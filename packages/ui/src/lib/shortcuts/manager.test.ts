@@ -1782,3 +1782,87 @@ describe("a handler that throws", () => {
     );
   });
 });
+
+describe("an image submit input", () => {
+  it("keeps its activation keys", () => {
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("Space", run)], { name: "shell", depth: 0 });
+    const image = document.createElement("input");
+    image.type = "image";
+    document.body.append(image);
+    const detach = manager.attach(document);
+    image.dispatchEvent(press(" "));
+    detach();
+    image.remove();
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("redo, which is spelled differently per platform", () => {
+  it("suppresses Command+Y on Apple, where it opens browser history", () => {
+    // Redo on macOS is Command+Shift+Z. Command+Y is a browser accelerator, so treating `y` as
+    // an editing key everywhere let it escape the grab on the one platform where it is not
+    // editing at all.
+    const manager = managerFor(true);
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("y", { metaKey: true });
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("leaves Ctrl+Y to the field on Windows, where it IS redo", () => {
+    const manager = managerFor(false);
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("y", { ctrlKey: true });
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe("a different key repeating during a sequence", () => {
+  it("abandons the sequence it interrupted", () => {
+    // While `x` is held, pressing `g`, receiving another `x` repeat, then pressing `d` completed
+    // `g d` as though nothing had come between them.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("g d", run)], { name: "shell", depth: 0 });
+
+    manager.handle(press("g"));
+    manager.handle(press("x", { repeat: true }));
+    manager.handle(press("d"));
+
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("survives a repeat of its own opening key", () => {
+    // The control: holding `g` a moment too long must not cancel the sequence it just began.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("g d", run)], { name: "shell", depth: 0 });
+
+    manager.handle(press("g"));
+    manager.handle(press("g", { repeat: true }));
+    manager.handle(press("d"));
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+});

@@ -14,6 +14,7 @@ import {
   useShortcuts,
   type UseShortcutsOptions,
 } from "./react";
+import { resetDevWarnings } from "../dev-warn";
 import type { ShortcutBinding } from "./manager";
 
 /** Registers one shortcut and renders nothing. */
@@ -275,5 +276,106 @@ describe("misuse", () => {
     } finally {
       error.mockRestore();
     }
+  });
+});
+
+describe("a provider nested inside another", () => {
+  it("runs a binding once, not once per provider", () => {
+    // Two providers on the same target is the very bug this module exists to remove: two
+    // listeners on one node, where stopPropagation cannot suppress a sibling, so both run their
+    // binding for the same key.
+    const run = vi.fn();
+
+    function Keys(): React.JSX.Element | null {
+      useShortcuts([{ keys: "mod+k", description: "Open", run }], {
+        name: "inner",
+      });
+      return null;
+    }
+
+    const view = render(
+      <ShortcutProvider isApple={false}>
+        <ShortcutProvider isApple={false}>
+          <Keys />
+        </ShortcutProvider>
+      </ShortcutProvider>
+    );
+
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "k",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      })
+    );
+    view.unmount();
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells the developer the inner provider is ignored", () => {
+    // Silently reusing the outer manager would leave someone wondering why their options had no
+    // effect, so the situation is reported rather than merely survived.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    resetDevWarnings();
+
+    const view = render(
+      <ShortcutProvider isApple={false}>
+        <ShortcutProvider isApple={false}>
+          <span />
+        </ShortcutProvider>
+      </ShortcutProvider>
+    );
+    const said = warn.mock.calls.map(c => String(c[0])).join(" ");
+    warn.mockRestore();
+    view.unmount();
+
+    expect(said).toContain("already mounted above");
+  });
+});
+
+describe("a nested provider that attaches a second listener", () => {
+  it("runs an allowed-default binding once, not twice", () => {
+    // The stricter version of the test above. When the binding preventDefaults, a second
+    // listener is harmless by accident: the manager stands down on an already-claimed event. A
+    // binding that asks NOT to preventDefault removes that accident, and a second listener then
+    // runs the callback a second time for one keystroke.
+    const run = vi.fn();
+
+    function Keys(): React.JSX.Element | null {
+      useShortcuts(
+        [
+          {
+            keys: "mod+k",
+            description: "Open",
+            run,
+            preventDefault: false,
+          },
+        ],
+        { name: "inner" }
+      );
+      return null;
+    }
+
+    const view = render(
+      <ShortcutProvider isApple={false}>
+        <ShortcutProvider isApple={false}>
+          <Keys />
+        </ShortcutProvider>
+      </ShortcutProvider>
+    );
+
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "k",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      })
+    );
+    view.unmount();
+
+    expect(run).toHaveBeenCalledTimes(1);
   });
 });

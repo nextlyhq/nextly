@@ -262,7 +262,8 @@ function controlOwnsKey(
     tag === "BUTTON" ||
     type === "button" ||
     type === "submit" ||
-    type === "reset"
+    type === "reset" ||
+    type === "image"
   ) {
     return event.key === " " || event.key === "Enter";
   }
@@ -475,6 +476,7 @@ export function createShortcutManager(
       // these still matches first; only UNBOUND combinations reach here.
       const letter =
         event.key.length === 1 ? event.key.toLowerCase() : event.key;
+      if (letter === REDO_LETTER) return !isApple;
       return EDITING_LETTERS.has(letter) || EDITING_NAVIGATION.has(event.key);
     }
     // Option turns caret keys into their by-word forms on macOS, and is a text modifier there;
@@ -640,6 +642,15 @@ export function createShortcutManager(
     // shortcut that suppressed the browser on the first keydown and then let every repeat
     // through would open the browser's own save dialog while the key was held down.
     if (event.repeat) {
+      // A repeat of some OTHER key is a real keystroke between the sequence's own. While `x` is
+      // held, pressing `g`, receiving another `x` repeat, then pressing `d` must not complete
+      // `g d` as though nothing had come between them.
+      if (
+        consumedPress === null ||
+        consumedPress.signature !== signature(event)
+      ) {
+        abandonSequence();
+      }
       // Re-offering is not enough on its own. A binding whose action changes its own condition —
       // `mod+s` saving and clearing the dirty flag — is no longer eligible by the second
       // keydown, so the repeat would be reported unhandled and the browser would take it. What
@@ -817,7 +828,16 @@ const RANGE_KEYS = new Set(["Home", "End", "PageUp", "PageDown"]);
  * Unbound, these belong to the field rather than to the application, so a modal that grabbed the
  * keyboard would otherwise make copy and paste impossible inside its own inputs.
  */
-const EDITING_LETTERS = new Set(["a", "c", "v", "x", "z", "y"]);
+const EDITING_LETTERS = new Set(["a", "c", "v", "x", "z"]);
+
+/**
+ * Redo, which is spelled differently on each platform.
+ *
+ * Ctrl+Y is redo on Windows and Linux. On macOS redo is Command+Shift+Z, and Command+Y is a
+ * BROWSER accelerator that opens history — so treating it as an editing key everywhere would let
+ * it escape a keyboard grab on the one platform where it is not editing at all.
+ */
+const REDO_LETTER = "y";
 
 /** Caret movement and deletion, which a modifier turns into their by-word forms. */
 const EDITING_NAVIGATION = new Set([
