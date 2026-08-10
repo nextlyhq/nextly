@@ -1,17 +1,50 @@
 /**
  * Resend Email Provider Adapter
  *
- * Implements the `EmailProviderAdapter` interface using the Resend SDK.
- * The Resend client is created once in the factory closure and reused
- * across `send()` calls — no persistent connections, serverless-friendly.
+ * Implements the `EmailProviderAdapter` interface against the Resend REST API
+ * using native `fetch` — no SDK. Sending is a single POST, and the `resend`
+ * package pulls `svix` and `postal-mime` (webhook verification and inbound MIME
+ * parsing) that nothing here calls, so every install carried megabytes of
+ * unreachable code to make one HTTP request. Mirrors the SendLayer adapter,
+ * which has always worked this way.
  *
  * @module services/email/providers/resend-provider
  * @since 1.0.0
  */
 
-import { Resend } from "resend";
-
 import type { EmailProviderAdapter } from "../../types";
+
+/** Resend's public API host, used when nothing overrides it. */
+const RESEND_DEFAULT_BASE_URL = "https://api.resend.com";
+
+/**
+ * Where to send, honouring the same environment override the Resend SDK read.
+ *
+ * Deployments point `RESEND_BASE_URL` at a capture server for testing, or at a
+ * controlled egress proxy where outbound traffic is the only route off the
+ * network. Hardcoding the public host does not fail loudly in either case — the
+ * request succeeds against the wrong endpoint — so the override has to survive
+ * the move off the SDK.
+ *
+ * Read per call rather than at module load: the value is captured at import
+ * time otherwise, which a test that sets the variable between cases cannot
+ * change, and a serverless runtime may populate the environment after the
+ * module graph is already warm.
+ */
+function resendEndpoint(): string {
+  const base = process.env.RESEND_BASE_URL?.trim() || RESEND_DEFAULT_BASE_URL;
+  // Tolerate a trailing slash so `https://host/` and `https://host` agree.
+  return `${base.replace(/\/+$/, "")}/emails`;
+}
+
+/**
+ * The `User-Agent` the SDK sent, overridable by the same variable it used.
+ * Some egress proxies filter on it, so it travels with the base URL rather
+ * than being dropped as cosmetic.
+ */
+function resendUserAgent(): string | undefined {
+  return process.env.RESEND_USER_AGENT?.trim() || undefined;
+}
 
 /**
  * Resend configuration shape stored in `EmailProviderRecord.configuration`.
@@ -22,10 +55,21 @@ interface ResendProviderConfig {
 }
 
 /**
+ * Error body Resend returns for a rejected send. Every field is optional
+ * because an error response is the one shape a caller cannot assume: a gateway
+ * or proxy failure yields a status without this envelope at all.
+ */
+interface ResendErrorBody {
+  statusCode?: number;
+  name?: string;
+  message?: string;
+}
+
+/**
  * Create a Resend email provider adapter.
  *
  * @param config - Decrypted Resend configuration from the email provider record
- * @returns An `EmailProviderAdapter` that sends emails via Resend
+ * @returns An `EmailProviderAdapter` that sends emails via the Resend REST API
  *
  * @example
  * ```typescript
@@ -44,35 +88,79 @@ interface ResendProviderConfig {
 export function createResendProvider(
   config: ResendProviderConfig
 ): EmailProviderAdapter {
-  const client = new Resend(config.apiKey);
-
   return {
     async send(options) {
+      // Built conditionally so unset fields are absent from the JSON rather
+      // than present and null, which Resend rejects for `reply_to`.
+      const body: Record<string, unknown> = {
+        from: options.from,
+        // The REST API takes a recipient LIST even for a single address; the
+        // SDK accepted a bare string and wrapped it.
+        to: [options.to],
+        subject: options.subject,
+        html: options.html,
+      };
+
+      if (options.text) {
+        body.text = options.text;
+      }
+
+      // Wire name is snake_case; the SDK's `replyTo` was its own camelCase
+      // surface, and sending that key here would silently drop the header.
+      if (options.replyTo) {
+        body.reply_to = options.replyTo;
+      }
+
+      if (options.cc && options.cc.length > 0) {
+        body.cc = options.cc;
+      }
+
+      if (options.bcc && options.bcc.length > 0) {
+        body.bcc = options.bcc;
+      }
+
+      if (options.attachments && options.attachments.length > 0) {
+        body.attachments = options.attachments.map(a => ({
+          filename: a.filename,
+          // Base64, not the Buffer itself: JSON.stringify turns a Buffer into
+          // `{"type":"Buffer","data":[...]}`, which is not what the API reads.
+          content: a.content.toString("base64"),
+          content_type: a.mimeType,
+        }));
+      }
+
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${config.apiKey}`,
+      };
+      const userAgent = resendUserAgent();
+      if (userAgent) headers["User-Agent"] = userAgent;
+
       try {
-        const { data, error } = await client.emails.send({
-          from: options.from,
-          to: options.to,
-          subject: options.subject,
-          html: options.html,
-          text: options.text,
-          replyTo: options.replyTo,
-          cc: options.cc,
-          bcc: options.bcc,
-          attachments: options.attachments?.map(a => ({
-            filename: a.filename,
-            // Resend SDK accepts Buffer directly (Node) or base64 string.
-            content: a.content,
-            contentType: a.mimeType,
-          })),
+        const response = await fetch(resendEndpoint(), {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
         });
 
-        if (error) {
-          throw new Error(error.message);
+        if (!response.ok) {
+          // Prefer Resend's own message; fall back to the status line when the
+          // body is absent or not JSON (a proxy or gateway failure).
+          let detail = response.statusText;
+          try {
+            const errorBody = (await response.json()) as ResendErrorBody;
+            if (errorBody.message) detail = errorBody.message;
+          } catch {
+            // Body was not JSON — the status line is all there is to report.
+          }
+          throw new Error(`HTTP ${response.status}: ${detail}`);
         }
+
+        const data = (await response.json()) as { id?: string };
 
         return {
           success: true,
-          messageId: data?.id,
+          messageId: data.id,
         };
       } catch (error) {
         const message =

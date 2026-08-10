@@ -10,8 +10,9 @@
 
 import { Button } from "@nextlyhq/ui";
 
-import { Eye, Loader2 } from "@admin/components/icons";
+import { Loader2 } from "@admin/components/icons";
 
+import { PreviewActions } from "./PreviewActions";
 import type { EntryFormMode } from "./useEntryForm";
 
 // ============================================================================
@@ -37,6 +38,15 @@ export interface EntryFormActionsProps {
   onPreview?: () => void;
   /** Custom label for the preview button */
   previewLabel?: string;
+  /**
+   * Whether a shareable preview link can be minted for this entry. False while
+   * creating, since an unsaved entry has no id to name.
+   */
+  isLinkAvailable?: boolean;
+  /** Mints a shareable preview link and copies it. */
+  onCopyLink?: () => void;
+  /** Whether a link is being minted right now. */
+  isCopyingLink?: boolean;
 }
 
 // ============================================================================
@@ -88,6 +98,9 @@ export function EntryFormActions({
   isPreviewAvailable = false,
   onPreview,
   previewLabel = "Preview",
+  isLinkAvailable = false,
+  onCopyLink,
+  isCopyingLink = false,
 }: EntryFormActionsProps) {
   const submitLabel = mode === "create" ? `Create` : "Save Changes";
 
@@ -97,19 +110,17 @@ export function EntryFormActions({
     <div className="flex flex-col gap-2.5 w-full">
       <div className="flex items-center gap-3 w-full">
         {/* Secondary Actions */}
-        {(showCancel || isPreviewAvailable) && (
+        {(showCancel || isPreviewAvailable || isLinkAvailable) && (
           <div className="flex items-center gap-1 flex-1">
-            {isPreviewAvailable && onPreview && (
-              <Button
-                type="button"
-                variant="outline"
-                onClick={onPreview}
-                disabled={isSubmitting}
-              >
-                <Eye className="h-4 w-4" />
-                {previewLabel}
-              </Button>
-            )}
+            <PreviewActions
+              isPreviewAvailable={isPreviewAvailable}
+              {...(onPreview === undefined ? {} : { onPreview })}
+              previewLabel={previewLabel}
+              isLinkAvailable={isLinkAvailable}
+              {...(onCopyLink === undefined ? {} : { onCopyLink })}
+              isCopyingLink={isCopyingLink}
+              disabled={isSubmitting}
+            />
 
             {showCancel && onCancel && (
               <Button

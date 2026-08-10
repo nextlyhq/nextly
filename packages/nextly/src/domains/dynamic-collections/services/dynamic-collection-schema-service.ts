@@ -24,12 +24,17 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import {
+  validateNumberDecimalDimensionsShared,
+  type BaseValidationError,
+} from "../../../shared/base-validator";
 import { env } from "../../../shared/lib/env";
 import {
   pluginEmptyColumnDefault,
   storageTypeToken,
 } from "../../../shared/lib/plugin-storage";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import { generateSQL } from "../../schema/pipeline/sql-templates/index";
 import {
   fieldProducesColumn,
   usesJunctionTable,
@@ -312,6 +317,9 @@ export class DynamicCollectionSchemaService {
       localized?: boolean;
     }
   ): string {
+    // Refuse an unusable decimal shape before any of it becomes SQL.
+    this.assertDecimalDimensions(fields);
+
     const constraints: string[] = [];
     const checks: string[] = [];
     const junctionTables: string[] = [];
@@ -342,7 +350,7 @@ export class DynamicCollectionSchemaService {
 
         const type =
           this.canonicalSlugType(f) ??
-          this.mapFieldTypeToSQL(f.type, f.length, f.options, f.validation);
+          this.mapFieldTypeToSQL(f.type, f.length, f.options, f.validation, f);
         const nullable = f.required ? "NOT NULL" : "";
 
         const unique = this.columnIsUnique(f) ? "UNIQUE" : "";
@@ -525,7 +533,7 @@ ${allColumnDefs.join(",\n")}
         const indexSql = this.createIndexSql(
           tableName,
           col,
-          this.mapFieldTypeToSQL(f.type, f.length, f.options, f.validation)
+          this.mapFieldTypeToSQL(f.type, f.length, f.options, f.validation, f)
         );
         if (indexSql) indexStatements.push(indexSql);
       }
@@ -646,6 +654,9 @@ ${allColumnDefs.join(",\n")}
       indexNames?: ReadonlySet<string>;
     }
   ): string {
+    // The added columns become SQL here too, so the same refusal applies.
+    this.assertDecimalDimensions(newFields);
+
     const statements: string[] = [`-- Update dynamic collection: ${tableName}`];
 
     // Status system column flip (enable / disable Draft/Published). When
@@ -751,7 +762,13 @@ ${allColumnDefs.join(",\n")}
           continue;
         }
 
-        const type = this.mapFieldTypeToSQL(field.type, field.length);
+        const type = this.mapFieldTypeToSQL(
+          field.type,
+          field.length,
+          undefined,
+          undefined,
+          field
+        );
         const nullable = field.required ? "NOT NULL" : "";
         const addColName = toSnakeCase(field.name);
 
@@ -854,7 +871,13 @@ ${allColumnDefs.join(",\n")}
           const toggleIndexSql = this.createIndexSql(
             tableName,
             idxCol,
-            this.mapFieldTypeToSQL(field.type, field.length)
+            this.mapFieldTypeToSQL(
+              field.type,
+              field.length,
+              undefined,
+              undefined,
+              field
+            )
           );
           if (toggleIndexSql) statements.push(toggleIndexSql);
         } else {
@@ -983,20 +1006,123 @@ ${allColumnDefs.join(",\n")}
         if (oldField && this.storageClassChanged(oldField, field)) continue;
         if (oldField && this.isFieldModified(oldField, field)) {
           const alterCol = toSnakeCase(field.name);
-          const type = this.mapFieldTypeToSQL(field.type, field.length);
-          statements.push(
-            `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(alterCol)} TYPE ${type};`
+          // The descriptor decides the target column, the same answer the comparison above used to
+          // decide there was a change at all. Asking a different renderer here is what let a field
+          // be judged modified by one definition and then rewritten by another: this call used to
+          // drop `options` and `validation`, so a number switched to `format: "float"` was detected
+          // and then re-emitted as `integer`.
+          const before = getColumnDescriptor(
+            oldField,
+            this.dialect,
+            "collection"
           );
+          const described = getColumnDescriptor(
+            field,
+            this.dialect,
+            "collection"
+          );
+          const type =
+            described?.dialectType ??
+            this.mapFieldTypeToSQL(
+              field.type,
+              field.length,
+              field.options,
+              field.validation,
+              field
+            );
 
-          if (field.required !== oldField.required) {
-            if (field.required) {
+          // 🔴 Whether the COLUMN changed, which is not the same question as whether the FIELD did.
+          //
+          // `isFieldModified` also answers true for an index or a unique constraint, and neither is
+          // a property of the column's shape. Rewriting the type for one of those is not a harmless
+          // no-op: the type written here is the DESCRIPTOR's, and the descriptor does not yet agree
+          // with the generator that created the column. Enabling an index on a Builder `select`
+          // would move it from the unbounded `text` it was created as to `varchar(255)`, truncating
+          // every stored value past 255 characters — for an edit that never touched its storage.
+          // Nullability is deliberately NOT part of this. The descriptor derives `nullable` from
+          // `required`, so including it would make a requiredness toggle claim the column's TYPE
+          // changed and rewrite it — the same truncation the index case caused, reached through a
+          // different edit. It is tracked on its own below, where it belongs.
+          const columnChanged =
+            !before || !described
+              ? before !== described
+              : before.dialectType !== described.dialectType ||
+                before.kind !== described.kind ||
+                before.name !== described.name;
+          const nullabilityChanged = field.required !== oldField.required;
+
+          if (this.dialect === "mysql") {
+            // MySQL restates the WHOLE definition, so everything the column carries travels with
+            // the type or it is dropped: nullability, and the default the create path emits from
+            // `field.default`. A MODIFY that omits either silently removes it.
+            //
+            // Issued when the column's shape changed OR its nullability did, because on this dialect
+            // one statement carries both.
+            if (columnChanged || nullabilityChanged) {
+              const nullability = field.required ? " NOT NULL" : " NULL";
+              const defaultClause =
+                field.default !== undefined && field.default !== null
+                  ? ` DEFAULT ${this.formatDefaultValue(field.default, field.type)}`
+                  : "";
+              // 🔴 Which type a MODIFY restates depends on WHY it is being issued, and getting this
+              // wrong rewrites a column nobody asked to change.
+              //
+              // Changing the storage means asking for the descriptor's answer. Changing only the
+              // nullability means preserving what the column already is — and what it already is,
+              // for a table this service built, is what THIS generator renders. Restating the
+              // descriptor's answer instead would move a `select` created as unbounded `text` to
+              // `varchar(255)` and truncate stored values, for an edit that touched nothing but a
+              // required flag. MySQL leaves no third option: the type has to be restated or the
+              // column definition is lost.
+              const restated = columnChanged
+                ? type
+                : this.mapFieldTypeToSQL(
+                    field.type,
+                    field.length,
+                    field.options,
+                    field.validation,
+                    field
+                  );
               statements.push(
-                `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(alterCol)} SET NOT NULL;`
+                `ALTER TABLE ${this.quoteIdentifier(tableName)} MODIFY COLUMN ${this.quoteIdentifier(alterCol)} ${restated}${nullability}${defaultClause};`
               );
-            } else {
+            }
+          } else if (!columnChanged) {
+            // Nothing about the column moved. Nullability is still handled below.
+            if (nullabilityChanged) {
               statements.push(
-                `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(alterCol)} DROP NOT NULL;`
+                field.required
+                  ? `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(alterCol)} SET NOT NULL;`
+                  : `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(alterCol)} DROP NOT NULL;`
               );
+            }
+          } else {
+            // Rendered by the shared template rather than written out here, so this path and
+            // `migrate:create` emit the same statement. It also carries the `USING` clause
+            // PostgreSQL requires for cross-family changes, which the hand-written form omitted.
+            statements.push(
+              `${generateSQL(
+                {
+                  type: "change_column_type",
+                  tableName,
+                  columnName: alterCol,
+                  fromType: before?.dialectType ?? type,
+                  toType: type,
+                },
+                this.dialect
+              )};`
+            );
+
+            if (nullabilityChanged) {
+              if (field.required) {
+                statements.push(
+                  `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(alterCol)} SET NOT NULL;`
+                );
+              } else {
+                statements.push(
+                  `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(alterCol)} DROP NOT NULL;`
+                );
+              }
             }
           }
         }
@@ -1009,16 +1135,39 @@ ${allColumnDefs.join(",\n")}
   /**
    * Check if a field definition has been modified
    */
+  /**
+   * Whether an edit changes the physical column, and therefore needs an ALTER.
+   *
+   * The column is compared through the descriptor rather than by listing the properties that
+   * happen to affect it. A list is a claim about which properties matter, and it goes stale the
+   * moment a new one is added: `dbType`, `precision`, `scale` and `options.format` all decide a
+   * number's storage and none of them were listed, so changing a field to an exact decimal or
+   * widening its precision produced no ALTER at all — the registry described a decimal while the
+   * column stayed an integer, and every fractional write was still truncated.
+   *
+   * Asking the descriptor makes that class of omission impossible: whatever decides a column today
+   * or later is, by construction, what this compares.
+   *
+   * `unique` and `index` are compared separately because they are not properties of the column's
+   * shape. Two columns can be identical and differ in whether an index covers them.
+   */
   isFieldModified(
     oldField: FieldDefinition,
     newField: FieldDefinition
   ): boolean {
+    if (oldField.unique !== newField.unique) return true;
+    if (oldField.index !== newField.index) return true;
+
+    const before = getColumnDescriptor(oldField, this.dialect, "collection");
+    const after = getColumnDescriptor(newField, this.dialect, "collection");
+    // One producing no column and the other producing one is itself a change of storage class.
+    if (!before || !after) return before !== after;
+
     return (
-      oldField.type !== newField.type ||
-      oldField.length !== newField.length ||
-      oldField.required !== newField.required ||
-      oldField.unique !== newField.unique ||
-      oldField.index !== newField.index
+      before.name !== after.name ||
+      before.dialectType !== after.dialectType ||
+      before.nullable !== after.nullable ||
+      before.kind !== after.kind
     );
   }
 
@@ -1172,7 +1321,8 @@ ${allColumnDefs.join(",\n")}
             field.type,
             field.length,
             field.options,
-            field.validation
+            field.validation,
+            field
           )
         ) !== null
       ) {
@@ -1307,11 +1457,99 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
    * outright. Converging the rest belongs with the column-descriptor
    * consolidation rather than with a per-column patch.
    */
+  /**
+   * The column a number field reaches, for the dialect this service builds for.
+   *
+   * Two independent things can ask for fractions and they mean different storage. `dbType:
+   * "decimal"` asks for exact fixed point, which is what money needs and what nothing else should
+   * use; `options.format === "float"` is the UI's way of asking for an ordinary fractional number.
+   * Silence means whole numbers.
+   *
+   * 🔴 "Exact" holds on PostgreSQL and MySQL, which have a real fixed-point type. SQLite has only
+   * NUMERIC affinity: it stores what it can as an exact value and falls back to binary floating
+   * point, and this package reads number columns back as JavaScript numbers either way. The column
+   * is therefore the best storage SQLite offers rather than a guarantee, which is the same caveat
+   * `NumberFieldConfig` already carries.
+   *
+   * Read here rather than inline in each dialect map because the same three-way answer is needed
+   * three times, and a map that answered it per dialect is how one of the three came to be missing
+   * from all of them.
+   */
+  private numberColumnType(
+    options: FieldDefinition["options"],
+    storage: Pick<FieldDefinition, "dbType" | "precision" | "scale"> | undefined
+  ): string {
+    if (storage?.dbType === "decimal") {
+      // 🔴 Asked, not restated. The descriptor owns the decimal defaults and the per-dialect
+      // spelling, and both are read by the runtime table and the schema diff. Copying them here
+      // would be a second source of truth for the very question whose two answers produced this
+      // defect: a later change to a default or a dialect rendering would make a newly created
+      // table disagree with the schema that binds it, silently and only on one path.
+      //
+      // The dimensions are validated before this point, so what reaches the descriptor is a shape
+      // it can render rather than whatever a request happened to carry.
+      const described = getColumnDescriptor(
+        {
+          name: "n",
+          type: "number",
+          dbType: "decimal",
+          precision: storage.precision,
+          scale: storage.scale,
+        },
+        this.dialect,
+        "collection"
+      );
+      if (described) return described.dialectType;
+    }
+    if (options?.format === "float") {
+      return this.dialect === "sqlite" ? "real" : "decimal(10,2)";
+    }
+    return "integer";
+  }
+
+  /**
+   * Refuse decimal dimensions that cannot safely become part of a type.
+   *
+   * `precision` and `scale` are interpolated into DDL, and on this path they arrive from a request
+   * payload that is only name- and plugin-validated. A value that is not an integer therefore
+   * reaches the template verbatim, which at best renders a migration no engine accepts and at worst
+   * carries whatever the string contains into a statement.
+   *
+   * The same rule the code-first config already enforces, reused rather than restated: the ranges
+   * and the scale-not-greater-than-precision check are one definition, so the Schema Builder cannot
+   * accept a shape `defineCollection` rejects.
+   */
+  private assertDecimalDimensions(fields: FieldDefinition[]): void {
+    const errors: BaseValidationError[] = [];
+    fields.forEach((field, index) => {
+      validateNumberDecimalDimensionsShared(field, `fields[${index}]`, errors);
+    });
+    if (errors.length > 0) {
+      throw NextlyError.validation({
+        errors: errors.map(e => ({
+          path: e.path,
+          code: e.code,
+          message: e.message,
+        })),
+      });
+    }
+  }
+
   mapFieldTypeToSQL(
     declaredType: string,
     length?: number,
     options?: FieldDefinition["options"],
-    validation?: FieldDefinition["validation"]
+    validation?: FieldDefinition["validation"],
+    /**
+     * What a number field says about how it wants to be stored.
+     *
+     * Passed as its own argument because this map is reached from six call
+     * sites and four of them used to hand over only a type and a length, which
+     * is why an exact-decimal field silently became a whole-number column: the
+     * facts that decide it never arrived. Optional so a caller that genuinely
+     * has no field (a storage token resolved from a plugin type) is unchanged.
+     */
+    numberStorage?: Pick<FieldDefinition, "dbType" | "precision" | "scale">
   ): string {
     // A contributed type persists as its storage primitive, and this map has
     // never heard of the token it is declared under. Left unresolved it falls
@@ -1320,12 +1558,23 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
     // and the missing-column scan already make.
     const type = storageTypeToken({ type: declaredType }) ?? declaredType;
 
+    // 🔴 Only a field DECLARED as the built-in number states how a number is stored.
+    //
+    // A plugin type resolves to the `number` storage primitive above, but `dbType`, `precision` and
+    // `scale` are the built-in number field's own vocabulary — a plugin's payload carrying them
+    // means something to the plugin, not to this map. Honouring them would give the plugin a decimal
+    // column while `getColumnDescriptor` still describes its storage primitive as an integer, so the
+    // ORM would bind a different shape than the table has and every diff would propose the change
+    // again. It also routes around the dimension validation, which only inspects fields whose type
+    // IS `number` and would never see the values being interpolated here.
+    const storage = declaredType === "number" ? numberStorage : undefined;
+
     if (this.dialect === "sqlite") {
       // SQLite type mapping. SQLite has dynamic typing, so types are simplified.
       const sqliteTypeMap: Record<string, string> = {
         text: "text",
         textarea: "text",
-        number: options?.format === "float" ? "real" : "integer",
+        number: this.numberColumnType(options, storage),
         checkbox: "integer", // SQLite uses 0/1 for boolean
         date: "integer", // Store as Unix timestamp
         email: "text",
@@ -1347,7 +1596,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
             ? `varchar(${validation?.maxLength || 255})`
             : "text",
         textarea: "text",
-        number: options?.format === "float" ? "decimal(10,2)" : "integer",
+        number: this.numberColumnType(options, storage),
         checkbox: "boolean",
         date: "timestamp",
         email: `varchar(${validation?.maxLength || 255})`,
@@ -1368,7 +1617,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
           ? `varchar(${validation?.maxLength || 255})`
           : "text",
       textarea: "text",
-      number: options?.format === "float" ? "decimal(10,2)" : "integer",
+      number: this.numberColumnType(options, storage),
       checkbox: "boolean",
       date: "timestamp",
       email: `varchar(${validation?.maxLength || 255})`,

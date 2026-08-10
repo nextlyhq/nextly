@@ -39,6 +39,11 @@ export const paragraph = defineBlock<ParagraphProps, PageContext>({
     "A paragraph of plain text. Rich formatting lives in the rich-text block, which carries its own editor.",
   props: { text: { type: "textarea" } },
   defaultProps: { text: "" },
+  // The opening prose is what a search result should quote. Offered whole and
+  // untruncated: how long a description may be is the metadata layer's rule,
+  // and a block trimming to its own guess would fight it.
+  // Normalized as the render does, for the same reason the heading is.
+  seo: props => ({ description: text(props.text) }),
   example: { props: { text: "A paragraph of text." } },
   supports: {
     typography: true,

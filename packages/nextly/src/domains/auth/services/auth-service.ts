@@ -19,6 +19,7 @@ import type { MinimalUser } from "@nextly/types/auth";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import { emitAuthEvent } from "../../../events/domain-events";
+import { env } from "../../../lib/env";
 import { BaseService } from "../../../services/base-service";
 import type { EmailService } from "../../../services/email/email-service";
 import type { Logger } from "../../../services/shared";
@@ -159,6 +160,32 @@ export class AuthService extends BaseService {
   // Drizzle native on PG/MySQL and manual BEGIN/COMMIT on SQLite.
   // Do NOT override it here — the base class's dialect-aware routing
   // is what makes async transaction callbacks work on all three dialects.
+
+  /**
+   * What to return when a token could not be delivered by email.
+   *
+   * Outside production the raw token comes back, which is what makes a local
+   * install usable before any provider is configured. In production it does
+   * not: a reset or verification token is a credential, and OWASP's guidance
+   * is that it may only travel by the side channel it was minted for. Handing
+   * it to whoever called the endpoint turns a delivery outage into account
+   * takeover for every account an attacker cares to name.
+   *
+   * The gate is what makes detecting more failures safe. Recognising an
+   * unsuccessful send — rather than only a thrown one — necessarily routes
+   * more situations here, and without this that would have widened where a
+   * live token is handed back.
+   */
+  private undeliveredTokenFallback(rawToken: string): { token?: string } {
+    if (env.NODE_ENV === "production") {
+      this.logger.error(
+        "A token could not be delivered and is withheld from the response",
+        { event: "auth.token_delivery_failed", environment: "production" }
+      );
+      return {};
+    }
+    return { token: rawToken };
+  }
 
   /**
    * Register a new user with email and password.
@@ -445,34 +472,47 @@ export class AuthService extends BaseService {
       }
 
       if (this.emailService) {
+        let delivered = false;
         try {
-          await this.emailService.sendPasswordResetEmail(
+          // The result matters as much as the absence of a throw: a provider
+          // failure is converted to `{ success: false }` rather than raised, so
+          // awaiting alone would read a failed send as a delivered one and take
+          // the branch below that deliberately withholds the token.
+          const result = await this.emailService.sendPasswordResetEmail(
             normalizedEmail,
             { name: user.name, email: user.email },
             rawToken,
             { path: options?.redirectPath }
           );
+          delivered = result.success;
+          if (!delivered) {
+            this.logger.error("Password reset email was not delivered", {
+              event: "auth.password_reset.email_failed",
+              reason: "provider reported an unsuccessful send",
+            });
+          }
         } catch (emailError) {
-          // Email failure should not prevent token generation
-          console.warn(
-            "[AuthService] Failed to send password reset email:",
-            emailError instanceof Error
-              ? emailError.message
-              : String(emailError)
-          );
-          // Return token in response as dev fallback when email fails
-          return { token: rawToken };
+          this.logger.error("Failed to send password reset email", {
+            event: "auth.password_reset.email_failed",
+            error:
+              emailError instanceof Error
+                ? emailError.message
+                : String(emailError),
+          });
         }
 
-        // IMPORTANT: Email sent successfully — do NOT return token (security)
-        return {};
+        // Delivered: the token travelled by its side channel and must not also
+        // appear here.
+        if (delivered) return {};
+
+        return this.undeliveredTokenFallback(rawToken);
       }
 
-      // No email service configured — dev fallback: return token in response
-      console.warn(
-        "[AuthService] No email service configured. Returning password reset token in response. Configure an email provider for production use."
+      this.logger.warn(
+        "No email provider is configured, so the password reset token could not be delivered",
+        { event: "auth.password_reset.email_unconfigured" }
       );
-      return { token: rawToken };
+      return this.undeliveredTokenFallback(rawToken);
     } catch (error) {
       // DB errors are mapped to NextlyError. Generic public messages keep us
       // from leaking schema or driver text. Normalise raw driver errors via
@@ -662,34 +702,44 @@ export class AuthService extends BaseService {
       }
 
       if (this.emailService) {
+        let delivered = false;
         try {
-          await this.emailService.sendEmailVerificationEmail(
+          // Same reasoning as the password-reset path: a provider failure
+          // arrives as `{ success: false }`, not as a throw, so the result is
+          // the only evidence that nothing reached the user.
+          const result = await this.emailService.sendEmailVerificationEmail(
             email,
             { name: user.name, email: user.email },
             rawToken,
             { path: options?.redirectPath }
           );
+          delivered = result.success;
+          if (!delivered) {
+            this.logger.error("Email verification message was not delivered", {
+              event: "auth.email_verification.email_failed",
+              reason: "provider reported an unsuccessful send",
+            });
+          }
         } catch (emailError) {
-          // Email failure should not prevent token generation
-          console.warn(
-            "[AuthService] Failed to send email verification email:",
-            emailError instanceof Error
-              ? emailError.message
-              : String(emailError)
-          );
-          // Return token in response as dev fallback when email fails
-          return { token: rawToken };
+          this.logger.error("Failed to send email verification email", {
+            event: "auth.email_verification.email_failed",
+            error:
+              emailError instanceof Error
+                ? emailError.message
+                : String(emailError),
+          });
         }
 
-        // IMPORTANT: Email sent successfully — do NOT return token (security)
-        return {};
+        if (delivered) return {};
+
+        return this.undeliveredTokenFallback(rawToken);
       }
 
-      // No email service configured — dev fallback: return token in response
-      console.warn(
-        "[AuthService] No email service configured. Returning email verification token in response. Configure an email provider for production use."
+      this.logger.warn(
+        "No email provider is configured, so the verification token could not be delivered",
+        { event: "auth.email_verification.email_unconfigured" }
       );
-      return { token: rawToken };
+      return this.undeliveredTokenFallback(rawToken);
     } catch (error) {
       // Normalise raw driver errors so the DB kind is preserved.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));

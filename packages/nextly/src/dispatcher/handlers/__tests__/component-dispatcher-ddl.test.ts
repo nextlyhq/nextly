@@ -19,6 +19,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../helpers/di", () => ({
   getComponentRegistryFromDI: vi.fn(),
+  getFieldGroupMetadataServiceFromDI: vi.fn(),
   getAdapterFromDI: vi.fn(),
   // Reached by the companion reconciliation a localized create runs. Omitted, calling it throws and
   // the handler catches that as a companion-provisioning failure — so the assertions below would
@@ -68,7 +69,14 @@ vi.mock("../../../di/container", () => ({
   },
 }));
 
-import { getAdapterFromDI, getComponentRegistryFromDI } from "../../helpers/di";
+import { FieldGroupMetadataService } from "../../../domains/field-groups/services/field-group-metadata-service";
+import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
+import type { Logger } from "../../../shared/types";
+import {
+  getAdapterFromDI,
+  getComponentRegistryFromDI,
+  getFieldGroupMetadataServiceFromDI,
+} from "../../helpers/di";
 import { dispatchComponents } from "../component-dispatcher";
 
 function wireRegistry() {
@@ -85,6 +93,24 @@ function wireRegistry() {
   };
   vi.mocked(getComponentRegistryFromDI).mockReturnValue(
     registry as unknown as ReturnType<typeof getComponentRegistryFromDI>
+  );
+  // The REAL service over the same doubles, because the create path's behaviour IS this service's
+  // behaviour: what the request forwards into the DDL is decided inside it, and a stub standing in
+  // for it would leave every assertion below describing the stub.
+  const silent: Logger = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  };
+  vi.mocked(getFieldGroupMetadataServiceFromDI).mockReturnValue(
+    new FieldGroupMetadataService(
+      registry as unknown as FieldGroupRegistryService,
+      silent,
+      adapter as unknown as ConstructorParameters<
+        typeof FieldGroupMetadataService
+      >[2]
+    )
   );
   return registry;
 }
@@ -109,6 +135,7 @@ async function ddlFor(
 
 beforeEach(() => {
   vi.mocked(getComponentRegistryFromDI).mockReset();
+  vi.mocked(getFieldGroupMetadataServiceFromDI).mockReset();
   vi.mocked(getAdapterFromDI).mockReset();
 });
 

@@ -72,6 +72,23 @@ export interface CompileOptions {
    * node can know.
    */
   classes?: ReadonlyMap<string, string>;
+  /**
+   * The reusable-block library this page can reference, keyed by ref id.
+   *
+   * Supplied so a reusable block's OWN styles reach the page. Without it the compiler never sees
+   * those nodes — `walk` visits slots, and a library subtree is reached through `refs` rather than
+   * through the tree — so every style stored on a reusable block was silently dropped while the
+   * editor went on offering the controls that wrote it.
+   */
+  refs?: Record<string, BlockNode>;
+  /**
+   * The ref id whose library subtree is being compiled, when it is one.
+   *
+   * Absent for the document's own nodes. Present, a node is named from {@link refScopedKey}
+   * instead of its bare id, which is what keeps a library node that shares an id with a document
+   * node from wearing the document node's class — and its styles.
+   */
+  refScope?: string;
 }
 
 /**
@@ -119,13 +136,132 @@ export function compileTokensCss(
  * single node: the editor asking which selector to scrub, or a test naming an
  * expected class.
  */
-export { nodeClassName as nodeClass } from "@nextlyhq/blocks-engine";
+/**
+ * The class a node of the DOCUMENT is styled by.
+ *
+ * Still "the class for this node id" from a caller's side. The key composition below is an
+ * internal detail of how the document and the reusable library are held apart, and a caller
+ * holding a node id should not have to know it exists.
+ *
+ * A node inside a reusable block is named by {@link refNodeClass} instead, because its id alone
+ * does not identify it — two library blocks, or a library block and the document, can each hold
+ * the same id.
+ */
+export function nodeClass(nodeId: string): string {
+  return nodeClassName(documentKey(nodeId));
+}
+
+/** The class a node INSIDE a reusable block is styled by. */
+export function refNodeClass(refId: string, nodeId: string): string {
+  return nodeClassName(refScopedKey(refId, nodeId));
+}
+
+/**
+ * The key a node inside a reusable block is named by.
+ *
+ * A node reached through `core/ref` is not in the document's own id space. A block made reusable
+ * from a node that stayed put is the ordinary way to make one, so a library subtree very often
+ * holds an id the document also holds — and naming both from the id alone gives them the same
+ * class, so the referenced node silently wears the document node's styles.
+ *
+ * Length-prefixed rather than joined by a separator, because a separator has to be a character
+ * neither an id nor a ref id can contain, and nothing guarantees that: `("a", "b/c")` and
+ * `("a/b", "c")` would both spell `a/b/c` and two different nodes would share a class. The prefix
+ * makes the split unambiguous whatever the two strings contain.
+ *
+ * Scoped by the ref id rather than by the PLACEMENT, so a reusable block placed twice names its
+ * nodes the same both times and one rule serves every placement. That is what makes editing the
+ * block update everywhere it appears, which is the whole point of a reusable block. It also means
+ * a nested ref is named by the block it lives in, not by the path taken to reach it, so a block
+ * placed directly and through another block resolves to one set of names.
+ */
+export function refScopedKey(refId: string, nodeId: string): string {
+  return `${refId.length}:${refId}${nodeId}`;
+}
+
+/**
+ * The key a node of the document itself is named by.
+ *
+ * Prefixed too, and that is the whole point. Length-prefixing only the ref keys makes one
+ * (ref, id) pair unambiguous against another, but NOT against a bare id — and a node id is any
+ * non-empty string a document can carry. An imported or plugin-produced document could hold the
+ * literal id `2:r1same`, which is exactly what `refScopedKey("r1", "same")` generates; both would
+ * land in one key set, `nodeClassNames` would collapse them to a single class, and the library's
+ * rule would style the document node too.
+ *
+ * With both sides prefixed the number states how many of the following characters are the scope,
+ * so every key parses back to exactly one (scope, id) pair. A document is the EMPTY scope, which
+ * no usable ref id can be.
+ */
+export function documentKey(nodeId: string): string {
+  return `0:${nodeId}`;
+}
+
+/**
+ * The ref ids a document actually reaches, following refs inside refs.
+ *
+ * Only these get RULES. The whole library stays in the key set, because a disambiguating suffix
+ * that changed with which blocks a page happened to place would name the same library node
+ * differently on two pages and no shared stylesheet could exist. But emitting the whole library's
+ * CSS on every page is weight that grows with the library rather than with the page.
+ *
+ * Cycle-guarded by the visited set, which is what the renderer's `refStack` does for the same
+ * reason: a block that references itself must not walk forever here either.
+ */
+export function placedRefIds(
+  doc: BlockDocument,
+  refs?: Record<string, BlockNode>
+): string[] {
+  const placed: string[] = [];
+  const seen = new Set<string>();
+  const visit = (node: BlockNode): void => {
+    if (node.type !== "core/ref") return;
+    const refId = typeof node.props?.refId === "string" ? node.props.refId : "";
+    if (refId === "" || seen.has(refId)) return;
+    const target = refs?.[refId];
+    if (!target) return;
+    seen.add(refId);
+    placed.push(refId);
+    walk(target, visit);
+  };
+  walk(doc.root, visit);
+  return placed.sort();
+}
 
 /** Every node id in a document, in document order. */
 export function documentNodeIds(doc: BlockDocument): string[] {
   const ids: string[] = [];
   walk(doc.root, node => ids.push(node.id));
   return ids;
+}
+
+/**
+ * Every name a page can style: the document's own node ids, then one ref-scoped key per node of
+ * every reusable block the library holds.
+ *
+ * Both sets go through ONE {@link nodeClassNames} call, because the disambiguating suffix depends
+ * on the whole set. Naming the document from one call and the library from another would let a
+ * document id and a library key hash alike and each be told it was unique.
+ *
+ * The library is read whole rather than only the blocks this document places. A page that places
+ * a block conditionally would otherwise change every other node's disambiguation depending on
+ * which blocks happened to be referenced, so the same library node would be named differently on
+ * two pages and a shared stylesheet could not exist.
+ */
+export function pageStyleKeys(
+  doc: BlockDocument,
+  refs?: Record<string, BlockNode>
+): string[] {
+  const keys = documentNodeIds(doc).map(documentKey);
+  for (const refId of Object.keys(refs ?? {}).sort()) {
+    const target = refs?.[refId];
+    // An empty ref id would generate the empty scope, which is the document's own namespace. The
+    // renderer never resolves one either — it reads a missing ref id as a missing target — so
+    // skipping it keeps both halves naming the same set.
+    if (!target || refId === "") continue;
+    walk(target, node => keys.push(refScopedKey(refId, node.id)));
+  }
+  return keys;
 }
 
 /**
@@ -137,14 +273,20 @@ export function documentNodeIds(doc: BlockDocument): string[] {
  * markup does not carry, which is a worse failure than the collision it set out
  * to fix.
  *
- * The set is the document walk, and deliberately not the subtrees that
- * `core/ref` pulls in. Those are reached through the reusable-block library
- * rather than the tree, so the compiler never walks them either; including them
- * on one side only is exactly the disagreement above. A referenced node keeps
- * the undisambiguated class {@link nodeClass} gives it, as it does today.
+ * The set spans BOTH key spaces: the document's own nodes, and one ref-scoped key per node of
+ * every reusable block in `refs`. Pass the library whenever the page can reference one — omitting
+ * it, or discarding this map at a `core/ref` boundary, puts a library node back on a bare-id name
+ * and it silently takes the class, and therefore the styles, of a document node holding that id.
+ *
+ * One call rather than two, because the disambiguating suffix depends on the whole set: naming the
+ * document from one call and the library from another would let a document key and a library key
+ * hash alike and each be told it was unique.
  */
-export function documentNodeClasses(doc: BlockDocument): Map<string, string> {
-  return nodeClassNames(documentNodeIds(doc));
+export function documentNodeClasses(
+  doc: BlockDocument,
+  refs?: Record<string, BlockNode>
+): Map<string, string> {
+  return nodeClassNames(pageStyleKeys(doc, refs));
 }
 
 /**
@@ -389,7 +531,14 @@ export function compileNodeCss(
 ): string {
   const bps = opts.breakpoints ?? DEFAULT_BREAKPOINTS;
   const remotePatterns = opts.remotePatterns ?? [];
-  const cls = opts.classes?.get(node.id) ?? nodeClassName(node.id);
+  // Named by the key it belongs to, so a library node and a document node holding the same id
+  // stay apart. Both sides derive the key the same way; a class the compiler invents that the
+  // renderer does not is a rule matching nothing.
+  const styleKey =
+    opts.refScope === undefined || opts.refScope === ""
+      ? documentKey(node.id)
+      : refScopedKey(opts.refScope, node.id);
+  const cls = opts.classes?.get(styleKey) ?? nodeClassName(styleKey);
   // The document's own class in front of the node's, when the caller supplies
   // one. A node class is a hash of the node id, and two documents can hold the
   // same id — a reusable block rendered in both is the ordinary way — so
@@ -462,39 +611,89 @@ export function compileDocumentCss(
 ): string {
   // Resolved once for the document and passed down, so every node in this
   // stylesheet is named by the same map the markup is named by.
-  const classes = opts.classes ?? documentNodeClasses(doc);
+  const classes = opts.classes ?? documentNodeClasses(doc, opts.refs);
   const nodeOpts = { ...opts, classes };
   const parts: string[] = [];
   walk(doc.root, n => {
     const css = compileNodeCss(n, nodeOpts);
     if (css) parts.push(css);
   });
+  // The library, after the document. A reusable block's own styles are the tier BELOW a
+  // placement's, so at one specificity source order is what makes a placement able to override
+  // the block it places — the same reason the tiers above are emitted whole, one after another.
+  for (const refId of placedRefIds(doc, opts.refs)) {
+    const target = opts.refs?.[refId];
+    if (!target) continue;
+    walk(target, n => {
+      const css = compileNodeCss(n, { ...nodeOpts, refScope: refId });
+      if (css) parts.push(css);
+    });
+  }
   return parts.join("\n");
 }
 
-/** Emit the shared motion keyframes once, if any node in the document animates. */
-export function compileDocumentMotionCss(doc: BlockDocument): string {
+/**
+ * Emit the shared motion keyframes once, if anything the page renders animates.
+ *
+ * The library counts. A reusable block that animates is on the page as much as a document node
+ * that does, and withholding the keyframes because only a referenced node uses them leaves its
+ * animation naming a rule nobody wrote.
+ */
+export function compileDocumentMotionCss(
+  doc: BlockDocument,
+  refs?: Record<string, BlockNode>
+): string {
   let any = false;
-  walk(doc.root, n => {
+  const check = (n: BlockNode): void => {
     if (n.motion?.entrance && n.motion.entrance !== "none") any = true;
-  });
+  };
+  walk(doc.root, check);
+  for (const target of Object.values(refs ?? {})) {
+    if (target) walk(target, check);
+  }
   return any ? MOTION_KEYFRAMES : "";
 }
 
 /** Collect every node's sanitized per-block custom CSS for the page <style> (spec §4.4). */
 export function compileDocumentBlockCss(
   doc: BlockDocument,
-  classes: ReadonlyMap<string, string> = documentNodeClasses(doc)
+  classes?: ReadonlyMap<string, string>,
+  refs?: Record<string, BlockNode>,
+  /**
+   * The document's own class, nested outside each block's.
+   *
+   * Without it a block's custom CSS is anchored to the node class alone, and a node class is a
+   * hash of a key rather than of a document — so two pages rendering the same reusable block with
+   * different custom CSS resolve to the same selector.
+   */
+  scope?: string
 ): string {
+  const map = classes ?? documentNodeClasses(doc, refs);
   const parts: string[] = [];
-  walk(doc.root, n => {
-    if (n.customCss) {
-      const cls = classes.get(n.id) ?? nodeClassName(n.id);
-      const scoped = sanitizeBlockCss(n.customCss, cls);
-      // `.css`, not the result: the object is always truthy, so testing it
-      // would push an empty string for every block that has none.
-      if (scoped.css) parts.push(scoped.css);
-    }
-  });
+  // Named through the same key as every other tier, so a reusable block's custom CSS is anchored
+  // to the class its markup carries. Scoped by the ref it belongs to for the document's nodes as
+  // much as the library's: an unscoped spelling here would re-open the collision the scoped key
+  // exists to close, on this tier alone, and the symptom would be one block's custom CSS silently
+  // styling another.
+  const collect = (n: BlockNode, refScope?: string): void => {
+    if (!n.customCss) return;
+    const key =
+      refScope === undefined || refScope === ""
+        ? documentKey(n.id)
+        : refScopedKey(refScope, n.id);
+    const scoped = sanitizeBlockCss(
+      n.customCss,
+      map.get(key) ?? nodeClassName(key),
+      scope
+    );
+    // `.css`, not the result: the object is always truthy, so testing it
+    // would push an empty string for every block that has none.
+    if (scoped.css) parts.push(scoped.css);
+  };
+  walk(doc.root, n => collect(n));
+  for (const refId of placedRefIds(doc, refs)) {
+    const target = refs?.[refId];
+    if (target) walk(target, n => collect(n, refId));
+  }
   return parts.join("\n");
 }

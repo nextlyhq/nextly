@@ -461,7 +461,16 @@ function insideKeyframes(atrule: csstree.Atrule | null): boolean {
 
 export function sanitizeCustomCss(
   css: string,
-  scopeClass: string
+  scopeClass: string,
+  /**
+   * A class nested OUTSIDE `scopeClass`, when the caller has one.
+   *
+   * Prepended as a second ancestor rather than replacing `scopeClass`, so both boundaries hold:
+   * `.<outer> .<scope> sel`. Used to separate two documents that resolve to the same inner class —
+   * a node class is a hash of a key, not of a document, so the same reusable block rendered on two
+   * pages produces the same inner class and the later stylesheet would otherwise restyle both.
+   */
+  outerClass?: string
 ): SanitizedCss {
   if (!css) return { css: "", warnings: [] };
 
@@ -613,7 +622,16 @@ export function sanitizeCustomCss(
     parse: csstree.parse,
     generate: csstree.generate,
   };
-  const definedNames = namespaceDefinedNames(ast, scopeClass, cssTree);
+  // Namespaced from BOTH boundaries when there is an outer one. A `@keyframes` name derived from
+  // the node class alone is the same string in two documents rendering the same reusable block,
+  // because they share that node class — so the later definition wins for both, and the selector
+  // boundary above does nothing about it. A global name is not a selector and no ancestor scopes
+  // it.
+  const globalNameScope =
+    outerClass === undefined || outerClass === ""
+      ? scopeClass
+      : `${outerClass}-${scopeClass}`;
+  const definedNames = namespaceDefinedNames(ast, globalNameScope, cssTree);
   // The same bound the origin scan follows nested rules with, passed in rather
   // than restated there: both walk the same nesting for the same reason, and
   // two numbers would let one of them reach a level the other reports as too
@@ -694,14 +712,61 @@ export function sanitizeCustomCss(
       if (node.prelude.type !== "SelectorList") return;
       for (const sel of node.prelude.children) {
         if (sel.type !== "Selector") continue;
-        const first = sel.children.first;
-        const alreadyScoped =
-          first != null &&
-          first.type === "ClassSelector" &&
-          first.name === scopeClass;
-        if (alreadyScoped) continue;
+        const outer =
+          outerClass === undefined || outerClass === ""
+            ? undefined
+            : outerClass;
+        // ONE rule, checked at the head: a selector either already BEGINS with the required
+        // anchor or gets it prepended. Nothing else about the author's selector is inspected.
+        //
+        // Analysing it was the mistake. "Does the block class appear anywhere" does not mean the
+        // SELECTED element is inside the block — `.wrapper .<block> ~ p` carries the class and
+        // still targets a sibling outside it. And inserting after a class that turned out to be
+        // part of a compound split that compound, moving the document root's other classes onto
+        // the block. Both are questions this does not have to ask: prepending an ancestor cannot
+        // widen what a selector matches, so an over-prefixed selector is contained, and a
+        // correctly prefixed one is left exactly as written.
+        const anchor: csstree.CssNode[] =
+          outer === undefined
+            ? [{ type: "ClassSelector", name: scopeClass }]
+            : [
+                { type: "ClassSelector", name: outer },
+                { type: "Combinator", name: " " },
+                { type: "ClassSelector", name: scopeClass },
+              ];
+
+        const head: csstree.CssNode[] = [];
+        sel.children.forEach(node => {
+          if (head.length < anchor.length) head.push(node);
+        });
+        const alreadyAnchored =
+          head.length === anchor.length &&
+          anchor.every((want, i) => {
+            const got = head[i];
+            if (
+              want.type === "ClassSelector" &&
+              got?.type === "ClassSelector"
+            ) {
+              return got.name === want.name;
+            }
+            // The NAME, not just the type. The anchor is a DESCENDANT relationship, and `+` or
+            // `~` between the two classes names a SIBLING of the document root that happens to
+            // carry the block class — outside the document entirely. Accepting any combinator
+            // treats that as already anchored and lets the rule escape.
+            return (
+              want.type === "Combinator" &&
+              got?.type === "Combinator" &&
+              got.name === want.name
+            );
+          });
+        if (alreadyAnchored) continue;
+
+        // Prepended in reverse, because each prepend goes to the front.
         sel.children.prependData({ type: "Combinator", name: " " });
-        sel.children.prependData({ type: "ClassSelector", name: scopeClass });
+        for (let i = anchor.length - 1; i >= 0; i -= 1) {
+          const node = anchor[i];
+          if (node !== undefined) sel.children.prependData(node);
+        }
       }
     },
   });
@@ -717,15 +782,30 @@ export function sanitizeCustomCss(
  */
 export function sanitizeBlockCss(
   css: string,
-  scopeClass: string
+  scopeClass: string,
+  /**
+   * The document's own class, nested outside the block's.
+   *
+   * A node class is a hash of a key rather than of a document, so two pages holding the same
+   * reusable block resolve to the same node class — and without this the later stylesheet restyles
+   * both. Nested rather than substituted for the reason the comment below gives.
+   */
+  documentScope?: string
 ): SanitizedCss {
   if (!css) return { css: "", warnings: [] };
   // Replace the `selector` keyword (word-boundary, not part of .foo-selector).
-  const withScope = css.replace(/(^|[^\w.#-])selector\b/g, `$1.${scopeClass}`);
+  // Rewritten to the FULL anchor, not the block class alone. `selector` means this block's own
+  // root element, so producing `.<block>` and then prefixing it would emit `.<doc> .<block>
+  // .<block>` — the block as a descendant of itself, matching nothing.
+  const anchorText =
+    documentScope === undefined || documentScope === ""
+      ? `.${scopeClass}`
+      : `.${documentScope} .${scopeClass}`;
+  const withScope = css.replace(/(^|[^\w.#-])selector\b/g, `$1${anchorText}`);
   // The NODE class, and only it. Anchoring to a document scope instead would
   // swap one boundary for the other rather than nesting them: `p { color: red }`
   // would emit `.<document> p` and restyle every matching element in every other
   // block. Separating two documents that hold the same node id is the node
   // class's own job, not this one's.
-  return sanitizeCustomCss(withScope, scopeClass);
+  return sanitizeCustomCss(withScope, scopeClass, documentScope);
 }

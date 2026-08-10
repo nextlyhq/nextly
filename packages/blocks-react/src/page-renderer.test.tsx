@@ -7,6 +7,7 @@ import {
   forwardRef,
   memo,
   type ReactElement,
+  type ReactNode,
 } from "react";
 import { renderToReadableStream } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -22,7 +23,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "./context";
-import { defineBlock } from "./context";
+import { createStandaloneContext, defineBlock } from "./context";
 import { PageRenderer } from "./page-renderer";
 import { createBlockResolver } from "./resolver";
 
@@ -118,6 +119,16 @@ function placeholderReasons(html: string): string[] {
 
 const text = defineBlock<{ value: string }>({
   name: "test/text",
+  version: 1,
+  description: "Renders its value.",
+  example: { props: { value: "hi" } },
+  defaultProps: { value: "" },
+  render: ({ props, className }) => <p className={className}>{props.value}</p>,
+});
+
+/** A second type, so a document can lose every instance of one and keep the other. */
+const onlyHidden = defineBlock<{ value: string }>({
+  name: "test/only-hidden",
   version: 1,
   description: "Renders its value.",
   example: { props: { value: "hi" } },
@@ -243,7 +254,7 @@ describe("PageRenderer", () => {
         version: 1,
         description: "Returns a plain object.",
         example: { props: {} },
-        render: () => ({ not: "a node" }),
+        render: () => ({ not: "a node" }) as unknown as ReactNode,
       });
 
       const html = await renderToHtml(
@@ -331,7 +342,7 @@ describe("PageRenderer", () => {
         version: 1,
         description: "Returns a deeply nested invalid value.",
         example: { props: {} },
-        render: () => nested,
+        render: () => nested as ReactNode,
       });
 
       const html = await renderToHtml(
@@ -588,7 +599,7 @@ describe("PageRenderer", () => {
         version: 1,
         description: "Returns a memo component instead of an element.",
         example: { props: {} },
-        render: () => memo(Component),
+        render: () => memo(Component) as unknown as ReactNode,
       });
 
       const html = await renderToHtml(
@@ -679,11 +690,12 @@ describe("PageRenderer", () => {
         version: 1,
         description: "Returns an object whose then getter throws.",
         example: { props: {} },
-        render: () => ({
-          get then() {
-            throw new Error("then getter");
-          },
-        }),
+        render: () =>
+          ({
+            get then() {
+              throw new Error("then getter");
+            },
+          }) as unknown as ReactNode,
       });
 
       const html = await renderToHtml(
@@ -834,7 +846,7 @@ describe("PageRenderer", () => {
         version: 1,
         description: "Returns a portal.",
         example: { props: {} },
-        render: () => portalLike,
+        render: () => portalLike as unknown as ReactNode,
       });
 
       const html = await renderToHtml(
@@ -1322,6 +1334,50 @@ describe("PageRenderer", () => {
       }
     });
 
+    it("does not reserve a node id for a child that never reaches the page", async () => {
+      // The same rule one level down, for node ids rather than DOM ids. A
+      // placeholder replaces its node ENTIRELY, so the subtree under an unknown
+      // type never renders — but walking into it anyway let a child claim an id
+      // and delete the later visible sibling that shares it.
+      //
+      // `duplicate-node-id` is a write-time validation error, so this arrives
+      // only from a row edited outside the product. What matters is which side
+      // survives when it does: content over a diagnostic for something that was
+      // never going to be drawn.
+      for (const broken of [
+        node("wrapper", "test/missing", {
+          slots: {
+            main: [node("dup", "test/text", { props: { value: "buried" } })],
+          },
+        }),
+        node("wrapper", "test/text", {
+          props: { value: "stale" },
+          migrationFailed: true,
+          slots: {
+            main: [node("dup", "test/text", { props: { value: "buried" } })],
+          },
+        }),
+      ]) {
+        const html = await renderToHtml(
+          <PageRenderer
+            document={doc(
+              broken,
+              node("dup", "test/text", { props: { value: "healthy" } })
+            )}
+            blocks={createBlockResolver([text as AnyBlockDefinition])}
+          />
+        );
+
+        // The point of the test: the visible sibling is still on the page.
+        expect(html).toContain("healthy");
+        // And the child that took its id never was, so nothing was traded away.
+        expect(html).not.toContain("buried");
+        // The broken node still reports itself. Skipping the descent must not
+        // also skip the diagnostic that says why the subtree is gone.
+        expect(placeholderReasons(html)).toHaveLength(1);
+      }
+    });
+
     it("does not let attributes that never render force a placeholder", async () => {
       // The refusal is about DOM fields being LOST. `style` and `onClick` are
       // dropped by the allowlist whatever the root is, so a node carrying only
@@ -1471,7 +1527,7 @@ describe("PageRenderer", () => {
               resolve(<span>awaited</span>);
             },
           });
-          return thenable;
+          return thenable as unknown as ReactNode;
         },
       });
 
@@ -2852,6 +2908,296 @@ describe("PageRenderer", () => {
       expect(html).toContain("nx-b");
     });
 
+    it("keeps a stored stylesheet when the artifact carries the gated rules", async () => {
+      // An artifact with `gated` holds the conditioned node's rules SEPARATELY, so the sheet it
+      // ships never contained them. There is nothing stale to withhold: the visible nodes keep
+      // their styling and the gated node contributes nothing, with no recompile and no compile
+      // context needed.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            css: ".nx-b { color: teal }",
+            classes: { a: "nx-a", b: "nx-b" },
+            gated: { a: ".nx-a { background-image: url(/gated-asset.png) }" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated body");
+      // The leak the split exists to stop: the withheld node's asset stays out.
+      expect(html).not.toContain("gated-asset.png");
+      // ...and, unlike the withholding path above, the sheet SURVIVES.
+      expect(html).toContain("color: teal");
+      expect(html).toContain("public body");
+    });
+
+    it("still withholds when the artifact has no gated map at all", async () => {
+      // A missing map means the sheet was compiled before the split existed, not that nothing was
+      // gated — the two are indistinguishable from the artifact alone. Reading absence as "nothing
+      // gated" would trust a sheet that predates gating entirely.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            css: ".nx-b { color: teal }",
+            classes: { a: "nx-a", b: "nx-b" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated body");
+      expect(html).not.toContain("color: teal");
+      expect(html).toContain("public body");
+    });
+
+    it("still withholds when a repair other than gating is also needed", async () => {
+      // `gated` answers ONE of the four repair causes. Here two nodes share an id, so the class map
+      // is rebuilt — a staleness the per-node split cannot fix — and the sheet must still go.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("dup", "test/text", { props: { value: "first body" } }),
+            node("dup", "test/text", { props: { value: "second body" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            css: ".nx-b { color: teal }",
+            classes: { a: "nx-a", dup: "nx-dup" },
+            gated: { a: ".nx-a { color: rebeccapurple }" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated body");
+      expect(html).not.toContain("color: teal");
+      expect(html).not.toContain("rebeccapurple");
+    });
+
+    it("still withholds when the stored document had a duplicate id the prune hid", async () => {
+      // `dup` appears twice and one copy is gated. Pruning removes the gated copy, so the tree that
+      // renders has no collision left and nothing after the prune can see there was one — while the
+      // stored sheet, compiled when both were present, carries no rules for EITHER, because nodes
+      // sharing an id cannot be styled apart. Trusting the artifact here serves the survivor
+      // unstyled.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("dup", "test/text", {
+              props: { value: "gated twin" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("dup", "test/text", { props: { value: "surviving twin" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            css: ".nx-dup { color: teal }",
+            classes: { dup: "nx-dup" },
+            gated: { dup: ".nx-dup { color: rebeccapurple }" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated twin");
+      expect(html).not.toContain("color: teal");
+      expect(html).not.toContain("rebeccapurple");
+    });
+
+    it.each([
+      ["null", null],
+      ["an array", []],
+      ["a string", "nope"],
+    ])(
+      "still withholds when the stored gated map is %s",
+      async (_label, malformed) => {
+        // A malformed map is not a map. Counting it as coverage skips the repair while the
+        // delivery half correctly refuses to read it, so the stale main sheet ships with the
+        // hidden node's rules and asset URLs still in it.
+        const html = await renderToHtml(
+          <PageRenderer
+            document={doc(
+              node("a", "test/text", {
+                props: { value: "gated body" },
+                visibility: {
+                  conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+                },
+              }),
+              node("b", "test/text", { props: { value: "public body" } })
+            )}
+            blocks={createBlockResolver([text as AnyBlockDefinition])}
+            styles={{
+              css: ".nx-a { background-image: url(/gated-asset.png) }",
+              classes: { a: "nx-a", b: "nx-b" },
+              gated: malformed as unknown as Record<string, string>,
+            }}
+          />
+        );
+
+        expect(html).not.toContain("gated body");
+        expect(html).not.toContain("gated-asset.png");
+        expect(html).toContain("public body");
+      }
+    );
+
+    it("still withholds when the gated map does not cover every pruned node", async () => {
+      // A stored artifact can be stale relative to the document it is rendered with: compiled when
+      // `a` was unconditional, so `a`'s rules are in `css`, while `b` was already gated and has an
+      // entry. If `a` later gains conditions, it is pruned — and a coverage test that only asks
+      // whether a map EXISTS sees `b`'s entry, calls gating covered, and serves the stored sheet
+      // with `a`'s asset still in it.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "newly gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", {
+              props: { value: "long gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("c", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            css: ".nx-a { background-image: url(/stale-asset.png) }",
+            classes: { a: "nx-a", b: "nx-b", c: "nx-c" },
+            // Covers `b` only. `a` was compiled into `css` before it was gated.
+            gated: { b: ".nx-b { color: teal }" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("newly gated body");
+      expect(html).not.toContain("stale-asset.png");
+      expect(html).toContain("public body");
+    });
+
+    it("still withholds when a covering entry is not a usable rule string", async () => {
+      // Coverage that only asks whether the KEY exists certifies a node whose entry the delivery
+      // then refuses to read. The repair is skipped and the stale sheet ships with that node's
+      // asset in it.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            // `a` is deliberately ABSENT from `classes`: naming it would make the artifact
+            // describe a node the document lacks, and the unaccounted-nodes guard would refuse
+            // the sheet before the coverage check under test ran.
+            css: ".nx-a { background-image: url(/gated-asset.png) }",
+            classes: { b: "nx-b" },
+            gated: { a: null } as unknown as Record<string, string>,
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated body");
+      expect(html).not.toContain("gated-asset.png");
+      expect(html).toContain("public body");
+    });
+
+    it("still withholds when pruning removes the last node of a block type", async () => {
+      // A block type's defaults are emitted ONCE into the main sheet, shared by every instance, so
+      // no per-node entry can account for them. When the last instance of a type is pruned, the
+      // stored sheet keeps publishing that type's defaults for a block nobody was served.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/only-hidden", {
+              props: { value: "gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([
+            text as AnyBlockDefinition,
+            onlyHidden as AnyBlockDefinition,
+          ])}
+          styles={{
+            css: ".nx-bt-test--only-hidden { background-image: url(/type-default.png) }",
+            classes: { a: "nx-a", b: "nx-b" },
+            gated: { a: "" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated body");
+      expect(html).not.toContain("type-default.png");
+      expect(html).toContain("public body");
+    });
+
+    it("keeps the sheet when a gated node's entry is legitimately empty", async () => {
+      // A gated node with no node-local rules of its own compiles to `serializeRules([])`, which
+      // is `""`. That is the compiler RECORDING the node, not failing to. Reading it as uncovered
+      // forces the repair, and on this path — stored artifact, no compile context — the repair
+      // clears the whole sheet, so a visible sibling loses its styling because a hidden node
+      // happened to carry no rules.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            css: ".nx-b { color: teal }",
+            classes: { a: "nx-a", b: "nx-b" },
+            gated: { a: "" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated body");
+      expect(html).toContain("public body");
+      expect(html).toContain("color: teal");
+    });
+
     it("recompiles rather than withholding when it can", async () => {
       // With a compile context present there is no need to lose the styling:
       // the sheet is rebuilt from the pruned document, so the visible nodes keep
@@ -3348,6 +3694,249 @@ describe("PageRenderer", () => {
       // page is worse than the block being absent.
       expect(html).toContain("hidden");
       expect(html).not.toContain("No block is registered");
+    });
+  });
+
+  describe("host policy", () => {
+    const container = defineBlock({
+      name: "test/policy-box",
+      version: 1,
+      description: "Renders one slot.",
+      example: { props: {} },
+      slots: { children: {} },
+      render: ({ className, renderSlot }) => (
+        <div className={className}>{renderSlot("children")}</div>
+      ),
+    });
+
+    const reader = defineBlock({
+      name: "test/policy-reader",
+      version: 1,
+      description: "Reports what policy reached it.",
+      example: { props: {} },
+      render: ({ hostPolicy }) => (
+        <p>{(hostPolicy?.trustedFrameOrigins ?? []).join(",") || "none"}</p>
+      ),
+    });
+
+    const blocks = createBlockResolver([
+      container as AnyBlockDefinition,
+      reader as AnyBlockDefinition,
+    ]);
+
+    it("reaches a block nested inside a slot", async () => {
+      // The prop is the seam that matters. A policy that only reached top-level
+      // blocks would be one a nested block silently rendered without, which is
+      // the failure a security default exists to prevent.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/policy-box", {
+              slots: { children: [node("b", "test/policy-reader")] },
+            })
+          )}
+          blocks={blocks}
+          hostPolicy={{ trustedFrameOrigins: ["https://player.example.com"] }}
+        />
+      );
+
+      expect(html).toContain("https://player.example.com");
+    });
+
+    it("gives a block no policy when the host configured none", async () => {
+      // Absent must read as absent rather than as anything permissive.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/policy-reader"))}
+          blocks={blocks}
+        />
+      );
+
+      expect(html).toContain("none");
+    });
+
+    it("leaves the host's own context object untouched", async () => {
+      // The policy travels beside the context, never on it. Copying a host's
+      // context to add a field cannot be done faithfully: a spread drops the
+      // prototype methods of a class-based context, and even a
+      // prototype-preserving clone fails a method that reads a private field,
+      // because the clone is not branded with it.
+      const supplied = createStandaloneContext();
+      const before = Object.keys(supplied).sort();
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/policy-reader"))}
+          blocks={blocks}
+          context={supplied}
+          hostPolicy={{ trustedFrameOrigins: ["https://current.example"] }}
+        />
+      );
+
+      expect(html).toContain("https://current.example");
+      expect(Object.keys(supplied).sort()).toEqual(before);
+      expect("hostPolicy" in supplied).toBe(false);
+    });
+
+    it("reaches a slot whose container replaced the context", async () => {
+      // A repeater replaces the context to set `item` per iteration. The policy
+      // is the HOST's, not the block's, so it has to survive that replacement —
+      // otherwise an allowlisted embed loses its grant for being nested.
+      const replacing = defineBlock({
+        name: "test/policy-replacer",
+        version: 1,
+        description: "Renders its slot under a context of its own making.",
+        example: { props: {} },
+        slots: { children: {} },
+        // BUILT, not spread. A container that spreads the context it was given
+        // carries the policy along by accident, so a fixture written that way
+        // passes whether or not the renderer reapplies anything. This is the
+        // shape that actually loses it.
+        render: ({ ctx, renderSlot }) =>
+          renderSlot("children", {
+            entry: ctx.entry,
+            item: { id: "1" },
+            resolveMedia: ctx.resolveMedia,
+            resolveEntryPath: ctx.resolveEntryPath,
+          }) as ReactElement,
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/policy-replacer", {
+              slots: { children: [node("b", "test/policy-reader")] },
+            })
+          )}
+          blocks={createBlockResolver([
+            replacing as AnyBlockDefinition,
+            reader as AnyBlockDefinition,
+          ])}
+          hostPolicy={{ trustedFrameOrigins: ["https://player.example.com"] }}
+        />
+      );
+
+      expect(html).toContain("https://player.example.com");
+    });
+
+    it("does not let a block grant itself a policy through a slot", async () => {
+      // The other direction, and the one that matters more. A block hands
+      // `renderSlot` a context it built, so a block able to leave a `hostPolicy`
+      // on it would be issuing itself permissions the site operator declined.
+      const forging = defineBlock({
+        name: "test/policy-forger",
+        version: 1,
+        description: "Tries to widen the policy for its children.",
+        example: { props: {} },
+        slots: { children: {} },
+        render: ({ ctx, renderSlot }) =>
+          renderSlot("children", {
+            ...ctx,
+            // Not a field a context has, so this is the closest a block can get
+            // to fabricating one. It must reach the child as nothing.
+            ...{
+              hostPolicy: { trustedFrameOrigins: ["https://attacker.example"] },
+            },
+          } as PageContext) as ReactElement,
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/policy-forger", {
+              slots: { children: [node("b", "test/policy-reader")] },
+            })
+          )}
+          blocks={createBlockResolver([
+            forging as AnyBlockDefinition,
+            reader as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(html).not.toContain("attacker.example");
+      expect(html).toContain("none");
+    });
+
+    it("keeps a host's prototype methods when applying the policy", async () => {
+      // A host may implement the context with a class, where `resolveMedia` and
+      // `resolveEntryPath` live on the prototype. A spread copies only own
+      // enumerable properties, so it would drop them — and only for hosts that
+      // supplied a policy, which is the worst way to find out.
+      // The private field is the point. A prototype-preserving clone keeps
+      // method LOOKUP working, so a class without one would pass even against a
+      // clone; a method reading `#paths` throws on any object not branded with
+      // it, which is what proves the host's own instance is the receiver.
+      class HostContext implements PageContext {
+        entry = null;
+        #paths = new Map([["posts:1", "/resolved"]]);
+        resolveMedia(): Promise<null> {
+          return Promise.resolve(null);
+        }
+        resolveEntryPath(collection: string, id: string): Promise<string> {
+          return Promise.resolve(this.#paths.get(`${collection}:${id}`) ?? "");
+        }
+      }
+
+      const caller = defineBlock({
+        name: "test/policy-resolver-caller",
+        version: 1,
+        description: "Calls a context method that lives on the prototype.",
+        example: { props: {} },
+        render: async ({ ctx }) => (
+          <p>{await ctx.resolveEntryPath("posts", "1")}</p>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/policy-resolver-caller"))}
+          blocks={createBlockResolver([caller as AnyBlockDefinition])}
+          context={new HostContext()}
+          hostPolicy={{ trustedFrameOrigins: ["https://player.example.com"] }}
+        />
+      );
+
+      // The method still resolved, rather than the block being replaced by a
+      // render-error placeholder for calling something the copy no longer had.
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("/resolved");
+    });
+
+    it("keeps a class-based context usable with no policy at all", async () => {
+      // The control for the case above: the class path has to work whether or
+      // not a policy is supplied, since the original defect appeared ONLY when
+      // one was, which is the worst way for a host to discover it.
+      class HostContext implements PageContext {
+        entry = null;
+        resolveMedia(): Promise<null> {
+          return Promise.resolve(null);
+        }
+        resolveEntryPath(): Promise<string> {
+          return Promise.resolve("/resolved");
+        }
+      }
+
+      const caller = defineBlock({
+        name: "test/policy-absent-caller",
+        version: 1,
+        description: "Calls a prototype method with no policy configured.",
+        example: { props: {} },
+        render: async ({ ctx }) => (
+          <p>{await ctx.resolveEntryPath("posts", "1")}</p>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/policy-absent-caller"))}
+          blocks={createBlockResolver([caller as AnyBlockDefinition])}
+          context={new HostContext()}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("/resolved");
     });
   });
 
@@ -4086,6 +4675,44 @@ describe("PageRenderer", () => {
       expect(placeholderReasons(html)).toEqual(["version-ahead"]);
       // The healthy node keeps its rule; the placeholder's is gone. Asserting
       // both is what separates the prune from a sheet that failed to compile.
+      expect(html).toContain("#00ff00");
+      expect(html).not.toContain("#ff0000");
+    });
+
+    it("recompiles a real breakpoint's rules without the placeholder's", async () => {
+      // Every other `styleContext` fixture declares empty breakpoint lists, so
+      // the recompile-after-prune path had never run with a breakpoint at all:
+      // a responsive rule belonging to a pruned node could have shipped inside
+      // its media query and no test would have looked there.
+      const ahead = doc(
+        node("a", "test/text", {
+          version: 9,
+          props: { value: "ahead" },
+          styles: { base: { narrow: { color: "#ff0000" } } },
+        }),
+        node("b", "test/text", {
+          props: { value: "healthy" },
+          styles: { base: { narrow: { color: "#00ff00" } } },
+        })
+      );
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={ahead}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styleContext={{
+            breakpoints: {
+              viewport: [{ id: "narrow", label: "Narrow", maxWidth: 600 }],
+              container: [],
+            },
+            limits: DEFAULT_LIMITS,
+          }}
+        />
+      );
+
+      // The breakpoint really compiled, so the assertions below are about the
+      // prune rather than about a query that was never emitted.
+      expect(html).toContain("max-width: 600px");
       expect(html).toContain("#00ff00");
       expect(html).not.toContain("#ff0000");
     });

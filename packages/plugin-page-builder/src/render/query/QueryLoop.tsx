@@ -25,6 +25,14 @@ export interface QueryLoopProps {
   budget: QueryBudget;
   /** The document's node classes, threaded on to the loop template. */
   classes?: ReadonlyMap<string, string>;
+  /**
+   * The ref id whose reusable block this loop lives in, when it lives in one.
+   *
+   * Forwarded unchanged to the template it renders. A loop inside a reusable block is still inside
+   * it, and a template named from bare ids while its ancestors are named from the ref would put
+   * the collision back one level down.
+   */
+  refScope?: string;
 }
 
 export async function QueryLoop({
@@ -32,6 +40,7 @@ export async function QueryLoop({
   registry,
   dataProvider,
   remotePatterns,
+  refScope,
   className,
   budget,
   classes,
@@ -48,6 +57,7 @@ export async function QueryLoop({
       result={result}
       budget={budget}
       classes={classes}
+      refScope={refScope}
     />
   );
 }

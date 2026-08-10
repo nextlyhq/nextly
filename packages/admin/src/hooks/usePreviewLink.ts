@@ -113,7 +113,45 @@ export function usePreviewLink({
       }
       // Not a failure of the mint: the link exists and works. Showing it is the
       // only way the editor can still use it when the browser refused the copy.
-      toast.info(`Preview link: ${url}`);
+      //
+      // It has to STAY on screen to be usable. A preview URL is a few hundred
+      // characters of signed token, and the default toast dismisses itself in
+      // about four seconds, which is not long enough to select one by hand and
+      // leaves nothing behind when it goes. So this one persists until the
+      // editor closes it, and offers the copy again as an action.
+      //
+      // The action re-copies the URL already minted rather than minting a new
+      // one. Every mint issues another live bearer credential, so a retry that
+      // went back to the server would leave a trail of working links behind
+      // each failed copy.
+      const shown = toast.info(
+        "Preview link ready, but your browser blocked the copy.",
+        {
+          description: url,
+          duration: Infinity,
+          closeButton: true,
+          action: {
+            label: "Copy",
+            onClick: event => {
+              // Clicking an action closes the toast unless the event is
+              // prevented, and the retry only settles afterwards. Left alone,
+              // a retry that fails again would take the one copy of the link
+              // off screen and replace it with an error — the editor would be
+              // further from the link than before they clicked.
+              event.preventDefault();
+              void copyToClipboard(url).then(retried => {
+                if (!retried) {
+                  toast.error("Your browser is still blocking the copy.");
+                  return;
+                }
+                toast.success("Preview link copied.");
+                // Dismissed only now, when the clipboard actually holds it.
+                toast.dismiss(shown);
+              });
+            },
+          },
+        }
+      );
     },
     onError: () => {
       toast.error("Couldn't create a preview link.");

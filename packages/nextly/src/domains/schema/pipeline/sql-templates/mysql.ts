@@ -118,7 +118,13 @@ function generateRenameColumn(op: RenameColumnOp): string {
 // dropped (operator must hand-edit if they need to preserve them).
 // Acceptable trade-off for v1.
 function generateChangeColumnType(op: ChangeColumnTypeOp): string {
-  return `ALTER TABLE ${q(op.tableName)} MODIFY COLUMN ${q(op.columnName)} ${op.toType}`;
+  // MODIFY restates the WHOLE definition, so anything the caller knows about the column has to be
+  // restated with it or MySQL drops it. A caller that knows neither gets the historical behaviour.
+  const nullability =
+    op.nullable === undefined ? "" : op.nullable ? " NULL" : " NOT NULL";
+  const columnDefault =
+    op.columnDefault === undefined ? "" : ` DEFAULT ${op.columnDefault}`;
+  return `ALTER TABLE ${q(op.tableName)} MODIFY COLUMN ${q(op.columnName)} ${op.toType}${nullability}${columnDefault}`;
 }
 
 // F11 PR 3 review fix #1: previously emitted SQL with a comment-as-

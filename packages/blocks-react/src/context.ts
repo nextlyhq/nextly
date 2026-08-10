@@ -1,7 +1,6 @@
 import type {
   BlockRenderArgs as EngineBlockRenderArgs,
   BlockDefinition as EngineBlockDefinition,
-  BlockRenderResult,
 } from "@nextlyhq/blocks-engine";
 import type { ReactNode } from "react";
 
@@ -97,6 +96,66 @@ export interface QueryBudget {
 }
 
 /**
+ * Decisions that belong to the site operator rather than to a page editor.
+ *
+ * The distinction this type exists to draw: a block's props are CONTENT, filled
+ * in by whoever edits the page, and content is untrusted input. A few of the
+ * things a block does are not content decisions at all — they are security
+ * posture, and the person who should answer them is the developer standing up
+ * the site, once, in code they control. Modelling those as props put the answer
+ * in a checkbox any editor could tick, against any URL.
+ *
+ * Supplied to `PageRenderer` and handed to every block as a render ARGUMENT,
+ * deliberately not as a field on the context. The context object belongs to the
+ * host and is passed through untouched; the policy belongs to the renderer.
+ * Putting renderer-owned data on a host-owned object meant deriving a modified
+ * copy, and no copy is faithful: a spread loses a class host's prototype
+ * methods, and a prototype-preserving clone still fails a method that reads a
+ * native private field, because the clone is not branded with it. Threading the
+ * value instead means the host's object is never rewritten.
+ *
+ * It also settles the question of who may set it. A block builds the context it
+ * hands `renderSlot`, so a policy living there could be forged by the block or
+ * dropped by a container that rebuilt the object. As an argument supplied by
+ * the boundary, it can be neither.
+ *
+ * Every field is optional and every default is the closed one. A host that
+ * configures nothing gets the restrictive behaviour, which is the only safe
+ * direction for a value that arrives absent.
+ */
+export interface BlockHostPolicy {
+  /**
+   * Origins whose documents may keep their own origin inside a frame.
+   *
+   * An iframe granted `allow-same-origin` alongside `allow-scripts` can remove
+   * its own sandbox, so this is the one embed decision that cannot be left to
+   * content. Entries are compared as ORIGINS — scheme, host and port together,
+   * exactly — so `https://player.example.com` does not admit
+   * `http://player.example.com`, a subdomain, or a lookalike host.
+   *
+   * A relative URL never matches, deliberately. It resolves to the host's OWN
+   * origin, where `allow-same-origin` would let the frame script the page
+   * around it; that is the most dangerous grant of all, and it must be asked
+   * for by naming the origin rather than arrived at by writing `/player`. The
+   * same refusal covers `https:player.example.com`, which a URL parser reads as
+   * an absolute URL while a browser resolves it against the document.
+   *
+   * **What this cannot do.** Sandbox permissions belong to the frame, not to
+   * one navigation, so they survive a redirect: an allowlisted origin that
+   * exposes an open redirect can send the frame somewhere unlisted and the
+   * grant travels with it. The renderer sees only the URL it writes and cannot
+   * constrain where the browser goes next.
+   *
+   * So an origin listed here is trusted for everything it can redirect to, and
+   * a site that needs that bounded should pair this with a `frame-src` content
+   * security policy, which is enforced on every navigation rather than only the
+   * first. Listing an origin whose redirect behaviour you do not control is the
+   * case to avoid.
+   */
+  trustedFrameOrigins?: readonly string[];
+}
+
+/**
  * The context every block render receives.
  *
  * Resolver functions rather than raw maps: a host that resolves media through a
@@ -188,6 +247,17 @@ export interface PageContext {
 export interface BlockRenderArgs<P>
   extends Omit<EngineBlockRenderArgs<P, PageContext>, "renderSlot"> {
   renderSlot(this: void, name: string, ctx?: PageContext): ReactNode;
+  /**
+   * Site-operator decisions this block enforces. See {@link BlockHostPolicy}.
+   *
+   * Absent means the host configured nothing, and every policy then takes its
+   * closed default — the only safe reading of a value that did not arrive.
+   *
+   * An argument rather than a field on `ctx`, so that the host's own context
+   * object is never copied and a block cannot reach the policy through a
+   * context it built itself.
+   */
+  hostPolicy?: BlockHostPolicy;
 }
 
 /** A context with nothing wired up: the standalone default. */
@@ -227,7 +297,20 @@ export function createStandaloneContext(
  */
 export interface ReactBlockDefinition<P extends object>
   extends Omit<EngineBlockDefinition<P, PageContext>, "render"> {
-  render(args: BlockRenderArgs<P>): BlockRenderResult;
+  /**
+   * `ReactNode | Promise<ReactNode>` rather than the engine's
+   * `BlockRenderResult`, which is `unknown`.
+   *
+   * `unknown` is right for the engine, which carries no React types, and wrong
+   * for an authoring helper: it accepts `render: () => ({ not: "a node" })`,
+   * which typechecks and then renders an `invalid-output` placeholder. A helper
+   * whose types admit what the renderer will refuse has moved a compile-time
+   * error to runtime.
+   *
+   * The promise is allowed because a block may be an async Server Component;
+   * the renderer awaits it under the same containment as a synchronous one.
+   */
+  render(args: BlockRenderArgs<P>): ReactNode | Promise<ReactNode>;
 }
 
 /**

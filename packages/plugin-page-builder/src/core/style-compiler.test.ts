@@ -13,6 +13,9 @@ import {
   isAllowedRemoteUrl,
   safeValue,
   DEFAULT_BREAKPOINTS,
+  documentKey,
+  refNodeClass,
+  refScopedKey,
 } from "./style-compiler";
 import { makeNode } from "./tree";
 
@@ -23,11 +26,30 @@ describe("nodeClass", () => {
     expect(nodeClass("pb-abc")).not.toBe(nodeClass("pb-def"));
   });
 
-  it("is the engine's class, not a second one under the same prefix", () => {
-    // Both sides emitted `nx-pb-` from different digests, so the compiler and
-    // the engine could name one node two ways. Comparing the strings is the
-    // only assertion that catches them drifting apart again.
-    expect(nodeClass("pb-abc")).toBe(nodeClassName("pb-abc"));
+  it("uses the engine's digest, not a second one under the same prefix", () => {
+    // Both sides once emitted `nx-pb-` from different digests, so the compiler and the engine
+    // could name one node two ways. What has to hold is that there is ONE hash — the plugin
+    // composes a KEY and hands it to the engine, rather than hashing anything itself.
+    //
+    // Asserted through the key rather than the raw id, because a document node is named from
+    // `documentKey(id)` so its name cannot collide with a library node named from a ref. Comparing
+    // `nodeClass(id)` to `nodeClassName(id)` would now be comparing two different questions.
+    expect(nodeClass("pb-abc")).toBe(nodeClassName(documentKey("pb-abc")));
+    expect(refNodeClass("r1", "pb-abc")).toBe(
+      nodeClassName(refScopedKey("r1", "pb-abc"))
+    );
+  });
+
+  it("names a document node and a library node of the same id apart", () => {
+    // The collision the key space exists to close, stated directly.
+    expect(nodeClass("shared")).not.toBe(refNodeClass("r1", "shared"));
+  });
+
+  it("cannot be collided by a document id shaped like a ref key", () => {
+    // A node id is any non-empty string, so a document can carry the literal id a ref key
+    // generates. Prefixing only the ref side would give both the same class.
+    const generated = refScopedKey("r1", "same");
+    expect(nodeClass(generated)).not.toBe(refNodeClass("r1", "same"));
   });
 });
 
@@ -41,7 +63,7 @@ describe("document node classes", () => {
   it("covers every node the document walk reaches", () => {
     expect(documentNodeIds(doc)).toEqual([doc.root.id, leaf.id]);
     expect([...documentNodeClasses(doc).keys()].sort()).toEqual(
-      [doc.root.id, leaf.id].sort()
+      [documentKey(doc.root.id), documentKey(leaf.id)].sort()
     );
   });
 
@@ -50,7 +72,7 @@ describe("document node classes", () => {
     // the class itself would emit a selector the markup never carries. A map
     // holding a name the default would never produce is the only way to tell
     // "consulted it" apart from "happened to agree with it".
-    const classes = new Map([[leaf.id, "nx-pb-from-the-map"]]);
+    const classes = new Map([[documentKey(leaf.id), "nx-pb-from-the-map"]]);
     const styled = { ...leaf, style: { base: { backgroundColor: "#111" } } };
     expect(compileNodeCss(styled, { classes })).toContain(
       ".nx-pb-from-the-map"
@@ -66,7 +88,7 @@ describe("document node classes", () => {
       version: 1 as const,
       root: makeNode("core/container", {}, undefined, { default: [withCss] }),
     };
-    const classes = new Map([[withCss.id, "nx-pb-from-the-map"]]);
+    const classes = new Map([[documentKey(withCss.id), "nx-pb-from-the-map"]]);
     expect(compileDocumentBlockCss(scoped, classes)).toContain(
       ".nx-pb-from-the-map"
     );
@@ -79,7 +101,7 @@ describe("document node classes", () => {
       root: makeNode("core/container", {}, undefined, { default: [styled] }),
     };
     expect(compileDocumentCss(tree)).toContain(
-      `.${documentNodeClasses(tree).get(styled.id)}`
+      `.${documentNodeClasses(tree).get(documentKey(styled.id))}`
     );
   });
 });

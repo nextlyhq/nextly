@@ -173,23 +173,29 @@ export function createFieldGroupsNamespace(
       });
       const tableName = resolveComponentTableName(args.slug);
 
-      const component = await ctx.fieldGroupRegistryService.registerComponent({
-        slug: args.slug,
-        label: args.label,
-        tableName,
-        description: args.description,
-        fields: fieldsTyped,
-        admin: args.admin,
-        source: "ui",
-        locked: false,
-        schemaHash,
-        schemaVersion: 1,
-        migrationStatus: "pending",
-      });
+      // Through the service that owns the table and the row together. Writing the row here
+      // directly is what made this path answer success for a field group whose comp_ table was
+      // never created, leaving the registry describing storage that did not exist.
+      const { record, migrationStatus } =
+        await ctx.fieldGroupMetadataService.createFieldGroup({
+          slug: args.slug,
+          label: args.label,
+          tableName,
+          description: args.description,
+          fields: fieldsTyped,
+          admin: args.admin,
+          source: "ui",
+          locked: false,
+          schemaHash,
+          schemaVersion: 1,
+        });
 
       return {
-        message: "Field group created.",
-        item: mapFieldGroupRecord(component),
+        message:
+          migrationStatus === "applied"
+            ? "Field group created."
+            : "Field group created, but its table could not be provisioned. The field group is recorded with a failed migration and holds its slug, so creating it again is refused as a duplicate: check the server logs, then delete this field group before creating it again.",
+        item: mapFieldGroupRecord(record),
       };
     },
 

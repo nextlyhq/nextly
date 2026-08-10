@@ -28,7 +28,12 @@ import {
 import type { ReactElement } from "react";
 
 import { BlockBoundary } from "../block-boundary";
-import type { BlockRenderArgs, PageContext, ResolvedMedia } from "../context";
+import type {
+  BlockHostPolicy,
+  BlockRenderArgs,
+  PageContext,
+  ResolvedMedia,
+} from "../context";
 import { createBlockResolver } from "../resolver";
 
 import { button, renderButton } from "./button";
@@ -40,7 +45,6 @@ import { list, renderList } from "./list";
 import { paragraph, renderParagraph } from "./paragraph";
 import { quote, renderQuote } from "./quote";
 import { spacer, renderSpacer } from "./spacer";
-
 const NODE: BlockNode = { id: "n1", type: "core/text", version: 1, props: {} };
 
 function context(overrides: Partial<PageContext> = {}): PageContext {
@@ -53,13 +57,18 @@ function context(overrides: Partial<PageContext> = {}): PageContext {
   };
 }
 
-function args<P>(props: P, ctx: PageContext = context()): BlockRenderArgs<P> {
+function args<P>(
+  props: P,
+  ctx: PageContext = context(),
+  hostPolicy?: BlockHostPolicy
+): BlockRenderArgs<P> {
   return {
     props,
     node: NODE,
     className: "nx-n1",
     ctx,
     renderSlot: () => null,
+    ...(hostPolicy === undefined ? {} : { hostPolicy }),
   };
 }
 
@@ -405,13 +414,86 @@ describe("core/embed", () => {
     );
   });
 
-  it("grants same-origin only when deliberately asked", () => {
+  it("grants same-origin to an origin the host trusted", () => {
     const out = html(
       renderEmbed(
-        args({ src: "https://e.com/v", title: "t", allowSameOrigin: true })
+        args({ src: "https://player.example.com/v", title: "t" }, context(), {
+          trustedFrameOrigins: ["https://player.example.com"],
+        })
       )
     );
     expect(out).toContain("allow-same-origin");
+  });
+
+  it("ignores a stored request to drop the sandbox", () => {
+    // The flag used to be a checkbox on the block, which put a security posture
+    // in the hands of whoever edited the page. Documents written then still
+    // carry it, and it must now do nothing at all.
+    const stored = {
+      src: "https://e.com/v",
+      title: "t",
+      allowSameOrigin: true,
+    } as never;
+
+    expect(html(renderEmbed(args(stored)))).not.toContain("allow-same-origin");
+  });
+
+  it.each([
+    // Each is a way a naive check would have said yes.
+    ["a different scheme", "http://player.example.com/v"],
+    ["a suffix lookalike", "https://player.example.com.evil.test/v"],
+    ["a subdomain of a trusted host", "https://a.player.example.com/v"],
+    ["a different port", "https://player.example.com:8443/v"],
+    // `new URL(x)` with no base reads these as the trusted origin, while an
+    // `iframe src` resolves them against the DOCUMENT, because the scheme
+    // matches: they load `https://site.example/.../player.example.com`. Trusting
+    // the parser's answer would grant same-origin on the HOST's own origin.
+    ["a same-scheme url with no authority", "https:player.example.com/v"],
+    ["a same-scheme url with one slash", "https:/player.example.com/v"],
+    // A relative URL resolves to the host's OWN origin, where the grant would
+    // let the frame reach the document around it. The most dangerous case, and
+    // the one a prefix test is likeliest to wave through.
+    ["a relative url", "/player/v"],
+  ])("refuses same-origin for %s", (label, src) => {
+    const out = html(
+      renderEmbed(
+        args({ src, title: "t" }, context(), {
+          trustedFrameOrigins: ["https://player.example.com"],
+        })
+      )
+    );
+    expect(out, label).not.toContain("allow-same-origin");
+  });
+
+  it("survives an unparseable entry in the trusted list", () => {
+    // One typo in configuration must not throw out of a render and take the
+    // page with it, and must not widen the list either.
+    const policy = {
+      trustedFrameOrigins: ["not a url", "https://player.example.com"],
+    };
+
+    expect(
+      html(
+        renderEmbed(
+          args(
+            { src: "https://player.example.com/v", title: "t" },
+            context(),
+            policy
+          )
+        )
+      )
+    ).toContain("allow-same-origin");
+    expect(
+      html(
+        renderEmbed(
+          args(
+            { src: "https://other.example/v", title: "t" },
+            context(),
+            policy
+          )
+        )
+      )
+    ).not.toContain("allow-same-origin");
   });
 });
 
@@ -741,6 +823,55 @@ describe("through the boundary", () => {
     expect(html).toContain('data-nx-block-placeholder="invalid-output"');
   });
 
+  it("refuses a wrapper whose props throw on the way in", async () => {
+    // A forged Activity whose `mode` is a getter that raises. Reading it happens
+    // AFTER the block's own try/catch has returned, so an unguarded read costs
+    // the page rather than the block. Derived from a real element for the same
+    // reason as the fragment above.
+    const forged = {
+      ...(<Activity mode="visible">{null}</Activity>),
+      props: {
+        get mode(): string {
+          throw new Error("hostile mode");
+        },
+        children: null,
+      },
+    };
+
+    const html = await renderReturning(forged, "test/forged-activity");
+
+    expect(html).toContain('data-nx-block-placeholder="invalid-output"');
+  });
+
+  it("keeps the diagnostic for a borrowed iterable that answers twice", async () => {
+    // Emptiness is judged from a read, and React renders from a LATER one. An
+    // iterable that yields differently each time can read empty here and hand
+    // React an element, which would then reach the DOM without the `cssId` the
+    // node asked for — the exact silent loss the diagnostic exists to prevent.
+    // Only an array and a `Set` are trusted, because neither answers by running
+    // the block's iterator again.
+    // Four passes precede React's: two to classify the iterator as re-readable,
+    // one to validate what it holds, and one that judging emptiness would add.
+    // Staying empty for all four is what leaves the element for React alone.
+    const QUIET_READS = 4;
+    let reads = 0;
+    const shifting: Iterable<unknown> = {
+      [Symbol.iterator]() {
+        const quiet = reads++ < QUIET_READS;
+        return (quiet ? [] : [<span key="late">late</span>])[Symbol.iterator]();
+      },
+    };
+
+    const html = await renderReturning(<>{shifting}</>, "test/shifting-set");
+
+    expect(html).toContain('data-nx-block-placeholder="invalid-output"');
+    expect(html).not.toContain("late");
+    // Without this the test passes for the wrong reason: one pass fewer and the
+    // element appears while emptiness is being judged, so the diagnostic is kept
+    // by the ordinary non-empty path and the fix above is never exercised.
+    expect(reads).toBeLessThan(QUIET_READS);
+  });
+
   it("still refuses a single-use iterator inside a fragment", async () => {
     // Not an emptiness question, and the distinction matters: React does not
     // support a single-use iterator as a JSX child at all, so the normalizer
@@ -807,5 +938,53 @@ describe("through the boundary", () => {
     );
 
     expect(html).toContain('data-nx-block-placeholder="invalid-output"');
+  });
+});
+
+describe("declared empty output", () => {
+  // A block that draws nothing still costs a reader: a stylesheet carries its
+  // rules, and a rule may name a URL. `rendersNothing` is how a block says so
+  // without being rendered, and these pin the answers against the SAME props
+  // the render path treats as empty — the two must not drift.
+  it.each([
+    ["core/image", image, {}, true],
+    ["core/image with a direct url", image, { src: "/a.jpg" }, false],
+    ["core/image with a media id", image, { mediaId: "m1" }, false],
+    // A refused scheme leaves nothing usable, so it is empty for this purpose
+    // exactly as `renderImage` treats it.
+    [
+      "core/image with a refused url",
+      image,
+      { src: "javascript:alert(1)" },
+      true,
+    ],
+    ["core/embed", embed, {}, true],
+    ["core/embed with a url", embed, { src: "https://e.com/v" }, false],
+    [
+      "core/embed with a refused url",
+      embed,
+      { src: "javascript:alert(1)" },
+      true,
+    ],
+  ])("%s answers %s", (_label, definition, props, expected) => {
+    expect(definition.rendersNothing?.(props as never)).toBe(expected);
+  });
+
+  it("agrees with what the render actually produces", () => {
+    // The declaration and the render are written separately on purpose, so this
+    // is the assertion that stops them drifting: for every case above, a block
+    // that SAYS it draws nothing must actually draw nothing.
+    for (const [definition, props] of [
+      [image, {}],
+      [image, { src: "javascript:alert(1)" }],
+      [embed, {}],
+      [embed, { src: "javascript:alert(1)" }],
+    ] as const) {
+      expect(definition.rendersNothing?.(props as never)).toBe(true);
+    }
+    expect(html(renderEmbed(args({})))).toBe("");
+    expect(
+      html(renderEmbed(args({ src: "javascript:alert(1)", title: "t" })))
+    ).toBe("");
   });
 });

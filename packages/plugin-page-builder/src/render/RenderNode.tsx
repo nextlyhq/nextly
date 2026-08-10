@@ -10,11 +10,12 @@
  * at any depth resolves via `resolveBindings`. `core/query-loop` is intercepted and
  * rendered data-driven via `QueryLoop`.
  */
+import { nodeClassName } from "@nextlyhq/blocks-engine";
 import { cloneElement, isValidElement, type ReactNode } from "react";
 
 import { resolveBindings } from "../core/bindings";
 import type { BlockRegistry } from "../core/registry";
-import { nodeClass } from "../core/style-compiler";
+import { documentKey, refScopedKey } from "../core/style-compiler";
 import type { BlockNode } from "../core/types";
 import type { RemotePatternInput } from "../core/url-policy";
 
@@ -85,11 +86,22 @@ export interface RenderNodeProps {
    * stylesheet was compiled from, because a class disambiguated in one and not
    * the other names a selector the markup never carries.
    *
-   * A node reached through `core/ref` is not in it — the compiler does not walk
-   * the reusable-block library either — and falls back to its plain class,
-   * which is what both halves already give it.
+   * It spans the document's own ids AND one ref-scoped key per node of every
+   * reusable block, so a library node and a document node holding the same id
+   * are named apart rather than sharing a class.
    */
   classes?: ReadonlyMap<string, string>;
+  /**
+   * The ref id whose library subtree this node belongs to, when it belongs to
+   * one.
+   *
+   * Absent for the document's own nodes. Set at each `core/ref` boundary and
+   * carried down the subtree, so a node is named by the block it lives in
+   * rather than by the path taken to reach it — a nested reusable block
+   * resolves to the same names whether it was placed directly or through
+   * another block, and one rule serves every placement.
+   */
+  refScope?: string;
 }
 
 const REF_TYPE = "core/ref";
@@ -104,9 +116,16 @@ export function RenderNode({
   refs,
   refStack,
   classes,
+  refScope,
 }: RenderNodeProps): ReactNode {
+  // The same key the compiler names this node by. Deriving it differently on
+  // either side writes a stylesheet against a selector the markup never carries.
+  const styleKey =
+    refScope === undefined || refScope === ""
+      ? documentKey(node.id)
+      : refScopedKey(refScope, node.id);
   const className = [
-    classes?.get(node.id) ?? nodeClass(node.id),
+    classes?.get(styleKey) ?? nodeClassName(styleKey),
     node.customClass,
   ]
     .filter(Boolean)
@@ -129,15 +148,15 @@ export function RenderNode({
         budget={budget}
         refs={refs}
         refStack={[...(refStack ?? []), refId]}
-        // Not this document's map. It is keyed by id, and a stored subtree can
-        // hold an id the document also holds — a block made reusable from a node
-        // that stayed put is the ordinary way — so passing it on would give the
-        // referenced node a class disambiguated for the OTHER node of that id,
-        // compiled from styles that are not its own. The referenced subtree is
-        // outside the walk the map is built from, so it has no entry to inherit
-        // and its nodes take the plain class, which is what the compiler would
-        // name them if it reached them.
-        classes={undefined}
+        // The map DOES carry this subtree, under ref-scoped keys, so it is
+        // threaded rather than withheld. Withholding it was the previous answer
+        // and it did not work: for any id without a hash collision the plain
+        // class and the map's entry are the same string, so a referenced node
+        // sharing an id with a document node still wore that node's class.
+        // Naming it apart is what separates them; the scope below is what does
+        // the naming.
+        classes={classes}
+        refScope={refId}
       />
     );
   }
@@ -161,6 +180,7 @@ export function RenderNode({
           className={className}
           budget={budget ?? { n: 0 }}
           classes={classes}
+          refScope={refScope}
         />
       </BlockErrorBoundary>
     );
@@ -181,6 +201,11 @@ export function RenderNode({
           refs={refs}
           refStack={refStack}
           classes={classes}
+          // Carried down, not reset: a child of a library node is still inside that reusable
+          // block. Dropping it here would name the child from its bare id while its parent was
+          // named from the ref, so the child would collide with a document node of the same id
+          // and the parent would not — the original bug surviving one level down.
+          refScope={refScope}
         />
       ));
     }

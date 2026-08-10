@@ -25,7 +25,7 @@ import {
 } from "react";
 
 import { defaultBlockRegistry } from "../../core/registry";
-import { nodeClass } from "../../core/style-compiler";
+import { documentKey, nodeClass } from "../../core/style-compiler";
 import type { BlockNode } from "../../core/types";
 import { BlockErrorBoundary } from "../../render/ErrorBoundary";
 import { QUERY_LOOP_TYPE } from "../../render/query/types";
@@ -70,7 +70,12 @@ function classFor(
   classes?: ReadonlyMap<string, string>
 ): string {
   return [
-    classes?.get(node.id) ?? nodeClass(node.id),
+    // Composed the same way the compiler names a document node. The map is keyed by
+    // `documentKey(id)` so a library node reached through `core/ref` cannot share an entry with a
+    // document node of the same id — reading it by the bare id always misses, and the preview
+    // silently falls back to the undisambiguated class while the compiled sheet targets the
+    // suffixed one.
+    classes?.get(documentKey(node.id)) ?? nodeClass(node.id),
     node.customClass,
     selected && "nx-pb-selected",
     ...extra,

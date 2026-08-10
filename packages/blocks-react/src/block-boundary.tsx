@@ -1,7 +1,7 @@
 import { blockTypeClassName, type BlockNode } from "@nextlyhq/blocks-engine";
 import { Suspense, cloneElement, isValidElement, type ReactNode } from "react";
 
-import type { PageContext } from "./context";
+import type { BlockHostPolicy, PageContext } from "./context";
 import { BlockPlaceholder } from "./placeholder";
 import {
   describeThrown,
@@ -21,6 +21,13 @@ export interface BlockBoundaryProps {
   classes: Record<string, string>;
   /** Shown while an async block is still producing output. */
   fallback?: ReactNode;
+  /**
+   * Site-operator decisions the block enforces.
+   *
+   * Threaded down the tree rather than carried on the context, so the host's
+   * own object is never rewritten and no block can supply its own.
+   */
+  hostPolicy?: BlockHostPolicy;
 }
 
 /**
@@ -180,31 +187,67 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
  * Takes `unknown` rather than `ReactNode` so a fragment's children can be read
  * off an element's props and passed straight back in without a cast.
  */
-function rendersNothing(output: unknown, budget = { left: 10_000 }): boolean {
+function rendersNothing(
+  output: unknown,
+  budget = { left: 10_000 },
+  // Whether this value sits inside an element the block already built. What is
+  // reached that way is READ AGAIN by React from the same object; what arrives
+  // here directly was materialised by the normalizer into a fresh array this
+  // renderer owns, and React sees exactly what was measured.
+  borrowed = false
+): boolean {
   if (isValidElement(output) && isTransparentWrapper(output.type)) {
-    const props: unknown = output.props;
-    // A hidden `Activity` serialises as nothing WHATEVER it contains, so its
-    // children do not decide the answer and must not be consulted. Checked
-    // before the recursion rather than inside it, because the question here is
-    // about the wrapper's own mode and not about what it wraps.
-    if (isHiddenActivity(output.type, props)) return true;
-    // Unusable rather than empty. A forged element can pass `isValidElement`
-    // with null props, and calling it empty withholds the placeholder and hands
-    // it to React, which reads `props.ref` and throws — taking the page, not the
-    // block. Answering false sends it to the diagnostic below, where it belongs.
-    if (typeof props !== "object" || props === null) return false;
-    return !("children" in props) || rendersNothing(props.children, budget);
+    let children: unknown;
+    // Every read below is a property access on an object the block built, and a
+    // getter or a proxy trap may make one throw. This runs after the block's own
+    // try/catch has returned, so an escape here costs the whole page rather than
+    // one block. A read that fails answers "it draws", which routes the element
+    // to the diagnostic instead of withholding one.
+    try {
+      const props: unknown = output.props;
+      // A hidden `Activity` serialises as nothing WHATEVER it contains, so its
+      // children do not decide the answer and must not be consulted. Checked
+      // before the recursion rather than inside it, because the question here is
+      // about the wrapper's own mode and not about what it wraps.
+      if (isHiddenActivity(output.type, props)) return true;
+      // Unusable rather than empty. A forged element can pass `isValidElement`
+      // with null props, and calling it empty withholds the placeholder and
+      // hands it to React, which reads `props.ref` and throws — taking the page,
+      // not the block. Answering false sends it to the diagnostic below.
+      if (typeof props !== "object" || props === null) return false;
+      if (!("children" in props)) return true;
+      children = props.children;
+    } catch {
+      return false;
+    }
+    // Outside the try on purpose: the recursion contains its own reads, and
+    // catching them here would turn a deeper failure into this wrapper's answer.
+    return rendersNothing(children, budget, true);
   }
   // A string is iterable and must not be walked character by character: a
   // non-empty one draws, and the empty one is answered below.
   if (isWalkableIterable(output)) {
+    // Emptiness is only trusted when it is read the way React will read it.
+    //
+    // An array is indexed off the very object React indexes, and a `Set` answers
+    // from an internal slot, so neither answer can drift from the one React
+    // acts on. Any OTHER borrowed iterable answers by running the block's own
+    // `Symbol.iterator` again — a third call, after the normalizer's and before
+    // React's — and an iterable that yields differently each time can read empty
+    // here and yield an element to React, which then reaches the DOM without the
+    // `cssId` the node asked for. Treating it as drawing keeps the diagnostic,
+    // which is the direction that fails where someone can see it.
+    if (borrowed && !Array.isArray(output)) {
+      const size = setSize(output);
+      return size === null ? false : size === 0;
+    }
     try {
       for (const item of output) {
         // Refusing when the budget runs out answers "it draws", which is the
         // safe direction: it keeps the node's fields refused rather than
         // silently accepting output nobody counted.
         if (budget.left-- <= 0) return false;
-        if (!rendersNothing(item, budget)) return false;
+        if (!rendersNothing(item, budget, borrowed)) return false;
       }
       return true;
     } catch {
@@ -251,6 +294,25 @@ function isHiddenActivity(type: unknown, props: unknown): boolean {
 
 /** React's `Activity`, by the symbol this React identifies it with. */
 const ACTIVITY_TYPE = Symbol.for("react.activity");
+
+/**
+ * How many members a `Set` holds, or `null` for anything that is not one.
+ *
+ * Read through `Set.prototype`'s own getter rather than as `value.size`, so a
+ * subclass or a look-alike that defines its own `size` answers from the internal
+ * slot or not at all. That matters because the answer is TRUSTED: it is taken
+ * instead of iterating, which is the only reason a `Set` may be judged empty
+ * without a pass React cannot see. Anything without the slot raises, and is
+ * reported as not-a-Set rather than as empty.
+ */
+function setSize(value: unknown): number | null {
+  try {
+    const size: unknown = Reflect.get(Set.prototype, "size", value);
+    return typeof size === "number" ? size : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Whether a value should be walked as a list of children.
@@ -318,10 +380,10 @@ function nodeRootReason(output: ReactNode, node: BlockNode): string | null {
   // therefore real output with a root.
   if (rendersNothing(output)) return null;
   const named = hasCssId ? "`cssId`" : "attributes";
-  // A primitive or a list, on the other hand, is output that HAS a root and
-  // loses the fields anyway — silently, and with the same broken anchors as a
-  // wrapper root. The format says a block renders a single element for these to
-  // target.
+  // A primitive or a list, on the other hand, is real output with no single
+  // element to carry the fields, so it loses them anyway — silently, and with
+  // the same broken anchors as a wrapper root. The format says a block renders
+  // a single element for these to target.
   if (!isValidElement(output)) {
     return `a node carrying ${named} whose block returned no element, so there is no DOM root to put them on`;
   }
@@ -462,6 +524,7 @@ export function BlockBoundary({
   blocks,
   classes,
   fallback,
+  hostPolicy,
 }: BlockBoundaryProps): ReactNode {
   // A node the migration pass could not bring to its block's current version
   // keeps its last-good props, which the current render would misread. The
@@ -512,6 +575,9 @@ export function BlockBoundary({
       node,
       className,
       ctx: context,
+      // The renderer's, not the context's. A block may replace the context its
+      // slot children see; it can neither drop nor forge this.
+      ...(hostPolicy === undefined ? {} : { hostPolicy }),
       // Synchronous by contract: it returns an element describing what to
       // render, not the rendered result. That is what lets a block call it
       // inside its own JSX, and what lets a slot that is never shown never run
@@ -520,10 +586,15 @@ export function BlockBoundary({
       renderSlot: (name: string, slotContext?: PageContext) => (
         <BlockList
           nodes={slotNodes(node, name)}
+          // A block may replace the context its slot children see — that is how
+          // a repeater sets `item` per iteration — and the policy travels
+          // beside it either way, so a nested block cannot lose the grant by
+          // being nested nor gain one by rebuilding the context.
           context={slotContext ?? context}
           blocks={blocks}
           classes={classes}
           fallback={fallback}
+          {...(hostPolicy === undefined ? {} : { hostPolicy })}
         />
       ),
     });
@@ -562,6 +633,7 @@ export interface BlockListProps {
   blocks: BlockResolver;
   classes: Record<string, string>;
   fallback?: ReactNode;
+  hostPolicy?: BlockHostPolicy;
 }
 
 /**
@@ -577,6 +649,7 @@ export function BlockList({
   blocks,
   classes,
   fallback,
+  hostPolicy,
 }: BlockListProps): ReactNode {
   return nodes
     .filter(isUnconditional)
@@ -588,6 +661,7 @@ export function BlockList({
         blocks={blocks}
         classes={classes}
         fallback={fallback}
+        {...(hostPolicy === undefined ? {} : { hostPolicy })}
       />
     ));
 }
