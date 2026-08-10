@@ -16,7 +16,7 @@
 import { describe, expect, it } from "vitest";
 
 import { declaredSlotsOf } from "../block-structure";
-import { defaultBlockRegistry } from "../registry";
+import { createBlockRegistry, defaultBlockRegistry } from "../registry";
 import { makeNode } from "../tree";
 import { validateDocument } from "../validate";
 
@@ -76,6 +76,40 @@ describe("the write path with nothing rendered", () => {
         { allowUnknown: true }
       )
     ).toBe(true);
+  });
+
+  it("lets a registered definition's OWN slot list be the whole answer", () => {
+    // A caller supplying its own definition is stating what its own renderer exposes. Listing NO
+    // slots has to mean exactly that — not "fall back to whatever the built-in structure says" —
+    // or the built-in's `default` would admit children the caller's renderer never draws.
+    //
+    // Uses a fresh registry rather than the default one, so this is about definition precedence
+    // and not about the empty-registry condition the rest of this file exercises.
+    const own = createBlockRegistry();
+    own.register({
+      type: "core/container",
+      version: 1,
+      label: "Mine",
+      isContainer: true,
+      defaultProps: {},
+      render: () => null,
+    } as never);
+
+    // Positive control: structure DOES declare `default` for this type, so a fallback would accept
+    // it — which is what makes the rejection below meaningful rather than vacuous.
+    expect(declaredSlotsOf("core/container")).toEqual([{ name: "default" }]);
+
+    expect(
+      validateDocument(
+        doc(
+          container({
+            default: [makeNode("core/heading", { text: "x", level: "h2" })],
+          })
+        ),
+        own,
+        { allowUnknown: true }
+      )
+    ).toContain("has no slot");
   });
 
   it("leaves a type this build has no structure for to allowUnknown", () => {

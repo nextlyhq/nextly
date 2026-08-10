@@ -41,21 +41,15 @@ export function validateDocument(
     const def = registry.get(n.type);
     if (!def && !opts.allowUnknown) return `unknown block type ${n.type}`;
 
-    // Structure comes from the React-free source when it has an answer, and from the registry only
-    // as a fallback. The registry is populated by a side-effect import of `render/blocks`, which
-    // this validator's caller deliberately does not perform — so relying on it alone left the slot
-    // check unable to fire at all in the config/server path it actually runs in.
+    // A REGISTERED definition is the whole answer about its own slots, including when it lists
+    // none: a caller supplying its own definition is stating what its own renderer exposes, and
+    // letting a built-in's structure fill the gap would admit children that renderer never draws.
     //
-    // Both are read while blocks are migrating: a type whose structure has moved answers from
-    // there, one that has not still answers from its definition. This fallback goes away with the
-    // last batch, and nothing should be added to it in the meantime.
-    // The REGISTRY wins when it has an answer, and structure fills in when it does not. That order
-    // matters both ways: a caller passing its own registry is making an explicit statement about
-    // its own blocks — including a tighter `allowedBlocks` than any built-in structure carries —
-    // and structure must not shadow it. The fallback is what makes the check work at all in the
-    // config/server path, where the registry is empty because nothing imported the renderer.
+    // Structure answers only when no definition is registered. That is the ordinary case for the
+    // config and server paths, where the registry is empty because populating it requires a
+    // side-effect import of the renderer that those paths do not perform.
     const structuralSlots = declaredSlotsOf(n.type);
-    const declaredSlots = def?.slots ?? structuralSlots;
+    const declaredSlots = def ? (def.slots ?? []) : structuralSlots;
     const structural = def !== undefined || structuralSlots !== undefined;
 
     if (n.slots) {
