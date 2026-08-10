@@ -84,6 +84,7 @@
 import * as SliderPrimitive from "@radix-ui/react-slider";
 import * as React from "react";
 
+import { devWarnOnce } from "../lib/dev-warn";
 import { cn } from "../lib/utils";
 
 /**
@@ -179,6 +180,22 @@ const Slider = React.forwardRef<
     // The single-thumb fallback keeps the documented one-thumb API working:
     // with one thumb the root's name is unambiguous, so it is forwarded. A
     // range has no such fallback — one name cannot distinguish two ends.
+    // The requirement TypeScript cannot express: how many thumbs there are is
+    // the length of an array, so nothing at compile time can insist a range
+    // names both of its ends. Unmet, it fails silently — the control renders
+    // and is unusable with a screen reader.
+    devWarnOnce(
+      count === 1 ||
+        Array.from({ length: count }).every(
+          (_, i) =>
+            thumbs?.[i]?.["aria-label"] ?? thumbs?.[i]?.["aria-labelledby"]
+        ),
+      "Slider: a range needs one `thumbs` entry per thumb with an accessible " +
+        "name. The root's name is not inherited by the thumbs, and two thumbs " +
+        "sharing one name are announced identically, so nothing says which " +
+        "end is held."
+    );
+
     const ariaFor = (index: number): SliderThumbProps => {
       const supplied = thumbs?.[index] ?? {};
       if (count !== 1) return supplied;

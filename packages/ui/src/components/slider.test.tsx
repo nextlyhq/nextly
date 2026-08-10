@@ -10,7 +10,9 @@
  * uncontrolled), because the two props are read on different code paths.
  */
 import { render } from "@testing-library/react";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+
+import { resetDevWarnings } from "../lib/dev-warn";
 
 import { Slider } from "./slider";
 
@@ -33,6 +35,10 @@ beforeAll(() => {
  */
 const thumbsIn = (container: HTMLElement): Element[] =>
   Array.from(container.querySelectorAll('[role="slider"]'));
+
+afterEach(() => {
+  resetDevWarnings();
+});
 
 describe("Slider", () => {
   it("renders one thumb for a single controlled value", () => {
@@ -176,5 +182,52 @@ describe("Slider", () => {
       />
     );
     expect(thumbsIn(container)[0].getAttribute("aria-label")).toBe("Specific");
+  });
+
+  it("warns in development when a range names neither end", () => {
+    // The requirement the type system cannot express: how many thumbs there
+    // are is the length of an array. Documented and tested is not the same as
+    // enforced, and an unnamed range fails silently — the control renders and
+    // is unusable with a screen reader.
+    resetDevWarnings();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      render(<Slider aria-label="Size" defaultValue={[25, 75]} />);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toContain(
+        "one `thumbs` entry per thumb"
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("stays silent when the range names both ends", () => {
+    // The positive control. Without it, a warning that fired unconditionally
+    // would pass the case above and be useless.
+    resetDevWarnings();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      render(
+        <Slider
+          defaultValue={[25, 75]}
+          thumbs={[{ "aria-label": "Minimum" }, { "aria-label": "Maximum" }]}
+        />
+      );
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("stays silent for a single thumb named through the root", () => {
+    resetDevWarnings();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      render(<Slider aria-label="Opacity" defaultValue={[40]} />);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
