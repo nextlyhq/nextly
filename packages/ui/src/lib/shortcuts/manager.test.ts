@@ -2092,3 +2092,25 @@ describe("a letter outside the basic plane", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("a keystroke the IME is composing with", () => {
+  it("stops it reaching a window listener without preventing its default", () => {
+    // Two things must both hold: the IME's own handling goes ahead, so the default is untouched;
+    // and no other listener acts, so a legacy window-level owner cannot dismiss or navigate on
+    // the Escape the user pressed to cancel what they were composing.
+    const onWindow = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], { name: "shell", depth: 0 });
+
+    const detach = manager.attach(document);
+    window.addEventListener("keydown", onWindow);
+    const event = press("Escape");
+    Object.defineProperty(event, "isComposing", { value: true });
+    document.body.dispatchEvent(event);
+    window.removeEventListener("keydown", onWindow);
+    detach();
+
+    expect(onWindow).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+});

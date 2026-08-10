@@ -500,3 +500,40 @@ describe("providers that are siblings rather than nested", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("under Strict Mode", () => {
+  it("still has a listener after React replays the effect", () => {
+    // Strict Mode runs setup, cleanup, setup in development. A cleanup that removed the shared
+    // registry entry left the replayed setup with nothing to find, so nothing reattached and
+    // every shortcut was dead for the rest of the mount — in development only, which is the
+    // worst place for it to hide.
+    const run = vi.fn();
+
+    function Keys(): React.JSX.Element | null {
+      useShortcuts([{ keys: "mod+k", description: "Open", run }], {
+        name: "shell",
+      });
+      return null;
+    }
+
+    const view = render(
+      <React.StrictMode>
+        <ShortcutProvider isApple={false}>
+          <Keys />
+        </ShortcutProvider>
+      </React.StrictMode>
+    );
+
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "k",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      })
+    );
+    view.unmount();
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+});

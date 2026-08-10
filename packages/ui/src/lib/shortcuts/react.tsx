@@ -167,24 +167,34 @@ export function ShortcutProvider({
     // `null` is an explicit "attach nothing", for tests and for a host that drives `handle`
     // itself.
     if (resolvedTarget === null) return;
-    const entry = ownersByTarget.get(resolvedTarget);
-    if (!entry) return;
-    entry.providers += 1;
+    let entry = ownersByTarget.get(resolvedTarget);
+    if (!entry) {
+      // Strict Mode replays effects as setup, cleanup, setup. Reading the entry made during
+      // render would find nothing on the replayed setup, so nothing would reattach and every
+      // shortcut would be dead for the rest of the mount — in development only, which is the
+      // worst place for it to hide.
+      entry = { manager, providers: 0 };
+      ownersByTarget.set(resolvedTarget, entry);
+    }
+    const owned = entry;
+    owned.providers += 1;
     // The first provider to arrive installs the listener; the rest share it. Ownership is a
     // property of the target rather than of the tree, so this holds for sibling subtrees and
     // independent React roots, which have no common context to consult.
-    if (entry.providers === 1) {
-      entry.detach = entry.manager.attach(resolvedTarget);
+    if (owned.providers === 1) {
+      owned.detach = owned.manager.attach(resolvedTarget);
     }
     return () => {
-      entry.providers -= 1;
-      if (entry.providers === 0) {
-        entry.detach?.();
-        entry.detach = undefined;
-        ownersByTarget.delete(resolvedTarget);
+      owned.providers -= 1;
+      if (owned.providers === 0) {
+        owned.detach?.();
+        owned.detach = undefined;
+        // The entry itself is KEPT. It is weakly keyed by the target, so it cannot outlive one,
+        // and removing it is what made a Strict Mode replay lose the listener. An unused manager
+        // holds no layers, since each layer is disposed by the hook that registered it.
       }
     };
-  }, [resolvedTarget]);
+  }, [resolvedTarget, manager]);
 
   // Depth continues from the parent rather than restarting, so a scope inside an ignored nested
   // provider still outranks what surrounds it.

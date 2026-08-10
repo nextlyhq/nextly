@@ -654,7 +654,11 @@ export function createShortcutManager(
     // binds Escape to.
     if (event.isComposing) {
       abandonSequence();
-      return false;
+      // Reported as consumed WITHOUT preventing the default: the IME's own handling must go
+      // ahead, and no other listener should act on the keystroke either. During a staged
+      // migration a window-level owner would otherwise dismiss or navigate on the Escape the
+      // user pressed to cancel what they were composing.
+      return true;
     }
     // Pressing a modifier on its own is not a keystroke to match, and treating it as one would
     // clear any sequence in progress the moment the user reached for Shift.
