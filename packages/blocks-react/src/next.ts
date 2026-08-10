@@ -646,6 +646,23 @@ function entryPathResolver(
     const path = emitPath(slug);
     if (path === null) return null;
 
+    // The referenced row's identity AS THE PROBE WILL SEE IT — read back off the
+    // row rather than taken from the argument, so both sides of the comparison
+    // below have been through the same `afterRead`.
+    //
+    // Refused when it is not a usable value, which is what a hook DROPPING `id`
+    // produces: two rows would then compare equal on `undefined` and a
+    // shadowing entry could claim this link. Identity that cannot be
+    // established is not identity, and no link beats a link to the wrong page.
+    const referenceIdValue = record.id;
+    if (
+      typeof referenceIdValue !== "string" &&
+      typeof referenceIdValue !== "number"
+    ) {
+      return null;
+    }
+    const referenceId = String(referenceIdValue);
+
     // The route serves the FIRST entry whose STORED slug matches, searching its
     // collections in order — so that is the question to ask, rather than
     // whether some earlier collection happens to shadow this one. Asking it
@@ -686,7 +703,15 @@ function entryPathResolver(
       // This link is honest only when that is this very record — same
       // collection, same row. A duplicate slug inside the collection lands here
       // too, and is refused for the same reason.
-      return candidate === collection && String(first.id) === id ? path : null;
+      //
+      // Compared against the REFERENCED ROW's identity rather than the id this
+      // resolver was handed. Both rows here come back through `afterRead`, so a
+      // hook that rewrites `id` rewrites it on each of them alike, while the
+      // argument is the stored value the hook never saw. Comparing those two
+      // spellings made every link on such a site disappear.
+      return candidate === collection && String(first.id) === referenceId
+        ? path
+        : null;
     }
 
     // No collection serves this slug, so there is no path to offer.

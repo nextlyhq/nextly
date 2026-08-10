@@ -17,7 +17,7 @@ import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
-import { flag, oneOf, text, url } from "./props";
+import { flag, isAuthoredText, oneOf, text, url } from "./props";
 
 /** How the browser should schedule the image. */
 export const IMAGE_LOADING = ["lazy", "eager"] as const;
@@ -55,21 +55,22 @@ export async function renderImage({
   if (src === undefined) return null;
 
   const decorative = flag(props.decorative);
-  // The block's default `alt` is the EMPTY STRING, and `text()` treats that as
-  // a value rather than a missing one — so passing the media's alt as its
-  // fallback never reached a freshly created image, and it emitted `alt=""`
-  // while the record held usable text. Empty is checked explicitly instead.
+  // Three states, not two, and `text()` collapses two of them: it answers `""`
+  // for a MISSING alt and for an explicitly empty one, which here mean opposite
+  // things. An explicit `""` is this block's documented way to say "decorative"
+  // and is emitted as written; a missing alt is nobody having said anything,
+  // and falling back to the record's text is what keeps a screen reader from
+  // being handed the file name.
   //
-  // Order matters and is deliberate: `decorative` wins outright, because an
-  // author marking an image decorative means `alt=""` even when the media has
-  // text; an author's own alt beats the record's, because it was written for
-  // this placement; and the record's is the fallback that keeps a screen reader
-  // from being handed nothing.
-  const authored = text(props.alt);
+  // Order is deliberate: `decorative` wins outright, because an author marking
+  // an image decorative means `alt=""` even when the record holds text; an
+  // author's own alt beats the record's, because it was written for THIS
+  // placement; and the record's is the fallback for a placement that says
+  // nothing.
   const alt = decorative
     ? ""
-    : authored !== ""
-      ? authored
+    : isAuthoredText(props.alt)
+      ? text(props.alt)
       : (resolved?.alt ?? "");
   const caption = text(props.caption);
 

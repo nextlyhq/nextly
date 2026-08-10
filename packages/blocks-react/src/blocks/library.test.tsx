@@ -164,6 +164,34 @@ describe("core/collection-loop", () => {
     });
   });
 
+  it("queries in the locale the page is being rendered in", async () => {
+    // Without it the provider reads the default locale, so a French page
+    // embeds English rows: the surrounding blocks translate and the looped
+    // content silently does not.
+    const { provider, calls } = stubProvider([]);
+    await renderCollectionLoop(
+      args<{ collection?: string }>(
+        { collection: "posts" },
+        testContext({ data: provider, locale: "fr" })
+      )
+    );
+    expect(calls[0]).toEqual({ collection: "posts", limit: 10, locale: "fr" });
+  });
+
+  it("omits the locale key entirely on an unlocalized page", async () => {
+    // A present-but-undefined `locale` is not the same as no locale to a
+    // provider that spreads its arguments into a query.
+    const { provider, calls } = stubProvider([]);
+    await renderCollectionLoop(
+      args<{ collection?: string }>(
+        { collection: "posts" },
+        testContext({ data: provider })
+      )
+    );
+    expect(calls[0]).toEqual({ collection: "posts", limit: 10 });
+    expect("locale" in (calls[0] ?? {})).toBe(false);
+  });
+
   it("renders its template once while no collection is chosen", async () => {
     const { provider, calls } = stubProvider([{ id: "a" }, { id: "b" }]);
     const element = await renderCollectionLoop(

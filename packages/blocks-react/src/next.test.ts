@@ -1102,6 +1102,80 @@ describe("createBlocksPage", () => {
     expect(seen?.image).toBe("/later.png");
   });
 
+  it("keeps a link when a hook rewrote the ids it reads back", async () => {
+    // Both rows come back through `afterRead`, so a hook rewriting `id`
+    // rewrites it on each of them alike — while the id this resolver was HANDED
+    // is the stored value the hook never saw. Comparing those two spellings
+    // made every internal link on such a site disappear.
+    const instance = reader({
+      slug: "about",
+      content: document,
+    }) as unknown as {
+      find: ReturnType<typeof vi.fn>;
+    };
+    instance.find = vi.fn(
+      async ({ where }: { where?: Record<string, { equals?: unknown }> }) => {
+        // The hook prefixes every id it returns.
+        if (where?.id?.equals === "p9") {
+          return { items: [{ id: "hook:p9", slug: "contact" }], meta: {} };
+        }
+        if (where?.slug?.equals === "contact") {
+          return { items: [{ id: "hook:p9", slug: "contact" }], meta: {} };
+        }
+        return {
+          items: [{ id: "hook:p1", slug: "about", content: document }],
+          meta: {},
+        };
+      }
+    );
+
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: instance as never,
+    });
+
+    await expect(props.context?.resolveEntryPath("pages", "p9")).resolves.toBe(
+      "/contact"
+    );
+  });
+
+  it("gives no path when a hook dropped the id entirely", async () => {
+    // Two rows would then compare equal on `undefined`, letting a shadowing
+    // entry claim this link. Identity that cannot be established is not
+    // identity.
+    const instance = reader({
+      slug: "about",
+      content: document,
+    }) as unknown as {
+      find: ReturnType<typeof vi.fn>;
+    };
+    instance.find = vi.fn(
+      async ({ where }: { where?: Record<string, { equals?: unknown }> }) => {
+        if (where?.id?.equals === "p9") {
+          return { items: [{ slug: "contact" }], meta: {} };
+        }
+        if (where?.slug?.equals === "contact") {
+          return { items: [{ slug: "contact" }], meta: {} };
+        }
+        return {
+          items: [{ slug: "about", content: document }],
+          meta: {},
+        };
+      }
+    );
+
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: instance as never,
+    });
+
+    await expect(
+      props.context?.resolveEntryPath("pages", "p9")
+    ).resolves.toBeNull();
+  });
+
   it("gives a routed page a finite query budget", async () => {
     // `core/collection-loop` claims from `ctx.queries` before each read and its
     // check is `ctx.queries?.take() === false`, so an ABSENT budget reads as

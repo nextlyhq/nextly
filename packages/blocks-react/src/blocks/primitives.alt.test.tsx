@@ -21,15 +21,26 @@ const args = (props: Record<string, unknown>, alt?: string) =>
   }) as never;
 
 describe("core/image alt text", () => {
-  it("uses the media record's alt when the block's is the empty default", async () => {
-    // The block ships `alt: ""`, and the old fallback never fired because the
-    // empty string reads as a value — so a freshly created image emitted
-    // `alt=""` while the record held usable text.
+  it("uses the media record's alt when the placement has none", async () => {
+    // Nobody said anything about this placement, so the record's text is what
+    // stops a screen reader being handed the file name.
+    const el = (await renderImage(args({ mediaId: "m" }, "A tabby cat"))) as {
+      props: { alt: string };
+    };
+
+    expect(el.props.alt).toBe("A tabby cat");
+  });
+
+  it("keeps an explicitly empty alt empty, even when the record has text", async () => {
+    // `alt: ""` is this block's DOCUMENTED way to mark an image decorative, and
+    // it predates the `decorative` flag. Treating it as "nothing was said" and
+    // substituting the record's text would make every existing document using
+    // that form start announcing an image the author silenced on purpose.
     const el = (await renderImage(
       args({ mediaId: "m", alt: "" }, "A tabby cat")
     )) as { props: { alt: string } };
 
-    expect(el.props.alt).toBe("A tabby cat");
+    expect(el.props.alt).toBe("");
   });
 
   it("prefers the author's own alt over the record's", async () => {
