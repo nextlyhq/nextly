@@ -146,7 +146,18 @@ export function ThemePreviewCard({
     mode === undefined ? (["light", "dark"] as const) : [mode];
 
   return (
-    <section className="overflow-hidden rounded-lg border border-[var(--nx-border)]">
+    /* The card's own chrome is inside a `nextly-admin` scope too, and marked
+       as a preview like the panels are. The ui package's component rules are
+       scoped beneath that class, so the header's Apply button was rendering
+       unstyled wherever the card sits outside the admin subtree -- which is
+       everywhere the switcher shows it. Marking it a preview keeps the lab
+       from attributing it as a real admin root; its tokens come from the
+       surrounding panel rather than from a theme, because the chrome belongs
+       to the lab and only the panels below belong to the theme. */
+    <section
+      data-theme-preview=""
+      className="nextly-admin overflow-hidden rounded-lg border border-[var(--nx-border)]"
+    >
       <header className="flex items-center justify-between gap-2 px-3 py-2">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
@@ -203,6 +214,14 @@ export function ThemePreviewCard({
                theme's density, showing every theme at whatever density
                happens to be active instead of at its own. */
             data-theme-preview=""
+            /* Its OWN recommended density, not the selected one. Excluding the
+               panel above stops it inheriting whatever density is active, but
+               excluding it from everything would leave it with no density at
+               all -- and `densities.css` keys on this attribute, so a panel
+               without it previews at the base metrics while Apply switches the
+               admin to the theme's. The preview has to show what Apply
+               produces or it is not a preview. */
+            data-density={theme.recommendedDensity}
             /* `nextly-admin` brings the ui components' base styles; `dark`
                is what their dark-mode variants key off. The inline vars then
                decide every token those styles read. */

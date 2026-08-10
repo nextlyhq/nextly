@@ -20,6 +20,8 @@ import { register } from "node:module";
 import { dirname, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { converter } from "culori";
+
 register("./ts-extension-loader.mjs", import.meta.url);
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -35,12 +37,42 @@ const css = readFileSync(
   "utf8"
 );
 
-/** The oklch lightness of every literal colour token, deduped. */
+const toOklch = converter("oklch");
+
+/**
+ * A token's colour in OKLCH, whatever notation it was written in.
+ *
+ * Matching `oklch(` textually measured the Nextly themes and quietly skipped
+ * the imported presets, whose surfaces, foregrounds and accents are hex. The
+ * structural figures below then described each preset's handful of inherited
+ * status and syntax tokens rather than its palette, and reported that as the
+ * palette's shape.
+ *
+ * Returns null for a value this cannot resolve on its own -- a `var()`
+ * reference or a `color-mix()` -- which the caller counts rather than absorbs.
+ */
+function oklchOf(value) {
+  if (/^(var\(|color-mix\()/.test(value.trim())) return null;
+  try {
+    return toOklch(value.trim()) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Values a palette cannot be measured from, reported rather than dropped. */
+function unreadable(tokens) {
+  return Object.values(tokens).filter(value => oklchOf(value) === null).length;
+}
+
+/** The lightness of every literal colour token, deduped. */
 function lightnessSteps(tokens) {
   const steps = new Set();
   for (const value of Object.values(tokens)) {
-    const m = /^oklch\(\s*([0-9.]+)/.exec(value);
-    if (m) steps.add(Number(m[1]));
+    const color = oklchOf(value);
+    // Rounded: two authored values a thousandth apart are one step to the eye,
+    // and hex converts to long decimals that would each count separately.
+    if (color) steps.add(Number(color.l.toFixed(3)));
   }
   return [...steps].sort((a, b) => a - b);
 }
@@ -49,8 +81,8 @@ function lightnessSteps(tokens) {
 function chromaSpend(tokens) {
   const cs = new Set();
   for (const value of Object.values(tokens)) {
-    const m = /^oklch\(\s*[0-9.]+\s+([0-9.]+)/.exec(value);
-    if (m && Number(m[1]) > 0.005) cs.add(Number(m[1]));
+    const color = oklchOf(value);
+    if (color && (color.c ?? 0) > 0.005) cs.add(Number(color.c.toFixed(3)));
   }
   return cs.size;
 }
@@ -61,7 +93,12 @@ console.log(
     "L-steps".padStart(9) +
     "L-range".padStart(9) +
     "steps/range".padStart(13) +
-    "chromas".padStart(9)
+    "chromas".padStart(9) +
+    // Printed rather than assumed to be zero: a token this cannot resolve is a
+    // token the figures on its row do not describe, and a silent skip is what
+    // made every preset's palette look like the handful of values that
+    // happened to be readable.
+    "unread".padStart(8)
 );
 
 for (const theme of [...NEXTLY_THEMES, ...TWEAKCN_THEMES]) {
@@ -76,6 +113,7 @@ for (const theme of [...NEXTLY_THEMES, ...TWEAKCN_THEMES]) {
       String(steps.length).padStart(9) +
       range.toFixed(3).padStart(9) +
       density.toFixed(1).padStart(13) +
-      String(chromaSpend(theme.light)).padStart(9)
+      String(chromaSpend(theme.light)).padStart(9) +
+      String(unreadable(theme.light)).padStart(8)
   );
 }

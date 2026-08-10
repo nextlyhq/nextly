@@ -222,6 +222,15 @@ density consequence found here.
    palette's 13), and packing density runs the _wrong_ way — the most tightly packed palettes have
    the FEWEST near-gate pairings. What predicts margin is whether anyone optimised for it.
 
+   **Correction, and why the conclusion survives it.** The script producing these figures matched
+   `oklch(` textually, so it silently skipped the imported presets, whose surfaces and foregrounds
+   are hex — their rows described a handful of inherited status tokens rather than a palette. Fixed
+   to convert any notation, and the unreadable count is now printed rather than assumed to be zero.
+   The claim above is unaffected because it rests on the two Nextly palettes, which are authored in
+   OKLCH throughout and were always measured in full; re-running confirms 17 against 13 and the same
+   density ordering. The preset rows were the wrong ones, and they were never what the claim rested
+   on.
+
 ---
 
 ## 8. What is left for you to decide

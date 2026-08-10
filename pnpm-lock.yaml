@@ -214,6 +214,9 @@ importers:
       better-sqlite3:
         specifier: ^12.5.0
         version: 12.5.0
+      culori:
+        specifier: ^4.0.2
+        version: 4.0.2
       eslint:
         specifier: ^9.39.1
         version: 9.39.1(jiti@2.7.0)
