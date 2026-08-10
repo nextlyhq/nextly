@@ -122,11 +122,21 @@ export function PreviewActions({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
-        <DropdownMenuItem onSelect={onPreview}>
+        {/*
+         * Each item carries `disabled` itself rather than relying on the
+         * trigger. The menu is uncontrolled, so a submit that begins while it
+         * is already open leaves it open: disabling only the trigger would stop
+         * the next opening and none of the actions inside the current one, and
+         * both of these race the save they would run alongside.
+         */}
+        <DropdownMenuItem onSelect={onPreview} disabled={disabled}>
           <Eye className="h-4 w-4" />
           {previewLabel}
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={onCopyLink} disabled={isCopyingLink}>
+        <DropdownMenuItem
+          onSelect={onCopyLink}
+          disabled={disabled || isCopyingLink}
+        >
           <Link2 className="h-4 w-4" />
           {COPY_LABEL}
         </DropdownMenuItem>

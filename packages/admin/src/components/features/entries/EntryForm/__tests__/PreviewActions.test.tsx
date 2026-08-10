@@ -6,6 +6,7 @@
  * looks like a crowded sidebar or a button that promises something it cannot do.
  */
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { PreviewActions } from "../PreviewActions";
@@ -52,9 +53,42 @@ describe("PreviewActions", () => {
     expect(triggers[0]).toHaveAttribute("aria-label", "Preview options");
   });
 
-  it("disables both when the form is submitting", () => {
+  it("disables the plain preview button when the form is submitting", () => {
     render(<PreviewActions isPreviewAvailable onPreview={vi.fn()} disabled />);
     expect(screen.getByRole("button", { name: "Preview" })).toBeDisabled();
+  });
+
+  it("stops both menu actions when a submit begins with the menu open", async () => {
+    // The menu is uncontrolled, so it stays open across the state change that
+    // starts a save. Disabling the trigger alone prevents the NEXT opening and
+    // nothing inside the current one, which leaves an author able to mint a
+    // link or open a preview racing the write already in flight.
+    const onPreview = vi.fn();
+    const onCopyLink = vi.fn();
+    const user = userEvent.setup();
+    const props = {
+      isPreviewAvailable: true,
+      onPreview,
+      isLinkAvailable: true,
+      onCopyLink,
+    };
+
+    const { rerender } = render(<PreviewActions {...props} />);
+    await user.click(screen.getByRole("button", { name: "Preview options" }));
+
+    const preview = await screen.findByRole("menuitem", { name: "Preview" });
+    expect(preview).toBeInTheDocument();
+
+    rerender(<PreviewActions {...props} disabled />);
+
+    for (const name of ["Preview", "Copy shareable link"]) {
+      const item = screen.getByRole("menuitem", { name });
+      expect(item, name).toHaveAttribute("aria-disabled", "true");
+      await user.click(item);
+    }
+
+    expect(onPreview).not.toHaveBeenCalled();
+    expect(onCopyLink).not.toHaveBeenCalled();
   });
 
   it("does not offer a preview action without a handler for it", () => {
