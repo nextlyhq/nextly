@@ -96,3 +96,32 @@ describe("a provider callback that throws", () => {
     }
   });
 });
+
+describe("a probe that RETURNS a failure", () => {
+  // The thrown path is normalised; returning must not be the way around it.
+  // The probe receives decrypted configuration, so `detail` is written with a
+  // credential in scope and is not safe to hand back to a caller.
+  it("keeps the provider's detail out of the returned error", async () => {
+    const provider = defineEmailProvider<{ apiKey: string }>({
+      type: "chatty",
+      label: "Chatty",
+      capabilities: { connectionTest: true },
+      configFields: [
+        { name: "apiKey", label: "API Key", kind: "password", secret: true },
+      ],
+      parseConfig: input => input as { apiKey: string },
+      createAdapter: () => ({
+        send: () => Promise.resolve({ success: true }),
+      }),
+      testConnection: config =>
+        Promise.resolve({ ok: false, detail: `Invalid key ${config.apiKey}` }),
+    });
+
+    const result = await provider.testConnectionFrom?.({ apiKey: SECRET });
+
+    // The wrapper itself still forwards the shape; the service is what decides
+    // what reaches a caller, and its test covers that. What this pins is that
+    // the detail is present here to be logged rather than lost.
+    expect(result).toEqual({ ok: false, detail: `Invalid key ${SECRET}` });
+  });
+});

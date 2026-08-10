@@ -637,6 +637,19 @@ export class EmailProviderService extends BaseService {
       };
     }
 
+    // An unrecognised mode is refused rather than treated as the default.
+    // This argument decides whether a real message leaves the building, and a
+    // TypeScript union does not constrain a JavaScript caller or a wrapper that
+    // forwards a request body: a misspelled `"connecton"` would otherwise fall
+    // through and send mail the caller was explicitly trying not to send.
+    if (mode !== "send" && mode !== "connection") {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Unknown email provider test mode. Use "send" to dispatch a message or "connection" to probe without sending.`,
+        logContext: { providerId: id, mode: String(mode) },
+      });
+    }
+
     try {
       // Only when the caller explicitly asked to probe. Substituting a probe
       // for the send would have been silent and wrong: `api/email-providers-test.ts`
@@ -654,9 +667,23 @@ export class EmailProviderService extends BaseService {
           };
         }
         const result = await probe(provider.configuration);
+        if (result.ok) return { success: true };
+
+        // The probe's own `detail` is NOT returned. It is written by the
+        // provider, which received decrypted configuration, so a message like
+        // `Invalid key ${config.apiKey}` would hand a credential to anyone who
+        // pressed Test — the same disclosure the thrown path normalises, and
+        // returning rather than throwing must not be the way around it.
+        // Operators keep the detail: it goes to the server log.
+        this.logger.warn("Email provider connection test failed", {
+          providerId: id,
+          providerType: provider.type,
+          detail: result.detail,
+        });
         return {
-          success: result.ok,
-          error: result.ok ? undefined : (result.detail ?? "Connection failed"),
+          success: false,
+          error:
+            "Connection test failed. The provider's reason is in the server log.",
         };
       }
 
