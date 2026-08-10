@@ -290,7 +290,14 @@ export function PageRenderer({
   // take that address from a visible node for nothing: the visible one would be
   // dropped or stripped of its anchor, and the node it collided with would then
   // be pruned anyway.
-  const visible = dedupeNodeIds(pruned);
+  //
+  // The children of a node that is already known to placeholder are in the same
+  // position. The node itself still renders its marker and still needs a key,
+  // but a placeholder replaces the node entirely, so nothing below it reaches
+  // the page and nothing below it should hold an address.
+  const visible = dedupeNodeIds(pruned, node =>
+    rendersOwnMarkup(node, resolver)
+  );
 
   // Whether the tree that renders is the tree the stored stylesheet was
   // compiled from. Each pass returns its input unchanged when it had nothing to
