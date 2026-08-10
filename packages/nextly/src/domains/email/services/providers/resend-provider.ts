@@ -14,8 +14,37 @@
 
 import type { EmailProviderAdapter } from "../../types";
 
-/** Resend's send endpoint. */
-const RESEND_API_URL = "https://api.resend.com/emails";
+/** Resend's public API host, used when nothing overrides it. */
+const RESEND_DEFAULT_BASE_URL = "https://api.resend.com";
+
+/**
+ * Where to send, honouring the same environment override the Resend SDK read.
+ *
+ * Deployments point `RESEND_BASE_URL` at a capture server for testing, or at a
+ * controlled egress proxy where outbound traffic is the only route off the
+ * network. Hardcoding the public host does not fail loudly in either case — the
+ * request succeeds against the wrong endpoint — so the override has to survive
+ * the move off the SDK.
+ *
+ * Read per call rather than at module load: the value is captured at import
+ * time otherwise, which a test that sets the variable between cases cannot
+ * change, and a serverless runtime may populate the environment after the
+ * module graph is already warm.
+ */
+function resendEndpoint(): string {
+  const base = process.env.RESEND_BASE_URL?.trim() || RESEND_DEFAULT_BASE_URL;
+  // Tolerate a trailing slash so `https://host/` and `https://host` agree.
+  return `${base.replace(/\/+$/, "")}/emails`;
+}
+
+/**
+ * The `User-Agent` the SDK sent, overridable by the same variable it used.
+ * Some egress proxies filter on it, so it travels with the base URL rather
+ * than being dropped as cosmetic.
+ */
+function resendUserAgent(): string | undefined {
+  return process.env.RESEND_USER_AGENT?.trim() || undefined;
+}
 
 /**
  * Resend configuration shape stored in `EmailProviderRecord.configuration`.
@@ -100,13 +129,17 @@ export function createResendProvider(
         }));
       }
 
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${config.apiKey}`,
+      };
+      const userAgent = resendUserAgent();
+      if (userAgent) headers["User-Agent"] = userAgent;
+
       try {
-        const response = await fetch(RESEND_API_URL, {
+        const response = await fetch(resendEndpoint(), {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${config.apiKey}`,
-          },
+          headers,
           body: JSON.stringify(body),
         });
 
