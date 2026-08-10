@@ -89,7 +89,7 @@ export function PageRenderer({
       classes,
       refs,
     }),
-    compileDocumentBlockCss(document, classes, refs),
+    compileDocumentBlockCss(document, classes, refs, scope),
     // `.css` alone: the sanitizer also returns what it removed, and this path
     // renders rather than edits, so there is nowhere to show a warning. The
     // editor reads the same result and displays them.

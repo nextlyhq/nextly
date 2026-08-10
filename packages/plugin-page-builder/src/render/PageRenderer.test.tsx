@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { createBlockRegistry } from "../core/registry";
 import {
+  documentKey,
   documentNodeClasses,
   documentScopeClass,
   nodeClass,
@@ -144,7 +145,7 @@ describe("PageRenderer", () => {
     const html = renderToStaticMarkup(
       <PageRenderer document={doc} registry={registry()} />
     );
-    const expected = documentNodeClasses(doc).get(inner.id);
+    const expected = documentNodeClasses(doc).get(documentKey(inner.id));
     expect(expected).toBeDefined();
     // The class the markup carries, and the selector the stylesheet targets.
     expect(html).toContain(`<h2 class="${expected}"`);

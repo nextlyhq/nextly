@@ -461,7 +461,16 @@ function insideKeyframes(atrule: csstree.Atrule | null): boolean {
 
 export function sanitizeCustomCss(
   css: string,
-  scopeClass: string
+  scopeClass: string,
+  /**
+   * A class nested OUTSIDE `scopeClass`, when the caller has one.
+   *
+   * Prepended as a second ancestor rather than replacing `scopeClass`, so both boundaries hold:
+   * `.<outer> .<scope> sel`. Used to separate two documents that resolve to the same inner class —
+   * a node class is a hash of a key, not of a document, so the same reusable block rendered on two
+   * pages produces the same inner class and the later stylesheet would otherwise restyle both.
+   */
+  outerClass?: string
 ): SanitizedCss {
   if (!css) return { css: "", warnings: [] };
 
@@ -695,13 +704,33 @@ export function sanitizeCustomCss(
       for (const sel of node.prelude.children) {
         if (sel.type !== "Selector") continue;
         const first = sel.children.first;
-        const alreadyScoped =
-          first != null &&
-          first.type === "ClassSelector" &&
-          first.name === scopeClass;
-        if (alreadyScoped) continue;
-        sel.children.prependData({ type: "Combinator", name: " " });
-        sel.children.prependData({ type: "ClassSelector", name: scopeClass });
+        const outer =
+          outerClass === undefined || outerClass === ""
+            ? undefined
+            : outerClass;
+        const firstClass =
+          first != null && first.type === "ClassSelector"
+            ? first.name
+            : undefined;
+        // Already under the outermost boundary: nothing to add.
+        if (outer !== undefined && firstClass === outer) continue;
+        // Anchored to the inner class but not the outer one. This is the shape the `selector`
+        // keyword produces, since it is rewritten to the node class BEFORE this runs — so
+        // treating it as fully scoped would silently skip the document boundary for exactly the
+        // custom CSS most authors write.
+        const needsInner = firstClass !== scopeClass;
+        if (needsInner) {
+          sel.children.prependData({ type: "Combinator", name: " " });
+          sel.children.prependData({ type: "ClassSelector", name: scopeClass });
+        }
+        if (outer === undefined) {
+          if (!needsInner) continue;
+        } else {
+          // Outermost prepended LAST, because each prepend goes to the front: this leaves
+          // `.<outer> .<scope> sel` rather than the reverse.
+          sel.children.prependData({ type: "Combinator", name: " " });
+          sel.children.prependData({ type: "ClassSelector", name: outer });
+        }
       }
     },
   });
@@ -717,7 +746,15 @@ export function sanitizeCustomCss(
  */
 export function sanitizeBlockCss(
   css: string,
-  scopeClass: string
+  scopeClass: string,
+  /**
+   * The document's own class, nested outside the block's.
+   *
+   * A node class is a hash of a key rather than of a document, so two pages holding the same
+   * reusable block resolve to the same node class — and without this the later stylesheet restyles
+   * both. Nested rather than substituted for the reason the comment below gives.
+   */
+  documentScope?: string
 ): SanitizedCss {
   if (!css) return { css: "", warnings: [] };
   // Replace the `selector` keyword (word-boundary, not part of .foo-selector).
@@ -727,5 +764,5 @@ export function sanitizeBlockCss(
   // would emit `.<document> p` and restyle every matching element in every other
   // block. Separating two documents that hold the same node id is the node
   // class's own job, not this one's.
-  return sanitizeCustomCss(withScope, scopeClass);
+  return sanitizeCustomCss(withScope, scopeClass, documentScope);
 }
