@@ -15,8 +15,24 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+/**
+ * Every table the runtime was pointed at, in order.
+ *
+ * Recorded rather than asserted through a spy on the module, because WHEN this happens is the
+ * behaviour under test: the list has to be empty for a create whose row was rejected.
+ */
+const bound: string[] = [];
+
+vi.mock("../field-group-table-provisioning", () => ({
+  registerComponentRuntimeSchema: vi.fn((_a, _d, tableName: string) => {
+    bound.push(tableName);
+  }),
+  reconcileComponentCompanion: vi.fn(async () => {}),
+}));
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { NextlyError } from "../../../../errors";
 import type { Logger } from "../../../../shared/types";
 import type { FieldGroupRegistryService } from "../field-group-registry-service";
 import {
@@ -74,6 +90,7 @@ function serviceOver(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  bound.length = 0;
 });
 
 describe("a field-group create records its outcome rather than raising it", () => {
@@ -129,5 +146,49 @@ describe("a field-group create records its outcome rather than raising it", () =
     // rebound the existing field group's storage to this request's fields.
     expect(adapter.executeQuery).not.toHaveBeenCalled();
     expect(registry.registerComponent).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * What separates two creates that both want the same table.
+ *
+ * The ownership check cannot exclude a write that has not happened yet, so two requests whose slugs
+ * normalise to one table can both pass it. The registry's `table_name` unique index is what actually
+ * decides between them — and that only helps if nothing irreversible has already happened.
+ *
+ * Binding the runtime schema is irreversible in the sense that matters: it describes the shared table
+ * to the running process. Done before the insert, the request that loses rebinds the winner's table
+ * to ITS field list and only then fails, leaving reads and writes going through a schema that
+ * describes the wrong field group until a restart. So the binding has to happen after the insert
+ * that would reject it.
+ */
+describe("a create that loses the race changes nothing", () => {
+  it("does not bind the runtime schema when the registry rejects the row", async () => {
+    const registry = registryDouble();
+    // Passes the ownership check — the state a racing pair is in, since neither row exists yet —
+    // and then fails at the INSERT, which is where the database serialises them.
+    registry.registerComponent.mockRejectedValue(
+      NextlyError.duplicate({ logContext: { reason: "table-name-unique" } })
+    );
+    const adapter = adapterDouble(async () => true);
+
+    await expect(
+      serviceOver(registry, adapter).createFieldGroup(INPUT)
+    ).rejects.toMatchObject({ code: "DUPLICATE" });
+
+    // The table itself was created, which is expected and harmless: the DDL is idempotent and the
+    // winner owns the same table. What must NOT have happened is the rebind.
+    expect(bound).toHaveLength(0);
+  });
+
+  it("binds the runtime schema when the row is written", async () => {
+    // The positive control. Without it, a service that never bound at all would satisfy the case
+    // above while leaving every successful create invisible to the running process.
+    const registry = registryDouble();
+    const adapter = adapterDouble(async () => true);
+
+    await serviceOver(registry, adapter).createFieldGroup(INPUT);
+
+    expect(bound).toEqual(["comp_hero"]);
   });
 });

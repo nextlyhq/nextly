@@ -123,7 +123,53 @@ export class FieldGroupMetadataService {
       migrationStatus,
     });
 
+    // 4. BIND the runtime schema, and only now.
+    //
+    // 🔴 The order here is what decides a race, so it is not arbitrary. Two creates whose slugs
+    // normalise to one table can both pass the ownership check above, because a read cannot exclude
+    // a write that has not happened yet. What separates them is the registry's own `table_name`
+    // unique index: the second INSERT is rejected by the database.
+    //
+    // That only helps if nothing irreversible has happened first. Binding before the insert meant
+    // the loser rebound the shared table to ITS field list and only then failed, leaving the winner
+    // reading through a schema that does not describe it until the process restarts. Binding after
+    // the insert means the loser never reaches this line.
+    //
+    // A lock spanning the check, the DDL and the insert would be stronger, and is what the migration
+    // lock will provide once it exists. It cannot be built here: MySQL commits DDL implicitly, so no
+    // transaction opened around this can cover the table change on all three dialects.
+    if (migrationStatus === "applied") {
+      await this.bindRuntimeSchema(input);
+    }
+
     return { record, migrationStatus };
+  }
+
+  /**
+   * Point the runtime at the table that was just created.
+   *
+   * Separated from the apply so it can run after the registry write rather than with the DDL. It
+   * describes the table to the running process; the DDL only makes it exist.
+   */
+  private async bindRuntimeSchema(input: CreateFieldGroupInput): Promise<void> {
+    const adapter = this.adapter;
+    if (!adapter) return;
+
+    const { registerComponentRuntimeSchema } = await import(
+      "./field-group-table-provisioning"
+    );
+    registerComponentRuntimeSchema(
+      adapter,
+      this.dialect,
+      input.tableName,
+      input.fields,
+      // The constant, NOT a probe, and this is the one path where that inference is sound: this is
+      // the CREATE path for a new slug, and the statements just executed are the DDL generator's
+      // own, which write this column. A table the storage migration had moved would carry the
+      // migrated prefix and could not be addressed by this name at all.
+      STORAGE_FORMAT.columns.type,
+      input.localized === true
+    );
   }
 
   /**
@@ -225,22 +271,8 @@ export class FieldGroupMetadataService {
       return "failed";
     }
 
-    const { reconcileComponentCompanion, registerComponentRuntimeSchema } =
-      await import("./field-group-table-provisioning");
-
-    registerComponentRuntimeSchema(
-      adapter,
-      this.dialect,
-      input.tableName,
-      input.fields,
-      // The constant, NOT a probe, and this is the one path where that inference is sound: this is
-      // the CREATE path for a new slug, and the statements just executed are the DDL generator's
-      // own, which write this column. A table the storage migration had moved would carry the
-      // migrated prefix and could not be addressed by this name at all. Probing here can only hurt,
-      // because a transient introspection failure would record the row as failed and still return
-      // success, leaving a created table with no runtime schema until a restart.
-      STORAGE_FORMAT.columns.type,
-      isLocalized
+    const { reconcileComponentCompanion } = await import(
+      "./field-group-table-provisioning"
     );
 
     // The companion is the other half of a localized field group's storage, so failing to provision
