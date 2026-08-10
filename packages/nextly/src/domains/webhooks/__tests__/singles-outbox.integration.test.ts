@@ -7,11 +7,11 @@
  * the status transitions — independent of whether versioning is enabled, and
  * with secret fields never reaching the payload.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  component,
-  defineComponent,
+  fieldGroup,
+  defineFieldGroup,
   defineSingle,
   password,
   text,
@@ -30,6 +30,10 @@ let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  // The post-commit-hook case silences `console.error` to assert against it.
+  // This config does not restore mocks between tests, so without this every
+  // later test in the file would run with errors muted.
+  vi.restoreAllMocks();
 });
 
 /** A `nextly_events` row as read back (Drizzle camelCases the columns). */
@@ -514,8 +518,8 @@ describe("webhook outbox capture — singles (integration)", () => {
     // the event must not be tagged with a language.
     current = await createTestNextly({
       localization: { locales: ["en", "de"], defaultLocale: "en" },
-      components: [
-        defineComponent({
+      fieldGroups: [
+        defineFieldGroup({
           slug: "hero",
           localized: false,
           fields: [text({ name: "heading" })],
@@ -527,7 +531,7 @@ describe("webhook outbox capture — singles (integration)", () => {
           localized: true,
           fields: [
             text({ name: "title", localized: true }),
-            component({ name: "hero", component: "hero" }),
+            fieldGroup({ name: "hero", component: "hero" }),
           ],
         }),
       ],
@@ -552,8 +556,8 @@ describe("webhook outbox capture — singles (integration)", () => {
     // write locale.
     current = await createTestNextly({
       localization: { locales: ["en", "de"], defaultLocale: "en" },
-      components: [
-        defineComponent({
+      fieldGroups: [
+        defineFieldGroup({
           slug: "hero",
           localized: true,
           fields: [text({ name: "heading", localized: true })],
@@ -563,7 +567,7 @@ describe("webhook outbox capture — singles (integration)", () => {
         defineSingle({
           slug: "preferences",
           localized: true,
-          fields: [component({ name: "hero", component: "hero" })],
+          fields: [fieldGroup({ name: "hero", component: "hero" })],
         }),
       ],
     });
@@ -588,8 +592,8 @@ describe("webhook outbox capture — singles (integration)", () => {
     // config names an allow-list rather than a single component slug.
     current = await createTestNextly({
       localization: { locales: ["en", "de"], defaultLocale: "en" },
-      components: [
-        defineComponent({
+      fieldGroups: [
+        defineFieldGroup({
           slug: "hero_localized",
           localized: true,
           fields: [text({ name: "heading", localized: true })],
@@ -600,7 +604,7 @@ describe("webhook outbox capture — singles (integration)", () => {
           slug: "preferences",
           localized: true,
           fields: [
-            component({
+            fieldGroup({
               name: "blocks",
               components: ["hero_localized"],
               repeatable: true,
@@ -629,8 +633,8 @@ describe("webhook outbox capture — singles (integration)", () => {
     // per-locale even though there is no dynamic-zone `_componentType`.
     current = await createTestNextly({
       localization: { locales: ["en", "de"], defaultLocale: "en" },
-      components: [
-        defineComponent({
+      fieldGroups: [
+        defineFieldGroup({
           slug: "hero_localized",
           localized: true,
           fields: [text({ name: "heading", localized: true })],
@@ -641,7 +645,7 @@ describe("webhook outbox capture — singles (integration)", () => {
           slug: "preferences",
           localized: true,
           fields: [
-            component({
+            fieldGroup({
               name: "blocks",
               component: "hero_localized",
               repeatable: true,
@@ -670,8 +674,8 @@ describe("webhook outbox capture — singles (integration)", () => {
     // per-locale even though the component's definition is localized.
     current = await createTestNextly({
       localization: { locales: ["en", "de"], defaultLocale: "en" },
-      components: [
-        defineComponent({
+      fieldGroups: [
+        defineFieldGroup({
           slug: "hero_mixed",
           localized: true,
           fields: [
@@ -684,7 +688,7 @@ describe("webhook outbox capture — singles (integration)", () => {
         defineSingle({
           slug: "preferences",
           localized: true,
-          fields: [component({ name: "hero", component: "hero_mixed" })],
+          fields: [fieldGroup({ name: "hero", component: "hero_mixed" })],
         }),
       ],
     });
@@ -721,6 +725,7 @@ describe("webhook outbox capture — singles (integration)", () => {
   });
 
   it("reports eventRecorded when the write commits but a post-commit hook throws", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     current = await createTestNextly({
       singles: [
         defineSingle({
@@ -729,8 +734,10 @@ describe("webhook outbox capture — singles (integration)", () => {
         }),
       ],
     });
-    // afterUpdate runs after the write transaction commits, so a throw here
-    // leaves the entry + outbox event durable while the result reports failure.
+    // afterUpdate runs after the write transaction commits, so a throw here can
+    // undo neither the entry nor the outbox event. The write reports success and
+    // the hook failure is reported separately; `eventRecorded` is what the drain
+    // keys off and is unaffected either way.
     current.hooks.register(
       "afterUpdate",
       getSingleHookCollection("preferences"),
@@ -747,8 +754,19 @@ describe("webhook outbox capture — singles (integration)", () => {
       { overrideAccess: true }
     );
 
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
     expect(result.eventRecorded).toBe(true);
+
+    // The single trace the failure leaves, given the operation reports success.
+    expect(logged).toHaveBeenCalled();
+    expect(String(logged.mock.calls[0][0])).toContain("afterUpdate");
+    // The exception, not only the phase line. This hook throws a typed error
+    // carrying its reason, and that reason is what an operator has to go on.
+    const loggedError = logged.mock.calls[0][1] as {
+      logContext?: Record<string, unknown>;
+    };
+    expect(loggedError?.logContext?.reason).toBe("afterUpdate-observer-failed");
+
     const rows = (await events(current)).filter(
       r => r.type === "single.updated"
     );

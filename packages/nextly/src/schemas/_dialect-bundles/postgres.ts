@@ -62,7 +62,7 @@ export { nextlyMeta } from "../nextly-meta/postgres";
 // `dynamicCollectionsPg` → `dynamicCollections`, etc.).
 export { dynamicCollectionsPg as dynamicCollections } from "../dynamic-collections/postgres";
 export { dynamicSinglesPg as dynamicSingles } from "../dynamic-singles/postgres";
-export { dynamicComponentsPg as dynamicComponents } from "../dynamic-components/postgres";
+export { dynamicFieldGroupsPg as dynamicFieldGroups } from "../dynamic-field-groups/postgres";
 
 // Singletons + lookup tables.
 export { siteSettingsPg as siteSettings } from "../site-settings/postgres";

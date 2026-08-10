@@ -8,7 +8,9 @@
  * logic.
  */
 
+import { NextlyError } from "../../errors";
 import type { RichTextOutputFormat } from "../../lib/rich-text-html";
+import type { StatusOption } from "../../lib/status-filter";
 import type { WhereFilter } from "../../services/collections/query-operators";
 import type { Params } from "../types";
 
@@ -193,6 +195,40 @@ export const parseRichTextFormat = (
     return normalized;
   }
   return undefined;
+};
+
+/**
+ * Parse the `?status=` read filter. Absent (or empty) resolves to `undefined`,
+ * so the query service applies its published-only default for untrusted callers
+ * (a trusted `overrideAccess` call still sees every status). A recognized value
+ * passes through. An UNRECOGNIZED value is REJECTED with a 400 rather than
+ * silently widened to "all" or narrowed to the default — silent widening on bad
+ * input is a draft-leak, and a typo must never quietly change what a read
+ * returns.
+ */
+export const parseStatusParam = (
+  statusParam?: unknown
+): StatusOption | undefined => {
+  if (statusParam === undefined || statusParam === null || statusParam === "") {
+    return undefined;
+  }
+  if (
+    statusParam === "all" ||
+    statusParam === "draft" ||
+    statusParam === "published"
+  ) {
+    return statusParam;
+  }
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "status",
+        code: "INVALID_VALUE",
+        message: 'Invalid status filter. Use "all", "draft", or "published".',
+      },
+    ],
+    logContext: { param: "status", value: statusParam },
+  });
 };
 
 /**

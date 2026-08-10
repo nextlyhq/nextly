@@ -16,10 +16,16 @@
 /**
  * Which retention window governs an event row.
  *
- * A single event can drive a webhook AND be audit-relevant, so the class
- * records the LONGEST retention the row needs rather than what produced it.
- * Everything written today is `webhook`; the audit-log feature will mark the
- * rows it depends on as `audit` so outbox hygiene cannot evict its history.
+ * A single event can drive a webhook AND be audit-relevant, so the class records
+ * the LONGEST retention the row needs rather than what produced it. The mutation
+ * seam decides it from why the row was admitted: a write the audit seam admitted
+ * is `audit` and outlives outbox hygiene, one admitted only because an endpoint
+ * exists is `webhook`, and one that is both takes `audit`.
+ *
+ * Because a row can be dual-purpose and only carries the one label, resolution
+ * raises the audit window to the webhook window whenever that is longer — see
+ * {@link resolveWebhookRetentionConfig}. Without that, the label would promise
+ * the longer retention while being pruned on the shorter one.
  */
 export type EventRetentionClass = "webhook" | "audit";
 
@@ -28,7 +34,14 @@ export const EVENT_RETENTION_CLASSES: readonly EventRetentionClass[] = [
   "audit",
 ];
 
-/** The class every event is written with until the audit log exists. */
+/**
+ * The class a row falls back to when a recorder is given none.
+ *
+ * Not the class most rows carry — the mutation seam always classifies what it
+ * records. This is the floor for a caller that appends an event without saying
+ * why, and it is the shorter window deliberately: a row nothing claimed as
+ * audit-relevant should not silently acquire audit retention.
+ */
 export const DEFAULT_EVENT_RETENTION_CLASS: EventRetentionClass = "webhook";
 
 /** User-facing retention options. `false` anywhere means "keep forever". */
@@ -77,8 +90,24 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  */
 export const DEFAULT_EVENTS_MAX_AGE_MS = 30 * DAY_MS;
 
-/** 365 days. Audit history is kept in years; SOC 2 practice is a one-year floor. */
-export const DEFAULT_AUDIT_EVENTS_MAX_AGE_MS = 365 * DAY_MS;
+/**
+ * 90 days. Audit history is measured in months where outbox hygiene is measured
+ * in days, and 90 is where comparable products land for CONTENT activity —
+ * Directus, Strapi, Sanity's mid tier, Vercel and Datadog all default there.
+ *
+ * An earlier note here put this at a year on the grounds that "SOC 2 practice is
+ * a one-year floor". That does not hold up: neither SOC 2 nor ISO 27001 A.8.15
+ * mandates a period — both require that retention be defined and risk-based —
+ * and the ubiquitous twelve-month figure is PCI DSS convention (10.5.1) that has
+ * been imported into the wider discourse. A deployment genuinely in PCI scope
+ * should raise `auditEventsMaxAgeMs` accordingly; that is a decision only the
+ * operator can make, so the default follows the norm rather than the strictest
+ * regime anyone might be under.
+ *
+ * Auth and security events are governed separately and kept longer; they live in
+ * their own table because they carry evidence content activity does not.
+ */
+export const DEFAULT_AUDIT_EVENTS_MAX_AGE_MS = 90 * DAY_MS;
 
 /**
  * 7 days. Deliveries are the faster-growing table (events x matching endpoints)
@@ -158,9 +187,19 @@ export function resolveWebhookRetentionConfig(
     input.eventsMaxAgeMs,
     DEFAULT_EVENTS_MAX_AGE_MS
   );
-  const auditEventsMaxAgeMs = maxAge(
-    input.auditEventsMaxAgeMs,
-    DEFAULT_AUDIT_EVENTS_MAX_AGE_MS
+  // Raised to the webhook window when it is the shorter of the two. The class a
+  // row carries is decided from why it was recorded, and a row admitted by both
+  // the audit seam and an endpoint is labelled `audit` because that is the
+  // longest retention it needs — but the two windows are configured
+  // independently, so nothing stops an audit window shorter than the webhook
+  // one. Left alone, that combination prunes a dual-purpose row earlier than the
+  // webhook setting allows, which is the opposite of what its class promises and
+  // is not recoverable. Clamping here keeps the promise true for every
+  // configuration rather than only the ones where audit happens to be longer,
+  // and mirrors how `deliveriesMaxAgeMs` is bounded by the windows above it.
+  const auditEventsMaxAgeMs = longestEventWindow(
+    eventsMaxAgeMs,
+    maxAge(input.auditEventsMaxAgeMs, DEFAULT_AUDIT_EVENTS_MAX_AGE_MS)
   );
 
   // A delivery row is removed by cascade when its event goes, so a window

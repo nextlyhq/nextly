@@ -12,9 +12,8 @@
 //   2. The DI-bound `applyDesiredSchema` re-exported below — positioned for
 //      future external / plugin / integration-test callers that want a
 //      zero-wiring entry point. Resolves services from the DI container at
-//      first call and caches. MySQL via this entry point requires the
-//      caller to extract databaseName themselves and pass it through —
-//      F8 will wire this fully when it absorbs the callers.
+//      first call and caches. MySQL needs no caller cooperation here: the
+//      database name comes from the live connection.
 
 import {
   getAdapterFromDI,
@@ -30,6 +29,7 @@ import {
   type ApplyDesiredSchemaFn,
 } from "./apply";
 import { RealClassifier } from "./classifier/classifier";
+import { currentMysqlDatabaseName } from "./database-url";
 import { RealPreCleanupExecutor } from "./pre-cleanup/executor";
 import { ClackTerminalPromptDispatcher } from "./prompt-dispatcher/clack-terminal";
 import { PushSchemaPipeline } from "./pushschema-pipeline";
@@ -42,7 +42,7 @@ import type { DesiredSchema } from "./types";
 
 export type {
   DesiredCollection,
-  DesiredComponent,
+  DesiredFieldGroup,
   DesiredSchema,
   DesiredSingle,
 } from "./types";
@@ -121,18 +121,23 @@ function buildProductionDeps(): ApplyDesiredSchemaDeps {
         notifier: getProductionNotifier(),
       });
 
-      // MySQL note: the DI-bound entry point doesn't have access to
-      // the caller's connection URL, so it can't auto-extract
-      // databaseName for MySQL. Per-call factories (in reload-config.ts
-      // and collection-dispatcher.ts) do extract it themselves. F8 will
-      // collapse the two paths — until then, MySQL via this entry point
-      // throws loudly inside PushSchemaPipeline.importDrizzleKit.
+      // drizzle-kit's MySQL pushSchema needs the database name as its own
+      // argument. This entry point is handed a connection rather than a URL,
+      // so it asks the connection which database it selected — authoritative,
+      // and available even when the caller never set DATABASE_URL. Without it
+      // every MySQL apply through here fails inside
+      // PushSchemaPipeline.importDrizzleKit, which is what made boot-time
+      // auto-sync silently skip creating a code-first collection's table.
+      const databaseName =
+        dialect === "mysql" ? await currentMysqlDatabaseName(db) : undefined;
+
       return pipeline.apply({
         desired,
         db,
         dialect,
         source,
         promptChannel,
+        databaseName,
       });
     },
 

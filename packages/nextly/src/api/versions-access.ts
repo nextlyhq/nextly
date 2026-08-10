@@ -20,6 +20,10 @@ import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
 import { checkSingleAccess } from "../domains/singles";
 import type { UserContext } from "../domains/singles/types";
+import { computeVersionDiff } from "../domains/versions/diff";
+import type { VersionDiff } from "../domains/versions/diff";
+import { hydrateDiffReferences } from "../domains/versions/diff-references";
+import { hydrateSnapshotReferences } from "../domains/versions/snapshot-references";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { VersionScopeKind } from "../schemas/versions/types";
@@ -46,7 +50,7 @@ export async function requireRouteVersionReadAccess(
   scopeKind: VersionScopeKind,
   slug: string,
   entryId: string
-): Promise<UserContext> {
+): Promise<{ user: UserContext; authenticatedScope?: AuthenticatedScope }> {
   await getCachedNextly();
 
   const auth = await requireRouteCollectionAccess(request, "read", slug);
@@ -81,7 +85,7 @@ export async function requireRouteVersionReadAccess(
     authenticatedScope
   );
 
-  return user;
+  return { user, authenticatedScope };
 }
 
 /**
@@ -379,7 +383,7 @@ export async function redactSnapshotForUser(
   // read path. Capture already strips password values, but a field converted to
   // `password` after a snapshot was written — or history imported from before
   // that rule existed — would otherwise hand back a value the live read hides.
-  const fields = await resolveFieldsForRedaction(scopeKind, slug);
+  const fields = await resolveCurrentFields(scopeKind, slug);
   if (fields.length > 0) {
     stripPasswordFieldValues(entry, fields);
   }
@@ -394,11 +398,12 @@ export async function redactSnapshotForUser(
 }
 
 /**
- * Current field configs for an entity, used to decide what to strip. A lookup
- * failure yields an empty list: redaction then falls back to field-level access
- * alone rather than failing the request.
+ * Current field configs for an entity. Used by redaction to decide what to
+ * strip, and by the diff orchestration as the schema to walk. A lookup failure
+ * yields an empty list rather than failing the request (redaction then falls
+ * back to field-level access alone; a diff falls back to raw-key comparison).
  */
-async function resolveFieldsForRedaction(
+export async function resolveCurrentFields(
   scopeKind: "collection" | "single",
   slug: string
 ): Promise<FieldConfig[]> {
@@ -417,4 +422,196 @@ async function resolveFieldsForRedaction(
   } catch {
     return [];
   }
+}
+
+/**
+ * Current fields enriched with resolved component sub-schemas, so the diff
+ * engine can walk into component fields. `enrichFieldsWithComponentSchemas`
+ * takes and returns a `Record`-based shape; the enriched result is a structural
+ * superset of `FieldConfig` (the same fields plus attached sub-schemas), which
+ * the engine reads structurally. The casts are isolated here rather than at the
+ * call site, matching the enrichment idiom the schema-detail routes use.
+ */
+async function resolveEnrichedFields(
+  scopeKind: "collection" | "single",
+  slug: string
+): Promise<FieldConfig[]> {
+  const rawFields = await resolveCurrentFields(scopeKind, slug);
+  const fieldGroupRegistry = getService("fieldGroupRegistryService");
+  const enriched = await fieldGroupRegistry.enrichFieldsWithComponentSchemas(
+    rawFields as unknown as Record<string, unknown>[]
+  );
+  return enriched as unknown as FieldConfig[];
+}
+
+/** A stored snapshot as a plain object, or an empty object if it is not one. */
+function snapshotObject(snapshot: unknown): Record<string, unknown> {
+  return snapshot !== null &&
+    typeof snapshot === "object" &&
+    !Array.isArray(snapshot)
+    ? (snapshot as Record<string, unknown>)
+    : {};
+}
+
+/** Validate the version pair a diff compares before any read runs. */
+export function assertDiffVersionPair(from: number, to: number): void {
+  for (const [value, path] of [
+    [from, "from"],
+    [to, "to"],
+  ] as const) {
+    if (!Number.isInteger(value) || value < 1) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path,
+            code: "INVALID_VALUE",
+            message: `${path} must be a positive integer.`,
+          },
+        ],
+      });
+    }
+  }
+  if (from === to) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "to",
+          code: "INVALID_VALUE",
+          message: "Cannot compare a version with itself.",
+        },
+      ],
+    });
+  }
+}
+
+/**
+ * Resolve the relationship and upload references in a version snapshot to the
+ * value kit's display shape, in place, for the caller.
+ *
+ * Runs AFTER redaction, on the same enriched schema the diff walks, so a
+ * preview renders labels through the one value kit and a field the caller may
+ * not read is dropped before its references are ever resolved. The dispatcher
+ * read and the standalone route both call this, so the fields-resolution and
+ * hydration are defined once rather than duplicated between them.
+ */
+export async function hydrateVersionSnapshot(
+  snapshot: unknown,
+  scopeKind: VersionScopeKind,
+  slug: string,
+  user: UserContext,
+  authenticatedScope?: AuthenticatedScope,
+  // The version's locale, so a localized display column on a referenced target
+  // resolves in the language the snapshot was captured in.
+  locale?: string | null
+): Promise<void> {
+  const lookupKind = scopeKind === "single" ? "single" : "collection";
+  const fields = await resolveEnrichedFields(lookupKind, slug);
+  await hydrateSnapshotReferences(
+    snapshot,
+    fields,
+    user,
+    authenticatedScope,
+    locale
+  );
+}
+
+/**
+ * Compute a diff of two versions AFTER the caller has confirmed read access to
+ * the document. The dispatcher method and the standalone route both call this,
+ * so the get/redact/walk logic has exactly one definition and each surface
+ * applies its own read gate (mirroring how both reuse `versions.get`).
+ *
+ * Both snapshots are redacted for the caller before the pure engine sees them,
+ * so the diff can never surface a field the caller may not read. The two
+ * versions must share a locale: each snapshot records one locale's values, so a
+ * cross-locale comparison is meaningless. The schema is enriched with component
+ * sub-schemas so nested component fields diff field-by-field.
+ */
+export async function diffDocumentVersions(args: {
+  scopeKind: VersionScopeKind;
+  slug: string;
+  entryId: string;
+  user: UserContext;
+  from: number;
+  to: number;
+  modifiedOnly?: boolean;
+  authenticatedScope?: AuthenticatedScope;
+}): Promise<VersionDiff> {
+  const versions = getService("versionsService");
+  const ref = {
+    scopeKind: args.scopeKind,
+    scopeSlug: args.slug,
+    entryId: args.entryId,
+  };
+  const [fromRow, toRow] = await Promise.all([
+    versions.get(ref, args.from),
+    versions.get(ref, args.to),
+  ]);
+
+  if (fromRow.locale !== toRow.locale) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "to",
+          code: "LOCALE_MISMATCH",
+          message: "The two versions belong to different locales.",
+        },
+      ],
+      logContext: {
+        reason: "version-diff-locale-mismatch",
+        scopeKind: args.scopeKind,
+        slug: args.slug,
+        from: args.from,
+        to: args.to,
+      },
+    });
+  }
+
+  // Redact each snapshot for the caller BEFORE diffing, so the diff can never
+  // surface a field the caller may not read.
+  await redactSnapshotForUser(
+    fromRow.snapshot,
+    args.scopeKind,
+    args.slug,
+    args.user
+  );
+  await redactSnapshotForUser(
+    toRow.snapshot,
+    args.scopeKind,
+    args.slug,
+    args.user
+  );
+
+  // Page scope has no HTTP diff surface; collection and single are the only
+  // callers, so anything else resolves as a collection for field lookup.
+  const lookupKind = args.scopeKind === "single" ? "single" : "collection";
+  const fields = await resolveEnrichedFields(lookupKind, args.slug);
+
+  const body = computeVersionDiff(
+    snapshotObject(fromRow.snapshot),
+    snapshotObject(toRow.snapshot),
+    fields,
+    { modifiedOnly: args.modifiedOnly }
+  );
+
+  // Resolve relationship and upload ids in the diff to display labels through
+  // the same access-checked path a read uses: an unreadable target stays a bare
+  // id. Labels attach beside the ids rather than replacing them, so the diff
+  // wire stays id-stable for any non-admin consumer of this surface. Both
+  // versions share a locale (asserted above), so the target reads resolve in
+  // that language.
+  await hydrateDiffReferences(
+    body.fields,
+    args.user,
+    args.authenticatedScope,
+    fromRow.locale
+  );
+
+  return {
+    from: args.from,
+    to: args.to,
+    locale: fromRow.locale,
+    hasChanges: body.hasChanges,
+    fields: body.fields,
+  };
 }

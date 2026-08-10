@@ -325,6 +325,20 @@ export interface BuilderField extends FieldConfig {
   /** When true, the Builder shows this field read-only (inspect only). */
   locked?: boolean;
   /**
+   * A blocks field's policy: which registered block names and document kinds
+   * it accepts. Carried through the builder so an edit elsewhere in the schema
+   * cannot rewrite the field without it.
+   */
+  blocks?: { allow?: string[]; kinds?: string[] };
+  /**
+   * Options belonging to the field's own type, carried verbatim.
+   *
+   * A plugin-contributed field type declares its own option names, so the
+   * builder cannot model them. Holding them here keeps a save that rebuilds
+   * every field from dropping options the type requires.
+   */
+  pluginOptions?: Record<string, unknown>;
+  /**
    * Field description/help text
    */
   description?: string;

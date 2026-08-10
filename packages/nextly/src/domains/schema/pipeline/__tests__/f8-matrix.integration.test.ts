@@ -271,6 +271,84 @@ describe("F8 matrix — SQLite — drop field", () => {
       .get("a1") as { id: string; body: string };
     expect(a1.body).toBe("body-1");
   });
+
+  it("removes an INDEXED column (index dropped first — SQLite rejects DROP COLUMN while an index covers it)", async () => {
+    // Mirrors deleting a Builder media/upload or unique/indexed field: those
+    // fields carry a managed idx_/uq_ index on their column. SQLite refuses
+    // `ALTER TABLE ... DROP COLUMN` while any index still references the
+    // column, so the apply only succeeds if the pipeline pre-drops the
+    // index before the column drop.
+    const tableName = "dc_gallery";
+    // The LIVE table is spelled out rather than generated, matching the other
+    // fixtures in this file. On SQLite a managed table is created through
+    // drizzle-kit from generateRuntimeSchema, which declares no secondary
+    // indexes and its own column shape; the desired-side
+    // buildDesiredTableFromFields spec differs from it (it lists the system
+    // slug/created_at/created_by indexes), so generating the live table from
+    // that spec produces a table drizzle-kit then wants to DROP and recreate.
+    // What matters here is the one thing a Builder-made table really carries:
+    // the per-field index, which the index-restore step creates.
+    sqlite.exec(`
+      CREATE TABLE ${quoteIdent(tableName)} (
+        "id" text PRIMARY KEY,
+        "title" text NOT NULL,
+        "slug" text NOT NULL,
+        "created_at" integer,
+        "updated_at" integer,
+        "created_by" text,
+        "body" text NOT NULL,
+        "hero_image" text
+      )
+    `);
+    sqlite.exec(
+      `CREATE INDEX "idx_dc_gallery_hero_image" ON ${quoteIdent(tableName)} ("hero_image")`
+    );
+    sqlite
+      .prepare(
+        `INSERT INTO ${quoteIdent(tableName)} (id, title, slug, body, hero_image) VALUES (?, ?, ?, ?, ?)`
+      )
+      .run("g1", "title-1", "slug-1", "body-1", "media-123");
+
+    // Desired: the indexed hero_image field is gone entirely.
+    const desired: DesiredSchema = {
+      collections: {
+        gallery: {
+          slug: "gallery",
+          tableName,
+          fields: [{ name: "body", type: "text", required: true }] as never,
+        },
+      },
+      singles: {},
+      components: {},
+    };
+
+    const { dispatcher } = autoConfirmAllRenamesDispatcher();
+    const pipeline = makePipeline(dispatcher);
+    const result = await pipeline.apply({
+      desired,
+      db,
+      dialect: "sqlite",
+      source: "code",
+      promptChannel: "terminal",
+    });
+    expect(result.success).toBe(true);
+
+    // Column gone, surviving data intact.
+    const cols = sqlite
+      .prepare(`PRAGMA table_info(${quoteIdent(tableName)})`)
+      .all() as Array<{ name: string }>;
+    expect(cols.map(c => c.name)).not.toContain("hero_image");
+    const g1 = sqlite
+      .prepare(`SELECT id, body FROM ${quoteIdent(tableName)} WHERE id = ?`)
+      .get("g1") as { id: string; body: string };
+    expect(g1.body).toBe("body-1");
+
+    // The managed index is gone too (not merely orphaned).
+    const indexes = sqlite
+      .prepare(`PRAGMA index_list(${quoteIdent(tableName)})`)
+      .all() as Array<{ name: string }>;
+    expect(indexes.map(i => i.name)).not.toContain("idx_dc_gallery_hero_image");
+  });
 });
 
 // ---------------------------------------------------------------------------

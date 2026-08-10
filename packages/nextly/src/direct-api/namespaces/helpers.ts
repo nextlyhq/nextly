@@ -9,11 +9,12 @@
  * @packageDocumentation
  */
 
+import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
 import type { RequestContext } from "../../shared/types/index";
 import type {
-  ComponentDefinition,
   DirectAPIConfig,
+  FieldGroupDefinition,
   ListResult,
   Permission,
   Role,
@@ -51,7 +52,8 @@ export function createRequestContext(args: DirectAPIConfig): RequestContext {
   return {
     user: {
       id: args.user.id,
-      email: "",
+      // Preserve the caller's real email so email-based access rules match.
+      email: typeof args.user.email === "string" ? args.user.email : "",
       role: args.user.role ?? "user",
       permissions: [],
     },
@@ -65,7 +67,17 @@ export function createRequestContext(args: DirectAPIConfig): RequestContext {
 export interface ServiceResultLike {
   success: boolean;
   statusCode: number;
+  /**
+   * Canonical `NextlyError` code carried by envelopes that originate from a
+   * NextlyError. Preferred over the status-derived fallback because one
+   * status can cover several codes (409 is both DUPLICATE and CONFLICT).
+   */
+  code?: string;
   message: string;
+  /** Translation key for the public message, when the thrower set one. */
+  messageKey?: string;
+  /** The error's own public data -- a rate limit's retry interval, and such. */
+  publicData?: unknown;
   data: unknown;
   errors?: Array<{ path: string; code: string; message: string }>;
 }
@@ -74,19 +86,25 @@ export interface ServiceResultLike {
  * Convert a failed service-layer result into a `NextlyError`.
  */
 export function createErrorFromResult(result: ServiceResultLike): NextlyError {
-  // Per-field validation issues survive into the Direct API error so
-  // server-side callers (and agents) see exactly which fields failed.
-  if (result.statusCode === 400 && result.errors?.length) {
-    return NextlyError.validation({ errors: result.errors });
-  }
-  return new NextlyError({
-    code: statusCodeToErrorCode(result.statusCode),
-    publicMessage: result.message,
-    statusCode: result.statusCode,
-    logContext:
-      result.data !== undefined && result.data !== null
-        ? { resultData: result.data }
-        : undefined,
+  // The shared converter, so a Direct API caller and a REST caller are handed
+  // the same error for the same failure. Its code-keyed rebuild carries the
+  // message key and public data that this boundary used to drop.
+  //
+  // The rebuilt error is right for the caller and blind for whoever debugs it:
+  // the driver error underneath and the identifiers the thrower attached were
+  // dropped on the way through the public envelope. The converter chains the
+  // original back on as `cause` by reading it off the envelope, and the spread
+  // below is what carries it there — it is an enumerable own property, so it
+  // survives into the object handed over.
+  return errorFromServiceEnvelope(result, {
+    // The service's own text, kept for the operator. A code-less failure now
+    // answers with a generic sentence, because its message may be a raw
+    // exception's; withholding it from the caller is the point, and discarding
+    // it as well would make exactly those failures undiagnosable.
+    legacyMessage: result.message,
+    ...(result.data !== undefined && result.data !== null
+      ? { resultData: result.data }
+      : {}),
   });
 }
 
@@ -96,8 +114,14 @@ export function createErrorFromResult(result: ServiceResultLike): NextlyError {
 export interface SingleResultLike {
   success: boolean;
   statusCode: number;
+  /** Canonical `NextlyError` code, when the envelope came from one. */
+  code?: string;
   message?: string;
-  errors?: Array<{ field?: string; message: string }>;
+  /** Translation key for the public message. */
+  messageKey?: string;
+  /** The error's own public data -- a rate limit's retry interval, and such. */
+  publicData?: unknown;
+  errors?: Array<{ field?: string; code?: string; message: string }>;
 }
 
 /**
@@ -111,60 +135,30 @@ export function createErrorFromSingleResult(
     result.errors?.map(e => e.message).join(", ") ||
     "Operation failed";
 
-  if (result.statusCode === 400 && result.errors && result.errors.length > 0) {
-    return NextlyError.validation({
-      errors: result.errors.map(e => ({
-        path: e.field ?? "",
-        code: "VALIDATION_ERROR",
+  // The shared converter, so a Single failure reaches a Direct API caller as
+  // the same error a REST caller gets. Rebuilding from status alone dropped the
+  // message key and the public data -- a rate limit's retry interval among it.
+  return errorFromServiceEnvelope(
+    {
+      ...result,
+      message,
+      // Normalised to the canonical shape; SingleResult still emits `{field}`.
+      errors: result.errors?.map(e => ({
+        path: e.field,
+        // The per-field reason travels with the issue; dropping it here would
+        // have the converter substitute a generic one.
+        code: e.code,
         message: e.message,
       })),
-    });
-  }
-
-  return new NextlyError({
-    code: statusCodeToErrorCode(result.statusCode),
-    publicMessage: message,
-    statusCode: result.statusCode,
-  });
-}
-
-/**
- * Map an HTTP status code to the primary canonical `NextlyErrorCode` string
- * for that status. Mirrors the inverse of `NEXTLY_ERROR_STATUS` from
- * `error-codes.ts`, picking the most specific representative code per status.
- *
- * Statuses outside this table fall back to `INTERNAL_ERROR` — service-layer
- * results that need a more specific code (e.g. `BUSINESS_RULE_VIOLATION` at
- * 422) should throw `NextlyError` directly rather than returning a result
- * shape that funnels through this helper.
- */
-export function statusCodeToErrorCode(statusCode: number): string {
-  switch (statusCode) {
-    case 400:
-      return "VALIDATION_ERROR";
-    case 401:
-      return "AUTH_REQUIRED";
-    case 403:
-      return "FORBIDDEN";
-    case 404:
-      return "NOT_FOUND";
-    case 409:
-      return "CONFLICT";
-    case 413:
-      return "PAYLOAD_TOO_LARGE";
-    case 415:
-      return "UNSUPPORTED_MEDIA_TYPE";
-    case 422:
-      return "INVALID_INPUT";
-    case 429:
-      return "RATE_LIMITED";
-    case 502:
-      return "EXTERNAL_SERVICE_ERROR";
-    case 503:
-      return "SERVICE_UNAVAILABLE";
-    default:
-      return "INTERNAL_ERROR";
-  }
+    },
+    // The NORMALISED message, not `result.message`. A Single failure may omit
+    // the top-level one and carry per-field `errors` instead, in which case the
+    // text above is synthesised from them -- and that synthesised text is what
+    // the converter replaces with a generic sentence for a non-validation
+    // status. Logging the raw field would record `undefined` in exactly the
+    // case where the caller's text was withheld.
+    { legacyMessage: message }
+  );
 }
 
 /**
@@ -260,9 +254,9 @@ export function mapPermission(perm: RawPermissionRecord): Permission {
 }
 
 /**
- * Shape of a raw component record as returned by the component registry service.
+ * Shape of a raw field group record as returned by the registry service.
  */
-export interface RawComponentRecord {
+export interface RawFieldGroupRecord {
   id: string;
   slug: string;
   label: string;
@@ -283,11 +277,11 @@ export interface RawComponentRecord {
 }
 
 /**
- * Normalize a raw component record into the public `ComponentDefinition` type.
+ * Normalize a raw field group record into the public `FieldGroupDefinition` type.
  */
-export function mapComponentRecord(
-  record: RawComponentRecord
-): ComponentDefinition {
+export function mapFieldGroupRecord(
+  record: RawFieldGroupRecord
+): FieldGroupDefinition {
   return {
     id: record.id,
     slug: record.slug,
@@ -298,14 +292,14 @@ export function mapComponentRecord(
       string,
       unknown
     >[],
-    admin: record.admin as ComponentDefinition["admin"],
+    admin: record.admin as FieldGroupDefinition["admin"],
     source: record.source as "code" | "ui",
     locked: record.locked,
     configPath: record.configPath ?? undefined,
     schemaHash: record.schemaHash,
     schemaVersion: record.schemaVersion,
     migrationStatus:
-      record.migrationStatus as ComponentDefinition["migrationStatus"],
+      record.migrationStatus as FieldGroupDefinition["migrationStatus"],
     lastMigrationId: record.lastMigrationId ?? undefined,
     createdBy: record.createdBy ?? undefined,
     createdAt: record.createdAt,

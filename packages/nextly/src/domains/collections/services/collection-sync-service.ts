@@ -6,7 +6,7 @@
  * TypeScript types.
  *
  * This service is typically called during:
- * - Development server startup (`nextly dev`)
+ * - Development server startup (HMR listener)
  * - CLI commands (`nextly sync`, `nextly generate:types`)
  * - Build process (`nextly build`)
  *
@@ -48,7 +48,7 @@ import {
   toPluralLabel,
 } from "../../../shared/lib/pluralization";
 import type { SupportedDialect } from "../../../types/database";
-import { teardownEntityComponentData } from "../../components/services/teardown-entity-component-data";
+import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import { ZodGenerator, TypeGenerator } from "../../schema";
 // Resolve the versioning config so the CLI `db:sync` path persists it too
@@ -708,6 +708,7 @@ export class CollectionSyncService extends BaseService {
               parentTable: tableName,
             });
             await teardownEntityI18n({
+              kind: "collection",
               adapter: this.adapter,
               slug,
               tableName,

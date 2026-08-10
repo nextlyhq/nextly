@@ -63,13 +63,13 @@ export interface ComponentSelectorProps {
 
   /**
    * Optional title for the dialog.
-   * @default "Add Component"
+   * @default "Add Field Group"
    */
   title?: string;
 
   /**
    * Optional description for the dialog.
-   * @default "Choose a component type to add."
+   * @default "Choose a field group to add."
    */
   description?: string;
 }
@@ -199,7 +199,7 @@ function ComponentCard({ component, onSelect }: ComponentCardProps) {
       type="button"
       onClick={onSelect}
       className={cn(
-        "flex flex-col items-start gap-2 p-3 rounded-none  border border-border",
+        "flex flex-col items-start gap-2 p-3 rounded-md  border border-border",
         "bg-background hover:bg-accent hover:border-accent-foreground/20",
         "transition-colors text-left w-full",
         "focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
@@ -254,8 +254,10 @@ export function ComponentSelector({
   componentSchemas,
   availableSlugs,
   onSelect,
-  title = "Add Component",
-  description = "Choose a component type to add.",
+  // Defaults are display copy. Slugs and schema keys threaded through this component keep the
+  // stored `component` spelling.
+  title = "Add Field Group",
+  description = "Choose a field group to add.",
 }: ComponentSelectorProps) {
   // Search state
   const [searchQuery, setSearchQuery] = useState("");
@@ -316,7 +318,7 @@ export function ComponentSelector({
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
           <Input
             type="search"
-            placeholder="Search components..."
+            placeholder="Search field groups..."
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             className="pl-10 pr-10"
@@ -338,7 +340,7 @@ export function ComponentSelector({
         {searchQuery && filteredCount !== totalCount && (
           <div className="flex items-center gap-2">
             <Badge variant="default" className="text-xs">
-              {filteredCount} of {totalCount} components
+              {filteredCount} of {totalCount} field groups
             </Badge>
           </div>
         )}
@@ -352,7 +354,7 @@ export function ComponentSelector({
                   {/* Category Header */}
                   <div className="flex items-center gap-2 mb-3">
                     <div
-                      className="w-2 h-2 shrink-0 rounded-none bg-border-strong"
+                      className="w-2 h-2 shrink-0 rounded-sm bg-border-strong"
                       aria-hidden="true"
                     />
                     <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -380,8 +382,8 @@ export function ComponentSelector({
                 <Puzzle className="h-12 w-12 mx-auto text-muted-foreground mb-3" />
                 <p className="text-muted-foreground">
                   {searchQuery
-                    ? "No components match your search."
-                    : "No components available."}
+                    ? "No field groups match your search."
+                    : "No field groups available."}
                 </p>
                 {searchQuery && (
                   <Button

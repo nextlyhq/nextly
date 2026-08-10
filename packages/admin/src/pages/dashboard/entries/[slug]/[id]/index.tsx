@@ -104,7 +104,7 @@ function EditEntryPageSkeleton() {
             <Skeleton className="h-5 w-96" />
           </div>
 
-          <div className="bg-card  border border-border rounded-none p-6">
+          <div className="bg-card  border border-border rounded-lg p-6">
             <div className="space-y-6">
               <Skeleton className="h-10 w-full" />
               <Skeleton className="h-10 w-full" />
@@ -247,6 +247,11 @@ export default function EditEntryPage({
     collectionSlug: slug || "",
     entryId: id,
     depth: 2,
+    // Load the pending working draft in place of the live row when the
+    // collection has the draft/published split enabled, so the editor shows and
+    // saves onto the unpublished edits. Inert for non-drafts collections (the
+    // server only overlays a draft it actually has).
+    draft: collection?.draftsEnabled === true,
     locale,
     // Edit the ACTUAL per-locale values — disable fallback so an untranslated field
     // shows empty (not the default-language text, which a save would otherwise persist

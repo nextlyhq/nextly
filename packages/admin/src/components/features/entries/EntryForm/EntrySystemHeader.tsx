@@ -27,11 +27,14 @@ import {
   Trash2,
 } from "@admin/components/icons";
 import { useCan } from "@admin/hooks/useCan";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 
 import { useEntryLocale } from "../EntryLocaleContext";
 import { LanguageSwitcher } from "../LanguageSwitcher";
 
+import { DiscardDraftConfirmDialog } from "./DiscardDraftConfirmDialog";
+import { effectiveEntryStatus } from "./entry-address";
 import { ShowJSONDialog } from "./ShowJSONDialog";
 import { UnpublishConfirmDialog } from "./UnpublishConfirmDialog";
 import type { EntryData, EntryFormMode } from "./useEntryForm";
@@ -53,6 +56,11 @@ export interface EntrySystemHeaderProps {
   /** Whether the collection has the Draft/Published feature enabled.
    *  Splits the primary submit into Save Draft + Publish/Update. */
   hasStatus: boolean;
+  /** Whether the working-draft split is enabled (drafts on a versioned
+   *  collection). When `true`, editing a PUBLISHED entry saves a pending
+   *  working draft (live row untouched) instead of re-publishing, and a
+   *  separate Publish promotes it. */
+  draftsEnabled?: boolean;
   /** Whether the form is currently submitting. Disables buttons + spinner. */
   isSubmitting?: boolean;
   /** Whether the form has validation errors. Disables submit. */
@@ -70,6 +78,10 @@ export interface EntrySystemHeaderProps {
   /** Called when the user switches the active content language (i18n M7). When omitted, the
    *  language switcher is not rendered. */
   onLocaleChange?: (locale: string) => void;
+  /** Whether the entity is localized. Forwarded to the version-history panel as
+   *  the authoritative signal for its locale filter (shared writes can produce
+   *  null-locale versions, so the rows alone are not conclusive). */
+  localized?: boolean;
 
   /** Save Draft handler — routed through useEntryForm.handleSubmit('save-draft').
    *  Used in create mode and when editing a draft entry. */
@@ -78,13 +90,22 @@ export interface EntrySystemHeaderProps {
    *  Used in create mode and when promoting a draft to published. */
   onPublish?: () => void;
   /** Save changes handler — routed through useEntryForm.handleSubmit('save-changes').
-   *  Used when editing a published entry; submits dirty fields with
-   *  status="published" so the lifecycle stays the same. */
+   *  Used when editing a published entry on a NON-drafts collection; submits
+   *  dirty fields with status="published" so the lifecycle stays the same. */
   onSaveChanges?: () => void;
+  /** Save working draft handler — routed through
+   *  useEntryForm.handleSubmit('save-working-draft'). Used when editing a
+   *  published entry on a drafts-enabled collection: stores a pending working
+   *  draft (status-less) instead of writing the live row. */
+  onSaveWorkingDraft?: () => void;
   /** Unpublish handler — routed through useEntryForm.handleSubmit('unpublish').
    *  Fires only after the user confirms the modal. Sends `{ status: "draft" }`
    *  with no other field changes (matches Payload's Unpublish pattern). */
   onUnpublish?: () => void;
+  /** Discard-working-draft handler (draft/published split). Throws away the
+   *  pending working draft and reverts the editor to the live published row.
+   *  Shown as a confirmed menu action for a Changed document. */
+  onDiscardWorkingDraft?: () => void | Promise<void>;
   /** Discard / Cancel handler. */
   onCancel?: () => void;
   /** Delete handler (edit mode only). */
@@ -151,6 +172,7 @@ export function EntrySystemHeader({
   mode,
   titleField,
   hasStatus,
+  draftsEnabled = false,
   isSubmitting = false,
   isInvalid = false,
   isDirty = false,
@@ -162,7 +184,9 @@ export function EntrySystemHeader({
   onSaveDraft,
   onPublish,
   onSaveChanges,
+  onSaveWorkingDraft,
   onUnpublish,
+  onDiscardWorkingDraft,
   onCancel,
   onDelete,
   onDuplicate,
@@ -175,11 +199,16 @@ export function EntrySystemHeader({
   isRailCollapsed = false,
   onToggleRail,
   toolbarSlot,
+  localized,
 }: EntrySystemHeaderProps) {
   const form = useFormContext();
   const entryLocale = useEntryLocale();
+  // The default language is edited with `locale === undefined`, and its status
+  // can live on the companion, so resolve it to read the right lifecycle.
+  const { defaultLocale } = useLocalization();
   const inputRef = useRef<HTMLInputElement>(null);
   const [unpublishOpen, setUnpublishOpen] = useState(false);
+  const [discardDraftOpen, setDiscardDraftOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
 
   // Both collections and singles authorize a document write as `update-{slug}`.
@@ -243,23 +272,26 @@ export function EntrySystemHeader({
   // - !hasStatus → single Save button (collections without drafts).
   // On a localized draft collection each language has its own lifecycle, so the
   // active locale's status — not the main/default row's — decides which submit
-  // affordances to show. A non-default locale with no companion status is not
-  // yet published; only fall back to the row status when there is no per-locale
-  // map (non-localized entries), so it never inherits the default's published state.
-  const localeStatus =
-    locale !== undefined
-      ? (
-          entry?._translations as
-            | Record<string, { status?: string }>
-            | undefined
-        )?.[locale]?.status
-      : undefined;
-  const hasTranslations =
-    locale !== undefined && entry?._translations !== undefined;
-  const effectiveStatus = hasTranslations
-    ? localeStatus
-    : (entry?.status as string | undefined);
+  // affordances to show. Shared with the slug freeze and the public-URL notice,
+  // which ask the same question and must not answer it differently.
+  const effectiveStatus = effectiveEntryStatus(entry, locale, defaultLocale);
   const isPublishedEdit = mode === "edit" && effectiveStatus === "published";
+  // A drafts-enabled published entry that has a pending working draft: the
+  // server flags the overlay read with `_isWorkingDraft`. This is Payload's
+  // "Changed" state — Publish promotes it and the status pill reflects it.
+  const hasWorkingDraft =
+    draftsEnabled &&
+    (entry as { _isWorkingDraft?: boolean } | null | undefined)
+      ?._isWorkingDraft === true;
+  // The "Discard draft" revert is offered for a Changed document (a pending
+  // working draft over a published row). The server authorizes it as an update,
+  // and the working-draft split is code-first only, so update can be granted by a
+  // collection `access.update` rule that the flat `update-{slug}` permission does
+  // not list. Gating on that permission here would hide Discard from an editor who
+  // can create and keep saving the very draft this reverts, so it is not gated on
+  // it — the sibling Save affordances are not either, and the endpoint refuses if
+  // the caller truly may not update.
+  const showDiscardDraft = hasWorkingDraft && !!onDiscardWorkingDraft;
   const entryLabel =
     typeof entry?.title === "string" && entry.title.trim().length > 0
       ? entry.title
@@ -283,7 +315,7 @@ export function EntrySystemHeader({
           // RTL for a translatable title edited in an RTL language.
           {...(titleRtl ? { dir: "rtl" as const } : {})}
           className={cn(
-            "w-full text-[19px] font-semibold tracking-tight text-foreground",
+            "w-full text-xl font-semibold tracking-tight text-foreground",
             "bg-transparent outline-none placeholder:text-muted-foreground",
             isSubmitting && "opacity-60 cursor-not-allowed",
             lockIdentity && "cursor-default text-foreground/80"
@@ -321,15 +353,41 @@ export function EntrySystemHeader({
               variant="outline"
               size="sm"
               disabled={isSubmitting || isInvalid || !isDirty}
-              onClick={onSaveChanges}
-              data-status="save-changes"
+              // On a drafts-enabled collection a save on a published entry
+              // stores a working draft (live untouched); otherwise it re-asserts
+              // published, keeping the lifecycle unchanged.
+              onClick={draftsEnabled ? onSaveWorkingDraft : onSaveChanges}
+              data-status={
+                draftsEnabled ? "save-working-draft" : "save-changes"
+              }
             >
               {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              Save changes
+              {draftsEnabled ? "Save" : "Save changes"}
             </Button>
+            {/* Promote the pending working draft to live. Shown only when one
+                exists — a fully-published entry has nothing to promote. */}
+            {hasWorkingDraft && canPublishDocument && (
+              <Button
+                type="button"
+                size="sm"
+                disabled={isSubmitting || isInvalid}
+                onClick={onPublish}
+                data-status="published"
+              >
+                {isSubmitting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Globe className="h-3.5 w-3.5" />
+                )}
+                Publish
+              </Button>
+            )}
             {canUnpublishDocument && (
               <Button
                 type="button"
+                // Keep Publish the sole primary action when a draft is pending;
+                // otherwise Unpublish stays the primary (published-only) action.
+                variant={hasWorkingDraft ? "outline" : "default"}
                 size="sm"
                 disabled={isSubmitting}
                 onClick={() => setUnpublishOpen(true)}
@@ -410,6 +468,15 @@ export function EntrySystemHeader({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              {showDiscardDraft && (
+                <DropdownMenuItem
+                  onClick={() => setDiscardDraftOpen(true)}
+                  disabled={isSubmitting}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Discard draft
+                </DropdownMenuItem>
+              )}
               {isDirty && onCancel && (
                 <DropdownMenuItem onClick={onCancel} disabled={isSubmitting}>
                   <RotateCcw className="h-3.5 w-3.5" />
@@ -418,7 +485,9 @@ export function EntrySystemHeader({
               )}
               {onDuplicate && (
                 <>
-                  {isDirty && onCancel && <DropdownMenuSeparator />}
+                  {(showDiscardDraft || (isDirty && onCancel)) && (
+                    <DropdownMenuSeparator />
+                  )}
                   <DropdownMenuItem
                     onClick={onDuplicate}
                     disabled={isSubmitting}
@@ -509,6 +578,29 @@ export function EntrySystemHeader({
         isLoading={isSubmitting}
       />
 
+      {/* Discarding a working draft deletes saved-but-unpublished edits, so it
+          is confirmed like Unpublish. Mounted at the root for the same reason:
+          it must survive whichever button-matrix branch rendered. */}
+      <DiscardDraftConfirmDialog
+        open={discardDraftOpen}
+        onOpenChange={setDiscardDraftOpen}
+        entryLabel={entryLabel}
+        onConfirm={async () => {
+          // Keep the dialog open (and its in-flight spinner visible) while the
+          // discard runs, then close only once it SUCCEEDS. Closing first — as
+          // this did — hid the progress state; closing on failure too would drop
+          // the retry context. A rejection leaves the dialog open; its error was
+          // already surfaced by the mutation's onError toast.
+          try {
+            await onDiscardWorkingDraft?.();
+            setDiscardDraftOpen(false);
+          } catch {
+            // Stay open for a retry.
+          }
+        }}
+        isLoading={isSubmitting}
+      />
+
       {/* Mounted at the component root for the same reason as the dialog above:
           the panel must survive whichever button matrix branch rendered. */}
       {historyFields && entry?.id ? (
@@ -529,6 +621,8 @@ export function EntrySystemHeader({
                 }
           }
           fields={historyFields}
+          // Authoritative localized signal for the panel's locale filter.
+          entityLocalized={localized}
           // Restore reuses the ordinary edit permission, so a caller who may
           // only read history is not offered a write that would be refused.
           canRestore={canUpdateDocument}

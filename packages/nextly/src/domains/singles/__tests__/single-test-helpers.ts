@@ -124,6 +124,10 @@ export function createMockSingleRegistry(): MockRecord {
     getSingleBySlug: vi.fn().mockImplementation(async (slug: string) => {
       return singles.get(slug) ?? null;
     }),
+    // The live code-first field source used to resolve `defaultValue`s that do
+    // not survive serialization. Undefined by default (UI-created behavior);
+    // tests that exercise function defaults override the return value.
+    getCodeFirstFields: vi.fn().mockReturnValue(undefined),
   };
 }
 
@@ -142,7 +146,7 @@ export function createMockHookRegistry(): MockRecord {
   };
 }
 
-// ── Mock ComponentDataService ───────────────────────────────────────────
+// ── Mock FieldGroupDataService ───────────────────────────────────────────
 
 export function createMockComponentDataService(): MockRecord {
   return {
@@ -153,6 +157,13 @@ export function createMockComponentDataService(): MockRecord {
       ),
     saveComponentData: vi.fn().mockResolvedValue(undefined),
     saveComponentDataInTransaction: vi.fn().mockResolvedValue(undefined),
+    // Asked before the caller opens its transaction, and its result is handed
+    // to `saveComponentDataInTransaction`. An empty map is what production
+    // returns when no localization is configured, which is the shape these
+    // suites exercise. Built per call so one test cannot mutate another's.
+    assertLocalizedFieldGroupsWritable: vi
+      .fn()
+      .mockImplementation(async () => new Map<string, boolean>()),
     deleteComponentData: vi.fn().mockResolvedValue(undefined),
     // The webhook field tree expands component references to find nested
     // secrets; null = no nested component schema for this slug in the mock.

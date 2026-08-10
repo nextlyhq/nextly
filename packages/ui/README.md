@@ -72,8 +72,10 @@ as a Tailwind v3 preset from `@nextlyhq/ui/tailwind-preset`.
 **Display:** `Badge`, `Card`, `Alert`, `Separator`, `Skeleton`, `Progress`
 **Toggles:** `Checkbox`, `RadioGroup`, `Switch`, `Collapsible`
 **Layout and disclosure:** `Accordion`, `Avatar`, `Tabs`, `Tooltip`, `Popover`
+**Resizable regions:** `ResizablePanelGroup`, `ResizablePanel`, `ResizableHandle`
+**Hierarchies:** `TreeView` (virtualized, keyboard-operable)
 **Overlays:** `Dialog`, `AlertDialog`, `Sheet`
-**Menus and command palette:** `DropdownMenu`, `Select`, `Command`
+**Menus and command palette:** `DropdownMenu`, `ContextMenu`, `Select`, `Command`
 **Feedback:** `Spinner`, `Toaster` (with `toast()` helper)
 **Tables:** `Table` primitives, `ResponsiveTable`, `TableSearch`, `TablePagination`, `TableSkeleton`, `TableEmpty`, `TableError`, `TableLoading`
 **Providers:** `PortalProvider`, `usePortalContainer`
@@ -118,7 +120,8 @@ Tailwind's internal `--tw-*` registrations, and the ancestor classes `dark:` and
 
 ### Overlays need a portal container
 
-AlertDialog, Command, Dialog, DropdownMenu, Popover, Select, Sheet and Tooltip render
+AlertDialog, Command, ContextMenu, Dialog, DropdownMenu, Popover, Select, Sheet and
+Tooltip render
 their overlay through a portal, which defaults to `document.body` — outside the wrapper,
 where the scoped rules and tokens do not reach. Triggers would look right and the menus
 they open would not. Point them back inside with `PortalProvider`:

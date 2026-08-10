@@ -21,6 +21,7 @@ import { generateSqliteCoreTableStatements } from "../../database/sqlite-core-ta
 // MySQL because it has no caller-supplied URL. Once F8 PR 2/3 collapses
 // the two paths, this can collapse back to a single import.
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
+import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -42,12 +43,14 @@ import type {
   DesiredSingle,
 } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
+import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 // F8 PR 1: SchemaPushService dropped from this module. The env check
 // (was getEnvironment().isProduction) is now an inline NODE_ENV read.
 // The legacy fallback sync path is deleted (dead code post-Option E).
 // addMissingColumnsForFields is extracted to utils/missing-columns.ts.
 import { addMissingColumnsForFields } from "../../domains/schema/utils/missing-columns";
+import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { reconcileSingleTables } from "../../domains/singles/services/reconcile-single-tables";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError, immediateMessage } from "../../errors/index";
@@ -55,9 +58,9 @@ import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service";
 import {
-  ComponentRegistryService,
+  FieldGroupRegistryService,
   type SyncComponentResult,
-} from "../../services/components/component-registry-service";
+} from "../../services/field-groups/field-group-registry-service";
 import type { Logger as ServiceLogger } from "../../services/shared/types";
 import {
   SingleRegistryService,
@@ -217,8 +220,7 @@ export async function performAutoSync(
   }
 
   // Production guard: never auto-apply schema in production. Users must
-  // explicitly run `nextly migrate:generate` + `nextly migrate:run`. F8
-  // PR 1 inlined this check (was SchemaPushService.getEnvironment()).
+  // explicitly run `nextly migrate:create` + `nextly migrate`.
   if (process.env.NODE_ENV === "production") {
     const pendingCollections = [
       ...syncResult.sync.created,
@@ -229,7 +231,7 @@ export async function performAutoSync(
       logger.newline();
       logger.error("Cannot auto-sync schema in production mode.");
       logger.info(
-        "Run `nextly migrate:generate` to create migrations, then `nextly migrate:run` to apply."
+        'Run `nextly migrate:create --name="<migration-name>"` to create migrations, then `nextly migrate` to apply.'
       );
       process.exit(1);
     }
@@ -245,8 +247,13 @@ export async function performAutoSync(
   // here to wire `setTableResolver` so adapter CRUD on dynamic tables
   // works for the rest of this CLI invocation (seed scripts, etc.).
   const schemaRegistry = new SchemaRegistry(dialect);
-  const staticSchemas = getDialectTables(dialect);
-  schemaRegistry.registerStaticSchemas(staticSchemas);
+  // Both spellings of the field-group registry: the schema registry keys a
+  // table by the physical name its Drizzle object carries, so a database whose
+  // storage migration has run has no handle for its registry otherwise.
+  schemaRegistry.registerStaticSchemas({
+    ...getDialectTables(dialect),
+    ...getFieldGroupRegistryAliases(dialect),
+  });
 
   // F8 PR 1: collections flow through the F2 applyDesiredSchema pipeline
   // (rename detection + classifier + pre-cleanup + pushSchema, all inside
@@ -288,7 +295,7 @@ export async function performAutoSync(
   // Build the desired-singles bucket the same way collections are built.
   // Without this, the pipeline never introspects single_* tables and
   // treats them as "not managed" — renames become drop+add and new fields
-  // never propagate on `nextly dev` restart.
+  // never propagate on the next sync run.
   const { resolveSingleTableName } = await import(
     "../../domains/singles/services/resolve-single-table-name"
   );
@@ -345,7 +352,7 @@ export async function performAutoSync(
     drizzleAdapter,
     registryLogger
   );
-  const componentRegistry = new ComponentRegistryService(
+  const componentRegistry = new FieldGroupRegistryService(
     drizzleAdapter,
     registryLogger
   );
@@ -574,11 +581,16 @@ export async function performSinglesAutoSync(
   logger.newline();
   logger.info(`Auto-syncing ${singlesToSync.length} single table(s)...`);
 
-  // Import the schema service for generating migration SQL
+  // Import the schema service for generating migration SQL. The dialect comes
+  // from the adapter that will run the DDL: the service's own default reads
+  // DB_DIALECT, which is optional and falls back to "postgresql".
   const { DynamicCollectionSchemaService } = await import(
     "../../domains/dynamic-collections/services/dynamic-collection-schema-service"
   );
-  const schemaService = new DynamicCollectionSchemaService();
+  const schemaService = new DynamicCollectionSchemaService(
+    undefined,
+    adapter.dialect
+  );
 
   const synced: string[] = [];
   const errors: Array<{ slug: string; error: string }> = [];
@@ -622,17 +634,17 @@ export async function performSinglesAutoSync(
         // Ensure system columns (title, slug) exist — they may be missing
         // on tables created before the fix that added them to the schema.
         // Singles always need title/slug for createDefaultDocument().
+        // Matched on the COLUMN each field becomes, as `defineSingle` and the generators do. An
+        // author writing `Title` already owns the `title` column, so adding the system field
+        // beside it asks for that column twice.
         const systemFields = [];
-        const hasTitleField = (
-          singleConfig.fields as Array<{ name?: string }>
-        ).some(f => f.name === "title");
-        if (!hasTitleField) {
+        const declaredColumns = columnsDeclaredBy(
+          singleConfig.fields as Array<{ name?: string; type?: string }>
+        );
+        if (!declaredColumns.has("title")) {
           systemFields.push({ name: "title", type: "text" });
         }
-        const hasSlugField = (
-          singleConfig.fields as Array<{ name?: string }>
-        ).some(f => f.name === "slug");
-        if (!hasSlugField) {
+        if (!declaredColumns.has("slug")) {
           systemFields.push({ name: "slug", type: "text" });
         }
 
@@ -641,7 +653,7 @@ export async function performSinglesAutoSync(
           serviceLogger,
           tableName,
           [...systemFields, ...singleConfig.fields] as unknown as FieldConfig[],
-          { timestamps: true }
+          { timestamps: true, builtBy: "collection" }
         );
 
         if (addedColumns.length > 0) {
@@ -760,7 +772,11 @@ export async function performSinglesReconcile(
   const { DynamicCollectionSchemaService } = await import(
     "../../domains/dynamic-collections/services/dynamic-collection-schema-service"
   );
-  const schemaService = new DynamicCollectionSchemaService();
+  // Same as the auto-sync above: the adapter names the dialect, not DB_DIALECT.
+  const schemaService = new DynamicCollectionSchemaService(
+    undefined,
+    adapter.dialect
+  );
 
   const reconciledSlugs: string[] = [];
 
@@ -854,7 +870,7 @@ export async function performSinglesReconcile(
 export async function performComponentsAutoSync(
   config: LoadConfigResult["config"],
   adapter: CLIDatabaseAdapter,
-  componentRegistry: ComponentRegistryService,
+  componentRegistry: FieldGroupRegistryService,
   syncResult: SyncComponentResult,
   _options: ResolvedDevOptions,
   context: CommandContext
@@ -872,12 +888,12 @@ export async function performComponentsAutoSync(
   logger.info(`Auto-syncing ${componentsToSync.length} component table(s)...`);
 
   // Import the component schema service for generating migration SQL
-  const { ComponentSchemaService } = await import(
-    "../../services/components/component-schema-service"
+  const { FieldGroupSchemaService } = await import(
+    "../../services/field-groups/field-group-schema-service"
   );
   const dialect = (adapter as unknown as DrizzleAdapter).getCapabilities()
     .dialect;
-  const schemaService = new ComponentSchemaService(dialect);
+  const schemaService = new FieldGroupSchemaService(dialect);
 
   const synced: string[] = [];
   const errors: Array<{ slug: string; error: string }> = [];
@@ -894,19 +910,14 @@ export async function performComponentsAutoSync(
 
   for (const slug of componentsToSync) {
     // Get the Component config to get fields
-    const componentConfig = config.components.find(c => c.slug === slug);
+    const componentConfig = config.fieldGroups.find(c => c.slug === slug);
     if (!componentConfig) {
       errors.push({ slug, error: "Component config not found" });
       continue;
     }
 
-    // Generate table name using the same convention as the registry (comp_ prefix)
-    const tableName =
-      componentConfig.dbName ??
-      `comp_${slug
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "_")
-        .replace(/^_+|_+$/g, "")}`;
+    // Canonical resolution: custom dbName verbatim, else comp_ + normalized slug.
+    const tableName = resolveComponentTableName(slug);
 
     try {
       const tableAlreadyExists = await drizzleAdapter.tableExists(tableName);
@@ -919,7 +930,7 @@ export async function performComponentsAutoSync(
           serviceLogger,
           tableName,
           componentConfig.fields,
-          { timestamps: true }
+          { timestamps: true, builtBy: "fieldGroup" }
         );
 
         if (addedColumns.length > 0) {

@@ -21,6 +21,7 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { buildMetadata } from "nextly/runtime";
 
 import { AuthorCard } from "@/components/AuthorCard";
 import { CategoryBadge } from "@/components/CategoryBadge";
@@ -43,13 +44,17 @@ import {
 } from "@/lib/queries";
 import { absoluteUrl } from "@/lib/site-url";
 
+// Pre-render every published post at build time. Freshness afterward is
+// tag-based: the post query helpers tag their reads (src/lib/queries), so
+// publishing, editing, or deleting a post busts the tag and this page
+// regenerates on the next request — no time-based `revalidate`. A rename
+// busts the collection tag too, so the old slug's page 404s once it moves.
 export async function generateStaticParams() {
   const slugs = await getAllPostSlugs();
   return slugs.map(slug => ({ slug }));
 }
 
-/** Revalidate each post page every 60 seconds (ISR). */
-export const revalidate = 60;
+// Slugs published after the last build render on first request.
 export const dynamicParams = true;
 
 export async function generateMetadata({
@@ -61,38 +66,28 @@ export async function generateMetadata({
   const post = await getPostBySlug(slug);
   if (!post) return { title: "Post Not Found" };
 
-  const seo = post.seo ?? {};
-  const title = seo.metaTitle || post.title;
-  const description = seo.metaDescription || post.excerpt || undefined;
-  const seoImage = seo.ogImage?.url ?? post.featuredImage?.url ?? undefined;
-  const images = seoImage ? [{ url: seoImage, alt: post.title }] : undefined;
-  const canonical = seo.canonical || `/blog/${slug}`;
-
-  return {
-    title,
-    description,
-    alternates: { canonical },
+  // `buildMetadata` reads the post's `seo` group (metaTitle/metaDescription/
+  // ogImage/canonical/noindex) and fills blanks from these fallbacks, emitting
+  // the canonical, OpenGraph, Twitter card, and robots index/follow. The
+  // article-specific OpenGraph fields are passed as caller extras.
+  const ogImage =
+    post.seo?.ogImage?.url ?? post.featuredImage?.url ?? undefined;
+  return buildMetadata(post, {
+    fallback: {
+      title: post.title,
+      description: post.excerpt ?? undefined,
+      image: ogImage,
+      canonical: `/blog/${slug}`,
+    },
     openGraph: {
-      title,
-      description,
       type: "article",
-      url: canonical,
       publishedTime: post.publishedAt ?? undefined,
       modifiedTime: post.publishedAt ?? undefined,
       authors: post.author ? [post.author.name] : undefined,
-      images,
+      // Keep the image's descriptive alt text for social-share accessibility.
+      ...(ogImage ? { images: [{ url: ogImage, alt: post.title }] } : {}),
     },
-    twitter: {
-      card: "summary_large_image",
-      title,
-      description,
-      images: seoImage ? [seoImage] : undefined,
-    },
-    robots: {
-      index: !seo.noindex,
-      follow: !seo.noindex,
-    },
-  };
+  });
 }
 
 export default async function PostPage({

@@ -19,6 +19,7 @@ import type { BlockDocument } from "../core/types";
 
 import { EditorSurface } from "./EditorSurface";
 import { draftKeyFor, EditorProvider } from "./store/EditorProvider";
+import { useRemotePatterns } from "./useRemotePatterns";
 
 export interface PageBuilderFieldProps {
   /** Form path (react-hook-form) for this field. */
@@ -53,11 +54,14 @@ function FieldEditorWithCss({ name, control }: PageBuilderFieldProps) {
     name: PAGE_BUILDER_CUSTOM_CSS_FIELD,
   });
   const doc = isDocument(field.value) ? field.value : emptyDoc();
+  // Same allowlist the published page enforces; see `useRemotePatterns`.
+  const remotePatterns = useRemotePatterns();
 
   return (
     <EditorProvider
       document={doc}
       draftKey={draftKeyFor("field", name)}
+      remotePatterns={remotePatterns}
       customCss={typeof cssField.value === "string" ? cssField.value : ""}
       onDocumentChange={next => field.onChange(next)}
       onCustomCssChange={css => cssField.onChange(css)}
@@ -70,11 +74,14 @@ function FieldEditorWithCss({ name, control }: PageBuilderFieldProps) {
 function FieldEditor({ name, control }: PageBuilderFieldProps) {
   const { field } = useController({ control, name });
   const doc = isDocument(field.value) ? field.value : emptyDoc();
+  // Same allowlist the published page enforces; see `useRemotePatterns`.
+  const remotePatterns = useRemotePatterns();
 
   return (
     <EditorProvider
       document={doc}
       draftKey={draftKeyFor("field", name)}
+      remotePatterns={remotePatterns}
       onDocumentChange={next => field.onChange(next)}
     >
       <EditorSurface />

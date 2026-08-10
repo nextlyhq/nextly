@@ -24,7 +24,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
 
-import { getDialectTables } from "../../../database/index";
+import { getDialectTablesForPush } from "../../../database/index";
 import {
   getCachedSnapshot,
   getLiveSnapshot,
@@ -32,14 +32,24 @@ import {
 } from "../../../init/schema-snapshot-cache";
 import { buildNotificationEvent } from "../../../runtime/notifications/build-event";
 import type { MigrationScope } from "../../../runtime/notifications/types";
-import { ComponentSchemaService } from "../../components/services/component-schema-service";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { FieldGroupSchemaService } from "../../field-groups/services/field-group-schema-service";
+import {
+  chooseTypeColumns,
+  resolveRegistryNameFromCatalog,
+} from "../../field-groups/storage/resolve-storage-names";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
+import { identifierCaseRules } from "../utils/resolve-catalog-name";
 
 import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "./classifier/count-helpers";
-import { canEmitWithoutDrizzleKit, emitDdl } from "./ddl-emitter";
+import {
+  canEmitWithoutDrizzleKit,
+  emitDdl,
+  withoutUnemittableIndexes,
+} from "./ddl-emitter";
 import {
   buildDesiredTableFromFields,
   buildDesiredTableFromComponentFields,
@@ -55,9 +65,11 @@ import {
   findUnexpectedDestructiveStatements,
   getDrizzleTableName,
   isDrizzleTable,
+  stripKitDropsOfDeclaredIndexes,
 } from "./filter-unsafe-statements";
 import { indexRestoreStatements } from "./index-restore";
 import { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable } from "./managed-tables";
+import { applyMakeOptionalToOperations } from "./pre-cleanup/snapshot-patch";
 import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions";
 import { executePreResolutionOps } from "./pre-resolution/executor";
 import {
@@ -77,6 +89,7 @@ import type {
   RenameCandidate,
   RenameDetector,
 } from "./pushschema-pipeline-interfaces";
+import { builtByFor } from "./registered-collections";
 import type { ClassifierEvent, Resolution } from "./resolution/types";
 import { withCapturedStdout } from "./stdout-capture";
 import type { DesiredSchema } from "./types";
@@ -366,10 +379,14 @@ export function computeJournalSummaryFromOperations(
 // Pure helper. Test seam: exported.
 export function computeJournalScope(
   source: "ui" | "code",
-  uiTargetSlug: string | undefined
+  uiTargetSlug: string | undefined,
+  // Defaulted to `collection` so the many existing UI callers that target one keep their scope
+  // without restating it. A single or field group must say so: recording either as a collection
+  // hid its migrations from every scope-filtered audit query.
+  uiTargetKind: "collection" | "single" | "component" = "collection"
 ): MigrationJournalScope {
   if (source === "ui" && uiTargetSlug) {
-    return { kind: "collection", slug: uiTargetSlug };
+    return { kind: uiTargetKind, slug: uiTargetSlug };
   }
   return { kind: "global" };
 }
@@ -445,7 +462,7 @@ export function excludeLockedTableOps(
   return { kept, skipped };
 }
 
-function logSkippedLockedOps(skipped: Operation[]): void {
+export function logSkippedLockedOps(skipped: Operation[]): void {
   if (skipped.length === 0 || process.env.DEBUG_SCHEMA !== "1") return;
   const tables = [
     ...new Set(skipped.map(op => operationTargetTable(op) ?? "<unknown>")),
@@ -478,12 +495,10 @@ function toNotificationScope(scope: MigrationJournalScope): MigrationScope {
       ? { kind: "global", slug: scope.slug }
       : { kind: "global" };
   }
-  // collection | single — both require a slug per
-  // MigrationJournalScope's contract (asserted at the type-system
-  // level because slug is optional only for fresh-push/global).
-  return scope.slug
-    ? { kind: scope.kind, slug: scope.slug }
-    : { kind: "global" };
+  // collection | single | component — the scope type requires a slug on each of them, so there is
+  // no slugless case left to fall back for. The fallback this replaces silently retargeted such a
+  // scope to the whole schema, which is the one outcome an entity-scoped apply must not produce.
+  return { kind: scope.kind, slug: scope.slug };
 }
 
 export class PushSchemaPipeline {
@@ -506,9 +521,20 @@ export class PushSchemaPipeline {
     // slug: <user's collection> }`. HMR/code-first applies omit it
     // and get tagged as global.
     uiTargetSlug?: string;
+    /** Which entity kind `uiTargetSlug` names, so the journal row records it accurately. */
+    uiTargetKind?: "collection" | "single" | "component";
   }): Promise<PipelineResult> {
-    const { desired, db, dialect, source, promptChannel, databaseName } = args;
-    const scope = computeJournalScope(source, args.uiTargetSlug);
+    const { db, dialect, source, promptChannel, databaseName } = args;
+    // Resolved once, before anything reads it. A desired schema is consumed by TWO builders — the
+    // snapshot the diff compares and the Drizzle tables drizzle-kit turns into DDL — and resolving
+    // inside either leaves the other on the raw fields, so a table would converge and then report a
+    // type change against itself on every following diff.
+    const desired = args.desired;
+    const scope = computeJournalScope(
+      source,
+      args.uiTargetSlug,
+      args.uiTargetKind
+    );
     // F10 PR 3: track wall-clock for the notification event. The
     // journal already computes its own duration; we duplicate here so
     // the notification event surfaces duration even when the journal
@@ -599,6 +625,45 @@ export class PushSchemaPipeline {
             : await introspectLiveSnapshot(db, dialect, managedTableNames);
       }
 
+      // 🔴 Derived from the snapshot just taken, not from a fresh catalog read.
+      //
+      // That snapshot was introspected over exactly these table names, so it
+      // already carries the columns this needs — and deriving from it guarantees
+      // the desired shape and the live shape are read from ONE observation of
+      // the database. A second read could disagree with the first, and a diff
+      // computed across two disagreeing observations is the one thing this
+      // function must never produce.
+      // 🔴 Contained, and its failure means "declare NEITHER registry".
+      //
+      // The desired schema is what drizzle-kit creates from, so naming the
+      // wrong registry creates an empty one — and on MySQL and SQLite the full
+      // schema is always handed over, because scope reduction below is
+      // PostgreSQL-only. Guessing is therefore the one thing this must not do.
+      // Omitting it instead leaves drizzle-kit free to propose a DROP, which
+      // `filterUnsafeStatements` blocks and reports; a wrong CREATE is additive
+      // and nothing stops it.
+      const fieldGroupRegistryTable = await resolveRegistryNameFromCatalog({
+        dialect,
+        getDrizzle: <T>() => db as T,
+      }).catch(() => undefined);
+
+      const fieldGroupTypeColumns = chooseTypeColumns(
+        liveSnapshot.tables.map(table => ({
+          table: table.name,
+          columns: table.columns.map(column => column.name),
+        })),
+        Object.values(desired.components).map(c => c.tableName),
+        // MySQL is given the folding setting rather than queried for it. The
+        // names being matched are ones this apply itself asked the server to
+        // describe, so a case-insensitive table match cannot select a different
+        // object than the one requested — while an exact match would miss a
+        // server that reported it folded. Column names fold on MySQL
+        // regardless, which is what the discriminator lookup actually needs.
+        dialect === "mysql"
+          ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
+          : identifierCaseRules({ dialect })
+      );
+
       const desiredSnapshot: NextlySchemaSnapshot = {
         tables: [
           ...Object.values(desired.collections).map(c =>
@@ -615,7 +680,11 @@ export class PushSchemaPipeline {
               // localized collection's translatable columns are omitted from the
               // main table's desired snapshot (they live in the companion
               // `_locales` table) rather than being re-added by the diff.
-              { hasStatus: c.status === true, localized: c.localized === true }
+              {
+                builtBy: builtByFor("collection", c.builderOwned),
+                hasStatus: c.status === true,
+                localized: c.localized === true,
+              }
             )
           ),
           ...Object.values(desired.singles).map(s =>
@@ -626,6 +695,7 @@ export class PushSchemaPipeline {
               >[1],
               dialect,
               {
+                builtBy: builtByFor("single", s.builderOwned),
                 hasStatus: s.status === true,
                 localized: (s as { localized?: boolean }).localized === true,
               }
@@ -638,13 +708,32 @@ export class PushSchemaPipeline {
                 typeof buildDesiredTableFromComponentFields
               >[1],
               dialect,
-              { localized: (c as { localized?: boolean }).localized === true }
+              {
+                builtBy: builtByFor("fieldGroup", c.builderOwned),
+                localized: (c as { localized?: boolean }).localized === true,
+                typeColumn: fieldGroupTypeColumns.get(c.tableName),
+              }
             )
           ),
         ],
       };
 
-      const operations = diffSnapshots(liveSnapshot, desiredSnapshot);
+      const allOperations = diffSnapshots(liveSnapshot, desiredSnapshot);
+
+      // A UI save owns only the entity being edited. An operation targeting a code-first or
+      // plugin-owned table is dropped here, BEFORE anything reads the operation set, because those
+      // tables belong to `nextly.config.ts` and reconciling their drift is db:sync's job.
+      //
+      // 🔴 Dropped before rename detection rather than after prompting, which is where this used to
+      // happen. An operation on a locked table still reached the rename detector and the prompt gate
+      // on the way, and an unresolved candidate fails closed — so unapplied drift on a table the
+      // save was never going to touch could refuse the entire save, over an operation the very next
+      // step discards. Code-first applies keep the full set: they ARE the authority for those tables.
+      const { kept: operations, skipped: skippedLockedOps } =
+        source === "ui"
+          ? excludeLockedTableOps(allOperations, desired)
+          : { kept: allOperations, skipped: [] as Operation[] };
+      logSkippedLockedOps(skippedLockedOps);
 
       // Phase B: rename detection + prompt + resolution application.
       const candidates = this.deps.renameDetector.detect(operations, dialect);
@@ -708,27 +797,36 @@ export class PushSchemaPipeline {
         classificationResult.events
       );
 
-      const allResolvedOps =
+      const renameResolvedOps =
         this.testHooks._resolvedOpsOverride ??
         applyResolutionsToOperations(
           operations,
           toRenameResolutions(dispatchResult.confirmedRenames, candidates)
         );
+      // make_optional must reach the OPERATIONS too, not only `desired`: the
+      // fast-path emitters (and the kit-path table pre-creation) generate
+      // their SQL from these ops, so an unpatched add_column would still say
+      // NOT NULL despite the admin's resolution — failing the apply on a
+      // populated table or landing the column as required.
+      const allResolvedOps = applyMakeOptionalToOperations(
+        renameResolvedOps,
+        dispatchResult.resolutions,
+        classificationResult.events
+      );
 
-      // A UI save owns only the entity being edited. Drop any operation that
-      // targets a code-first/plugin-owned table so the Schema Builder can never
-      // alter schema the user did not edit. Code-first applies (db:sync) are
-      // the authority for those tables and keep the full operation set.
-      const { kept: resolvedOps, skipped: skippedLockedOps } =
-        source === "ui"
-          ? excludeLockedTableOps(allResolvedOps, desired)
-          : { kept: allResolvedOps, skipped: [] as Operation[] };
-      logSkippedLockedOps(skippedLockedOps);
+      // Already excluded above, before the operation set was read. Resolutions are keyed to the
+      // candidates and events that set produced, so none of them can reintroduce a locked table.
+      const resolvedOps = allResolvedOps;
 
       // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
       const drizzleSchema = this.testHooks._buildDrizzleSchemaOverride
         ? this.testHooks._buildDrizzleSchemaOverride(patchedDesired, dialect)
-        : this.buildDrizzleSchema(patchedDesired, dialect);
+        : this.buildDrizzleSchema(
+            patchedDesired,
+            dialect,
+            fieldGroupTypeColumns,
+            fieldGroupRegistryTable
+          );
 
       // Scope drizzleSchema down to the table(s) actually touched by
       // resolvedOps. Without this, a Builder save that touches one
@@ -796,9 +894,14 @@ export class PushSchemaPipeline {
           ? scopedSchema
           : drizzleSchema;
 
-      const kit: DrizzleKitLike = this.testHooks._kitOverride
-        ? this.testHooks._kitOverride
-        : await this.importDrizzleKit(dialect, databaseName);
+      // Deferred until the route decision needs it: importing eagerly made
+      // MySQL fail its databaseName precondition even for applies that never
+      // reach drizzle-kit (empty or purely-additive op sets on an adapter
+      // wired without a parseable DATABASE_URL).
+      const getKit = async (): Promise<DrizzleKitLike> =>
+        this.testHooks._kitOverride
+          ? this.testHooks._kitOverride
+          : this.importDrizzleKit(dialect, databaseName);
 
       const isSqlite = dialect === "sqlite";
 
@@ -897,9 +1000,74 @@ export class PushSchemaPipeline {
 
         let emittedStatements: string[];
         let pushResult: PushSchemaPassResult | undefined;
+        // Statements this apply executed BEFORE drizzle-kit ran (kit-path
+        // add_table pre-creation below) — counted into the journal's
+        // executed total alongside the post-filter batch.
+        let preCreatedStatements = 0;
         if (useFastPath) {
           emittedStatements = emitDdl(resolvedOps, dialect);
         } else {
+          // Resolved BEFORE the pre-creation below writes anything. The
+          // import carries MySQL's `databaseName` precondition, and running
+          // it after the CREATEs would leave those tables behind on a
+          // dialect whose DDL auto-commits when the precondition then
+          // fails. The fast path never reaches this branch, so a kit-free
+          // apply still never evaluates the precondition at all.
+          const kit = await getKit();
+
+          // v1 kit crash guard (SQLite/MySQL only — PG scopes the kit's
+          // introspection with a tables filter): drizzle-kit v1's differ
+          // sees the WHOLE live DB on these dialects, so any live table
+          // absent from the desired schema (UI-created entities during a
+          // code-first apply, `_locales` companions, the i18n archive)
+          // reads as "deleted". Paired against a "created" table from this
+          // apply, its rename resolver throws `Internal error:
+          // resolver(table) was called without a HintsHandler` before
+          // emitting anything, failing the apply and leaving the new table
+          // uncreated. Creating the planned tables OURSELVES first empties
+          // the differ's created set — nothing to pair, no resolver call —
+          // and the kit then handles only the column-level remainder (it
+          // re-introspects and sees these tables live AND declared).
+          //
+          // On SQLite these CREATEs are not rolled back when the kit pass
+          // then fails: the pipeline runs SQLite outside `db.transaction()`
+          // by design, so `tx === db` here. That is the intended outcome
+          // rather than a gap — the retry's diff re-introspects, no longer
+          // plans `add_table` for them, and the table it finds is the one
+          // this emitter built, which carries the tracked indexes the kit's
+          // own CREATE would have omitted. The journal records the failed
+          // apply without these statements in `statements_executed`, which
+          // counts only a successful pass.
+          if (dialect !== "postgresql") {
+            const addTableOps = resolvedOps.filter(
+              op => op.type === "add_table"
+            );
+            if (addTableOps.length > 0) {
+              // This branch runs for tables the routing decision may have
+              // REJECTED, so it cannot emit them verbatim: a MySQL UNIQUE
+              // index over a TEXT/BLOB column is exactly what sent such an
+              // apply here, and emitting it would reinstate the prefix
+              // uniqueness that decision existed to avoid. The table body is
+              // still pre-created (that is the crash guard); drizzle-kit adds
+              // the stripped index from its own introspection.
+              const createStatements = emitDdl(
+                addTableOps.map(op => withoutUnemittableIndexes(op, dialect)),
+                dialect
+              );
+              try {
+                await this.deps.executor.executeStatements(
+                  tx,
+                  createStatements
+                );
+              } catch (err) {
+                throw new DdlExecutionError(
+                  err instanceof Error ? err.message : String(err),
+                  err
+                );
+              }
+              preCreatedStatements = createStatements.length;
+            }
+          }
           try {
             // withCapturedStdout reroutes any chatter drizzle-kit writes to
             // process.stdout/stderr so it doesn't leak into the dev console.
@@ -928,7 +1096,27 @@ export class PushSchemaPipeline {
               err
             );
           }
-          emittedStatements = pushResult.sqlStatements;
+          // The kit reads every live index on a declared table as
+          // undeclared (its runtime schemas carry none) and emits DROP
+          // INDEX for it even on a no-op. An index the desired snapshot
+          // TRACKS is only ever dropped by our own diff's drop_index op,
+          // so the kit's drops of tracked indexes are stripped here —
+          // otherwise a kit-path apply would shed the canonical indexes
+          // of every managed table it did not rebuild.
+          const stripped = stripKitDropsOfDeclaredIndexes(
+            pushResult.sqlStatements,
+            desiredSnapshot
+          );
+          emittedStatements = stripped.kept;
+          if (stripped.strippedCount > 0) {
+            // Once per apply, not per statement: enough to see the guard
+            // acted without turning a routine emission into log noise.
+            console.debug(
+              `[Nextly schema] Kept ${stripped.strippedCount} tracked index(es) ` +
+                `drizzle-kit emitted a DROP INDEX for (they are declared in the ` +
+                `desired schema; only a drop_index operation removes one).`
+            );
+          }
         }
         // Safety net, v1 semantics (observed on all three dialects,
         // 2026-07): drizzle-kit now INCLUDES destructive statements in
@@ -987,10 +1175,21 @@ export class PushSchemaPipeline {
             .map(t => t.toLowerCase())
             .filter(t => !lockedForThisApply.has(t))
         );
-        const unlocked = filterUnsafeStatements(
-          emittedStatements,
-          desiredTableNames
-        );
+        // Only drizzle-kit's output goes through the orphan filter. That
+        // filter answers "did the kit propose dropping something we never
+        // asked about?", and it identifies an index's owner from the
+        // suffix-style names the kit produces (`<table>_<col>_idx`). Nextly's
+        // own indexes are named `idx_<table>_<col>` / `uq_<table>_<col>`, for
+        // which that inference finds no owner and the drop is blocked — so
+        // running it over the fast path's statements would silently discard a
+        // `drop_index` this pipeline's own diff planned and the apply would
+        // report success with the index still in place. Fast-path SQL is
+        // emitted from those approved operations, so there is no orphan to
+        // find; the destructive scan and the lock filter below still apply to
+        // both routes.
+        const unlocked = useFastPath
+          ? emittedStatements
+          : filterUnsafeStatements(emittedStatements, desiredTableNames);
         // Op-level lock filtering covers what this pipeline decided to do, but
         // drizzle-kit re-derives drift from the full desired schema, so on the
         // kit path it can still emit DDL for a locked table. Scope reduction
@@ -1035,11 +1234,17 @@ export class PushSchemaPipeline {
         // index. On PG and MySQL that batch is transactional; SQLite runs
         // without a transaction by design, so a failing restore there is
         // reported but the rebuild it followed has already landed.
+        //
+        // The ops are handed over ONLY on the kit route: the restore's
+        // ops-replay exists because drizzle-kit never creates dynamic-table
+        // indexes, but the fast path emits every add_index itself, so
+        // replaying them would issue the same CREATE INDEX twice — fatal on
+        // MySQL, which has no IF NOT EXISTS for indexes.
         const restore = indexRestoreStatements(
           desiredSnapshot,
           dialect,
           safe,
-          resolvedOps
+          useFastPath ? [] : resolvedOps
         );
 
         try {
@@ -1051,12 +1256,14 @@ export class PushSchemaPipeline {
           );
         }
 
-        // `safe.length`, not the executed length: this number is the
-        // journal's `statements_executed`, read against `statements_planned`
-        // from the diff. The restore statements were never planned, so
-        // counting them would report a mismatch on every apply that had to
-        // put an index back.
-        return safe.length;
+        // `safe.length` plus the kit-path pre-created statements, not the
+        // executed length: this number is the journal's
+        // `statements_executed`, read against `statements_planned` from the
+        // diff. The restore statements were never planned, so counting them
+        // would report a mismatch on every apply that had to put an index
+        // back; the pre-created CREATEs WERE planned (add_table ops) and
+        // executed, so they count.
+        return safe.length + preCreatedStatements;
       };
 
       let statementsExecuted: number;
@@ -1165,7 +1372,9 @@ export class PushSchemaPipeline {
 
   private buildDrizzleSchema(
     desired: DesiredSchema,
-    dialect: SupportedDialect
+    dialect: SupportedDialect,
+    typeColumns: Map<string, string>,
+    fieldGroupRegistryTable: string | undefined
   ): Record<string, unknown> {
     const out: Record<string, unknown> = {};
 
@@ -1187,7 +1396,11 @@ export class PushSchemaPipeline {
     // when disk matches the schema definition. Phase C's strict
     // filterUnsafeStatements is the safety net.
     for (const [exportKey, value] of Object.entries(
-      getDialectTables(dialect)
+      // `null` where the catalog could not say which registry exists, which the
+      // bundle reads as "declare neither".
+      getDialectTablesForPush(dialect, {
+        fieldGroupRegistryTable: fieldGroupRegistryTable ?? null,
+      })
     )) {
       if (isDrizzleTable(value)) {
         const sqlName = getDrizzleTableName(value, exportKey);
@@ -1216,6 +1429,9 @@ export class PushSchemaPipeline {
         c.fields as unknown as Parameters<typeof generateRuntimeSchema>[1],
         dialect,
         {
+          // This schema is what drizzle-kit renders as DDL, so the width rule matters here and the
+          // builder that made the table has to be named.
+          builtBy: builtByFor("collection", c.builderOwned),
           status: c.status === true,
           localized: (c as { localized?: boolean }).localized === true,
         }
@@ -1234,6 +1450,8 @@ export class PushSchemaPipeline {
         s.fields as unknown as Parameters<typeof generateRuntimeSchema>[1],
         dialect,
         {
+          // Rendered as DDL by drizzle-kit, so the builder that made it is named here too.
+          builtBy: builtByFor("single", s.builderOwned),
           status: s.status === true,
           localized: (s as { localized?: boolean }).localized === true,
         }
@@ -1242,18 +1460,32 @@ export class PushSchemaPipeline {
     }
     // Components (comp_* tables) use component system columns
     // (_parent_id, _parent_table, _parent_field, _order, _component_type)
-    // instead of collection columns (title, slug). ComponentSchemaService
+    // instead of collection columns (title, slug). FieldGroupSchemaService
     // owns that column layout; generateRuntimeSchema would inject wrong
     // system columns.
-    const componentSchemaService = new ComponentSchemaService(dialect);
+    const fieldGroupSchemaService = new FieldGroupSchemaService(dialect);
     for (const c of Object.values(desired.components)) {
       // i18n: omit a localized component's translatable columns from the main
       // comp_ table handed to drizzle-kit (they live in comp_<slug>_locales,
       // provisioned out-of-band) — same rule as collections/singles above.
-      const componentTable = componentSchemaService.generateRuntimeSchema(
+      const componentTable = fieldGroupSchemaService.generateRuntimeSchema(
         c.tableName,
         c.fields,
-        { localized: (c as { localized?: boolean }).localized === true }
+        {
+          localized: (c as { localized?: boolean }).localized === true,
+          // 🔴 The discriminator is a SYSTEM column whose name no user ever
+          // chooses: the only two spellings are the two storage generations,
+          // and which one a table carries is a fact of that table rather than a
+          // preference the desired shape could hold an opinion about. Naming
+          // the other one turns a diff into "add this column, drop that one" —
+          // a destructive pair the classifier refuses and fresh-push strips, so
+          // every later apply carries an operation that can never succeed.
+          //
+          // A table the catalog does not describe, including one about to be
+          // created, resolves to the spelling this release's DDL writes.
+          typeColumn:
+            typeColumns.get(c.tableName) ?? STORAGE_FORMAT.columns.type,
+        }
       );
       out[c.tableName] = componentTable;
     }

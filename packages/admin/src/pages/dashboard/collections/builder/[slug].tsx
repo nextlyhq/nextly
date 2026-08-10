@@ -207,9 +207,20 @@ export default function CollectionBuilderEditPage({
       versions:
         (collection as { versions?: { enabled?: boolean } | null }).versions
           ?.enabled === true,
+      // Retention: the stored resolved config always carries the effective
+      // count (`false` = unlimited), so the select reflects the true setting. A
+      // config left at the framework default reads back as its concrete number.
+      versionsMaxPerDoc: (
+        collection as {
+          versions?: { maxPerDoc?: number | false } | null;
+        }
+      ).versions?.maxPerDoc,
       // Cache revalidation is on unless the stored config disables it, so the
       // switch reflects on for both null (default) and an absent-disable config.
       revalidate: collection.revalidate?.disable !== true,
+      // Webhook recording is on unless the stored policy opts out, so the
+      // switch reflects on for both null (default) and an absent record flag.
+      webhooks: collection.webhooks?.record !== false,
     };
     setSettings(loadedSettings);
     // Pin a copy as the dirty baseline so settings-only edits enable Save.
@@ -293,7 +304,10 @@ export default function CollectionBuilderEditPage({
           fieldDefinitions,
           schemaVersion,
           resolutions,
-          renameResolutions
+          renameResolutions,
+          // i18n: carry the current toggle so a simultaneous i18n flip + field change provisions
+          // the companion in the same apply.
+          settings?.i18n === true
         );
         if (result.success) {
           const collectionLabel = settings?.singularName?.trim() || slug;
@@ -328,9 +342,14 @@ export default function CollectionBuilderEditPage({
                   status: settings.status === true,
                   localized: settings.i18n === true,
                   versions: settings.versions === true,
+                  // Retention forwarded with the switch; the server resolves it.
+                  versionsMaxPerDoc: settings.versionsMaxPerDoc,
                   // Cache revalidation: on unless explicitly turned off; the
                   // server normalizes the boolean into the stored config.
                   revalidate: settings.revalidate !== false,
+                  // Webhook recording: on unless explicitly turned off; the
+                  // server normalizes the boolean into the stored policy.
+                  webhooks: settings.webhooks !== false,
                 },
               },
               {
@@ -416,8 +435,12 @@ export default function CollectionBuilderEditPage({
             // Version history: the server normalizes this into the resolved
             // config the registry column holds.
             versions: settings.versions === true,
+            // Retention forwarded with the switch; resolved into the config.
+            versionsMaxPerDoc: settings.versionsMaxPerDoc,
             // Cache revalidation: on unless explicitly turned off.
             revalidate: settings.revalidate !== false,
+            // Webhook recording: on unless explicitly turned off.
+            webhooks: settings.webhooks !== false,
             // Why: useAsTitle + timestamps were removed from the modal in
             // PR B (system title is always the display; timestamps always
             // emitted). Backend defaults take over -- code-first config can
@@ -474,7 +497,13 @@ export default function CollectionBuilderEditPage({
     if (!fieldDefinitions) return;
 
     try {
-      const preview = await schemaApi.preview(slug, fieldDefinitions);
+      // i18n: preview with the toggle the apply will use, so the resolutions
+      // collected here match the DDL that actually runs.
+      const preview = await schemaApi.preview(
+        slug,
+        fieldDefinitions,
+        settings?.i18n === true
+      );
 
       if (!preview.hasChanges) {
         // No schema changes — just persist labels/settings/hooks.
@@ -497,7 +526,7 @@ export default function CollectionBuilderEditPage({
       const errorObj = err as { message?: string };
       toast.error(errorObj?.message || "Failed to preview schema changes");
     }
-  }, [slug, getValidatedFields, saveSettingsOnly]);
+  }, [slug, getValidatedFields, saveSettingsOnly, settings]);
 
   // Why: DnD reorder is row-level (BuilderFieldList packs fields into rows
   // by width). We compute the OLD row layout, apply the row swap, and

@@ -30,9 +30,13 @@ import { nextlyI18nArchiveTables } from "../../../schemas/nextly-i18n-archive";
 import { affectedRowCount } from "../../auth/services/auth-service";
 
 import { q } from "./ddl-types";
+import type { I18nTransitionKind } from "./transition-state";
 
 /** The shared archive table, scoped per entity by its `collection` column. */
 const ARCHIVE_TABLE = "nextly_i18n_archive";
+
+/** Where the transition record lives. Absent on a database that never completed core setup. */
+const META_TABLE = "nextly_meta";
 
 /**
  * The slice of Drizzle this helper drives: a single scoped DELETE. Declaring only what is
@@ -50,18 +54,35 @@ export interface TeardownI18nAdapter {
   getDrizzle<T = unknown>(): T;
 }
 
-export interface TeardownEntityI18nArgs {
+/**
+ * How the entity is identified, as a union so the unusable combination cannot be written.
+ *
+ * The transition record is keyed by kind AND slug: a collection, a single and a field group may
+ * share one slug while only one of them transitioned. A caller holding a slug but no kind could
+ * only guess, and guessing deletes an unrelated entity's history — so the type does not offer
+ * that shape. Either both are known or neither is.
+ */
+export type TeardownEntityIdentity =
+  | {
+      /** Entity slug exactly as the disable migration records it in `archive.collection`. */
+      slug: string;
+      /** Which registry the slug belongs to. Completes the transition record's key. */
+      kind: I18nTransitionKind;
+    }
+  | {
+      /**
+       * The catalog sweep, which finds companion tables whose registry row is already gone. A slug
+       * cannot be recovered from the table name, because entities may declare a custom `tableName`.
+       * The companion is still dropped; the archive purge and the transition record are both left
+       * alone, since acting on either would mean guessing which entity they belong to.
+       */
+      slug: null;
+      kind?: undefined;
+    };
+
+export interface TeardownEntityI18nArgsBase {
   adapter: TeardownI18nAdapter;
-  /**
-   * Entity slug exactly as the disable migration records it in `archive.collection`.
-   *
-   * `null` when the caller cannot establish the slug — a catalog sweep finds companion
-   * tables whose registry row is already gone, and a slug cannot be recovered from the
-   * table name because entities may declare a custom `tableName`. The companion is still
-   * dropped; the archive purge is skipped, since guessing here would delete another
-   * entity's translations and leave this one's behind.
-   */
-  slug: string | null;
+
   /**
    * Physical MAIN table of the entity being deleted, e.g. `dc_pages`, `comp_seo`,
    * `single_home`. The companion name is derived as `<tableName>_locales`, matching
@@ -69,6 +90,9 @@ export interface TeardownEntityI18nArgs {
    */
   tableName: string;
 }
+
+export type TeardownEntityI18nArgs = TeardownEntityI18nArgsBase &
+  TeardownEntityIdentity;
 
 export interface TeardownEntityI18nResult {
   /** True when a companion table was found and dropped (false when the entity had none). */
@@ -103,6 +127,13 @@ export async function teardownEntityI18n(
         : `DROP TABLE IF EXISTS ${quoted}`;
     await adapter.executeQuery(dropSql);
     companionDropped = true;
+    // Readiness remembers only that a companion exists, and this is one of the two things that
+    // makes that false. Forgetting it here rather than at the call sites keeps the memory tied to
+    // the statement that invalidates it.
+    const { forgetCompanionReadiness } = await import(
+      "../runtime/companion-readiness"
+    );
+    forgetCompanionReadiness(adapter, companionTable);
   }
 
   // The archive table is created lazily on the first localization disable, so its absence is
@@ -121,6 +152,33 @@ export async function teardownEntityI18n(
     // Each driver reports the count in a different place, and mysql2 nests it inside a
     // result tuple, so the shared dialect-aware reader owns that knowledge.
     archiveRowsPurged = affectedRowCount(result, adapter.dialect);
+  }
+
+  // The transition record outlives everything else here unless it is removed: it lives in
+  // `nextly_meta`, not in any of the tables dropped above, and it is keyed by kind and slug —
+  // both of which a later entity can reuse. Left behind, it would hand that entity a
+  // predecessor's source locale and refuse its real one, after its companion had already been
+  // created and seeded.
+  //
+  // Skipped for the catalog sweep, which has no identity to key on. Consistent with the archive
+  // above: neither is touched when acting on it would mean guessing whose it is.
+  //
+  // Guarded on the table's existence for the same reason the archive is: `nextly_meta` is created
+  // by the core setup, and a database that never got that far still has to be able to delete an
+  // entity. Failing the teardown because a bookkeeping row could not be removed would block the
+  // drop it exists to perform.
+  if (
+    args.slug !== null &&
+    args.kind !== undefined &&
+    (await adapter.tableExists(META_TABLE))
+  ) {
+    const { resolveTransitionStore } = await import("./transition-recorder");
+    const { forgetI18nTransition } = await import("./transition-state");
+    await forgetI18nTransition(
+      await resolveTransitionStore(adapter),
+      args.kind,
+      args.slug
+    );
   }
 
   return { companionDropped, archiveRowsPurged };

@@ -15,11 +15,21 @@ import { getI18nArchiveDdl } from "../../../schemas/nextly-i18n-archive";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import { assertLocalizationConfigured } from "../../i18n/config/require-app-config";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
-import { buildCompanionTransitionStatements } from "../../i18n/migration/reconcile-companion";
-import { companionHasStatusColumn } from "../../i18n/runtime/companion-io";
+import { buildCompanionTransitionPlans } from "../../i18n/migration/reconcile-companion";
+import {
+  companionHasStatusColumn,
+  localizedColumnsOnMain,
+} from "../../i18n/runtime/companion-io";
+import {
+  readForeignKeyColumns,
+  readIndexNames,
+  tableHasRows,
+} from "../../schema/pipeline/live-table-facts";
 import { resolveBuilderVersions } from "../../versions/builder-versions";
+import { resolveBuilderWebhooks } from "../../webhooks/builder-webhooks";
 
 import {
   DynamicCollectionRegistryService,
@@ -81,8 +91,16 @@ export interface CreateCollectionInput {
   localized?: boolean;
   /** Whether every save is recorded as a restorable version. */
   versions?: boolean;
+  /** Durable versions kept per document. `false` = unlimited, a number = keep
+   *  that many, undefined = the default (50). Ignored when `versions` is off. */
+  versionsMaxPerDoc?: number | false;
   /** Whether writes bust cache tags. Default on; false opts out entirely. */
   revalidate?: boolean;
+  /**
+   * Whether writes are recorded to the webhook outbox. Default on; false keeps
+   * this collection's content out of the outbox and every delivery.
+   */
+  webhooks?: boolean;
   fields: FieldDefinition[];
   hooks?: Record<string, unknown>[];
   createdBy?: string;
@@ -104,8 +122,13 @@ export interface UpdateCollectionInput {
   localized?: boolean;
   /** Toggle version history. Honoured when defined; undefined leaves it unchanged. */
   versions?: boolean;
+  /** Retention, honoured with the switch. `false` = unlimited, a number = keep
+   *  that many, undefined = the default (50). */
+  versionsMaxPerDoc?: number | false;
   /** Toggle cache revalidation. Honoured when defined; undefined leaves it unchanged. */
   revalidate?: boolean;
+  /** Toggle webhook recording. Honoured when defined; undefined leaves it unchanged. */
+  webhooks?: boolean;
   fields?: FieldDefinition[];
   hooks?: Record<string, unknown>[];
 }
@@ -120,10 +143,24 @@ export class DynamicCollectionService extends BaseService {
    * config; defaults to "en" for setups without localization (where transitions never run).
    */
   private readonly defaultLocale: string;
+  /**
+   * i18n: whether the constructing caller holds a localization config, when it
+   * knows. `CollectionsHandler` takes one as a constructor argument and can be
+   * built outside DI, so that instance must not be told localization is
+   * unconfigured by a container it never used. Undefined defers to DI, which is
+   * the registered-services path every dispatcher request takes.
+   */
+  private readonly localizationConfigured?: boolean;
 
-  constructor(adapter: DrizzleAdapter, logger: Logger, defaultLocale = "en") {
+  constructor(
+    adapter: DrizzleAdapter,
+    logger: Logger,
+    defaultLocale = "en",
+    localizationConfigured?: boolean
+  ) {
     super(adapter, logger);
     this.defaultLocale = defaultLocale;
+    this.localizationConfigured = localizationConfigured;
 
     this.validationService = new DynamicCollectionValidationService();
     this.schemaService = new DynamicCollectionSchemaService(
@@ -133,6 +170,65 @@ export class DynamicCollectionService extends BaseService {
       this.adapter,
       this.logger
     );
+  }
+
+  /**
+   * What the live table is, for the parts of an ALTER the field list cannot decide: whether a
+   * required column can be added without a value for the rows already there, and which columns
+   * are referenced by a foreign key that has to come off before they can be dropped.
+   *
+   * Both are read together and once per save, so the two cannot be observed at different
+   * moments and a table is not queried twice for one edit.
+   */
+  private async readTableFacts(
+    tableName: string,
+    pendingFields: FieldDefinition[]
+  ): Promise<{
+    tableHasRows: boolean;
+    foreignKeysByColumn: ReadonlyMap<string, readonly string[]>;
+    indexNames: ReadonlySet<string>;
+  }> {
+    // A collection whose creation migration has not been deployed yet has a registry record and
+    // no table. Reading from it throws, which would block every follow-up edit to a collection
+    // the author has only just created.
+    //
+    // The attachments still have to be modelled, and as the table WILL be rather than as it is:
+    // the two artefacts replay in order, so the create runs first and installs the index and the
+    // constraint that this update then has to remove. Reporting none emits a bare DROP COLUMN
+    // that is correct against the absent table and refused by the one the deployment builds.
+    // There are no rows either way, because nothing has ever been inserted.
+    if (!(await this.adapter.tableExists(tableName))) {
+      return {
+        tableHasRows: false,
+        ...this.schemaService.plannedAttachments(tableName, pendingFields),
+      };
+    }
+
+    const db = this.adapter.getDrizzle();
+    const [hasRows, foreignKeys, indexes] = await Promise.all([
+      tableHasRows(db, this.adapter.dialect, tableName),
+      readForeignKeyColumns(db, this.adapter.dialect, tableName),
+      readIndexNames(db, this.adapter.dialect, tableName),
+    ]);
+
+    // What the table carries, and only that.
+    //
+    // A deployment can hold several unapplied edits, and each one is generated against the
+    // table as it is now rather than as the edit before it will leave it. Correcting for that
+    // means replaying the queued artefacts in order — adding what they add AND removing what
+    // they remove — because a state that can only gain attachments answers the second edit
+    // wrongly in the other direction: disabling an index and then dropping its field would
+    // emit a second unguarded removal for an index the first artefact already took away.
+    //
+    // That is the deferred-artefact problem in general, not something about attachments, and
+    // it is tracked with the rest of it rather than approximated here. Reading the live table
+    // is exact whenever the edit is applied as it is saved, which is every development setup
+    // and every deployment holding one edit.
+    return {
+      tableHasRows: hasRows,
+      foreignKeysByColumn: foreignKeys,
+      indexNames: indexes,
+    };
   }
 
   /**
@@ -202,6 +298,18 @@ export class DynamicCollectionService extends BaseService {
     const tableName = `dc_${normalizedName}`;
 
     this.validationService.validateCollectionName(normalizedName);
+
+    // i18n: a localized collection stores translatable values via the app's
+    // `localization` config; creating one without that config would split
+    // the tables into a shape the runtime cannot write to (every entry
+    // create then 500s). Reject up front with an actionable message.
+    if (data.localized === true) {
+      assertLocalizationConfigured(
+        "collection",
+        normalizedName,
+        this.localizationConfigured
+      );
+    }
 
     const exists = await this.registryService.collectionExists(normalizedName);
     if (exists) {
@@ -285,11 +393,15 @@ export class DynamicCollectionService extends BaseService {
       localized: data.localized === true,
       // Persist version history from the create payload; without it a
       // collection created with the switch on is written unversioned and the
-      // switch reads as off the moment the editor loads.
-      versions: resolveBuilderVersions(data.versions),
+      // switch reads as off the moment the editor loads. Retention rides along.
+      versions: resolveBuilderVersions(data.versions, data.versionsMaxPerDoc),
       // Persist the cache-revalidation opt-out from the create payload (null =
       // standard tags, { disable: true } = off) so the write path reads it back.
       revalidate: resolveBuilderRevalidate(data.revalidate),
+      // Persist the webhook recording opt-out from the create payload (null =
+      // record, { record: false } = off) so boot reads it back and the switch
+      // survives a restart rather than lasting only for this process.
+      webhooks: resolveBuilderWebhooks(data.webhooks),
       schemaHash,
       schemaVersion: 1,
       migrationStatus: "pending" as const,
@@ -321,6 +433,8 @@ export class DynamicCollectionService extends BaseService {
       dbName: tableName,
       fields: opts.fields,
       dialect: this.adapter.dialect,
+      // This service creates Schema Builder collections, and the companion mirrors that table.
+      builtBy: "collection",
       // Unused for the create-only statement (no seed) — a placeholder is fine.
       defaultLocale: "en",
       collectionLocalized: true,
@@ -364,7 +478,9 @@ export class DynamicCollectionService extends BaseService {
     wasLocalized: boolean;
     isLocalized: boolean;
     status: boolean;
-  }): Promise<{ sql: string; needsArchive: boolean }> {
+    /** Whether the entity HAD Draft/Published before this save — see `wasStatus` on the args. */
+    wasStatus: boolean;
+  }): Promise<{ sql: string; localSql?: string; needsArchive: boolean }> {
     const companionTable = `${args.tableName}_locales`;
     const companionExists = await this.adapter.tableExists(companionTable);
     // Only introspect `_status` for a field change on a still-localized collection (a later
@@ -373,7 +489,12 @@ export class DynamicCollectionService extends BaseService {
       companionExists && args.wasLocalized && args.isLocalized
         ? await companionHasStatusColumn(this.adapter, companionTable)
         : undefined;
-    const plan = buildCompanionTransitionStatements({
+    const localizedOldNames = new Set(
+      resolveLocalizedFieldNames(args.oldFields, args.wasLocalized)
+    );
+    const common = {
+      // This service owns Schema Builder collections, so the companion mirrors that builder.
+      builtBy: "collection" as const,
       slug: args.slug,
       tableName: args.tableName,
       dialect: this.adapter.dialect,
@@ -385,13 +506,32 @@ export class DynamicCollectionService extends BaseService {
       newFields: args.newFields,
       companionExists,
       companionHasStatus,
+      wasStatus: args.wasStatus,
+    };
+
+    // Which translatable columns the main table still carries. A disable must not re-add one that
+    // is already there, and must still restore it: presence says the column exists, never that its
+    // value is current, because every localized write went to the companion alone.
+    const { artefact, local } = buildCompanionTransitionPlans({
+      ...common,
+      // Only the fields that were TRANSLATABLE before this save. The helper reports whichever of
+      // the names it is given exist on the main table, so handing it every old field would put
+      // ordinary shared columns into the list and let the local plan diverge from the artefact
+      // over columns no transition ever touched.
+      existingMainColumns: await localizedColumnsOnMain(
+        this.adapter,
+        args.tableName,
+        args.oldFields.filter(f => localizedOldNames.has(f.name))
+      ).then(cols => cols.map(c => c.name)),
     });
+
     // Separate statements with the migration-file breakpoint marker (not blank lines): the file
     // is split on `--> statement-breakpoint` and each chunk is run as ONE statement, so a
     // multi-statement chunk is rejected by drivers with multi-statements disabled (e.g. MySQL).
     return {
-      sql: this.toBreakpointSql(plan.statements),
-      needsArchive: plan.needsArchive,
+      sql: this.toBreakpointSql(artefact.statements),
+      ...(local ? { localSql: this.toBreakpointSql(local.statements) } : {}),
+      needsArchive: artefact.needsArchive,
     };
   }
 
@@ -403,6 +543,16 @@ export class DynamicCollectionService extends BaseService {
     updates: UpdateCollectionInput
   ): Promise<{
     migrationSQL: string | null;
+    /**
+     * What to run against THIS database, when it differs from the artefact.
+     *
+     * Present only where the local schema is in a shape migration history cannot produce:
+     * unattended provisioning retains the columns it copied into a companion, so a later disable
+     * meets a main table that already has them while the file — which must be replayable on a
+     * database that only ever ran migrations — re-adds them. Null means the artefact is correct
+     * here too, which is every case but that one.
+     */
+    localMigrationSQL: string | null;
     migrationFileName: string | null;
     metadataUpdates: Record<string, unknown>;
   }> {
@@ -513,8 +663,29 @@ export class DynamicCollectionService extends BaseService {
     // off writes null. `status` is deliberately not passed to the resolver —
     // it aliases to a versioned config for back-compat, which would stop the
     // toggle from ever turning versioning off on a Draft/Published entity.
+    // Retention without the on/off switch is ambiguous — the resolver needs the
+    // enabled state — so a retention-only update is rejected rather than
+    // silently dropped. This is the chokepoint every collection-update caller
+    // reaches (the dispatcher forwards its raw body here).
+    if (
+      updates.versionsMaxPerDoc !== undefined &&
+      updates.versions === undefined
+    ) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "versionsMaxPerDoc",
+            code: "MISSING_DEPENDENCY",
+            message: "versionsMaxPerDoc requires versions to be set.",
+          },
+        ],
+      });
+    }
     if (updates.versions !== undefined) {
-      metadataUpdates.versions = resolveBuilderVersions(updates.versions);
+      metadataUpdates.versions = resolveBuilderVersions(
+        updates.versions,
+        updates.versionsMaxPerDoc
+      );
     }
     // Cache-revalidation toggle. The column holds the resolved config the write
     // path reads, so the boolean is normalized before storing; off writes the
@@ -522,9 +693,29 @@ export class DynamicCollectionService extends BaseService {
     if (updates.revalidate !== undefined) {
       metadataUpdates.revalidate = resolveBuilderRevalidate(updates.revalidate);
     }
+    // Webhook recording toggle. The column holds the resolved policy boot reads
+    // back, so the boolean is normalized before storing; off writes the opt-out,
+    // on writes null.
+    if (updates.webhooks !== undefined) {
+      metadataUpdates.webhooks = resolveBuilderWebhooks(updates.webhooks);
+    }
 
     let migrationSQL: string | null = null;
+    // Set only where this database is in a shape migration history cannot produce — see the
+    // return type. Null everywhere else, so the caller runs the artefact itself.
+    let localMigrationSQL: string | null = null;
     let migrationFileName: string | null = null;
+
+    // Read by the branches that diff two different field lists, and shared between them. The
+    // status-only branches below diff a list against itself, so no column is added or dropped
+    // and there is nothing for these facts to decide.
+    let tableFacts: ReturnType<typeof this.readTableFacts> | null = null;
+    const liveTable = () =>
+      (tableFacts ??= this.readTableFacts(
+        collection.tableName,
+        // What the pending create artefact builds from, for the not-yet-deployed case.
+        collection.fields ?? []
+      ));
 
     // Why: the alter-table block runs when fields change, but a status-only
     // flip also needs a migration (ADD/DROP status column) so the data
@@ -549,6 +740,18 @@ export class DynamicCollectionService extends BaseService {
         : collectionWasLocalized;
     const localizedTransition =
       collectionWasLocalized !== collectionIsLocalized;
+    // i18n: turning Internationalization ON requires the app-level
+    // `localization` config — without it the enable transition would move
+    // translatable columns into a companion the runtime cannot address.
+    // Only the false→true transition is gated: an already-localized
+    // collection keeps saving, and disabling is always allowed.
+    if (!collectionWasLocalized && collectionIsLocalized) {
+      assertLocalizationConfigured(
+        "collection",
+        collectionName,
+        this.localizationConfigured
+      );
+    }
     const reservedForFields = [
       "id",
       "title",
@@ -626,36 +829,45 @@ export class DynamicCollectionService extends BaseService {
           collection.tableName,
           oldShared,
           newShared,
-          { wasStatus, hasStatus }
+          { wasStatus, hasStatus, ...(await liveTable()) }
         );
-        const { sql: companionSQL, needsArchive } =
-          await this.buildCompanionTransitionSQL({
-            slug: collectionName,
-            tableName: collection.tableName,
-            oldFields: oldUserFields,
-            newFields: userDefinedFields,
-            wasLocalized: collectionWasLocalized,
-            isLocalized: collectionIsLocalized,
-            status: hasStatus,
-          });
+        const {
+          sql: companionSQL,
+          localSql: localCompanionSQL,
+          needsArchive,
+        } = await this.buildCompanionTransitionSQL({
+          slug: collectionName,
+          tableName: collection.tableName,
+          oldFields: oldUserFields,
+          newFields: userDefinedFields,
+          wasLocalized: collectionWasLocalized,
+          isLocalized: collectionIsLocalized,
+          status: hasStatus,
+          wasStatus,
+        });
         const archiveSQL = needsArchive
           ? this.toBreakpointSql(getI18nArchiveDdl(this.adapter.dialect))
           : "";
         // A disable re-adds the translatable columns to main (companionSQL), so run the companion
         // transition FIRST (after ensuring the archive table), then the shared ALTER. An enable /
         // field change runs the shared ALTER first, then seeds + drops / ADD-DROPs the companion.
-        const parts = collectionIsLocalized
-          ? [mainSQL, companionSQL]
-          : [archiveSQL, companionSQL, mainSQL];
-        migrationSQL = parts
-          .filter(sql => sql && sql.trim())
-          .join("\n--> statement-breakpoint\n");
+        const assemble = (companion: string) =>
+          (collectionIsLocalized
+            ? [mainSQL, companion]
+            : [archiveSQL, companion, mainSQL]
+          )
+            .filter(sql => sql && sql.trim())
+            .join("\n--> statement-breakpoint\n");
+        migrationSQL = assemble(companionSQL);
+        if (localCompanionSQL !== undefined) {
+          localMigrationSQL = assemble(localCompanionSQL);
+        }
       } else {
         migrationSQL = this.schemaService.generateAlterTableMigration(
           collection.tableName,
           oldUserFields,
           userDefinedFields,
-          { wasStatus, hasStatus }
+          { wasStatus, hasStatus, ...(await liveTable()) }
         );
       }
       migrationFileName = `${Date.now()}_update_${collectionName}.sql`;
@@ -685,25 +897,34 @@ export class DynamicCollectionService extends BaseService {
             { wasStatus: wasStatusForUpdate, hasStatus }
           )
         : "";
-      const { sql: companionSQL, needsArchive } =
-        await this.buildCompanionTransitionSQL({
-          slug: collectionName,
-          tableName: collection.tableName,
-          oldFields: oldUserFields,
-          newFields: oldUserFields,
-          wasLocalized: collectionWasLocalized,
-          isLocalized: collectionIsLocalized,
-          status: hasStatus,
-        });
+      const {
+        sql: companionSQL,
+        localSql: localCompanionSQL,
+        needsArchive,
+      } = await this.buildCompanionTransitionSQL({
+        slug: collectionName,
+        tableName: collection.tableName,
+        oldFields: oldUserFields,
+        newFields: oldUserFields,
+        wasLocalized: collectionWasLocalized,
+        isLocalized: collectionIsLocalized,
+        status: hasStatus,
+        wasStatus: wasStatusForUpdate,
+      });
       const archiveSQL = needsArchive
         ? this.toBreakpointSql(getI18nArchiveDdl(this.adapter.dialect))
         : "";
-      const parts = collectionIsLocalized
-        ? [mainSQL, companionSQL]
-        : [archiveSQL, companionSQL, mainSQL];
-      migrationSQL = parts
-        .filter(sql => sql && sql.trim())
-        .join("\n--> statement-breakpoint\n");
+      const assemble = (companion: string) =>
+        (collectionIsLocalized
+          ? [mainSQL, companion]
+          : [archiveSQL, companion, mainSQL]
+        )
+          .filter(sql => sql && sql.trim())
+          .join("\n--> statement-breakpoint\n");
+      migrationSQL = assemble(companionSQL);
+      if (localCompanionSQL !== undefined) {
+        localMigrationSQL = assemble(localCompanionSQL);
+      }
       migrationFileName = `${Date.now()}_i18n_${collectionName}.sql`;
     } else if (statusFlipped) {
       // No field changes, but status toggled — emit an alter that just
@@ -734,6 +955,7 @@ export class DynamicCollectionService extends BaseService {
 
     return {
       migrationSQL,
+      localMigrationSQL,
       migrationFileName,
       metadataUpdates,
     };

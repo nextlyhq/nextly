@@ -16,7 +16,7 @@ import type { FieldType } from "./base";
 import type { CheckboxFieldConfig } from "./checkbox";
 import type { ChipsFieldConfig } from "./chips";
 import type { CodeFieldConfig } from "./code";
-import type { ComponentFieldConfig } from "./component";
+import type { FieldGroupFieldConfig } from "./component";
 import type { DateFieldConfig } from "./date";
 import type { EmailFieldConfig } from "./email";
 import type { GroupFieldConfig } from "./group";
@@ -33,6 +33,7 @@ import type { TextareaFieldConfig } from "./textarea";
 import type { UploadFieldConfig } from "./upload";
 
 export * from "./base";
+export * from "./plugin-field";
 
 // Text field types
 export * from "./text";
@@ -100,7 +101,7 @@ export type DataFieldConfig =
   | RepeaterFieldConfig
   | GroupFieldConfig
   | JSONFieldConfig
-  | ComponentFieldConfig
+  | FieldGroupFieldConfig
   | ChipsFieldConfig;
 
 /**

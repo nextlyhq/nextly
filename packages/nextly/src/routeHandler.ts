@@ -54,7 +54,8 @@ import {
   updateImageSize,
   deleteImageSize,
 } from "./api/image-sizes";
-import { readOrGenerateRequestId } from "./api/request-id";
+import { mintPreviewLink, revokePreviewLinks } from "./api/preview-links";
+import { readOrGenerateRequestId, withRequestIdHeader } from "./api/request-id";
 // canonical respondX wire shapes (spec §5.1) instead of the
 // hand-rolled `{ data: <payload> }` envelope.
 import { respondData, respondMutation } from "./api/response-shapes";
@@ -78,6 +79,11 @@ import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { NextlyError } from "./errors/nextly-error";
+import {
+  currentFlattenedErrors,
+  logFlattenedErrors,
+  withSideEffectWarnings,
+} from "./hooks/side-effect-warnings";
 import { withTimezoneFormatting } from "./lib/date-formatting";
 import { createCorsMiddleware } from "./middleware/cors";
 import { createRateLimiter } from "./middleware/rate-limit";
@@ -85,6 +91,7 @@ import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
 import { buildPluginAdminMeta } from "./plugins/admin-meta";
 import { runPluginRoute } from "./plugins/routes/dispatch";
 import { getPluginRouteRegistry } from "./plugins/routes/route-registry";
+import { assertClientConfigs } from "./plugins/validate-client-config";
 import {
   parseRestRoute,
   getActionFromMethod,
@@ -142,6 +149,22 @@ function getSchemaVersionHeader(): number {
 // Global API Date/Time Formatting
 // ============================================================================
 
+/**
+ * Marks a response the global date/time pass must leave alone.
+ *
+ * That pass renders CONTENT timestamps in the viewer's timezone. A payload of
+ * configuration carries none, so every date-like string in it is opaque text
+ * belonging to whoever wrote it — a plugin's `clientConfig` most clearly, which
+ * is promised to arrive exactly as declared. Rewriting `"2026-08-04T12:34Z"`
+ * into a normalised, timezone-shifted form breaks that promise for a value the
+ * pass cannot know the meaning of.
+ *
+ * A header rather than a path test: the handler knows what it is returning,
+ * whereas a path can be matched by a plugin route that happens to end in the
+ * same segment and should keep its ordinary formatting.
+ */
+const SKIP_DATE_FORMATTING_HEADER = "x-nextly-skip-date-formatting";
+
 async function applyGlobalDateFormatting(
   response: Response,
   req?: Request
@@ -149,6 +172,20 @@ async function applyGlobalDateFormatting(
   const contentType = response.headers.get("content-type") || "";
   if (!contentType.toLowerCase().includes("application/json")) {
     return response;
+  }
+
+  // A response that opted out. Marked by the handler rather than matched by
+  // path: a plugin may mount its own route ending in the same segment, and it
+  // should keep the formatting every other plugin response gets. The header is
+  // internal, so it is removed on the way out.
+  if (response.headers.has(SKIP_DATE_FORMATTING_HEADER)) {
+    const headers = new Headers(response.headers);
+    headers.delete(SKIP_DATE_FORMATTING_HEADER);
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
   }
 
   // Skip formatting for auth endpoints to avoid interfering with auth flow
@@ -300,6 +337,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "apiKeys",
   "webhooks",
   "generalSettings",
+  "previewLinks",
   "imageSizes",
   "dashboard",
   "schema",
@@ -515,12 +553,17 @@ const COLLECTION_ENTRY_METHODS = new Set([
   // the entry itself; the document-level rules run inside the methods.
   "listEntryVersions",
   "getEntryVersion",
+  "getEntryVersionDiff",
   // Restoring writes the document, so the route parser marks it an `update`
   // operation and this resolves to the `update-{slug}` permission.
   "restoreEntryVersion",
   // Naming a version writes history rather than the document, but it is still
   // a write and resolves to the same permission.
   "setEntryVersionLabel",
+  // Discarding the working draft reverts the document to its live row; the
+  // route parser marks it an `update` operation, so it resolves to the
+  // `update-{slug}` permission rather than a definition mutation's manage-settings.
+  "discardWorkingDraft",
 ]);
 
 /** Single document methods (read/update content, not schema definitions). */
@@ -530,6 +573,7 @@ const SINGLE_DOCUMENT_METHODS = new Set([
   // Read-only history for the document, guarded by the same read permission.
   "listSingleVersions",
   "getSingleVersion",
+  "getSingleVersionDiff",
   // A write, authorized as an update of the document.
   "restoreSingleVersion",
   // Also a write. Deliberately absent from the read allowlist below, so the
@@ -566,8 +610,10 @@ const ROLE_AWARE_READ_METHODS = new Set([
   "getSingleDocument",
   "listEntryVersions",
   "getEntryVersion",
+  "getEntryVersionDiff",
   "listSingleVersions",
   "getSingleVersion",
+  "getSingleVersionDiff",
 ]);
 
 /**
@@ -633,7 +679,8 @@ async function resolveAuthorization(
       const action =
         method === "getSingleDocument" ||
         method === "listSingleVersions" ||
-        method === "getSingleVersion"
+        method === "getSingleVersion" ||
+        method === "getSingleVersionDiff"
           ? "read"
           : "update";
       const slug = routeParams?.slug || "";
@@ -674,8 +721,8 @@ async function resolveAuthorization(
     ]);
   }
 
-  // --- Components → manage-settings ---
-  if (service === "components") {
+  // --- Field groups → manage-settings ---
+  if (service === "field-groups") {
     const action = getActionFromMethod(httpMethod);
     return requireAnyPermission(req, [
       { action, resource: "settings" },
@@ -866,6 +913,15 @@ async function handleServiceRequest(
   // before they can read it.
   if (service === "webhooks") {
     return handleWebhookRequest(req, method, routeParams);
+  }
+
+  // ==================== PREVIEW LINKS DIRECT DISPATCH ====================
+  // Above the body read below, like the handlers beside it: these parse their
+  // own JSON, and a consumed stream would reach them empty.
+  if (service === "previewLinks") {
+    return method === "revokePreviewLinks"
+      ? revokePreviewLinks(req)
+      : mintPreviewLink(req);
   }
 
   // ==================== GENERAL SETTINGS DIRECT DISPATCH ====================
@@ -1242,7 +1298,10 @@ async function handleAdminMetaRequest(): Promise<Response> {
   // migrated fetcher. `respondData` requires a Record-shaped argument and
   // `payload` is built as `Record<string, unknown>` above so the bound is
   // satisfied without a cast.
-  return respondData(payload);
+  const response = respondData(payload);
+  // Configuration, not content: see `SKIP_DATE_FORMATTING_HEADER`.
+  response.headers.set(SKIP_DATE_FORMATTING_HEADER, "1");
+  return response;
 }
 
 /**
@@ -1397,6 +1456,14 @@ export function createDynamicHandlers(options?: {
 }) {
   // Store the config so ensureServicesInitialized() can use it
   if (options?.config) {
+    // Before the config is stored, so no request can be served against a
+    // plugin whose `clientConfig` cannot be delivered. `resolvePlugins` runs
+    // the same check, but service initialisation is lazy and `/api/admin-meta`
+    // is served WITHOUT it — so on an admin's first request that check has not
+    // happened yet, and the failure would land on the branding response
+    // instead of at startup. This module runs when the route file is imported,
+    // which is the earliest deterministic point the config exists.
+    assertClientConfigs(options.config.plugins ?? []);
     setHandlerConfig(options.config);
   }
 
@@ -1462,9 +1529,56 @@ export function createDynamicHandlers(options?: {
       return applySecurityHeaders(corsRateLimited);
     }
 
-    // Run the handler, then layer on CORS + security headers
-    const response = await handler();
-    const formattedResponse = await applyGlobalDateFormatting(response, req);
+    // Run the handler, then layer on CORS + security headers.
+    //
+    // Wrapped in a side-effect warning scope because this is the one place
+    // every verb converges on, and a post-commit hook failure has to reach the
+    // response the client is waiting on. The response builders read the scope
+    // from inside it, so nothing between here and them has to carry the
+    // failures; a request whose hooks all succeed collects an empty array and
+    // its body is unchanged.
+    // Captured inside the scope, which closes when this returns. The dynamic
+    // routes do not pass through `withErrorHandler`, so without this the
+    // detail an envelope flattened on the ordinary `/api/...` surface reaches
+    // the log only as the boundary's reconstruction, with neither the cause
+    // nor the context the thrower attached.
+    let flattenedInRequest: NextlyError[] = [];
+    const { result: response } = await withSideEffectWarnings(async () => {
+      try {
+        return await handler();
+      } finally {
+        flattenedInRequest = currentFlattenedErrors();
+      }
+    });
+    // Settled BEFORE logging and put on the response, so the id an operator
+    // reads in the log is one the caller actually received. The response
+    // helpers do not set it for a 200 carrying per-item failures, so without
+    // this the log would carry an id generated here and shown to nobody,
+    // which is the join the diagnostics exist for.
+    const effectiveRequestId =
+      response.headers.get("x-request-id") ?? readOrGenerateRequestId(req);
+    const identifiedResponse = withRequestIdHeader(
+      response,
+      effectiveRequestId
+    );
+    // Imported here rather than at module scope, matching how this file already
+    // reaches the logger, so the route entry point keeps its import graph.
+    const { getNextlyLogger: resolveLogger } = await import(
+      "./observability/logger"
+    );
+    logFlattenedErrors(
+      flattenedInRequest,
+      entry => resolveLogger().error(entry),
+      {
+        requestId: effectiveRequestId,
+        route: new URL(req.url).pathname,
+        method: req.method,
+      }
+    );
+    const formattedResponse = await applyGlobalDateFormatting(
+      identifiedResponse,
+      req
+    );
     const corsResponse = cors.applyHeaders(req, formattedResponse);
     return applySecurityHeaders(corsResponse);
   }
@@ -1637,6 +1751,7 @@ async function setAuthenticatedRouteParams(
   delete routeParams._authenticatedActorType;
   delete routeParams._authenticatedActorId;
   delete routeParams._authenticatedPermissions;
+  delete routeParams._authenticatedClaims;
 
   if (!authorizedUser) return;
 
@@ -1658,6 +1773,12 @@ async function setAuthenticatedRouteParams(
     routeParams._authenticatedPermissions = JSON.stringify(
       authorizedUser.permissions ?? []
     );
+  }
+  // Verified extra claims, so a stored `custom` rule decides on the same
+  // identity over HTTP that it gets through the Direct API. Server-authored
+  // like the keys above: the client-supplied copy was deleted first.
+  if (authorizedUser.claims) {
+    routeParams._authenticatedClaims = JSON.stringify(authorizedUser.claims);
   }
 
   if (!needsRoles) return;

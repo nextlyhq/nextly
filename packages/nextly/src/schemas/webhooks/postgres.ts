@@ -62,6 +62,11 @@ export const nextlyEvents = pgTable(
     // Which retention window governs this row. A single event can serve both
     // roles at once, so this records the LONGEST retention it needs: rows the
     // audit log depends on outlive rows that only ever drove a webhook.
+    // Whether the action this row describes succeeded. Defaults to "success"
+    // because a row is only written inside the transaction of a change that
+    // commits, so every event recorded before this column existed was one —
+    // which is also why the default is the correct value for those rows.
+    outcome: varchar("outcome", { length: 16 }).notNull().default("success"),
     retentionClass: varchar("retention_class", { length: 20 })
       .notNull()
       .default("webhook"),
@@ -128,6 +133,12 @@ export const nextlyWebhookDeliveries = pgTable(
   "nextly_webhook_deliveries",
   {
     id: text("id").primaryKey(),
+    // Both foreign keys cascade on delete, deliberately. Endpoints are
+    // soft-deleted (the `nextly_webhooks` row survives), so this cascade never
+    // fires for normal retirement and a retired endpoint keeps its history; it
+    // only fires on a genuine hard row-delete, where erasing the endpoint's
+    // deliveries with it is the intended meaning. The event cascade is how
+    // retention prunes an event together with its delivery attempts in one step.
     webhookId: text("webhook_id")
       .notNull()
       .references(() => nextlyWebhooks.id, { onDelete: "cascade" }),

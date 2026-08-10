@@ -48,10 +48,8 @@ import { resolve } from "node:path";
 import type { Command } from "commander";
 
 import { LOCALIZATION_MIGRATION_MARKER } from "../../domains/i18n/migration/write-migration-file";
-import {
-  buildDesiredSnapshotFromConfig,
-  type MinimalConfigEntity,
-} from "../../domains/schema/migrate-create/generate";
+import { toMinimalEntities } from "../../domains/schema/migrate-create/config-entities";
+import { buildDesiredSnapshotFromConfig } from "../../domains/schema/migrate-create/generate";
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
@@ -75,6 +73,10 @@ import {
 } from "../../domains/schema/utils/resolve-table-name";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError } from "../../errors/index";
+import {
+  assertPluginFieldDeclarations,
+  describeDeclarationFailure,
+} from "../../shared/lib/assert-plugin-field-declarations";
 import { createContext, type CommandContext } from "../program";
 import { validateDatabaseEnv, type SupportedDialect } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
@@ -139,6 +141,26 @@ export async function runMigrateCheck(
     process.exit(1);
   }
 
+  // `loadConfig` has registered `contributes.fieldTypes` by now, which is the
+  // first moment an unknown field type can be told apart from one a plugin had
+  // not contributed yet: the `define*` validators defer that question because
+  // the config bundle is evaluated before any plugin registers. Asked here, a
+  // misspelled or wrong-surface token fails the command instead of silently
+  // generating primitive fallback types and a snapshot that production boot
+  // then refuses.
+  try {
+    assertPluginFieldDeclarations({
+      collections: configResult.config.collections,
+      singles: configResult.config.singles,
+      fieldGroups: configResult.config.fieldGroups,
+    });
+  } catch (error) {
+    // Reported and exited rather than thrown, so an invalid declaration reads
+    // like every other check failure instead of an unhandled crash.
+    logger.error(describeDeclarationFailure(error));
+    process.exit(1);
+  }
+
   const cwd = options.cwd ?? process.cwd();
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
@@ -160,6 +182,36 @@ export async function runMigrateCheck(
     manifest,
     configResult.deferredExtends ?? []
   );
+
+  // The manifest gets the same check the code-first config got above, once its
+  // deferred extends are materialized: a Builder-owned entity can carry a
+  // plugin field too, and a plugin extending one contributes its fields here
+  // rather than in the config. Only entities a code-first entity does not
+  // shadow are checked, because a shadowed one never reaches the snapshot.
+  const surviving = <T extends { slug: string }>(
+    list: readonly T[] | undefined,
+    codeFirst: ReadonlyArray<{ slug: string }> | undefined
+  ): T[] => {
+    const shadowed = new Set((codeFirst ?? []).map(e => e.slug));
+    return (list ?? []).filter(e => !shadowed.has(e.slug));
+  };
+
+  try {
+    assertPluginFieldDeclarations({
+      collections: surviving(
+        manifest.collections,
+        configResult.config.collections
+      ),
+      singles: surviving(manifest.singles, configResult.config.singles),
+      fieldGroups: surviving(
+        manifest.components,
+        configResult.config.fieldGroups
+      ),
+    });
+  } catch (error) {
+    logger.error(describeDeclarationFailure(error));
+    process.exit(1);
+  }
 
   // Cross-file checks (slug collision, relation targets).
   const crossIssues = validateCrossFile({
@@ -183,8 +235,9 @@ export async function runMigrateCheck(
     codeSingles: toMinimalEntities(configResult.config.singles ?? [], e =>
       resolveSingleTableName({ slug: e.slug, dbName: e.dbName })
     ),
-    codeComponents: toMinimalEntities(configResult.config.components ?? [], e =>
-      resolveComponentTableName(e.slug, e.dbName)
+    codeComponents: toMinimalEntities(
+      configResult.config.fieldGroups ?? [],
+      e => resolveComponentTableName(e.slug)
     ),
     manifest,
   });
@@ -277,7 +330,7 @@ export async function runChecks(args: {
       logger.error(`  Actual SHA-256:   ${result.actual}`);
       logger.error(
         "  The migration file was edited after generation. Either revert the edit, " +
-          "or delete this file and re-generate via `nextly migrate:create --name=<name>`."
+          'or delete this file and re-generate via `nextly migrate:create --name="<migration-name>"`.'
       );
       process.exit(1);
       return;
@@ -324,7 +377,7 @@ export async function runChecks(args: {
       logger.error(`  ... and ${ops.length - 10} more`);
     }
     logger.error(
-      "Run `nextly migrate:create --name=<name>` and commit the result."
+      'Run `nextly migrate:create --name="<migration-name>"` and commit the result.'
     );
     process.exit(1);
     return;
@@ -369,73 +422,6 @@ function describeOp(op: Operation): string {
     case "drop_index":
       return `drop_index ${op.index.name} on ${op.tableName}`;
   }
-}
-
-/**
- * F11 PR 4: same adapter as `cli/commands/migrate-create.ts`. Kept in
- * sync via the shared `MinimalConfigEntity` type from the migrate-create
- * module. A future cleanup could extract to a shared CLI helper; for now
- * we duplicate the small ~15-LOC function rather than introduce a new
- * shared module just for this.
- *
- * MIRROR: keep in sync with `migrate-create.ts:toMinimalEntities`.
- */
-function toMinimalEntities(
-  entities: unknown[],
-  resolveTableName: (entity: { slug: string; dbName?: string }) => string
-): MinimalConfigEntity[] {
-  return entities.map(raw => {
-    const e = raw as {
-      slug: string;
-      fields?: {
-        name: string;
-        type: string;
-        required?: boolean;
-        hasMany?: boolean;
-        relationTo?: string | string[];
-        unique?: boolean;
-        index?: boolean;
-        localized?: boolean;
-        dbType?: "integer" | "decimal";
-        precision?: number;
-        scale?: number;
-      }[];
-      dbName?: string;
-      status?: boolean;
-      localized?: boolean;
-    };
-    return {
-      slug: e.slug,
-      // Resolve through the same per-kind helper the runtime uses so a dbName
-      // that omits the prefix (e.g. a plugin collection with dbName:"forms")
-      // still resolves to the table the runtime creates (dc_forms).
-      tableName: resolveTableName({ slug: e.slug, dbName: e.dbName }),
-      fields: (e.fields ?? []).map(f => ({
-        name: f.name,
-        type: f.type,
-        required: f.required,
-        hasMany: f.hasMany,
-        relationTo: f.relationTo,
-        unique: f.unique,
-        index: f.index,
-        localized: f.localized,
-        // Forward decimal storage so drift detection compares a decimal column
-        // against the decimal desired state, not the integer default.
-        dbType: f.dbType,
-        precision: f.precision,
-        scale: f.scale,
-      })),
-      // Why: forward the Draft/Published flag so migrate:check's drift
-      // detection compares status correctly. Components don't carry
-      // status — leaving the field unset (undefined) defaults to off
-      // inside buildDesiredSnapshotFromConfig.
-      status: e.status === true,
-      // Forward localization so the drift check's desired snapshot omits
-      // localized columns — matching the live main table after the companion
-      // migration relocated them (no false drift).
-      localized: e.localized === true,
-    };
-  });
 }
 
 // SupportedDialect is the runtime dialect used to build the desired

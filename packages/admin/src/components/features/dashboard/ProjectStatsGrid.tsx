@@ -46,7 +46,7 @@ function LoadingSkeleton() {
     <div className="grid grid-cols-2 gap-4" aria-busy="true">
       <span className="sr-only">Loading metrics...</span>
       {Array.from({ length: 8 }, (_, i) => (
-        <Skeleton key={i} className="h-20 rounded-none" />
+        <Skeleton key={i} className="h-20 rounded-lg" />
       ))}
     </div>
   );
@@ -80,10 +80,10 @@ export const ProjectStatsGrid: React.FC = () => {
           href: ROUTES.BUILDER_COLLECTIONS,
         },
         {
-          title: "Plugins",
-          value: data.components,
+          title: "Field Groups",
+          value: data.fieldGroups,
           icon: <Puzzle className="h-5 w-5" />,
-          href: ROUTES.BUILDER_COMPONENTS,
+          href: ROUTES.BUILDER_FIELD_GROUPS,
         },
         {
           title: "Singles",
@@ -112,20 +112,20 @@ export const ProjectStatsGrid: React.FC = () => {
     }, [data, localeCount]);
 
   return (
-    <Card className="border-border bg-card/80 backdrop-blur-md rounded-none overflow-hidden transition-all duration-500 hover:border-border">
+    <Card className="border-border bg-card/80 backdrop-blur-md rounded-lg overflow-hidden transition-all duration-500 hover:border-border">
       <CardHeader
         noBorder
         className="flex flex-row items-center justify-between space-y-0 px-8 pt-8 pb-4"
       >
         <div className="space-y-1">
-          <CardTitle className="text-[10px] font-black uppercase tracking-[0.25em] text-muted-foreground">
+          <CardTitle className="text-xs font-black uppercase tracking-[0.25em] text-muted-foreground">
             Resource Inventory
           </CardTitle>
-          <div className="h-1 w-6 bg-primary/30 rounded-none" />
+          <div className="h-1 w-6 bg-primary/30 rounded-sm" />
         </div>
         <Link
           href={ROUTES.SETTINGS}
-          className="text-[10px] font-black uppercase tracking-[0.2em] text-primary hover-unified transition-all flex items-center gap-2 px-4 py-2 rounded-none bg-primary/5 hover-unified"
+          className="text-xs font-black uppercase tracking-[0.2em] text-primary hover-unified transition-all flex items-center gap-2 px-4 py-2 rounded-md bg-primary/5 hover-unified"
         >
           Infrastructure <ChevronRight className="h-3 w-3" />
         </Link>
@@ -134,7 +134,7 @@ export const ProjectStatsGrid: React.FC = () => {
         {isLoading ? (
           <LoadingSkeleton />
         ) : error ? (
-          <div className="flex items-center gap-3 py-10 text-[11px] font-bold uppercase tracking-widest text-destructive justify-center bg-destructive/5 rounded-none">
+          <div className="flex items-center gap-3 py-10 text-xs font-bold uppercase tracking-widest text-destructive justify-center bg-destructive/5 rounded-md">
             <AlertCircle className="h-4 w-4" />
             <span>Resource index synchronization failed</span>
           </div>
@@ -148,7 +148,7 @@ export const ProjectStatsGrid: React.FC = () => {
                 value={stat.value}
                 icon={stat.icon}
                 href={stat.href}
-                className="rounded-none bg-primary/5 border-border"
+                className="rounded-lg bg-primary/5 border-border"
               />
             ))}
           </div>

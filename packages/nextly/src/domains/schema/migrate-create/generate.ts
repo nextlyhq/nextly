@@ -31,6 +31,7 @@ import {
   planCompanionMigration,
   type CompanionMigrationPlan,
 } from "../../i18n/migration/plan-companion-migration";
+import type { I18nTransitionKind } from "../../i18n/migration/transition-state";
 import type {
   CompanionMigrationSpec,
   LocalizedColumnSpec,
@@ -103,7 +104,7 @@ export interface MinimalConfigEntity {
   status?: boolean;
   /**
    * Whether content-localization is enabled for this collection, single, OR component
-   * (`defineCollection({ localized: true })` / `defineSingle` / `defineComponent`). When
+   * (`defineCollection({ localized: true })` / `defineSingle` / `defineFieldGroup`). When
    * true, fields resolved as translatable are omitted from the main-table desired snapshot
    * and relocated to the migration-owned companion `_locales` table (i18n Option B).
    */
@@ -192,8 +193,14 @@ export async function generateMigration(
   //     components (i18n Option B: companions are migration-owned, emitted as
   //     snapshot-less .sql). All three derive their companion the same way — from the
   //     entity's table name — so a single planner call over the merged list covers them.
+  // Tagged rather than concatenated: the kind is half of the transition marker's key, so an entry
+  // that lost track of which list it came from could not name the record it belongs to.
   const companionPlans = planCompanionMigrations(
-    [...args.collections, ...args.singles, ...args.components],
+    [
+      ...args.collections.map(e => tagged(e, "collection")),
+      ...args.singles.map(e => tagged(e, "single")),
+      ...args.components.map(e => tagged(e, "fieldGroup")),
+    ],
     previousSnapshot,
     args.dialect,
     args.defaultLocale ?? "en"
@@ -283,18 +290,22 @@ export async function generateMigration(
   //      file so `nextly migrate` restores the column before the main migration indexes it.
   const disablePlans = companionPlans.filter(p => p.plan.kind === "disable");
   const forwardPlans = companionPlans.filter(p => p.plan.kind !== "disable");
-  disablePlans.forEach(({ spec, plan }, i) => {
-    writeCompanionMigrationFile(args.migrationsDir, spec, {
+  // `plan.spec` rather than the entry's: an ENABLE narrows `columnsOnMain` to what the previous
+  // main table really held, and the header has to describe the statements that were emitted.
+  disablePlans.forEach(({ plan, entity }, i) => {
+    writeCompanionMigrationFile(args.migrationsDir, plan.spec, {
       kind: "disable",
+      entity,
       upSql: plan.upSql,
       downSql: plan.downSql,
       now: new Date(now.getTime() - (disablePlans.length - i)),
     });
   });
-  forwardPlans.forEach(({ spec, plan }, i) => {
-    writeCompanionMigrationFile(args.migrationsDir, spec, {
+  forwardPlans.forEach(({ plan, entity }, i) => {
+    writeCompanionMigrationFile(args.migrationsDir, plan.spec, {
       // `none` plans are filtered out by the planner, so the kind is always writable here.
       kind: plan.kind === "none" ? "create-only" : plan.kind,
+      entity,
       upSql: plan.upSql,
       downSql: plan.downSql,
       now: new Date(now.getTime() + i + 1),
@@ -332,7 +343,7 @@ function buildDisableSpec(
 
   const columns: LocalizedColumnSpec[] = [];
   for (const f of entity.fields) {
-    const col = fieldToLocalizedColumnSpec(f, dialect);
+    const col = fieldToLocalizedColumnSpec(f, dialect, "codeFirst");
     if (col && recorded.includes(col.name)) columns.push(col);
   }
   if (columns.length === 0) return null;
@@ -353,6 +364,12 @@ function buildDisableSpec(
 interface CompanionPlanEntry {
   spec: CompanionMigrationSpec;
   plan: CompanionMigrationPlan;
+  /**
+   * Which kind of entity the companion belongs to. Carried per entry rather than derived later
+   * because the three kinds are planned from one merged list, and the transition marker written
+   * for this companion is keyed by kind as well as slug.
+   */
+  entity: I18nTransitionKind;
 }
 
 /**
@@ -367,19 +384,33 @@ interface CompanionPlanEntry {
  *   - previous main table HELD the columns → enabling now  → create + seed + drop.
  *   - previous main table lacked them      → already localized → none (companion exists).
  */
+/** Pair an entity with the kind of list it came from, which its companion's marker is keyed by. */
+function tagged(
+  entity: MinimalConfigEntity,
+  kind: I18nTransitionKind
+): TaggedConfigEntity {
+  return { entity, kind };
+}
+
+interface TaggedConfigEntity {
+  entity: MinimalConfigEntity;
+  kind: I18nTransitionKind;
+}
+
 function planCompanionMigrations(
-  entities: MinimalConfigEntity[],
+  entities: TaggedConfigEntity[],
   previousSnapshot: NextlySchemaSnapshot,
   dialect: SupportedDialect,
   defaultLocale: string
 ): CompanionPlanEntry[] {
   const entries: CompanionPlanEntry[] = [];
-  for (const c of entities) {
+  for (const { entity: c, kind: entityKind } of entities) {
     // Derive the companion spec with `collectionLocalized: true` regardless of the
     // entity's CURRENT flag. For a localized entity this describes the companion to create;
     // for one being DISABLED it is the starting point that the previous snapshot's recorded
     // column list then corrects (see below). Returns null when no field is translatable.
     const spec = deriveCompanionSpec({
+      builtBy: "codeFirst" as const,
       slug: c.slug,
       dbName: c.tableName,
       fields: c.fields,
@@ -420,7 +451,8 @@ function planCompanionMigrations(
         localized: false,
         previouslyLocalized: true,
       });
-      if (plan.kind !== "none") entries.push({ spec: disableSpec, plan });
+      if (plan.kind !== "none")
+        entries.push({ spec: disableSpec, plan, entity: entityKind });
       continue;
     }
 
@@ -444,7 +476,7 @@ function planCompanionMigrations(
       prevMainColumnNames,
       companionExisted,
     });
-    if (plan.kind !== "none") entries.push({ spec, plan });
+    if (plan.kind !== "none") entries.push({ spec, plan, entity: entityKind });
   }
   return entries;
 }
@@ -471,6 +503,7 @@ function withLocalizedMarker(
   if (entity.localized !== true) return table;
   // `defaultLocale` does not affect column names, so any value works here.
   const spec = deriveCompanionSpec({
+    builtBy: "codeFirst" as const,
     slug: entity.slug,
     dbName: entity.tableName,
     fields: entity.fields,
@@ -557,6 +590,7 @@ export function buildDesiredSnapshotFromConfig(
     tables.push(
       withLocalizedMarker(
         buildDesiredTableFromFields(c.tableName, c.fields, dialect, {
+          builtBy: "codeFirst" as const,
           hasStatus: c.status === true,
           localized: c.localized === true,
         }),
@@ -573,6 +607,7 @@ export function buildDesiredSnapshotFromConfig(
     tables.push(
       withLocalizedMarker(
         buildDesiredTableFromFields(c.tableName, c.fields, dialect, {
+          builtBy: "codeFirst" as const,
           hasStatus: c.status === true,
           localized: c.localized === true,
         }),
@@ -592,6 +627,7 @@ export function buildDesiredSnapshotFromConfig(
     tables.push(
       withLocalizedMarker(
         buildDesiredTableFromComponentFields(c.tableName, c.fields, dialect, {
+          builtBy: "codeFirst" as const,
           localized: c.localized === true,
         }),
         c,
@@ -666,6 +702,7 @@ function applyRenameDecisions(
   }
 
   // Append rename_column ops for each effective acceptance.
+  const renames: Operation[] = [];
   for (const d of effectiveAccepts) {
     const c = d.candidate;
     const renameOp: RenameColumnOp = {
@@ -676,10 +713,34 @@ function applyRenameDecisions(
       fromType: c.fromType,
       toType: c.toType,
     };
-    remaining.push(renameOp);
+    renames.push(renameOp);
   }
 
-  return remaining;
+  // Nothing was collapsed, so the diff's own ordering already holds and the
+  // list is returned untouched. Partitioning here regardless would produce the
+  // same array only for as long as diffSnapshots keeps emitting add_index
+  // last, which makes this function silently depend on that contract.
+  if (renames.length === 0) return remaining;
+
+  // The renames land ahead of the index tail, not at the very end. Collapsing a
+  // (drop_column, add_column) pair removes the statement that would have
+  // created the new column, so an index declared on it can only be created
+  // once the rename has produced that name — otherwise the generated UP reads
+  // `CREATE INDEX ... (image); RENAME COLUMN hero_image TO image` and fails on
+  // a column that does not exist yet.
+  //
+  // Inserted before the FIRST add_index rather than filtering add_index out,
+  // so the tail keeps the order the diff chose. That tail can end with an index
+  // drop the diff deliberately placed after its replacement's creation, and
+  // hoisting the renames past it would reorder the two.
+  const firstAddIndex = remaining.findIndex(op => op.type === "add_index");
+  if (firstAddIndex === -1) return [...remaining, ...renames];
+
+  return [
+    ...remaining.slice(0, firstAddIndex),
+    ...renames,
+    ...remaining.slice(firstAddIndex),
+  ];
 }
 
 /**

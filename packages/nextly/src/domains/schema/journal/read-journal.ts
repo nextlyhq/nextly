@@ -15,6 +15,7 @@
 import { and, desc, inArray, lt } from "drizzle-orm";
 
 import { schemaEventsTables } from "../../../schemas/schema-events";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 
 export type Dialect = "postgresql" | "mysql" | "sqlite";
 
@@ -23,6 +24,7 @@ export type Dialect = "postgresql" | "mysql" | "sqlite";
 export type JournalScopeApi =
   | { kind: "collection"; slug: string }
   | { kind: "single"; slug: string }
+  | { kind: "component"; slug: string }
   | { kind: "global"; slug?: string }
   | { kind: "fresh-push" };
 
@@ -92,7 +94,10 @@ export async function readJournal(
   const startedAtCol = (table as { startedAt: any }).startedAt;
 
   const filter = beforeDate
-    ? and(inArray(eventTypeCol, [...JOURNAL_EVENT_TYPES]), lt(startedAtCol, beforeDate))
+    ? and(
+        inArray(eventTypeCol, [...JOURNAL_EVENT_TYPES]),
+        lt(startedAtCol, beforeDate)
+      )
     : inArray(eventTypeCol, [...JOURNAL_EVENT_TYPES]);
 
   const chain = db
@@ -116,15 +121,24 @@ function mapRow(r: Record<string, unknown>): JournalRowApi {
   const scopeKind = r.scopeKind as string | null | undefined;
   const scopeSlug = r.scopeSlug as string | null | undefined;
   let scope: JournalScopeApi | null = null;
-  if (scopeKind === "global" || scopeKind === "core" || scopeKind === "component") {
-    // Events-only kinds (core/component) have no admin-facing equivalent;
-    // fold them into the generic "global" bucket.
-    scope = scopeSlug ? { kind: "global", slug: scopeSlug } : { kind: "global" };
+  if (scopeKind === "global" || scopeKind === "core") {
+    // `core` describes Nextly's own tables and names no user entity, so it has no scope of its own
+    // to report and folds into the generic bucket.
+    scope = scopeSlug
+      ? { kind: "global", slug: scopeSlug }
+      : { kind: "global" };
   } else if (
-    (scopeKind === "collection" || scopeKind === "single") &&
+    (scopeKind === "collection" ||
+      scopeKind === "single" ||
+      // A field-group save records its own kind, so reporting it as global would discard the one
+      // thing a caller filtering this feed by entity is asking for.
+      scopeKind === STORAGE_FORMAT.schemaEventScope) &&
     typeof scopeSlug === "string"
   ) {
-    scope = { kind: scopeKind, slug: scopeSlug };
+    scope =
+      scopeKind === STORAGE_FORMAT.schemaEventScope
+        ? { kind: "component", slug: scopeSlug }
+        : { kind: scopeKind, slug: scopeSlug };
   }
 
   return {

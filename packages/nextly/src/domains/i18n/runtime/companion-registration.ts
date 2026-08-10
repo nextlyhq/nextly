@@ -12,6 +12,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { generateCompanionRuntimeSchema } from "../../schema/services/runtime-schema-generator";
 import { deriveCompanionSpec } from "../migration/derive-companion-spec";
 
@@ -32,6 +33,15 @@ export interface CompanionRuntimeArgs {
   defaultLocale?: string;
   /** Whether the collection has Draft/Published (i18n M6) → companion has a `_status` column. */
   status?: boolean;
+  /**
+   * Which builder made the main table.
+   *
+   * Optional for the same reason it is optional on `RuntimeSchemaOptions`: every caller hands the
+   * result to `registerDynamicSchema`, which exists to look a table up for QUERIES, and a query
+   * binds a string whatever width the column was declared with. The physical companion is created
+   * by the migration path, which does state it.
+   */
+  builtBy?: ColumnOrigin;
 }
 
 export interface CompanionRuntimeTable {
@@ -53,6 +63,7 @@ export function buildCompanionRuntimeTable(
     dbName: args.tableName,
     fields: args.fields,
     dialect: args.dialect,
+    builtBy: args.builtBy ?? "codeFirst",
     defaultLocale: args.defaultLocale ?? "en",
     collectionLocalized: true,
     status: args.status,

@@ -36,6 +36,13 @@ import { resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
+import {
+  isLocalizationIntentRefusal,
+  LOCALIZATION_INTENT_HEADER,
+  parseLocalizationIntent,
+  type LocalizationMigrationIntent,
+} from "../../domains/i18n/migration/migration-intent";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import {
@@ -44,6 +51,7 @@ import {
 } from "../../domains/schema/events/schema-events-repository";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
+import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
 import {
   EMPTY_SNAPSHOT,
   parseSnapshotFile,
@@ -54,9 +62,8 @@ import {
   forceUnlock,
   withMigrateLock,
 } from "../../domains/schema/pipeline/locks";
-import { isCompanionTable } from "../../domains/schema/pipeline/managed-tables";
+import { snapshotComparableTables } from "../../domains/schema/pipeline/managed-tables";
 import { NextlyError, describeError } from "../../errors";
-import { CORE_TABLE_PREFIXES } from "../../schemas";
 import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
@@ -93,6 +100,26 @@ export interface MigrateCommandOptions {
    * @default false
    */
   forceUnlock?: boolean;
+
+  /**
+   * Copy existing content into the translation tables of localized entities that carry no record
+   * of ever having transitioned.
+   *
+   * Opt-in, and it has to be. An entity with no record is either an install that enabled
+   * localization before Nextly began recording transitions, or one that has been localized since
+   * birth and owes nothing — and nothing on disk tells the two apart. That is the same conclusion
+   * this whole mechanism rests on: which language existing values are in cannot be recovered by
+   * looking at them, which is why it is recorded rather than inferred. Guessing here would
+   * manufacture a default-locale translation for every entry, including ones deliberately authored
+   * in another language only.
+   *
+   * Running it is the operator supplying the one missing fact: that their main tables hold content
+   * in the configured default locale. Rows that already have a translation in that locale are left
+   * alone, so it is safe to repeat and cannot overwrite a real translation.
+   *
+   * @default false
+   */
+  repairLocalization?: boolean;
 }
 
 /**
@@ -132,6 +159,13 @@ interface ParsedMigration {
   singles: string[];
   /** Component slugs (if present in file header) */
   components: string[];
+  /**
+   * What a companion migration declares it is FOR, when it declares anything.
+   *
+   * Undefined for ordinary migrations and for companion files written before the field existed;
+   * both apply verbatim, which is what they have always done.
+   */
+  localization?: LocalizationMigrationIntent;
   /** Timestamp extracted from filename */
   timestamp: string;
   /** Source of the migration (core bundled or app) */
@@ -217,6 +251,15 @@ export async function runMigrate(
     const cwd = options.cwd ?? process.cwd();
     const appMigrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
+    // Config and the Builder manifest, merged as generation merges them. The
+    // drift check needs the derived-table set, and assembling it here from the
+    // config alone missed Builder entities and plugin extends.
+    const resolvedSchema = await resolveDeclaredSchema({
+      projectRoot: cwd,
+      config: configResult.config,
+      deferredExtends: configResult.deferredExtends,
+    });
+
     // Phase 0 — legacy bookkeeping gate (spec §4.6). Aborts with
     // NEXTLY_LEGACY_BOOKKEEPING_DETECTED if the pre-consolidation tables exist.
     await assertNoLegacyBookkeeping(
@@ -263,6 +306,11 @@ export async function runMigrate(
         logger,
         lockMode: "fail-fast",
         ttlSeconds: configResult.config.db.migrateLockTtlSeconds,
+        // A custom `options.junctionTable` name cannot be inferred from any
+        // convention, and such a table is in no snapshot — so the drift check
+        // has to be told about it or it reports a difference no migration can
+        // resolve.
+        knownJunctions: resolvedSchema.knownJunctions,
         allowDestructive: allowCoreDestructive,
         ensureLedger: async () => {
           if (!(await dz.tableExists("nextly_schema_events"))) {
@@ -280,6 +328,56 @@ export async function runMigrate(
           ? "Nothing to migrate. Database is up to date."
           : `${formatCount(applied, "migration")} applied.`
       );
+    } catch (err) {
+      logger.error(describeError(err));
+      process.exit(1);
+    }
+
+    // Localization companions, once the schema is in step.
+    //
+    // The push pipeline does not manage companion tables, so a localized entity can be fully
+    // migrated and still have nowhere to store translations — and in production nothing else may
+    // create one, because boot deliberately refuses to run DDL there. This is the supervised path
+    // the refusal message names, and the only one an install that transitioned before transitions
+    // were recorded can be repaired from.
+    //
+    // After the migrations, not before: a companion carries a foreign key to its main table, and
+    // the columns it seeds from are whatever the migrations have just left in place.
+    //
+    // Skipped entirely while any migration is still pending, which `--step` is precisely for. The
+    // config describes the FINAL schema, so provisioning against it now would create a companion
+    // that a later pending migration is going to create for itself — and that migration's
+    // unconditional `CREATE TABLE` then fails on a table that already exists. Deriving the work
+    // from the applied subset instead is not worth it: the operator stepping through migrations
+    // will reach the end, and the run that gets there does the provisioning.
+    try {
+      const stillPending = await findPendingFiles(
+        adapter,
+        db,
+        dialect,
+        appMigrationsDir,
+        logger
+      );
+      if (stillPending.length > 0) {
+        logger.info(
+          `Skipping translation-table provisioning: ${formatCount(stillPending.length, "migration")} still pending. ` +
+            `Run \`nextly migrate\` without --step to finish.`
+        );
+      } else {
+        const { ensureLocalizedCompanions } = await import("./dev-build");
+        await ensureLocalizedCompanions(
+          configResult.config,
+          adapter,
+          context,
+          "afterApply",
+          {
+            supervised: true,
+            // Never by default: an entity with no transition record may be a legacy install or one
+            // localized since birth, and nothing distinguishes them. See `repairLocalization`.
+            repairUntracked: options.repairLocalization === true,
+          }
+        );
+      }
     } catch (err) {
       logger.error(describeError(err));
       process.exit(1);
@@ -315,6 +413,8 @@ export interface MigrateCoreDeps {
   step?: number;
   reconcileCoreFn?: typeof reconcileCore;
   runFileMigrationsFn?: typeof runFileMigrations;
+  /** Junction tables the config names outright; see `runFileMigrations`. */
+  knownJunctions?: ReadonlySet<string>;
   withLock?: typeof withMigrateLock;
 }
 
@@ -347,9 +447,18 @@ export async function migrateCore(
     deps.dialect,
     async () => {
       deps.logger.info("Phase 1: reconciling core schema...");
+      // Resolved here, where a failure can still fail the command cleanly. The
+      // core schema is a desired shape, so naming a registry the database does
+      // not have is an instruction to create it — and an empty legacy registry
+      // beside a populated migrated one is preferred by every reader.
+      const fieldGroupRegistryTable = await resolveRegistryNameFromCatalog({
+        dialect: deps.dialect,
+        getDrizzle: <T>() => deps.db as T,
+      });
       const r = await reconcile({
         db: deps.db,
         dialect: deps.dialect,
+        fieldGroupRegistryTable,
         logger: {
           info: m => deps.logger.debug(m),
           warn: m => deps.logger.warn(m),
@@ -367,6 +476,7 @@ export async function migrateCore(
         migrationsDir: deps.migrationsDir,
         step: deps.step,
         logger: deps.logger,
+        knownJunctions: deps.knownJunctions,
       });
     },
     {
@@ -476,6 +586,15 @@ export async function runFileMigrations(args: {
   migrationsDir: string;
   step?: number;
   logger: CommandContext["logger"];
+  /**
+   * Junction tables the config names outright via `options.junctionTable`.
+   *
+   * The generated `<mainA>_<mainB>_<field>` shape can be inferred; a custom
+   * name cannot. Such a table appears in neither the before nor the target
+   * snapshot, so without this it stays in the live scope and the first
+   * migration after adoption stops with drift no migration could resolve.
+   */
+  knownJunctions?: ReadonlySet<string>;
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
   // Passing dialect prefers {name}.{dialect}.sql over base {name}.sql when both exist
@@ -564,13 +683,24 @@ export async function runFileMigrations(args: {
     // Capturing it once before the loop left it empty on a fresh DB, so the
     // 2nd+ migration saw its tables as "absent" and aborted with false drift.
     const liveTables = await safeListTables(adapter);
-    const managed = liveTables.filter(
-      t =>
-        CORE_TABLE_PREFIXES.some(p => t.startsWith(p)) &&
-        // Localized companion tables are migration-owned (Option B) and never
-        // appear in a migrate:create snapshot; excluding them here prevents a
-        // false "extraneous table" drift on snapshot-paired migrations.
-        !isCompanionTable(t)
+    // Managed main tables only, for the same reason `migrate:resolve` uses
+    // this predicate: a localized companion never appears in the snapshot this
+    // is diffed against, so including one reports drift that is not there.
+    // Junctions are excluded alongside companions: neither is declared by
+    // config, so neither can appear in the snapshot this is compared against,
+    // and including one reports drift that no migration could ever resolve.
+    //
+    // The snapshots on either side of this file ARE the declaration, so a
+    // table named in them is a real one however much its name resembles the
+    // `<mainA>_<mainB>_<field>` shape a relationship produces.
+    const declared = new Set([
+      ...before.tables.map(t => t.name),
+      ...target.tables.map(t => t.name),
+    ]);
+    const managed = snapshotComparableTables(
+      liveTables,
+      declared,
+      args.knownJunctions
     );
     const live = await introspectLiveSnapshot(db, dialect, managed);
     await reconcileFile({
@@ -617,6 +747,10 @@ async function discoverMigrations(
       const parsed = parseMigrationFile(baseName, filePath, content, source);
       migrations.push(parsed);
     } catch (error) {
+      // A declared intent this build cannot read has to stop the run. Dropping the file with a
+      // warning, as an unreadable file is dropped, would let every later migration apply and the
+      // run report success while the transition this one describes never happened.
+      if (isLocalizationIntentRefusal(error)) throw error;
       logger.warn(
         `Failed to parse migration file ${selectedFile}: ${error instanceof Error ? error.message : String(error)}`
       );
@@ -668,6 +802,7 @@ function parseMigrationFile(
   const timestamp = timestampMatch?.[1] ?? name;
 
   const { upSql, downSql } = parseSqlSections(content);
+  const localization = parseLocalizationIntent(content, `${name}.sql`);
 
   return {
     name,
@@ -681,6 +816,7 @@ function parseMigrationFile(
     components,
     timestamp,
     source,
+    ...(localization === null ? {} : { localization }),
   };
 }
 
@@ -731,7 +867,10 @@ export function parseSqlSections(content: string): {
         !line.trim().startsWith("-- Dialect:") &&
         !line.trim().startsWith("-- Checksum:") &&
         !line.trim().startsWith("-- Collections:") &&
-        !line.trim().startsWith("-- Singles:")
+        !line.trim().startsWith("-- Singles:") &&
+        // Only reached by a file with no `-- UP` marker at all. Without this the declared intent
+        // would be handed to the SQL splitter as though it were a statement.
+        !line.trim().startsWith(LOCALIZATION_INTENT_HEADER)
     );
   }
 
@@ -858,6 +997,11 @@ export function registerMigrateCommand(program: Command): void {
     .option(
       "--force-unlock",
       "Clear a stale migrate lock before running",
+      false
+    )
+    .option(
+      "--repair-localization",
+      "Copy existing content into the translation tables of localized entities that have no record of transitioning (for installs that enabled localization before Nextly recorded it)",
       false
     )
     .action(async (cmdOptions: MigrateCommandOptions, cmd: Command) => {

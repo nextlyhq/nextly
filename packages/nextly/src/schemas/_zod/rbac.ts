@@ -37,6 +37,43 @@ export function isSystemResource(resource: string): resource is SystemResource {
 }
 
 /**
+ * A permission's identity: what every authorization check looks up.
+ *
+ * Order is the whole content of this function, and it is not a matter of taste.
+ * A permission row is found by its slug, so a producer that writes
+ * `users-read` and a guard that reads `read-users` do not disagree loudly —
+ * the lookup simply misses, and a grant that the admin panel shows as assigned
+ * authorizes nothing. The failure is silent, and it is silent in the direction
+ * of denial, which is safe but indistinguishable from the permission never
+ * having been granted.
+ *
+ * It exists as a function because the convention was previously written out at
+ * each of eleven call sites, and one of them had the two halves the wrong way
+ * round. Composing the string by hand is what allows that, so the string is
+ * composed here and nowhere else.
+ */
+export function permissionSlug(action: string, resource: string): string {
+  return `${action}-${resource}`;
+}
+
+/**
+ * A permission's display label, for the admin list and nothing else.
+ *
+ * Separate from {@link permissionSlug} on purpose: this one is free to change
+ * without consequence, while the slug is an identity that existing rows and
+ * grants are keyed on.
+ */
+export function permissionName(action: string, resource: string): string {
+  const titleCase = (value: string): string =>
+    value
+      .split(/[-_\s]+/)
+      .filter(Boolean)
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ");
+  return `${titleCase(action)} ${titleCase(resource)}`;
+}
+
+/**
  * Check if a resource is valid (either a system resource or a known collection slug).
  * The caller provides known collection slugs from the database.
  */

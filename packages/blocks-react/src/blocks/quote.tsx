@@ -1,0 +1,104 @@
+/**
+ * `core/quote` — quoted text with an optional attribution.
+ *
+ * `<blockquote>` carries the quotation, and the attribution sits in a `<figure>`
+ * beside it rather than inside it. Putting the speaker's name inside the
+ * blockquote makes it part of the quotation, which says the person quoted also
+ * said their own name.
+ *
+ * `<cite>` marks the TITLE of a work, not a person, so it wraps the source when
+ * one is given and never the attribution alone.
+ *
+ * @module blocks/quote
+ */
+import { defineBlock } from "@nextlyhq/blocks-engine";
+import type { ReactElement } from "react";
+
+import type { BlockRenderArgs, PageContext } from "../context";
+
+import { text, url } from "./props";
+
+export interface QuoteProps {
+  /** The quoted text. */
+  text?: string;
+  /** Who said it. */
+  attribution?: string;
+  /** The work it came from. */
+  source?: string;
+  /** A URL for the source, which becomes `cite` on the blockquote. */
+  citeUrl?: string;
+}
+
+export function renderQuote({
+  props,
+  className,
+}: BlockRenderArgs<QuoteProps>): ReactElement {
+  const quoted = text(props.text);
+  const attribution = text(props.attribution);
+  const source = text(props.source);
+  const citeUrl = url(props.citeUrl);
+
+  const blockquote = (
+    <blockquote {...(citeUrl === undefined ? {} : { cite: citeUrl })}>
+      <p>{quoted}</p>
+    </blockquote>
+  );
+
+  // With nothing to attribute, the blockquote IS the block and takes the class.
+  if (attribution === "" && source === "") {
+    return (
+      <blockquote
+        className={className}
+        {...(citeUrl === undefined ? {} : { cite: citeUrl })}
+      >
+        <p>{quoted}</p>
+      </blockquote>
+    );
+  }
+
+  return (
+    <figure className={className}>
+      {blockquote}
+      <figcaption>
+        {attribution}
+        {attribution !== "" && source !== "" ? ", " : null}
+        {source === "" ? null : <cite>{source}</cite>}
+      </figcaption>
+    </figure>
+  );
+}
+
+// Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
+// declares the contract and the SDK re-exports it for third parties. The
+// context is named rather than augmented, so a block compiled against the
+// published types is typed the same as one compiled here. See `./index.ts`.
+export const quote = defineBlock<QuoteProps, PageContext>({
+  name: "core/quote",
+  version: 1,
+  description:
+    "Quoted text with an optional attribution, kept outside the quotation so the speaker is not quoted saying their own name.",
+  props: {
+    text: { type: "textarea" },
+    attribution: { type: "text" },
+    source: { type: "text" },
+    citeUrl: { type: "url" },
+  },
+  defaultProps: { text: "" },
+  example: {
+    props: {
+      text: "Simplicity is the soul of efficiency.",
+      attribution: "Austin Freeman",
+    },
+  },
+  supports: {
+    typography: true,
+    color: true,
+    background: true,
+    spacing: true,
+    dimensions: true,
+    border: true,
+    effects: true,
+    position: true,
+  },
+  render: renderQuote,
+});

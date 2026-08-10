@@ -50,9 +50,18 @@ export type BuilderSettingsValues = {
   status?: boolean;
   i18n?: boolean;
   versions?: boolean;
+  // Version retention, meaningful only when `versions` is on. Undefined = the
+  // default (keep 50); false = keep unlimited history; a number = keep that many
+  // durable versions per document (0 = keep only protected versions).
+  versionsMaxPerDoc?: number | false;
   // Cache revalidation. Undefined means on (the default): writes bust the
   // standard tags. False opts the entity out entirely.
   revalidate?: boolean;
+  // Webhook recording. Undefined means on (the default): writes are recorded to
+  // the outbox and delivered to every subscribed endpoint. False keeps this
+  // entity's writes out of the outbox entirely, for content that carries
+  // personal data.
+  webhooks?: boolean;
 };
 
 type Props = {
@@ -70,7 +79,7 @@ type Props = {
 const KIND_TITLE: Record<BuilderConfig["kind"], string> = {
   collection: "collection",
   single: "single",
-  component: "component",
+  "field-group": "field group",
 };
 
 const EMPTY_VALUES: BuilderSettingsValues = {

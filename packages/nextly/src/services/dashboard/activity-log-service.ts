@@ -14,12 +14,14 @@ import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SqlParam } from "@nextlyhq/adapter-drizzle/types";
+import { type Column, type Table } from "drizzle-orm";
 
 import { toDbError } from "../../database/errors";
 // PR 4 migration: switched from ServiceError.fromDatabaseError to
 // NextlyError.fromDatabaseError. Public message stays generic per §13.8;
 // the underlying DbError is preserved as `cause` and rich DB context
 // (kind, dialect, code) flows into logContext automatically.
+import { insertErasureAware } from "../../domains/audit/erasure-aware-insert";
 import { NextlyError } from "../../errors";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
@@ -30,22 +32,49 @@ export type ActivityLogAction = "create" | "update" | "delete";
 /** A single activity log record as returned by queries. */
 export interface ActivityLogEntry {
   id: string;
+  /**
+   * The actor, as an opaque reference that outlives their account.
+   *
+   * Still set after the account is deleted — that is what keeps one deleted
+   * actor's entries distinguishable from another's.
+   */
   userId: string;
-  userName: string;
-  userEmail: string;
+  /** NULL once the actor's account was deleted and their identity erased. */
+  userName: string | null;
+  /** NULL once the actor's account was deleted and their identity erased. */
+  userEmail: string | null;
   action: ActivityLogAction;
   collection: string;
   entryId: string | null;
   entryTitle: string | null;
   metadata: Record<string, unknown> | null;
   createdAt: string;
+  /**
+   * When THIS ROW's identity was erased. NULL while the actor still exists.
+   *
+   * The row's own erasure, deliberately, not the account's deletion. For an
+   * entry erased by a deletion the two coincide, because the erasure runs
+   * inside that transaction. For one written after the account was already
+   * gone they do not: nothing retains when that deletion happened, and
+   * claiming otherwise would put a number in an audit field that no record
+   * supports. Separate from a NULL name because "erased" and "never carried a
+   * name" are different facts, and only this one answers when.
+   */
+  identityErasedAt: string | null;
 }
 
 /** Input for recording a new activity. */
 export interface LogActivityInput {
   userId: string;
-  userName: string;
-  userEmail: string;
+  /**
+   * Display name to denormalize onto the row. Omit to take it from the account
+   * itself, which is what a caller that holds only an actor id does — the write
+   * already reads that row to decide whether the account still exists, so the
+   * name comes from the same look, under the same lock, as that decision.
+   */
+  userName?: string;
+  /** Email to denormalize onto the row; omit to take it from the account. */
+  userEmail?: string;
   action: ActivityLogAction;
   collection: string;
   entryId?: string;
@@ -71,6 +100,55 @@ export interface ActivityLogQueryOptions {
 const TABLE = "activity_log";
 
 /**
+ * The Drizzle surface an activity write needs.
+ *
+ * Structural rather than the concrete types because the real ones are
+ * dialect-specific (NodePgDatabase / MySql2Database / BetterSQLite3Database),
+ * while the fluent API is identical.
+ */
+export interface ActivityWriteDb {
+  insert(table: unknown): { values(data: unknown): Promise<unknown> };
+  select(fields: unknown): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        limit(count: number): Promise<Record<string, unknown>[]> & {
+          // `.for("share")` exists on the Postgres and MySQL builders. SQLite
+          // has no row lock and never reaches the call.
+          for(strength: "share"): Promise<Record<string, unknown>[]>;
+        };
+      };
+    };
+  };
+}
+
+/** The same surface plus the transaction a lock has to be held inside. */
+interface TransactionalActivityDb extends ActivityWriteDb {
+  transaction<T>(work: (tx: ActivityWriteDb) => Promise<T>): Promise<T>;
+}
+
+/** The two tables an activity write reads and writes. */
+interface ActivityWriteTables {
+  activityLog: Table & { identityErasedAt: Column };
+  users: Table & { id: Column; name: Column; email: Column };
+}
+
+/**
+ * One query filter, in both the spellings its two consumers need.
+ *
+ * `adapter.select` resolves a name against the Drizzle table and therefore
+ * wants the schema property; the count query writes SQL and wants the physical
+ * column. They are carried together so a filter cannot be added in one
+ * spelling and used in the other.
+ */
+interface ActivityFilter {
+  /** The Drizzle schema property, for `adapter.select`. */
+  property: string;
+  /** The physical column, for the count query's SQL. */
+  column: string;
+  value: SqlParam;
+}
+
+/**
  * Safely convert an unknown driver-returned value to a nullable string.
  * Avoids `Object.toString()` fallthrough that triggers no-base-to-string.
  */
@@ -89,27 +167,47 @@ export class ActivityLogService extends BaseService {
   }
 
   /**
-   * Record an activity log entry.
+   * The columns of one entry that erasure never touches.
    *
-   * Errors are caught and logged but never propagated — activity logging
-   * must never break a content operation.
+   * The identity columns are decided by the write itself, against an account
+   * that may be being deleted at that moment, so they are supplied separately.
+   */
+  private entryValues(
+    input: LogActivityInput,
+    createdAt: Date
+  ): Record<string, unknown> {
+    return {
+      id: randomUUID(),
+      userId: input.userId,
+      action: input.action,
+      collection: input.collection,
+      entryId: input.entryId ?? null,
+      entryTitle: input.entryTitle ?? null,
+      metadata: input.metadata ? JSON.stringify(input.metadata) : null,
+      createdAt,
+    };
+  }
+
+  /**
+   * Record an activity log entry as a self-contained write.
+   *
+   * For callers that own no transaction of their own — the auth and account
+   * seams. Supplies the transaction the identity decision needs (see
+   * {@link logActivityInTx}) and swallows failures: these callers have already
+   * committed by the time they log, so a throw here could only turn a recorded
+   * action into a failed one. A mutation recording inside its own write
+   * transaction wants the opposite and calls {@link logActivityInTx} directly.
    */
   async logActivity(input: LogActivityInput): Promise<void> {
     try {
-      const now = this.formatDateForDb();
+      if (this.dialect === "sqlite") {
+        await this.logActivityInTx(this.db as ActivityWriteDb, input);
+        return;
+      }
 
-      await this.adapter.insert(TABLE, {
-        id: randomUUID(),
-        user_id: input.userId,
-        user_name: input.userName,
-        user_email: input.userEmail,
-        action: input.action,
-        collection: input.collection,
-        entry_id: input.entryId ?? null,
-        entry_title: input.entryTitle ?? null,
-        metadata: input.metadata ? JSON.stringify(input.metadata) : null,
-        created_at: now,
-      });
+      await (this.db as TransactionalActivityDb).transaction(tx =>
+        this.logActivityInTx(tx, input)
+      );
     } catch (error) {
       this.logger.error("Failed to log activity", {
         error: error instanceof Error ? error.message : String(error),
@@ -120,6 +218,70 @@ export class ActivityLogService extends BaseService {
         },
       });
     }
+  }
+
+  /**
+   * Write one activity entry through an executor the CALLER owns.
+   *
+   * Holds the whole erasure-aware identity decision, so the two writers — the
+   * standalone {@link logActivity} above and the mutation seam that records
+   * inside a content transaction — cannot come to disagree about what a row may
+   * carry. Both dialect mechanisms live here; only the transaction the
+   * statements run in differs between callers.
+   *
+   * Failures PROPAGATE, deliberately. A caller recording inside a content
+   * transaction needs the write to fail with it — an entry that cannot be
+   * written must take the change it describes down with it, rather than leaving
+   * a committed mutation nothing recorded. Swallowing is the standalone
+   * caller's decision to make, and it makes it above.
+   *
+   * The identity a row may carry has to be decided against an account that may
+   * be deleted at this very moment, and the two dialect families need
+   * different mechanisms for it.
+   *
+   * **Postgres and MySQL** first take a SHARED lock on the account row.
+   * `deleteUser` takes an EXCLUSIVE lock on that row before it erases anything,
+   * so the two cannot be in flight at once: either this lock is taken first and
+   * the deletion waits, so its erasure covers a row that already exists, or the
+   * deletion holds the row and this waits for its commit and then correctly
+   * finds the account gone. The lock is what closes the gap a single statement
+   * cannot — its subquery is answered when it STARTS while its row becomes
+   * visible when it COMMITS, and an insert spanning the deletion's commit
+   * satisfies neither the deletion's own erasure nor its post-commit sweep.
+   * Shared rather than exclusive so concurrent writes by the same author do not
+   * serialise against each other; only the deletion has to exclude them, for
+   * the length of one insert.
+   *
+   * **SQLite** has one writer, so its insert cannot interleave with the
+   * deletion's transaction at all and needs no lock. It decides the identity
+   * inside the statement instead, because a check followed by a separate
+   * insert would leave a durable row that a second statement was still going
+   * to correct.
+   */
+  async logActivityInTx(
+    db: ActivityWriteDb,
+    input: LogActivityInput
+  ): Promise<void> {
+    const { activityLog, users } = this.tables as ActivityWriteTables;
+    // The caller's identity when it supplied one, otherwise the account's own.
+    // Taking it from the account is what a caller holding only an actor id
+    // does: the write already looks at that row to decide whether the account
+    // exists, so the name comes from the same look as that decision.
+    const supplied: Record<string, unknown> = {};
+    const fromAccount: Record<string, Column> = {};
+    if (input.userName !== undefined) supplied.userName = input.userName;
+    else fromAccount.userName = users.name;
+    if (input.userEmail !== undefined) supplied.userEmail = input.userEmail;
+    else fromAccount.userEmail = users.email;
+
+    await insertErasureAware(db, this.dialect, {
+      table: activityLog,
+      users,
+      row: this.entryValues(input, new Date()),
+      identity: supplied,
+      identityFromAccount: fromAccount,
+      actorUserId: input.userId,
+    });
   }
 
   /**
@@ -136,32 +298,43 @@ export class ActivityLogService extends BaseService {
     const offset = options?.offset ?? 0;
 
     try {
-      const conditions: Array<{
-        column: string;
-        op: "=";
-        value: SqlParam;
-      }> = [];
+      // Each filter carries BOTH spellings because its two consumers disagree
+      // by nature: `adapter.select` resolves names against the Drizzle table,
+      // so it needs the schema property, while the count below writes SQL and
+      // needs the physical column. Deriving both from one entry is what stops
+      // them drifting apart — naming the column for the select silently
+      // dropped the ordering and made a filtered query fail outright.
+      const filters: ActivityFilter[] = [];
 
       if (options?.collection) {
-        conditions.push({
+        filters.push({
+          property: "collection",
           column: "collection",
-          op: "=",
           value: options.collection,
         });
       }
       if (options?.userId) {
-        conditions.push({
+        filters.push({
+          property: "userId",
           column: "user_id",
-          op: "=",
           value: options.userId,
         });
       }
 
-      const where = conditions.length > 0 ? { and: conditions } : undefined;
+      const where =
+        filters.length > 0
+          ? {
+              and: filters.map(f => ({
+                column: f.property,
+                op: "=" as const,
+                value: f.value,
+              })),
+            }
+          : undefined;
 
       const rows = await this.adapter.select<Record<string, unknown>>(TABLE, {
         where,
-        orderBy: [{ column: "created_at", direction: "desc" }],
+        orderBy: [{ column: "createdAt", direction: "desc" }],
         limit: limit + 1,
         offset,
       });
@@ -169,7 +342,7 @@ export class ActivityLogService extends BaseService {
       const hasMore = rows.length > limit;
       const entries = (hasMore ? rows.slice(0, limit) : rows).map(this.mapRow);
 
-      const total = await this.countActivities(where);
+      const total = await this.countActivities(filters);
 
       return { activities: entries, total, hasMore };
     } catch (error) {
@@ -186,47 +359,13 @@ export class ActivityLogService extends BaseService {
     }
   }
 
-  /**
-   * Delete activity log records older than the specified number of days.
-   *
-   * @param olderThanDays - Delete records older than this many days (default: 90)
-   * @returns Number of deleted records
-   */
-  async cleanupOldActivities(olderThanDays: number = 90): Promise<number> {
-    try {
-      const cutoff = new Date();
-      cutoff.setDate(cutoff.getDate() - olderThanDays);
-      const cutoffStr = this.formatDateForDb(cutoff);
-
-      const deleted = await this.adapter.delete(TABLE, {
-        and: [{ column: "created_at", op: "<", value: cutoffStr }],
-      });
-
-      if (deleted > 0) {
-        this.logger.info(
-          `Cleaned up ${deleted} activity log entries older than ${olderThanDays} days`
-        );
-      }
-
-      return deleted;
-    } catch (error) {
-      this.logger.error("Failed to cleanup old activities", {
-        error: error instanceof Error ? error.message : String(error),
-        olderThanDays,
-      });
-      return 0;
-    }
-  }
-
-  private async countActivities(where?: {
-    and: Array<{ column: string; op: "="; value: SqlParam }>;
-  }): Promise<number> {
+  private async countActivities(filters: ActivityFilter[]): Promise<number> {
     try {
       let sql = `SELECT COUNT(*) as count FROM ${TABLE}`;
       const params: SqlParam[] = [];
 
-      if (where && where.and.length > 0) {
-        const clauses = where.and.map((c, i) => {
+      if (filters.length > 0) {
+        const clauses = filters.map((c, i) => {
           params.push(c.value);
           // Use positional placeholders for PG ($1, $2) and ? for MySQL/SQLite
           return this.dialect === "postgresql"
@@ -259,22 +398,35 @@ export class ActivityLogService extends BaseService {
       }
     }
 
+    // Keyed by the Drizzle SCHEMA PROPERTY, not the column: `adapter.select`
+    // runs `db.select().from(table)` and throws outright when the table is not
+    // in the registry, so there is no raw-SQL path that would return
+    // `user_name`. Reading the column spelling yielded undefined for every
+    // field and surfaced as the string "undefined" in the feed.
+    const createdAt = row.createdAt;
+    const identityErasedAt = row.identityErasedAt;
+
     return {
       id: String(row.id),
-      userId: String(row.user_id),
-      userName: String(row.user_name),
-      userEmail: String(row.user_email),
+      userId: String(row.userId),
+      // Through the same narrowing as the other nullable columns: an erased
+      // row holds SQL NULL here, and `String(null)` would surface the literal
+      // text "null" as the actor's name.
+      userName: toNullableString(row.userName),
+      userEmail: toNullableString(row.userEmail),
       action: String(row.action) as ActivityLogAction,
       collection: String(row.collection),
       // Type-narrow before stringification so we don't fall through to
       // Object#toString for non-primitive driver values.
-      entryId: toNullableString(row.entry_id),
-      entryTitle: toNullableString(row.entry_title),
+      entryId: toNullableString(row.entryId),
+      entryTitle: toNullableString(row.entryTitle),
       metadata,
       createdAt:
-        row.created_at instanceof Date
-          ? row.created_at.toISOString()
-          : String(row.created_at),
+        createdAt instanceof Date ? createdAt.toISOString() : String(createdAt),
+      identityErasedAt:
+        identityErasedAt instanceof Date
+          ? identityErasedAt.toISOString()
+          : toNullableString(identityErasedAt),
     };
   };
 }

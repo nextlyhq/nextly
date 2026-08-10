@@ -192,6 +192,100 @@ export function filterUnsafeStatements(
 }
 
 /**
+ * Strip the kit's DROP INDEX emissions for indexes the desired snapshot
+ * DECLARES.
+ *
+ * The Drizzle tables handed to drizzle-kit declare no dynamic-table indexes
+ * (see index-restore.ts), so v1's differ reads every live secondary index on
+ * a declared table as undeclared and emits `DROP INDEX` for it — even on a
+ * no-op apply (probe-verified on the sqlite payload). The ownership-based
+ * drop-guard deliberately allows drops whose owner table is in the desired
+ * set, so these emissions would strip a managed table's tracked indexes with
+ * nothing putting them back (the restore step replays only rebuilt tables
+ * and standalone add_index ops). An index the snapshot tracks can only be
+ * dropped by Nextly's own diff (a drop_index op), never by the kit.
+ *
+ * Applied on every dialect. PostgreSQL scopes the kit's introspection with
+ * `tablesFilter`, which narrows but does not remove the emission: the kit
+ * has been observed there dropping a managed table's `<table>_pkey` after a
+ * metadata-only field-type change (see the routing docblock in
+ * `ddl-emitter/index.ts`). Since the guard only ever removes a drop of an
+ * index the desired snapshot itself declares, covering PG costs nothing and
+ * closes that case on the kit route too.
+ *
+ * Returns the stripped count so the caller can report it once per apply
+ * rather than per statement: this decides, per apply, that a destructive
+ * statement from the kit is wrong, and that decision should be observable.
+ */
+export function stripKitDropsOfDeclaredIndexes(
+  statements: string[],
+  desired: NextlySnapshotLike
+): { kept: string[]; strippedCount: number } {
+  // Two keys per declared index: the bare name, and the name qualified by
+  // its table. MySQL scopes index names per table and spells the table in
+  // the statement (`DROP INDEX x ON t`), so its drops are matched on the
+  // qualified key and a same-named index on another table is left alone.
+  // SQLite (global index namespace) and PostgreSQL (schema-scoped) name no
+  // table in the statement, so those match on the bare name — which is
+  // unambiguous exactly because the name is unique in that scope.
+  const declaredNames = new Set<string>();
+  const declaredQualified = new Set<string>();
+  const declare = (tableName: string, indexName: string): void => {
+    declaredNames.add(indexName.toLowerCase());
+    declaredQualified.add(
+      `${tableName.toLowerCase()}.${indexName.toLowerCase()}`
+    );
+  };
+  for (const table of desired.tables) {
+    for (const index of table.indexes ?? []) {
+      declare(table.name, index.name);
+    }
+    // A primary key is declared on the COLUMN, never in `indexes`, but
+    // PostgreSQL materialises it as an index named `<table>_pkey` and the kit
+    // has been observed emitting a drop for exactly that. The ownership
+    // filter would allow it — the owner table is in the desired schema — and
+    // executing it fails on the dependent constraint. Declaring the
+    // convention name here is what puts a primary key under the same
+    // protection as the indexes beside it.
+    if (desired.tables.length > 0 && table.columns?.some(c => c.primaryKey)) {
+      declare(table.name, `${table.name}_pkey`);
+    }
+  }
+  if (declaredNames.size === 0) {
+    return { kept: statements, strippedCount: 0 };
+  }
+
+  let strippedCount = 0;
+  const kept = statements.filter(stmt => {
+    // A quoted identifier holding anything outside [A-Za-z0-9_] does not
+    // match, and a non-match KEEPS the statement — the fail-safe direction:
+    // an unrecognised drop is left for the drop-guard to judge rather than
+    // silently removed here. `pinned-fail-safe` in the tests locks that in.
+    const m = stmt.match(
+      /^DROP\s+INDEX\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?(?:\s+ON\s+(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?)?/i
+    );
+    if (!m) return true;
+    const name = (m[1] ?? "").toLowerCase();
+    const onTable = m[2]?.toLowerCase();
+    const isDeclared = onTable
+      ? declaredQualified.has(`${onTable}.${name}`)
+      : declaredNames.has(name);
+    if (isDeclared) strippedCount++;
+    return !isDeclared;
+  });
+  return { kept, strippedCount };
+}
+
+/** The snapshot slice {@link stripKitDropsOfDeclaredIndexes} reads. */
+interface NextlySnapshotLike {
+  tables: ReadonlyArray<{
+    name: string;
+    indexes?: ReadonlyArray<{ name: string }>;
+    columns?: ReadonlyArray<{ primaryKey?: boolean }>;
+  }>;
+}
+
+/**
  * Statement patterns that name the table they act on directly. Used to decide
  * which table a statement belongs to when filtering by ownership.
  *

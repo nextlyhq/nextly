@@ -85,7 +85,6 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       singles: "singles",
       media: "media",
       plugins: "plugins",
-      manage: "users",
       settings: "settings",
     };
 
@@ -104,7 +103,11 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
         .replace(/^-+|-+$/g, "");
       const iconName = sp.appearance?.icon || "Database";
       const IconComponent = iconMap[iconName] || Database;
-      const anchor = sp.after || "plugins";
+      // The former top-level Users icon is gone; User Management now lives
+      // under Settings, so a plugin still declaring `after: "users"` is anchored
+      // next to Settings instead of falling through to the end of the rail.
+      const rawAnchor = sp.after || "plugins";
+      const anchor = rawAnchor === "users" ? "settings" : rawAnchor;
 
       const entry = {
         item: {
@@ -229,9 +232,6 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
   const hasMediaSection = hasPermissionDataPending
     ? true
     : capabilities.canViewMedia;
-  const hasUsersSection = hasPermissionDataPending
-    ? true
-    : capabilities.canViewUsers || capabilities.canViewRoles;
   const canAccessApiKeys =
     hasPermission("read-api-keys") ||
     hasPermission("create-api-keys") ||
@@ -242,13 +242,17 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     hasPermission("read-webhooks") ||
     hasPermission("update-webhooks") ||
     hasPermission("create-webhooks");
+  // Settings now also hosts User Management (Users, User Fields, Roles), so a
+  // user whose only access is users/roles must still see the Settings icon.
   const hasSettingsSection = hasPermissionDataPending
     ? true
     : capabilities.canViewSettings ||
       capabilities.canManageEmailProviders ||
       capabilities.canManageEmailTemplates ||
       canAccessApiKeys ||
-      canAccessWebhooks;
+      canAccessWebhooks ||
+      capabilities.canViewUsers ||
+      capabilities.canViewRoles;
   const hasBuildersSection = showBuilder;
 
   const visibleMenuItems = useMemo(
@@ -263,8 +267,6 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
             return hasPluginsSection;
           case "media":
             return hasMediaSection;
-          case "manage":
-            return hasUsersSection;
           case "settings":
             return hasSettingsSection;
           case "builders":
@@ -279,7 +281,6 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       hasSinglesSection,
       hasPluginsSection,
       hasMediaSection,
-      hasUsersSection,
       hasSettingsSection,
       hasBuildersSection,
     ]
@@ -311,7 +312,9 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       for (const c of pluginCollections) {
         if (!pathname.includes(`/admin/collections/${c.name}`)) continue;
         const placement = getCollectionPlacement(c);
-        if (placement === "users") return "manage";
+        // "users" now lives inside the Settings sub-sidebar, so it highlights
+        // the Settings icon rather than the removed Users icon.
+        if (placement === "users") return "settings";
         if (placement === "settings") return "settings";
         if (placement === "collections") return "collections";
         if (placement === "singles") return "singles";
@@ -359,16 +362,19 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       // to go instead of an empty sidebar.
       if (pathname.includes("/admin/builder/collections")) return "collections";
       if (pathname.includes("/admin/builder/singles")) return "singles";
-      if (pathname.includes("/admin/builder/components")) return "collections";
+      if (pathname.includes("/admin/builder/field-groups"))
+        return "collections";
     }
     if (pathname.includes("/admin/collections/")) return "collections";
     if (pathname.includes("/admin/singles/")) return "singles";
     if (pathname.includes("/admin/media")) return "media";
+    // User management routes live under Settings now, so they highlight the
+    // Settings icon (previously the standalone Users icon, id "manage").
     if (
       pathname.includes("/admin/users") ||
       pathname.includes("/admin/security/roles")
     )
-      return "manage";
+      return "settings";
     if (pathname.includes("/admin/settings")) return "settings";
 
     return "dashboard";
@@ -410,7 +416,6 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       "collections",
       "singles",
       "plugins",
-      "manage",
       "settings",
       ...(showBuilder ? ["builders" as const] : []),
     ].includes(selectedMain) ||
@@ -422,7 +427,6 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     "singles",
     "media",
     "plugins",
-    "manage",
     "settings",
     "builders",
   ];
@@ -439,7 +443,9 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
   // gated on each route's own guard, not the broader "can see the link" flag, so
   // it never resolves to a page that would redirect. General needs
   // manage-settings; the API Keys route needs update-api-keys; Webhooks accepts
-  // any webhook grant (its route's any-of).
+  // any webhook grant (its route's any-of). User Management now lives here too,
+  // so a role whose only access is read-users / read-roles lands on Users (or
+  // Roles) instead of bouncing off the manage-settings-guarded General page.
   const settingsHref = hasPermission("manage-settings")
     ? ROUTES.SETTINGS
     : hasPermission("update-api-keys")
@@ -450,7 +456,11 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
           ? ROUTES.SETTINGS_EMAIL_PROVIDERS
           : hasPermission("manage-email-templates")
             ? ROUTES.SETTINGS_EMAIL_TEMPLATES
-            : ROUTES.SETTINGS;
+            : hasPermission("read-users")
+              ? ROUTES.USERS
+              : hasPermission("read-roles")
+                ? ROUTES.SECURITY_ROLES
+                : ROUTES.SETTINGS;
 
   const resolveItemHref = (item: MainMenuItem): string =>
     resolveItemHrefHelper(item, visibleStandalonePlugins, settingsHref);
@@ -525,9 +535,9 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
 
             // Unselected items use muted foreground so the resting icon meets contrast; a faint primary alpha did not.
             const className = cn(
-              "flex items-center justify-center h-11 w-11 rounded-none transition-all duration-200 cursor-pointer relative focus:outline-none",
+              "flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative focus:outline-none",
               isSelected
-                ? "bg-muted text-primary"
+                ? "bg-muted text-sidebar-accent-foreground"
                 : "text-muted-foreground hover-unified"
             );
 

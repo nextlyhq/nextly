@@ -20,16 +20,27 @@ export type ActivityCategory = "success" | "info" | "warning" | "destructive";
  * User information for activity feed
  */
 export interface ActivityUser {
-  /** User's unique identifier */
+  /**
+   * User's unique identifier.
+   *
+   * Outlives the account: an activity entry keeps naming the actor that
+   * produced it after the account is gone, so the trail stays attributable.
+   */
   id: string;
-  /** User's display name */
+  /**
+   * User's display name, or a placeholder naming the deleted account.
+   *
+   * Always renderable — see `deleted` to tell the two apart.
+   */
   name: string;
-  /** User's email address */
-  email: string;
+  /** User's email address; null once the account was deleted and erased. */
+  email: string | null;
   /** User's avatar URL (optional) */
   avatar?: string;
   /** User's initials for avatar fallback */
   initials: string;
+  /** Whether this actor's account was deleted and their identity erased. */
+  deleted: boolean;
 }
 
 /**

@@ -19,6 +19,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { RequestActor } from "../../../auth/request-actor";
+import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import type { WhereFilter } from "../../../services/collections/query-operators";
@@ -28,6 +29,7 @@ import { PAGINATION_DEFAULTS } from "../../../types/pagination";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type { CollectionMutationService } from "./collection-mutation-service";
+import { isWriteIntegrityFailure } from "./collection-mutation-service";
 import type { CollectionQueryService } from "./collection-query-service";
 import type {
   BatchOperationResult,
@@ -54,29 +56,16 @@ import type {
  */
 function legacyEnvelopeToFailureFields(result: {
   statusCode?: number;
+  code?: string;
   message?: string;
 }): { code: string; message: string } {
-  const status = result.statusCode ?? 500;
-  if (status === 404) {
-    return { code: "NOT_FOUND", message: "Not found." };
-  }
-  if (status === 403) {
-    return {
-      code: "FORBIDDEN",
-      message: "You don't have permission to perform this action.",
-    };
-  }
-  if (status === 409) {
-    return {
-      code: "CONFLICT",
-      message:
-        "The resource has changed since you last loaded it. Please refresh and try again.",
-    };
-  }
-  if (status === 400) {
-    return { code: "VALIDATION_ERROR", message: "Validation failed." };
-  }
-  return { code: "INTERNAL_ERROR", message: "An unexpected error occurred." };
+  // Rebuilt through the shared converter so a per-item failure reports the same
+  // code the single-item endpoint reports for the identical failure. This kept
+  // its own status table, which sent anything outside 400/403/404/409 to
+  // INTERNAL_ERROR -- so an item whose hook threw `rateLimited()` was a rate
+  // limit on the single endpoint and an internal error in bulk.
+  const rebuilt = errorFromServiceEnvelope(result);
+  return { code: String(rebuilt.code), message: rebuilt.publicMessage };
 }
 
 /**
@@ -265,6 +254,11 @@ export class CollectionBulkService extends BaseService {
 
       if (!sourceResult.success || !sourceResult.data) {
         return {
+          // Forwarded whole rather than rebuilt from two of its fields: the
+          // source read's failure is this operation's failure, and dropping its
+          // code left a rate limit on the source arriving as an internal error
+          // with no retry interval.
+          ...sourceResult,
           success: false,
           statusCode: sourceResult.statusCode || 404,
           message: sourceResult.message || "Source entry not found",
@@ -670,15 +664,13 @@ export class CollectionBulkService extends BaseService {
       // happen. This is a request-level failure (no items to partially
       // succeed on). Throw the canonical mapping so the dispatcher emits
       // an error envelope rather than a synthetic empty-id failure row.
-      const { code, message } = legacyEnvelopeToFailureFields(listResult);
-      throw new NextlyError({
-        code,
-        publicMessage: message,
-        logContext: {
-          op: "bulkUpdateByQuery",
-          collectionName: params.collectionName,
-          legacyMessage: listResult.message,
-        },
+      // The rebuilt error itself, not a reduction of it: taking only the code
+      // and message dropped the status (so a plugin code fell back to 500) and
+      // the public data a rate limit needs for `Retry-After`.
+      throw errorFromServiceEnvelope(listResult, {
+        op: "bulkUpdateByQuery",
+        collectionName: params.collectionName,
+        legacyMessage: listResult.message,
       });
     }
 
@@ -866,15 +858,13 @@ export class CollectionBulkService extends BaseService {
     });
 
     if (!listResult.success || !listResult.data) {
-      const { code, message } = legacyEnvelopeToFailureFields(listResult);
-      throw new NextlyError({
-        code,
-        publicMessage: message,
-        logContext: {
-          op: "bulkDeleteByQuery",
-          collectionName: params.collectionName,
-          legacyMessage: listResult.message,
-        },
+      // The rebuilt error itself, not a reduction of it: taking only the code
+      // and message dropped the status (so a plugin code fell back to 500) and
+      // the public data a rate limit needs for `Retry-After`.
+      throw errorFromServiceEnvelope(listResult, {
+        op: "bulkDeleteByQuery",
+        collectionName: params.collectionName,
+        legacyMessage: listResult.message,
       });
     }
 
@@ -1051,9 +1041,21 @@ export class CollectionBulkService extends BaseService {
         authenticatedScope: params.authenticatedScope,
       });
 
+    // Every companion verdict the batch needs, resolved here for the same reason the
+    // authorization above is. Inside the transaction they can only be READ: resolving issues a
+    // query, and a query against a missing relation aborts the whole transaction on PostgreSQL.
+    // An unresolved verdict reads as unusable, so each row's durable version snapshot and its
+    // outbound event would silently omit every localized component value.
+    await this.mutationService.warmLocalizedReadiness(params.collectionName);
+
     // The revalidation intents of every committed create, applied to the result
     // only after the shared transaction commits — a rollback undoes every insert.
     const collectedIntents: RevalidationIntent[] = [];
+    // Set inside the transaction when a marked capture/recording failure forced
+    // the rollback. Tracked on a flag rather than re-checked on the caught error
+    // because the adapter re-wraps the error as it aborts the transaction, so the
+    // integrity mark (by object identity) is not visible on the outer catch.
+    let integrityRollback = false;
     // Process all entries within a single transaction
     try {
       await this.adapter.transaction(async tx => {
@@ -1109,6 +1111,16 @@ export class CollectionBulkService extends BaseService {
                 }
               }
             } catch (error: unknown) {
+              // A post-write capture/recording failure is marked to abort the
+              // whole batch: the row is already inserted on this shared
+              // transaction with no per-item savepoint, so continuing would
+              // commit it without its version/event. Re-throw regardless of
+              // stopOnError so the transaction rolls back; record it on a flag
+              // the outer catch reads (the error is re-wrapped by then).
+              if (isWriteIntegrityFailure(error)) {
+                integrityRollback = true;
+                throw error;
+              }
               // Handle unexpected errors during entry creation
               result.failed++;
               result.errors.push({
@@ -1138,8 +1150,27 @@ export class CollectionBulkService extends BaseService {
       // aborted before ANY item was counted successful, so the wrapper never
       // drains for events that never committed.
       result.eventRecorded = false;
-      // Reset successful count since transaction rolled back
-      if (stopOnError && result.successful > 0) {
+      if (integrityRollback) {
+        // A marked capture/recording failure forced a full rollback even under
+        // the default stopOnError:false: nothing persisted, so report EVERY
+        // requested item as failed (not just the triggering one) and drop any
+        // provisional successes, keeping successful + failed === entries.length.
+        this.logger.warn("Bulk create rolled back", {
+          collectionName: params.collectionName,
+          successfulBeforeRollback: result.successful,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        result.successful = 0;
+        result.ids = [];
+        result.failed = entries.length;
+        // One error per requested index (not a single sentinel): the public
+        // BatchOperationResult contract maps errors to input indices, and every
+        // input was rolled back. Use a generic message — the raw operational
+        // error (a missing table, a component-registry failure) is logged above,
+        // never surfaced to the caller.
+        const message = "The write could not be completed and was rolled back.";
+        result.errors = entries.map((_, index) => ({ index, error: message }));
+      } else if (stopOnError && result.successful > 0) {
         this.logger.warn("Bulk create rolled back due to stopOnError", {
           collectionName: params.collectionName,
           successfulBeforeRollback: result.successful,
@@ -1180,6 +1211,10 @@ export class CollectionBulkService extends BaseService {
    *
    * @example
    * ```typescript
+   * // Resolve companion readiness before opening the transaction — inside one it can only be
+   * // read, and an unresolved verdict silently strips localized component values from every
+   * // version snapshot and outbound event this batch produces.
+   * await entryService.warmLocalizedReadiness('children');
    * await adapter.transaction(async (tx) => {
    *   // Create parent entry
    *   const parent = await entryService.createEntryInTransaction(tx, parentParams, parentData);
@@ -1296,6 +1331,10 @@ export class CollectionBulkService extends BaseService {
               createResult.revalidationIntent
             );
           }
+          // Aggregate the outbox signal (set even on a committed-but-hook-failed
+          // item) so the caller offers the post-commit fast drain, matching the
+          // update-in-transaction loop; a batch that recorded nothing owes none.
+          if (createResult.eventRecorded) result.eventRecorded = true;
           if (createResult.success && createResult.data) {
             result.successful++;
             result.ids.push(
@@ -1315,6 +1354,11 @@ export class CollectionBulkService extends BaseService {
             }
           }
         } catch (error: unknown) {
+          // A post-write capture/recording failure is marked to abort the whole
+          // batch: the row is already written on the caller's shared transaction
+          // with no per-item savepoint, so continuing would commit it without its
+          // version/event. Re-throw regardless of stopOnError.
+          if (isWriteIntegrityFailure(error)) throw error;
           result.failed++;
           result.errors.push({
             index: entryIndex,
@@ -1444,9 +1488,21 @@ export class CollectionBulkService extends BaseService {
         authenticatedScope: params.authenticatedScope,
       });
 
+    // Every companion verdict the batch needs, resolved here for the same reason the
+    // authorization above is. Inside the transaction they can only be READ: resolving issues a
+    // query, and a query against a missing relation aborts the whole transaction on PostgreSQL.
+    // An unresolved verdict reads as unusable, so each row's previous/post version snapshots and
+    // its outbound event would silently omit every localized component value.
+    await this.mutationService.warmLocalizedReadiness(params.collectionName);
+
     // The revalidation intents of every committed update, applied only after the
     // shared transaction commits — a rollback undoes every update.
     const collectedIntents: RevalidationIntent[] = [];
+    // Set inside the transaction when a marked capture/recording failure forced
+    // the rollback. Tracked on a flag rather than re-checked on the caught error
+    // because the adapter re-wraps the error as it aborts the transaction, so the
+    // integrity mark (by object identity) is not visible on the outer catch.
+    let integrityRollback = false;
     // Process all entries within a single transaction
     try {
       await this.adapter.transaction(async tx => {
@@ -1501,6 +1557,16 @@ export class CollectionBulkService extends BaseService {
                 }
               }
             } catch (error: unknown) {
+              // A post-write capture/recording failure is marked to abort the
+              // whole batch: the row is already updated on this shared
+              // transaction with no per-item savepoint, so continuing would
+              // commit it without its version/event. Re-throw regardless of
+              // stopOnError so the transaction rolls back; record it on a flag
+              // the outer catch reads (the error is re-wrapped by then).
+              if (isWriteIntegrityFailure(error)) {
+                integrityRollback = true;
+                throw error;
+              }
               // Handle unexpected errors during entry update
               result.failed++;
               result.errors.push({
@@ -1529,8 +1595,27 @@ export class CollectionBulkService extends BaseService {
       // when none is counted successful — so the wrapper never drains for events
       // that never committed.
       result.eventRecorded = false;
-      // Reset successful count since transaction rolled back
-      if (stopOnError && result.successful > 0) {
+      if (integrityRollback) {
+        // A marked capture/recording failure forced a full rollback even under
+        // the default stopOnError:false: nothing persisted, so report EVERY
+        // requested item as failed (not just the triggering one) and drop any
+        // provisional successes, keeping successful + failed === entries.length.
+        this.logger.warn("Bulk update rolled back", {
+          collectionName: params.collectionName,
+          successfulBeforeRollback: result.successful,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        result.successful = 0;
+        result.ids = [];
+        result.failed = entries.length;
+        // One error per requested index (not a single sentinel): the public
+        // BatchOperationResult contract maps errors to input indices, and every
+        // input was rolled back. Use a generic message — the raw operational
+        // error (a missing table, a component-registry failure) is logged above,
+        // never surfaced to the caller.
+        const message = "The write could not be completed and was rolled back.";
+        result.errors = entries.map((_, index) => ({ index, error: message }));
+      } else if (stopOnError && result.successful > 0) {
         this.logger.warn("Bulk update rolled back due to stopOnError", {
           collectionName: params.collectionName,
           successfulBeforeRollback: result.successful,
@@ -1571,6 +1656,10 @@ export class CollectionBulkService extends BaseService {
    *
    * @example
    * ```typescript
+   * // Resolve companion readiness before opening the transaction — inside one it can only be
+   * // read, and an unresolved verdict silently strips localized component values from every
+   * // version snapshot and outbound event this batch produces.
+   * await entryService.warmLocalizedReadiness('children');
    * await adapter.transaction(async (tx) => {
    *   // Update parent entry
    *   await entryService.updateEntryInTransaction(tx, parentParams, parentData);
@@ -1706,6 +1795,11 @@ export class CollectionBulkService extends BaseService {
             }
           }
         } catch (error: unknown) {
+          // A post-write capture/recording failure is marked to abort the whole
+          // batch: the row is already written on the caller's shared transaction
+          // with no per-item savepoint, so continuing would commit it without its
+          // version/event. Re-throw regardless of stopOnError.
+          if (isWriteIntegrityFailure(error)) throw error;
           result.failed++;
           result.errors.push({
             index: entryIndex,
@@ -1811,6 +1905,13 @@ export class CollectionBulkService extends BaseService {
         ids: [],
       };
     }
+
+    // Every companion verdict the batch needs, resolved on the pool before the shared
+    // transaction opens. Inside it they can only be READ: resolving issues a query, and a query
+    // against a missing relation aborts the whole transaction on PostgreSQL. An unresolved verdict
+    // reads as unusable, so the snapshot describing each deleted row — the last record of it
+    // there will ever be — would silently omit every localized component value.
+    await this.mutationService.warmLocalizedReadiness(params.collectionName);
 
     // Whether any item appended an outbox event in the shared transaction. Read
     // back onto the result only after the transaction commits (below), so a
@@ -1960,6 +2061,10 @@ export class CollectionBulkService extends BaseService {
    *
    * @example
    * ```typescript
+   * // Resolve companion readiness before opening the transaction — inside one it can only be
+   * // read, and an unresolved verdict silently strips localized component values from the
+   * // snapshot describing each deleted row, which is the last record of it there will ever be.
+   * await entryService.warmLocalizedReadiness('children');
    * await adapter.transaction(async (tx) => {
    *   // Delete parent entry
    *   await entryService.deleteEntryInTransaction(tx, parentParams);

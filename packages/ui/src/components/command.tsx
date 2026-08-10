@@ -38,7 +38,7 @@ import { usePortalContainer } from "../providers/portal-provider";
  * @design-spec
  * - Input height: 48px (h-12) - larger for prominence
  * - Item height: 36px (h-9) desktop, 44px (h-11) mobile for touch
- * - Border radius: 0px (rounded-none) for items
+ * - Border radius: `rounded-lg` for the panel, `rounded-sm` for items
  * - Max list height: 400px (max-h-[400px])
  * - Transition: 150ms per design system
  *
@@ -48,6 +48,7 @@ import { usePortalContainer } from "../providers/portal-provider";
  * - Screen reader announcements for results
  * - Focus management and visual focus indicators
  * - WCAG 2.2 AA compliant (verified contrast ratios)
+ * @experimental
  */
 
 export type CommandProps = ComponentPropsWithoutRef<typeof CommandPrimitive>;
@@ -55,13 +56,14 @@ export type CommandProps = ComponentPropsWithoutRef<typeof CommandPrimitive>;
 /**
  * Command - Root container for the command palette.
  * Handles filtering, keyboard navigation, and accessibility.
+ * @experimental
  */
 const Command = forwardRef<ElementRef<typeof CommandPrimitive>, CommandProps>(
   ({ className, ...props }, ref) => (
     <CommandPrimitive
       ref={ref}
       className={cn(
-        "flex h-full w-full flex-col overflow-hidden rounded-none bg-background text-foreground",
+        "flex h-full w-full flex-col overflow-hidden rounded-lg bg-background text-foreground",
         className
       )}
       {...props}
@@ -70,6 +72,7 @@ const Command = forwardRef<ElementRef<typeof CommandPrimitive>, CommandProps>(
 );
 Command.displayName = "Command";
 
+/** @experimental */
 export type CommandDialogProps = DialogPrimitive.DialogProps;
 
 /**
@@ -83,7 +86,12 @@ const CommandDialogOverlay = forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      "fixed inset-0 z-[99] bg-black/80 backdrop-blur-sm",
+      // A modal scrim, from the `--nx-overlay` token rather than a surface
+      // token. A black wash is the point — painting it from `background` would
+      // make it a white veil in light mode — but the alpha still has to differ
+      // per mode, because what it composites over is white in one and mid-tone
+      // in the other.
+      "fixed inset-0 z-[99] bg-overlay backdrop-blur-sm",
       "data-[state=open]:animate-in data-[state=closed]:animate-out",
       "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
       "transition-opacity duration-200",
@@ -120,6 +128,7 @@ CommandDialogOverlay.displayName = "CommandDialogOverlay";
  *   </CommandDialog>
  * )
  * ```
+ * @experimental
  */
 const CommandDialog = ({ children, ...props }: CommandDialogProps) => {
   const portalContainer = usePortalContainer();
@@ -142,7 +151,7 @@ const CommandDialog = ({ children, ...props }: CommandDialogProps) => {
             // Spacing
             "m-4 sm:m-0", // 16px margin on mobile, no margin on desktop
             // Visual
-            "overflow-hidden rounded-none  border border-border bg-background shadow-xl",
+            "overflow-hidden rounded-lg  border border-border bg-background shadow-xl",
             // Animation
             "duration-200",
             "data-[state=open]:animate-in data-[state=closed]:animate-out",
@@ -160,6 +169,7 @@ const CommandDialog = ({ children, ...props }: CommandDialogProps) => {
   );
 };
 
+/** @experimental */
 export type CommandInputProps = ComponentPropsWithoutRef<
   typeof CommandPrimitive.Input
 >;
@@ -167,6 +177,7 @@ export type CommandInputProps = ComponentPropsWithoutRef<
 /**
  * CommandInput - Search input field for filtering commands.
  * Includes search icon and styled per design system.
+ * @experimental
  */
 const CommandInput = forwardRef<
   ElementRef<typeof CommandPrimitive.Input>,
@@ -203,6 +214,7 @@ const CommandInput = forwardRef<
 ));
 CommandInput.displayName = "CommandInput";
 
+/** @experimental */
 export type CommandListProps = ComponentPropsWithoutRef<
   typeof CommandPrimitive.List
 >;
@@ -210,6 +222,7 @@ export type CommandListProps = ComponentPropsWithoutRef<
 /**
  * CommandList - Scrollable container for command results.
  * Max height 400px per design spec to prevent tall dialogs.
+ * @experimental
  */
 const CommandList = forwardRef<
   ElementRef<typeof CommandPrimitive.List>,
@@ -229,6 +242,7 @@ const CommandList = forwardRef<
 ));
 CommandList.displayName = "CommandList";
 
+/** @experimental */
 export type CommandEmptyProps = ComponentPropsWithoutRef<
   typeof CommandPrimitive.Empty
 >;
@@ -236,6 +250,7 @@ export type CommandEmptyProps = ComponentPropsWithoutRef<
 /**
  * CommandEmpty - Empty state message when no results found.
  * Centered text with muted color per design spec.
+ * @experimental
  */
 const CommandEmpty = forwardRef<
   ElementRef<typeof CommandPrimitive.Empty>,
@@ -249,6 +264,7 @@ const CommandEmpty = forwardRef<
 ));
 CommandEmpty.displayName = "CommandEmpty";
 
+/** @experimental */
 export type CommandGroupProps = ComponentPropsWithoutRef<
   typeof CommandPrimitive.Group
 >;
@@ -256,6 +272,7 @@ export type CommandGroupProps = ComponentPropsWithoutRef<
 /**
  * CommandGroup - Grouped section of commands with optional heading.
  * Heading styled as uppercase, small, semibold per design spec.
+ * @experimental
  */
 const CommandGroup = forwardRef<
   ElementRef<typeof CommandPrimitive.Group>,
@@ -275,6 +292,7 @@ const CommandGroup = forwardRef<
 ));
 CommandGroup.displayName = "CommandGroup";
 
+/** @experimental */
 export type CommandSeparatorProps = ComponentPropsWithoutRef<
   typeof CommandPrimitive.Separator
 >;
@@ -282,6 +300,7 @@ export type CommandSeparatorProps = ComponentPropsWithoutRef<
 /**
  * CommandSeparator - Visual divider between command groups.
  * 1px line with  border border-border color, 8px margin top/bottom.
+ * @experimental
  */
 const CommandSeparator = forwardRef<
   ElementRef<typeof CommandPrimitive.Separator>,
@@ -295,6 +314,7 @@ const CommandSeparator = forwardRef<
 ));
 CommandSeparator.displayName = "CommandSeparator";
 
+/** @experimental */
 export type CommandItemProps = ComponentPropsWithoutRef<
   typeof CommandPrimitive.Item
 >;
@@ -303,6 +323,7 @@ export type CommandItemProps = ComponentPropsWithoutRef<
  * CommandItem - Individual selectable command item.
  * Height: 36px desktop, 44px mobile per design spec.
  * Includes hover, focus, and selected states.
+ * @experimental
  */
 const CommandItem = forwardRef<
   ElementRef<typeof CommandPrimitive.Item>,
@@ -318,7 +339,7 @@ const CommandItem = forwardRef<
       // Spacing
       "px-3 py-2.5",
       // Visual
-      "rounded-none text-base sm:text-sm outline-none",
+      "rounded-sm text-base sm:text-sm outline-none",
       // Transitions
       "transition-all duration-200 ease-(--ease-premium)",
       // Hover state - shared dashboard hover treatment
@@ -335,11 +356,13 @@ const CommandItem = forwardRef<
 ));
 CommandItem.displayName = "CommandItem";
 
+/** @experimental */
 export type CommandShortcutProps = HTMLAttributes<HTMLSpanElement>;
 
 /**
  * CommandShortcut - Keyboard shortcut display (e.g., "⌘K", "↵ Enter").
  * Monospace font, subtle background, right-aligned per design spec.
+ * @experimental
  */
 const CommandShortcut = forwardRef<HTMLSpanElement, CommandShortcutProps>(
   ({ className, ...props }, ref) => {
@@ -353,7 +376,7 @@ const CommandShortcut = forwardRef<HTMLSpanElement, CommandShortcutProps>(
           "text-xs font-mono",
           // Visual
           "text-muted-foreground bg-primary/5",
-          "border border-border rounded-none",
+          "border border-border rounded-md",
           // Spacing
           "px-1.5 py-0.5",
           className

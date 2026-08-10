@@ -18,12 +18,14 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
+import { permissionSlug } from "../../schemas/_zod/rbac";
 import type { ServiceContainer } from "../../services";
 import {
   isSuperAdmin,
   listEffectivePermissions,
   listRoleSlugsForUser,
 } from "../../services/lib/permissions";
+import { readAuthenticatedActor } from "../helpers/authenticated-actor";
 import { toPaginationMeta } from "../helpers/service-envelope";
 import {
   requireBodyField,
@@ -100,7 +102,7 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
     },
   },
   createLocalUser: {
-    execute: async (svc, _, body) => {
+    execute: async (svc, p, body) => {
       const b = requireBodyField<{ email: string; password?: unknown }>(
         body,
         "email",
@@ -111,10 +113,15 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
       // a password chosen for someone else — force a change on first sign-in.
       const adminSetPassword =
         typeof b.password === "string" && b.password.length > 0;
-      const user = await svc.createLocalUser({
-        ...(b as Parameters<typeof svc.createLocalUser>[0]),
-        mustChangePassword: adminSetPassword,
-      });
+      const user = await svc.createLocalUser(
+        {
+          ...(b as Parameters<typeof svc.createLocalUser>[0]),
+          mustChangePassword: adminSetPassword,
+        },
+        // Attribute the account creation to the authenticated admin so the
+        // emitted `user.created` event is not anonymous.
+        readAuthenticatedActor(p)
+      );
       return respondMutation("User created.", user, { status: 201 });
     },
   },
@@ -131,7 +138,12 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
   },
   deleteUser: {
     execute: async (svc, p) => {
-      const user = await svc.deleteUser(requireParam(p, "userId", "UserId"));
+      const user = await svc.deleteUser(
+        requireParam(p, "userId", "UserId"),
+        // Attribute the deletion to the authenticated admin so the emitted
+        // `user.deleted` event is not anonymous.
+        readAuthenticatedActor(p)
+      );
       return respondMutation("User deleted.", user);
     },
   },
@@ -175,8 +187,8 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
       // Convert "resource:action" → "action-resource" slug format
       // (e.g. "users:read" → "read-users").
       const permissions = permissionPairs.map(pair => {
-        const [resource, action] = pair.split(":");
-        return `${action}-${resource}`;
+        const [resource = "", action = ""] = pair.split(":");
+        return permissionSlug(action, resource);
       });
       return respondData({
         permissions,

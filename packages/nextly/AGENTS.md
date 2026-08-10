@@ -22,7 +22,7 @@ inside `packages/nextly`.
   `.item`. There is no `docs`/`totalDocs` shape anywhere.
 - `overrideAccess` defaults to `true` (trusted server context). Enforcing
   access control requires `overrideAccess: false` plus a `user`.
-- The canonical `FieldType` union has 18 members and the structured-array
+- The canonical `FieldType` union has 19 members and the structured-array
   type is `repeater`; the `array()` factory is a backward-compat alias, use
   `repeater()` in new code. Surface-only types (`url`, `phone` for users;
   plus `file`, `time`, `hidden` for forms) are intentionally NOT in the

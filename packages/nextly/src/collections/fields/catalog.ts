@@ -12,6 +12,8 @@
  * and each consumer resolves names against its own icon set.
  */
 
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
+
 import type { FieldType } from "./types/base";
 
 /**
@@ -171,10 +173,13 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
     icon: "FolderOpen",
   },
   {
-    type: "component",
-    label: "Component",
+    // `type` is the STORED value and deliberately still reads `component`; the label is what the
+    // picker shows. Renaming the type would make every existing `fields` JSON row unreadable, so
+    // the two are pinned apart by a test rather than left to be kept in step by hand.
+    type: STORAGE_FORMAT.fieldType,
+    label: "Field Group",
     category: "Structured",
-    hint: "Embed a reusable component",
+    hint: "Embed a reusable field group",
     icon: "Puzzle",
   },
 ];
@@ -350,6 +355,9 @@ export const FORM_FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry<FormFieldCa
  * - `component` is excluded because reusable composition inside a block
  *   document happens through slots and component-instance nodes; admitting the
  *   component field type as well would give one concept two storage shapes.
+ * - `blocks` is excluded because a prop holding a whole nested document is
+ *   what slots already express, and nesting documents inside documents would
+ *   put two migration boundaries in one value.
  *
  * Link-shaped props keep using `text` until the dedicated link picker joins
  * the catalog with its admin component.

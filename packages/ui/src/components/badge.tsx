@@ -30,9 +30,10 @@ import { cn } from "../lib/utils";
  * - warning: Light amber background
  * - destructive: Light red background
  * - outline: Transparent background with  border border-border
+ * @experimental
  */
 const badgeVariants = cva(
-  "inline-flex items-center rounded-none px-2.5 py-0.5 h-[22px] text-xs font-medium transition-colors",
+  "inline-flex items-center rounded-sm px-2.5 py-0.5 h-[22px] text-xs font-medium transition-colors",
   {
     variants: {
       variant: {
@@ -56,10 +57,12 @@ const badgeVariants = cva(
   }
 );
 
+/** @public */
 export interface BadgeProps
   extends HTMLAttributes<HTMLDivElement>,
     VariantProps<typeof badgeVariants> {}
 
+/** @public */
 function Badge({ className, variant = "default", ...props }: BadgeProps) {
   return (
     <div

@@ -40,8 +40,8 @@ import type {
 } from "../../domains/collections/services/collection-types";
 import type { DynamicCollectionService } from "../../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
+import type { RetentionRunner } from "../../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
-import type { WebhookRetentionRunner } from "../../domains/webhooks/retention-runner";
 import type {
   CacheRevalidator,
   RevalidationIntent,
@@ -50,7 +50,7 @@ import type { PaginatedResponse } from "../../types/pagination";
 import type { AccessControlService } from "../access";
 import { BaseService } from "../base-service";
 import type { CollectionFileManager } from "../collection-file-manager";
-import type { ComponentDataService } from "../components/component-data-service";
+import type { FieldGroupDataService } from "../field-groups/field-group-data-service";
 import type { Logger } from "../shared";
 
 import type { CollectionRelationshipService } from "./collection-relationship-service";
@@ -89,17 +89,22 @@ export class CollectionEntryService extends BaseService {
     relationshipService: CollectionRelationshipService,
     hookRegistry: HookRegistry,
     accessControlService: AccessControlService,
-    componentDataService?: ComponentDataService,
+    fieldGroupDataService?: FieldGroupDataService,
     rbacAccessControlService?: RBACAccessControlService,
     /** Normalized localization config (i18n M4) — forwarded to the query service. */
     localization?: SanitizedLocalizationConfig,
     /**
-     * Offers a webhook-retention pass after a write. Wired here rather than at
-     * a caller because every write path that appends an event runs through this
-     * service — the dispatcher-facing handler, `CollectionService`, and direct
-     * callers alike — so this is the one place that covers them all.
+     * Offers a retention pass after a write — both of them: the webhook event
+     * ledger and the audit trails, each on its own window and its own gate. The
+     * runner decides which are configured, so a construction site that forwards
+     * only one policy silently leaves that domain unpruned rather than failing.
+     *
+     * Wired here rather than at a caller because every write path that appends
+     * an event runs through this service — the dispatcher-facing handler,
+     * `CollectionService`, and direct callers alike — so this is the one place
+     * that covers them all.
      */
-    private readonly retentionRunner?: WebhookRetentionRunner,
+    private readonly retentionRunner?: RetentionRunner,
     /**
      * Kicks an immediate, bounded drain after a write (via Next `after()`), so
      * the first delivery attempt does not wait for the next scheduled trigger.
@@ -137,7 +142,7 @@ export class CollectionEntryService extends BaseService {
       relationshipService,
       this.accessService,
       this.hookService,
-      componentDataService,
+      fieldGroupDataService,
       localization
     );
     this.mutationService = new CollectionMutationService(
@@ -148,7 +153,7 @@ export class CollectionEntryService extends BaseService {
       relationshipService,
       this.accessService,
       this.hookService,
-      componentDataService,
+      fieldGroupDataService,
       localization
     );
     this.bulkService = new CollectionBulkService(
@@ -171,6 +176,8 @@ export class CollectionEntryService extends BaseService {
     where?: WhereFilter;
     richTextFormat?: RichTextOutputFormat;
     sort?: string;
+    /** Draft/Published lifecycle scope; forwarded to the query service. */
+    status?: "published" | "draft" | "all";
     overrideAccess?: boolean;
     /** Requested content locale (i18n M4) — forwarded to the query service. */
     locale?: string;
@@ -219,6 +226,12 @@ export class CollectionEntryService extends BaseService {
      * query service which maps it to a SQL predicate.
      */
     status?: "published" | "draft" | "all";
+    /**
+     * Opt in to the working-draft overlay (draft/published split): a trusted
+     * editor read returns the pending working draft in place of the live row.
+     * Forwarded to the query service, which gates it on update trust.
+     */
+    includeWorkingDraft?: boolean;
     /** Requested content locale (i18n M4) — forwarded to the query service. */
     locale?: string;
     /** Fallback control (`false`/`"none"` disables fallback). */
@@ -378,6 +391,29 @@ export class CollectionEntryService extends BaseService {
    * a no-op when no cache adapter is registered, and self-absorbing on error so
    * a revalidator fault never turns a committed write into a failure.
    */
+  /**
+   * Run the write-path maintenance the automatic paths run, for the
+   * `CollectionService.withTransaction` wrapper to call after a tx-API write
+   * commits. The wrappers return only the entry, so — like
+   * `flushRevalidationIntents` — these cannot be triggered from the wrapper's own
+   * result. Mirrors `afterWriteIfRecorded`: a committed write offers the
+   * opportunistic retention pass (the write path is the only prune trigger for an
+   * install with no drain, so tx-API writes must offer it too, or `nextly_events`
+   * grows unbounded), and a recorded event schedules the fast drain. No-ops when
+   * the respective runner/scheduler is unwired.
+   */
+  async offerPostCommitTxMaintenance(opts: {
+    committedWrite: boolean;
+    recordedEvent: boolean;
+  }): Promise<void> {
+    if (opts.committedWrite) {
+      await this.offerRetentionPass();
+    }
+    if (opts.recordedEvent) {
+      this.fastDrainScheduler?.offer();
+    }
+  }
+
   async flushRevalidationIntents(intents: RevalidationIntent[]): Promise<void> {
     if (intents.length === 0) return;
     // Resolve at flush time so a Next cache adapter registered after this
@@ -525,9 +561,43 @@ export class CollectionEntryService extends BaseService {
     return result;
   }
 
+  /**
+   * Resolve this collection's localized companion verdicts on the pooled connection.
+   *
+   * Call it BEFORE opening a transaction whose body uses the `*InTransaction` methods below.
+   * Those cannot do it themselves: resolving issues a query, a query against a missing relation
+   * aborts the whole transaction on PostgreSQL, and a pooled probe taken while a transaction is
+   * open waits for a connection that transaction will not release.
+   *
+   * Skipping it throws nothing. The write commits and its durable version snapshot and outbound
+   * event silently omit every localized component value.
+   */
+  async warmLocalizedReadiness(collectionName: string): Promise<void> {
+    return this.mutationService.warmLocalizedReadiness(collectionName);
+  }
+
+  /**
+   * Remove a document's pending working-draft sidecar under the same parent-row
+   * lock a draft save takes, so a discard cannot delete a draft that a
+   * concurrent save committed after the discard's checks. The discard handler
+   * has already authorized read and update on the document.
+   */
+  async discardWorkingDraft(params: {
+    collectionName: string;
+    entryId: string;
+  }): Promise<void> {
+    return this.mutationService.discardWorkingDraft(params);
+  }
+
+  // Params are taken from the method being delegated to rather than restated here. Restating them
+  // had already dropped `overrideAccess`, `routeAuthorized` and `transitionAuth`: the object is
+  // forwarded whole, so those kept working at runtime while the type denied they existed, and a
+  // caller doing a trusted server write through this facade could not say so without a cast.
   async createEntryInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: Parameters<
+      CollectionMutationService["createEntryInTransaction"]
+    >[1],
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
     return this.mutationService.createEntryInTransaction(tx, params, body);
@@ -535,7 +605,9 @@ export class CollectionEntryService extends BaseService {
 
   async updateEntryInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; entryId: string; user?: UserContext },
+    params: Parameters<
+      CollectionMutationService["updateEntryInTransaction"]
+    >[1],
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
     return this.mutationService.updateEntryInTransaction(tx, params, body);

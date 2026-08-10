@@ -59,10 +59,11 @@ import {
   type DatabaseErrorKind,
   type BaseAdapterConfig,
   type AdapterLogger,
+  isApplicationError,
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
 import type Database from "better-sqlite3";
-import type { AnyRelations } from "drizzle-orm";
+import type { AnyRelations, SQL } from "drizzle-orm";
 import {
   drizzle,
   type BetterSQLite3Database,
@@ -539,6 +540,12 @@ export class SqliteAdapter extends DrizzleAdapter {
         throw error;
       }
     } catch (error) {
+      // Work inside a transaction may throw to roll the write back — a refused
+      // value, a denied permission — and that is the application's verdict, not
+      // the driver's failure. Classifying it would replace its code and payload
+      // with a generic database error, so a caller that asked for a refusal is
+      // handed an unexplained failure and the per-field detail never arrives.
+      if (isApplicationError(error)) throw error;
       throw this.classifyError(error);
     }
   }
@@ -628,7 +635,11 @@ export class SqliteAdapter extends DrizzleAdapter {
     try {
       const stmt = db.prepare(sql);
       const rows = stmt.all(...(params as unknown[])) as T[];
-      return rows;
+      // SQLite stores a timestamp as an integer and hands it back as one. The
+      // Drizzle read paths decode it through the column definition, so without
+      // this a bulk insert answers with numbers where a read answers `Date`.
+      const tableObj = this.getTableObject(table);
+      return rows.map(r => this.mapRowFromRawSql(tableObj, r));
     } catch (error) {
       throw this.handleQueryError(error, "insertMany", table);
     }
@@ -714,6 +725,25 @@ export class SqliteAdapter extends DrizzleAdapter {
       // lock up front and serializes writers for the whole transaction.
       lockRow: (): Promise<void> => Promise.resolve(),
 
+      // `run`, not `all`: better-sqlite3 throws on a statement that returns no
+      // rows, which is every statement this method exists to carry. The Drizzle
+      // instance is the transaction-bound one, so the statement runs inside this
+      // transaction.
+      //
+      // better-sqlite3 is synchronous, so this resolves an already-settled
+      // promise rather than being declared `async` over a body that never
+      // awaits.
+      runStatement: (statement: SQL): Promise<void> => {
+        txDb().run(statement);
+        return Promise.resolve();
+      },
+
+      // `all`, not `run`: this is the reading half, and better-sqlite3 returns
+      // rows only from `all`. Synchronous, so the promise is already settled.
+      queryStatement: <T = Record<string, unknown>>(
+        statement: SQL
+      ): Promise<T[]> => Promise.resolve(txDb().all(statement)),
+
       // eslint-disable-next-line @typescript-eslint/require-await
       execute: async <T = unknown>(
         sql: string,
@@ -740,6 +770,10 @@ export class SqliteAdapter extends DrizzleAdapter {
         }
       },
 
+      // Keys only, unlike the PostgreSQL and MySQL raw paths, which also encode
+      // their date values. `sanitizeSqliteValue` below binds a `Date` as unix
+      // seconds, and an instant carries no zone -- so what SQLite stores does
+      // not depend on the server's timezone and there is nothing to correct.
       // eslint-disable-next-line @typescript-eslint/require-await
       insert: async <T = unknown>(
         table: string,
@@ -776,8 +810,10 @@ export class SqliteAdapter extends DrizzleAdapter {
           return undefined as T;
         }
         const rows = stmt.all(...values) as T[];
-        // Return JS property-named keys to match the non-transactional insert.
-        return this.mapRowKeysToJs(this.getTableObject(table), rows[0]);
+        // Return JS property-named keys AND Drizzle-decoded date values, so a
+        // write inside a transaction answers with the same representation a
+        // read of the same row gives.
+        return this.mapRowFromRawSql(this.getTableObject(table), rows[0]);
       },
 
       // eslint-disable-next-line @typescript-eslint/require-await
@@ -825,7 +861,7 @@ export class SqliteAdapter extends DrizzleAdapter {
           return [];
         }
         return (stmt.all(...allValues) as T[]).map(r =>
-          this.mapRowKeysToJs(tableObj, r)
+          this.mapRowFromRawSql(tableObj, r)
         );
       },
 

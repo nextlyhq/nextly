@@ -38,7 +38,7 @@ export { nextlyMeta } from "../nextly-meta/mysql";
 
 export { dynamicCollectionsMysql as dynamicCollections } from "../dynamic-collections/mysql";
 export { dynamicSinglesMysql as dynamicSingles } from "../dynamic-singles/mysql";
-export { dynamicComponentsMysql as dynamicComponents } from "../dynamic-components/mysql";
+export { dynamicFieldGroupsMysql as dynamicFieldGroups } from "../dynamic-field-groups/mysql";
 
 export { siteSettingsMysql as siteSettings } from "../site-settings/mysql";
 export { userFieldDefinitionsMysql as userFieldDefinitions } from "../user-field-definitions/mysql";

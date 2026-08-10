@@ -1,0 +1,1946 @@
+/**
+ * Proves a Single's stored `custom` read rule is enforced, against a real
+ * (in-memory SQLite) database.
+ *
+ * A custom rule answers with a boolean or with a query constraint. The boolean
+ * decides; the constraint is refused. A constraint is the predicate a list read
+ * folds into SQL, and a Single's document is assembled from several tables, so
+ * no single row remains for the database to test it against. Comparing it in
+ * memory instead would mean a second evaluator drifting from the one lists
+ * compile, and that drift is itself the security bug.
+ */
+
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  checkbox,
+  defineCollection,
+  defineSingle,
+  group,
+  relationship,
+  repeater,
+  text,
+} from "../../../config";
+import {
+  createTestNextly,
+  type TestNextly,
+} from "../../../plugins/test-nextly";
+import type { CollectionsHandler } from "../../../services/collections-handler";
+import type { SingleEntryService } from "../services/single-entry-service";
+
+let current: TestNextly | undefined;
+afterEach(async () => {
+  await current?.destroy();
+  current = undefined;
+});
+
+const TARGET_RULE_PATH = new URL(
+  "../../collections/__tests__/_fixtures/related-target-read-rule.ts",
+  import.meta.url
+).pathname;
+
+const RULE_PATH = new URL(
+  "../../collections/__tests__/_fixtures/single-read-rule.ts",
+  import.meta.url
+).pathname;
+
+/** Boot a Single, attach the stored custom read rule, and seed its row. */
+async function bootWithCustomRule(): Promise<SingleEntryService> {
+  current = await createTestNextly({
+    singles: [
+      defineSingle({
+        slug: "branding",
+        fields: [text({ name: "siteName" }), text({ name: "tenant" })],
+      }),
+    ],
+  });
+
+  await current.adapter.update(
+    "dynamic_singles",
+    { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+    { and: [{ column: "slug", op: "=", value: "branding" }] }
+  );
+
+  const entry = current.getService<SingleEntryService>("singleEntryService");
+  await entry.update(
+    "branding",
+    { siteName: "Acme", tenant: "acme" },
+    { overrideAccess: true }
+  );
+  return entry;
+}
+
+describe("Single custom read rules (integration)", () => {
+  it.each([["acme"], ["system-column"], ["reads-data"], ["contains-op"]])(
+    "refuses a rule that returns a query constraint (%s)",
+    async userId => {
+      // The authoritative decision is made on the assembled document, which is
+      // built from the main row plus companion translations, component tables
+      // and whatever a hook changed — so there is no single row left for the
+      // database to test a predicate against. A constraint is refused rather
+      // than approximated in memory.
+      const entry = await bootWithCustomRule();
+
+      const result = await entry.get("branding", {
+        user: { id: userId },
+        routeAuthorized: true,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.statusCode).toBe(403);
+    }
+  );
+
+  it("denies when the constraint selects nothing", async () => {
+    // The rule narrows to the caller's own tenant. A caller from another tenant
+    // matches no row, so the read is refused rather than served.
+    const entry = await bootWithCustomRule();
+
+    const result = await entry.get("branding", {
+      user: { id: "other" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("denies when the rule refuses the caller outright", async () => {
+    const entry = await bootWithCustomRule();
+
+    const result = await entry.get("branding", {
+      user: { id: "denied" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("allows when the rule decides on the caller alone", async () => {
+    // A boolean answer carries no predicate, so there is nothing to filter by.
+    const entry = await bootWithCustomRule();
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("refuses a constraint whose shape cannot be translated exactly", async () => {
+    // Held to the same shape rules as a collection constraint: a dotted path
+    // translates to a comparison against the base column, which is a different
+    // predicate than the rule states.
+    const entry = await bootWithCustomRule();
+
+    const result = await entry.get("branding", {
+      user: { id: "dotted" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("gives the rule the read's locale", async () => {
+    // A rule keyed on the requested language sees `undefined` unless the read's
+    // locale reaches its context, which can turn a check that tolerates absence
+    // into an unintended allow.
+    const entry = await bootWithCustomRule();
+
+    const result = await entry.get("branding", {
+      user: { id: "locale-aware" },
+      locale: "secret",
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("gives the rule the caller's non-canonical claims", async () => {
+    // `UserContext` carries arbitrary extra claims. Rebuilding the object from
+    // its canonical fields drops them, so a rule keyed on one sees undefined and
+    // can allow a caller it was written to deny.
+    const entry = await bootWithCustomRule();
+
+    const result = await entry.get("branding", {
+      user: { id: "claim-aware", tenantId: "blocked" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("denies a rule that returns no decision", async () => {
+    // A non-boolean, non-constraint return used to be read as "allowed, with no
+    // predicate" — so a rule that simply fell through admitted the caller and
+    // narrowed nothing. A missing verdict is not an authorization.
+    const entry = await bootWithCustomRule();
+
+    const result = await entry.get("branding", {
+      user: { id: "no-verdict" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("lets a trusted read through untouched", async () => {
+    const entry = await bootWithCustomRule();
+
+    const result = await entry.get("branding", { overrideAccess: true });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("keeps a rule's writes to its own argument out of the response", async () => {
+    // `data` is handed to app code. Passing the response object itself would
+    // make a rule that assigns to it a response transformer, able to put back
+    // a value a later stage is meant to withhold.
+    const entry = await bootWithCustomRule();
+
+    const result = await entry.get("branding", {
+      user: { id: "mutating" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data).not.toHaveProperty("injected");
+  });
+});
+
+/**
+ * A rule is decided on values, not on their absence.
+ *
+ * The guarded field here is translatable, so it lives only in the companion
+ * table and the main row carries no value for it at all; it also has a field
+ * read rule, so it is removed from the response. Both are ways for the rule to
+ * be shown `undefined` where the document holds something, and a rule written
+ * as `data.visibility !== "private"` reads that absence as permission.
+ */
+describe("Single custom read rules vs the assembled document (integration)", () => {
+  /**
+   * Boot a localized Single whose guarded field is unreadable to callers, with
+   * a different value per language so the main row and the requested
+   * translation disagree.
+   */
+  async function bootLocalized(values: {
+    en: string;
+    de: string;
+  }): Promise<SingleEntryService> {
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          localized: true,
+          fields: [
+            text({ name: "siteName" }),
+            text({ name: "visibility", access: { read: () => false } }),
+          ],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", visibility: values.en },
+      { overrideAccess: true, locale: "en" }
+    );
+    await entry.update(
+      "branding",
+      { siteName: "Acme", visibility: values.de },
+      { overrideAccess: true, locale: "de" }
+    );
+    return entry;
+  }
+
+  it("denies on a guarded value the caller may not read", async () => {
+    // Field-level read access removes the value from the response. Removing it
+    // before the decision leaves `data.visibility !== "private"` reading
+    // `undefined`, which passes — handing back the rest of a document the rule
+    // exists to withhold.
+    const entry = await bootLocalized({ en: "public", de: "private" });
+
+    const result = await entry.get("branding", {
+      user: { id: "assembled-aware" },
+      locale: "de",
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("still redacts the guarded field from an allowed read", async () => {
+    // The mirror case: authorizing on the unredacted document must not hand the
+    // guarded value back once the read is allowed.
+    const entry = await bootLocalized({ en: "public", de: "private" });
+
+    const result = await entry.get("branding", {
+      user: { id: "assembled-aware" },
+      locale: "en",
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data).not.toHaveProperty("visibility");
+  });
+
+  it("materializes nothing for a caller its defaults refuse", async () => {
+    // A Single that has never been written is created by the first read that
+    // reaches it, along with its first version. If the rule is judged with no
+    // document, one that refuses on a default value admits that read, the write
+    // lands, and only the outgoing check returns 403 — a permanent effect
+    // driven by a caller the rule denies.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [text({ name: "siteName" })],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+
+    const result = await entry.get("branding", {
+      user: { id: "default-aware" },
+      routeAuthorized: true,
+    });
+
+    expect(result.statusCode).toBe(403);
+    // The refusal is only worth anything if the row was never written.
+    expect(await current.adapter.selectOne("single_branding", {})).toBeNull();
+  });
+
+  it("shows the rule a related field the response redacts", async () => {
+    // Related-row redaction happens while the relationship is expanded, so the
+    // rule would be handed the hole it leaves. `data.author.suspended !== true`
+    // then reads `undefined` and admits a caller the stored data refuses.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "authors",
+          fields: [
+            text({ name: "name" }),
+            checkbox({ name: "suspended", access: { read: () => false } }),
+          ],
+        }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: "authors" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A", suspended: true }
+    );
+    const authorId = (created.data as { id: string }).id;
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: authorId },
+      { overrideAccess: true }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "relation-aware" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("does not let the caller's depth shrink what the rule is shown", async () => {
+    // Depth shapes the RESPONSE. Letting it shape the authorization view too
+    // hands the caller a way to blind the rule: at `depth: 0` the relationship
+    // stays an id, so `data.author?.suspended !== true` reads `undefined` and
+    // the Single is served to someone the stored data refuses.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "authors",
+          fields: [
+            text({ name: "name" }),
+            checkbox({ name: "suspended", access: { read: () => false } }),
+          ],
+        }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: "authors" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A", suspended: true }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: (created.data as { id: string }).id },
+      { overrideAccess: true }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "relation-aware" },
+      routeAuthorized: true,
+      depth: 0,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("keeps a rule's writes deep inside its argument out of the response", async () => {
+    // A shallow copy still shares every nested object with the response, so a
+    // rule reaching into a component or group could rewrite what is returned.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            group({
+              name: "settings",
+              fields: [checkbox({ name: "private" })],
+            }),
+          ],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", settings: { private: false } },
+      { overrideAccess: true }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "deep-mutating" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data!.settings).not.toHaveProperty("injected");
+  });
+
+  it("shows the rule the translation overview the response will carry", async () => {
+    // `_translations` is attached only when the read asks for it. Leaving it off
+    // the copy the rule is judged on makes the two decisions disagree about
+    // what the document contains: the first refuses a read the second allows.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          localized: true,
+          fields: [text({ name: "siteName" })],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme" },
+      { overrideAccess: true, locale: "en" }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "translation-aware" },
+      routeAuthorized: true,
+      translationStatus: true,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("keeps a field rule's writes out of the response", async () => {
+    // Field read rules run AFTER the document-level decision, so a callback
+    // that mutates its argument changes a document that has already been
+    // authorized — and nothing judges it again.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({
+              name: "siteName",
+              access: {
+                read: ({ data }) => {
+                  const settings = (
+                    data as { settings?: Record<string, unknown> }
+                  )?.settings;
+                  if (settings) settings.injected = "from-the-field-rule";
+                  return true;
+                },
+              },
+            }),
+            group({
+              name: "settings",
+              fields: [checkbox({ name: "private" })],
+            }),
+          ],
+        }),
+      ],
+    });
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", settings: { private: false } },
+      { overrideAccess: true }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "someone" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data!.settings).not.toHaveProperty("injected");
+  });
+
+  it("hides a draft Single rather than reporting the rule's verdict", async () => {
+    // A draft answers 404 to an untrusted caller so its existence stays hidden.
+    // Deciding the stored rule first answers 403 instead, which reveals both
+    // that the row is there and what the rule made of the caller.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          status: true,
+          fields: [text({ name: "siteName" })],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", status: "draft" },
+      { overrideAccess: true }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "denied" },
+      routeAuthorized: true,
+    });
+
+    expect(result.statusCode).toBe(404);
+  });
+
+  it("authorizes the defaults when the checked row disappears mid-read", async () => {
+    // The rule allowed the stored row. A `beforeRead` hook then deletes it, so
+    // what the read is about to create is a default document no rule has seen.
+    // Creating it and refusing afterwards leaves the row, its localized
+    // defaults and its first version behind for a caller who was denied.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [text({ name: "siteName" })],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme" },
+      { overrideAccess: true }
+    );
+    // Registered directly: hooks declared on `defineSingle` are never wired up
+    // (tracked separately), and this needs a hook that actually runs.
+    current.hooks.register("beforeRead", "single:branding", async () => {
+      await current!.adapter.delete("single_branding", {});
+      return undefined;
+    });
+
+    const result = await entry.get("branding", {
+      user: { id: "seeded-only" },
+      routeAuthorized: true,
+    });
+
+    expect(result.statusCode).toBe(403);
+    // The refusal is only worth anything if nothing was written.
+    expect(await current.adapter.selectOne("single_branding", {})).toBeNull();
+  });
+
+  it("refuses the read when the rule's evidence cannot be assembled", async () => {
+    // Response assembly is best-effort: a relationship that cannot be expanded
+    // comes back as a bare id. For a document being JUDGED that turns a
+    // transient failure into missing evidence, and an absence-tolerant rule
+    // reads missing evidence as permission.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "authors",
+          fields: [
+            text({ name: "name" }),
+            checkbox({ name: "suspended", access: { read: () => false } }),
+          ],
+        }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: "authors" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A", suspended: true }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: (created.data as { id: string }).id },
+      { overrideAccess: true }
+    );
+
+    // Make expansion fail the way a transient fault would.
+    await (
+      current.adapter as unknown as {
+        executeQuery: (sql: string) => Promise<unknown>;
+      }
+    ).executeQuery('DROP TABLE "dc_authors"');
+
+    const result = await entry.get("branding", {
+      user: { id: "relation-aware" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.data).toBeUndefined();
+  });
+
+  it("refuses when a has-many reference goes missing from the expansion", async () => {
+    // A `hasMany` expansion drops the entries it could not fetch, so the list
+    // comes back shorter rather than absent. Checking only that each surviving
+    // element is a row accepts evidence that quietly went missing — and accepts
+    // an empty list vacuously.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "authors",
+          fields: [
+            text({ name: "name" }),
+            checkbox({ name: "suspended", access: { read: () => false } }),
+          ],
+        }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({
+              name: "author",
+              relationTo: "authors",
+              hasMany: true,
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const kept = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A", suspended: false }
+    );
+    const removed = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "B", suspended: true }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      {
+        siteName: "Acme",
+        author: [
+          (kept.data as { id: string }).id,
+          (removed.data as { id: string }).id,
+        ],
+      },
+      { overrideAccess: true }
+    );
+    // The row the rule would refuse on disappears from under the reference,
+    // exactly as a failed lookup leaves it: still referenced by the Single,
+    // absent from the expansion. Removed at the adapter so the reference is
+    // left dangling rather than cleaned up.
+    await current.adapter.delete("dc_authors", {
+      and: [
+        { column: "id", op: "=", value: (removed.data as { id: string }).id },
+      ],
+    });
+
+    const result = await entry.get("branding", {
+      user: { id: "relation-aware" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.data).toBeUndefined();
+    // And the refusal says nothing about the schema it failed on.
+    expect(result.message).not.toContain("dc_authors");
+  });
+
+  it("refuses when a relationship nested in a group cannot be assembled", async () => {
+    // Expansion reaches into groups and repeaters, so the same guarantee has
+    // to. Checking only top-level fields leaves a rule reading
+    // `data.meta.author` deciding on evidence that never arrived.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            group({
+              name: "meta",
+              fields: [relationship({ name: "author", relationTo: "authors" })],
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A" }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    const authorId = (author.data as { id: string }).id;
+    await entry.update(
+      "branding",
+      { siteName: "Acme", meta: { author: authorId } },
+      { overrideAccess: true }
+    );
+    // Leaves the nested reference dangling, the way a failed lookup does.
+    await current.adapter.delete("dc_authors", {
+      and: [{ column: "id", op: "=", value: authorId }],
+    });
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.data).toBeUndefined();
+  });
+
+  it("expands a relationship that exists only inside a group", async () => {
+    // The expansion guard looked at top-level fields only, so a Single whose
+    // relationships all live inside a container was returned unexpanded — and
+    // the completeness check then refused every read of a perfectly valid
+    // document.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            group({
+              name: "meta",
+              fields: [relationship({ name: "author", relationTo: "authors" })],
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A" }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      {
+        siteName: "Acme",
+        meta: { author: (author.data as { id: string }).id },
+      },
+      { overrideAccess: true }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(true);
+    expect(
+      (result.data!.meta as { author?: { id?: string } })?.author?.id
+    ).toBe((author.data as { id: string }).id);
+  });
+
+  it("checks a localized relationship, which the stored row never carries", async () => {
+    // A localized reference lives in the companion table and is overlaid after
+    // the main row is read, so comparing the view against the stored row skips
+    // the field entirely and a failed expansion goes unnoticed.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          localized: true,
+          fields: [
+            text({ name: "siteName" }),
+            relationship({
+              name: "author",
+              relationTo: "authors",
+              localized: true,
+            }),
+          ],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A" }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    const authorId = (author.data as { id: string }).id;
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: authorId },
+      { overrideAccess: true, locale: "en" }
+    );
+    // Leaves the localized reference dangling, as a failed lookup does.
+    await current.adapter.delete("dc_authors", {
+      and: [{ column: "id", op: "=", value: authorId }],
+    });
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      locale: "en",
+      depth: 1,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.data).toBeUndefined();
+  });
+
+  it("reads a Single whose relationship points at several collections", async () => {
+    // A reference naming its own collection is stored as `{ relationTo, value }`
+    // and populated from the collection it names. The read must not be refused
+    // for the shape it arrives in, whether or not the row could be loaded.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+        defineCollection({ slug: "orgs", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: ["authors", "orgs"] }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A" }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      {
+        siteName: "Acme",
+        author: {
+          relationTo: "authors",
+          value: (author.data as { id: string }).id,
+        },
+      },
+      { overrideAccess: true }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(true);
+    // Pin the shape, not just the success: the row has to come from the
+    // collection the value named, and a bare success assertion would be
+    // satisfied by the unexpanded reference just as well.
+    expect(result.data!.author).toMatchObject({
+      relationTo: "authors",
+      value: { id: (author.data as { id: string }).id, name: "A" },
+    });
+  });
+
+  // A read at depth serves the populated row, and that is what a client sends
+  // back on save. Stored as it arrives it becomes a snapshot: later reads serve
+  // the copy instead of reloading the target, so edits to the target vanish.
+  it("stores a reference, not the row, when a populated value is saved back", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+        defineCollection({ slug: "orgs", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: ["authors", "orgs"] }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "Original" }
+    );
+    const authorId = (author.data as { id: string }).id;
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: { relationTo: "authors", value: authorId } },
+      { overrideAccess: true }
+    );
+
+    const read = await entry.get("branding", {
+      overrideAccess: true,
+      depth: 1,
+    });
+    // Saved back exactly as served, which is what an unrelated edit does.
+    await entry.update(
+      "branding",
+      { siteName: "Acme Two", author: read.data!.author },
+      { overrideAccess: true }
+    );
+
+    // Change the target: a stored snapshot would keep serving the old name.
+    await handler.updateEntry(
+      { collectionName: "authors", entryId: authorId, overrideAccess: true },
+      { name: "Renamed" }
+    );
+
+    const after = await entry.get("branding", {
+      overrideAccess: true,
+      depth: 1,
+    });
+    expect(after.data!.author).toMatchObject({
+      relationTo: "authors",
+      value: { id: authorId, name: "Renamed" },
+    });
+  });
+
+  // A field's public value is the document id, and a custom validator is
+  // written against that. Saving a Single read at depth hands the validator the
+  // populated row instead, so a check like `value.value.startsWith(...)` throws
+  // and blocks an edit to some unrelated field.
+  it("shows a validator the id when a populated single value is saved back", async () => {
+    const seen: unknown[] = [];
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+        defineCollection({ slug: "orgs", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({
+              name: "author",
+              relationTo: ["authors", "orgs"],
+              validate: (value: unknown) => {
+                seen.push(value);
+                return true;
+              },
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "Ada" }
+    );
+    const authorId = (author.data as { id: string }).id;
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      {
+        siteName: "Acme",
+        author: { relationTo: "authors", value: authorId },
+      },
+      { overrideAccess: true }
+    );
+
+    const read = await entry.get("branding", {
+      overrideAccess: true,
+      depth: 1,
+    });
+    seen.length = 0;
+    await entry.update(
+      "branding",
+      { siteName: "Acme Two", author: read.data!.author },
+      { overrideAccess: true }
+    );
+
+    expect(seen).toContainEqual({ relationTo: "authors", value: authorId });
+  });
+
+  // A relationship whose TARGET collection refuses this caller is absent
+  // because they may not read it, not because the read failed. The
+  // completeness check exists to catch evidence that went missing, and reading
+  // a refusal as a fault refuses a document the caller is allowed to see.
+  it("serves a judged read whose relationship target is refused", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: "authors" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "Ada" }
+    );
+    const authorId = (author.data as { id: string }).id;
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: authorId },
+      { overrideAccess: true }
+    );
+
+    // The Single admits this caller; the target collection refuses them.
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    await current.adapter.update(
+      "dynamic_collections",
+      {
+        access_rules: {
+          read: { type: "custom", functionPath: TARGET_RULE_PATH },
+        },
+      },
+      { and: [{ column: "slug", op: "=", value: "authors" }] }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data!.siteName).toBe("Acme");
+    // Left as the reference it was stored as, rather than populated or refused.
+    expect(result.data!.author).toBe(authorId);
+  });
+
+  // A list-valued relationship may hold both readable and refused targets. The
+  // refused ones are absent on purpose, so completeness has to be measured
+  // against what could be read, not against everything the row stored.
+  it("serves a judged read whose list holds one refused target", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({
+              name: "authors",
+              relationTo: "authors",
+              hasMany: true,
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    // The caller is admitted by the Single's rule and refused by the target's
+    // rule for one specific row, so the list ends up part readable and part
+    // refused — which is the case the check has to account for.
+    const readable = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "Readable" }
+    );
+    const refused = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "Refused" }
+    );
+    const refusedId = (refused.data as { id: string }).id;
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      {
+        siteName: "Acme",
+        authors: [(readable.data as { id: string }).id, refusedId],
+      },
+      { overrideAccess: true }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    await current.adapter.update(
+      "dynamic_collections",
+      {
+        access_rules: {
+          read: { type: "custom", functionPath: TARGET_RULE_PATH },
+        },
+      },
+      { and: [{ column: "slug", op: "=", value: "authors" }] }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "partial", blockedId: refusedId },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(true);
+    const authors = result.data!.authors as Record<string, unknown>[];
+    // The readable half survived; the refused half is simply not there.
+    expect(JSON.stringify(authors)).toContain("Readable");
+    expect(JSON.stringify(authors)).not.toContain("Refused");
+  });
+
+  // The preliminary view and the response have to agree about whether a target
+  // is readable. A view shown a row the response will withhold lets a rule
+  // reading that row approve the document, so the read's side effects run and
+  // only the final check discovers the row is gone — the denial arrives after
+  // the hooks it was supposed to precede.
+  it("runs no read hook when a target the response withholds is refused", async () => {
+    const beforeRead = vi.fn(async () => undefined);
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          hooks: { beforeRead: [beforeRead] },
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: "authors" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "Ada" }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: (author.data as { id: string }).id },
+      { overrideAccess: true }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    // The target refuses this caller, while the Single's own rule admits the
+    // document only while its `author` is a populated row.
+    await current.adapter.update(
+      "dynamic_collections",
+      {
+        access_rules: {
+          read: { type: "custom", functionPath: TARGET_RULE_PATH },
+        },
+      },
+      { and: [{ column: "slug", op: "=", value: "authors" }] }
+    );
+    beforeRead.mockClear();
+
+    const result = await entry.get("branding", {
+      user: { id: "needs-populated-author" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(false);
+    // The decision was reached on the same evidence the response would carry,
+    // so it landed before the read's side effects rather than after them.
+    expect(beforeRead).not.toHaveBeenCalled();
+  });
+
+  // A container is serialized to JSON wholesale, so a reference left populated
+  // inside one is written as the row and never read back as a reference again.
+  it("stores a reference for a populated value inside a group", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+        defineCollection({ slug: "orgs", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            group({
+              name: "meta",
+              fields: [
+                text({ name: "note" }),
+                relationship({
+                  name: "author",
+                  relationTo: ["authors", "orgs"],
+                }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "Original" }
+    );
+    const authorId = (author.data as { id: string }).id;
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      {
+        siteName: "Acme",
+        meta: {
+          note: "n",
+          author: { relationTo: "authors", value: authorId },
+        },
+      },
+      { overrideAccess: true }
+    );
+
+    const read = await entry.get("branding", {
+      overrideAccess: true,
+      depth: 1,
+    });
+    await entry.update(
+      "branding",
+      { siteName: "Acme", meta: read.data!.meta },
+      { overrideAccess: true }
+    );
+
+    await handler.updateEntry(
+      { collectionName: "authors", entryId: authorId, overrideAccess: true },
+      { name: "Renamed" }
+    );
+
+    const after = await entry.get("branding", {
+      overrideAccess: true,
+      depth: 1,
+    });
+    const meta = after.data!.meta as { author?: Record<string, unknown> };
+    // A snapshot stored inside the group would still say "Original".
+    expect(meta.author).toMatchObject({
+      relationTo: "authors",
+      value: { id: authorId, name: "Renamed" },
+    });
+  });
+
+  // Neither `relationTo` nor `value` is a reserved field name, so a target
+  // collection may define both. A populated row from one then looks exactly
+  // like the wrapper a populated reference is served in, and reading it as one
+  // judges a field value in place of the row — refusing a read that is fine.
+  it("judges a populated row that defines relationTo and value as fields", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "authors",
+          fields: [
+            text({ name: "name" }),
+            text({ name: "relationTo" }),
+            text({ name: "value" }),
+          ],
+        }),
+        defineCollection({ slug: "orgs", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: ["authors", "orgs"] }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A", relationTo: "not a reference", value: "just a string" }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      {
+        siteName: "Acme",
+        author: {
+          relationTo: "authors",
+          value: (author.data as { id: string }).id,
+        },
+      },
+      { overrideAccess: true }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(true);
+    // The row's own fields survived, rather than one of them being read as the
+    // reference it is named after.
+    expect(result.data!.author).toMatchObject({
+      relationTo: "authors",
+      value: {
+        name: "A",
+        relationTo: "not a reference",
+        value: "just a string",
+      },
+    });
+  });
+
+  // Population can fail — a deleted target, a transient error — and the value
+  // then stays the reference it was stored as. A rule reading into it would
+  // decide on evidence that never arrived, and an absence-tolerant rule reads
+  // that absence as permission, so the read is refused instead.
+  it("refuses a judged read when a multi-target reference did not populate", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+        defineCollection({ slug: "orgs", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: ["authors", "orgs"] }),
+          ],
+        }),
+      ],
+    });
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      {
+        siteName: "Acme",
+        // No such row, so nothing can be populated from it.
+        author: {
+          relationTo: "authors",
+          value: "11111111-1111-4111-8111-111111111111",
+        },
+      },
+      { overrideAccess: true }
+    );
+
+    // Read once WITHOUT a stored rule: the check only runs for a judged read,
+    // so an ordinary read of the same document must still be served. Without
+    // this the test would pass just as well if the read were broken outright.
+    const unjudged = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+    expect(unjudged.success).toBe(true);
+
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+
+    const judged = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+    expect(judged.success).toBe(false);
+  });
+
+  it("serves a depth-zero read the references it asked for", async () => {
+    // `depth: 0` asks for ids and the response gives them, so holding the
+    // returned document to "every reference became a document" refuses exactly
+    // what was requested. The authorization view has already judged the same
+    // relationships at the full read depth.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: "authors" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A" }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    const authorId = (author.data as { id: string }).id;
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: authorId },
+      { overrideAccess: true }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 0,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data!.author).toBe(authorId);
+  });
+
+  it("refuses when a stored container cannot be read", async () => {
+    // A group whose stored JSON is malformed hides whatever relationships it
+    // held. Treating it as an empty container walks straight past them, and the
+    // rule is judged on a document it could not actually see.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            group({
+              name: "meta",
+              fields: [relationship({ name: "author", relationTo: "authors" })],
+            }),
+          ],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", meta: {} },
+      { overrideAccess: true }
+    );
+    // Corrupt the stored container, the way a truncated or half-written value
+    // would arrive.
+    await current.adapter.update("single_branding", { meta: "{not json" }, {});
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.data).toBeUndefined();
+  });
+
+  it("lets an afterRead hook drop a relationship without failing the read", async () => {
+    // A hook shapes the response and may legitimately remove or replace a
+    // relationship. Nothing distinguishes that from an expansion that failed,
+    // so checking completeness after hooks run reads a deliberate
+    // transformation as a fault and refuses a read that is fine.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: "authors" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A" }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: (author.data as { id: string }).id },
+      { overrideAccess: true }
+    );
+    current.hooks.register(
+      "afterRead",
+      "single:branding",
+      ({ data }: { data: Record<string, unknown> }) => {
+        const { author: _dropped, ...rest } = data;
+        return rest;
+      }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data).not.toHaveProperty("author");
+  });
+
+  it("refuses when a stored container holds the wrong shape", async () => {
+    // Valid JSON of the wrong shape reads as zero rows, which walks the check
+    // past every relationship the container was meant to hold — the same blind
+    // spot as JSON that will not parse.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            group({
+              name: "meta",
+              fields: [relationship({ name: "author", relationTo: "authors" })],
+            }),
+          ],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", meta: {} },
+      { overrideAccess: true }
+    );
+    // A list where the field declares a group: parses cleanly, holds nothing
+    // the walk can read.
+    await current.adapter.update("single_branding", { meta: "[]" }, {});
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.data).toBeUndefined();
+  });
+
+  it("reads a Single whose schema uses the legacy relation alias", async () => {
+    // The relationship service matches `relationship` only, so a field declared
+    // as `relation` is never expanded for anyone. Requiring a document for it
+    // would refuse every read of a Single that uses one.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({ name: "author", relationTo: "authors" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A" }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: (author.data as { id: string }).id },
+      { overrideAccess: true }
+    );
+    // Rewrite the stored schema to the alias, the shape a UI-created Single
+    // carries.
+    const stored = (await current.adapter.selectOne("dynamic_singles", {
+      and: [{ column: "slug", op: "=", value: "branding" }],
+    })) as { fields: unknown };
+    const fields = (
+      typeof stored.fields === "string"
+        ? (JSON.parse(stored.fields) as Record<string, unknown>[])
+        : (stored.fields as Record<string, unknown>[])
+    ).map(field =>
+      field.name === "author" ? { ...field, type: "relation" } : field
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { fields },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("refuses when a repeater row is not a row", async () => {
+    // The container parses and is an array, so the outer shape check passes,
+    // but a scalar entry becomes no row at all — and the walk steps over every
+    // relationship that row was supposed to hold.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            repeater({
+              name: "items",
+              fields: [relationship({ name: "author", relationTo: "authors" })],
+            }),
+          ],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", items: [] },
+      { overrideAccess: true }
+    );
+    await current.adapter.update("single_branding", { items: "[42]" }, {});
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.data).toBeUndefined();
+  });
+
+  it("leaves an empty repeater alone", async () => {
+    // The mirror: a repeater that legitimately holds no rows, and one holding a
+    // row with nothing in it, are both ordinary documents rather than evidence
+    // that went missing.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            repeater({
+              name: "items",
+              fields: [relationship({ name: "author", relationTo: "authors" })],
+            }),
+          ],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", items: [{}] },
+      { overrideAccess: true }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+      depth: 1,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("leaves a relationship configured not to populate alone", async () => {
+    // `maxDepth: 0` asks for the reference itself, so an unexpanded id is the
+    // configured outcome. Demanding a row there refuses every read of the
+    // Single, whatever the rule says.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({ slug: "authors", fields: [text({ name: "name" })] }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            relationship({
+              name: "author",
+              relationTo: "authors",
+              maxDepth: 0,
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const author = await handler.createEntry(
+      { collectionName: "authors", overrideAccess: true },
+      { name: "A" }
+    );
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", author: (author.data as { id: string }).id },
+      { overrideAccess: true }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "always" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("tells the rule the id the document it judges will carry", async () => {
+    // The first read of a Single that does not exist is judged against the
+    // document it would create. Passing `undefined` for the id while `data`
+    // carries one leaves the rule two disagreeing answers to the same question.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [text({ name: "siteName" })],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService<SingleEntryService>("singleEntryService");
+
+    const result = await entry.get("branding", {
+      user: { id: "id-coherent" },
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("admits a caller the requested translation authorizes", async () => {
+    // The rule grants on the translated value. Judged against the bare main row
+    // it reads the default language instead and refuses a caller it admits, so
+    // the decision has to be made on the document the caller would receive.
+    const entry = await bootLocalized({ en: "internal", de: "public" });
+
+    const result = await entry.get("branding", {
+      user: { id: "assembled-grant" },
+      locale: "de",
+      routeAuthorized: true,
+    });
+
+    expect(result.success).toBe(true);
+  });
+});

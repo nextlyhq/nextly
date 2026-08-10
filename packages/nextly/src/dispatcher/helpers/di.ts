@@ -14,12 +14,13 @@ import { container } from "../../di/container";
 import type { NextlyServiceConfig } from "../../di/register";
 import type { DrizzleMigrationJournal } from "../../domains/schema/journal/migration-journal";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
+import type { SingleMetadataService } from "../../domains/singles/services/single-metadata-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
 import type { CollectionsHandler } from "../../services/collections-handler";
-import type { ComponentRegistryService } from "../../services/components/component-registry-service";
 import type { EmailProviderService } from "../../services/email/email-provider-service";
 import type { EmailTemplateService } from "../../services/email/email-template-service";
+import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
 import type { UserExtSchemaService } from "../../services/users/user-ext-schema-service";
 import type { UserFieldDefinitionService } from "../../services/users/user-field-definition-service";
 
@@ -71,6 +72,19 @@ export function getSingleRegistryFromDI(): SingleRegistryService | undefined {
   return undefined;
 }
 
+export function getSingleMetadataServiceFromDI():
+  | SingleMetadataService
+  | undefined {
+  try {
+    if (container.has("singleMetadataService")) {
+      return container.get<SingleMetadataService>("singleMetadataService");
+    }
+  } catch {
+    // DI not initialized
+  }
+  return undefined;
+}
+
 export function getSingleEntryServiceFromDI(): SingleEntryService | undefined {
   try {
     if (container.has("singleEntryService")) {
@@ -82,13 +96,16 @@ export function getSingleEntryServiceFromDI(): SingleEntryService | undefined {
   return undefined;
 }
 
+// The container key moved to `fieldGroupRegistryService` with the service, but
+// this helper keeps its name because callers reach it through the component
+// field type, whose stored spelling has not changed.
 export function getComponentRegistryFromDI():
-  | ComponentRegistryService
+  | FieldGroupRegistryService
   | undefined {
   try {
-    if (container.has("componentRegistryService")) {
-      return container.get<ComponentRegistryService>(
-        "componentRegistryService"
+    if (container.has("fieldGroupRegistryService")) {
+      return container.get<FieldGroupRegistryService>(
+        "fieldGroupRegistryService"
       );
     }
   } catch {

@@ -11,8 +11,11 @@
 
 import type { PaginationMeta } from "../../api/response-shapes";
 import {
+  assertDiffVersionPair,
   assertVersionDocumentReadable,
   assertVersionDocumentUpdatable,
+  diffDocumentVersions,
+  hydrateVersionSnapshot,
   redactSnapshotForUser,
 } from "../../api/versions-access";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
@@ -27,6 +30,8 @@ import {
   attachVersionAuthors,
   type VersionMetaWithAuthor,
 } from "../../domains/versions/author-hydration";
+import type { VersionDiff } from "../../domains/versions/diff";
+import { discardWorkingDraft } from "../../domains/versions/discard-working-draft";
 import { restoreVersion } from "../../domains/versions/restore-version";
 import type { VersionRow } from "../../domains/versions/versions-repository";
 import { NextlyError } from "../../errors/nextly-error";
@@ -75,6 +80,8 @@ export interface VersionMethodArgs {
   authenticatedScope?: AuthenticatedScope;
   limit?: number;
   cursor?: number;
+  /** Scope the history listing to one locale's versions. */
+  locale?: string;
 }
 
 /**
@@ -147,6 +154,10 @@ export async function listVersionsForDocument(
     {
       limit: limit + 1,
       ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
+      // An empty `?locale=` reaches the dispatcher as "" (the route parser keeps
+      // it); treat that as absent so both list surfaces list every locale rather
+      // than matching a non-existent empty-string locale and returning nothing.
+      ...(args.locale ? { locale: args.locale } : {}),
     }
   );
   const hasNext = window.length > limit;
@@ -209,7 +220,48 @@ export async function getVersionForDocument(
     args.user
   );
 
+  // Resolve relationship and upload ids in the snapshot to display labels
+  // through the access-checked path, so a preview renders labels rather than
+  // ids. Runs after redaction, so a dropped field is never resolved.
+  await hydrateVersionSnapshot(
+    row.snapshot,
+    args.scopeKind,
+    args.slug,
+    args.user,
+    args.authenticatedScope,
+    row.locale
+  );
+
   return row;
+}
+
+/**
+ * A typed diff of two versions of one document over the dispatcher, gated
+ * exactly like a single-version read.
+ */
+export async function getVersionDiffForDocument(
+  args: VersionMethodArgs & { from: number; to: number; modifiedOnly?: boolean }
+): Promise<VersionDiff> {
+  assertDiffVersionPair(args.from, args.to);
+
+  await assertVersionDocumentReadable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user,
+    args.authenticatedScope
+  );
+
+  return diffDocumentVersions({
+    scopeKind: args.scopeKind,
+    slug: args.slug,
+    entryId: args.entryId,
+    user: args.user,
+    from: args.from,
+    to: args.to,
+    modifiedOnly: args.modifiedOnly,
+    authenticatedScope: args.authenticatedScope,
+  });
 }
 
 /**
@@ -481,5 +533,68 @@ export async function restoreVersionForDocument(
     // The publish gate a restore-to-published triggers must judge the key's own
     // scope, not the owner's RBAC.
     authenticatedScope: readAuthenticatedScope(args.params),
+  });
+}
+
+/**
+ * Discard a collection entry's pending working draft (draft/published split),
+ * reverting the editor to the live published row.
+ *
+ * The sidecar is deleted; the document's durable history is never touched, so
+ * this reverts unpublished edits rather than writing a version. It is authorized
+ * as an update — a caller who may not update the document may not throw away its
+ * pending edits either — after read access is established, so a caller who cannot
+ * see the document gets a 404 rather than a 403 that would confirm it exists.
+ *
+ * Returns the published document as a plain read would, so the editor can reset
+ * to the live values without a second request. A no-op that still returns the
+ * live row when no working draft exists.
+ */
+export async function discardWorkingDraftForDocument(
+  args: VersionMethodArgs & { params: Params }
+): Promise<unknown> {
+  const caller = readAccessCallerFromParams(args.params, args.user);
+
+  // Read gate first: the route authorized this as an update, not a read, so a
+  // caller who cannot read the document is refused here — as "not found" so the
+  // refusal does not confirm it exists. Mirrors restoreVersionForDocument.
+  if (!(await canReadEntity(args.slug, caller))) {
+    throw NextlyError.notFound({
+      logContext: {
+        reason: "discard-working-draft-read-denied",
+        scopeKind: args.scopeKind,
+        scopeSlug: args.slug,
+        entryId: args.entryId,
+        userId: args.user.id,
+      },
+    });
+  }
+
+  const authenticatedScope = readAuthenticatedScope(args.params);
+
+  // Per-document read (404 when the row is gone or hidden by an owner-only rule)
+  // then the update gate (403): the coarse update-<slug> permission ran at the
+  // route, but a per-document rule can still refuse THIS document, and discarding
+  // its pending edits owes the same rules as any other update to it.
+  await assertVersionDocumentReadable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user,
+    authenticatedScope
+  );
+  await assertVersionDocumentUpdatable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user,
+    authenticatedScope
+  );
+
+  return discardWorkingDraft({
+    slug: args.slug,
+    entryId: args.entryId,
+    user: args.user,
+    authenticatedScope,
   });
 }

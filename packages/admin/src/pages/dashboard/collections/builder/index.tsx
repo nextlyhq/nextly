@@ -62,9 +62,15 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
         localized: values.i18n === true,
         // Version history opt-in at create; the server resolves the boolean.
         versions: values.versions === true,
+        // Retention: how many durable versions to keep (false = unlimited,
+        // undefined = the default 50). The server resolves it with the switch.
+        versionsMaxPerDoc: values.versionsMaxPerDoc,
         // Cache revalidation opt-out at create; on by default, so only an
         // explicit false is forwarded as off. The server resolves the boolean.
         revalidate: values.revalidate !== false,
+        // Webhook recording opt-out at create; on by default, so only an
+        // explicit false is forwarded as off. The server resolves the boolean.
+        webhooks: values.webhooks !== false,
         // Why: useAsTitle + timestamps removed in PR B. Backend defaults
         // (timestamps always on, useAsTitle = system title) take over.
         // Code-first config can still override either.
@@ -93,8 +99,12 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
                     localized: values.i18n === true,
                     // and with version history.
                     versions: values.versions === true,
+                    // and with its retention setting.
+                    versionsMaxPerDoc: values.versionsMaxPerDoc,
                     // and with cache revalidation (on unless explicitly off).
                     revalidate: values.revalidate !== false,
+                    // and with webhook recording (on unless explicitly off).
+                    webhooks: values.webhooks !== false,
                   },
                   fields: [],
                 })

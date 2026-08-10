@@ -83,7 +83,7 @@ function PluginSettingsContent({ activeSlug }: { activeSlug?: string }) {
           props={{ plugin: plugin as unknown as Record<string, unknown> }}
         />
       ) : (
-        <div className="rounded-none border border-dashed border-border bg-card p-12 text-center">
+        <div className="rounded-lg border border-dashed border-border bg-card p-12 text-center">
           <Package className="h-10 w-10 text-muted-foreground mx-auto mb-4" />
           <h3 className="text-sm font-medium text-foreground mb-1">
             {plugin ? "No settings to show" : "Plugin not found"}

@@ -8,6 +8,8 @@
  * @since 1.0.0
  */
 
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
+
 import type {
   // Text field types
   TextFieldConfig,
@@ -32,7 +34,7 @@ import type {
   GroupFieldConfig,
   JSONFieldConfig,
   // Component field types
-  ComponentFieldConfig,
+  FieldGroupFieldConfig,
   // Chips field type
   ChipsFieldConfig,
   // Union types
@@ -303,13 +305,14 @@ export const isJSONField = createTypeGuard<JSONFieldConfig>("json");
  *
  * @example
  * ```typescript
- * if (isComponentField(field)) {
+ * if (isFieldGroupField(field)) {
  *   console.log(field.component, field.components, field.repeatable);
  * }
  * ```
  */
-export const isComponentField =
-  createTypeGuard<ComponentFieldConfig>("component");
+export const isFieldGroupField = createTypeGuard<FieldGroupFieldConfig>(
+  STORAGE_FORMAT.fieldType
+);
 
 // ============================================================
 // Individual Type Guards - Chips Fields

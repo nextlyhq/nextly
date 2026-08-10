@@ -17,7 +17,11 @@ import type {
   VersionStatus,
 } from "../../schemas/versions/types";
 
-import type { VersionsDbApi, VersionsWhereCondition } from "./db-api";
+import type {
+  VersionsDbApi,
+  VersionsWhere,
+  VersionsWhereCondition,
+} from "./db-api";
 import type { PrunableVersion } from "./retention";
 
 const TABLE = "nextly_versions";
@@ -129,23 +133,8 @@ export class VersionsRepository {
         logContext: { reason: "autosave-version-has-version-no" },
       });
     }
-    // `snapshot` is `unknown`; serialize defensively. JSON.stringify returns
-    // `undefined` for a top-level function/symbol/undefined and THROWS for a
-    // circular reference or a BigInt. Either way the NOT NULL snapshot column
-    // must not receive a bad value, so both cases are wrapped as a NextlyError.
-    let serializedSnapshot: string;
-    try {
-      const serialized = JSON.stringify(input.snapshot);
-      if (typeof serialized !== "string") {
-        throw new TypeError("snapshot did not serialize to a JSON string");
-      }
-      serializedSnapshot = serialized;
-    } catch (cause) {
-      throw NextlyError.internal({
-        cause: cause instanceof Error ? cause : undefined,
-        logContext: { reason: "version-snapshot-not-serializable" },
-      });
-    }
+    // `snapshot` is `unknown`; serialize defensively (see serializeSnapshot).
+    const serializedSnapshot = this.serializeSnapshot(input.snapshot);
     await this.db.insert(
       TABLE,
       {
@@ -182,6 +171,155 @@ export class VersionsRepository {
   }
 
   /**
+   * Serialize a snapshot for the NOT NULL `snapshot` column.
+   *
+   * `snapshot` is `unknown`; serialize defensively. `JSON.stringify` returns
+   * `undefined` for a top-level function/symbol/undefined and THROWS for a
+   * circular reference or a BigInt. Either way the column must not receive a
+   * bad value, so both cases surface as a NextlyError rather than a driver
+   * error or a NULL write.
+   */
+  private serializeSnapshot(snapshot: unknown): string {
+    try {
+      const serialized = JSON.stringify(snapshot);
+      if (typeof serialized !== "string") {
+        throw new TypeError("snapshot did not serialize to a JSON string");
+      }
+      return serialized;
+    } catch (cause) {
+      throw NextlyError.internal({
+        cause: cause instanceof Error ? cause : undefined,
+        logContext: { reason: "version-snapshot-not-serializable" },
+      });
+    }
+  }
+
+  /**
+   * A locale match for the working-draft lookup. Unlocalized documents keep a
+   * single working draft under `locale IS NULL`; a localized document keeps one
+   * per language, so the lookup must match the exact write locale. An `= value`
+   * comparison never matches NULL, which is the intended distinction between
+   * the two cases.
+   */
+  private localeCondition(locale: string | null): VersionsWhereCondition {
+    return locale == null
+      ? { column: "locale", op: "IS NULL" }
+      : { column: "locale", op: "=", value: locale };
+  }
+
+  /**
+   * The predicate identifying THE working draft of a document in one locale:
+   * the sidecar draft row holding pending edits to a published document that
+   * has not been promoted to the live row. A working draft is the only
+   * non-autosave row carrying no version number (durable history rows always
+   * take a sequence number; autosave rows set `isAutosave = true`), so this
+   * shape is unambiguous and matches the partial unique index that keeps it to
+   * one per document per locale.
+   */
+  private workingDraftWhere(
+    ref: VersionRef,
+    locale: string | null
+  ): VersionsWhere {
+    return {
+      and: [
+        ...this.docWhere(ref),
+        { column: "isAutosave", op: "=", value: false },
+        { column: "versionNo", op: "IS NULL" },
+        { column: "status", op: "=", value: "draft" },
+        this.localeCondition(locale),
+      ],
+    };
+  }
+
+  /**
+   * Insert or update the coalesced working draft for a document in one locale.
+   *
+   * There is exactly one working draft per (document, locale): editing a
+   * published document repeatedly rewrites this row in place rather than piling
+   * up draft rows, so `updatedAt` advances and the snapshot always holds the
+   * latest pending edit. The live content row is never touched here — this is
+   * the sidecar that lets a published document be edited without changing what
+   * the public sees until publish promotes it.
+   */
+  async upsertWorkingDraft(input: {
+    ref: VersionRef;
+    locale: string | null;
+    snapshot: unknown;
+    createdBy?: string | null;
+  }): Promise<void> {
+    const now = new Date();
+    const serializedSnapshot = this.serializeSnapshot(input.snapshot);
+    const where = this.workingDraftWhere(input.ref, input.locale);
+    // Project only the id: the existence check must not transfer the (possibly
+    // large) snapshot of the row it is about to overwrite.
+    const existing = await this.db.select<{ id: string }>(TABLE, {
+      columns: ["id"],
+      where,
+      limit: 1,
+    });
+    if (existing[0]) {
+      await this.db.update(
+        TABLE,
+        {
+          snapshot: serializedSnapshot,
+          createdBy: input.createdBy ?? null,
+          updatedAt: now,
+        },
+        where
+      );
+      return;
+    }
+    await this.db.insert(
+      TABLE,
+      {
+        id: crypto.randomUUID(),
+        scopeKind: input.ref.scopeKind,
+        scopeSlug: input.ref.scopeSlug,
+        entryId: input.ref.entryId,
+        // A working draft is neither a durable history version (no sequence
+        // number) nor an autosave row; it is the sidecar draft head.
+        versionNo: null,
+        status: "draft",
+        isAutosave: false,
+        // Pre-stringified for the same cross-dialect reason as insertVersion:
+        // the transaction insert path binds this value straight into the driver
+        // query with no column-type awareness.
+        snapshot: serializedSnapshot,
+        label: null,
+        locale: input.locale ?? null,
+        sourceVersionNo: null,
+        createdBy: input.createdBy ?? null,
+        createdAt: now,
+        updatedAt: now,
+      },
+      { returning: [] }
+    );
+  }
+
+  /** Fetch the working draft (snapshot included) for a document in one locale. */
+  async findWorkingDraft(
+    ref: VersionRef,
+    locale: string | null
+  ): Promise<VersionRow | undefined> {
+    const rows = await this.db.select<VersionRow>(TABLE, {
+      where: this.workingDraftWhere(ref, locale),
+      limit: 1,
+    });
+    return rows[0];
+  }
+
+  /**
+   * Delete the working draft for a document in one locale, returning the number
+   * of rows removed. Called when the draft is promoted (published) or discarded.
+   */
+  async deleteWorkingDraft(
+    ref: VersionRef,
+    locale: string | null
+  ): Promise<number> {
+    return this.db.delete(TABLE, this.workingDraftWhere(ref, locale));
+  }
+
+  /**
    * Highest durable (non-autosave) version_no for a document, or 0 if none.
    * The caller allocates the next number as `getMaxVersionNo(ref) + 1`. When
    * invoked with the transaction context this read runs inside the caller's
@@ -199,6 +337,11 @@ export class VersionsRepository {
         and: [
           ...this.docWhere(ref),
           { column: "isAutosave", op: "=", value: false },
+          // Exclude the working draft (a non-autosave row with no version
+          // number). Without this it sorts first under `versionNo DESC` (NULLS
+          // FIRST on Postgres) and this returns 0 even when durable versions
+          // exist, so the next capture allocates a colliding version number.
+          { column: "versionNo", op: "IS NOT NULL" },
         ],
       },
       orderBy: [{ column: "versionNo", direction: "desc" }],
@@ -232,11 +375,46 @@ export class VersionsRepository {
    */
   async listByDoc(
     ref: VersionRef,
-    opts: { limit?: number; includeAutosave?: boolean; cursor?: number } = {}
+    opts: {
+      limit?: number;
+      includeAutosave?: boolean;
+      cursor?: number;
+      locale?: string;
+    } = {}
   ): Promise<VersionMeta[]> {
-    const and = [...this.docWhere(ref)];
-    if (!opts.includeAutosave) {
+    const and: (VersionsWhereCondition | VersionsWhere)[] = [
+      ...this.docWhere(ref),
+    ];
+    if (opts.includeAutosave) {
+      // Include autosave rows, but still exclude the working draft (a
+      // non-autosave row with no version number): it is the live pending edit
+      // surfaced via findWorkingDraft, not a history entry.
+      and.push({
+        or: [
+          { column: "versionNo", op: "IS NOT NULL" },
+          { column: "isAutosave", op: "=", value: true },
+        ],
+      });
+    } else {
+      // Durable history only: no autosave rows, and not the working draft.
       and.push({ column: "isAutosave", op: "=", value: false });
+      and.push({ column: "versionNo", op: "IS NOT NULL" });
+    }
+    // Scope to one locale's history when asked. A localized document captures a
+    // version per locale, so the list can be narrowed to the language an editor
+    // is working in; absent, every locale's versions are returned.
+    //
+    // Shared (null-locale) snapshots are included: a write touching only fields
+    // shared across locales is recorded with `locale: null` yet still changes
+    // this locale's document, so excluding it would omit real history and could
+    // present an older locale-specific row as the latest state.
+    if (opts.locale !== undefined) {
+      and.push({
+        or: [
+          { column: "locale", op: "=", value: opts.locale },
+          { column: "locale", op: "IS NULL" },
+        ],
+      });
     }
     // Keyset pagination: return versions strictly older than the cursor, which
     // is the last versionNo the caller already has. Stable under concurrent
@@ -290,6 +468,10 @@ export class VersionsRepository {
         and: [
           ...this.docWhere(ref),
           { column: "isAutosave", op: "=", value: false },
+          // The working draft is not a durable version and must never enter the
+          // retention candidate set (it would be counted toward the cap, or
+          // pruned as if it were history).
+          { column: "versionNo", op: "IS NOT NULL" },
         ],
       },
       orderBy: [

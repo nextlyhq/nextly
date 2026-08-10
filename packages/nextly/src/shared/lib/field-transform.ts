@@ -12,8 +12,11 @@ import type {
   FieldConfig,
   DataFieldConfig,
 } from "../../collections/fields/types";
+import { normalizeRelationshipValue } from "../../domains/collections/services/collection-utils";
 import { NextlyError } from "../../errors";
 
+import { detachData } from "./detach";
+import { storageTypeToken } from "./plugin-storage";
 import {
   formatRichTextOutput,
   isRichTextValue,
@@ -512,6 +515,104 @@ export function requiresTransformation(fieldType: string): boolean {
 }
 
 /**
+ * Normalize relationship field values on write input, at any nesting depth.
+ *
+ * A read at depth serves a relationship as the populated row, and a
+ * multi-target one as `{ relationTo, value: row }`. Both come back on save, and
+ * stored as they arrive they put a whole row snapshot in the column: later
+ * reads then serve that stale copy instead of reloading the target, so an edit
+ * to the target never appears.
+ *
+ * Groups and repeaters are walked rather than skipped. Their contents are
+ * serialized to JSON wholesale, so a reference left populated inside one is
+ * written as the row and never recognised as a reference again.
+ *
+ * Mutates `data` in place, reducing each value to the reference it stands for.
+ */
+export function normalizeRelationshipFields(
+  data: Record<string, unknown>,
+  fields: FieldConfig[]
+): void {
+  for (const field of fields) {
+    if (!("name" in field) || !field.name) continue;
+    const value = data[field.name];
+    if (value == null) continue;
+
+    if (field.type === "relationship") {
+      data[field.name] = normalizeRelationshipField(field, value);
+      continue;
+    }
+
+    const nested = "fields" in field ? (field.fields as FieldConfig[]) : null;
+    if (!nested || nested.length === 0) continue;
+
+    if (field.type === "repeater") {
+      if (!Array.isArray(value)) continue;
+      for (const row of value) {
+        if (row && typeof row === "object" && !Array.isArray(row)) {
+          normalizeRelationshipFields(row as Record<string, unknown>, nested);
+        }
+      }
+    } else if (field.type === "group") {
+      if (typeof value === "object" && !Array.isArray(value)) {
+        normalizeRelationshipFields(value as Record<string, unknown>, nested);
+      }
+    }
+  }
+}
+
+/**
+ * The document a validator is shown.
+ *
+ * A relationship read at a populating depth comes back as the related row, and
+ * a multi-target one wrapped with the collection it names. A field's public
+ * value is the document id, and a custom validator is written against that —
+ * handed a row it compares an object to a string, or calls a string method on
+ * it and throws, rejecting a form the user did not otherwise change.
+ *
+ * Reduced on a detached copy rather than in place, because the submitted shape
+ * is what the hooks between validation and storage still expect to see.
+ */
+export function relationshipValidationView(
+  data: Record<string, unknown>,
+  fields: FieldConfig[]
+): Record<string, unknown> {
+  const view = detachData(data);
+  normalizeRelationshipFields(view, fields);
+  return view;
+}
+
+/**
+ * Reduce one relationship value to the reference it stands for.
+ *
+ * Reads the target list from either shape a field can carry it in: code-first
+ * fields declare `relationTo`, Builder-authored ones `options.target`.
+ */
+function normalizeRelationshipField(
+  field: FieldConfig,
+  value: unknown
+): unknown {
+  const config = field as {
+    relationTo?: unknown;
+    hasMany?: boolean;
+    options?: { target?: unknown; relationType?: string };
+  };
+  const isPolymorphic =
+    Array.isArray(config.relationTo) || Array.isArray(config.options?.target);
+  const hasMany =
+    config.hasMany === true || config.options?.relationType === "manyToMany";
+
+  const normalized = normalizeRelationshipValue(value, isPolymorphic);
+
+  // A single relationship holds one value; an array reaching it means the form
+  // sent a list for a field that stores one reference.
+  if (!hasMany && Array.isArray(normalized)) {
+    return normalized.length > 0 ? normalized[0] : null;
+  }
+  return normalized;
+}
+
+/**
  * Coerce string values for `field.type === "date"` columns into `Date`
  * objects, mutating `data` in place. Drizzle binds `timestamp` columns
  * by calling `.toISOString()` on the bound value, so an ISO string
@@ -536,7 +637,9 @@ export function coerceDateFieldsToDate(
 ): void {
   for (const field of fields) {
     if (!field.name) continue;
-    if (field.type !== "date") continue;
+    // A timestamp-backed plugin type binds to the same column a `date` does,
+    // so it needs the same coercion: Drizzle refuses to bind a string there.
+    if (storageTypeToken(field) !== "date") continue;
     const value = data[field.name];
     if (typeof value === "string") {
       data[field.name] = new Date(value);

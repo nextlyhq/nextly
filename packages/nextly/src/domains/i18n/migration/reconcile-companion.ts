@@ -1,5 +1,6 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { isFieldLocalized } from "../classify-fields";
 
 import { ddlType, q } from "./ddl-types";
@@ -30,6 +31,13 @@ export interface ReconcileCompanionArgs {
   dialect: SupportedDialect;
   /** Whether the collection has Draft/Published → companion carries a per-locale `_status`. */
   status: boolean;
+  /**
+   * Which builder made the main table. A companion column mirrors the main table's, so it is
+   * described as whatever built that one; deciding it locally left a translatable field bounded on
+   * the companion while the same declaration was unbounded on the main table.
+   */
+  builtBy: ColumnOrigin;
+
   /**
    * Whether the companion `<tableName>_locales` table already exists in the live DB.
    * The caller performs the existence check (e.g. `adapter.tableExists`) so this helper
@@ -83,7 +91,15 @@ export function buildCompanionReconcileSql(
 export function buildCompanionReconcileStatements(
   args: ReconcileCompanionArgs
 ): string[] {
-  const { slug, tableName, oldLocalized, newLocalized, dialect, status } = args;
+  const {
+    slug,
+    tableName,
+    oldLocalized,
+    newLocalized,
+    dialect,
+    status,
+    builtBy,
+  } = args;
   const companionTable = `${tableName}_locales`;
 
   if (!args.companionExists) {
@@ -98,6 +114,7 @@ export function buildCompanionReconcileStatements(
       defaultLocale: "en", // unused for the create-only statement (no seed rows)
       collectionLocalized: true,
       status,
+      builtBy,
     });
     // The create-only helper terminates with `;`; strip it so this stays a bare statement.
     return spec ? [buildCompanionCreateOnlySql(spec).replace(/;\s*$/, "")] : [];
@@ -110,7 +127,7 @@ export function buildCompanionReconcileStatements(
 
   for (const f of newLocalized) {
     if (oldNames.has(f.name)) continue;
-    const col = fieldToLocalizedColumnSpec(f, dialect);
+    const col = fieldToLocalizedColumnSpec(f, dialect, builtBy);
     if (col) {
       stmts.push(
         `ALTER TABLE ${q(companionTable, dialect)} ADD COLUMN ${q(col.name, dialect)} ${ddlType(col, dialect)}`
@@ -119,7 +136,7 @@ export function buildCompanionReconcileStatements(
   }
   for (const f of oldLocalized) {
     if (newNames.has(f.name)) continue;
-    const col = fieldToLocalizedColumnSpec(f, dialect);
+    const col = fieldToLocalizedColumnSpec(f, dialect, builtBy);
     if (col) {
       stmts.push(
         `ALTER TABLE ${q(companionTable, dialect)} DROP COLUMN ${q(col.name, dialect)}`
@@ -166,6 +183,11 @@ export interface CompanionTransitionArgs {
   slug: string;
   tableName: string;
   dialect: SupportedDialect;
+  /**
+   * Which builder made the main table. A companion column mirrors the main table's, so it is
+   * described as whatever built that one.
+   */
+  builtBy: ColumnOrigin;
   /** Default locale — the language seeded onto/restored from the companion. */
   defaultLocale: string;
   /** Desired Draft/Published state (companion `_status`). */
@@ -180,6 +202,37 @@ export interface CompanionTransitionArgs {
   newFields: CompanionFieldLike[];
   /** Whether the companion `<tableName>_locales` table currently exists. */
   companionExists: boolean;
+  /**
+   * Localized columns the MAIN table still physically carries.
+   *
+   * Only the disable direction reads it. Unattended provisioning may seed a companion without
+   * dropping the columns it copied from, so a later disable can meet a main table that still has
+   * them: re-adding one fails, and skipping the restore because it is present reverts content to
+   * whatever it held before the entity was localized.
+   *
+   * Omitted means "none of them", which is the shape a transition produced by an explicit toggle
+   * or a migration file leaves behind.
+   */
+  existingMainColumns?: readonly string[];
+  /**
+   * Whether the entity had Draft/Published BEFORE this change.
+   *
+   * A history fact, unlike {@link CompanionTransitionArgs.existingMainColumns}, which describes
+   * only the database in front of you and is deliberately stripped from the migration artefact.
+   * That distinction is what makes this the right signal for the disable restore: it is equally
+   * true for a database that has only ever replayed migrations.
+   *
+   * It answers exactly what that restore needs — did main carry `status` and the companion
+   * `_status` before this save. Deriving it from the DESIRED status instead would emit a copy from
+   * a `_status` the old companion never had, into a `status` main has not been given yet, because a
+   * disable deliberately runs the companion transition before the shared ALTER that adds it.
+   *
+   * REQUIRED rather than optional, and that is the point. An optional history signal is one a
+   * caller can omit without noticing, and the copy it gates then silently stops happening for that
+   * caller alone — which is exactly how this went wrong once already. `undefined` is not a
+   * shorthand for "no status"; a caller that genuinely has none says `false`.
+   */
+  wasStatus: boolean;
   /** Whether the existing companion physically has `_status` (see ReconcileCompanionArgs). */
   companionHasStatus?: boolean;
 }
@@ -216,6 +269,7 @@ export function buildCompanionTransitionStatements(
     slug,
     tableName,
     dialect,
+    builtBy,
     defaultLocale,
     status,
     wasLocalized,
@@ -242,6 +296,7 @@ export function buildCompanionTransitionStatements(
       defaultLocale,
       collectionLocalized: true,
       status,
+      builtBy,
     });
     // No translatable columns yet (or an already-present companion from a partial apply): fall
     // back to the plain reconcile, which CREATEs an empty companion or no-ops.
@@ -250,6 +305,7 @@ export function buildCompanionTransitionStatements(
         statements: buildCompanionReconcileStatements({
           slug,
           tableName,
+          builtBy,
           oldLocalized: [],
           newLocalized: localizedNew,
           dialect,
@@ -269,7 +325,7 @@ export function buildCompanionTransitionStatements(
     // old column and gets a companion column only.
     const oldColumnNames = new Set(
       oldFields
-        .map(f => fieldToLocalizedColumnSpec(f, dialect)?.name)
+        .map(f => fieldToLocalizedColumnSpec(f, dialect, builtBy)?.name)
         .filter((n): n is string => typeof n === "string")
     );
     spec.columnsOnMain = spec.columns
@@ -293,11 +349,32 @@ export function buildCompanionTransitionStatements(
       defaultLocale,
       collectionLocalized: true,
       status,
+      builtBy,
     });
     // Nothing to restore (no companion, or the entity had no translatable columns).
     if (!spec || !companionExists) return none;
     return {
-      statements: buildLocalizationDownStatements(spec),
+      statements: buildLocalizationDownStatements(spec, {
+        existingMainColumns: args.existingMainColumns,
+        // The PHYSICAL shape, not the desired one. `status` describes what the collection is being
+        // saved as, and a save that disables localization and enables Draft/Published at once
+        // would have this restore read a `_status` the old companion never had — and main receive
+        // it before the shared ALTER that adds `status`, because a disable deliberately runs the
+        // companion transition first. Both columns have to be there already.
+        // The column has to be there BEFORE this save and still be there after.
+        //
+        // Before, because the copy reads the companion's `_status` and writes main's `status`, and
+        // neither exists for an entity that did not have Draft/Published. `existingMainColumns`
+        // cannot answer that: it is built from localized user fields, so it never contains
+        // `status`, and it is cleared for the artefact so a migration file cannot depend on local
+        // introspection.
+        //
+        // After, because turning Draft/Published off in the same save drops main's `status`, and
+        // whether that ALTER lands before or after this plan differs by flow — the single schema
+        // path runs it first, the collection path runs it second. Restoring into a column that is
+        // being removed is pointless in both, and fatal in the one that removes it first.
+        restoreStatus: args.wasStatus === true && status === true,
+      }),
       needsArchive: true,
       companionDropped: true,
     };
@@ -312,6 +389,7 @@ export function buildCompanionTransitionStatements(
       statements: buildCompanionReconcileStatements({
         slug,
         tableName,
+        builtBy,
         oldLocalized,
         newLocalized,
         dialect,
@@ -328,4 +406,38 @@ export function buildCompanionTransitionStatements(
   }
 
   return none;
+}
+
+/**
+ * The transition as a replayable migration artefact, and — only when they differ — as the
+ * statements this particular database needs.
+ *
+ * A migration file is replayed against databases that have only ever run migrations, so its
+ * content must follow from history alone. `existingMainColumns` comes from introspecting the
+ * database in front of you, and unattended provisioning retains the columns it copied into a
+ * companion, so a development database can sit in a shape no sequence of migrations produces.
+ * Baking that in emits a disable which skips re-adding columns the target database dropped, and
+ * the restore then addresses columns that are not there.
+ *
+ * Both plans come from one call site so the artefact cannot accidentally be built from local
+ * introspection. `local` is omitted when the two agree — every case but a disable meeting retained
+ * columns — so a caller holding one plan cannot pick the wrong one.
+ */
+export function buildCompanionTransitionPlans(
+  args: CompanionTransitionArgs & {
+    /** What THIS database carries. Never reaches the artefact. */
+    existingMainColumns?: readonly string[];
+  }
+): { artefact: CompanionTransitionPlan; local?: CompanionTransitionPlan } {
+  const artefact = buildCompanionTransitionStatements({
+    ...args,
+    existingMainColumns: undefined,
+  });
+  if (!args.existingMainColumns?.length) return { artefact };
+
+  const local = buildCompanionTransitionStatements(args);
+  const same =
+    local.statements.length === artefact.statements.length &&
+    local.statements.every((s, i) => s === artefact.statements[i]);
+  return same ? { artefact } : { artefact, local };
 }

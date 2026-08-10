@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
+
 import {
   BINDABLE_KINDS,
   BLOCK_FIELD_TYPES,
@@ -351,5 +353,33 @@ describe("binding kinds", () => {
     expect(canBindFieldToProp({ type: "toString" }, { type: "text" })).toBe(
       false
     );
+  });
+});
+
+// The field group's field type has two spellings that must not be confused: what the picker SHOWS
+// and what gets written to disk. The label was renamed with the rest of the vocabulary; the stored
+// value deliberately was not, because changing it rewrites `fields` JSON in three registry tables.
+//
+// This pins them apart. A sweep that renames the label and takes the value with it would pass every
+// other test in the suite while silently making existing content unreadable.
+describe("field group entry: display name vs stored value", () => {
+  const entry = FIELD_TYPE_CATALOG.find(f => f.label === "Field Group");
+
+  it("presents itself as a field group", () => {
+    expect(entry).toBeDefined();
+    expect(entry?.hint).toBe("Embed a reusable field group");
+  });
+
+  it("still stores the value the on-disk format defines, not the label", () => {
+    expect(entry?.type).toBe(STORAGE_FORMAT.fieldType);
+    expect(STORAGE_FORMAT.fieldType).toBe("component");
+  });
+
+  // No catalog entry may present itself with the pre-rename vocabulary.
+  it("leaves no catalog entry labelled or hinted 'component'", () => {
+    const stale = FIELD_TYPE_CATALOG.filter(
+      f => /component/i.test(f.label) || /component/i.test(f.hint ?? "")
+    );
+    expect(stale.map(f => f.label)).toEqual([]);
   });
 });

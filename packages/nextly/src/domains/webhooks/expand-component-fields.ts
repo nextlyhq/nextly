@@ -14,6 +14,8 @@
  * @module domains/webhooks/expand-component-fields
  */
 
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
+
 import type { SensitiveFieldSource } from "./sensitive-fields";
 
 /** Resolves a component slug to its field definitions, or null if unknown. */
@@ -32,7 +34,7 @@ export type ComponentFieldResolver = (
  * reaches the deny list.
  */
 function referencedSlugs(field: SensitiveFieldSource): string[] {
-  if (field.type !== "component") return [];
+  if (field.type !== STORAGE_FORMAT.fieldType) return [];
   const candidate = field as {
     component?: unknown;
     componentSlug?: unknown;
@@ -40,11 +42,15 @@ function referencedSlugs(field: SensitiveFieldSource): string[] {
   };
 
   const slugs: string[] = [];
-  if (typeof candidate.componentSlug === "string")
-    slugs.push(candidate.componentSlug);
-  if (typeof candidate.component === "string") slugs.push(candidate.component);
-  if (Array.isArray(candidate.components)) {
-    for (const slug of candidate.components) {
+  // Read into a local: narrowing an indexed access does not carry to a second
+  // lookup, so the pushed value would widen back to `unknown`.
+  const legacySlug = candidate[STORAGE_FORMAT.refKeys.legacy];
+  if (typeof legacySlug === "string") slugs.push(legacySlug);
+  const singleSlug = candidate[STORAGE_FORMAT.refKeys.single];
+  if (typeof singleSlug === "string") slugs.push(singleSlug);
+  const manySlugs = candidate[STORAGE_FORMAT.refKeys.many];
+  if (Array.isArray(manySlugs)) {
+    for (const slug of manySlugs) {
       if (typeof slug === "string") slugs.push(slug);
     }
   }
@@ -83,20 +89,38 @@ async function resolveOnce(
   return resolved;
 }
 
+/**
+ * Expand component references inside inlined block definitions.
+ *
+ * `blocks` is only walked when it is an array of definitions carrying their
+ * own fields. A Nextly blocks field puts an options object there naming the
+ * registered block types it accepts, which holds no fields to expand, so it
+ * passes through untouched.
+ */
 async function expandBlocks(
   blocks: SensitiveFieldSource["blocks"],
   resolve: ComponentFieldResolver,
   seen: ReadonlySet<string>,
   cache: ResolutionCache
 ): Promise<SensitiveFieldSource["blocks"]> {
-  if (!blocks) return blocks;
+  if (!Array.isArray(blocks)) return blocks;
   return Promise.all(
-    blocks.map(async block => ({
-      ...block,
-      fields: block.fields
-        ? await expandComponentFields(block.fields, resolve, seen, cache)
-        : block.fields,
-    }))
+    blocks.map(async entry => {
+      // Untrusted shape: only an object carrying an array of object fields is
+      // walked, so a malformed entry passes through instead of crashing the
+      // webhook payload build.
+      if (typeof entry !== "object" || entry === null) return entry;
+      const nested = (entry as { fields?: unknown }).fields;
+      if (!Array.isArray(nested)) return entry;
+      const fields = nested.filter(
+        (field): field is SensitiveFieldSource =>
+          typeof field === "object" && field !== null
+      );
+      return {
+        ...(entry as object),
+        fields: await expandComponentFields(fields, resolve, seen, cache),
+      };
+    })
   );
 }
 

@@ -21,7 +21,7 @@ const collectionConfig: BuilderConfig = {
 
 const componentConfig: BuilderConfig = {
   ...collectionConfig,
-  kind: "component",
+  kind: "field-group",
   toolbar: { previewSchemaChange: false },
 };
 
@@ -102,7 +102,7 @@ describe("BuilderToolbar", () => {
     // The legacy first-letter tile rendered the first character of the
     // icon name in a square. With it removed, the standalone "H" or "F"
     // letter shouldn't appear before the breadcrumb.
-    const breadcrumb = screen.getByText(/components/i);
+    const breadcrumb = screen.getByText(/field groups/i);
     const sibling = breadcrumb.previousSibling;
     expect(sibling).toBeNull();
   });

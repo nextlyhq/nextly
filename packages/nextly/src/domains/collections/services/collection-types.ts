@@ -19,6 +19,24 @@ export interface CollectionServiceResult<T = unknown> {
   message: string;
   data: T | null;
   /**
+   * Canonical `NextlyError` code for failure envelopes that originate from a
+   * NextlyError (or a mapped database error). The HTTP status alone is
+   * ambiguous — 409 covers both DUPLICATE and CONFLICT — so boundary
+   * translators (dispatcher, Direct API) use this to rebuild the precise
+   * error instead of guessing from the status.
+   */
+  code?: string;
+  /**
+   * The error's public data (failure only) -- the same object that reaches the
+   * wire as `error.data`. Public by definition, unlike `logContext`, so it can
+   * ride this shape safely, and carrying it is what lets a boundary rebuild an
+   * error whose meaning lives there: a rate limit's retry interval, which the
+   * route needs to emit `Retry-After`.
+   */
+  publicData?: unknown;
+  /** Translation key for the public message, when the thrower set one. */
+  messageKey?: string;
+  /**
    * Per-field validation issues (failure only). Carried through the
    * result shape so the dispatcher and Direct API can rebuild the
    * canonical VALIDATION_ERROR envelope with field paths intact.

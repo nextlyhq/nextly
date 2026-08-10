@@ -152,11 +152,15 @@ export const singleApi = {
    */
   previewSchemaChanges: async (
     slug: string,
-    fields: unknown[]
+    fields: unknown[],
+    // i18n: mirrors schemaApi.preview — the preview collects the resolutions
+    // the apply runs with, so both have to diff against the same localization
+    // state or the apply can need a prompt the preview never showed.
+    localized?: boolean
   ): Promise<SchemaPreviewResponse> => {
     return protectedApi.post<SchemaPreviewResponse>(
       `/singles/schema/${slug}/preview`,
-      { fields }
+      { fields, ...(localized !== undefined ? { localized } : {}) }
     );
   },
 

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { NextlyError } from "../../errors/nextly-error";
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { FieldConfig } from "../../collections/fields/types";
-import type { ComponentConfig } from "../../components/config/types";
+import type { FieldGroupConfig } from "../../field-groups/config/types";
 import type { NextlyServiceConfig } from "../../di/register";
 import type { SingleConfig } from "../../singles/config/types";
 import type { PluginContributions } from "../contributions";
@@ -21,8 +21,8 @@ const coll = (slug: string): CollectionConfig =>
   ({ slug, fields: [] }) as unknown as CollectionConfig;
 const single = (slug: string): SingleConfig =>
   ({ slug, fields: [] }) as unknown as SingleConfig;
-const comp = (slug: string): ComponentConfig =>
-  ({ slug, fields: [] }) as unknown as ComponentConfig;
+const comp = (slug: string): FieldGroupConfig =>
+  ({ slug, fields: [] }) as unknown as FieldGroupConfig;
 
 const cfg = (partial: Partial<NextlyServiceConfig>): NextlyServiceConfig =>
   ({ imageProcessor: {}, ...partial }) as unknown as NextlyServiceConfig;
@@ -43,17 +43,17 @@ const slugs = (entities: { slug: string }[] | undefined): string[] =>
   (entities ?? []).map(e => e.slug);
 
 describe("applyPluginSchemaContributions (fold — D3/D12)", () => {
-  it("appends each plugin's contributes.{collections,singles,components}, config-first then plugin order", () => {
+  it("appends each plugin's contributes.{collections,singles,fieldGroups}, config-first then plugin order", () => {
     const config = cfg({
       collections: [coll("code-posts")],
       singles: [single("code-settings")],
-      components: [comp("code-hero")],
+      fieldGroups: [comp("code-hero")],
     });
     const plugins = [
       plugin("plugin-a", {
         collections: [coll("a-forms")],
         singles: [single("a-single")],
-        components: [comp("a-comp")],
+        fieldGroups: [comp("a-comp")],
       }),
       plugin("plugin-b", {
         collections: [coll("b-submissions")],
@@ -68,7 +68,7 @@ describe("applyPluginSchemaContributions (fold — D3/D12)", () => {
       "b-submissions",
     ]);
     expect(slugs(result.singles)).toEqual(["code-settings", "a-single"]);
-    expect(slugs(result.components)).toEqual(["code-hero", "a-comp"]);
+    expect(slugs(result.fieldGroups)).toEqual(["code-hero", "a-comp"]);
   });
 
   it("does not mutate the input config or its arrays", () => {

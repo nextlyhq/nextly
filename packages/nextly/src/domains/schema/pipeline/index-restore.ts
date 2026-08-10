@@ -65,11 +65,12 @@ export function indexRestoreStatements(
   }
 
   // An `add_index` op is the diff stating the index is absent, so creating it
-  // cannot duplicate one. This is the only thing that creates it on SQLite and
-  // MySQL: the fast-path emitter is PostgreSQL-only, and the schema handed to
-  // drizzle-kit declares no dynamic-table indexes, so a diff of nothing but
-  // index additions would otherwise apply zero statements and report success
-  // while the index stayed missing.
+  // cannot duplicate one. This replay exists for the drizzle-kit route, where
+  // the schema handed to the kit declares no dynamic-table indexes and a diff
+  // of nothing but index additions would otherwise apply zero statements and
+  // report success while the index stayed missing. Callers on the fast-path
+  // route MUST pass no ops: that route's emitter already issued every
+  // add_index, and replaying one is fatal on MySQL (no IF NOT EXISTS).
   for (const op of ops) {
     if (op.type !== "add_index") continue;
     add(op.tableName, op.index);

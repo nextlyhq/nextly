@@ -13,11 +13,13 @@
 //      onboarding code path (createLocalUser → ensureSuperAdminRole →
 //      assignRoleToUser) end-to-end against live tables.
 //
-// Keep the list and column definitions in sync with
-// `packages/nextly/src/database/schema/sqlite.ts`. If you add a column
-// there, add it here as well — there is no generator bridging the two
-// (a future improvement would be to derive this from the Drizzle schema
-// via drizzle-kit, but that path requires a TTY for push operations).
+// These definitions must agree with the canonical Drizzle schemas under
+// `schemas/*/sqlite.ts`. Nothing derives one from the other — drizzle-kit's
+// push path needs a TTY, which the fallback above exists to survive — so the
+// agreement is asserted instead: `sqlite-core-tables.test.ts` compares every
+// column of every table here against the schema that defines it. A column
+// added to a schema and not here is a column the ORM writes and the table does
+// not have, and every insert naming it fails.
 
 /**
  * Return SQLite CREATE TABLE IF NOT EXISTS statements for all core Nextly
@@ -39,6 +41,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "is_active" INTEGER NOT NULL DEFAULT 0,
       "failed_login_attempts" INTEGER NOT NULL DEFAULT 0,
       "locked_until" INTEGER,
+      "must_change_password" INTEGER,
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch()),
       "updated_at" INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
@@ -157,6 +160,9 @@ export function generateSqliteCoreTableStatements(): string[] {
       "url" TEXT NOT NULL,
       "thumbnail_url" TEXT,
       "alt_text" TEXT,
+      "focal_x" INTEGER,
+      "focal_y" INTEGER,
+      "sizes" TEXT,
       "caption" TEXT,
       "tags" TEXT,
       "folder_id" TEXT REFERENCES "media_folders"("id") ON DELETE SET NULL,

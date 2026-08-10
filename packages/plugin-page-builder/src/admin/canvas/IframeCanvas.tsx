@@ -6,7 +6,14 @@
  * actually visible, and page CSS is isolated from the admin shell. The compiled page CSS
  * + a small editor-overlay stylesheet are injected into the iframe <head>.
  */
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { PAGE_ROOT_CLASS } from "@nextlyhq/blocks-engine";
+import {
+  useDeferredValue,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
 
 import { sanitizeCustomCss } from "../../core/css-sanitize";
@@ -14,6 +21,7 @@ import { BREAKPOINT_WIDTHS } from "../../core/responsive";
 import {
   compileDocumentCss,
   compileTokensCss,
+  documentScopeClass,
 } from "../../core/style-compiler";
 import { useEditor } from "../store/EditorProvider";
 
@@ -76,7 +84,7 @@ const OVERLAY_CSS = [
 ].join("");
 
 export function IframeCanvas({ children }: { children: ReactNode }) {
-  const { state, dispatch } = useEditor();
+  const { state, dispatch, remotePatterns, nodeClasses } = useEditor();
   const ref = useRef<HTMLIFrameElement>(null);
   const [body, setBody] = useState<HTMLElement | null>(null);
   // Desktop/base is FLUID (fills the pane); only tablet/mobile use a fixed device width.
@@ -122,6 +130,18 @@ export function IframeCanvas({ children }: { children: ReactNode }) {
     return () => observer.disconnect();
   }, [body]);
 
+  // Deferred for the same reason the Inspector's warnings are: sanitizing runs
+  // a full parse and several walks, and on a large stylesheet doing that
+  // synchronously per keystroke made typing wait for the preview to recompile.
+  const deferredCustomCss = useDeferredValue(state.customCss);
+
+  // The document's own scope, derived exactly as the renderer derives it, so
+  // the preview anchors its tokens and custom CSS to the same class the
+  // published page will — including the namespaced `@keyframes` and
+  // `@font-face` names, which differ per scope and would otherwise make the
+  // preview the one place an animation resolved.
+  const pageScope = documentScopeClass(state.document);
+
   // Keep the compiled page CSS in sync with the document.
   useEffect(() => {
     const doc = ref.current?.contentDocument;
@@ -142,13 +162,24 @@ export function IframeCanvas({ children }: { children: ReactNode }) {
       doc.head.appendChild(pageStyle);
     }
     pageStyle.textContent =
-      compileTokensCss("nx-pb-page") +
+      compileTokensCss(pageScope) +
       "\n" +
-      compileDocumentCss(state.document) +
+      compileDocumentCss(state.document, {
+        remotePatterns,
+        scope: pageScope,
+        classes: nodeClasses,
+      }) +
       "\n" +
       // Same sanitize+scope pass as PageRenderer, so the preview is faithful.
-      sanitizeCustomCss(state.customCss, "nx-pb-page");
-  }, [state.document, state.customCss, body]);
+      sanitizeCustomCss(deferredCustomCss, pageScope).css;
+  }, [
+    state.document,
+    deferredCustomCss,
+    remotePatterns,
+    body,
+    pageScope,
+    nodeClasses,
+  ]);
 
   // Selection via a native delegated listener ON THE IFRAME DOCUMENT. React's synthetic
   // events don't cross the portal→iframe boundary, so onClick handlers inside the canvas
@@ -197,7 +228,10 @@ export function IframeCanvas({ children }: { children: ReactNode }) {
         }}
       />
       {body
-        ? createPortal(<div className="nx-pb-page">{children}</div>, body)
+        ? createPortal(
+            <div className={`${PAGE_ROOT_CLASS} ${pageScope}`}>{children}</div>,
+            body
+          )
         : null}
     </div>
   );

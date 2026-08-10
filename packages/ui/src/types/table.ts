@@ -2,6 +2,7 @@
 // nextly's response-shapes.ts PaginationMeta). Phase 4.7 unified the admin
 // internal type with the wire contract; the legacy {page, pageSize, total,
 // totalPages} shape was dropped.
+/** @experimental */
 export interface PaginationMeta {
   total: number;
   page: number;
@@ -12,12 +13,14 @@ export interface PaginationMeta {
 }
 
 // Sorting information for server
+/** @experimental */
 export interface SortInfo {
   field: string;
   direction: "asc" | "desc";
 }
 
 // Search/filter information for server
+/** @experimental */
 export interface FilterInfo {
   search?: string;
   filters?: Record<string, unknown>;
@@ -28,6 +31,7 @@ export interface FilterInfo {
 // is mapped to the wire `limit` query param by the fetcher. Renaming this
 // admin-internal field is intentionally out of Phase 4.7 scope; it stays as
 // `pageSize` to avoid churn across every table component's local state.
+/** @experimental */
 export interface TableParams {
   pagination: {
     page: number;
@@ -40,12 +44,14 @@ export interface TableParams {
 // Server response structure (canonical wire shape). Renamed from
 // TableResponse in Phase 4.7. Field is `items` (not `data`) per spec
 // section 5.1.
+/** @experimental */
 export interface ListResponse<TData> {
   items: TData[];
   meta: PaginationMeta;
 }
 
 // Pagination configuration for the client-side selector
+/** @experimental */
 export interface PaginationConfig {
   pageSize?: number;
   pageSizeOptions?: number[];
@@ -54,6 +60,7 @@ export interface PaginationConfig {
 }
 
 // Action callbacks
+/** @experimental */
 export interface ActionCallbacks<TData = unknown> {
   onEdit?: (item: TData) => void;
   onDelete?: (item: TData) => void;
@@ -61,6 +68,7 @@ export interface ActionCallbacks<TData = unknown> {
 }
 
 // API callback for data fetching
+/** @experimental */
 export type DataFetcher<TData> = (
   params: TableParams
 ) => Promise<ListResponse<TData>>;

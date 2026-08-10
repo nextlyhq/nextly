@@ -151,8 +151,8 @@ export type {
 } from "./components/ui/table/data-table";
 
 // Field-UI kit — controlled, form-library-agnostic field-building components
-// (type picker, options editor, default-value input) rendered from the shared
-// `nextly/field-catalog`. Author surface re-exported by
+// (type picker, options editor, default-value input, condition row) rendered
+// from the shared `nextly/field-catalog`. Author surface re-exported by
 // `@nextlyhq/plugin-sdk/admin`, same as the DataTable above.
 export {
   FieldTypePicker,
@@ -160,6 +160,12 @@ export {
   FieldOptionsEditor,
   withOptionIds,
   usePluginFieldTypeEntries,
+  // Reads a plugin's own PUBLIC config from admin metadata; see
+  // `usePluginClientConfig`.
+  usePluginClientConfig,
+  ConditionRow,
+  operatorsForType,
+  operatorTakesValue,
 } from "./components/field-ui";
 export type {
   FieldTypePickerProps,
@@ -167,6 +173,12 @@ export type {
   FieldDefaultOption,
   FieldOption,
   FieldOptionsEditorProps,
+  ConditionOperatorName,
+  ConditionRange,
+  ConditionRowProps,
+  ConditionSource,
+  ConditionSourceOption,
+  ConditionValue,
 } from "./components/field-ui";
 
 // Error Fallback Components

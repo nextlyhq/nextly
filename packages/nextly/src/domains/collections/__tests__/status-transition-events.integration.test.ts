@@ -11,11 +11,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import { defineCollection, text } from "../../../config";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
+import { NextlyError } from "../../../errors";
 import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+// The concrete entry-service type: the publish-all test drives
+// `publishAllLocales` directly (it is not on the public handler surface) to
+// assert its per-locale workflow events.
+import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 
 let current: TestNextly | undefined;
 
@@ -137,6 +142,8 @@ describe("document status-transition events (integration)", () => {
       dialect: current.adapter.dialect,
       defaultLocale: "en",
       collectionLocalized: true,
+      // Defined in config, so the pipeline built this table.
+      builtBy: "codeFirst",
       status: true,
     });
     if (!spec) throw new Error("expected a companion spec");
@@ -182,6 +189,83 @@ describe("document status-transition events (integration)", () => {
     expect(payloads["document.published"]).toMatchObject({ locale: "de" });
   });
 
+  it("publish-all replays each companion locale's transition to workflow subscribers", async () => {
+    // The durable outbox records a locale-tagged event per published companion
+    // locale; the in-process workflow subscribers must observe the same, or a
+    // published translation is visible to webhooks but invisible to workflows.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "pages",
+          status: true,
+          localized: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const spec = deriveCompanionSpec({
+      slug: "pages",
+      fields: [{ name: "title", type: "text", localized: true }],
+      dialect: current.adapter.dialect,
+      defaultLocale: "en",
+      collectionLocalized: true,
+      // Defined in config, so the pipeline built this table.
+      builtBy: "codeFirst",
+      status: true,
+    });
+    if (!spec)
+      throw NextlyError.internal({
+        logContext: { reason: "missing-companion-spec", collection: "pages" },
+      });
+    if (!(await current.adapter.tableExists(spec.companionTable))) {
+      await (
+        current.adapter as unknown as {
+          executeQuery: (sql: string) => Promise<unknown>;
+        }
+      ).executeQuery(buildCompanionCreateOnlySql(spec));
+    }
+
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    // Draft main row plus a draft German translation.
+    const created = await handler.createEntry(
+      { collectionName: "pages", locale: "en", overrideAccess: true },
+      { title: "en", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+    await handler.updateEntry(
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "de",
+        overrideAccess: true,
+      },
+      { title: "de" }
+    );
+
+    const publishedLocales: (string | undefined)[] = [];
+    current.events.on("document.published", (e: unknown) => {
+      publishedLocales.push(
+        (e as { payload: { locale?: string } }).payload.locale
+      );
+    });
+
+    const entries = handler.getEntryService() as CollectionEntryService;
+    await entries.publishAllLocales({
+      collectionName: "pages",
+      entryId: id,
+      overrideAccess: true,
+    });
+
+    // Both companion locales' draft->published changes reached the workflow
+    // subscribers, each locale-tagged — the default locale by its own `en` tag
+    // (matching the ordinary update path), not an untagged document-wide event.
+    expect(publishedLocales).toContain("de");
+    expect(publishedLocales).toContain("en");
+    expect(publishedLocales).not.toContain(undefined);
+  });
+
   it("re-publishing an already-published locale fires no status events", async () => {
     current = await createTestNextly({
       collections: [
@@ -203,6 +287,8 @@ describe("document status-transition events (integration)", () => {
       dialect: current.adapter.dialect,
       defaultLocale: "en",
       collectionLocalized: true,
+      // Defined in config, so the pipeline built this table.
+      builtBy: "codeFirst",
       status: true,
     });
     if (!spec) throw new Error("expected a companion spec");

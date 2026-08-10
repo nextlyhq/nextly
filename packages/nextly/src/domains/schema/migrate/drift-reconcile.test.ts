@@ -16,11 +16,18 @@ const snap = (...names: string[]): NextlySchemaSnapshot => ({
   tables: names.map(tbl),
 });
 
-function fakeRepo(): ReconcileRepo & {
+type FakeRepo = ReconcileRepo & {
   starts: number;
   applied: Array<{ statementsExecuted?: number | null }>;
   superseded: Array<{ supersededEventIds: string[]; byEventId: string }>;
-} {
+};
+
+/**
+ * Typed as `ReconcileRepo` rather than cast away, so a method added to the
+ * interface fails to compile here instead of being discovered at runtime by
+ * whichever test happens to reach it.
+ */
+function fakeRepo(priorAttempts: readonly unknown[] = []): FakeRepo {
   const state = {
     starts: 0,
     applied: [] as Array<{ statementsExecuted?: number | null }>,
@@ -44,7 +51,8 @@ function fakeRepo(): ReconcileRepo & {
       state.superseded.push(args);
       return Promise.resolve();
     },
-  } as never;
+    findFileApplies: () => Promise.resolve(priorAttempts),
+  };
 }
 
 const file = {
@@ -100,6 +108,43 @@ describe("reconcileFile (Phase 2 three-state)", () => {
         executeSql: vi.fn(),
       })
     ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+  });
+
+  it("does not offer the baseline recovery when the file already failed once", async () => {
+    // Schema alone cannot tell a retried failed migration from a database
+    // nobody has adopted: MySQL commits each DDL statement as it runs, so a
+    // first migration that failed partway leaves its tables and the retry sees
+    // an empty baseline against tables that already exist. The ledger is the
+    // difference, and sending this operator to `migrate:baseline` would send
+    // them past the failed-cleanup path they need.
+    const withAttempt = fakeRepo([{ status: "failed" }]);
+    await expect(
+      reconcileFile({
+        file,
+        before: snap(),
+        target: snap("a", "b"),
+        live: snap("a"), // matches neither: every difference is a `+`
+        repo: withAttempt,
+        executeSql: vi.fn(),
+      })
+    ).rejects.toMatchObject({
+      publicMessage: expect.not.stringContaining("migrate:baseline"),
+    });
+
+    // The same drift with no recorded attempt IS an adoption.
+    const fresh = fakeRepo();
+    await expect(
+      reconcileFile({
+        file,
+        before: snap(),
+        target: snap("a", "b"),
+        live: snap("a"),
+        repo: fresh,
+        executeSql: vi.fn(),
+      })
+    ).rejects.toMatchObject({
+      publicMessage: expect.stringContaining("migrate:baseline"),
+    });
   });
 
   it("apply failure: IN_SYNC + executeSql throws → marks failed + throws APPLY_FAILED", async () => {

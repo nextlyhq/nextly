@@ -14,9 +14,21 @@
  *
  * KNOWN LIMITATION (v1): metadata-only edits produce no DDL operation, so no
  * migration is generated and the change is not propagated until a schema
- * change co-occurs. This covers labels, and equally the `status`, `localized`
- * and `versions` flags: flipping one alone leaves the deployed registry row on
- * its previous value until the next migration for that table.
+ * change co-occurs. This covers labels, and equally the `status`, `localized`,
+ * `versions`, `versionsMaxPerDoc` (retention), `revalidate` and `webhooks`
+ * flags: changing one alone leaves the deployed registry row on its previous
+ * value until the next migration for that table.
+ *
+ * `webhooks` and `versionsMaxPerDoc` carry the sharpest consequences of that
+ * limitation. `webhooks` governs whether content reaches the outbox: turning
+ * recording off in the Builder opts the development database out while a
+ * deployed environment keeps recording and delivering until a schema change
+ * ships alongside it. `versionsMaxPerDoc` governs how much history is kept:
+ * lowering the cap (or leaving a finite one in place instead of "keep all") in
+ * the Builder does not reach a deployed environment, which keeps pruning to its
+ * old cap. Until metadata-only edits generate their own migration, an operator
+ * who needs either change in production should set it in code-first config,
+ * which is republished on every boot and needs no migration.
  *
  * @module domains/schema/ui-schema/metadata-sql
  * @since v0.0.3-alpha (Plan D2b)
@@ -27,11 +39,13 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { resolveBuilderRevalidate } from "../../../revalidation/builder-revalidate";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import {
   toPluralLabel,
   toSingularLabel,
 } from "../../../shared/lib/pluralization";
 import { resolveBuilderVersions } from "../../versions/builder-versions";
+import { resolveBuilderWebhooks } from "../../webhooks/builder-webhooks";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import { calculateSchemaHash } from "../services/schema-hash";
 
@@ -69,9 +83,10 @@ function jsonLiteral(value: unknown, dialect: Dialect): string {
  */
 function versionsLiteral(
   versions: boolean | undefined,
+  maxPerDoc: number | false | undefined,
   dialect: Dialect
 ): string {
-  const resolved = resolveBuilderVersions(versions);
+  const resolved = resolveBuilderVersions(versions, maxPerDoc);
   return resolved === null ? "NULL" : jsonLiteral(resolved, dialect);
 }
 
@@ -88,6 +103,22 @@ function revalidateLiteral(
   dialect: Dialect
 ): string {
   const resolved = resolveBuilderRevalidate(revalidate);
+  return resolved === null ? "NULL" : jsonLiteral(resolved, dialect);
+}
+
+/**
+ * The `webhooks` column value for a manifest entity.
+ *
+ * The column holds the resolved `{ record }` policy boot reads back, so the
+ * manifest's on/off boolean is normalized through the same mapping the
+ * Builder's write paths use: on → NULL (record, the default), off → the
+ * stored opt-out.
+ */
+function webhooksLiteral(
+  webhooks: boolean | undefined,
+  dialect: Dialect
+): string {
+  const resolved = resolveBuilderWebhooks(webhooks);
   return resolved === null ? "NULL" : jsonLiteral(resolved, dialect);
 }
 
@@ -157,7 +188,7 @@ function buildUpsert(
 
 function tableNameFor(
   slug: string,
-  prefix: "dc_" | "single_" | "comp_"
+  prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix
 ): string {
   return `${prefix}${slug.replace(/-/g, "_")}`;
 }
@@ -210,7 +241,11 @@ export function buildCollectionMetadataUpsert(
       // the column, and a column left out of the upsert is untouched by its
       // DO UPDATE SET.
       name: "versions",
-      value: versionsLiteral(entity.versions, dialect),
+      value: versionsLiteral(
+        entity.versions,
+        entity.versionsMaxPerDoc,
+        dialect
+      ),
       update: true,
     },
     {
@@ -219,6 +254,14 @@ export function buildCollectionMetadataUpsert(
       // upsert is untouched by its DO UPDATE SET.
       name: "revalidate",
       value: revalidateLiteral(entity.revalidate, dialect),
+      update: true,
+    },
+    {
+      // Always written, including when recording is on (same reason as
+      // revalidate): turning it off has to occupy the column, and a column left
+      // out of the upsert is untouched by its DO UPDATE SET.
+      name: "webhooks",
+      value: webhooksLiteral(entity.webhooks, dialect),
       update: true,
     },
     { name: "migration_status", value: sqlStr("applied") },
@@ -270,13 +313,25 @@ export function buildSingleMetadataUpsert(
       // the column, and a column left out of the upsert is untouched by its
       // DO UPDATE SET.
       name: "versions",
-      value: versionsLiteral(entity.versions, dialect),
+      value: versionsLiteral(
+        entity.versions,
+        entity.versionsMaxPerDoc,
+        dialect
+      ),
       update: true,
     },
     {
       // Mirror the collection upsert: always written so flipping off clears it.
       name: "revalidate",
       value: revalidateLiteral(entity.revalidate, dialect),
+      update: true,
+    },
+    {
+      // Always written, including when recording is on (same reason as
+      // revalidate): turning it off has to occupy the column, and a column left
+      // out of the upsert is untouched by its DO UPDATE SET.
+      name: "webhooks",
+      value: webhooksLiteral(entity.webhooks, dialect),
       update: true,
     },
     { name: "migration_status", value: sqlStr("applied") },
@@ -293,7 +348,10 @@ export function buildComponentMetadataUpsert(
     { name: "id", value: sqlStr(deterministicId(entity.slug)) },
     { name: "slug", value: sqlStr(entity.slug) },
     { name: "label", value: sqlStr(singular(entity)), update: true },
-    { name: "table_name", value: sqlStr(tableNameFor(entity.slug, "comp_")) },
+    {
+      name: "table_name",
+      value: sqlStr(tableNameFor(entity.slug, STORAGE_FORMAT.tablePrefix)),
+    },
     {
       name: "fields",
       value: jsonLiteral(entity.fields, dialect),
@@ -312,5 +370,5 @@ export function buildComponentMetadataUpsert(
     { name: "migration_status", value: sqlStr("applied") },
   ];
   columns.push(...timestampColumns(dialect));
-  return buildUpsert("dynamic_components", columns, dialect);
+  return buildUpsert(STORAGE_FORMAT.registryTable, columns, dialect);
 }

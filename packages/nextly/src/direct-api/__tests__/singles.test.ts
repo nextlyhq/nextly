@@ -92,6 +92,53 @@ describe("Direct API - Singles Operations", () => {
         nextly.findSingle({ slug: "site-settings" })
       ).rejects.toThrow(NextlyError);
     });
+
+    it("forwards the caller's fallback-locale choice", async () => {
+      // Fallback control decides whether an untranslated field falls back to the
+      // default language, so it shapes the document a rule is judged on — and a
+      // rule keyed on it reads `undefined` when the option is dropped here.
+      mocks.singleEntryService.get.mockResolvedValue({
+        success: true,
+        statusCode: 200,
+        data: { id: "1" },
+      });
+
+      await nextly.findSingle({
+        slug: "site-settings",
+        locale: "de",
+        fallbackLocale: false,
+      });
+
+      expect(mocks.singleEntryService.get).toHaveBeenCalledWith(
+        "site-settings",
+        expect.objectContaining({ fallbackLocale: false })
+      );
+    });
+
+    it("forwards the caller's own claims to the access rules", async () => {
+      // A `custom` rule may decide on a claim the framework does not know about
+      // — a tenant, a plan, an entitlement. Rebuilding the caller from `id` and
+      // `role` alone drops those, so a rule written to refuse a caller reads
+      // `undefined` and admits it instead.
+      mocks.singleEntryService.get.mockResolvedValue({
+        success: true,
+        statusCode: 200,
+        data: { id: "1" },
+      });
+
+      await nextly.findSingle({
+        slug: "site-settings",
+        overrideAccess: false,
+        user: { id: "u1", role: "editor", tenantId: "blocked" },
+      });
+
+      expect(mocks.singleEntryService.get).toHaveBeenCalledWith(
+        "site-settings",
+        expect.objectContaining({
+          user: expect.objectContaining({ id: "u1", tenantId: "blocked" }),
+        })
+      );
+    });
   });
 
   describe("updateSingle()", () => {
@@ -112,7 +159,11 @@ describe("Direct API - Singles Operations", () => {
         data: { siteName: "Updated Site" },
       });
 
-      expect(result).toEqual(mockData);
+      // The mutation envelope, matching the collection mutations. `warnings`
+      // is absent because no hook failed, so an ordinary result carries what
+      // it always did plus the message.
+      expect(result.item).toEqual(mockData);
+      expect(result.warnings).toBeUndefined();
       expect(mocks.singleEntryService.update).toHaveBeenCalledWith(
         "site-settings",
         { siteName: "Updated Site" },

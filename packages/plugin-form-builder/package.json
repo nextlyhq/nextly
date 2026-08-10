@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/plugin-form-builder",
-  "version": "0.0.2-alpha.41",
+  "version": "0.0.2-alpha.54",
   "description": "Visual form builder plugin for Nextly with Code-First and Schema Builder support",
   "license": "MIT",
   "type": "module",
@@ -40,13 +40,13 @@
     "zod": "^4.1.12"
   },
   "peerDependencies": {
-    "@nextlyhq/admin": "0.0.2-alpha.41",
+    "@nextlyhq/admin": "0.0.2-alpha.54",
     "@nextlyhq/plugin-sdk": "workspace:*",
     "@nextlyhq/ui": "workspace:^",
     "@tanstack/react-query": ">=5.0.0",
     "lucide-react": ">=0.400.0",
     "next": "^14.0.0 || ^15.0.0 || ^16.0.0",
-    "nextly": "0.0.2-alpha.41",
+    "nextly": "0.0.2-alpha.54",
     "react": "^18.0.0 || ^19.0.0"
   },
   "devDependencies": {
@@ -55,8 +55,12 @@
     "@nextlyhq/tsconfig": "workspace:*",
     "@nextlyhq/ui": "workspace:*",
     "@tanstack/react-query": "^5.62.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.1",
     "@types/node": "^20.19.17",
     "@types/react": "19.2.0",
+    "jsdom": "^27.1.0",
     "lucide-react": "^0.544.0",
     "nextly": "workspace:*",
     "tsup": "^8.5.0",

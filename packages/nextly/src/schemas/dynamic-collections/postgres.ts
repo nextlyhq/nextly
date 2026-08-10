@@ -53,6 +53,7 @@ import type {
   CollectionSource,
   MigrationStatus,
   StoredHookConfig,
+  StoredWebhookRecording,
 } from "./types";
 
 // ============================================================
@@ -166,6 +167,13 @@ export const dynamicCollectionsPg = pgTable(
      * the collection sets no `revalidate` config.
      */
     revalidate: jsonb("revalidate").$type<RevalidateConfig>(),
+
+    /**
+     * Webhook recording opt-out (`{ record: false }`). Nullable, and null means
+     * record — so a database predating this column keeps recording exactly as
+     * before and only an explicit opt-out suppresses the outbox.
+     */
+    webhooks: jsonb("webhooks").$type<StoredWebhookRecording>(),
 
     /**
      * Admin UI configuration options.

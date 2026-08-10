@@ -323,7 +323,7 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
               type="button"
               className={cn(
                 "flex items-center gap-2 w-full text-left cursor-pointer",
-                "rounded-none p-4",
+                "rounded-md p-4",
                 "hover-unified focus:outline-none"
               )}
               aria-expanded={isOpen}
@@ -379,7 +379,7 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
 
             {/* Empty State */}
             {items.length === 0 && (
-              <div className="text-center py-8 text-muted-foreground  border border-border border-dashed rounded-none bg-primary/5">
+              <div className="text-center py-8 text-muted-foreground  border border-border border-dashed rounded-md bg-primary/5">
                 <p className="mb-1">No {pluralLabel.toLowerCase()} yet.</p>
                 {canAdd && (
                   <p className="text-sm">Click the button below to add one.</p>

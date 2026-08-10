@@ -90,6 +90,13 @@ export {
   type RegisterCollectionHooksResult,
 } from "./hooks/register-collection-hooks";
 
+export {
+  registerSingleHooks,
+  clearSingleHooks,
+  reregisterSingleHooks,
+  type RegisterSingleHooksResult,
+} from "./hooks/register-single-hooks";
+
 // ============================================================
 // INITIALIZATION API
 // ============================================================
@@ -125,8 +132,25 @@ export type {
   GeneratedTypes,
   CollectionSlug,
   SingleSlug,
+  FieldGroupSlug,
   DataFromCollectionSlug,
   DataFromSingleSlug,
+  InProcessRow,
+  RowFromCollectionSlug,
+  RowFromSingleSlug,
+  DataFromFieldGroupSlug,
+} from "./direct-api/types";
+
+// Direct API types - the `nextly.fieldGroups.*` namespace. Exported from the
+// root because they are the argument and result types of a public namespace:
+// without them a caller cannot annotate a variable holding what it returns.
+export type {
+  FieldGroupDefinition,
+  FindFieldGroupsArgs,
+  FindFieldGroupBySlugArgs,
+  CreateFieldGroupArgs,
+  UpdateFieldGroupArgs,
+  DeleteFieldGroupArgs,
 } from "./direct-api/types";
 
 // Direct API types - core operation argument types
@@ -224,6 +248,7 @@ export type {
   TypeGeneratorOptions,
   GeneratedTypeInterface,
   GeneratedSingleTypeInterface,
+  GeneratedUserInterface,
   GeneratedTypesFile,
 } from "./domains/schema/services/type-generator";
 
@@ -244,7 +269,7 @@ export {
   type DesiredSchema,
   type DesiredCollection,
   type DesiredSingle,
-  type DesiredComponent,
+  type DesiredFieldGroup,
   type DesiredSchemaOverrides,
   type SchemaApplyErrorCode,
 } from "./domains/schema/pipeline";
@@ -336,9 +361,34 @@ export type {
 } from "./services/shared";
 export { SYSTEM_CONTEXT, consoleLogger } from "./services/shared";
 
+// Validating loose values against field declarations, for plugins that store
+// structured content of their own and must apply the same rules a write does.
+export {
+  validateFieldValues,
+  type ValidateFieldValuesOptions,
+  type FieldValueDeclaration,
+  type FieldValueDeclarationInput,
+  type ValidationIssue,
+} from "./plugins/validate-field-values";
+
+// The block manifest's published contract. Exported from the package root
+// because a schema nothing can import promises nothing: the file is read by an
+// editor build, a docs page or an agent, and none of them can reach an internal
+// module through the export map.
+export {
+  BLOCK_MANIFEST_FILENAME,
+  BLOCK_MANIFEST_VERSION,
+  blockManifestJsonSchema,
+  blockManifestSchema,
+  blockManifestEntrySchema,
+  type BlockManifest,
+  type BlockManifestEntry,
+} from "./plugins/codegen/block-manifest";
+
 // Plugin System - Types and helpers for creating plugins
 export {
   AdminPlacement,
+  collectDeclarations,
   definePlugin,
   createPluginContext,
   type PluginAdminAppearance,
@@ -346,12 +396,19 @@ export {
   type PluginCategory,
   type PluginContext,
   type PluginContributions,
+  type PluginDeclaration,
   type PluginDefinition,
   type PluginPermission,
   type PluginRole,
   type PluginEmailProvider,
   type PluginEmailTemplate,
   type PluginFieldType,
+  type PluginFieldValidateArgs,
+  type PluginFieldInstance,
+  type PluginFieldIssue,
+  type PluginFieldValidationResult,
+  type PluginFieldCodegen,
+  type PluginFieldCodegenImport,
   type FieldSurface,
   type ScheduledTask,
   type PermissionSlug,
@@ -364,6 +421,8 @@ export {
   type Middleware,
   type RouteMethod,
   type ComponentPath,
+  type JsonObject,
+  type JsonValue,
   type PluginAdminContributions,
   type PluginAdminPage,
   type PluginAdminWidget,
@@ -566,27 +625,42 @@ export {
 // COMPONENTS
 // ============================================================
 
-// Component configuration (defineComponent, ComponentConfig, etc.)
+// Component configuration (defineFieldGroup, FieldGroupConfig, etc.)
 export {
-  defineComponent,
-  type ComponentConfig,
-  type ComponentLabel,
-  type ComponentAdminOptions,
-} from "./components";
+  defineFieldGroup,
+  type FieldGroupConfig,
+  type FieldGroupLabel,
+  type FieldGroupAdminOptions,
+} from "./field-groups";
 
 // Component configuration validation
 export {
-  validateComponentConfig,
-  assertValidComponentConfig,
-  type ComponentValidationResult,
-  type ComponentValidationError,
-  type ComponentValidationErrorCode,
-  RESERVED_COMPONENT_SLUGS,
-  MAX_COMPONENT_NESTING_DEPTH,
-} from "./components";
+  validateFieldGroupConfig,
+  assertValidFieldGroupConfig,
+  type FieldGroupValidationResult,
+  type FieldGroupValidationError,
+  type FieldGroupValidationErrorCode,
+  RESERVED_FIELD_GROUP_SLUGS,
+  MAX_FIELD_GROUP_NESTING_DEPTH,
+} from "./field-groups";
 
 // Component field type (also exported from ./collections/fields via barrel export)
-export type { ComponentFieldConfig } from "./collections/fields/types/component";
+export type { FieldGroupFieldConfig } from "./collections/fields/types/component";
+
+// Declares an entry field whose type a plugin contributed. `FieldConfig` is a
+// closed union whose arms carry each built-in type's own errors, so it cannot
+// admit a contributed type without losing them; the brand opens the authoring
+// surfaces alone. The users surface solves the same problem the same way with
+// `pluginUserField` below.
+export {
+  pluginField,
+  pluginFieldBrand,
+} from "./collections/fields/types/plugin-field";
+export type {
+  AuthorableFieldConfig,
+  PluginDataFieldConfig,
+  PluginFieldInput,
+} from "./collections/fields/types/plugin-field";
 
 // ============================================================
 // USER MANAGEMENT
@@ -596,9 +670,16 @@ export type { ComponentFieldConfig } from "./collections/fields/types/component"
 export type {
   UserConfig,
   UserFieldConfig,
+  UserPluginFieldConfig,
+  UserPluginFieldInput,
   UserFieldType,
   UserAdminOptions,
 } from "./users";
+
+// Declares a user field whose type a plugin contributed, which the built-in
+// arms of `UserFieldConfig` cannot be widened to admit without losing their
+// own errors.
+export { pluginUserField, pluginUserFieldBrand } from "./users";
 
 // User config validation
 export {

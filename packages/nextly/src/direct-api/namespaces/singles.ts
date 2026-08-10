@@ -7,9 +7,11 @@
  * @packageDocumentation
  */
 
+import { collectingWarnings } from "../../hooks/side-effect-warnings";
 import { transformRichTextFields } from "../../lib/field-transform";
 import type {
-  DataFromSingleSlug,
+  MutationResult,
+  RowFromSingleSlug,
   FindSingleArgs,
   FindSinglesArgs,
   SingleListResult,
@@ -18,7 +20,11 @@ import type {
 } from "../types/index";
 
 import type { NextlyContext } from "./context";
-import { createErrorFromSingleResult, mergeConfig } from "./helpers";
+import {
+  buildMutationMessage,
+  createErrorFromSingleResult,
+  mergeConfig,
+} from "./helpers";
 
 /**
  * Retrieve the content of a single by slug.
@@ -26,15 +32,17 @@ import { createErrorFromSingleResult, mergeConfig } from "./helpers";
 export async function findSingle<TSlug extends SingleSlug>(
   ctx: NextlyContext,
   args: FindSingleArgs<TSlug>
-): Promise<DataFromSingleSlug<TSlug>> {
+): Promise<RowFromSingleSlug<TSlug>> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
   const result = await ctx.singleEntryService.get(args.slug, {
     depth: config.depth,
     locale: config.locale,
-    user: config.user
-      ? { id: config.user.id, role: config.user.role }
-      : undefined,
+    // Fallback control belongs to the read: it decides whether an untranslated
+    // field falls back to the default language, and a rule keyed on it sees
+    // `undefined` when it is dropped here.
+    fallbackLocale: config.fallbackLocale,
+    user: config.user,
     overrideAccess: config.overrideAccess,
     context: config.context,
   });
@@ -43,7 +51,7 @@ export async function findSingle<TSlug extends SingleSlug>(
     throw createErrorFromSingleResult(result);
   }
 
-  let data = result.data as DataFromSingleSlug<TSlug>;
+  let data = result.data as RowFromSingleSlug<TSlug>;
 
   if (
     config.richTextFormat &&
@@ -60,7 +68,7 @@ export async function findSingle<TSlug extends SingleSlug>(
         result.data,
         single.fields,
         config.richTextFormat
-      ) as DataFromSingleSlug<TSlug>;
+      ) as RowFromSingleSlug<TSlug>;
     }
   }
 
@@ -73,24 +81,28 @@ export async function findSingle<TSlug extends SingleSlug>(
 export async function updateSingle<TSlug extends SingleSlug>(
   ctx: NextlyContext,
   args: UpdateSingleArgs<TSlug>
-): Promise<DataFromSingleSlug<TSlug>> {
+): Promise<MutationResult<RowFromSingleSlug<TSlug>>> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
-  const result = await ctx.singleEntryService.update(args.slug, args.data, {
-    locale: config.locale,
-    user: config.user
-      ? { id: config.user.id, role: config.user.role }
-      : undefined,
-    overrideAccess: config.overrideAccess,
-    context: config.context,
-    disableRevalidate: config.disableRevalidate,
-  });
+  const { result, warnings } = await collectingWarnings(() =>
+    ctx.singleEntryService.update(args.slug, args.data, {
+      locale: config.locale,
+      user: config.user,
+      overrideAccess: config.overrideAccess,
+      context: config.context,
+      disableRevalidate: config.disableRevalidate,
+    })
+  );
 
   if (!result.success) {
     throw createErrorFromSingleResult(result);
   }
 
-  return result.data as DataFromSingleSlug<TSlug>;
+  return {
+    message: buildMutationMessage(args.slug, "updated"),
+    item: result.data as RowFromSingleSlug<TSlug>,
+    ...(warnings ? { warnings } : {}),
+  };
 }
 
 /**
@@ -116,9 +128,8 @@ export async function findSingles(
       const result = await ctx.singleEntryService.get(record.slug, {
         depth: config.depth,
         locale: config.locale,
-        user: config.user
-          ? { id: config.user.id, role: config.user.role }
-          : undefined,
+        fallbackLocale: config.fallbackLocale,
+        user: config.user,
         overrideAccess: config.overrideAccess,
         context: config.context,
       });

@@ -56,6 +56,7 @@ import {
   type FieldDefinition,
 } from "../../../services/runtime-schema-generator";
 import { findUnexpectedDestructiveStatements } from "../../filter-unsafe-statements";
+import { isIdempotencyError } from "../../sql-statement-utils";
 
 interface Fixture {
   capturedFrom: string;
@@ -135,6 +136,14 @@ const isPost045TableStatement = (stmt: string): boolean =>
 // the post-0.45 allowlist, so it is accepted here explicitly rather than being
 // mistaken for a phantom diff. Tolerant of pg ("created_by") and MySQL
 // (`created_by`) quoting and the optional COLUMN keyword.
+// `plugin_options` is the same shape as `created_by`: a nullable column with no
+// default, added to a system table that predates this fixture. A contributed
+// field type's own options have no column of their own, so the row carries them
+// whole; an install upgrading across this change legitimately gains the column,
+// and the pass-2 assertion is what proves it then round-trips to silence.
+const addsPluginOptionsColumn = (stmt: string): boolean =>
+  /^ALTER TABLE .+ ADD (COLUMN )?[`"]?plugin_options[`"]?\b/i.test(stmt.trim());
+
 const addsOwnerColumn = (stmt: string): boolean =>
   /^ALTER TABLE .+ ADD (COLUMN )?[`"]?created_by[`"]?\b/i.test(stmt.trim());
 
@@ -160,6 +169,103 @@ const addsRevalidateColumn = (stmt: string): boolean =>
   /^ALTER TABLE [`"]?(dynamic_collections|dynamic_singles)[`"]? ADD (COLUMN )?[`"]?revalidate[`"]?\b/i.test(
     stmt.trim()
   );
+
+// The `webhooks` recording-policy column is additive (nullable) on the
+// pre-existing dynamic_collections / dynamic_singles registry tables, exactly
+// like `revalidate` above, so a v1 upgrade of a schema captured before it emits
+// one additive `ADD COLUMN webhooks` per table. Accept it rather than mistaking
+// it for a phantom diff. Scoped to the two registry tables (webhooks is added
+// nowhere else). Tolerant of pg/MySQL quoting and the optional COLUMN keyword.
+const addsWebhooksColumn = (stmt: string): boolean =>
+  /^ALTER TABLE [`"]?(dynamic_collections|dynamic_singles)[`"]? ADD (COLUMN )?[`"]?webhooks[`"]?\b/i.test(
+    stmt.trim()
+  );
+
+// The `preview_token_generation` column is additive on `site_settings`, which
+// predates this fixture, so a v1 upgrade of a schema captured before it emits
+// one `ADD COLUMN`. It is NOT NULL with a default of 0, which is data-preserving
+// on an existing row: 0 is the generation every preview link minted before any
+// revoke already carries, so the backfill leaves those links working rather than
+// refusing them all. Scoped to `site_settings` and to that column, so an
+// unrelated NOT NULL addition cannot ride in behind it. Tolerant of pg/MySQL
+// quoting and the optional COLUMN keyword.
+const addsPreviewGenerationColumn = (stmt: string): boolean =>
+  /^ALTER TABLE [`"]?site_settings[`"]? ADD (COLUMN )?[`"]?preview_token_generation[`"]?\b/i.test(
+    stmt.trim()
+  );
+
+// `activity_log` carried `user_id` with a cascading foreign key when this
+// fixture was captured, which meant deleting a user destroyed their entire
+// activity trail. Undoing that is a one-time migration on a table that predates
+// the fixture, so it lands outside every allowlist above: the key is dropped,
+// the two identity columns become nullable so a deleted account's name and
+// email can be erased without deleting the row, and `identity_erased_at` is
+// added. Every one of those is data-preserving — nothing here drops a column or
+// a row — and the pass-2 assertion is what proves the new shape then
+// round-trips to silence rather than being re-proposed forever.
+//
+// Scoped to `activity_log` and to those exact columns, so an unrelated
+// constraint drop or a widening of some other table cannot ride in behind it.
+// Tolerant of pg ("x") and MySQL (`x`) quoting, of the optional COLUMN keyword,
+// and of the three ways the dialects spell these edits. Making a column
+// nullable: pg emits `ALTER COLUMN ... DROP NOT NULL`, MySQL restates the whole
+// column with `MODIFY COLUMN`. Dropping the key: pg emits `DROP CONSTRAINT`,
+// MySQL emits `DROP FOREIGN KEY` and additionally drops the index it maintains
+// behind every foreign key — a standalone `DROP INDEX ... ON activity_log`
+// naming that same constraint, which is part of removing the key rather than a
+// loss of a real index.
+const ACTIVITY_LOG_FK = "activity_log_user_id_users_id_fk";
+
+const migratesActivityLogActor = (stmt: string): boolean => {
+  const s = stmt.trim();
+
+  // MySQL's companion index drop is the one edit that does not start with
+  // ALTER TABLE, so it is matched on its own, still pinned to both the table
+  // and the exact constraint name.
+  if (
+    new RegExp(
+      `^DROP INDEX [\`"]?${ACTIVITY_LOG_FK}[\`"]? ON [\`"]?activity_log[\`"]?`,
+      "i"
+    ).test(s)
+  ) {
+    return true;
+  }
+
+  if (!/^ALTER TABLE [`"]?activity_log[`"]? /i.test(s)) return false;
+  return (
+    // The cascade goes.
+    new RegExp(
+      `\\bDROP (CONSTRAINT|FOREIGN KEY) [\`"]?${ACTIVITY_LOG_FK}[\`"]?`,
+      "i"
+    ).test(s) ||
+    // The identity columns become erasable.
+    /\bALTER COLUMN [`"]?(user_name|user_email)[`"]? DROP NOT NULL/i.test(s) ||
+    /\bMODIFY COLUMN [`"]?(user_name|user_email)[`"]?\s+\w+(\([^)]*\))?\s*;?$/i.test(
+      s
+    ) ||
+    // The marker that says an identity was erased, and when.
+    /\bADD (COLUMN )?[`"]?identity_erased_at[`"]?\b/i.test(s)
+  );
+};
+
+/**
+ * The auth log gains the same erasure marker the activity log has, and for the
+ * same reason: `ip_address` and `user_agent` are nullable for rows that never
+ * carried them, so a bare NULL cannot say whether a person was erased.
+ *
+ * Pinned to the table AND the column rather than allowing any ALTER on it, so a
+ * future unintended change to `audit_log` still fails as a phantom diff.
+ */
+const addsAuditLogErasureStamp = (stmt: string): boolean => {
+  const s = stmt.trim().replace(/;$/, "");
+  // The WHOLE statement must be the single ADD, not merely contain one. A
+  // substring match would admit `ALTER TABLE audit_log ADD identity_erased_at
+  // ..., DROP COLUMN ip_address` — a destructive change riding through the
+  // guard on the additive clause beside it.
+  return /^ALTER TABLE [`"]?audit_log[`"]? ADD (COLUMN )?[`"]?identity_erased_at[`"]?[^,]*$/i.test(
+    s
+  );
+};
 
 // Positive guard: the sim must actually create each new table (an empty first
 // pass would otherwise satisfy the additive-only check vacuously).
@@ -265,8 +371,13 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
           expect(
             isPost045TableStatement(s) ||
               addsOwnerColumn(s) ||
+              addsPluginOptionsColumn(s) ||
               addsVersionsColumn(s) ||
-              addsRevalidateColumn(s),
+              addsRevalidateColumn(s) ||
+              addsWebhooksColumn(s) ||
+              migratesActivityLogActor(s) ||
+              addsAuditLogErasureStamp(s) ||
+              addsPreviewGenerationColumn(s),
             `phantom diff: ${s}`
           ).toBe(true);
         }
@@ -339,8 +450,13 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
             isDefaultReconcile ||
               isPost045TableStatement(s) ||
               addsOwnerColumn(s) ||
+              addsPluginOptionsColumn(s) ||
               addsVersionsColumn(s) ||
-              addsRevalidateColumn(s),
+              addsRevalidateColumn(s) ||
+              addsWebhooksColumn(s) ||
+              migratesActivityLogActor(s) ||
+              addsAuditLogErasureStamp(s) ||
+              addsPreviewGenerationColumn(s),
             `unexpected reconcile statement shape: ${s}`
           ).toBe(true);
         }
@@ -350,7 +466,22 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
             `missing CREATE TABLE for ${t}`
           ).toBe(true);
         }
-        await first.apply();
+        // Applied statement by statement with the SAME tolerance the product
+        // uses, not through the kit's own `apply()`. No upgrade path calls
+        // that: `freshPushSchema` executes the statements itself and skips the
+        // ones a reconcile has already satisfied. The distinction is load-
+        // bearing on MySQL, where removing a foreign key emits both a
+        // `DROP CONSTRAINT` and a `DROP INDEX` for the index the server keeps
+        // behind that key — the first statement removes both, so the second
+        // reports the key already gone. Applying via the kit here would fail
+        // the sim on a migration real users complete.
+        for (const stmt of first.sqlStatements) {
+          try {
+            await p.query(stmt);
+          } catch (err) {
+            if (!isIdempotencyError(err)) throw err;
+          }
+        }
 
         const [rows] = (await p.query(
           "SELECT slug FROM roles WHERE id = 'r-1'"

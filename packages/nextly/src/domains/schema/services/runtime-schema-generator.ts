@@ -13,6 +13,7 @@
  * @module services/schema/runtime-schema-generator
  */
 
+import { sql } from "drizzle-orm";
 import {
   mysqlTable,
   text as mysqlText,
@@ -50,11 +51,13 @@ import type { LocalizedColumnSpec } from "../../i18n/migration/types";
 import {
   type ColumnDescriptor,
   type ColumnKind,
+  type ColumnOrigin,
   type SupportedDialect as DescriptorDialect,
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
   getColumnDescriptor,
   getSystemColumnDescriptors,
+  toSnakeCase,
 } from "./field-column-descriptor";
 
 export type SupportedDialect = DescriptorDialect;
@@ -72,6 +75,25 @@ export interface RuntimeSchemaResult {
  * options so the runtime schema matches the diff descriptor's view.
  */
 export interface RuntimeSchemaOptions {
+  /**
+   * Which builder made this table, for the callers whose output becomes DDL.
+   *
+   * 🔴 Optional here, and required by `getColumnDescriptor`, because this function has two
+   * consumers that observe its columns very differently:
+   *
+   * - `buildDrizzleSchema` in the push pipeline hands the result to drizzle-kit, which renders it
+   *   as `CREATE` / `ALTER`. There the declared width IS the column, so that caller states it.
+   * - every other caller registers the result with `SchemaRegistry.registerDynamicSchema`, whose
+   *   own comment says it exists to "look up a table object by SQL table name (for queries)". A
+   *   query binds a string either way — Drizzle does not enforce a varchar length on read or write,
+   *   the database does — so the width is not observed on that path.
+   *
+   * The default is therefore the reading that changes nothing for a query, and the one path where
+   * it does change something passes it. Requiring it everywhere would have put a judgement call at
+   * roughly fifty sites that cannot observe the answer, which is how a value nobody can verify ends
+   * up pasted in until it compiles.
+   */
+  builtBy?: ColumnOrigin;
   /** When true, inject a `status` column ('draft' | 'published', default 'draft'). */
   status?: boolean;
   /**
@@ -252,7 +274,7 @@ function generateSQLiteSchema(
 function buildDrizzleColumnRecord(
   fields: FieldDefinition[],
   dialect: SupportedDialect,
-  options: RuntimeSchemaOptions = {}
+  options: RuntimeSchemaOptions
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle requires dialect-specific column builder unions
 ): Record<string, any> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- as above
@@ -261,11 +283,14 @@ function buildDrizzleColumnRecord(
   // A column-less field (e.g. a component, stored in its own table) must not
   // suppress the system title/slug column, or the table would have neither.
   const producesColumn = (f: FieldDefinition): boolean =>
-    getColumnDescriptor(f, dialect) !== null;
-  const hasTitleField = fields.some(
-    f => f.name === "title" && producesColumn(f)
-  );
-  const hasSlugField = fields.some(f => f.name === "slug" && producesColumn(f));
+    getColumnDescriptor(f, dialect, options.builtBy ?? "codeFirst") !== null;
+  // Matched on the COLUMN the field becomes, not its declared name: an author writing `Title`
+  // means the same column, and the three places that make this decision have to agree or one
+  // injects a system column the others do not have.
+  const declaresColumn = (column: string): boolean =>
+    fields.some(f => toSnakeCase(f.name) === column && producesColumn(f));
+  const hasTitleField = declaresColumn("title");
+  const hasSlugField = declaresColumn("slug");
 
   // Localized fields live in the companion `_locales` table; omit them from the main table.
   const localizedNames = options.localized
@@ -292,7 +317,11 @@ function buildDrizzleColumnRecord(
   // come back as `null` from getColumnDescriptor and are skipped.
   for (const field of fields) {
     if (localizedNames.has(field.name)) continue; // companion-owned
-    const desc = getColumnDescriptor(field, dialect);
+    const desc = getColumnDescriptor(
+      field,
+      dialect,
+      options.builtBy ?? "codeFirst"
+    );
     if (!desc) continue;
     out[field.name] = buildUserDrizzleColumn(desc, dialect);
   }
@@ -301,68 +330,92 @@ function buildDrizzleColumnRecord(
 }
 
 /**
- * Translates a system-column descriptor (id / title / slug /
- * created_at / updated_at) into the appropriate Drizzle column
- * builder for the given dialect. Mirrors the legacy hardcoded
- * builders byte-for-byte: id is primaryKey, title/slug are
- * notNull, timestamps default to defaultNow on PG/MySQL.
+ * Applies the modifiers every column family shares.
+ *
+ * Structurally typed rather than tied to one Drizzle builder, because the three families return
+ * three unrelated builder types that all carry these two methods. A primary key is already NOT NULL
+ * on every dialect, so it is not also marked.
+ */
+function finishColumn<T extends { notNull(): unknown; primaryKey(): unknown }>(
+  column: T,
+  spec: { nullable: boolean; primaryKey: boolean }
+): unknown {
+  if (spec.primaryKey) return column.primaryKey();
+  return spec.nullable ? column : column.notNull();
+}
+
+/**
+ * Translates a system-column descriptor into the Drizzle column builder for the given dialect.
+ *
+ * Dispatches on the declared column FAMILY, never on the column name. Name dispatch carried a
+ * fall-through that made anything unrecognised a non-null text column, so a newly declared
+ * timestamp was created in the database as a timestamp and read back through a text column —
+ * precisely the drift between the physical table and the runtime schema that the declarations
+ * exist to prevent.
+ *
+ * The timestamps stay nullable, but a row reaching the database without them does not: the
+ * default supplies a value for any insert that omits the column, which is what an insert
+ * bypassing the write path does. Nullable and defaulted are independent choices, and only
+ * the default can be added to a table a user already has without rewriting its rows. A column
+ * declared with no default keeps none — a first-publication marker must read NULL until it is
+ * earned, and a default would date a publication that never happened.
  */
 function buildSystemDrizzleColumn(
   sys: ReturnType<typeof getSystemColumnDescriptors>[number],
   dialect: SupportedDialect
 ): unknown {
+  const literal =
+    sys.defaultValue?.kind === "literal" ? sys.defaultValue.value : undefined;
+  const clockDefault = sys.defaultValue?.kind === "now";
+
   if (dialect === "postgresql") {
-    if (sys.name === "id") return pgText("id").primaryKey();
-    if (sys.name === "created_at")
-      return pgTimestamp("created_at").defaultNow();
-    if (sys.name === "updated_at")
-      return pgTimestamp("updated_at").defaultNow();
-    if (sys.name === "status") {
-      // Why: 'draft' default ensures backfill on enable doesn't accidentally
-      // publish anything. Length 20 leaves headroom over "published" (9 chars).
-      return pgVarchar("status", { length: 20 }).notNull().default("draft");
+    if (sys.kind === "timestamp") {
+      const col = pgTimestamp(sys.name);
+      return finishColumn(clockDefault ? col.defaultNow() : col, sys);
     }
-    // Row owner — nullable text (matches the id column type); no default so
-    // system/seed creates and existing rows stay null.
-    if (sys.name === "created_by") return pgText("created_by");
-    // title / slug — text NOT NULL.
-    return pgText(sys.name).notNull();
+    if (sys.kind === "varchar") {
+      const col = pgVarchar(sys.name, { length: sys.length ?? 255 });
+      return finishColumn(
+        literal === undefined ? col : col.default(literal),
+        sys
+      );
+    }
+    const col = pgText(sys.name);
+    return finishColumn(
+      literal === undefined ? col : col.default(literal),
+      sys
+    );
   }
+
   if (dialect === "mysql") {
-    if (sys.name === "id") {
-      return mysqlVarchar("id", { length: 36 }).primaryKey();
+    if (sys.kind === "timestamp") {
+      const col = mysqlTimestamp(sys.name);
+      return finishColumn(clockDefault ? col.defaultNow() : col, sys);
     }
-    if (sys.name === "created_at") {
-      return mysqlTimestamp("created_at").defaultNow();
+    if (sys.kind === "varchar") {
+      const col = mysqlVarchar(sys.name, { length: sys.length ?? 255 });
+      return finishColumn(
+        literal === undefined ? col : col.default(literal),
+        sys
+      );
     }
-    if (sys.name === "updated_at") {
-      return mysqlTimestamp("updated_at").defaultNow();
-    }
-    if (sys.name === "status") {
-      return mysqlVarchar("status", { length: 20 }).notNull().default("draft");
-    }
-    // Row owner — nullable varchar(191) sized to the MySQL users.id column
-    // (holds a user id, not the row id).
-    if (sys.name === "created_by") {
-      return mysqlVarchar("created_by", { length: 191 });
-    }
-    return mysqlVarchar(sys.name, { length: 255 }).notNull();
+    const col = mysqlText(sys.name);
+    return finishColumn(
+      literal === undefined ? col : col.default(literal),
+      sys
+    );
   }
-  // sqlite
-  if (sys.name === "id") return sqliteText("id").primaryKey();
-  if (sys.name === "created_at") {
-    return sqliteInteger("created_at", { mode: "timestamp" });
+
+  // SQLite stores a timestamp as an epoch integer and has no distinct varchar.
+  if (sys.kind === "timestamp") {
+    const col = sqliteInteger(sys.name, { mode: "timestamp" });
+    return finishColumn(
+      clockDefault ? col.default(sql`(strftime('%s', 'now'))`) : col,
+      sys
+    );
   }
-  if (sys.name === "updated_at") {
-    return sqliteInteger("updated_at", { mode: "timestamp" });
-  }
-  if (sys.name === "status") {
-    // SQLite has no varchar — text with default 'draft' is the equivalent.
-    return sqliteText("status").notNull().default("draft");
-  }
-  // Row owner — nullable text (matches the id column type).
-  if (sys.name === "created_by") return sqliteText("created_by");
-  return sqliteText(sys.name).notNull();
+  const col = sqliteText(sys.name);
+  return finishColumn(literal === undefined ? col : col.default(literal), sys);
 }
 
 /**
@@ -416,6 +469,12 @@ function buildPgColumnFromKind(
     case "longText":
     case "varchar":
       return nullable ? pgText(name) : pgText(name).notNull();
+    case "shortText": {
+      // The one string kind PostgreSQL bounds. The others render `text` there, so binding this as
+      // text too would leave the ORM describing a column the DDL declared with a width.
+      const col = pgVarchar(name, { length: desc.length ?? 255 });
+      return nullable ? col : col.notNull();
+    }
     case "boolean":
       return nullable ? pgBoolean(name) : pgBoolean(name).notNull();
     case "integer":
@@ -448,6 +507,7 @@ function buildMysqlColumnFromKind(
 ): unknown {
   switch (kind) {
     case "text":
+    case "shortText":
     case "varchar": {
       const col = mysqlVarchar(name, { length: length ?? 255 });
       return nullable ? col : col.notNull();
@@ -483,6 +543,7 @@ function buildSqliteColumnFromKind(
   switch (kind) {
     case "text":
     case "longText":
+    case "shortText":
     case "varchar":
       return nullable ? sqliteText(name) : sqliteText(name).notNull();
     case "boolean":

@@ -1,5 +1,7 @@
 import { defineCollection, text, code } from "nextly/config";
 
+import { CUSTOM_CSS_GRANT } from "../permissions";
+
 import { editorChoiceFields } from "./editorChoice";
 import { PAGE_BUILDER_CUSTOM_CSS_FIELD } from "./pageBuilderEntry";
 
@@ -27,7 +29,23 @@ export function pagesCollection() {
       text({ name: "slug", required: true, unique: true }),
       // The Elementor-style editor choice (select + Page Builder + normal rich text).
       ...editorChoiceFields(),
-      code({ name: PAGE_BUILDER_CUSTOM_CSS_FIELD, admin: { language: "css" } }),
+      code({
+        name: PAGE_BUILDER_CUSTOM_CSS_FIELD,
+        admin: { language: "css" },
+        // Writing custom CSS is gated; reading it is not. A user who may edit
+        // the page still needs to SEE the CSS already on it — the editor shows
+        // it, and hiding it would make the field look empty and invite it being
+        // overwritten with nothing. Withholding the grant makes it read-only,
+        // which is the intended shape of the privilege.
+        //
+        // A denied field is stripped from the write silently rather than
+        // rejected, so a user without the grant saves the rest of the page
+        // normally and the stored CSS is left as it was.
+        access: {
+          create: ({ permissions }) => permissions.includes(CUSTOM_CSS_GRANT),
+          update: ({ permissions }) => permissions.includes(CUSTOM_CSS_GRANT),
+        },
+      }),
     ],
     status: true,
     admin: { useAsTitle: "title" },

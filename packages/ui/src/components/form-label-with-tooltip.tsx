@@ -11,6 +11,7 @@ import {
   TooltipTrigger,
 } from "./tooltip";
 
+/** @public */
 export interface FormLabelWithTooltipProps
   extends React.ComponentPropsWithoutRef<typeof Label> {
   label: React.ReactNode;
@@ -20,6 +21,7 @@ export interface FormLabelWithTooltipProps
   tooltipClassName?: string;
 }
 
+/** @public */
 export const FormLabelWithTooltip = React.forwardRef<
   React.ElementRef<typeof Label>,
   FormLabelWithTooltipProps
@@ -56,7 +58,7 @@ export const FormLabelWithTooltip = React.forwardRef<
               <TooltipContent
                 side="right"
                 className={cn(
-                  "max-w-[250px] text-[12px] break-words relative z-[100] shadow-md  border border-border bg-primary text-primary-foreground px-3 py-2 rounded-none",
+                  "max-w-[250px] text-xs break-words relative z-[100] shadow-md  border border-border bg-primary text-primary-foreground px-3 py-2 rounded-lg",
                   tooltipClassName
                 )}
               >

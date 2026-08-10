@@ -10,6 +10,9 @@
  * @module domains/webhooks/envelope
  */
 
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import { defineOwnProperty } from "../../shared/lib/own-property";
+
 import { componentTypeSegment } from "./expand-component-fields";
 import type {
   WebhookActor,
@@ -80,8 +83,9 @@ function stripValue(
     // Two member types can share a field name with only one marking it
     // sensitive, so those denials are recorded under a type-tagged path and
     // only apply to instances of that type.
-    const componentType = (value as { _componentType?: unknown })
-      ._componentType;
+    const componentType = (value as { _componentType?: unknown })[
+      STORAGE_FORMAT.wireTypeKey
+    ];
     const prefixes =
       typeof componentType === "string"
         ? [
@@ -98,7 +102,9 @@ function stripValue(
     for (const [k, v] of Object.entries(value)) {
       const childPaths = prefixes.map(p => (p ? `${p}.${k}` : k));
       if (childPaths.some(candidate => denied.has(candidate))) continue;
-      out[k] = stripValue(v, denied, childPaths);
+      // Defined, not assigned: a JSON column can hold a `__proto__` key, and
+      // assigning it would drop it from the envelope rather than carry it.
+      defineOwnProperty(out, k, stripValue(v, denied, childPaths));
     }
     return out;
   }
@@ -128,7 +134,7 @@ function stripSensitive(
  * considered changed, so a changed-field filter still matches a create that
  * sets the field.
  */
-function computeChangedFields(
+export function computeChangedFields(
   previous: Record<string, unknown> | null,
   next: Record<string, unknown>
 ): string[] {
@@ -168,6 +174,8 @@ export interface BuildEnvelopeInput {
    * occurrence of that key at any depth, including unrelated siblings.
    */
   sensitiveFields?: readonly string[];
+  /** Status delta for a lifecycle event; copied verbatim onto the envelope. */
+  statusChange?: { from: string | null; to: string };
 }
 
 /**
@@ -198,6 +206,10 @@ export function buildEnvelope(input: BuildEnvelopeInput): WebhookEvent {
   // payload stays clean (no `site: undefined` / `actor: null`).
   if (input.site !== undefined) envelope.site = input.site;
   if (input.actor != null) envelope.actor = input.actor;
+  // Only lifecycle events pass this; keep it off every other envelope.
+  if (input.statusChange !== undefined) {
+    envelope.statusChange = input.statusChange;
+  }
 
   return envelope;
 }

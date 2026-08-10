@@ -22,6 +22,7 @@ import { z } from "zod";
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { resolveBuilderVersions } from "../domains/versions/builder-versions";
+import { resolveBuilderWebhooks } from "../domains/webhooks/builder-webhooks";
 import { getFilterRegistry, FilterSeams } from "../filters";
 import { getCachedNextly } from "../init";
 import { resolveBuilderRevalidate } from "../revalidation/builder-revalidate";
@@ -85,10 +86,20 @@ const createCollectionSchema = z.object({
   // Version history opt-in. Default off: capture adds a row to nextly_versions
   // on every save, which no existing caller has asked for.
   versions: z.boolean().optional(),
+  // Retention: durable versions kept per document. `false` = unlimited, a
+  // non-negative integer = keep that many, absent = the default (50). Only
+  // meaningful when `versions` is on.
+  versionsMaxPerDoc: z
+    .union([z.number().int().nonnegative(), z.literal(false)])
+    .optional(),
   // Cache-revalidation opt-out. Default on (absent): writes bust the standard
   // nextly:* tags; false persists the disable config so this collection busts
   // nothing.
   revalidate: z.boolean().optional(),
+  // Webhook recording opt-out. Default on (absent): writes are recorded to the
+  // outbox and delivered to subscribed endpoints; false persists the opt-out so
+  // this collection's content never leaves the app.
+  webhooks: z.boolean().optional(),
   admin: z
     .object({
       group: z.string().optional(),
@@ -281,11 +292,17 @@ export const POST = withErrorHandler(async (request: Request) => {
     // table is provisioned on the next migrate).
     localized: validated.localized === true,
     // Version history opt-in, normalized to the resolved config the column
-    // holds and every runtime reader tests.
-    versions: resolveBuilderVersions(validated.versions),
+    // holds and every runtime reader tests. Retention rides with the switch.
+    versions: resolveBuilderVersions(
+      validated.versions,
+      validated.versionsMaxPerDoc
+    ),
     // Cache-revalidation opt-out, normalized to the resolved config the write
     // path reads (null = standard tags, { disable: true } = off).
     revalidate: resolveBuilderRevalidate(validated.revalidate),
+    // Persist the recording opt-out alongside the other policy columns so it
+    // survives a restart, not just this process.
+    webhooks: resolveBuilderWebhooks(validated.webhooks),
     schemaHash,
     hooks: validated.hooks,
   });

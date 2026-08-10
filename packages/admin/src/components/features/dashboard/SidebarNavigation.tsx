@@ -114,7 +114,7 @@ export function SidebarNavigationItem({
           <DropdownMenuContent
             side="right"
             align="start"
-            className="w-56 ml-2 admin-dropdown-content shadow-xl shadow-black/5 border-border"
+            className="w-56 ml-2 admin-dropdown-content shadow-xl shadow-(color:--nx-shadow-color)/5 border-border"
             onMouseEnter={handleMouseEnter}
             onMouseLeave={handleMouseLeave}
           >
@@ -179,7 +179,7 @@ export function SidebarNavigationItem({
                       className={cn(
                         "transition-none", // No transition
                         isSubActive
-                          ? "bg-primary/5! text-primary! font-medium hover:bg-primary/5! hover:text-primary!"
+                          ? "bg-primary/5! text-sidebar-accent-foreground! font-medium hover:bg-primary/5! hover:text-sidebar-accent-foreground!"
                           : "hover-unified"
                       )}
                     >
@@ -275,10 +275,11 @@ export function SidebarNavigation({
     });
   }, [authorizedItems, search]);
 
-  // Group items by category (using filtered items)
+  // Group items by category (using filtered items). Users/Roles/Custom Fields
+  // are now filed under "settings" (User Management moved into Settings), so
+  // there is no separate "users" group anymore.
   const mainNavItems = filteredItems.filter(item => item.category === "main");
   const mediaItems = filteredItems.filter(item => item.category === "media");
-  const userItems = filteredItems.filter(item => item.category === "users");
   const settingsItems = filteredItems.filter(
     item => item.category === "settings"
   );
@@ -304,7 +305,7 @@ export function SidebarNavigation({
       <>
         <SidebarGroup>
           {!isCollapsed && !hideLabels.includes(label) && (
-            <SidebarGroupLabel className="text-[11px] uppercase tracking-wider text-muted-foreground px-2 mb-1">
+            <SidebarGroupLabel className="text-xs uppercase tracking-wider text-muted-foreground px-2 mb-1">
               {label}
             </SidebarGroupLabel>
           )}
@@ -337,7 +338,7 @@ export function SidebarNavigation({
               placeholder="Search..."
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="pl-9 bg-background border-border dark:border-border text-xs h-9"
+              className="pl-9 bg-background border-input text-xs h-9"
             />
           </div>
         </div>
@@ -350,7 +351,7 @@ export function SidebarNavigation({
       {showCollectionsSection && (
         <SidebarGroup>
           {!isCollapsed && (
-            <SidebarGroupLabel className="text-[11px] uppercase tracking-wider text-muted-foreground px-2 mb-1">
+            <SidebarGroupLabel className="text-xs uppercase tracking-wider text-muted-foreground px-2 mb-1">
               Collections
             </SidebarGroupLabel>
           )}
@@ -366,7 +367,7 @@ export function SidebarNavigation({
       {showSinglesSection && (
         <SidebarGroup>
           {!isCollapsed && (
-            <SidebarGroupLabel className="text-[11px] uppercase tracking-wider text-muted-foreground px-2 mb-1">
+            <SidebarGroupLabel className="text-xs uppercase tracking-wider text-muted-foreground px-2 mb-1">
               Singles
             </SidebarGroupLabel>
           )}
@@ -409,8 +410,9 @@ export function SidebarNavigation({
       {/* 6. Separator */}
       {!isCollapsed && <Separator className="my-1 bg-border/30" />}
 
-      {/* 7. Users */}
-      <RenderSection label="Users" items={userItems} />
+      {/* 7. Plugin collections placed under "users" (now part of Settings).
+          Kept here so plugin-contributed user-section items still render if
+          this legacy nav is ever revived. */}
       <DynamicPluginSectionItems placement="users" isActive={isActive} />
 
       {/* 8. Separator */}
@@ -420,7 +422,7 @@ export function SidebarNavigation({
       {showPluginsSection && (
         <SidebarGroup>
           {!isCollapsed && (
-            <SidebarGroupLabel className="text-[11px] uppercase tracking-wider text-muted-foreground px-2 mb-1">
+            <SidebarGroupLabel className="text-xs uppercase tracking-wider text-muted-foreground px-2 mb-1">
               Plugins
             </SidebarGroupLabel>
           )}
@@ -442,7 +444,7 @@ export function SidebarNavigation({
       {showSettingsSection && (
         <SidebarGroup>
           {!isCollapsed && (
-            <SidebarGroupLabel className="text-[11px] uppercase tracking-wider text-muted-foreground px-2 mb-1">
+            <SidebarGroupLabel className="text-xs uppercase tracking-wider text-muted-foreground px-2 mb-1">
               Settings
             </SidebarGroupLabel>
           )}
@@ -451,7 +453,7 @@ export function SidebarNavigation({
               {systemSettings.length > 0 && (
                 <>
                   {!isCollapsed && (
-                    <li className="px-2 pt-2 pb-1 text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                    <li className="px-2 pt-2 pb-1 text-xs uppercase tracking-wider text-muted-foreground font-medium">
                       System Settings
                     </li>
                   )}
@@ -468,7 +470,7 @@ export function SidebarNavigation({
               {emailSettings.length > 0 && (
                 <>
                   {!isCollapsed && (
-                    <li className="px-2 pt-2 pb-1 text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                    <li className="px-2 pt-2 pb-1 text-xs uppercase tracking-wider text-muted-foreground font-medium">
                       Email Configuration
                     </li>
                   )}

@@ -45,7 +45,7 @@ export interface DashboardStats {
   users: number;
   roles: number;
   permissions: number;
-  components: number;
+  fieldGroups: number;
   singles: number;
   apiKeys: number;
 }

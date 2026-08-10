@@ -21,6 +21,10 @@ export const SINGLE_BUILDER_CONFIG: BuilderConfig = {
     "i18n",
     "versions",
     "revalidate",
+    // Webhook recording (mirrors the collection builder). On by default; an
+    // explicit opt-out keeps this single's writes out of the outbox and every
+    // delivery.
+    "webhooks",
     "showSystemFields",
   ],
   toolbar: { previewSchemaChange: false },

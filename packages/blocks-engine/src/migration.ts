@@ -14,6 +14,7 @@
  * placeholder for each node flagged `migrationFailed` (forgiving).
  */
 import type { BlockDocument, BlockNode } from "./document";
+import { isPlainRecord } from "./plain-record";
 
 /** Upgrade a node's props from one schema version to the next. Must be pure. */
 export type MigrateFn = (
@@ -169,10 +170,6 @@ export function migrateProps(
   return { props: current };
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function escapePointer(token: string): string {
   return token.replace(/~/g, "~0").replace(/\//g, "~1");
 }
@@ -203,7 +200,7 @@ export function migrateDocument(
   const failures: MigrationFailure[] = [];
 
   const migrateNode = (node: BlockNode, path: string): BlockNode => {
-    if (!isPlainObject(node)) return node;
+    if (!isPlainRecord(node)) return node;
 
     let next = node;
     const info = source.get(node.type);
@@ -244,7 +241,7 @@ export function migrateDocument(
       }
     }
 
-    if (!isPlainObject(next.slots)) return next;
+    if (!isPlainRecord(next.slots)) return next;
     let slotsChanged = false;
     const slots: Record<string, BlockNode[]> = {};
     for (const [slot, children] of Object.entries(next.slots)) {

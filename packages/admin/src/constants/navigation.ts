@@ -24,17 +24,17 @@ import { ROUTES } from "./routes";
  * - `collections`: Content collection items (dynamic — DynamicCollectionNav)
  * - `singles`: Single items (dynamic — DynamicSingleNav)
  * - `media`: Media Library (standalone, NIS)
- * - `users`: User management section (Users, Roles, Custom Fields)
  * - `plugins`: Plugin entries (dynamic — DynamicPluginNav)
- * - `settings`: Configuration pages (grouped sub-sections: system, email)
- * - `builder`: Developer tools (Collections, Singles, Components) — untouched
+ * - `settings`: Configuration pages (grouped sub-sections: system, email) plus
+ *   User Management (Users, Roles, Custom Fields), which moved here from the
+ *   former standalone Users section.
+ * - `builder`: Developer tools (Collections, Singles, Field Groups) — untouched
  */
 export type NavigationCategory =
   | "main"
   | "collections"
   | "singles"
   | "media"
-  | "users"
   | "plugins"
   | "settings"
   | "builder";
@@ -90,9 +90,9 @@ export type SidebarNavigation = NavigationItem[];
  * Items are grouped by category into sidebar sections:
  * - main: Dashboard (NIS)
  * - media: Media Library (NIS)
- * - users: Users, Roles, Custom Fields (IS)
- * - settings: General, API Keys, Email Providers, Email Templates (IS with sub-groups)
- * - builder: Collections, Singles, Components (IS)
+ * - settings: General, API Keys, Email Providers, Email Templates, plus User
+ *   Management (Users, Roles, Custom Fields) (IS with sub-groups)
+ * - builder: Collections, Singles, Field Groups (IS)
  *
  * Dynamic items (collections, singles, plugins) are rendered by their
  * respective DynamicNav components and are not listed here.
@@ -116,26 +116,26 @@ export const SIDEBAR_NAVIGATION: SidebarNavigation = [
     requiredPermission: "read-media",
   },
 
-  // === USERS (IS) ===
+  // === USERS (now filed under the settings section — no standalone Users icon) ===
   {
     title: "Users",
     href: ROUTES.USERS,
     icon: Users,
-    category: "users",
+    category: "settings",
     requiredPermission: "read-users",
   },
   {
     title: "Roles",
     href: ROUTES.SECURITY_ROLES,
     icon: Shield,
-    category: "users",
+    category: "settings",
     requiredPermission: "read-roles",
   },
   {
     title: "Custom Fields",
     href: ROUTES.USERS_FIELDS,
     icon: SlidersHorizontal,
-    category: "users",
+    category: "settings",
     requiredPermission: "manage-settings",
   },
 
@@ -197,8 +197,8 @@ export const SIDEBAR_NAVIGATION: SidebarNavigation = [
     category: "builder",
   },
   {
-    title: "Components",
-    href: ROUTES.BUILDER_COMPONENTS,
+    title: "Field Groups",
+    href: ROUTES.BUILDER_FIELD_GROUPS,
     icon: Puzzle,
     category: "builder",
   },

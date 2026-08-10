@@ -74,6 +74,7 @@
     "HEALTH_CHECK_CACHE_SECONDS",
     "INIT_CWD",
     "NEXTLY_ACCEPT_DATA_LOSS",
+    "NEXTLY_ALLOW_CODE_FIRST_DROPS", // schema pipeline: opt in to auto-confirmed destructive drops
     "NEXTLY_APPLIED_BY", // nextly migrate: override appliedBy actor (F11)
     "NEXTLY_DEBUG_TIMEZONE",
     "NEXTLY_DELETE_THRESHOLD",
@@ -85,6 +86,7 @@
     "NEXTLY_SKIP_AUTO_SYNC",
     "NEXTLY_SKIP_SCHEMA_FILES",
     "NEXTLY_STRICT_PLUGIN_TARGETS", // P8: fail-fast on unresolvable plugin extend/relation targets
+    "NEXTLY_ALLOW_PLUGIN_PERMISSION_OVERRIDE", // let a plugin keep a permission an entity already owns
     "PERMISSION_CACHE_ENABLED",
     "PERMISSION_CACHE_MEMORY_SIZE",
     "PERMISSION_CACHE_TTL_SECONDS",
@@ -131,11 +133,15 @@
     //
     // Environment Variables:
     //   - NODE_ENV affects build output (production vs development)
+    //   - NEXTLY_DEV_DIAGNOSTICS is read at runtime, alongside NODE_ENV, before
+    //     an error response may carry the detail the public shape withholds.
+    //     Declared so the lint rule can see it and so a change is not silently
+    //     served from a cached build.
     "build": {
       "dependsOn": ["^build"], // Build dependencies first (critical for npm packages)
       "inputs": ["$TURBO_DEFAULT$", ".env*"], // Source files + env files
       "outputs": ["dist/**", ".next/**", "!.next/cache/**", "**/*.tsbuildinfo"],
-      "env": ["NODE_ENV"] // Build output changes based on NODE_ENV
+      "env": ["NODE_ENV", "NEXTLY_DEV_DIAGNOSTICS"]
     },
 
     // ==================== TYPE CHECKING ====================
@@ -265,6 +271,13 @@
     //   - pnpm test:watch        = Watch mode (auto-rerun on changes)
     //   - pnpm test:coverage     = Generate HTML coverage report
     //   - pnpm test:ui           = Interactive test UI (localhost:51204)
+    // Benchmarks are a report, not a gate. Never cached, because a cached
+    // timing is a timing from another machine, and run for one package at a
+    // time so nothing else in the workspace is compiling while it measures.
+    "bench": {
+      "dependsOn": ["^build"],
+      "cache": false
+    },
     "test": {
       "dependsOn": ["^build"], // Need built dependencies for imports
       "inputs": [

@@ -9,13 +9,16 @@ import {
   createContext,
   useContext,
   useEffect,
+  useMemo,
   useReducer,
   useRef,
   type Dispatch,
   type ReactNode,
 } from "react";
 
+import { documentNodeClasses } from "../../core/style-compiler";
 import type { BlockDocument } from "../../core/types";
+import type { RemotePatternInput } from "../../core/url-policy";
 
 import {
   editorReducer,
@@ -24,11 +27,29 @@ import {
   type EditorState,
 } from "./editorStore";
 
+/** Stable identity so the context value does not change on every render. */
+const EMPTY_PATTERNS: readonly RemotePatternInput[] = [];
+
 interface EditorContextValue {
   state: EditorState;
   dispatch: Dispatch<EditorAction>;
   /** Whether page-level custom CSS is editable in this mount (Edit view: yes; field mount: no — the host form owns persistence there). */
   pageCssEnabled: boolean;
+  /**
+   * The hosts block images may load from, as the published page will apply
+   * them. The preview compiles with the same list so an allowed off-origin
+   * background does not vanish in the editor and reappear on the page.
+   */
+  remotePatterns: readonly RemotePatternInput[];
+  /**
+   * The document's node classes, with any hash collision disambiguated.
+   *
+   * Held here so the preview's markup and the stylesheet compiled beside it are
+   * named from ONE map. Derived from the whole document, which is the only
+   * scope a collision is visible at, and memoized on it so a keystroke that
+   * does not change the tree does not rebuild it.
+   */
+  nodeClasses: ReadonlyMap<string, string>;
 }
 
 const EditorContext = createContext<EditorContextValue | null>(null);
@@ -50,12 +71,29 @@ export function EditorProvider({
   document: doc,
   draftKey,
   customCss,
+  remotePatterns,
   onDocumentChange,
   onCustomCssChange,
   children,
 }: {
   document: BlockDocument;
   draftKey: string;
+  /**
+   * The hosts block images may load from. Must match what the page is rendered
+   * with, or the preview and the published page disagree about which images
+   * exist.
+   *
+   * The registered surfaces — `PageBuilderEditView` and `PageBuilderField` —
+   * cannot supply this yet. Their props come from the admin's edit-view
+   * contract, and a plugin's own configuration has no route to a client
+   * component, so a host that configures `PageRenderer.remotePatterns` still
+   * gets an empty list in the canvas. The preview is then stricter than the
+   * page: it drops allowed remote backgrounds rather than showing forbidden
+   * ones, so the gap costs fidelity and not safety. Closing it needs a channel
+   * for plugin configuration to reach the client, which is a framework
+   * capability rather than something this component can reach for.
+   */
+  remotePatterns?: readonly RemotePatternInput[];
   /**
    * Initial page-level custom CSS. Passing a string (even "") enables the page-CSS
    * editor panel; leaving it undefined (field mount) hides it.
@@ -76,6 +114,10 @@ export function EditorProvider({
   );
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firstRender = useRef(true);
+  const nodeClasses = useMemo(
+    () => documentNodeClasses(state.document),
+    [state.document]
+  );
 
   // Hold the latest callback in a ref so the sync effect depends ONLY on the document.
   // Callers (e.g. PageBuilderField) commonly pass an inline arrow — depending on its
@@ -130,7 +172,13 @@ export function EditorProvider({
 
   return (
     <EditorContext.Provider
-      value={{ state, dispatch, pageCssEnabled: customCss !== undefined }}
+      value={{
+        state,
+        dispatch,
+        pageCssEnabled: customCss !== undefined,
+        remotePatterns: remotePatterns ?? EMPTY_PATTERNS,
+        nodeClasses,
+      }}
     >
       {children}
     </EditorContext.Provider>

@@ -28,7 +28,8 @@ describe("canonical field types map to columns (widened ui-schema set)", () => {
         { name: "f", type, required: false } as unknown as Parameters<
           typeof getColumnDescriptor
         >[0],
-        "postgresql"
+        "postgresql",
+        "codeFirst"
       );
       expect(d?.dialectType).toBe(dialectType);
     });
@@ -41,7 +42,8 @@ describe("canonical field types map to columns (widened ui-schema set)", () => {
       { name: "f", type: "component", required: true } as unknown as Parameters<
         typeof getColumnDescriptor
       >[0],
-      "postgresql"
+      "postgresql",
+      "codeFirst"
     );
     expect(d).toBeNull();
   });
@@ -77,7 +79,9 @@ function findColumn(
 
 describe("buildDesiredTableFromFields - reserved columns", () => {
   it("PG: injects id + created_at + updated_at + title + slug + created_by", () => {
-    const table = buildDesiredTableFromFields("dc_x", [], "postgresql");
+    const table = buildDesiredTableFromFields("dc_x", [], "postgresql", {
+      builtBy: "codeFirst",
+    });
     expect(findColumn(table.columns, "id")).toEqual({
       name: "id",
       type: "text",
@@ -116,7 +120,8 @@ describe("buildDesiredTableFromFields - reserved columns", () => {
     const table = buildDesiredTableFromFields(
       "dc_x",
       [{ name: "title", type: "component" }] as never,
-      "postgresql"
+      "postgresql",
+      { builtBy: "codeFirst" }
     );
     expect(findColumn(table.columns, "title")).toEqual({
       name: "title",
@@ -126,7 +131,9 @@ describe("buildDesiredTableFromFields - reserved columns", () => {
   });
 
   it("MySQL: id is varchar(36); title/slug varchar(255); timestamps", () => {
-    const table = buildDesiredTableFromFields("dc_x", [], "mysql");
+    const table = buildDesiredTableFromFields("dc_x", [], "mysql", {
+      builtBy: "codeFirst",
+    });
     expect(findColumn(table.columns, "id")?.type).toBe("varchar(36)");
     expect(findColumn(table.columns, "title")?.type).toBe("varchar(255)");
     expect(findColumn(table.columns, "slug")?.type).toBe("varchar(255)");
@@ -134,7 +141,9 @@ describe("buildDesiredTableFromFields - reserved columns", () => {
   });
 
   it("SQLite: lowercase tokens (matches PRAGMA-as-declared)", () => {
-    const table = buildDesiredTableFromFields("dc_x", [], "sqlite");
+    const table = buildDesiredTableFromFields("dc_x", [], "sqlite", {
+      builtBy: "codeFirst",
+    });
     expect(findColumn(table.columns, "id")?.type).toBe("text");
     expect(findColumn(table.columns, "title")?.type).toBe("text");
     expect(findColumn(table.columns, "created_at")?.type).toBe("integer");
@@ -147,7 +156,8 @@ describe("buildDesiredTableFromFields - reserved columns", () => {
     const table = buildDesiredTableFromFields(
       "dc_posts",
       fields as never,
-      "postgresql"
+      "postgresql",
+      { builtBy: "codeFirst" }
     );
 
     // exactly one `title` - the user's field shape, not the reserved.
@@ -162,7 +172,8 @@ describe("buildDesiredTableFromFields - reserved columns", () => {
     const table = buildDesiredTableFromFields(
       "dc_posts",
       fields as never,
-      "postgresql"
+      "postgresql",
+      { builtBy: "codeFirst" }
     );
 
     const slugs = table.columns.filter(c => c.name === "slug");
@@ -180,7 +191,8 @@ describe("buildDesiredTableFromFields - postgresql user fields", () => {
     const table = buildDesiredTableFromFields(
       "dc_posts",
       fields as never,
-      "postgresql"
+      "postgresql",
+      { builtBy: "codeFirst" }
     );
 
     expect(userColumns(table.columns)).toEqual([
@@ -194,7 +206,8 @@ describe("buildDesiredTableFromFields - postgresql user fields", () => {
     const table = buildDesiredTableFromFields(
       "dc_products",
       fields as never,
-      "postgresql"
+      "postgresql",
+      { builtBy: "codeFirst" }
     );
 
     expect(findColumn(table.columns, "price")).toEqual({
@@ -211,7 +224,8 @@ describe("buildDesiredTableFromFields - postgresql user fields", () => {
     const table = buildDesiredTableFromFields(
       "dc_posts",
       fields as never,
-      "postgresql"
+      "postgresql",
+      { builtBy: "codeFirst" }
     );
 
     expect(findColumn(table.columns, "is_published")?.type).toBe("bool");
@@ -223,27 +237,27 @@ describe("buildDesiredTableFromFields - postgresql user fields", () => {
     const table = buildDesiredTableFromFields(
       "dc_posts",
       fields as never,
-      "postgresql"
+      "postgresql",
+      { builtBy: "codeFirst" }
     );
 
     expect(findColumn(table.columns, "published_at")?.type).toBe("timestamp");
   });
 
-  it("maps json/repeater/group/blocks fields to jsonb", () => {
+  it("maps json/repeater/group fields to jsonb", () => {
     const fields: MinimalField[] = [
       { name: "tags", type: "chips" },
-      { name: "blocks_field", type: "blocks" },
       { name: "meta", type: "json" },
     ];
 
     const table = buildDesiredTableFromFields(
       "dc_posts",
       fields as never,
-      "postgresql"
+      "postgresql",
+      { builtBy: "codeFirst" }
     );
 
     expect(findColumn(table.columns, "tags")?.type).toBe("jsonb");
-    expect(findColumn(table.columns, "blocks_field")?.type).toBe("jsonb");
     expect(findColumn(table.columns, "meta")?.type).toBe("jsonb");
   });
 
@@ -256,7 +270,8 @@ describe("buildDesiredTableFromFields - postgresql user fields", () => {
     const table = buildDesiredTableFromFields(
       "dc_posts",
       fields as never,
-      "postgresql"
+      "postgresql",
+      { builtBy: "codeFirst" }
     );
 
     expect(userColumns(table.columns).map(c => c.name)).toEqual([
@@ -275,7 +290,8 @@ describe("buildDesiredTableFromFields - postgresql user fields", () => {
     const table = buildDesiredTableFromFields(
       "dc_posts",
       fields as never,
-      "postgresql"
+      "postgresql",
+      { builtBy: "codeFirst" }
     );
 
     expect(userColumns(table.columns)).toHaveLength(1);
@@ -290,7 +306,8 @@ describe("buildDesiredTableFromFields - mysql user fields", () => {
     const table = buildDesiredTableFromFields(
       "dc_posts",
       fields as never,
-      "mysql"
+      "mysql",
+      { builtBy: "codeFirst" }
     );
 
     expect(findColumn(table.columns, "summary")?.type).toBe("varchar(255)");
@@ -302,7 +319,8 @@ describe("buildDesiredTableFromFields - mysql user fields", () => {
     const table = buildDesiredTableFromFields(
       "dc_posts",
       fields as never,
-      "mysql"
+      "mysql",
+      { builtBy: "codeFirst" }
     );
 
     expect(findColumn(table.columns, "body")?.type).toBe("text");
@@ -314,7 +332,8 @@ describe("buildDesiredTableFromFields - mysql user fields", () => {
     const table = buildDesiredTableFromFields(
       "dc_posts",
       fields as never,
-      "mysql"
+      "mysql",
+      { builtBy: "codeFirst" }
     );
 
     expect(findColumn(table.columns, "is_pub")?.type).toBe("tinyint(1)");
@@ -326,19 +345,21 @@ describe("buildDesiredTableFromFields - mysql user fields", () => {
     const table = buildDesiredTableFromFields(
       "dc_products",
       fields as never,
-      "mysql"
+      "mysql",
+      { builtBy: "codeFirst" }
     );
 
     expect(findColumn(table.columns, "price")?.type).toBe("double");
   });
 
-  it("maps json/blocks/group fields to json", () => {
+  it("maps json/group fields to json", () => {
     const fields: MinimalField[] = [{ name: "meta", type: "json" }];
 
     const table = buildDesiredTableFromFields(
       "dc_posts",
       fields as never,
-      "mysql"
+      "mysql",
+      { builtBy: "codeFirst" }
     );
 
     expect(findColumn(table.columns, "meta")?.type).toBe("json");
@@ -353,7 +374,8 @@ describe("buildDesiredTableFromFields - mysql user fields", () => {
     const table = buildDesiredTableFromFields(
       "dc_posts",
       fields as never,
-      "mysql"
+      "mysql",
+      { builtBy: "codeFirst" }
     );
 
     expect(findColumn(table.columns, "author_id")?.type).toBe("varchar(36)");
@@ -368,7 +390,8 @@ describe("buildDesiredTableFromFields - sqlite user fields", () => {
     const table = buildDesiredTableFromFields(
       "dc_posts",
       fields as never,
-      "sqlite"
+      "sqlite",
+      { builtBy: "codeFirst" }
     );
 
     expect(findColumn(table.columns, "summary")?.type).toBe("text");
@@ -380,7 +403,8 @@ describe("buildDesiredTableFromFields - sqlite user fields", () => {
     const table = buildDesiredTableFromFields(
       "dc_products",
       fields as never,
-      "sqlite"
+      "sqlite",
+      { builtBy: "codeFirst" }
     );
 
     expect(findColumn(table.columns, "price")?.type).toBe("real");
@@ -392,7 +416,8 @@ describe("buildDesiredTableFromFields - sqlite user fields", () => {
     const table = buildDesiredTableFromFields(
       "dc_posts",
       fields as never,
-      "sqlite"
+      "sqlite",
+      { builtBy: "codeFirst" }
     );
 
     expect(findColumn(table.columns, "is_pub")?.type).toBe("integer");
@@ -404,19 +429,21 @@ describe("buildDesiredTableFromFields - sqlite user fields", () => {
     const table = buildDesiredTableFromFields(
       "dc_posts",
       fields as never,
-      "sqlite"
+      "sqlite",
+      { builtBy: "codeFirst" }
     );
 
     expect(findColumn(table.columns, "ts")?.type).toBe("integer");
   });
 
-  it("maps json/blocks/group fields to lowercase 'text' (no native json)", () => {
+  it("maps json/group fields to lowercase 'text' (no native json)", () => {
     const fields: MinimalField[] = [{ name: "meta", type: "json" }];
 
     const table = buildDesiredTableFromFields(
       "dc_posts",
       fields as never,
-      "sqlite"
+      "sqlite",
+      { builtBy: "codeFirst" }
     );
 
     expect(findColumn(table.columns, "meta")?.type).toBe("text");
@@ -439,7 +466,7 @@ describe("buildDesiredTableFromFields with status enabled", () => {
       "dc_posts",
       [] as never,
       "postgresql",
-      { hasStatus: true }
+      { builtBy: "codeFirst", hasStatus: true }
     );
     const status = findColumn(table.columns, "status");
     expect(status).toBeDefined();
@@ -453,7 +480,7 @@ describe("buildDesiredTableFromFields with status enabled", () => {
       "dc_posts",
       [] as never,
       "mysql",
-      { hasStatus: true }
+      { builtBy: "codeFirst", hasStatus: true }
     );
     const status = findColumn(table.columns, "status");
     expect(status?.type).toBe("varchar(20)");
@@ -466,7 +493,7 @@ describe("buildDesiredTableFromFields with status enabled", () => {
       "dc_posts",
       [] as never,
       "sqlite",
-      { hasStatus: true }
+      { builtBy: "codeFirst", hasStatus: true }
     );
     const status = findColumn(table.columns, "status");
     expect(status?.type).toBe("text");
@@ -478,7 +505,8 @@ describe("buildDesiredTableFromFields with status enabled", () => {
     const tableUnset = buildDesiredTableFromFields(
       "dc_posts",
       [] as never,
-      "postgresql"
+      "postgresql",
+      { builtBy: "codeFirst" }
     );
     expect(findColumn(tableUnset.columns, "status")).toBeUndefined();
 
@@ -486,14 +514,14 @@ describe("buildDesiredTableFromFields with status enabled", () => {
       "dc_posts",
       [] as never,
       "postgresql",
-      { hasStatus: false }
+      { builtBy: "codeFirst", hasStatus: false }
     );
     expect(findColumn(tableFalse.columns, "status")).toBeUndefined();
   });
 });
 
 describe("buildDesiredTableFromComponentFields - per-field indexes", () => {
-  // ComponentSchemaService creates idx_<table>_<column> for an indexed field
+  // FieldGroupSchemaService creates idx_<table>_<column> for an indexed field
   // and uq_<table>_<column> for a unique one. The snapshot has to carry them
   // too: it is what the index restore replays after a SQLite rebuild, and a
   // unique index missing from it is a constraint that silently disappears.
@@ -507,7 +535,8 @@ describe("buildDesiredTableFromComponentFields - per-field indexes", () => {
     const table = buildDesiredTableFromComponentFields(
       "comp_hero",
       fields,
-      "sqlite"
+      "sqlite",
+      { builtBy: "codeFirst" }
     );
     expect(table.indexes).toContainEqual({
       name: "uq_comp_hero_sku",
@@ -520,7 +549,8 @@ describe("buildDesiredTableFromComponentFields - per-field indexes", () => {
     const table = buildDesiredTableFromComponentFields(
       "comp_hero",
       fields,
-      "sqlite"
+      "sqlite",
+      { builtBy: "codeFirst" }
     );
     expect(table.indexes).toContainEqual({
       name: "idx_comp_hero_lookup_key",
@@ -533,7 +563,8 @@ describe("buildDesiredTableFromComponentFields - per-field indexes", () => {
     const table = buildDesiredTableFromComponentFields(
       "comp_hero",
       fields,
-      "sqlite"
+      "sqlite",
+      { builtBy: "codeFirst" }
     );
     expect(table.indexes?.map(i => i.name)).toContain("idx_comp_hero_parent");
   });
@@ -545,7 +576,9 @@ describe("owner index", () => {
   // drops every index the replacement table does not declare, and the restore
   // replays only what the snapshot carries — so it has to be recorded here.
   it("is recorded for a collection", () => {
-    const table = buildDesiredTableFromFields("dc_posts", [], "sqlite");
+    const table = buildDesiredTableFromFields("dc_posts", [], "sqlite", {
+      builtBy: "codeFirst",
+    });
     expect(table.indexes).toContainEqual({
       name: "idx_dc_posts_created_by",
       columns: ["created_by"],
@@ -557,10 +590,55 @@ describe("owner index", () => {
     const table = buildDesiredTableFromComponentFields(
       "comp_hero",
       [],
-      "sqlite"
+      "sqlite",
+      { builtBy: "codeFirst" }
     );
     expect(table.indexes?.map(i => i.name)).not.toContain(
       "idx_comp_hero_created_by"
     );
+  });
+});
+
+/**
+ * 🔴 The discriminator is a SYSTEM column, so its name is never a preference.
+ *
+ * The only two spellings are the two storage generations, and which one a table
+ * carries is a fact about that table. A desired shape that names the other one
+ * turns the diff into "add this column, drop that one" — a destructive pair the
+ * classifier refuses and fresh-push strips, so the operation never applies and
+ * never goes away, and every later apply carries it.
+ */
+describe("buildDesiredTableFromComponentFields - the discriminator column", () => {
+  const DIALECTS = ["postgresql", "mysql", "sqlite"] as const;
+  const noFields = [] as unknown as Parameters<
+    typeof buildDesiredTableFromComponentFields
+  >[1];
+
+  describe.each(DIALECTS)("%s", dialect => {
+    it("writes the spelling this release's DDL creates by default", () => {
+      const names = buildDesiredTableFromComponentFields(
+        "comp_hero",
+        noFields,
+        dialect,
+        { builtBy: "codeFirst" }
+      ).columns.map(column => column.name);
+
+      expect(names).toContain("_component_type");
+      expect(names).not.toContain("_field_group_type");
+    });
+
+    // Both halves matter: naming the migrated column is not enough on its own,
+    // because leaving the legacy one in the desired shape is what emits the ADD.
+    it("writes the migrated spelling when the table carries it", () => {
+      const names = buildDesiredTableFromComponentFields(
+        "fg_hero",
+        noFields,
+        dialect,
+        { builtBy: "codeFirst", typeColumn: "_field_group_type" }
+      ).columns.map(column => column.name);
+
+      expect(names).toContain("_field_group_type");
+      expect(names).not.toContain("_component_type");
+    });
   });
 });

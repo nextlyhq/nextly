@@ -45,8 +45,8 @@ export const imageBox = defineBlock({
     customCss: true,
     customAttributes: true,
   },
-  render: ({ props, className }) => {
-    const url = mediaUrl(props.image);
+  render: ({ props, className, remotePatterns }) => {
+    const url = mediaUrl(props.image, remotePatterns);
     const alt = mediaAlt(props.image);
     const title = str(props.title);
     const desc = str(props.description);

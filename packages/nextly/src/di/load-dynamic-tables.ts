@@ -16,6 +16,12 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../collections/fields/types";
+import {
+  isFieldGroupRegistry,
+  resolveFieldGroupRegistryName,
+  type FieldGroupRegistryName,
+} from "../domains/field-groups/storage/resolve-storage-names";
+import { isCodeOwned } from "../domains/schema/pipeline/registered-collections";
 
 /**
  * Row shape returned by the `SELECT table_name, fields, slug, status FROM
@@ -28,13 +34,20 @@ export type DynamicTableRow = {
   slug: string;
   status?: boolean | number | null;
   localized?: boolean | number | null;
+  /**
+   * Ownership, as the registry recorded it. These tables hold code-first and plugin-owned rows
+   * alongside Builder-made ones, and the two are built by different creators that size a text
+   * column differently — so a caller describing a column has to be able to tell them apart.
+   */
+  source?: string | null;
+  locked?: boolean | number | null;
 };
 
 /**
  * Read every row of `sourceTable` and call `register` for each. The
  * callback decides how to translate the row into a runtime Drizzle table
  * (Collections / Singles use `generateRuntimeSchema`; Components use
- * `ComponentSchemaService.generateRuntimeSchema`).
+ * `FieldGroupSchemaService.generateRuntimeSchema`).
  *
  * Why an empty-field row still calls register: a freshly-created UI
  * Single is committed with `fields: []` and the user adds fields one
@@ -46,44 +59,76 @@ export type DynamicTableRow = {
  */
 export async function loadDynamicTables(
   adapter: DrizzleAdapter,
-  sourceTable: "dynamic_collections" | "dynamic_singles" | "dynamic_components",
+  sourceTable:
+    | "dynamic_collections"
+    | "dynamic_singles"
+    | FieldGroupRegistryName,
   register: (
     tableName: string,
     fields: unknown[],
     hasStatus: boolean,
-    localized: boolean
+    localized: boolean,
+    /**
+     * Whether the Schema Builder owns this row, rather than code or a plugin. Passed because a
+     * caller that emits DDL has to describe a column the way its creator built it, and these
+     * tables hold both kinds. `undefined` where the registry is too old to say.
+     */
+    builderOwned: boolean | undefined
   ) => Promise<void>
 ): Promise<void> {
   // Components have no `status` column (they're not Draft/Published) — selecting it
   // would fail. They DO carry `localized` (i18n). Collections/singles carry both.
-  const statusCol = sourceTable !== "dynamic_components" ? ", status" : "";
+  // Asked under both registry spellings: the storage migration renames this
+  // table, and comparing against the legacy name alone would add `status` to the
+  // select the moment it has run.
+  const hasStatusColumn = !isFieldGroupRegistry(sourceTable);
 
-  // Read the rows, tolerating an existing DB that predates the i18n `localized`
-  // column: try the full select first, and on failure fall back to one without
-  // `localized`. Without this, the missing column throws and the outer catch
-  // below silently disables EVERY dynamic table app-wide. The
-  // column is added by the core-schema reconcile; until it runs, `localized`
-  // defaults to false, which is correct for a pre-i18n database.
+  // Every column this read wants, in the order it gives them up.
+  //
+  // A registry older than the code is missing the newest columns, and the read has to survive that:
+  // letting the error reach the outer catch would disable EVERY dynamic table app-wide over one
+  // absent column. Ownership is dropped first because it is the newest and the least costly to
+  // lose — without it a caller describes a column the way the pipeline would, which is the reading
+  // every code-first table already gets.
+  //
+  // Written as one projection with optional tiers rather than three hand-written statements, so the
+  // column list and the table name are stated once and the rungs cannot drift apart.
+  const required = ["table_name", "fields", "slug"];
+  const optionalTiers = [
+    hasStatusColumn ? ["status"] : [],
+    ["localized"],
+    ["source", "locked"],
+  ].filter(tier => tier.length > 0);
+
+  const candidateSelects = optionalTiers
+    .map((_, dropped) => optionalTiers.slice(0, optionalTiers.length - dropped))
+    .concat([[]])
+    .map(
+      tiers =>
+        `SELECT ${[...required, ...tiers.flat()].join(", ")} FROM ${sourceTable}`
+    );
+
   const readRows = async (): Promise<DynamicTableRow[]> => {
-    try {
-      return await adapter.executeQuery<DynamicTableRow>(
-        `SELECT table_name, fields, slug${statusCol}, localized FROM ${sourceTable}`
-      );
-    } catch (err) {
-      // Only a MISSING `localized` column should trigger the fallback select. A transient,
-      // permission, or genuinely-missing-table error must propagate (to the outer catch)
-      // instead of being converted into a non-localized registration with the wrong runtime
-      // schema for a localized table.
-      const msg = err instanceof Error ? err.message : String(err);
-      if (
-        !/localized|no such column|does not exist|unknown column/i.test(msg)
-      ) {
-        throw err;
+    let lastError: unknown;
+    for (const sql of candidateSelects) {
+      try {
+        return await adapter.executeQuery<DynamicTableRow>(sql);
+      } catch (err) {
+        // Only a MISSING column may step down. A transient, permission, or genuinely-missing-table
+        // error must propagate (to the outer catch) instead of being converted into a registration
+        // with the wrong runtime schema for the table.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (
+          !/localized|source|locked|no such column|does not exist|unknown column/i.test(
+            msg
+          )
+        ) {
+          throw err;
+        }
+        lastError = err;
       }
-      return adapter.executeQuery<DynamicTableRow>(
-        `SELECT table_name, fields, slug${statusCol} FROM ${sourceTable}`
-      );
     }
+    throw lastError;
   };
 
   try {
@@ -101,7 +146,23 @@ export async function loadDynamicTables(
         // 0/1 as numbers — same dance as the registry deserializer.
         const hasStatus = row.status === 1 || row.status === true;
         const localized = row.localized === 1 || row.localized === true;
-        await register(row.table_name, fields, hasStatus, localized);
+        // `undefined` when the registry could not report ownership at all, which is different from
+        // reporting "not the Builder": the caller treats the unknown case as the pipeline's, the
+        // same reading every code-first table already gets.
+        const builderOwned =
+          row.source === undefined && row.locked === undefined
+            ? undefined
+            : !isCodeOwned({
+                source: row.source ?? undefined,
+                locked: row.locked === 1 || row.locked === true,
+              });
+        await register(
+          row.table_name,
+          fields,
+          hasStatus,
+          localized,
+          builderOwned
+        );
       } catch {
         // Skip individual row if schema generation fails.
       }
@@ -132,7 +193,7 @@ export async function loadDynamicSlugs(
   const all = new Set<string>();
   const collections = new Set<string>();
   const read = async (
-    table: "dynamic_collections" | "dynamic_singles" | "dynamic_components",
+    table: "dynamic_collections" | "dynamic_singles" | FieldGroupRegistryName,
     into?: Set<string>
   ): Promise<void> => {
     try {
@@ -151,7 +212,12 @@ export async function loadDynamicSlugs(
   };
   await read("dynamic_collections", collections);
   await read("dynamic_singles");
-  await read("dynamic_components");
+  try {
+    await read(await resolveFieldGroupRegistryName(adapter));
+  } catch {
+    // Same contract as `read` itself: a catalog probe that cannot answer leaves
+    // the sets as they are rather than failing the boot that called it.
+  }
   return { all, collections };
 }
 
@@ -183,7 +249,7 @@ export async function loadBuilderEntities(
   adapter: DrizzleAdapter
 ): Promise<LoadedBuilderEntities> {
   const read = async (
-    table: "dynamic_collections" | "dynamic_singles" | "dynamic_components",
+    table: "dynamic_collections" | "dynamic_singles" | FieldGroupRegistryName,
     hasStatusColumn: boolean
   ): Promise<LoadedBuilderEntity[]> => {
     const selectSql = hasStatusColumn
@@ -217,9 +283,22 @@ export async function loadBuilderEntities(
     }
   };
 
+  // The registry NAME is resolved inside the same best-effort boundary as the
+  // read it feeds. Resolving outside it turns a transient catalog failure — a
+  // `listTables` blip, or a denied `lower_case_table_names` query on MySQL —
+  // into a rejection that aborts service registration, where this helper's
+  // whole contract is to answer with an empty list instead.
+  const readComponents = async (): Promise<LoadedBuilderEntity[]> => {
+    try {
+      return await read(await resolveFieldGroupRegistryName(adapter), false);
+    } catch {
+      return [];
+    }
+  };
+
   return {
     collections: await read("dynamic_collections", true),
     singles: await read("dynamic_singles", true),
-    components: await read("dynamic_components", false),
+    components: await readComponents(),
   };
 }

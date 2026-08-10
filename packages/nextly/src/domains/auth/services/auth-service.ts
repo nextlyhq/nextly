@@ -22,6 +22,7 @@ import { emitAuthEvent } from "../../../events/domain-events";
 import { BaseService } from "../../../services/base-service";
 import type { EmailService } from "../../../services/email/email-service";
 import type { Logger } from "../../../services/shared";
+import { auditReason } from "../../audit/audit-reasons";
 import { generateInviteTokenValue, hashInviteToken } from "../lib/invite-token";
 
 // v1's RQB object filters silently DROP keys whose value is `undefined`
@@ -191,9 +192,27 @@ export class AuthService extends BaseService {
     // with the silent-success pattern (§13.8).
     let newUser;
     try {
+      // Registration records `user.created`, so this service is built with the
+      // same post-commit hooks the DI-registered and facade-built ones get.
+      // Without them the event a self-registration produces waits for the
+      // scheduled drain, which an install running on Next's `after()` alone
+      // never triggers, and the outbox it lands in is never pruned from here.
+      const { resolveWebhookWritePathInfra } = await import(
+        "../../webhooks/write-path-infra"
+      );
+      const { fastDrainScheduler, retentionRunner } =
+        resolveWebhookWritePathInfra(this.adapter, this.logger);
       const userService = new (
         await import("../../../services/users")
-      ).UsersService(this.adapter, this.logger);
+      ).UsersService(
+        this.adapter,
+        this.logger,
+        undefined,
+        undefined,
+        undefined,
+        fastDrainScheduler,
+        retentionRunner
+      );
       newUser = await userService.createLocalUser({
         email: userData.email,
         name: userData.name ?? "User",
@@ -263,7 +282,7 @@ export class AuthService extends BaseService {
       // the factory; logContext records *why* internally for operators.
       throw NextlyError.invalidCredentials({
         logContext: {
-          reason: !user ? "user-not-found" : "no-password-hash",
+          reason: auditReason(!user ? "user-not-found" : "no-password-hash"),
         },
       });
     }
@@ -275,7 +294,10 @@ export class AuthService extends BaseService {
 
     if (!isValidPassword) {
       throw NextlyError.invalidCredentials({
-        logContext: { reason: "password-mismatch", userId: user.id },
+        logContext: {
+          reason: auditReason("password-mismatch"),
+          userId: user.id,
+        },
       });
     }
 
@@ -321,7 +343,7 @@ export class AuthService extends BaseService {
       // captures whether the user existed for debug purposes.
       throw NextlyError.invalidCredentials({
         logContext: {
-          reason: !user ? "user-not-found" : "no-password-hash",
+          reason: auditReason(!user ? "user-not-found" : "no-password-hash"),
           userId,
         },
       });
@@ -334,7 +356,10 @@ export class AuthService extends BaseService {
 
     if (!isValidPassword) {
       throw NextlyError.invalidCredentials({
-        logContext: { reason: "current-password-mismatch", userId },
+        logContext: {
+          reason: auditReason("current-password-mismatch"),
+          userId,
+        },
       });
     }
 
@@ -975,7 +1000,7 @@ export class AuthService extends BaseService {
       throw new NextlyError({
         code: "INVALID_INPUT",
         publicMessage: "This request is no longer valid. Please sign in again.",
-        logContext: { userId, reason: "not-in-must-change-state" },
+        logContext: { userId, reason: auditReason("not-in-must-change-state") },
       });
     }
     if (
@@ -1025,7 +1050,7 @@ export class AuthService extends BaseService {
       throw new NextlyError({
         code: "INVALID_INPUT",
         publicMessage: "This request is no longer valid. Please sign in again.",
-        logContext: { userId, reason: "not-in-must-change-state" },
+        logContext: { userId, reason: auditReason("not-in-must-change-state") },
       });
     }
 

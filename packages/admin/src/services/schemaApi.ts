@@ -111,11 +111,17 @@ export const schemaApi = {
   // type the fetcher generic directly.
   preview: async (
     slug: string,
-    fields: unknown[]
+    fields: unknown[],
+    // i18n: the same toggle the apply will send. The preview is what collects
+    // the resolutions the apply then runs with, so a preview that diffs
+    // against a DIFFERENT localization state can miss a required-column
+    // prompt the apply turns out to need — the save then fails after the user
+    // already confirmed. Undefined leaves the persisted flag in charge.
+    localized?: boolean
   ): Promise<SchemaPreviewResponse> => {
     return protectedApi.post<SchemaPreviewResponse>(
       `/collections/schema/${slug}/preview`,
-      { fields }
+      { fields, ...(localized !== undefined ? { localized } : {}) }
     );
   },
 
@@ -135,7 +141,13 @@ export const schemaApi = {
     fields: unknown[],
     schemaVersion: number,
     resolutions?: Record<string, FieldResolution>,
-    renameResolutions?: SchemaRenameResolution[]
+    renameResolutions?: SchemaRenameResolution[],
+    // i18n: the current Internationalization toggle (mirrors
+    // singleApi.applySchemaChanges), so an apply that flips i18n AND changes
+    // fields provisions the companion in the same request instead of diffing
+    // against the registry flag as it was before the save. Undefined leaves
+    // the persisted value untouched.
+    localized?: boolean
   ): Promise<SchemaApplyResponse> => {
     const result = await protectedApi.post<
       ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
@@ -145,6 +157,7 @@ export const schemaApi = {
       schemaVersion,
       resolutions,
       renameResolutions,
+      ...(localized !== undefined ? { localized } : {}),
     });
     return {
       success: true,

@@ -21,12 +21,13 @@ import {
   resolveMigration,
   type ResolveMode,
 } from "../../domains/schema/migrate/resolve";
+import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
 import { parseSnapshotFile } from "../../domains/schema/migrate-create/snapshot-io";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
+import { snapshotComparableTables } from "../../domains/schema/pipeline/managed-tables";
 import { describeError } from "../../errors/index";
-import { CORE_TABLE_PREFIXES } from "../../schemas";
 import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
@@ -35,11 +36,15 @@ import {
 } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
 
+import { maybeForceUnlock } from "./migrate";
+
 interface ResolveCommandOptions {
   applied?: string;
   rolledBack?: string;
   failedCleanup?: string;
   skipVerify?: boolean;
+  /** Clear a stale migrate lock before taking it (operator escape hatch). */
+  forceUnlock?: boolean;
 }
 
 interface ResolvedOptions extends ResolveCommandOptions {
@@ -141,6 +146,11 @@ export async function runMigrateResolve(
     const db = (adapter as unknown as DrizzleAdapter).getDrizzle();
     const repo = new SchemaEventsRepository(db, dialect);
 
+    // Clear a stale lock first when --force-unlock is passed (e.g. left by a
+    // crashed prior run): the lock-busy error tells operators to re-run with
+    // this flag, and recovery is exactly when a stale lock is most likely.
+    await maybeForceUnlock(options, db, dialect);
+
     // fail-fast mode (the default) never returns undefined — it runs fn or
     // throws — so the non-null assertion below is safe.
     const result = (await withMigrateLock(db, dialect, () =>
@@ -152,9 +162,44 @@ export async function runMigrateResolve(
         fileExists: name => fileExistsIn(migrationsDir, name),
         loadTargetSnapshot: () => loadSnapshot(metaDir, filename),
         introspectLive: async () => {
+          // Config and the Builder manifest, merged as generation merges them,
+          // so the verifier excludes the same derived tables the snapshot never
+          // held. Resolved HERE rather than before the lock because this
+          // callback is its only consumer and a malformed `ui-schema.json`
+          // throws: loading it eagerly would take --rolled-back,
+          // --failed-cleanup and --skip-verify down with it, and those are the
+          // modes an operator reaches for when something is already broken.
+          const resolvedSchema = await resolveDeclaredSchema({
+            projectRoot: cwd,
+            config: configResult.config,
+            deferredExtends: configResult.deferredExtends,
+          });
           const live = await safeListTables(adapter);
-          const managed = live.filter(t =>
-            CORE_TABLE_PREFIXES.some(p => t.startsWith(p))
+          // Managed main tables only. A localized companion is
+          // migration-owned and never appears in a `migrate:create` snapshot,
+          // so including one here can never match the file this is compared
+          // against and the equivalence check refuses the command.
+          // Junctions are excluded for exactly the reason the comment above
+          // gives for companions: neither is declared by config, so neither
+          // appears in the snapshot this is compared against, and a live
+          // snapshot carrying one can never match it. The target's own tables
+          // are the declaration, so a collection whose name resembles the
+          // generated junction shape is not mistaken for one.
+          // The same snapshot `loadTargetSnapshot` returns, read again rather
+          // than threaded: it is a file read, and the two callbacks are
+          // independent by design so the verifier can be driven without one.
+          // A missing snapshot is the verifier's own error to report; here it
+          // just means no declaration is available, and the name pattern alone
+          // decides.
+          const target = await loadSnapshot(metaDir, filename);
+          const managed = snapshotComparableTables(
+            live,
+            new Set((target?.tables ?? []).map(t => t.name)),
+            // A custom `options.junctionTable` name matches no convention and
+            // is in no snapshot, so without it the verifier compares a live
+            // scope containing the junction against a target that never could
+            // and refuses a recovery the operator has no other way to make.
+            resolvedSchema.knownJunctions
           );
           return introspectLiveSnapshot(db, dialect, managed);
         },
@@ -205,6 +250,14 @@ export function registerMigrateResolveCommand(program: Command): void {
     .option(
       "--skip-verify",
       "With --applied, skip the live-vs-snapshot equivalence check",
+      false
+    )
+    // This command takes the shared migrate lock, and the lock-busy error
+    // tells operators to re-run with this flag — so every lock-taking
+    // command must register it. Same escape hatch as `nextly migrate`.
+    .option(
+      "--force-unlock",
+      "Clear a stale migrate lock before running",
       false
     )
     .action(async (cmdOptions: ResolveCommandOptions, cmd: Command) => {

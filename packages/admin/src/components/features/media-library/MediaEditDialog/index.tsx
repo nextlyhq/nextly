@@ -115,7 +115,7 @@ function CropPointPicker({
       <div
         ref={containerRef}
         className={cn(
-          "relative rounded-none overflow-hidden border border-input bg-muted/30 cursor-crosshair",
+          "relative rounded-md overflow-hidden border border-input bg-muted/30 cursor-crosshair",
           disabled && "cursor-not-allowed opacity-60"
         )}
         onClick={handleClick}
@@ -170,7 +170,7 @@ function CropPointPicker({
             aria-label={`Preview at ${label} aspect ratio`}
           >
             <div
-              className="rounded-none border border-input overflow-hidden bg-muted/30"
+              className="rounded-md border border-input overflow-hidden bg-muted/30"
               style={{ width: w, height: h }}
             >
               <img
@@ -217,7 +217,7 @@ function ImageSizesDisplay({
   return (
     <div className="space-y-2">
       <Label className="text-sm font-medium text-foreground">Image sizes</Label>
-      <div className="rounded-none border border-input divide-y divide-border">
+      <div className="rounded-md border border-input divide-y divide-border">
         {entries.map(([name, variant]) => (
           <div key={name} className="flex items-center gap-3 px-3 py-2 text-sm">
             <span className="font-medium min-w-[80px]">{name}</span>
@@ -230,7 +230,7 @@ function ImageSizesDisplay({
             <button
               type="button"
               onClick={() => handleCopyUrl(variant.url, name)}
-              className="p-1 rounded-none hover:bg-accent transition-colors"
+              className="p-1 rounded-md hover:bg-accent transition-colors"
               title={`Copy ${name} URL`}
             >
               {copiedUrl === name ? (

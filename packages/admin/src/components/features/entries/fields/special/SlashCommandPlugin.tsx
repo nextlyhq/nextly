@@ -26,6 +26,7 @@ import {
 } from "@lexical/react/LexicalTypeaheadMenuPlugin";
 import { $createHeadingNode, $createQuoteNode } from "@lexical/rich-text";
 import { $setBlocksType } from "@lexical/selection";
+import { usePortalContainer } from "@nextlyhq/ui";
 import {
   $getSelection,
   $isRangeSelection,
@@ -262,8 +263,12 @@ const menuContainerStyle: React.CSSProperties = {
   border: "1px solid var(--nx-border)",
   backgroundColor: "var(--nx-popover)",
   padding: "4px",
-  boxShadow:
-    "0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)",
+  // Elevation from the theme's shadow ramp rather than a fixed black wash.
+  boxShadow: "var(--shadow-lg)",
+  // `z-index` only applies to a positioned box. Without this the element is
+  // `position: static`, the value below is discarded, and the menu loses the
+  // hit test to any positioned overlay above it in paint order.
+  position: "relative",
   zIndex: 9999,
 };
 
@@ -350,6 +355,14 @@ export function SlashCommandPlugin({
 }: SlashCommandPluginProps) {
   const [editor] = useLexicalComposerContext();
   const [queryString, setQueryString] = useState<string | null>(null);
+  // The typeahead anchor is appended to whatever `parent` is given, defaulting
+  // to `ownerDocument.body`. Dark mode is a `dark` class on the admin's own
+  // root element, not on `<html>`, so the `.dark` overrides of the tokens these
+  // styles read never match an element mounted on the body: a body-level menu
+  // renders with the light-mode surface inside a dark admin. Anchoring inside
+  // the admin's scoped portal root, which carries the same class, keeps the
+  // menu on the correct side of that override.
+  const portalContainer = usePortalContainer();
 
   // Check for "/" trigger
   const checkForSlashTrigger = useBasicTypeaheadTriggerMatch("/", {
@@ -403,6 +416,7 @@ export function SlashCommandPlugin({
       onSelectOption={onSelectOption}
       triggerFn={checkForMatch}
       options={options}
+      parent={portalContainer}
       menuRenderFn={(
         anchorElementRef,
         { selectedIndex, selectOptionAndCleanUp, setHighlightedIndex }

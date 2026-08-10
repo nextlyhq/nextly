@@ -3,6 +3,9 @@ import { defineRelations } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 
+import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
+import { generateSqliteCoreTableStatements } from "../../database/sqlite-core-tables";
+
 import * as schema from "./sqlite-schema";
 
 // v1 relations config over the fixture tables. Deliberately edge-less:
@@ -13,169 +16,31 @@ export const testRelations = defineRelations(schema);
 export type TestDrizzleDb = BetterSQLite3Database<typeof testRelations>;
 
 /**
- * Create database tables using raw SQL.
- * This is faster than using migrations for tests.
- * Schema mirrors the canonical per-feature schemas re-exported via
- * `./sqlite-schema.ts`.
+ * Build the fixture's tables.
+ *
+ * The core tables come from the SAME generators production uses, so the
+ * fixture cannot describe a schema that no longer exists. It previously
+ * hand-copied their DDL, and the copy drifted: `permissions` gained `owner`,
+ * `orphaned_at`, `permission_group` and `danger` in the schema the fixture
+ * already imports, the copy did not, and since Drizzle names every column in
+ * an INSERT, every write to that table failed against a table it thought it
+ * knew.
+ *
+ * Only tables with no generator to borrow are still written out here.
  */
 function createTables(sqlite: Database.Database) {
-  // Create all necessary tables for RBAC testing
+  for (const statement of generateSqliteCoreTableStatements()) {
+    sqlite.exec(statement);
+  }
+  for (const statement of getSchemaEventsDdl("sqlite")) {
+    sqlite.exec(statement);
+  }
+
+  // No core-table generator covers these: they are created by the schema
+  // pipeline at runtime rather than at first-run, so there is nothing to
+  // reuse. Carried across unchanged from the previous definition rather than
+  // retyped, and to be repointed if a generator ever owns them.
   sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS roles (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      slug TEXT NOT NULL UNIQUE,
-      description TEXT,
-      level INTEGER NOT NULL DEFAULT 0,
-      is_system INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
-      updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS roles_name_unique ON roles(name);
-    CREATE UNIQUE INDEX IF NOT EXISTS roles_slug_unique ON roles(slug);
-    CREATE INDEX IF NOT EXISTS roles_level_idx ON roles(level);
-    CREATE INDEX IF NOT EXISTS roles_is_system_idx ON roles(is_system);
-
-    CREATE TABLE IF NOT EXISTS permissions (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      slug TEXT NOT NULL UNIQUE,
-      action TEXT NOT NULL,
-      resource TEXT NOT NULL,
-      description TEXT,
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
-      updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS permissions_name_unique ON permissions(name);
-    CREATE UNIQUE INDEX IF NOT EXISTS permissions_slug_unique ON permissions(slug);
-    CREATE UNIQUE INDEX IF NOT EXISTS permissions_action_resource_unique ON permissions(action, resource);
-    CREATE INDEX IF NOT EXISTS permissions_action_idx ON permissions(action);
-    CREATE INDEX IF NOT EXISTS permissions_resource_idx ON permissions(resource);
-
-    CREATE TABLE IF NOT EXISTS role_permissions (
-      id TEXT PRIMARY KEY,
-      role_id TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
-      permission_id TEXT NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS role_permissions_role_id_permission_id_unique ON role_permissions(role_id, permission_id);
-    CREATE INDEX IF NOT EXISTS role_permissions_role_id_idx ON role_permissions(role_id);
-    CREATE INDEX IF NOT EXISTS role_permissions_permission_id_idx ON role_permissions(permission_id);
-
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      name TEXT,
-      email TEXT NOT NULL UNIQUE,
-      email_verified INTEGER,
-      password_updated_at INTEGER,
-      image TEXT,
-      password_hash TEXT,
-      is_active INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
-      updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users(email);
-    CREATE INDEX IF NOT EXISTS users_created_at_idx ON users(created_at);
-
-    CREATE TABLE IF NOT EXISTS password_reset_tokens (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      identifier TEXT NOT NULL,
-      token_hash TEXT NOT NULL,
-      expires INTEGER NOT NULL,
-      used_at INTEGER,
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS prt_identifier_token_hash_unique ON password_reset_tokens(identifier, token_hash);
-    CREATE INDEX IF NOT EXISTS prt_expires_idx ON password_reset_tokens(expires);
-    CREATE INDEX IF NOT EXISTS prt_used_at_idx ON password_reset_tokens(used_at);
-
-    CREATE TABLE IF NOT EXISTS email_verification_tokens (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      identifier TEXT NOT NULL,
-      token_hash TEXT NOT NULL,
-      expires INTEGER NOT NULL,
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS evt_identifier_token_hash_unique ON email_verification_tokens(identifier, token_hash);
-    CREATE INDEX IF NOT EXISTS evt_expires_idx ON email_verification_tokens(expires);
-
-    CREATE TABLE IF NOT EXISTS user_roles (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      role_id TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
-      expires_at INTEGER
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS user_roles_user_id_role_id_unique ON user_roles(user_id, role_id);
-    CREATE INDEX IF NOT EXISTS user_roles_user_id_idx ON user_roles(user_id);
-    CREATE INDEX IF NOT EXISTS user_roles_role_id_idx ON user_roles(role_id);
-    CREATE INDEX IF NOT EXISTS user_roles_expires_at_idx ON user_roles(expires_at);
-
-    CREATE TABLE IF NOT EXISTS role_inherits (
-      id TEXT PRIMARY KEY,
-      parent_role_id TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
-      child_role_id TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS role_inherits_parent_role_id_child_role_id_unique ON role_inherits(parent_role_id, child_role_id);
-    CREATE INDEX IF NOT EXISTS role_inherits_parent_role_id_idx ON role_inherits(parent_role_id);
-    CREATE INDEX IF NOT EXISTS role_inherits_child_role_id_idx ON role_inherits(child_role_id);
-
-    CREATE TABLE IF NOT EXISTS dynamic_collections (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL UNIQUE,
-      label TEXT NOT NULL,
-      table_name TEXT NOT NULL UNIQUE,
-      description TEXT,
-      icon TEXT,
-      schema_definition TEXT NOT NULL,
-      created_by TEXT REFERENCES users(id),
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
-      updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS dynamic_collections_name_unique ON dynamic_collections(name);
-    CREATE UNIQUE INDEX IF NOT EXISTS dynamic_collections_table_name_unique ON dynamic_collections(table_name);
-    CREATE INDEX IF NOT EXISTS dynamic_collections_created_by_idx ON dynamic_collections(created_by);
-    CREATE INDEX IF NOT EXISTS dynamic_collections_created_at_idx ON dynamic_collections(created_at);
-    CREATE INDEX IF NOT EXISTS dynamic_collections_updated_at_idx ON dynamic_collections(updated_at);
-
-    CREATE TABLE IF NOT EXISTS media_folders (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      description TEXT,
-      parent_id TEXT REFERENCES media_folders(id) ON DELETE CASCADE,
-      created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
-      updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)
-    );
-    CREATE INDEX IF NOT EXISTS media_folders_parent_id_idx ON media_folders(parent_id);
-    CREATE INDEX IF NOT EXISTS media_folders_created_by_idx ON media_folders(created_by);
-    CREATE INDEX IF NOT EXISTS media_folders_created_at_idx ON media_folders(created_at);
-
-    CREATE TABLE IF NOT EXISTS media (
-      id TEXT PRIMARY KEY,
-      filename TEXT NOT NULL,
-      original_filename TEXT NOT NULL,
-      mime_type TEXT NOT NULL,
-      size INTEGER NOT NULL,
-      width INTEGER,
-      height INTEGER,
-      duration INTEGER,
-      url TEXT NOT NULL,
-      thumbnail_url TEXT,
-      alt_text TEXT,
-      caption TEXT,
-      tags TEXT,
-      folder_id TEXT REFERENCES media_folders(id) ON DELETE SET NULL,
-      uploaded_by TEXT REFERENCES users(id) ON DELETE CASCADE,
-      uploaded_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
-      updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)
-    );
-    CREATE INDEX IF NOT EXISTS media_uploaded_by_idx ON media(uploaded_by);
-    CREATE INDEX IF NOT EXISTS media_mime_type_idx ON media(mime_type);
-    CREATE INDEX IF NOT EXISTS media_uploaded_at_idx ON media(uploaded_at);
-    CREATE INDEX IF NOT EXISTS media_folder_id_idx ON media(folder_id);
-    CREATE INDEX IF NOT EXISTS media_tags_idx ON media(tags);
-
     CREATE TABLE IF NOT EXISTS api_keys (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -196,44 +61,30 @@ function createTables(sqlite: Database.Database) {
     CREATE INDEX IF NOT EXISTS api_keys_role_id_idx ON api_keys(role_id);
     CREATE INDEX IF NOT EXISTS api_keys_is_active_expires_at_idx ON api_keys(is_active, expires_at);
 
+    CREATE TABLE IF NOT EXISTS dynamic_collections (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      label TEXT NOT NULL,
+      table_name TEXT NOT NULL UNIQUE,
+      description TEXT,
+      icon TEXT,
+      schema_definition TEXT NOT NULL,
+      created_by TEXT REFERENCES users(id),
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
+      updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS dynamic_collections_name_unique ON dynamic_collections(name);
+    CREATE UNIQUE INDEX IF NOT EXISTS dynamic_collections_table_name_unique ON dynamic_collections(table_name);
+    CREATE INDEX IF NOT EXISTS dynamic_collections_created_by_idx ON dynamic_collections(created_by);
+    CREATE INDEX IF NOT EXISTS dynamic_collections_created_at_idx ON dynamic_collections(created_at);
+    CREATE INDEX IF NOT EXISTS dynamic_collections_updated_at_idx ON dynamic_collections(updated_at);
+
     CREATE TABLE IF NOT EXISTS nextly_meta (
       key TEXT PRIMARY KEY NOT NULL,
       value TEXT,
       updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)
     );
     CREATE INDEX IF NOT EXISTS nextly_meta_updated_at_idx ON nextly_meta(updated_at);
-
-    CREATE TABLE IF NOT EXISTS nextly_schema_events (
-      id TEXT PRIMARY KEY,
-      event_type TEXT NOT NULL,
-      status TEXT NOT NULL,
-      source TEXT NOT NULL,
-      filename TEXT,
-      sha256 TEXT,
-      scope_kind TEXT,
-      scope_slug TEXT,
-      started_at INTEGER NOT NULL,
-      ended_at INTEGER,
-      duration_ms INTEGER,
-      applied_by TEXT,
-      note TEXT,
-      statements_planned INTEGER,
-      statements_executed INTEGER,
-      renames_applied INTEGER,
-      error_code TEXT,
-      error_message TEXT,
-      error_json TEXT,
-      superseded_event_ids TEXT,
-      superseded_at INTEGER,
-      superseded_by TEXT
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS nextly_schema_events_filename_applied_idx
-      ON nextly_schema_events (filename)
-      WHERE event_type = 'file_apply' AND status = 'applied';
-    CREATE INDEX IF NOT EXISTS nextly_schema_events_started_at_idx
-      ON nextly_schema_events (started_at);
-    CREATE INDEX IF NOT EXISTS nextly_schema_events_scope_idx
-      ON nextly_schema_events (scope_kind, scope_slug);
   `);
 }
 

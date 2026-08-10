@@ -19,7 +19,7 @@
  *
  * - **Aspect Ratio**: Square (1:1) using `aspect-square`
  * - **Border**: Default `border border-border`, Selected `border-primary`
- * - **Border Radius**: square corners (`rounded-none`, design system radius 0)
+ * - **Border Radius**: `rounded-lg`, the container step of the `--radius` scale
  * - **Hover State**: `hover:border-primary` on the card, image scales (`group-hover:scale-105`); no shadow
  * - **Selected State**: `border-primary`, no ring, no scale
  * - **Transition**: `transition-all duration-300`
@@ -153,6 +153,12 @@ export function MediaCard({
 
   // Determine if checkbox should be shown
   const showCheckbox = onSelectionChange !== undefined;
+
+  // Named once so the rendered text and its `title` fallback cannot drift.
+  const dimensionsLabel =
+    media.width && media.height ? `${media.width}×${media.height}` : "No Size";
+  const sizeLabel = formatFileSize(media.size);
+
   return (
     <div
       role="button"
@@ -162,7 +168,7 @@ export function MediaCard({
       aria-label={`${media.filename} - ${media.mimeType}`}
       aria-selected={isSelected}
       className={cn(
-        "group relative aspect-square rounded-none overflow-hidden bg-card/50 transition-all duration-300  border border-border flex flex-col",
+        "group relative aspect-square rounded-lg overflow-hidden bg-card/50 transition-all duration-300  border border-border flex flex-col",
         // Selected uses border-primary; unselected gets it on hover, keeping the states distinct and the active boundary perceivable.
         isSelected
           ? "border-primary cursor-pointer"
@@ -219,18 +225,33 @@ export function MediaCard({
 
       {/* Information Bar - Integrated at bottom of aspect-square */}
       <div className="bg-primary/5  border-t border-border p-3 shrink-0">
-        <div className="flex flex-col gap-1.5">
-          <p className="text-[10px] font-bold text-foreground dark:text-muted-foreground truncate leading-none tracking-tight">
+        {/* A container context on the metadata column, so the row below keys off
+         * the width it actually gets rather than the viewport: the grid's column
+         * count and the sidebar move card width independently of any breakpoint,
+         * and at `lg` the six columns leave the row about 58px wide. */}
+        <div className="@container/meta flex flex-col gap-1.5">
+          <p className="text-xs font-bold text-foreground dark:text-muted-foreground truncate leading-none tracking-tight">
             {media.originalFilename || media.filename}
           </p>
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[9px] font-medium text-muted-foreground dark:text-muted-foreground uppercase tracking-widest">
-              {media.width && media.height
-                ? `${media.width}×${media.height}`
-                : "No Size"}
+          {/* The pair needs roughly 160px to render whole, which the row only
+           * has on wide cards. Below that the size wins the space: it is the one
+           * value every asset has (audio and documents have no dimensions) and
+           * the one the preview cannot convey, whereas an image's proportions
+           * are already visible in the thumbnail above. Dimensions are therefore
+           * shown only once the row can hold both in full, so the value is never
+           * a partial number, and the row's `title` keeps them readable at every
+           * width — unlike a tooltip on the span itself, which is unreachable
+           * once the span is squeezed to zero. `truncate` on both is the floor
+           * that keeps a long label, `Invalid size` included, inside the card. */}
+          <div
+            title={`${dimensionsLabel} · ${sizeLabel}`}
+            className="flex items-center justify-between gap-2"
+          >
+            <span className="hidden @min-[10rem]/meta:inline text-xs font-medium text-muted-foreground dark:text-muted-foreground uppercase tracking-widest min-w-0 truncate">
+              {dimensionsLabel}
             </span>
-            <span className="text-[9px] font-bold text-muted-foreground dark:text-muted-foreground uppercase tracking-tighter">
-              {formatFileSize(media.size)}
+            <span className="text-xs font-bold text-muted-foreground dark:text-muted-foreground uppercase tracking-tighter min-w-0 truncate">
+              {sizeLabel}
             </span>
           </div>
         </div>

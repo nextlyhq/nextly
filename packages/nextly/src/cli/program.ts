@@ -17,10 +17,12 @@ import { registerAddCommand } from "./commands/add";
 import { registerBuildCommand } from "./commands/build";
 // What: import the renamed one-shot sync command.
 import { registerDbSyncCommand } from "./commands/db-sync";
+import { registerGenerateManifestCommand } from "./commands/generate-manifest";
 import { registerGenerateTypesCommand } from "./commands/generate-types";
 import { registerI18nRestoreCommand } from "./commands/i18n-restore";
 import { registerInitCommand } from "./commands/init";
 import { registerMigrateCommand } from "./commands/migrate";
+import { registerMigrateBaselineCommand } from "./commands/migrate-baseline";
 import { registerMigrateCheckCommand } from "./commands/migrate-check";
 import { registerMigrateCreateCommand } from "./commands/migrate-create";
 import { registerMigrateDownCommand } from "./commands/migrate-down";
@@ -35,6 +37,7 @@ import { registerPluginsCommand } from "./commands/plugins";
 import { registerPruneCommand } from "./commands/prune";
 import { registerTelemetryCommand } from "./commands/telemetry";
 import { registerUpgradeCommand } from "./commands/upgrade";
+import { registerWebhooksPruneCommand } from "./commands/webhooks-prune";
 import { createLogger, type Logger, type LoggerOptions } from "./utils/logger";
 
 // ============================================================================
@@ -139,6 +142,7 @@ export function createProgram(): Command {
 ${pc.bold("Examples:")}
   ${pc.gray("$")} next dev                      ${pc.gray("# Start the dev server (Nextly boots in-process)")}
   ${pc.gray("$")} nextly generate:types         ${pc.gray("# Generate TypeScript types")}
+  ${pc.gray("$")} nextly generate:manifest --check ${pc.gray("# Fail if the committed block manifest is stale")}
   ${pc.gray("$")} nextly migrate                ${pc.gray("# Run pending migrations")}
   ${pc.gray("$")} nextly migrate:status         ${pc.gray("# Show migration status")}
 
@@ -203,14 +207,19 @@ function registerCommands(program: Command): void {
   // Type generation commands
   registerGenerateTypesCommand(program);
   registerGenerateSchemaCommand(program);
+  // The manifest is also written by generate:types; this stands alone so CI can
+  // check it is current without paying for type and Zod generation.
+  registerGenerateManifestCommand(program);
 
   // Migration commands. F11 was forward-only; SP-2 adds single-step rollback.
   registerMigrateCommand(program); // Imported from ./commands/migrate.js
   registerMigrateCreateCommand(program);
   registerMigrateCheckCommand(program); // F11 PR 4
   registerMigrateStatusCommand(program);
+  registerMigrateBaselineCommand(program); // adopt an existing DB into the history
   registerMigrateResolveCommand(program); // Plan C3 — recovery command
   registerPruneCommand(program); // P2b — drop orphaned plugin/code schema (D14)
+  registerWebhooksPruneCommand(program); // manual webhook-queue retention pass
   registerMigrateFreshCommand(program);
   registerMigrateDownCommand(program); // SP-2 — rollback
 

@@ -17,6 +17,9 @@ import type { MigrationMap } from "./migration";
  * prop's declared `type` (for the generated manifest and for deriving editor
  * controls); the full field-configuration vocabulary lives in the field system
  * that produces these objects.
+ *
+ * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
+ *   Settles at the end of the engine phase.
  */
 export interface PropSchema {
   type: string;
@@ -44,11 +47,28 @@ export interface SlotSpec {
 }
 
 /**
+ * What one support declaration may say: on, off, or a set of named sub-flags.
+ *
+ * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
+ *   Settles at the end of the engine phase.
+ */
+export type BlockSupportValue = boolean | Record<string, boolean>;
+
+/**
  * Style capabilities a block opts into. Each key must be a registered support
  * (built-in or added via `registerSupport`); `true` enables the whole group and
  * an object enables individual sub-flags.
+ *
+ * Open at this level because the registry holds blocks from every source and
+ * validates their keys against what is registered at boot. The AUTHORING type
+ * is narrower and lives in `@nextlyhq/plugin-sdk/blocks`, where a plugin author
+ * can reach it: an augmentation has to name a module that resolves from the
+ * augmenting file, and a plugin installs the SDK rather than this package.
+ *
+ * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
+ *   Settles at the end of the engine phase.
  */
-export type BlockSupports = Record<string, boolean | Record<string, unknown>>;
+export type BlockSupports = Record<string, BlockSupportValue>;
 
 /** A path to an editor component, resolved through the admin import map. */
 export type ComponentPath = string;
@@ -78,22 +98,70 @@ export interface BlockVariation<P extends object = Record<string, unknown>> {
   props?: Partial<P>;
 }
 
-/** What a block's `render` receives. */
-export interface BlockRenderArgs<P> {
+/**
+ * What a block's `render` receives.
+ *
+ * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
+ *   Settles at the end of the engine phase.
+ */
+export interface BlockRenderArgs<P, C = unknown> {
   props: P;
   node: BlockNode;
-  /** Rendered children per slot, keyed by slot name. */
-  slots: Record<string, unknown>;
   /**
    * The generated class the block MUST place on its own root element. Blocks
    * render a single element and never wrap it, so styles target that element.
    */
   className: string;
+  /**
+   * Render one of this block's slots, optionally under a different context.
+   *
+   * A function rather than a map of already-rendered children, and the
+   * difference is what a block can express. Handed finished output, a block can
+   * only place it, so a repeater stamps the same picture once per entry and no
+   * child inside it can show its own entry's fields. Handed the means to draw,
+   * a repeater draws its template once per entry, each time saying which entry
+   * this one is for.
+   *
+   * The gain is not only repeaters. Nothing is rendered until it is asked for,
+   * so a Tabs block draws the visible panel and not the three behind it, and a
+   * panel that is never shown never runs the queries inside it.
+   *
+   * Passing a context replaces the block's own for that subtree; omitting it
+   * keeps the block's. What a context CONTAINS is the renderer's to say, which
+   * is why the item a repeater is iterating is named there rather than here.
+   *
+   * Named after the same idea in Vue (scoped slots) and Svelte (snippets): a
+   * region the parent supplies and the child draws, with values passed in at
+   * the moment of drawing.
+   *
+   * Declared `this: void`, which says what is true: it reads nothing from the
+   * object it arrives on. That is what lets a block pull it out of these
+   * arguments and call it, which is how every block is written. A plain
+   * function-typed property would say the same thing but make the arguments
+   * contravariant in the context, and a registry holding blocks of many context
+   * types could then hold none of them.
+   */
+  renderSlot(this: void, name: string, ctx?: C): BlockRenderResult;
+  /**
+   * Whatever the renderer makes available to a block: a data source, the
+   * current locale, a request. Its type is the renderer's to name, not this
+   * package's — the engine stays free of both React and any renderer, so it
+   * carries the handle without knowing what is on the other end.
+   *
+   * A block that reads data declares the context it needs
+   * (`BlockRenderArgs<MyProps, PageContext>`) and gets it typed. Without this
+   * an async block has no way to reach anything, which makes a dynamic block
+   * unwritable however many other members the definition has.
+   */
+  ctx: C;
 }
 
 /**
  * A block's rendered output. Opaque here: the engine stores and passes it
  * through without inspecting it, so this package needs no UI dependency.
+ *
+ * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
+ *   Settles at the end of the engine phase.
  */
 export type BlockRenderResult = unknown;
 
@@ -109,8 +177,14 @@ export interface BlockExample<P> {
  * `P` is constrained to `object` rather than a string-index record so ordinary
  * named interfaces (which carry no implicit index signature) can describe a
  * block's props without being rewritten.
+ *
+ * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
+ *   Settles at the end of the engine phase.
  */
-export interface BlockDefinition<P extends object = Record<string, unknown>> {
+export interface BlockDefinition<
+  P extends object = Record<string, unknown>,
+  C = unknown,
+> {
   /** Namespaced, immutable identity, e.g. "core/heading". */
   name: string;
   /** Schema version stamped onto every node of this type. */
@@ -148,9 +222,7 @@ export interface BlockDefinition<P extends object = Record<string, unknown>> {
    * make a typed definition unassignable to the heterogeneous collection
    * without buying any safety.
    */
-  render(args: BlockRenderArgs<P>): BlockRenderResult;
-  /** Optional editor-side data hydration before rendering. */
-  resolve?(props: P, ctx: unknown): unknown;
+  render(args: BlockRenderArgs<P, C>): BlockRenderResult;
   /** Editor-only metadata; never serialized. */
   editor?: BlockEditorMeta<P>;
 }
@@ -161,14 +233,26 @@ export interface BlockDefinition<P extends object = Record<string, unknown>> {
  * checked against each other at author time. Shape rules that need runtime
  * data (name format, version/migration coverage, support keys) are enforced
  * when the block is registered.
+ *
+ * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
+ *   The definition shape settles at the end of the engine phase, so a
+ *   contributed block may need changes until then. The tag lives here because
+ *   this declaration is what an author's editor resolves to; the SDK's own
+ *   re-export is collapsed to one line by its declaration bundler, which drops
+ *   the comments attached to it.
  */
-export function defineBlock<P extends object>(
-  definition: BlockDefinition<P>
-): BlockDefinition<P> {
+export function defineBlock<P extends object, C = unknown>(
+  definition: BlockDefinition<P, C>
+): BlockDefinition<P, C> {
   return definition;
 }
 
-/** The prop type of a block definition. */
+/**
+ * The prop type of a block definition.
+ *
+ * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
+ *   Settles at the end of the engine phase.
+ */
 export type InferBlockProps<D> = D extends BlockDefinition<infer P> ? P : never;
 
 /**
@@ -185,18 +269,20 @@ export type InferBlockProps<D> = D extends BlockDefinition<infer P> ? P : never;
  * The prop-consuming members widen to `object` and are declared as methods, so
  * this type works in both directions: any typed definition is assignable to it
  * (bivariant parameter checking), and a consumer holding a stored node can
- * still call `render`/`resolve` with that node's runtime props. Narrowing them
+ * still call `render` with that node's runtime props. Narrowing them
  * to `never` would make the collection accept definitions it could never use.
+ *
+ * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
+ *   Settles at the end of the engine phase.
  */
 export interface AnyBlockDefinition
   extends Omit<
     BlockDefinition,
-    "example" | "defaultProps" | "props" | "localized" | "render" | "resolve"
+    "example" | "defaultProps" | "props" | "localized" | "render"
   > {
   example: { props: object; slots?: Record<string, BlockNode[]> };
   defaultProps?: object;
   props?: Partial<Record<string, PropSchema>>;
   localized?: string[];
-  render(args: BlockRenderArgs<object>): BlockRenderResult;
-  resolve?(props: object, ctx: unknown): unknown;
+  render(args: BlockRenderArgs<object, unknown>): BlockRenderResult;
 }

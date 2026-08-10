@@ -164,7 +164,7 @@ const EditWebhookContent: React.FC<{ id: string }> = ({ id }) => {
   }
 
   if (isLoading || !webhook) {
-    return <Skeleton className="h-130 w-full rounded-none" />;
+    return <Skeleton className="h-130 w-full rounded-lg" />;
   }
 
   return (

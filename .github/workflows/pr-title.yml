@@ -47,8 +47,10 @@ jobs:
             storage-vercel-blob
             storage-uploadthing
             blocks-engine
+            blocks-react
             plugin-form-builder
             plugin-page-builder
+            plugin-seo
             plugin-sdk
             create-nextly-app
             eslint-config

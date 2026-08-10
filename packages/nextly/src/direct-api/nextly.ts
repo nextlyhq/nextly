@@ -60,10 +60,10 @@ import { RoleService } from "../domains/auth/services/role-service";
 import { NextlyError } from "../errors/nextly-error";
 import { buildPluginServicesNamespace } from "../plugins/services/plugin-services-registry";
 import type { CollectionsHandler } from "../services/collections-handler";
-import type { ComponentRegistryService } from "../services/components/component-registry-service";
 import type { EmailProviderService } from "../services/email/email-provider-service";
 import type { EmailService } from "../services/email/email-service";
 import type { EmailTemplateService } from "../services/email/email-template-service";
+import type { FieldGroupRegistryService } from "../services/field-groups/field-group-registry-service";
 import type { MediaService } from "../services/media/media-service";
 import type { Logger } from "../services/shared";
 import type { SingleEntryService } from "../services/singles/single-entry-service";
@@ -72,13 +72,14 @@ import { UserAccountService } from "../services/users/user-account-service";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 import type { UserService } from "../services/users/user-service";
 
+import { installLegacyFieldGroupsNamespaceGuard } from "./legacy-field-groups-namespace";
 import * as authNs from "./namespaces/auth";
 import * as collectionsNs from "./namespaces/collections";
 import type { NextlyContext } from "./namespaces/context";
 import {
   createAccessNamespace,
   createApiKeysNamespace,
-  createComponentsNamespace,
+  createFieldGroupsNamespace,
   createEmailNamespace,
   createEmailProvidersNamespace,
   createEmailTemplatesNamespace,
@@ -90,7 +91,7 @@ import {
   createUsersNamespace,
   type AccessNamespace,
   type ApiKeysNamespace,
-  type ComponentsNamespace,
+  type FieldGroupsNamespace,
   type EmailNamespace,
   type EmailProvidersNamespace,
   type EmailTemplatesNamespace,
@@ -111,8 +112,8 @@ import type {
   CountArgs,
   CountResult,
   CreateArgs,
-  DataFromCollectionSlug,
-  DataFromSingleSlug,
+  RowFromCollectionSlug,
+  RowFromSingleSlug,
   DeleteArgs,
   DeleteResult,
   DirectAPIConfig,
@@ -137,7 +138,7 @@ import type {
   CheckAccessArgs,
   CheckApiKeyArgs,
   CreateApiKeyArgs,
-  CreateComponentArgs,
+  CreateFieldGroupArgs,
   CreateEmailProviderArgs,
   CreateEmailTemplateArgs,
   CreateFolderArgs,
@@ -145,7 +146,7 @@ import type {
   CreateRoleArgs,
   CreateUserArgs,
   CreateUserFieldArgs,
-  DeleteComponentArgs,
+  DeleteFieldGroupArgs,
   DeleteEmailProviderArgs,
   DeleteEmailTemplateArgs,
   DeleteMediaArgs,
@@ -154,8 +155,8 @@ import type {
   DeleteUserArgs,
   DeleteUserFieldArgs,
   FindApiKeyByIDArgs,
-  FindComponentBySlugArgs,
-  FindComponentsArgs,
+  FindFieldGroupBySlugArgs,
+  FindFieldGroupsArgs,
   FindEmailProviderByIDArgs,
   FindEmailProvidersArgs,
   FindEmailTemplateByIDArgs,
@@ -189,7 +190,7 @@ import type {
   SubmitFormArgs,
   TestEmailProviderArgs,
   UpdateApiKeyArgs,
-  UpdateComponentArgs,
+  UpdateFieldGroupArgs,
   UpdateEmailProviderArgs,
   UpdateEmailTemplateArgs,
   UpdateMediaArgs,
@@ -238,7 +239,7 @@ export class Nextly implements NextlyContext {
   public readonly users: UsersNamespace;
   public readonly media: MediaNamespace;
   public readonly forms: FormsNamespace;
-  public readonly components: ComponentsNamespace;
+  public readonly fieldGroups: FieldGroupsNamespace;
   public readonly email: EmailNamespace;
   public readonly emailProviders: EmailProvidersNamespace;
   public readonly emailTemplates: EmailTemplatesNamespace;
@@ -262,7 +263,7 @@ export class Nextly implements NextlyContext {
     this.users = createUsersNamespace(this);
     this.media = createMediaNamespace(this);
     this.forms = createFormsNamespace(this);
-    this.components = createComponentsNamespace(this);
+    this.fieldGroups = createFieldGroupsNamespace(this);
     this.email = createEmailNamespace(this);
     this.emailProviders = createEmailProvidersNamespace(this);
     this.emailTemplates = createEmailTemplatesNamespace(this);
@@ -366,8 +367,10 @@ export class Nextly implements NextlyContext {
   }
 
   /** @internal */
-  public get componentRegistryService(): ComponentRegistryService {
-    return container.get<ComponentRegistryService>("componentRegistryService");
+  public get fieldGroupRegistryService(): FieldGroupRegistryService {
+    return container.get<FieldGroupRegistryService>(
+      "fieldGroupRegistryService"
+    );
   }
 
   /** @internal */
@@ -460,7 +463,7 @@ export class Nextly implements NextlyContext {
    */
   find<TSlug extends CollectionSlug>(
     args: FindArgs<TSlug>
-  ): Promise<ListResult<DataFromCollectionSlug<TSlug>>> {
+  ): Promise<ListResult<RowFromCollectionSlug<TSlug>>> {
     return collectionsNs.find(this, args);
   }
 
@@ -470,7 +473,7 @@ export class Nextly implements NextlyContext {
    */
   findByID<TSlug extends CollectionSlug>(
     args: FindByIDArgs<TSlug>
-  ): Promise<DataFromCollectionSlug<TSlug> | null> {
+  ): Promise<RowFromCollectionSlug<TSlug> | null> {
     return collectionsNs.findByID(this, args);
   }
 
@@ -481,7 +484,7 @@ export class Nextly implements NextlyContext {
    */
   create<TSlug extends CollectionSlug>(
     args: CreateArgs<TSlug>
-  ): Promise<MutationResult<DataFromCollectionSlug<TSlug>>> {
+  ): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
     return collectionsNs.create(this, args);
   }
 
@@ -492,7 +495,7 @@ export class Nextly implements NextlyContext {
    */
   update<TSlug extends CollectionSlug>(
     args: UpdateArgs<TSlug>
-  ): Promise<MutationResult<DataFromCollectionSlug<TSlug>>> {
+  ): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
     return collectionsNs.update(this, args);
   }
 
@@ -529,21 +532,27 @@ export class Nextly implements NextlyContext {
    */
   duplicate<TSlug extends CollectionSlug>(
     args: DuplicateArgs<TSlug>
-  ): Promise<MutationResult<DataFromCollectionSlug<TSlug>>> {
+  ): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
     return collectionsNs.duplicate(this, args);
   }
 
   /** Get a Single (global) document by slug. */
   findSingle<TSlug extends SingleSlug>(
     args: FindSingleArgs<TSlug>
-  ): Promise<DataFromSingleSlug<TSlug>> {
+  ): Promise<RowFromSingleSlug<TSlug>> {
     return singlesNs.findSingle(this, args);
   }
 
-  /** Update a Single (global) document by slug. */
+  /**
+   * Update a Single (global) document by slug.
+   *
+   * Returns the same `{ message, item }` envelope the collection mutations do,
+   * so every mutation reports its outcome the same way and a post-commit hook
+   * failure has somewhere to be reported.
+   */
   updateSingle<TSlug extends SingleSlug>(
     args: UpdateSingleArgs<TSlug>
-  ): Promise<DataFromSingleSlug<TSlug>> {
+  ): Promise<MutationResult<RowFromSingleSlug<TSlug>>> {
     return singlesNs.updateSingle(this, args);
   }
 
@@ -681,6 +690,21 @@ export function resetNextlyInstance(): void {
 }
 
 /**
+ * Whether the Direct API singleton has been built in this process.
+ *
+ * Answers the question without building it, which `getNextly()` cannot: asking
+ * it constructs the instance and registers the container binding. That makes
+ * "was the Direct API resolved?" unobservable through the ordinary surface, so
+ * a test cannot tell a caller that resolved it lazily from one that never
+ * touched it at all.
+ *
+ * @internal
+ */
+export function isNextlyInstantiated(): boolean {
+  return Boolean(globalForDirectApi.__nextly_directApiInstance);
+}
+
+/**
  * Module-level convenience object for Direct API operations.
  *
  * Each method lazily resolves the Nextly singleton on first call,
@@ -774,13 +798,16 @@ export const nextly = {
       getNextly().forms.submissions(args),
   },
 
-  components: {
-    find: (args?: FindComponentsArgs) => getNextly().components.find(args),
-    findBySlug: (args: FindComponentBySlugArgs) =>
-      getNextly().components.findBySlug(args),
-    create: (args: CreateComponentArgs) => getNextly().components.create(args),
-    update: (args: UpdateComponentArgs) => getNextly().components.update(args),
-    delete: (args: DeleteComponentArgs) => getNextly().components.delete(args),
+  fieldGroups: {
+    find: (args?: FindFieldGroupsArgs) => getNextly().fieldGroups.find(args),
+    findBySlug: (args: FindFieldGroupBySlugArgs) =>
+      getNextly().fieldGroups.findBySlug(args),
+    create: (args: CreateFieldGroupArgs) =>
+      getNextly().fieldGroups.create(args),
+    update: (args: UpdateFieldGroupArgs) =>
+      getNextly().fieldGroups.update(args),
+    delete: (args: DeleteFieldGroupArgs) =>
+      getNextly().fieldGroups.delete(args),
   },
 
   email: {
@@ -870,3 +897,9 @@ export const nextly = {
       getNextly().access.checkApiKey(args),
   },
 };
+
+// Both Direct API entry points answer for the pre-rename namespace: callers
+// reach field groups either through an instance or through the `nextly` facade,
+// and an untyped caller upgrading from `components` can arrive at either one.
+installLegacyFieldGroupsNamespaceGuard(Nextly.prototype);
+installLegacyFieldGroupsNamespaceGuard(nextly);

@@ -328,19 +328,34 @@ console.log(settings.siteName);
 
 ### updateSingle
 
-Update a single's content by slug. Returns the bare updated document.
+Update a single's content by slug. Returns the same `{ message, item }` envelope
+the collection mutations return, so every mutation reports its outcome the same
+way.
 
 ```typescript
-const updated = await nextly.updateSingle({
+const { item, warnings } = await nextly.updateSingle({
   slug: "site-settings",
   data: {
     siteName: "My Awesome Site",
     maintenanceMode: false,
   },
 });
+
+item.siteName; // "My Awesome Site"
+
+if (warnings) {
+  // The document was saved. A hook that runs after the write committed threw,
+  // so a side effect did not happen — each warning names the phase, the single
+  // and the error code.
+}
 ```
 
-**Returns:** `T` (the updated single document).
+**Returns:** `MutationResult<T>` — `{ message, item, warnings? }`.
+
+`warnings` is present only when a post-commit hook failed. The write itself
+succeeded: an `afterChange` hook cannot un-save the document, so the operation
+reports success and the failed side effect is reported beside it rather than
+being turned into an error that would invite a retry.
 
 ### findSingles
 
@@ -544,14 +559,14 @@ await nextly.verifyEmail({ token: "verification-token" });
 
 ## Other namespaces
 
-The Direct API also exposes typed namespaces for users, media, forms, components, email providers + templates, RBAC, API keys, and access checks. They follow the same `find` / `findByID` / `create` / `update` / `delete` shape and use the canonical `ListResult<T>` and `MutationResult<T>` envelopes:
+The Direct API also exposes typed namespaces for users, media, forms, field groups, email providers + templates, RBAC, API keys, and access checks. They follow the same `find` / `findByID` / `create` / `update` / `delete` shape and use the canonical `ListResult<T>` and `MutationResult<T>` envelopes:
 
 | Namespace | Purpose | Key methods |
 |---|---|---|
 | `nextly.users` | User records | `find`, `findOne`, `findByID`, `create`, `update`, `delete` |
 | `nextly.media` | Media library | `upload`, `find`, `findByID`, `update`, `delete`, `bulkDelete`, `folders.list`, `folders.create` |
 | `nextly.forms` | Form-builder forms | `find`, `findBySlug`, `submit`, `submissions` |
-| `nextly.components` | Reusable component definitions | `find`, `findBySlug`, `create`, `update`, `delete` |
+| `nextly.fieldGroups` | Reusable field group definitions | `find`, `findBySlug`, `create`, `update`, `delete` |
 | `nextly.emailProviders` | Provider CRUD | `find`, `findByID`, `create`, `update`, `delete`, `setDefault`, `test` |
 | `nextly.emailTemplates` | Template CRUD + preview + layout | `find`, `findByID`, `findBySlug`, `create`, `update`, `delete`, `preview`, `getLayout`, `updateLayout` |
 | `nextly.userFields` | Custom user field definitions | `find`, `findByID`, `create`, `update`, `delete`, `reorder` |

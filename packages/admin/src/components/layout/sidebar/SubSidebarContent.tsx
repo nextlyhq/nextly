@@ -76,7 +76,7 @@ export function SubSidebarContent({
           onChange={onCollectionSearchChange}
         />
         <div className="space-y-1">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
+          <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
             Collections
           </p>
           <SidebarMenu>
@@ -99,7 +99,7 @@ export function SubSidebarContent({
           onChange={onSingleSearchChange}
         />
         <div className="space-y-1">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
+          <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
             Singles
           </p>
           <SidebarMenu>
@@ -119,7 +119,7 @@ export function SubSidebarContent({
           onChange={onPluginSearchChange}
         />
         <div className="space-y-1">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
+          <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
             Install Plugins
           </p>
           <SidebarMenu>
@@ -134,7 +134,7 @@ export function SubSidebarContent({
     return (
       <div className="space-y-6 px-4 py-6">
         <div className="space-y-1">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
+          <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
             {standaloneLabel}
           </p>
           <SidebarMenu>
@@ -175,14 +175,17 @@ export function SubSidebarContent({
     );
   }
 
-  if (selectedMain === "manage") {
+  if (selectedMain === "settings") {
     return (
-      <div className="space-y-6 px-4 py-6">
+      <div className="space-y-8 px-4 py-6">
+        {/* User Management Group — Users, User Fields, and Roles moved here
+            from the former top-level Users icon (id "manage"), which no
+            longer has its own main-menu entry. */}
         <div className="space-y-1">
           {(hasPermission("read-users") ||
             hasPermission("manage-settings") ||
             hasPermission("read-roles")) && (
-            <p className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
+            <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
               User Management
             </p>
           )}
@@ -232,21 +235,17 @@ export function SubSidebarContent({
               </SidebarMenuItem>
             )}
           </SidebarMenu>
+          {/* Plugin collections explicitly placed under the old "users"
+              section follow User Management, matching the prior grouping. */}
+          <DynamicPluginSectionItems placement="users" isActive={isActive} />
         </div>
-        <DynamicPluginSectionItems placement="users" isActive={isActive} />
-      </div>
-    );
-  }
 
-  if (selectedMain === "settings") {
-    return (
-      <div className="space-y-8 px-4 py-6">
         {/* System Settings Group */}
         <div className="space-y-1">
           {(hasPermission("manage-settings") ||
             canAccessApiKeys ||
             canAccessWebhooks) && (
-            <p className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
+            <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
               System Settings
             </p>
           )}
@@ -314,7 +313,7 @@ export function SubSidebarContent({
         <div className="space-y-1">
           {(hasPermission("manage-email-providers") ||
             hasPermission("manage-email-templates")) && (
-            <p className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
+            <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
               Email Configuration
             </p>
           )}
@@ -358,7 +357,7 @@ export function SubSidebarContent({
     return (
       <div className="space-y-6 px-4 py-6">
         <div className="space-y-1">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
+          <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
             Content Builders
           </p>
           <SidebarMenu>
@@ -389,12 +388,12 @@ export function SubSidebarContent({
             <SidebarMenuItem>
               <SidebarMenuButton
                 asChild
-                isActive={isActive(ROUTES.BUILDER_COMPONENTS)}
+                isActive={isActive(ROUTES.BUILDER_FIELD_GROUPS)}
                 className="justify-start px-3"
               >
-                <Link href={ROUTES.BUILDER_COMPONENTS}>
+                <Link href={ROUTES.BUILDER_FIELD_GROUPS}>
                   <Puzzle className="h-4 w-4" />
-                  <span>Components</span>
+                  <span>Field Groups</span>
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>

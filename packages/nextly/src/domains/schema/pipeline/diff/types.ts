@@ -35,6 +35,20 @@ export interface ColumnSpec {
   // costs the nullability exemption the diff grants primary keys — never a
   // wrong op.
   primaryKey?: boolean;
+  // `true` when the live default is a `nextval()` over the sequence this
+  // column OWNS — what PostgreSQL materialises for a `serial` declaration.
+  // Recorded only when true, and only by PostgreSQL introspection: no other
+  // dialect has sequences in a default, and the desired side never spells the
+  // default at all.
+  //
+  // Ownership is the point. A column can hold a `nextval()` default over a
+  // sequence it does not own, either because someone pointed it at one
+  // deliberately or because a `serial` column was later repointed. Those are
+  // real defaults and the diff must keep reporting them; only the implicit
+  // one may be suppressed. Reading the shape of the expression cannot tell
+  // the two apart, which is why this is carried in the snapshot rather than
+  // re-derived in the diff.
+  ownedSequenceDefault?: boolean;
 }
 
 export interface IndexSpec {
@@ -177,15 +191,30 @@ export interface DropIndexOp {
 
 // Operations we PRE-RESOLVE (run via our own SQL before calling pushSchema):
 //   - rename_column / rename_table: avoid drizzle-kit's TTY prompt
+//   - drop_index: must run in the same phase as drop_column and BEFORE it —
+//     SQLite refuses ALTER TABLE ... DROP COLUMN while an index still covers
+//     the column, so leaving index drops to the later additive pass strands
+//     every indexed-column drop (upload/relationship auto-indexes, unique,
+//     index: true) behind an already-failed statement
 //   - drop_column / drop_table: ensure F5's destructive-confirm runs first,
 //     and stay symmetric with the pre-rename phase (ops we own end-to-end)
 //
+// Pre-dropping the index only reaches uniques that exist as a separate object.
+// A `unique: true` field created AT THE SAME TIME as its SQLite table is
+// rendered as a column-level UNIQUE inside CREATE TABLE, which SQLite backs
+// with an internal `sqlite_autoindex_*`. That name is deliberately outside the
+// managed set, no drop_index op is ever planned for it, and DROP INDEX cannot
+// remove it in any case — so dropping such a column still fails with "cannot
+// drop UNIQUE column". Fields that gained their unique later go through
+// CREATE UNIQUE INDEX / ADD CONSTRAINT and are covered.
+//
 // Operations we let pushSchema handle (purely additive; no prompt in API):
-//   - add_table, add_column
+//   - add_table, add_column, add_index
 //   - change_column_type, change_column_nullable, change_column_default
 export const PRE_RESOLUTION_OP_TYPES: ReadonlyArray<Operation["type"]> = [
   "rename_column",
   "rename_table",
+  "drop_index",
   "drop_column",
   "drop_table",
 ] as const;

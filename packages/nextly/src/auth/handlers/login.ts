@@ -1,5 +1,7 @@
 import { readOrGenerateRequestId } from "../../api/request-id";
+import { auditFailureMetadata } from "../../domains/audit/audit-log-writer";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
+import { auditReason } from "../../domains/audit/audit-reasons";
 import { NextlyError } from "../../errors/nextly-error";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
@@ -115,10 +117,18 @@ export async function handleLogin(
       // (same wire shape + stall + audit as the legacy missing-credentials leg).
       throw NextlyError.invalidCredentials({
         logContext: {
+          // The reason a strategy explicitly failed is ours to state, so the
+          // recorded event keeps that fact. A strategy is application code and
+          // its own text is free-form, so it travels under a separate key that
+          // reaches the operator log and stops there rather than displacing
+          // the one value the audit trail is allowed to retain.
           reason:
             outcome.type === "fail"
-              ? (outcome.reason ?? "strategy-fail")
-              : "no-strategy-matched",
+              ? auditReason("strategy-fail")
+              : auditReason("no-strategy-matched"),
+          ...(outcome.type === "fail" && outcome.reason !== undefined
+            ? { strategyReason: outcome.reason }
+            : {}),
         },
       });
     }
@@ -181,7 +191,6 @@ export async function handleLogin(
     }
 
     const response = await issueSession(afterAuth, deps, request, requestId);
-    await deps.authHooks.runAfterLogin(afterAuth, deps.pluginCtx);
     await stallResponse(startTime, deps.loginStallTimeMs);
     return response;
   } catch (err) {
@@ -193,9 +202,12 @@ export async function handleLogin(
     // Every login failure (bad password, locked, unverified, inactive,
     // internal) records a single 'login-failed' event. We deliberately do
     // not split by reason here; that would re-introduce the account-state
-    // leak the unified error wire shape collapses. The internal
-    // `logContext` on the NextlyError still carries the specific cause for
-    // operators reading the audit row's metadata.
+    // leak the unified error wire shape collapses. The row keeps only values
+    // this package controls — a failure is recorded with no actor precisely so
+    // it cannot say which account was reached, which also means nothing links
+    // it to a person and no later deletion can find it, so an identifier must
+    // not enter rather than be erased afterwards. The specific cause reaches
+    // the operator through the log instead.
     await deps.auditLog.write({
       kind: "login-failed",
       ipAddress: getTrustedClientIp(request, {
@@ -203,9 +215,7 @@ export async function handleLogin(
         trustedProxyIps: deps.trustedProxyIps,
       }),
       userAgent: request.headers.get("user-agent"),
-      metadata: NextlyError.is(err)
-        ? { code: err.code, ...(err.logContext ?? {}) }
-        : { code: "INTERNAL_ERROR" },
+      metadata: auditFailureMetadata(err, requestId),
     });
     if (NextlyError.is(err)) {
       return buildAuthErrorResponse(err, requestId);

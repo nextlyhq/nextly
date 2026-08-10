@@ -56,7 +56,7 @@ export const SecretLifecycle: React.FC<SecretLifecycleProps> = ({
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-[11px] font-semibold tracking-[0.08em] uppercase text-muted-foreground">
+        <p className="text-xs font-semibold tracking-[0.08em] uppercase text-muted-foreground">
           Signing secrets
         </p>
         {hasOverlap && canManage && (
@@ -84,7 +84,7 @@ export const SecretLifecycle: React.FC<SecretLifecycleProps> = ({
             key={`${secret.prefix}-${secret.createdAt}`}
             className="flex flex-wrap items-center gap-3 px-4 py-3"
           >
-            <code className="rounded-none bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">
+            <code className="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">
               {secret.prefix}
               {"•".repeat(6)}
             </code>

@@ -16,6 +16,7 @@ import { resolveBindings } from "../core/bindings";
 import type { BlockRegistry } from "../core/registry";
 import { nodeClass } from "../core/style-compiler";
 import type { BlockNode } from "../core/types";
+import type { RemotePatternInput } from "../core/url-policy";
 
 import type { DataProvider } from "./dataProvider";
 import { BlockErrorBoundary } from "./ErrorBoundary";
@@ -24,6 +25,26 @@ import type { QueryBudget } from "./query/runQuery";
 import { QUERY_LOOP_TYPE } from "./query/types";
 
 const BLOCKED_ATTRS = new Set(["style", "srcdoc", "class", "classname"]);
+
+/**
+ * Attributes the browser resolves on its own.
+ *
+ * These are applied by `cloneElement` AFTER the block has rendered, so a custom
+ * attribute here overwrites the value the block already put through the origin
+ * policy — an author-supplied `src` silently replaces the checked one and
+ * reaches any host it names. A block sets the ones it needs itself, so there is
+ * nothing to allow: overriding them is only ever a way around the gate.
+ *
+ * `data` is the `<object>` attribute, matched exactly; `data-*` is untouched.
+ */
+const FETCH_ATTRS = new Set([
+  "src",
+  "srcset",
+  "poster",
+  "background",
+  "data",
+  "lowsrc",
+]);
 
 /** Allowlist author-supplied HTML attributes: valid names, no event handlers, no style. */
 function safeAttributes(
@@ -36,6 +57,7 @@ function safeAttributes(
     if (!/^[a-z][a-z0-9-]*$/.test(key)) continue; // valid attr name only
     if (key.startsWith("on")) continue; // no event handlers
     if (BLOCKED_ATTRS.has(key)) continue;
+    if (FETCH_ATTRS.has(key)) continue;
     out[k] = String(v);
   }
   return out;
@@ -45,6 +67,8 @@ export interface RenderNodeProps {
   node: BlockNode;
   registry: BlockRegistry;
   dataProvider?: DataProvider;
+  /** Hosts this page may load media from; passed to every block's render args. */
+  remotePatterns?: readonly RemotePatternInput[];
   /** Current Query Loop item — threaded to resolve bindings at any depth. */
   item?: Record<string, unknown>;
   /** Remaining query budget shared across nested loops on this page render. */
@@ -53,6 +77,19 @@ export interface RenderNodeProps {
   refs?: Record<string, BlockNode>;
   /** Visited ref ids on the current path — guards against reference cycles. */
   refStack?: string[];
+  /**
+   * The document's node classes, from `documentNodeClasses`.
+   *
+   * Threaded rather than read from context for the same reason `item` is:
+   * Server Components cannot consume context. It has to be the map the
+   * stylesheet was compiled from, because a class disambiguated in one and not
+   * the other names a selector the markup never carries.
+   *
+   * A node reached through `core/ref` is not in it — the compiler does not walk
+   * the reusable-block library either — and falls back to its plain class,
+   * which is what both halves already give it.
+   */
+  classes?: ReadonlyMap<string, string>;
 }
 
 const REF_TYPE = "core/ref";
@@ -61,12 +98,17 @@ export function RenderNode({
   node,
   registry,
   dataProvider,
+  remotePatterns,
   item,
   budget,
   refs,
   refStack,
+  classes,
 }: RenderNodeProps): ReactNode {
-  const className = [nodeClass(node.id), node.customClass]
+  const className = [
+    classes?.get(node.id) ?? nodeClass(node.id),
+    node.customClass,
+  ]
     .filter(Boolean)
     .join(" ");
 
@@ -82,10 +124,20 @@ export function RenderNode({
         node={target}
         registry={registry}
         dataProvider={dataProvider}
+        remotePatterns={remotePatterns}
         item={item}
         budget={budget}
         refs={refs}
         refStack={[...(refStack ?? []), refId]}
+        // Not this document's map. It is keyed by id, and a stored subtree can
+        // hold an id the document also holds — a block made reusable from a node
+        // that stayed put is the ordinary way — so passing it on would give the
+        // referenced node a class disambiguated for the OTHER node of that id,
+        // compiled from styles that are not its own. The referenced subtree is
+        // outside the walk the map is built from, so it has no entry to inherit
+        // and its nodes take the plain class, which is what the compiler would
+        // name them if it reached them.
+        classes={undefined}
       />
     );
   }
@@ -105,8 +157,10 @@ export function RenderNode({
           node={node}
           registry={registry}
           dataProvider={dataProvider}
+          remotePatterns={remotePatterns}
           className={className}
           budget={budget ?? { n: 0 }}
+          classes={classes}
         />
       </BlockErrorBoundary>
     );
@@ -121,17 +175,19 @@ export function RenderNode({
           node={child}
           registry={registry}
           dataProvider={dataProvider}
+          remotePatterns={remotePatterns}
           item={item}
           budget={budget}
           refs={refs}
           refStack={refStack}
+          classes={classes}
         />
       ));
     }
   }
 
   const props = item ? resolveBindings(node, item) : node.props;
-  const el = def.render({ props, node, slots, className });
+  const el = def.render({ props, node, slots, className, remotePatterns });
 
   const extra: Record<string, string> = {
     ...safeAttributes(node.attributes),

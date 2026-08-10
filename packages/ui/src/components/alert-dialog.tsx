@@ -26,9 +26,9 @@
  * ```
  *
  * @design-spec
- * - Border-radius: 0px (rounded-none) per design system spec
+ * - Border-radius: `rounded-lg`, the container step of the `--radius` scale
  * - Max-width: 512px (default)
- * - Backdrop: black/80 with blur effect
+ * - Backdrop: the `--nx-overlay` scrim with blur effect
  * - Padding: 24px (p-6)
  * - Shadow: xl for prominence
  *
@@ -52,18 +52,23 @@ import { usePortalContainer } from "../providers/portal-provider";
 
 import { buttonVariants } from "./button";
 
+/** @experimental */
 const AlertDialog = AlertDialogPrimitive.Root;
 
+/** @experimental */
 const AlertDialogTrigger = AlertDialogPrimitive.Trigger;
 
+/** @experimental */
 const AlertDialogPortal = AlertDialogPrimitive.Portal;
 
+/** @experimental */
 export type AlertDialogOverlayProps = ComponentPropsWithoutRef<
   typeof AlertDialogPrimitive.Overlay
 >;
 
 /**
  * AlertDialogOverlay - The backdrop overlay behind the dialog content.
+ * @experimental
  */
 const AlertDialogOverlay = forwardRef<
   ElementRef<typeof AlertDialogPrimitive.Overlay>,
@@ -72,7 +77,12 @@ const AlertDialogOverlay = forwardRef<
   <AlertDialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      "fixed inset-0 z-50 bg-black/80 backdrop-blur-sm transition-opacity duration-150 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+      // A modal scrim, from the `--nx-overlay` token rather than a surface
+      // token. A black wash is the point — painting it from `background` would
+      // make it a white veil in light mode — but the alpha still has to differ
+      // per mode, because what it composites over is white in one and mid-tone
+      // in the other.
+      "fixed inset-0 z-50 bg-overlay backdrop-blur-sm transition-opacity duration-150 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
       className
     )}
     {...props}
@@ -80,12 +90,14 @@ const AlertDialogOverlay = forwardRef<
 ));
 AlertDialogOverlay.displayName = AlertDialogPrimitive.Overlay.displayName;
 
+/** @experimental */
 export type AlertDialogContentProps = ComponentPropsWithoutRef<
   typeof AlertDialogPrimitive.Content
 >;
 
 /**
  * AlertDialogContent - The main dialog content container.
+ * @experimental
  */
 const AlertDialogContent = forwardRef<
   ElementRef<typeof AlertDialogPrimitive.Content>,
@@ -99,7 +111,7 @@ const AlertDialogContent = forwardRef<
       <AlertDialogPrimitive.Content
         ref={ref}
         className={cn(
-          "fixed left-[50%] top-[50%] z-[51] grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4  border border-border bg-background p-6 shadow-xl rounded-none duration-150 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]",
+          "fixed left-[50%] top-[50%] z-[51] grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4  border border-border bg-background p-6 shadow-xl rounded-lg duration-150 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]",
           className
         )}
         {...props}
@@ -109,10 +121,12 @@ const AlertDialogContent = forwardRef<
 });
 AlertDialogContent.displayName = AlertDialogPrimitive.Content.displayName;
 
+/** @experimental */
 export type AlertDialogHeaderProps = HTMLAttributes<HTMLDivElement>;
 
 /**
  * AlertDialogHeader - Container for dialog title and description.
+ * @experimental
  */
 const AlertDialogHeader = forwardRef<HTMLDivElement, AlertDialogHeaderProps>(
   ({ className, ...props }, ref) => (
@@ -128,10 +142,12 @@ const AlertDialogHeader = forwardRef<HTMLDivElement, AlertDialogHeaderProps>(
 );
 AlertDialogHeader.displayName = "AlertDialogHeader";
 
+/** @experimental */
 export type AlertDialogFooterProps = HTMLAttributes<HTMLDivElement>;
 
 /**
  * AlertDialogFooter - Container for dialog action buttons.
+ * @experimental
  */
 const AlertDialogFooter = forwardRef<HTMLDivElement, AlertDialogFooterProps>(
   ({ className, ...props }, ref) => (
@@ -147,12 +163,14 @@ const AlertDialogFooter = forwardRef<HTMLDivElement, AlertDialogFooterProps>(
 );
 AlertDialogFooter.displayName = "AlertDialogFooter";
 
+/** @experimental */
 export type AlertDialogTitleProps = ComponentPropsWithoutRef<
   typeof AlertDialogPrimitive.Title
 >;
 
 /**
  * AlertDialogTitle - The title of the alert dialog.
+ * @experimental
  */
 const AlertDialogTitle = forwardRef<
   ElementRef<typeof AlertDialogPrimitive.Title>,
@@ -169,12 +187,14 @@ const AlertDialogTitle = forwardRef<
 ));
 AlertDialogTitle.displayName = AlertDialogPrimitive.Title.displayName;
 
+/** @experimental */
 export type AlertDialogDescriptionProps = ComponentPropsWithoutRef<
   typeof AlertDialogPrimitive.Description
 >;
 
 /**
  * AlertDialogDescription - The description text of the alert dialog.
+ * @experimental
  */
 const AlertDialogDescription = forwardRef<
   ElementRef<typeof AlertDialogPrimitive.Description>,
@@ -189,6 +209,7 @@ const AlertDialogDescription = forwardRef<
 AlertDialogDescription.displayName =
   AlertDialogPrimitive.Description.displayName;
 
+/** @experimental */
 export type AlertDialogActionProps = ComponentPropsWithoutRef<
   typeof AlertDialogPrimitive.Action
 >;
@@ -196,6 +217,7 @@ export type AlertDialogActionProps = ComponentPropsWithoutRef<
 /**
  * AlertDialogAction - The primary action button (e.g., "Delete", "Confirm").
  * Styled as destructive by default.
+ * @experimental
  */
 const AlertDialogAction = forwardRef<
   ElementRef<typeof AlertDialogPrimitive.Action>,
@@ -211,6 +233,7 @@ const AlertDialogAction = forwardRef<
 ));
 AlertDialogAction.displayName = AlertDialogPrimitive.Action.displayName;
 
+/** @experimental */
 export type AlertDialogCancelProps = ComponentPropsWithoutRef<
   typeof AlertDialogPrimitive.Cancel
 >;
@@ -218,6 +241,7 @@ export type AlertDialogCancelProps = ComponentPropsWithoutRef<
 /**
  * AlertDialogCancel - The cancel button.
  * Styled as outline variant.
+ * @experimental
  */
 const AlertDialogCancel = forwardRef<
   ElementRef<typeof AlertDialogPrimitive.Cancel>,

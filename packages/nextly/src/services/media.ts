@@ -41,9 +41,9 @@ import {
 // Actor threading + outbox recording for media writes. Each write records a
 // durable `media.*` event in the same transaction as the row change.
 import { actorForWrite, type RequestActor } from "../auth/request-actor";
+import type { RetentionRunner } from "../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
-import type { WebhookRetentionRunner } from "../domains/webhooks/retention-runner";
 import { keysToSnakeCase } from "../lib/case-conversion";
 import { isImageMimeType, validateFileSize } from "../types/media";
 import type {
@@ -86,8 +86,13 @@ export class MediaService extends BaseService {
      * exactly once per write.
      */
     private readonly fastDrainScheduler?: WebhookFastDrainScheduler,
-    /** Prunes the outbox after a write, paired with the drain fast path. */
-    private readonly retentionRunner?: WebhookRetentionRunner
+    /**
+     * Prunes after a write, paired with the drain fast path. The shared runner
+     * carries both passes — the webhook outbox and the audit trails — each on
+     * its own window and gate, and is absent only when neither has anything to
+     * prune.
+     */
+    private readonly retentionRunner?: RetentionRunner
   ) {
     super(adapter, logger);
   }
@@ -99,11 +104,15 @@ export class MediaService extends BaseService {
    * Both absorb their own failures, so this never turns a committed write into
    * an error.
    */
-  private async afterWrite(): Promise<void> {
+  private async afterWrite(recorded: boolean): Promise<void> {
     if (!this.fastDrainScheduler && !this.retentionRunner) {
       return;
     }
-    this.fastDrainScheduler?.offer();
+    // Only schedule the fast drain when an event was actually recorded: an
+    // install with no endpoint and audit off records nothing, so offering the
+    // drain would pay a fresh `nextly_webhooks` query on every media write for
+    // no subscriber. Retention still runs — it prunes prior rows regardless.
+    if (recorded) this.fastDrainScheduler?.offer();
     await this.retentionRunner?.maybeRun(MediaService.WRITE_PATH_PRUNE_BATCHES);
   }
 
@@ -195,6 +204,7 @@ export class MediaService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to fetch media",
         data: null,
       };
@@ -218,6 +228,7 @@ export class MediaService extends BaseService {
         return {
           success: false,
           statusCode: 404,
+          code: "NOT_FOUND",
           message: "Media not found",
           data: null,
         };
@@ -234,6 +245,7 @@ export class MediaService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to retrieve media",
         data: null,
       };
@@ -263,6 +275,7 @@ export class MediaService extends BaseService {
         return {
           success: false,
           statusCode: 400,
+          code: "VALIDATION_ERROR",
           message: sizeValidation.error || "Invalid file size",
           data: null,
         };
@@ -279,6 +292,7 @@ export class MediaService extends BaseService {
           return {
             success: false,
             statusCode: 400,
+            code: "VALIDATION_ERROR",
             message: "Invalid image file",
             data: null,
           };
@@ -427,6 +441,7 @@ export class MediaService extends BaseService {
         sizes: sizesData == null ? null : JSON.stringify(sizesData),
       }) as Record<string, unknown>;
 
+      let recorded = false;
       await this.adapter.transaction(async tx => {
         await tx.insert("media", insertRow, { returning: [] });
 
@@ -434,7 +449,7 @@ export class MediaService extends BaseService {
         // prior state, so `previous` is null. Media has no field schema, so
         // `fields` is empty (nothing to strip). The uploader is the recorded
         // subject when no transport actor was threaded.
-        await recordMutationEvent(tx, {
+        recorded = await recordMutationEvent(tx, {
           type: "media.uploaded",
           resource: { kind: "media", id: mediaId },
           data: mediaRecord,
@@ -446,7 +461,7 @@ export class MediaService extends BaseService {
 
       // The upload committed a media.uploaded outbox row; drain and prune it
       // (no-op when the unified media service wraps this one and drains itself).
-      await this.afterWrite();
+      await this.afterWrite(recorded);
 
       return {
         success: true,
@@ -459,6 +474,7 @@ export class MediaService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to upload media",
         data: null,
       };
@@ -707,6 +723,7 @@ export class MediaService extends BaseService {
       // the other's fresh variants.
       let replacedSizes: unknown = null;
       let updatedRow: Media | null;
+      let recorded = false;
       try {
         updatedRow = await this.adapter.transaction<Media | null>(async tx => {
           await tx.lockRow("media", mediaId);
@@ -736,7 +753,7 @@ export class MediaService extends BaseService {
 
           // `previous` is the freshly-read pre-write row; `data` is the new
           // state. Media has no field schema, so `fields` is empty.
-          await recordMutationEvent(tx, {
+          recorded = await recordMutationEvent(tx, {
             type: "media.updated",
             resource: { kind: "media", id: mediaId },
             data: nextRow,
@@ -784,6 +801,7 @@ export class MediaService extends BaseService {
         return {
           success: false,
           statusCode: 404,
+          code: "NOT_FOUND",
           message: "Media not found",
           data: null,
         };
@@ -797,7 +815,7 @@ export class MediaService extends BaseService {
 
       // The update committed a media.updated outbox row; drain and prune it
       // (no-op when the unified media service wraps this one and drains itself).
-      await this.afterWrite();
+      await this.afterWrite(recorded);
 
       return {
         success: true,
@@ -810,6 +828,7 @@ export class MediaService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to update media",
         data: null,
       };
@@ -829,6 +848,7 @@ export class MediaService extends BaseService {
         return {
           success: false,
           statusCode: 404,
+          code: "NOT_FOUND",
           message: "Media not found",
         };
       }
@@ -843,6 +863,7 @@ export class MediaService extends BaseService {
       // is detected reliably on every dialect, and the event's `data` carries
       // the latest committed state rather than the pre-transaction read. The
       // transaction returns the deleted row (or null when it was already gone).
+      let recorded = false;
       const deletedRow = await this.adapter.transaction<Media | null>(
         async tx => {
           await tx.lockRow("media", mediaId);
@@ -861,7 +882,7 @@ export class MediaService extends BaseService {
           // The removed row's final state ships as `data`; there is no
           // post-delete state, so `previous` is null (mirroring create). Media
           // has no field schema, so `fields` is empty (nothing to strip).
-          await recordMutationEvent(tx, {
+          recorded = await recordMutationEvent(tx, {
             type: "media.deleted",
             resource: { kind: "media", id: mediaId },
             data: current,
@@ -881,6 +902,7 @@ export class MediaService extends BaseService {
         return {
           success: false,
           statusCode: 404,
+          code: "NOT_FOUND",
           message: "Media not found",
         };
       }
@@ -931,7 +953,7 @@ export class MediaService extends BaseService {
 
       // The delete committed a media.deleted outbox row; drain and prune it
       // (no-op when the unified media service wraps this one and drains itself).
-      await this.afterWrite();
+      await this.afterWrite(recorded);
 
       return {
         success: true,
@@ -943,6 +965,7 @@ export class MediaService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to delete media",
       };
     }
@@ -1020,6 +1043,7 @@ export class MediaService extends BaseService {
             success: false,
             error: error instanceof Error ? error.message : "Unknown error",
             statusCode: 500,
+            code: "INTERNAL_ERROR",
           };
         }
       });

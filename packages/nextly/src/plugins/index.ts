@@ -9,6 +9,8 @@
  */
 
 export { AdminPlacement } from "./admin-placement";
+export { collectDeclarations } from "./declarations";
+export type { PluginDeclaration } from "./declarations";
 export type { AdminPlacement as AdminPlacementType } from "./admin-placement";
 
 export {
@@ -31,6 +33,12 @@ export type {
   PluginEmailProvider,
   PluginEmailTemplate,
   PluginFieldType,
+  PluginFieldValidateArgs,
+  PluginFieldInstance,
+  PluginFieldIssue,
+  PluginFieldValidationResult,
+  PluginFieldCodegen,
+  PluginFieldCodegenImport,
   FieldSurface,
   ScheduledTask,
   PermissionSlug,
@@ -39,6 +47,8 @@ export type {
 // Admin UI contributions — `contributes.admin` author surface.
 export type {
   ComponentPath,
+  JsonObject,
+  JsonValue,
   PluginAdminContributions,
   PluginAdminPage,
   PluginAdminWidget,

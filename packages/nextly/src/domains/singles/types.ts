@@ -24,7 +24,7 @@ export interface UserContext {
   /** User email */
   email?: string;
 
-  /** Singular authorized role (the Direct API forwards only this). */
+  /** Singular authorized role. */
   role?: string;
 
   /**
@@ -196,8 +196,16 @@ export interface SingleResult<T = SingleDocument> {
   /** Error message (on failure) */
   message?: string;
 
+  /**
+   * The failure's typed fields, so a boundary rebuilds the exact error instead
+   * of guessing it from the status. Mirrors `CollectionServiceResult`.
+   */
+  code?: string;
+  messageKey?: string;
+  publicData?: unknown;
+
   /** Error details (on failure) */
-  errors?: Array<{ field?: string; message: string }>;
+  errors?: Array<{ field?: string; code?: string; message: string }>;
 
   /**
    * Whether this write appended a durable outbox event, independent of

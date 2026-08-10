@@ -8,7 +8,7 @@
  * Two layers are proved here against a real in-memory SQLite database:
  *   1. `teardownEntityI18n` itself — drops the companion, purges only the deleted entity's
  *      archive rows, and stays a no-op when either artifact is absent.
- *   2. `ComponentRegistryService.deleteComponent` — the real delete path must invoke that
+ *   2. `FieldGroupRegistryService.deleteComponent` — the real delete path must invoke that
  *      teardown, not only drop the main table.
  *
  * System tables come from the production DDL helpers (`getI18nArchiveDdl`, drizzle-kit over
@@ -21,9 +21,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { getSQLiteDrizzleKit } from "../../../../database/drizzle-kit-lazy";
 import { SchemaRegistry } from "../../../../database/schema-registry";
-import { dynamicComponentsSqlite } from "../../../../schemas/dynamic-components/sqlite";
+import { dynamicFieldGroupsSqlite } from "../../../../schemas/dynamic-field-groups/sqlite";
 import { getI18nArchiveDdl } from "../../../../schemas/nextly-i18n-archive";
-import { ComponentRegistryService } from "../../../components/services/component-registry-service";
+import { FieldGroupRegistryService } from "../../../field-groups/services/field-group-registry-service";
 import { splitStatements } from "../../../schema/pipeline/sql-statement-utils";
 import { buildCompanionCreateOnlySql } from "../generate-up";
 import { teardownEntityI18n } from "../teardown-entity-i18n";
@@ -40,7 +40,7 @@ async function registryDdl(): Promise<string[]> {
   const statements = await kit.generateMigration(
     await kit.generateDrizzleJson({}),
     await kit.generateDrizzleJson({
-      dynamicComponents: dynamicComponentsSqlite,
+      dynamicFieldGroups: dynamicFieldGroupsSqlite,
     })
   );
   return splitStatements(statements);
@@ -94,7 +94,7 @@ beforeEach(async () => {
 
   const schemaRegistry = new SchemaRegistry();
   schemaRegistry.registerStaticSchemas({
-    dynamicComponents: dynamicComponentsSqlite,
+    dynamicFieldGroups: dynamicFieldGroupsSqlite,
   });
   adapter.setTableResolver(schemaRegistry);
 });
@@ -121,6 +121,7 @@ describe("teardownEntityI18n (real SQLite)", () => {
       adapter,
       slug: "pages",
       tableName: "dc_pages",
+      kind: "collection",
     });
 
     expect(result.companionDropped).toBe(true);
@@ -146,6 +147,7 @@ describe("teardownEntityI18n (real SQLite)", () => {
     const result = await teardownEntityI18n({
       adapter,
       slug: "plain",
+      kind: "collection",
       tableName: "dc_plain",
     });
 
@@ -162,6 +164,7 @@ describe("teardownEntityI18n (real SQLite)", () => {
       adapter,
       slug: "pages",
       tableName: "dc_pages",
+      kind: "collection",
     });
 
     expect(result).toEqual({ companionDropped: true, archiveRowsPurged: 0 });
@@ -171,7 +174,12 @@ describe("teardownEntityI18n (real SQLite)", () => {
   it("drops the companion before the main table, so the FK never blocks the main drop", async () => {
     await createLocalizedEntity("dc_pages");
 
-    await teardownEntityI18n({ adapter, slug: "pages", tableName: "dc_pages" });
+    await teardownEntityI18n({
+      adapter,
+      slug: "pages",
+      tableName: "dc_pages",
+      kind: "collection",
+    });
     await adapter.executeQuery(`DROP TABLE IF EXISTS "dc_pages"`);
 
     const tables = await tableNames();
@@ -180,8 +188,8 @@ describe("teardownEntityI18n (real SQLite)", () => {
   });
 });
 
-describe("ComponentRegistryService.deleteComponent (real SQLite)", () => {
-  let service: ComponentRegistryService;
+describe("FieldGroupRegistryService.deleteComponent (real SQLite)", () => {
+  let service: FieldGroupRegistryService;
 
   beforeEach(async () => {
     for (const stmt of await registryDdl()) await adapter.executeQuery(stmt);
@@ -195,12 +203,12 @@ describe("ComponentRegistryService.deleteComponent (real SQLite)", () => {
       warn: () => {},
       error: () => {},
     };
-    service = new ComponentRegistryService(
+    service = new FieldGroupRegistryService(
       adapter as unknown as ConstructorParameters<
-        typeof ComponentRegistryService
+        typeof FieldGroupRegistryService
       >[0],
       logger as unknown as ConstructorParameters<
-        typeof ComponentRegistryService
+        typeof FieldGroupRegistryService
       >[1]
     );
   });
@@ -244,5 +252,26 @@ describe("ComponentRegistryService.deleteComponent (real SQLite)", () => {
     expect(tables).toContain("comp_hero_locales");
 
     expect(await archiveSlugs()).toEqual(["hero"]);
+  });
+});
+
+describe("teardownEntityI18n and the transition record", () => {
+  it("still deletes the entity when the meta table was never created", async () => {
+    // A database that never completed core setup has no `nextly_meta`. Failing the teardown over a
+    // bookkeeping row would block the drop it exists to perform.
+    for (const stmt of getI18nArchiveDdl("sqlite")) {
+      await adapter.executeQuery(stmt);
+    }
+    await adapter.executeQuery('DROP TABLE IF EXISTS "nextly_meta"');
+    await createLocalizedEntity("dc_pages");
+
+    const result = await teardownEntityI18n({
+      adapter,
+      slug: "pages",
+      tableName: "dc_pages",
+      kind: "collection",
+    });
+
+    expect(result.companionDropped).toBe(true);
   });
 });

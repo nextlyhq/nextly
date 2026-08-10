@@ -11,7 +11,7 @@ import { cn } from "../lib/utils";
  * @design_specs
  * - Background: bg-accent (slate-100 in light mode, slate-800 in dark mode)
  * - Animation: animate-pulse with motion-reduce:animate-none (respects prefers-reduced-motion)
- * - Border-radius: 0px (rounded-none)
+ * - Border-radius: `rounded-md` by default; override per placeholder shape
  * - Contrast: 3:1 minimum for WCAG 1.4.11 (Non-text Contrast) compliance
  *
  * @accessibility
@@ -31,13 +31,13 @@ import { cn } from "../lib/utils";
  *
  * **Avatar Skeleton:**
  * ```tsx
- * <Skeleton className="h-12 w-12 rounded-none" />
+ * <Skeleton className="h-12 w-12 rounded-md" />
  * ```
  *
  * **Card Skeleton:**
  * ```tsx
  * <div className="space-y-3">
- *   <Skeleton className="h-[125px] w-[250px] rounded-none" />
+ *   <Skeleton className="h-[125px] w-[250px] rounded-lg" />
  *   <div className="space-y-2">
  *     <Skeleton className="h-4 w-[250px]" />
  *     <Skeleton className="h-4 w-[200px]" />
@@ -51,7 +51,7 @@ import { cn } from "../lib/utils";
  *   {isLoading ? (
  *     <>
  *       <span className="sr-only">Loading user profile...</span>
- *       <Skeleton className="h-12 w-12 rounded-none" />
+ *       <Skeleton className="h-12 w-12 rounded-md" />
  *       <Skeleton className="h-4 w-[200px]" />
  *     </>
  *   ) : (
@@ -74,6 +74,7 @@ import { cn } from "../lib/utils";
  *
  * @see {@link https://ui.shadcn.com/docs/components/skeleton shadcn/ui Skeleton}
  * @see {@link https://adrianroselli.com/2020/11/more-accessible-skeletons.html More Accessible Skeletons}
+ * @experimental
  */
 const Skeleton = React.forwardRef<HTMLDivElement, SkeletonProps>(
   ({ className, ...props }, ref) => {
@@ -83,7 +84,7 @@ const Skeleton = React.forwardRef<HTMLDivElement, SkeletonProps>(
         data-slot="skeleton"
         aria-hidden="true"
         className={cn(
-          "bg-primary/5 animate-pulse rounded-none motion-reduce:animate-none",
+          "bg-primary/5 animate-pulse rounded-md motion-reduce:animate-none",
           className
         )}
         {...props}
@@ -94,6 +95,7 @@ const Skeleton = React.forwardRef<HTMLDivElement, SkeletonProps>(
 
 Skeleton.displayName = "Skeleton";
 
+/** @experimental */
 export type SkeletonProps = React.ComponentProps<"div">;
 
 export { Skeleton };

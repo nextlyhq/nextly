@@ -248,7 +248,11 @@ function createDefaultComponentValues(
           }
           break;
         default:
-          defaultValues[fieldName] = null;
+          // A contributed field type reaches here, since the cases above name
+          // only the built-ins. Forcing null discarded the default its schema
+          // author declared and submitted an explicit empty over it.
+          defaultValues[fieldName] =
+            (subField as { defaultValue?: unknown }).defaultValue ?? null;
       }
     }
   }
@@ -279,7 +283,7 @@ function SingleComponentNonRepeatable({
     field.label ||
     (field.componentSchemas?.[field.component!]?.label ??
       field.component ??
-      "Component");
+      "Field Group");
 
   const isSidebar = field.admin?.position === "sidebar";
   const [isOpen, setIsOpen] = useState(true);
@@ -300,12 +304,14 @@ function SingleComponentNonRepeatable({
             "border-y border-border hover:border-primary relative z-10"
           )}
         >
-          <span className="text-[11px] font-bold tracking-[0.08em] uppercase text-primary">
+          {/* Accordion label and its disclosure chevron are content, so they
+              take the page ink; the primary tint stays on the header fill. */}
+          <span className="text-xs font-bold tracking-[0.08em] uppercase text-foreground">
             {label}
           </span>
           <ChevronDown
             className={cn(
-              "h-4 w-4 text-primary transition-transform duration-200",
+              "h-4 w-4 text-foreground transition-transform duration-200",
               isOpen ? "rotate-0" : "-rotate-90"
             )}
           />
@@ -346,7 +352,7 @@ function SingleComponentNonRepeatable({
   return (
     <div
       className={cn(
-        "border border-border dark:border-border shadow-none rounded-none overflow-hidden",
+        "border border-border dark:border-border shadow-none rounded-md overflow-hidden",
         field.admin?.className
       )}
     >
@@ -389,7 +395,7 @@ function SingleComponentNonRepeatable({
           })}
           {componentFields.length === 0 && (
             <p className="text-sm text-muted-foreground text-center py-4">
-              No fields configured for this component.
+              No fields configured for this field group.
             </p>
           )}
         </div>
@@ -447,7 +453,9 @@ function MultiComponentNonRepeatable({
     setValue(name, null, { shouldDirty: true });
   }, [name, setValue]);
 
-  const label = field.label || "Component";
+  // Shown when the field carries no label of its own. The field TYPE stays `component`; only
+  // what the editor is called changed.
+  const label = field.label || "Field Group";
 
   return (
     <Card className={cn("", field.admin?.className)}>
@@ -478,14 +486,14 @@ function MultiComponentNonRepeatable({
       <CardContent className="space-y-4">
         {/* Type Selector */}
         <div className="space-y-2">
-          <label className="text-sm font-medium">Component Type</label>
+          <label className="text-sm font-medium">Field Group</label>
           <Select
             value={currentType || ""}
             onValueChange={handleTypeChange}
             disabled={disabled || readOnly}
           >
             <SelectTrigger>
-              <SelectValue placeholder="Select a component type..." />
+              <SelectValue placeholder="Select a field group..." />
             </SelectTrigger>
             <SelectContent>
               {availableSlugs.map(slug => {
@@ -519,8 +527,8 @@ function MultiComponentNonRepeatable({
         )}
 
         {!currentType && (
-          <p className="text-sm text-muted-foreground text-center py-4  border border-border border-dashed rounded-none bg-primary/5">
-            Select a component type to add fields.
+          <p className="text-sm text-muted-foreground text-center py-4  border border-border border-dashed rounded-md bg-primary/5">
+            Select a field group to add fields.
           </p>
         )}
       </CardContent>
@@ -638,8 +646,8 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
   const isSortable = field.admin?.isSortable !== false;
 
   // Labels
-  const singularLabel = field.label || "Component";
-  const pluralLabel = field.label ? `${field.label}s` : "Components";
+  const singularLabel = field.label || "Field Group";
+  const pluralLabel = field.label ? `${field.label}s` : "Field Groups";
 
   return (
     <div className={cn("space-y-3", field.admin?.className)}>
@@ -703,7 +711,7 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
 
       {/* Empty State */}
       {items.length === 0 && (
-        <div className="text-center py-8 text-muted-foreground  border border-border border-dashed rounded-none bg-primary/5">
+        <div className="text-center py-8 text-muted-foreground  border border-border border-dashed rounded-md bg-primary/5">
           <Puzzle className="h-8 w-8 mx-auto mb-2 opacity-50" />
           <p className="mb-1">No {pluralLabel.toLowerCase()} yet.</p>
           {canAdd && (
@@ -735,7 +743,7 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
                 availableSlugs={availableSlugs}
                 onSelect={handleAdd}
                 title={`Add ${singularLabel}`}
-                description={`Choose a component type to add to ${pluralLabel.toLowerCase()}.`}
+                description={`Choose a field group to add to ${pluralLabel.toLowerCase()}.`}
               />
             </>
           ) : (
@@ -916,16 +924,16 @@ export function ComponentInput<TFieldValues extends FieldValues = FieldValues>({
   return (
     <div
       className={cn(
-        "rounded-none  border border-border border-warning-200 bg-warning-50 dark:border-warning-900 dark:bg-warning-950 p-4",
+        "rounded-lg  border border-border border-warning-200 bg-warning-50 dark:border-warning-900 dark:bg-warning-950 p-4",
         className
       )}
     >
       <p className="text-sm text-warning-700 dark:text-warning-300">
-        <strong>Component field:</strong> {field.name}
+        <strong>Field group field:</strong> {field.name}
       </p>
       <p className="text-xs text-warning-600 dark:text-warning-400 mt-1">
         Schema data not available. Ensure the collection schema API returns
-        enriched component fields.
+        enriched field-group fields.
       </p>
     </div>
   );

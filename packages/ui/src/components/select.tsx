@@ -23,7 +23,7 @@ import { usePortalContainer } from "../providers/portal-provider";
  * Design Specs:
  * - Height: sm=32px, default=40px, lg=44px (matches Input component)
  * - Padding: Horizontal 12px, vertical varies by size
- * - Border radius: 0px (rounded-none)
+ * - Border radius: `rounded-md` on the trigger, `rounded-lg` on the panel
  * - Border: 1px solid, changes on focus/error
  * - Transition: 150ms (consistent with design system)
  * - Font size: sm/default=14px (text-sm), lg=16px (text-base)
@@ -40,27 +40,31 @@ import { usePortalContainer } from "../providers/portal-provider";
  * - Grouping support with labels
  * - Placeholder text support
  * - Error state via aria-invalid
+ * @public
  */
 function Select({ ...props }: ComponentProps<typeof SelectPrimitive.Root>) {
   return <SelectPrimitive.Root data-slot="select" {...props} />;
 }
 
+/** @experimental */
 function SelectGroup({
   ...props
 }: ComponentProps<typeof SelectPrimitive.Group>) {
   return <SelectPrimitive.Group data-slot="select-group" {...props} />;
 }
 
+/** @public */
 function SelectValue({
   ...props
 }: ComponentProps<typeof SelectPrimitive.Value>) {
   return <SelectPrimitive.Value data-slot="select-value" {...props} />;
 }
 
+/** @experimental */
 const selectTriggerVariants = cva(
   // hover:border-primary (full strength) keeps the hover boundary more visible
   // than the resting border-input, not a fainter alpha of it.
-  "flex w-full items-center justify-between gap-2 rounded-none border border-input bg-background px-3 text-sm text-foreground cursor-pointer transition-all duration-150 focus:border-primary! focus-visible:border-primary! focus:outline-none hover:border-primary disabled:cursor-not-allowed disabled:opacity-50 disabled:bg-primary/5 data-[placeholder]:text-muted-foreground aria-[invalid=true]:border-destructive aria-[invalid=true]:focus:border-destructive! [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:size-4",
+  "flex w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-sm text-foreground cursor-pointer transition-all duration-150 focus:border-primary! focus-visible:border-primary! focus:outline-none hover:border-primary disabled:cursor-not-allowed disabled:opacity-50 disabled:bg-primary/5 data-[placeholder]:text-muted-foreground aria-[invalid=true]:border-destructive aria-[invalid=true]:focus:border-destructive! [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:size-4",
   {
     variants: {
       size: {
@@ -75,10 +79,12 @@ const selectTriggerVariants = cva(
   }
 );
 
+/** @public */
 export interface SelectTriggerProps
   extends ComponentProps<typeof SelectPrimitive.Trigger>,
     VariantProps<typeof selectTriggerVariants> {}
 
+/** @public */
 const SelectTrigger = forwardRef<
   React.ElementRef<typeof SelectPrimitive.Trigger>,
   SelectTriggerProps
@@ -100,6 +106,7 @@ const SelectTrigger = forwardRef<
 
 SelectTrigger.displayName = "SelectTrigger";
 
+/** @public */
 function SelectContent({
   className,
   children,
@@ -113,7 +120,7 @@ function SelectContent({
       <SelectPrimitive.Content
         data-slot="select-content"
         className={cn(
-          "bg-popover text-popover-foreground  border border-border shadow-none rounded-none z-9999 max-h-(--radix-select-content-available-height) min-w-32 overflow-hidden data-[state=open]:animate-zoom-in-95 data-[state=closed]:animate-zoom-out-95 data-[side=bottom]:animate-slide-in-from-top-2 data-[side=left]:animate-slide-in-from-right-2 data-[side=right]:animate-slide-in-from-left-2 data-[side=top]:animate-slide-in-from-bottom-2",
+          "bg-popover text-popover-foreground  border border-border shadow-none rounded-lg z-9999 max-h-(--radix-select-content-available-height) min-w-32 overflow-hidden data-[state=open]:animate-zoom-in-95 data-[state=closed]:animate-zoom-out-95 data-[side=bottom]:animate-slide-in-from-top-2 data-[side=left]:animate-slide-in-from-right-2 data-[side=right]:animate-slide-in-from-left-2 data-[side=top]:animate-slide-in-from-bottom-2",
           position === "popper" &&
             "data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
           className
@@ -137,6 +144,7 @@ function SelectContent({
   );
 }
 
+/** @experimental */
 function SelectLabel({
   className,
   ...props
@@ -150,6 +158,7 @@ function SelectLabel({
   );
 }
 
+/** @public */
 function SelectItem({
   className,
   children,
@@ -159,7 +168,7 @@ function SelectItem({
     <SelectPrimitive.Item
       data-slot="select-item"
       className={cn(
-        "relative flex w-full cursor-pointer items-center gap-2 rounded-none py-2 pr-8 pl-2 text-sm text-foreground outline-none select-none transition-colors hover-unified focus:bg-primary/5 focus:text-primary data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:size-4",
+        "relative flex w-full cursor-pointer items-center gap-2 rounded-sm py-2 pr-8 pl-2 text-sm text-foreground outline-none select-none transition-colors hover-unified focus:bg-primary/5 focus:text-primary data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:size-4",
         className
       )}
       {...props}
@@ -174,6 +183,7 @@ function SelectItem({
   );
 }
 
+/** @experimental */
 function SelectSeparator({
   className,
   ...props
@@ -187,6 +197,7 @@ function SelectSeparator({
   );
 }
 
+/** @experimental */
 function SelectScrollUpButton({
   className,
   ...props
@@ -205,6 +216,7 @@ function SelectScrollUpButton({
   );
 }
 
+/** @experimental */
 function SelectScrollDownButton({
   className,
   ...props

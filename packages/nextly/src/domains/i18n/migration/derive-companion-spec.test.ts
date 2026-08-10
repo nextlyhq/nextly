@@ -11,6 +11,7 @@ const fields = [
 describe("deriveCompanionSpec", () => {
   it("builds a spec for the localized subset only", () => {
     const spec = deriveCompanionSpec({
+      builtBy: "codeFirst" as const,
       slug: "pages",
       fields,
       dialect: "sqlite",
@@ -26,6 +27,7 @@ describe("deriveCompanionSpec", () => {
 
   it("uses VARCHAR(36) parent id on mysql", () => {
     const spec = deriveCompanionSpec({
+      builtBy: "codeFirst" as const,
       slug: "pages",
       fields,
       dialect: "mysql",
@@ -38,6 +40,7 @@ describe("deriveCompanionSpec", () => {
   it("returns null when nothing is localized", () => {
     expect(
       deriveCompanionSpec({
+        builtBy: "codeFirst" as const,
         slug: "x",
         fields: [{ name: "price", type: "number" }],
         dialect: "sqlite",
@@ -50,6 +53,7 @@ describe("deriveCompanionSpec", () => {
   it("returns null when the collection switch is off", () => {
     expect(
       deriveCompanionSpec({
+        builtBy: "codeFirst" as const,
         slug: "x",
         fields,
         dialect: "sqlite",

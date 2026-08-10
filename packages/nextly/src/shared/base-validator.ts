@@ -20,10 +20,7 @@
  * @since 1.0.0
  */
 
-// Imported from a leaf data module to avoid the circular dependency that
-// arises when this file imports from collections/config/validate-config and
-// validate-config in turn imports from this file. See shared/sql-reserved.ts
-// for the full rationale.
+import { pluginFieldOptionIssues } from "./lib/plugin-field-options";
 import { RESERVED_SLUGS, SQL_RESERVED_KEYWORDS } from "./sql-reserved";
 
 // ============================================================
@@ -341,12 +338,18 @@ export function validateFieldTypeShared(
       (isCustomType?.(fieldType) ?? false));
 
   if (!isKnown) {
-    errors.push({
-      path: `${path}.type`,
-      // eslint-disable-next-line @typescript-eslint/no-base-to-string
-      message: `Invalid field type '${String(fieldType)}'. Valid types: ${VALID_FIELD_TYPES.join(", ")}`,
-      code: "FIELD_TYPE_INVALID",
-    });
+    // Deferred, not accepted. A plugin contributes its field types when the app
+    // boots, which is after every `define*` call has already run — the config
+    // bundle is evaluated first. Refusing an unrecognised token here therefore
+    // refuses every contributed type, so a plugin field could only be declared
+    // by bypassing these validators entirely.
+    //
+    // A typo is indistinguishable from a not-yet-registered type at this point,
+    // so the answer is not knowable here and the question is asked again at
+    // boot, once `contributes.fieldTypes` has run: see
+    // `assertPluginFieldDeclarations`, which refuses a token no plugin claimed.
+    // `false` still skips the per-type checks below, which have nothing to say
+    // about a type they do not know.
     return false;
   }
 
@@ -362,6 +365,32 @@ export function validateFieldTypeShared(
  * present, an array, and non-empty. Error codes are suffixed with
  * `SELECT_` or `RADIO_` so domain validators surface the correct tag.
  */
+/**
+ * Report a plugin type's own declaration checks through the shared error shape.
+ *
+ * The checks themselves live in `pluginFieldOptionIssues`, which the Schema
+ * Builder's zod schema also consumes; this only renders their result, turning
+ * an option-relative path into the absolute one the config validators report.
+ */
+export function validatePluginFieldOptionsShared(
+  field: { type?: unknown; name?: unknown },
+  path: string,
+  errors: BaseValidationError[]
+): void {
+  for (const issue of pluginFieldOptionIssues(field)) {
+    errors.push({
+      // A returned path names an option, so it is read relative to the field:
+      // the plugin knows its options by name and cannot know its own index.
+      path: issue.path ? `${path}.${issue.path}` : path,
+      message: issue.message,
+      // Always the canonical member. Each domain's error-code union is closed
+      // and public, so emitting a plugin-defined string here would hand a
+      // consumer exhaustively handling those members a value none of them
+      // covers — and the cast at every call site would hide it.
+      code: "FIELD_TYPE_INVALID",
+    });
+  }
+}
 export function validateSelectOptionsShared(
   field: Record<string, unknown>,
   path: string,

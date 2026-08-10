@@ -104,6 +104,23 @@ function getRelationshipLabel(value: unknown): string {
 
   if (typeof value === "object" && value !== null) {
     const obj = value as Record<string, unknown>;
+    // A relationship naming several collections arrives as
+    // `{ relationTo, value }`, and `value` holds the populated row once the
+    // list was read at a populating depth. The label fields live on that row,
+    // so reading the wrapper alone discards a label that was already fetched.
+    //
+    // The row is identified first, because a target collection may itself
+    // define fields called `relationTo` and `value` — neither is reserved —
+    // and such a row is shaped exactly like a wrapper. A row carries an id and
+    // a wrapper does not, so unwrapping only what has no id reads the row's
+    // own `value` field as a label for nobody.
+    if (
+      !("id" in obj) &&
+      typeof obj.relationTo === "string" &&
+      "value" in obj
+    ) {
+      return getRelationshipLabel(obj.value);
+    }
     // Try common title fields in order of preference
     const label = obj.title || obj.name || obj.label || obj.email || obj.id;
     if (label) {
@@ -256,9 +273,11 @@ function UploadCell({ value }: { value: unknown }) {
   return (
     <div className="flex items-center gap-2">
       {isImage && thumbnailUrl ? (
-        <Avatar size="md">
+        // Avatar is reused here as a media thumbnail, not an identity: the
+        // circular default would crop the image, so it takes a --radius step.
+        <Avatar size="md" className="rounded-md">
           <AvatarImage src={thumbnailUrl} alt={filename} />
-          <AvatarFallback>
+          <AvatarFallback className="rounded-md">
             <Image className="h-4 w-4" />
           </AvatarFallback>
         </Avatar>
@@ -318,6 +337,38 @@ function RichTextCell({ value }: { value: unknown }) {
 /**
  * Renders a JSON field as a truncated code preview.
  */
+/**
+ * A page document in one line: how many blocks it holds. The document itself
+ * is a nested tree, so stringifying it would fill the column with structure
+ * nobody can read at a glance.
+ */
+function BlocksCell({ value }: { value: unknown }) {
+  const nodes = (value as { nodes?: unknown })?.nodes;
+  const count = countBlocks(Array.isArray(nodes) ? nodes : []);
+  if (count === 0) {
+    return <span className="text-muted-foreground text-sm">Empty</span>;
+  }
+  return (
+    <span className="text-sm">
+      {count} {count === 1 ? "block" : "blocks"}
+    </span>
+  );
+}
+
+/** Every block in the tree, including those nested inside slots. */
+function countBlocks(nodes: readonly unknown[]): number {
+  let total = 0;
+  for (const entry of nodes) {
+    const node = entry as { slots?: Record<string, unknown> };
+    if (!node || typeof node !== "object") continue;
+    total += 1;
+    for (const slot of Object.values(node.slots ?? {})) {
+      if (Array.isArray(slot)) total += countBlocks(slot);
+    }
+  }
+  return total;
+}
+
 function JsonCell({ value }: { value: unknown }) {
   const jsonStr = JSON.stringify(value);
   const maxLength = 40;
@@ -325,7 +376,7 @@ function JsonCell({ value }: { value: unknown }) {
     jsonStr.length > maxLength ? `${jsonStr.slice(0, maxLength)}...` : jsonStr;
 
   return (
-    <code className="text-xs bg-muted px-1.5 py-0.5 rounded-none font-mono">
+    <code className="text-xs bg-muted px-1.5 py-0.5 rounded-sm font-mono">
       {truncated}
     </code>
   );
@@ -513,9 +564,10 @@ export function EntryTableCell({
       );
     }
 
-    // Component field — indicate a nested component
+    // Field-group field — indicate a nested field group. The case value is the STORED
+    // field type and stays as it is; only the badge text is display copy.
     case "component": {
-      return <Badge variant="default">Component</Badge>;
+      return <Badge variant="default">Field Group</Badge>;
     }
 
     // Rich content
@@ -526,6 +578,11 @@ export function EntryTableCell({
     // JSON data
     case "json": {
       return renderContent(<JsonCell value={value} />);
+    }
+
+    // A page built from blocks
+    case "blocks": {
+      return renderContent(<BlocksCell value={value} />);
     }
 
     // Fallback for unknown types

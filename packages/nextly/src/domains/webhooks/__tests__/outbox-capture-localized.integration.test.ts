@@ -16,6 +16,10 @@ import {
 } from "../../../plugins/test-nextly";
 import { NextlyError } from "../../../errors";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+// The concrete entry-service type: the publish-all outbox tests call
+// `publishAllLocales` directly (it is not exposed on the handler) to assert the
+// per-locale events it records.
+import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import type { WebhookEvent } from "../types";
@@ -79,6 +83,8 @@ async function migrate(t: TestNextly): Promise<void> {
     dialect: t.adapter.dialect,
     defaultLocale: "en",
     collectionLocalized: true,
+    // Defined in config, so the pipeline built this table.
+    builtBy: "codeFirst",
     status: true,
   });
   if (!spec)
@@ -185,6 +191,153 @@ describe("webhook outbox capture, localized (integration)", () => {
     const updatedEvent = rows.find(r => r.type === "entry.updated");
     expect(envelopeOf(createdEvent!).resource).toMatchObject({ locale: "de" });
     expect(envelopeOf(updatedEvent!).resource).toMatchObject({ locale: "en" });
+  });
+
+  it("emits a per-locale entry.published for each companion locale a publish-all transitions", async () => {
+    // Publishing every locale flips the companion `_status` for all of them in
+    // one statement, but a subscriber watching a single language needs its own
+    // event. Each companion locale that actually transitioned to published must
+    // get a locale-tagged `entry.published`, alongside the document-wide event
+    // for the default locale (whose status lives on the main row).
+    const t = await boot();
+    await migrate(t);
+    const h = handlerOf(t);
+
+    // Default-locale draft: main row plus the `en` companion are draft.
+    const created = await h.createEntry(
+      { collectionName: "pages", locale: "en", overrideAccess: true },
+      { title: "T", heading: "English", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+    // A German draft translation, so the `de` companion is draft too.
+    await h.updateEntry(
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "de",
+        overrideAccess: true,
+      },
+      { heading: "Deutsch" }
+    );
+
+    const entries = h.getEntryService() as CollectionEntryService;
+    const result = await entries.publishAllLocales({
+      collectionName: "pages",
+      entryId: id,
+      overrideAccess: true,
+    });
+    expect(result.success).toBe(true);
+
+    const rows = await t.adapter.select<EventRow>("nextly_events");
+    const published = rows
+      .filter(r => r.type === "entry.published")
+      .map(envelopeOf);
+    const byLocale = (loc: string | undefined) =>
+      published.find(e => (e.resource as { locale?: string }).locale === loc);
+    // The German companion transitioned draft -> published, so it carries its
+    // own locale tag...
+    const de = byLocale("de");
+    expect(de).toBeDefined();
+    // ...and the German event carries the German content and the locale's own
+    // before/after status, not the main row's.
+    expect(de!.data.heading).toBe("Deutsch");
+    expect(de!.data.status).toBe("published");
+    expect(de!.previous?.status).toBe("draft");
+    // The default locale's companion transitioned too, so it is emitted with its
+    // own `en` tag (matching the ordinary update path) rather than an untagged
+    // document-wide event, so an `en`-routed consumer still sees it go live.
+    expect(byLocale("en")).toBeDefined();
+    expect(byLocale(undefined)).toBeUndefined();
+  });
+
+  it("emits the default locale's own published event when its companion transitions under an already-published main row", async () => {
+    // Reconciliation can add per-locale `_status` beneath an entry whose main
+    // row is already published, leaving the default companion draft. A
+    // publish-all then transitions that companion, and because the main row is
+    // not itself transitioning, the default locale needs its own locale-tagged
+    // event rather than being swallowed by an absent document-wide one.
+    const t = await boot();
+    await migrate(t);
+    const h = handlerOf(t);
+
+    const created = await h.createEntry(
+      { collectionName: "pages", locale: "en", overrideAccess: true },
+      { title: "T", heading: "English", status: "published" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    // Manufacture the divergence: main row stays published, `en` companion draft.
+    const adapter = t.adapter as unknown as {
+      executeQuery: (sql: string) => Promise<unknown>;
+      dialect: string;
+    };
+    const q = (idn: string) =>
+      adapter.dialect === "mysql" ? `\`${idn}\`` : `"${idn}"`;
+    await adapter.executeQuery(
+      `UPDATE ${q("dc_pages_locales")} SET ${q("_status")} = 'draft' WHERE ${q("_parent")} = '${id}' AND ${q("_locale")} = 'en'`
+    );
+
+    const entries = h.getEntryService() as CollectionEntryService;
+    const result = await entries.publishAllLocales({
+      collectionName: "pages",
+      entryId: id,
+      overrideAccess: true,
+    });
+    expect(result.success).toBe(true);
+
+    const rows = await t.adapter.select<EventRow>("nextly_events");
+    const enPublished = rows
+      .filter(r => r.type === "entry.published")
+      .map(envelopeOf)
+      .filter(e => (e.resource as { locale?: string }).locale === "en");
+    // The publish-all recorded the default companion's real draft -> published
+    // change as its own `en` event (distinct from the create's `en` published
+    // event, which had no prior state).
+    expect(enPublished.some(e => e.previous?.status === "draft")).toBe(true);
+  });
+
+  it("does not emit a publish event for a locale removed from configuration", async () => {
+    // A locale dropped from configuration can leave stale companion rows behind.
+    // A later publish-all must not emit an `entry.published` tagged with that
+    // unconfigured locale, which normal reads and writes would reject.
+    const t = await boot();
+    await migrate(t);
+    const h = handlerOf(t);
+
+    const created = await h.createEntry(
+      { collectionName: "pages", locale: "en", overrideAccess: true },
+      { title: "T", heading: "English", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    // Manufacture a stale companion row for `fr`, which is NOT in the configured
+    // locales (en, de) — as if `fr` had been removed after being translated.
+    const adapter = t.adapter as unknown as {
+      executeQuery: (sql: string) => Promise<unknown>;
+      dialect: string;
+    };
+    const q = (idn: string) =>
+      adapter.dialect === "mysql" ? `\`${idn}\`` : `"${idn}"`;
+    await adapter.executeQuery(
+      `INSERT INTO ${q("dc_pages_locales")} (${q("_parent")}, ${q("_locale")}, ${q("_status")}, ${q("heading")}) VALUES ('${id}', 'fr', 'draft', 'Bonjour')`
+    );
+
+    const entries = h.getEntryService() as CollectionEntryService;
+    const result = await entries.publishAllLocales({
+      collectionName: "pages",
+      entryId: id,
+      overrideAccess: true,
+    });
+    expect(result.success).toBe(true);
+
+    const rows = await t.adapter.select<EventRow>("nextly_events");
+    const publishedLocales = rows
+      .filter(r => r.type === "entry.published")
+      .map(r => (envelopeOf(r).resource as { locale?: string }).locale);
+    // No event carries the unconfigured `fr` locale...
+    expect(publishedLocales).not.toContain("fr");
+    // ...while the configured English one is still emitted.
+    expect(publishedLocales).toContain("en");
   });
 
   it("reports a brand-new translation as the draft it was written as", async () => {

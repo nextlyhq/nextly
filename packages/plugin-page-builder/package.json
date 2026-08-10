@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/plugin-page-builder",
-  "version": "0.0.2-alpha.41",
+  "version": "0.0.2-alpha.54",
   "description": "Visual page builder plugin for Nextly (blocks, drag-and-drop, server-first rendering)",
   "license": "MIT",
   "type": "module",
@@ -20,6 +20,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./blocks": {
+      "types": "./dist/blocks/index.d.ts",
+      "import": "./dist/blocks/index.js",
+      "default": "./dist/blocks/index.js"
     },
     "./admin": {
       "types": "./dist/admin/index.d.ts",
@@ -44,13 +49,17 @@
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
     "@dnd-kit/dom": "0.5.0",
     "@dnd-kit/react": "0.5.0",
+    "@nextlyhq/blocks-engine": "workspace:*",
+    "@nextlyhq/blocks-react": "workspace:*",
     "css-tree": "^2.3.1",
-    "isomorphic-dompurify": "^2"
+    "isomorphic-dompurify": "^2",
+    "picomatch": "^4.0.5"
   },
   "peerDependencies": {
     "@nextlyhq/admin": "workspace:*",
@@ -72,6 +81,7 @@
     "@tanstack/react-query": "^5.62.0",
     "@types/css-tree": "^2.3.4",
     "@types/node": "^20.19.17",
+    "@types/picomatch": "^4.0.3",
     "@types/react": "19.2.0",
     "@types/react-dom": "19.2.0",
     "lucide-react": "^0.544.0",

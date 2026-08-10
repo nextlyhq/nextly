@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 
 import type { BlockRegistry } from "../../core/registry";
 import { DEFAULT_SLOT, type BlockNode } from "../../core/types";
+import type { RemotePatternInput } from "../../core/url-policy";
 import type { DataProvider } from "../dataProvider";
 import { RenderNode } from "../RenderNode";
 
@@ -19,18 +20,24 @@ export interface QueryLoopViewProps {
   node: BlockNode;
   registry: BlockRegistry;
   dataProvider?: DataProvider;
+  /** Hosts this page may load media from; forwarded to nested blocks. */
+  remotePatterns?: readonly RemotePatternInput[];
   className: string;
   result: QueryResult;
   budget: QueryBudget;
+  /** The document's node classes, threaded on to each rendered template node. */
+  classes?: ReadonlyMap<string, string>;
 }
 
 export function QueryLoopView({
   node,
   registry,
   dataProvider,
+  remotePatterns,
   className,
   result,
   budget,
+  classes,
 }: QueryLoopViewProps): ReactNode {
   const template = node.slots?.[DEFAULT_SLOT] ?? [];
 
@@ -73,8 +80,10 @@ export function QueryLoopView({
               node={child}
               registry={registry}
               dataProvider={dataProvider}
+              remotePatterns={remotePatterns}
               item={item}
               budget={budget}
+              classes={classes}
             />
           ))}
         </div>

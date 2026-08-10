@@ -25,7 +25,12 @@
  */
 import safeRegex from "safe-regex2";
 
+import { STORAGE_PRIMITIVE_AS_FIELD_TYPE } from "../../collections/fields/catalog";
+import { getFieldType } from "../../domains/schema/field-types/field-type-registry";
 import type { ValidationPublicData } from "../../errors/public-data";
+import type { PluginFieldType } from "../../plugins/contributions";
+
+import { detachedField } from "./detached-field";
 
 export type ValidationIssue = ValidationPublicData["errors"][number];
 
@@ -84,6 +89,21 @@ export interface ValidateEntryOptions {
    * required LOCALIZED field pass because it falls back to the default language.
    */
   enforceLocalizedRequired?: boolean;
+  /**
+   * Whether an empty value is the value being judged rather than an omission.
+   *
+   * A submission that arrives empty means "not provided", so only `required`
+   * has anything to say about it. A resolved DEFAULT that is empty is different:
+   * it is what the config states the column will hold, so it still has to
+   * satisfy that column. Without this an empty default reaches the insert with
+   * neither the storage-primitive check nor the type's own `validate` having
+   * run — a number-backed `defaultValue: () => ""` fails at the database, or
+   * stores the wrong representation on SQLite.
+   *
+   * `null` and `undefined` are unaffected: they mean no value under either
+   * reading, and the callers that seed defaults filter them out first.
+   */
+  emptyIsAValue?: boolean;
 }
 
 /** Flat-or-nested rule lookup (builder writes `validation.*`, code-first is flat). */
@@ -155,6 +175,23 @@ function selectOptionValues(field: ValidatableField): string[] {
     .filter((v): v is string => typeof v === "string");
 }
 
+/**
+ * Whether JSON can represent a value at all.
+ *
+ * Deliberately narrower than the rule a block document answers to, which also
+ * refuses values JSON reshapes rather than rejects — an `undefined` member, a
+ * Map, a NaN. A json field carries ordinary data from ordinary callers, and
+ * `{ note: undefined }` is normal JavaScript for a field that declares no
+ * shape. What cannot pass is what would throw on write or store nothing.
+ */
+function isJsonRepresentable(value: unknown): boolean {
+  try {
+    return JSON.stringify(value) !== undefined;
+  } catch {
+    return false;
+  }
+}
+
 /** Date-only (YYYY-MM-DD) or anything Date.parse accepts. */
 function isValidDateValue(value: unknown): boolean {
   if (value instanceof Date) return !Number.isNaN(value.getTime());
@@ -163,14 +200,32 @@ function isValidDateValue(value: unknown): boolean {
 }
 
 /**
+ * The write the pass started from, as opposed to whatever the recursion is
+ * currently walking.
+ *
+ * Both differ from what the recursion carries inside a repeater row or group:
+ * the walked `data` is the row, and `options.mode` is forced to "create" there
+ * because a row is a complete object whose required fields must all be present.
+ * Neither is true of the write itself, and a plugin validator is told about the
+ * write — it asks "is this an update?" meaning the operation, not the nesting.
+ */
+interface WriteContext {
+  data: Record<string, unknown>;
+  mode: "create" | "update";
+}
+
+/**
  * Validate one value against one field's rules, appending issues.
  * `path` is the dotted/bracketed location for the admin's error mapping.
+ * `data` is the object this field lives on (a repeater row or group for a
+ * nested field); `write` is the operation the pass started from.
  */
 async function validateFieldValue(
   field: ValidatableField,
   value: unknown,
   path: string,
   data: Record<string, unknown>,
+  write: WriteContext,
   options: ValidateEntryOptions,
   issues: ValidationIssue[]
 ): Promise<void> {
@@ -206,7 +261,14 @@ async function validateFieldValue(
     Array.isArray(value) &&
     !field.hasMany &&
     (field.type === "select" || field.type === "radio");
-  if (isEmpty(value) && !isProvidedEmptyList && !isScalarChoiceArray) {
+  const emptyIsOmission =
+    !options.emptyIsAValue || value === null || value === undefined;
+  if (
+    isEmpty(value) &&
+    emptyIsOmission &&
+    !isProvidedEmptyList &&
+    !isScalarChoiceArray
+  ) {
     if (isRequired(field) && requiredIsEnforced(field, path, options)) {
       issues.push({
         path,
@@ -217,7 +279,19 @@ async function validateFieldValue(
     return;
   }
 
-  switch (field.type) {
+  // A plugin-contributed type is not one of the cases below, so on its own it
+  // would reach the column with nothing checked: a `number`-backed type would
+  // accept the string "3". The storage primitive it declares is exactly the
+  // statement of what its column holds, so the built-in rules for that
+  // primitive's equivalent type are the ones that apply. Built-ins resolve to
+  // themselves — a plugin cannot redefine one, so this never reroutes them.
+  const pluginType = getFieldType(field.type);
+  const effectiveType = pluginType
+    ? STORAGE_PRIMITIVE_AS_FIELD_TYPE[pluginType.storage]
+    : field.type;
+  const issuesBeforePrimitive = issues.length;
+
+  switch (effectiveType) {
     case "text":
     case "textarea":
     case "email":
@@ -473,6 +547,7 @@ async function validateFieldValue(
           await validateFields(
             field.fields,
             row as Record<string, unknown>,
+            write,
             `${path}[${i}]`,
             // Rows are complete objects, so nested required-ness applies.
             { ...options, mode: "create" },
@@ -496,6 +571,7 @@ async function validateFieldValue(
         await validateFields(
           field.fields,
           value as Record<string, unknown>,
+          write,
           path,
           { ...options, mode: "create" },
           issues
@@ -504,10 +580,49 @@ async function validateFieldValue(
       break;
     }
 
-    // relationship/upload/json/component values are shaped by their own
+    case "json": {
+      // A json column holds whatever JSON can represent, and a bigint or a
+      // cycle is not that: serialization throws on it further down the write,
+      // surfacing as a server error rather than as a rejected value. A bare
+      // function or symbol encodes to nothing at all, which would store the
+      // field as absent rather than as what was sent.
+      if (!isJsonRepresentable(value)) {
+        issues.push({
+          path,
+          code: "INVALID_TYPE",
+          message: `${label} must be JSON-serializable.`,
+        });
+      }
+      break;
+    }
+
+    // relationship/upload/component values are shaped by their own
     // normalization passes and referential checks; no scalar rules apply.
     default:
       break;
+  }
+
+  // A plugin-contributed type states its own rules through the registry. The
+  // switch above has just checked the value against its storage primitive,
+  // which for `json` means "is it JSON" and nothing more, so without this a
+  // type could say nothing about what it accepts. Before the per-field
+  // `validate` below, so a schema author's own rule composes on top of the
+  // type's rather than replacing it.
+  // Only for a value that is at least the right shape. A validator reasons
+  // about ratings, not about whether it was handed the string "3", and running
+  // it on a value the primitive already refused would either report the same
+  // write twice or force every plugin author to re-check the type first.
+  if (pluginType?.validate && issues.length === issuesBeforePrimitive) {
+    await validatePluginFieldType(
+      pluginType.validate,
+      field,
+      value,
+      path,
+      label,
+      write,
+      options,
+      issues
+    );
   }
 
   // Custom validate runs after built-in rules (documented contract). A
@@ -538,9 +653,82 @@ async function validateFieldValue(
   }
 }
 
+/** A message the API can show as-is: one sentence, ending in a period. */
+function asSentence(message: string): string {
+  return message.endsWith(".") ? message : `${message}.`;
+}
+
+/**
+ * Run the `validate` a plugin declared for this field's type.
+ *
+ * A failure here is the value's, not the server's: a validator that throws is
+ * reported as a refusal, exactly as the per-field `validate` is, so a defective
+ * plugin cannot turn a rejected write into a 500.
+ */
+async function validatePluginFieldType(
+  validate: NonNullable<PluginFieldType["validate"]>,
+  field: ValidatableField,
+  value: unknown,
+  path: string,
+  label: string | undefined,
+  write: WriteContext,
+  options: ValidateEntryOptions,
+  issues: ValidationIssue[]
+): Promise<void> {
+  const refuse = (message: string): void => {
+    issues.push({ path, code: "CUSTOM", message });
+  };
+
+  try {
+    const result = await validate(value, {
+      data: write.data,
+      req: options.req ?? {},
+      field: detachedField(field),
+      // The validator cannot work out where it sits — a type nested in a
+      // repeater row has no way to know its index — so the location it would
+      // need to build an issue path is given to it.
+      path,
+      // The operation, not `options.mode`: the latter is switched to "create"
+      // while walking a repeater row, which says nothing about whether the
+      // entry itself is being created.
+      mode: write.mode,
+    });
+
+    if (result === true) return;
+
+    if (typeof result === "string") {
+      refuse(asSentence(result));
+      return;
+    }
+
+    if (Array.isArray(result)) {
+      for (const issue of result) {
+        issues.push({
+          // A structured value can be wrong somewhere inside itself, so an
+          // issue may address a position under this field; without one it
+          // belongs to the field as a whole.
+          path: issue.path ?? path,
+          code: issue.code ?? "CUSTOM",
+          message: asSentence(issue.message),
+        });
+      }
+      return;
+    }
+
+    // Anything outside the documented union — `undefined` from a validator
+    // that forgot to return, a `false` from one assuming boolean semantics —
+    // is refused rather than read as consent. Silently accepting it would turn
+    // a validator bug into no validation at all.
+    refuse(`${label ?? "This field"} failed validation.`);
+  } catch {
+    refuse(`${label ?? "This field"} failed validation.`);
+  }
+}
+
 async function validateFields(
   fields: ValidatableField[],
   data: Record<string, unknown>,
+  write: WriteContext,
   basePath: string,
   options: ValidateEntryOptions,
   issues: ValidationIssue[]
@@ -548,7 +736,10 @@ async function validateFields(
   for (const field of fields) {
     if (!field.name) continue;
     const path = basePath ? `${basePath}.${field.name}` : field.name;
-    const provided = field.name in data;
+    // Own keys only. Field names may be camelCase, so `toString` is a legal
+    // one, and `in` would answer for the prototype: the field would read as
+    // present on every update and carry the inherited function as its value.
+    const provided = Object.hasOwn(data, field.name);
 
     // PATCH semantics: an absent key on update is untouched. On create,
     // absent required fields must still fail.
@@ -556,9 +747,10 @@ async function validateFields(
 
     await validateFieldValue(
       field,
-      data[field.name],
+      provided ? data[field.name] : undefined,
       path,
       data,
+      write,
       options,
       issues
     );
@@ -575,6 +767,16 @@ export async function validateEntryData(
   options: ValidateEntryOptions
 ): Promise<ValidationIssue[]> {
   const issues: ValidationIssue[] = [];
-  await validateFields(fields, data, "", options, issues);
+  // The write is what every nested pass reports against: a validator on a
+  // field inside a repeater row still needs the top-level siblings the row it
+  // is walking does not carry, and the operation the nested walk overrides.
+  await validateFields(
+    fields,
+    data,
+    { data, mode: options.mode },
+    "",
+    options,
+    issues
+  );
   return issues;
 }

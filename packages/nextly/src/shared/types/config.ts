@@ -12,7 +12,11 @@
 
 import type { AuthStrategy } from "../../auth/pipeline/types";
 import type { CollectionConfig } from "../../collections/config/define-collection";
-import type { ComponentConfig } from "../../components/config/types";
+import { resolveAuditRetentionConfig } from "../../domains/audit/retention-config";
+import type {
+  AuditRetentionConfig,
+  ResolvedAuditRetentionConfig,
+} from "../../domains/audit/retention-config";
 import { normalizeLocalization } from "../../domains/i18n/config/normalize";
 import type {
   LocalizationConfig,
@@ -23,6 +27,7 @@ import type {
   ResolvedWebhookRetentionConfig,
   WebhookRetentionConfig,
 } from "../../domains/webhooks/retention-config";
+import type { FieldGroupConfig } from "../../field-groups/config/types";
 import type { CorsConfig } from "../../middleware/cors";
 import type { RateLimitStore } from "../../middleware/rate-limit";
 import type { SecurityHeadersConfig } from "../../middleware/security-headers";
@@ -581,8 +586,8 @@ export interface NextlyConfig {
   /** Array of Single configurations. */
   singles?: SingleConfig[];
 
-  /** Array of Component configurations. */
-  components?: ComponentConfig[];
+  /** Array of Field Group configurations. */
+  fieldGroups?: FieldGroupConfig[];
 
   /** User model extension configuration. */
   users?: UserConfig;
@@ -643,6 +648,26 @@ export interface NextlyConfig {
 
   /** Outbound webhook configuration. */
   webhooks?: WebhookConfig;
+  /** Audit and activity trail policy. */
+  audit?: AuditConfig;
+}
+
+/**
+ * Audit trail configuration.
+ *
+ * Retention lives here rather than under `webhooks` because these windows bound
+ * a record of who did what, not a delivery ledger, and an operator setting how
+ * long activity is kept would not think to look under webhooks for it.
+ */
+export interface AuditConfig {
+  /**
+   * How long the two trails are kept.
+   *
+   * Enabled by default: content activity for 90 days, auth events for 180.
+   * `false` keeps everything forever and accepts the growth. Each window can
+   * also be set to `false` on its own.
+   */
+  retention?: AuditRetentionConfig | false;
 }
 
 /**
@@ -656,12 +681,20 @@ export interface WebhookConfig {
   /**
    * How long recorded events and delivery attempts are kept.
    *
-   * Enabled by default. A row is appended to the event ledger on every content
-   * write, whether or not this install uses webhooks at all, so leaving it
-   * unbounded would tax people who never opted in. `false` keeps everything
-   * forever and accepts that growth.
+   * Enabled by default. Events are recorded only when the install has an enabled
+   * endpoint (or the audit seam is on), so an install with no webhooks writes
+   * nothing to bound; when recording is active, this limits how long the rows
+   * are kept. `false` keeps everything forever and accepts that growth.
    */
   retention?: WebhookRetentionConfig | false;
+
+  /**
+   * Force-record every content event to the outbox even when no webhook
+   * endpoint is configured. Off by default: with no endpoints and this off,
+   * writes record nothing. The org-wide audit log turns this on so it captures
+   * events regardless of delivery subscriptions.
+   */
+  audit?: boolean;
 }
 
 /**
@@ -681,7 +714,7 @@ export interface SanitizedNextlyConfig {
   singles: SingleConfig[];
 
   /** Array of Component configurations (empty array if none provided). */
-  components: ComponentConfig[];
+  fieldGroups: FieldGroupConfig[];
 
   /** User model extension configuration. Undefined if no user config provided. */
   users?: UserConfig;
@@ -737,6 +770,21 @@ export interface SanitizedNextlyConfig {
    * Always present after sanitization so consumers never re-resolve it.
    */
   webhookRetention: ResolvedWebhookRetentionConfig | null;
+  /**
+   * Resolved audit-trail retention windows.
+   *
+   * Always a policy after sanitization, since both windows have defaults — 90
+   * days of content activity, 180 of auth events. Either may be `false`, which
+   * is how keeping that trail forever is expressed; `audit: { retention: false }`
+   * sets both.
+   */
+  auditRetention: ResolvedAuditRetentionConfig;
+
+  /**
+   * Whether the audit seam forces outbox recording regardless of endpoints.
+   * Always present after sanitization; defaults to false.
+   */
+  webhookAuditEnabled: boolean;
 }
 
 // ============================================================
@@ -865,7 +913,7 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
   return {
     collections: config.collections ?? [],
     singles: config.singles ?? [],
-    components: config.components ?? [],
+    fieldGroups: config.fieldGroups ?? [],
     users: config.users,
     email: config.email,
     typescript: {
@@ -908,5 +956,13 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     // user switched retention off; an absent `webhooks` key resolves to the
     // defaults, since the event ledger fills whether or not webhooks are used.
     webhookRetention: resolveWebhookRetentionConfig(config.webhooks?.retention),
+    // Resolved rather than passed through, and the resolution is the part that
+    // matters: omitting `audit` entirely produces the default windows, which
+    // DELETE rows past them. Keeping everything is `false` — at a single window
+    // or at the whole block — so it is stated rather than implied by absence.
+    auditRetention: resolveAuditRetentionConfig(config.audit?.retention),
+    // Off unless explicitly enabled; the org-wide audit log flips this to keep
+    // recording events when an install has no delivery endpoints.
+    webhookAuditEnabled: config.webhooks?.audit ?? false,
   };
 }

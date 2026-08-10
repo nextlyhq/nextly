@@ -139,7 +139,7 @@ function Segmented({
           size="sm"
           variant={value === opt.value ? "default" : "ghost"}
           disabled={disabled}
-          className="rounded-none border-0"
+          className="rounded-md border-0"
           onClick={() => onChange(opt.value)}
         >
           {opt.label}

@@ -13,9 +13,15 @@ import type { AnyBlockDefinition, BlockSupports } from "./block";
 import { COMPONENT_INSTANCE_TYPE } from "./document";
 import type { MigrationSource } from "./migration";
 import { MAX_MIGRATION_STEPS, findMigrationGaps } from "./migration";
+import { styleSupportDefinitions } from "./style/supports-map";
 import type { BlockTypeLookup } from "./validation";
 
-/** A style capability blocks may opt into. */
+/**
+ * A style capability blocks may opt into.
+ *
+ * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
+ *   Settles at the end of the engine phase.
+ */
 export interface SupportDefinition {
   /** The key blocks use inside `supports`, e.g. "spacing". */
   key: string;
@@ -36,27 +42,19 @@ interface RegistryEntry {
   source: string;
 }
 
-/** Style capabilities available to every app before any extension. */
+/**
+ * Style capabilities available to every app before any extension.
+ *
+ * The style groups are derived from the style-property catalog rather than
+ * listed again here: a support key and a catalog group are the same thing, and
+ * a support's sub-flags are exactly the flags its group's properties declare.
+ * Deriving them means adding a property, a group, or a flag extends what blocks
+ * may declare in the same edit, with no second list that can fall behind.
+ */
 const BUILT_IN_SUPPORTS: SupportDefinition[] = [
-  {
-    key: "spacing",
-    label: "Spacing",
-    flags: ["margin", "padding", "blockGap"],
-  },
-  { key: "layout", label: "Layout" },
-  { key: "dimensions", label: "Dimensions" },
-  { key: "typography", label: "Typography" },
-  { key: "color", label: "Color", flags: ["text", "background", "link"] },
-  { key: "background", label: "Background", flags: ["image", "gradient"] },
-  {
-    key: "border",
-    label: "Border",
-    flags: ["width", "style", "color", "radius"],
-  },
-  { key: "shadow", label: "Shadow" },
-  { key: "effects", label: "Effects" },
-  { key: "position", label: "Position" },
-  { key: "container", label: "Container queries" },
+  ...styleSupportDefinitions(),
+  // Custom CSS gates a capability rather than a set of style properties, so it
+  // has no catalog group and is declared directly.
   { key: "customCss", label: "Custom CSS" },
 ];
 
@@ -108,6 +106,18 @@ function fail(code: string, message: string): never {
 /** A key/value object — not null, not an array, not a function. */
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * How a malformed support value is named in a boot error. The kind rather than
+ * the value: what is wrong with `{ padding: "yes" }` is that it is a string
+ * where a flag belongs, and printing the string alone reads like a value the
+ * flag might have accepted.
+ */
+function describeSupportValue(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "an array";
+  return `a ${typeof value}`;
 }
 
 /**
@@ -203,17 +213,34 @@ function assertKnownSupports(
         `block "${blockName}" declares unknown support "${key}". Register it with registerSupport() first.`
       );
     }
-    // When a support enumerates its sub-flags, an unrecognized nested flag is
-    // as much a typo as an unknown support key and would silently enable
-    // nothing, so it is rejected the same way.
-    if (support.flags && isPlainRecord(value)) {
-      for (const flag of Object.keys(value)) {
-        if (!support.flags.includes(flag)) {
-          fail(
-            "NEXTLY_BLOCK_UNKNOWN_SUPPORT",
-            `block "${blockName}" declares unknown "${key}" flag "${flag}". Known flags: ${support.flags.join(", ")}.`
-          );
-        }
+    // The VALUE is checked, not only the key. A definition can arrive from
+    // plain JavaScript or through the deliberately untyped declarations
+    // channel, where the authoring types never ran, and the style mapping
+    // enables a group only on exactly `true`: `{ spacing: { padding: "yes" } }`
+    // would register without complaint and then style nothing at all, which is
+    // the silent failure the key check already exists to prevent.
+    if (typeof value !== "boolean" && !isPlainRecord(value)) {
+      fail(
+        "NEXTLY_BLOCK_INVALID",
+        `block "${blockName}" declares support "${key}" as ${describeSupportValue(value)}. Use true, false, or an object of sub-flags.`
+      );
+    }
+    if (!isPlainRecord(value)) continue;
+    for (const [flag, flagValue] of Object.entries(value)) {
+      // When a support enumerates its sub-flags, an unrecognized nested flag is
+      // as much a typo as an unknown support key and would silently enable
+      // nothing, so it is rejected the same way.
+      if (support.flags && !support.flags.includes(flag)) {
+        fail(
+          "NEXTLY_BLOCK_UNKNOWN_SUPPORT",
+          `block "${blockName}" declares unknown "${key}" flag "${flag}". Known flags: ${support.flags.join(", ")}.`
+        );
+      }
+      if (typeof flagValue !== "boolean") {
+        fail(
+          "NEXTLY_BLOCK_INVALID",
+          `block "${blockName}" declares "${key}" flag "${flag}" as ${describeSupportValue(flagValue)}. Use true or false.`
+        );
       }
     }
   }

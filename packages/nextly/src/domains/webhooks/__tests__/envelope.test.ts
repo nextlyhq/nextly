@@ -205,4 +205,27 @@ describe("buildEnvelope", () => {
     expect(data).toHaveProperty("password");
     expect(previous).toHaveProperty("password");
   });
+
+  it("carries statusChange when provided, omits it otherwise", () => {
+    const withChange = buildEnvelope({
+      ...base,
+      type: "entry.status_changed",
+      previous: { id: "p1", status: "draft" },
+      statusChange: { from: "draft", to: "published" },
+    });
+    expect(withChange.statusChange).toEqual({ from: "draft", to: "published" });
+
+    // A non-lifecycle event carries no statusChange.
+    expect(buildEnvelope(base).statusChange).toBeUndefined();
+  });
+
+  it("carries statusChange with from:null for a create-as-published", () => {
+    const env = buildEnvelope({
+      ...base,
+      type: "entry.published",
+      previous: null,
+      statusChange: { from: null, to: "published" },
+    });
+    expect(env.statusChange).toEqual({ from: null, to: "published" });
+  });
 });

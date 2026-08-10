@@ -47,7 +47,7 @@ export interface DashboardStatsResponse {
   users: number;
   roles: number;
   permissions: number;
-  components: number;
+  fieldGroups: number;
   singles: number;
   apiKeys: number;
 }
@@ -118,7 +118,7 @@ export class DashboardService extends BaseService {
       this.countTable("users"),
       this.countTable("roles"),
       this.countTable("permissions"),
-      this.countRegistryItems("componentRegistryService"),
+      this.countRegistryItems("fieldGroupRegistryService"),
       this.countActiveApiKeys(),
       this.getContentStatusBreakdown(collections),
     ]);
@@ -137,7 +137,7 @@ export class DashboardService extends BaseService {
       users: userCount,
       roles: roleCount,
       permissions: permissionCount,
-      components: componentCount,
+      fieldGroups: componentCount,
       singles: singles.length,
       apiKeys: apiKeyCount,
     };
@@ -212,7 +212,11 @@ export class DashboardService extends BaseService {
           label: "Content Types",
           value: dashStats.content.contentTypes,
         },
-        { key: "components", label: "Components", value: dashStats.components },
+        {
+          key: "fieldGroups",
+          label: "Field Groups",
+          value: dashStats.fieldGroups,
+        },
         { key: "singles", label: "Singles", value: dashStats.singles },
         { key: "users", label: "Users", value: dashStats.users },
         { key: "apiKeys", label: "API Keys", value: dashStats.apiKeys },
@@ -402,7 +406,7 @@ export class DashboardService extends BaseService {
       }>(serviceName);
 
       const listFn =
-        serviceName === "componentRegistryService"
+        serviceName === "fieldGroupRegistryService"
           ? service.listComponents
           : service.listSingles;
 

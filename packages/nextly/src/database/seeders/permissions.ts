@@ -5,7 +5,10 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { CreatePermissionSchema } from "@nextly/schemas/_zod/rbac";
+import {
+  CreatePermissionSchema,
+  permissionSlug,
+} from "@nextly/schemas/_zod/rbac";
 import { ServiceContainer } from "@nextly/services/index";
 
 /**
@@ -91,7 +94,7 @@ export async function seedPermissions(
 
     for (const action of actions) {
       const name = `${action.charAt(0).toUpperCase() + action.slice(1)} ${resource.charAt(0).toUpperCase() + resource.slice(1)}`;
-      const slug = `${action}-${resource}`;
+      const slug = permissionSlug(action, resource);
       const description = `Permission to ${action} ${resource}`;
 
       try {

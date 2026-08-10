@@ -87,7 +87,7 @@ export function requiresAuthOnly(service: string, method: string): boolean {
   // matching the collection/single schema-list endpoints above. It must not
   // be public: unauthenticated callers must not enumerate component schemas.
   if (
-    service === "components" &&
+    service === "field-groups" &&
     ["getComponent", "listComponents"].includes(method)
   ) {
     return true;
@@ -829,6 +829,26 @@ function parseCollectionEntryVersionRoutes(
     };
   }
 
+  // `versions/working-draft` DELETE discards the pending working draft
+  // (draft/published split), reverting the document to its live published row.
+  // `working-draft` is a named sub-resource, never a version number, so it can
+  // never collide with `versions/{versionNo}`. Authorized as an update: it
+  // changes what the editor sees, not the document's history.
+  if (
+    additionalParams.length === 2 &&
+    additionalParams[1] === "working-draft" &&
+    httpMethod === "DELETE"
+  ) {
+    routeParams.collectionName = id;
+    routeParams.entryId = subId;
+    return {
+      service: "collections",
+      operation: "update",
+      method: "discardWorkingDraft",
+      routeParams,
+    };
+  }
+
   if (
     // Only `versions` or `versions/{versionNo}`; anything deeper is not a
     // route this owns and must not be silently truncated to one that is.
@@ -840,6 +860,18 @@ function parseCollectionEntryVersionRoutes(
 
   routeParams.collectionName = id;
   routeParams.entryId = subId;
+
+  // `versions/diff?from=A&to=B` compares two versions. It is a read of history,
+  // authorized like reading a single version; `diff` can never collide with a
+  // version number, which is always numeric.
+  if (additionalParams[1] === "diff") {
+    return {
+      service: "collections",
+      operation: "single",
+      method: "getEntryVersionDiff",
+      routeParams,
+    };
+  }
 
   const versionNo = additionalParams[1];
   if (versionNo) {
@@ -917,6 +949,17 @@ function parseSingleVersionRoutes(
   }
 
   routeParams.slug = id;
+
+  // `versions/diff?from=A&to=B` compares two versions; a read of history like
+  // reading one version. `diff` cannot collide with a numeric version number.
+  if (subId === "diff") {
+    return {
+      service: "singles",
+      operation: "single",
+      method: "getSingleVersionDiff",
+      routeParams,
+    };
+  }
 
   if (subId) {
     routeParams.versionNo = subId;
@@ -1237,13 +1280,13 @@ function parseSingleRoutes(
  * Parse Components routes
  *
  * Handles component definition endpoints:
- * - GET /api/components → list all components
- * - POST /api/components → create component (Schema Builder)
- * - GET /api/components/[slug] → get component by slug
- * - PATCH /api/components/[slug] → update component
- * - DELETE /api/components/[slug] → delete component
- * - POST /api/components/schema/[slug]/preview → preview component schema changes
- * - POST /api/components/schema/[slug]/apply → apply confirmed component schema changes
+ * - GET /api/field-groups → list all components
+ * - POST /api/field-groups → create component (Schema Builder)
+ * - GET /api/field-groups/[slug] → get component by slug
+ * - PATCH /api/field-groups/[slug] → update component
+ * - DELETE /api/field-groups/[slug] → delete component
+ * - POST /api/field-groups/schema/[slug]/preview → preview component schema changes
+ * - POST /api/field-groups/schema/[slug]/apply → apply confirmed component schema changes
  */
 function parseComponentRoutes(
   id: string | undefined,
@@ -1252,7 +1295,7 @@ function parseComponentRoutes(
   subresource?: string,
   subId?: string
 ): ParsedRoute | null {
-  // POST /api/components/schema/[slug]/preview → preview component schema changes
+  // POST /api/field-groups/schema/[slug]/preview → preview component schema changes
   if (
     id === "schema" &&
     subresource &&
@@ -1261,14 +1304,14 @@ function parseComponentRoutes(
   ) {
     routeParams.slug = subresource;
     return {
-      service: "components",
+      service: "field-groups",
       operation: "single",
       method: "previewComponentSchemaChanges",
       routeParams,
     };
   }
 
-  // POST /api/components/schema/[slug]/apply → apply confirmed component schema changes
+  // POST /api/field-groups/schema/[slug]/apply → apply confirmed component schema changes
   if (
     id === "schema" &&
     subresource &&
@@ -1277,7 +1320,7 @@ function parseComponentRoutes(
   ) {
     routeParams.slug = subresource;
     return {
-      service: "components",
+      service: "field-groups",
       operation: "update",
       method: "applyComponentSchemaChanges",
       routeParams,
@@ -1286,53 +1329,53 @@ function parseComponentRoutes(
 
   const slug = id;
 
-  // GET /api/components → list all components
+  // GET /api/field-groups → list all components
   if (!slug && httpMethod === "GET") {
     return {
-      service: "components",
+      service: "field-groups",
       operation: "list",
       method: "listComponents",
       routeParams,
     };
   }
 
-  // POST /api/components → create component (Schema Builder)
+  // POST /api/field-groups → create component (Schema Builder)
   if (!slug && httpMethod === "POST") {
     return {
-      service: "components",
+      service: "field-groups",
       operation: "create",
       method: "createComponent",
       routeParams,
     };
   }
 
-  // GET /api/components/[slug] → get component by slug
+  // GET /api/field-groups/[slug] → get component by slug
   if (slug && httpMethod === "GET") {
     routeParams.slug = slug;
     return {
-      service: "components",
+      service: "field-groups",
       operation: "single",
       method: "getComponent",
       routeParams,
     };
   }
 
-  // PATCH /api/components/[slug] → update component
+  // PATCH /api/field-groups/[slug] → update component
   if (slug && httpMethod === "PATCH") {
     routeParams.slug = slug;
     return {
-      service: "components",
+      service: "field-groups",
       operation: "update",
       method: "updateComponent",
       routeParams,
     };
   }
 
-  // DELETE /api/components/[slug] → delete component
+  // DELETE /api/field-groups/[slug] → delete component
   if (slug && httpMethod === "DELETE") {
     routeParams.slug = slug;
     return {
-      service: "components",
+      service: "field-groups",
       operation: "delete",
       method: "deleteComponent",
       routeParams,
@@ -1665,6 +1708,48 @@ function parseUserFieldRoutes(
       service: "userFields",
       operation: "delete",
       method: "deleteField",
+      routeParams,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * `POST /api/nextly/preview-links` mints a link for one entry, and
+ * `POST /api/nextly/preview-links/revoke` invalidates every link ever issued.
+ *
+ * Both are POSTs because both change something: minting issues a bearer
+ * credential and revoking moves the site's generation. Neither is safe to
+ * repeat from a browser's history or to prefetch, which is what a GET invites.
+ */
+function parsePreviewLinkRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (httpMethod !== "POST") return null;
+  // Anything deeper than the two known paths is refused rather than falling
+  // through to the nearest match. Ignoring the extra segments would make
+  // `/preview-links/revoke/anything` revoke every link on the site, which is
+  // the most destructive thing either of these endpoints does.
+  if (subresource !== undefined) return null;
+
+  if (id === "revoke") {
+    return {
+      service: "previewLinks",
+      operation: "create",
+      method: "revokePreviewLinks",
+      routeParams,
+    };
+  }
+
+  if (!id) {
+    return {
+      service: "previewLinks",
+      operation: "create",
+      method: "mintPreviewLink",
       routeParams,
     };
   }
@@ -2209,7 +2294,7 @@ export function parseRestRoute(
   }
 
   // Handle Components endpoints
-  if (resource === "components") {
+  if (resource === "field-groups") {
     const result = parseComponentRoutes(
       id,
       httpMethod,
@@ -2251,6 +2336,17 @@ export function parseRestRoute(
   // Handle User Fields endpoints (custom user field definitions)
   if (resource === "user-fields") {
     const result = parseUserFieldRoutes(
+      id,
+      subresource,
+      httpMethod,
+      routeParams
+    );
+    if (result) return result;
+  }
+
+  // Handle preview link minting and revocation
+  if (resource === "preview-links") {
+    const result = parsePreviewLinkRoutes(
       id,
       subresource,
       httpMethod,

@@ -56,6 +56,10 @@ import {
   parseServerErrorMessage,
 } from "@admin/lib/errors/error-mapping";
 import {
+  toastMutationResult,
+  type MutationResult,
+} from "@admin/lib/mutation-warnings";
+import {
   entryApi,
   entryKeys,
   type UpdateEntryPayload,
@@ -90,6 +94,12 @@ export interface UseUpdateEntryOptions<
   locale?: string;
   /** Fallback locale when a translation is missing. */
   fallbackLocale?: string;
+  /**
+   * Whether the editor reads in draft (working-draft overlay) mode. Part of the
+   * cache identity: it must match the useEntry read key so the optimistic write,
+   * rollback, and query cancellation target the query the editor is showing.
+   */
+  draft?: boolean;
 }
 
 /**
@@ -218,27 +228,32 @@ export function useUpdateEntry<
   setError,
   locale,
   fallbackLocale,
+  draft,
 }: UseUpdateEntryOptions<T, TFieldValues>) {
   const queryClient = useQueryClient();
   const { enabled: localizationEnabled } = useLocalization();
 
-  // the optimistic cache is keyed by locale so the update touches the
-  // currently-viewed language's cached entry — not the default-language one. The key MUST
-  // match useEntry's exactly (React Query hashes the object), so it mirrors the same
-  // `translationStatus` and `fallbackLocale` dimensions the entry editor passes to useEntry:
-  // a localized editor requests `translationStatus` and `fallbackLocale: "none"`. Omitting
-  // them (as before) meant the key never matched and the optimistic write / rollback silently
-  // no-oped.
-  const localeKey = [
-    ...entryKeys.detail(collectionSlug, entryId),
-    {
-      locale: locale ?? null,
-      fallbackLocale: localizationEnabled ? "none" : (fallbackLocale ?? null),
-      translationStatus: localizationEnabled,
-    },
-  ] as const;
+  // The optimistic cache is keyed by the same per-view dimensions useEntry reads
+  // with, built through the shared `detailScoped` helper so the two can never
+  // drift (React Query hashes the object; any mismatch silently no-ops the
+  // optimistic write, rollback, and cancellation). A localized editor reads with
+  // `translationStatus` on and `fallbackLocale: "none"`, and draft mode follows
+  // the collection's working-draft split.
+  const localeKey = entryKeys.detailScoped(collectionSlug, entryId, {
+    locale,
+    fallbackLocale: localizationEnabled ? "none" : fallbackLocale,
+    translationStatus: localizationEnabled,
+    draft,
+  });
 
-  return useMutation<T, Error, UpdateEntryPayload, UpdateContext<T>>({
+  // The mutation resolves to the whole envelope so the success path can report
+  // what failed after the row committed; consumers still receive the entry.
+  return useMutation<
+    MutationResult<T>,
+    Error,
+    UpdateEntryPayload,
+    UpdateContext<T>
+  >({
     mutationFn: async (data: UpdateEntryPayload) => {
       const result = await entryApi.update(
         collectionSlug,
@@ -246,7 +261,7 @@ export function useUpdateEntry<
         data,
         locale ? { locale, fallbackLocale } : undefined
       );
-      return result as T;
+      return result as MutationResult<T>;
     },
 
     // Optimistic update: immediately update cache before server responds
@@ -301,7 +316,33 @@ export function useUpdateEntry<
     },
 
     // On success, invalidate queries to ensure fresh data
-    onSuccess: data => {
+    onSuccess: result => {
+      const data = result.item;
+      // Write the server's response into the detail cache the editor reads, so
+      // fields it derives server-side are shown at once rather than only after
+      // the invalidation below refetches (which may be slow or fail). The
+      // working-draft split is why this matters: a status-less save returns
+      // `_isWorkingDraft`, and without seeding it here the optimistic merge (of
+      // the status-less payload, which carries no such flag) leaves the editor's
+      // Changed state and Publish/Discard controls hidden until a refetch lands.
+      // Keyed by the same `localeKey` the read uses; merged over the cached entry
+      // so any view-only fields the response omits survive.
+      if (optimistic) {
+        queryClient.setQueryData<T>(localeKey, old => {
+          const merged = old ? { ...old, ...data } : data;
+          // `_isWorkingDraft` is a synthetic flag the server sets only on a
+          // working-draft overlay read; a publish/unpublish response returns the
+          // live document WITHOUT it. Derive it from this response so a stale
+          // cached `true` cannot survive the spread and keep the Changed state
+          // (and Publish/Discard controls) on screen after the sidecar is gone.
+          return {
+            ...merged,
+            _isWorkingDraft:
+              (data as { _isWorkingDraft?: boolean })._isWorkingDraft === true,
+          };
+        });
+      }
+
       // Invalidate entry list queries for this collection
       void queryClient.invalidateQueries({
         queryKey: entryKeys.listsByCollection(collectionSlug),
@@ -316,7 +357,10 @@ export function useUpdateEntry<
       void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
 
       if (showToast) {
-        toast.success("Entry updated successfully");
+        // The row IS saved even when a post-commit hook failed, so this stays a
+        // success and names the follow-up failure beside it. Reporting an error
+        // would have the user repeat a write that already took effect.
+        toastMutationResult("Entry updated successfully", result.warnings);
       }
 
       onSuccess?.(data);

@@ -101,6 +101,12 @@ export const GET = withErrorHandler(
       "limit"
     );
     const cursor = parsePositiveInt(url.searchParams.get("cursor"), "cursor");
+    // A plain string scoping the listing to one locale's versions. An empty
+    // value is treated as absent (list every locale) rather than matching a
+    // non-existent empty-string locale.
+    const localeParam = url.searchParams.get("locale");
+    const locale =
+      localeParam !== null && localeParam.length > 0 ? localeParam : undefined;
 
     // Always bounded: an unset limit still pages, and an oversized one is
     // clamped, so no single request can serialize an entire long history.
@@ -115,7 +121,11 @@ export const GET = withErrorHandler(
     // sending the client to an empty page.
     const window = await versions.list(
       { scopeKind, scopeSlug: slug, entryId: id },
-      { limit: limit + 1, ...(cursor !== undefined ? { cursor } : {}) }
+      {
+        limit: limit + 1,
+        ...(cursor !== undefined ? { cursor } : {}),
+        ...(locale !== undefined ? { locale } : {}),
+      }
     );
     const hasNext = window.length > limit;
     const rows = hasNext ? window.slice(0, limit) : window;

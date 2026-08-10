@@ -33,10 +33,14 @@ import type { NextlyServiceConfig } from "../../di/register";
 import {
   clearFieldTypes,
   registerFieldType,
+  restoreFieldTypes,
+  snapshotFieldTypes,
+  withoutDisabledBehavior,
 } from "../../domains/schema/field-types/field-type-registry";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { manifestToBuilderEntities } from "../../domains/schema/ui-schema/merge";
 import { NextlyError, describeError } from "../../errors/index";
+import type { PluginFieldType } from "../../plugins/contributions";
 import { getCoreVersion } from "../../plugins/core-version";
 import { collectCustomPermissions } from "../../plugins/permissions/collect-permissions";
 import type { PluginDefinition } from "../../plugins/plugin-context";
@@ -83,9 +87,17 @@ function applyFoldedToBase(
     ...base,
     collections: folded.collections ?? base.collections,
     singles: folded.singles ?? base.singles,
-    components: folded.components ?? base.components,
+    fieldGroups: folded.fieldGroups ?? base.fieldGroups,
     plugins: transformed.plugins ?? base.plugins,
     storage: transformed.storage ?? base.storage,
+    // Carry a plugin setup transformer's audit decision through, so an audit
+    // plugin that forces recording is not dropped back to the base value on a
+    // reload. Always a resolved boolean on a sanitized config.
+    webhookAuditEnabled: transformed.webhookAuditEnabled,
+    // Likewise carry a plugin's resolved retention policy: a plugin that tunes
+    // or disables `webhooks.retention` in setup() must not be reverted to the
+    // base value (which `webhooks:prune` and the runtime would otherwise use).
+    webhookRetention: transformed.webhookRetention,
   };
 }
 
@@ -94,7 +106,7 @@ function applyFoldedToBase(
  * declarative plugin schema contributions (D3/D12) via the SAME shared function
  * the runtime boot uses (`applyPluginSchemaContributionsDeferred` in
  * `register.ts`), so the CLI and runtime produce the same merged schema (D50).
- * Threads collections, singles, AND components. Extend targets that aren't
+ * Threads collections, singles, AND field groups. Extend targets that aren't
  * code/plugin entities are deferred (candidate Builder targets, P8/R2) and
  * resolved by the caller against the Builder set — not thrown here. Exported for
  * unit/parity testing.
@@ -169,6 +181,16 @@ export interface LoadConfigResult {
    * materialize the extra columns onto the Builder tables without re-folding.
    */
   deferredExtends?: DeferredExtend[];
+
+  /**
+   * The plugin field types this config registered, captured at the end of its
+   * load.
+   *
+   * Work that outlives the load it started from — the `db:sync` watcher keeps
+   * syncing across a save — resolves against this rather than the live registry,
+   * which the next load clears and rebuilds.
+   */
+  fieldTypes?: ReadonlyMap<string, PluginFieldType>;
 }
 
 /**
@@ -188,6 +210,74 @@ const CONFIG_SEARCH_DIRS = [".", "./src", "./config"];
 let cachedConfig: LoadConfigResult | null = null;
 
 let fileWatcher: FSWatcher | null = null;
+
+/** The reload currently running for the watched file, if any. */
+let watcherReload: Promise<void> | null = null;
+
+/** Whether a save arrived while that reload was running. */
+let watcherReloadPending = false;
+
+/**
+ * The options the next drained reload should use.
+ *
+ * The loop below used to close over the options it started with. A watcher
+ * stopped mid-reload and immediately replaced — `clearConfigCache()` followed
+ * by another `watch: true` load — left that loop reloading the OLD config and
+ * delivering it to the NEW callbacks, while the new watcher's change was never
+ * loaded at all. Reading the latest options each turn means a drained reload
+ * always belongs to the watcher that is currently installed.
+ */
+let watcherReloadOptions: LoadConfigOptions | null = null;
+
+/**
+ * Which watcher the reloads in flight belong to.
+ *
+ * Stopping a watcher bumps this. A reload already awaiting its load carries the
+ * value it started with, so it can tell that the watcher it was triggered for
+ * has since been replaced and decline to deliver a config nobody asked for to
+ * callbacks registered by whoever replaced it.
+ */
+let watcherGeneration = 0;
+
+/**
+ * The field-type registry the currently installed config loaded.
+ *
+ * A superseded reload finishing last leaves its own registrations live. This is
+ * what it has to put back — the set belonging to whoever is watching now, not
+ * whatever the registry happened to hold before that reload started.
+ */
+let installedFieldTypes: ReadonlyMap<string, PluginFieldType> | null = null;
+
+/**
+ * The tail of the loads that rebuild the process-wide field-type registry.
+ *
+ * A load clears the registry, registers the config's own types, and only then
+ * awaits again before snapshotting what it registered. Two loads overlapping
+ * across that await share one registry, so each can capture the other's types —
+ * and a superseded watcher reload, whose job is to put the installed set back,
+ * can put it back over a live load's registrations, leaving the new config
+ * paired with the previous config's types.
+ *
+ * The watcher's own reloads were already serialized against each other. An
+ * explicit `loadConfig()` never joined them, so a `clearConfigCache()` and
+ * reload arriving while a reload was in flight overlapped with it.
+ */
+let registryLoad: Promise<void> = Promise.resolve();
+
+/**
+ * Run `load` once every earlier registry-rebuilding load has finished.
+ *
+ * The chain records completion rather than outcome: a rejection left on it
+ * would be adopted by every later waiter and fail loads that were fine.
+ */
+function withRegistryLock<T>(load: () => Promise<T>): Promise<T> {
+  const run = registryLoad.then(load);
+  registryLoad = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
 
 const changeCallbacks: Set<ConfigChangeCallback> = new Set();
 
@@ -215,27 +305,9 @@ function startWatching(configPath: string, options: LoadConfigOptions): void {
   debugLog(options, "Starting file watcher for:", configPath);
 
   fileWatcher = watch(configPath, eventType => {
-    void (async () => {
-      if (eventType === "change") {
-        debugLog(options, "Config file changed, reloading...");
-
-        cachedConfig = null;
-
-        try {
-          const result = await loadConfigInternal(options);
-
-          for (const callback of changeCallbacks) {
-            try {
-              callback(result);
-            } catch (error) {
-              console.error("[config-loader] Error in change callback:", error);
-            }
-          }
-        } catch (error) {
-          console.error("[config-loader] Error reloading config:", error);
-        }
-      }
-    })();
+    if (eventType !== "change") return;
+    debugLog(options, "Config file changed, reloading...");
+    scheduleWatchReload(options);
   });
 
   fileWatcher.on("error", error => {
@@ -243,11 +315,116 @@ function startWatching(configPath: string, options: LoadConfigOptions): void {
   });
 }
 
+/** One reload of the watched file, notifying every registered callback. */
+async function runWatchReload(options: LoadConfigOptions): Promise<void> {
+  const generation = watcherGeneration;
+  cachedConfig = null;
+
+  // The lock covers the load and the registry bookkeeping that follows it, so
+  // the decision about which set is installed is made against a registry no
+  // other load is rebuilding. It is released before the callbacks run: those
+  // are caller code, and one of them calling `loadConfig()` while this held the
+  // lock would wait on itself.
+  const result = await withRegistryLock(async () => {
+    try {
+      const loaded = await loadConfigInternal(options);
+
+      // The watcher this reload belongs to was stopped while the load was in
+      // flight, so this result describes a config nothing is watching.
+      // Delivering it would hand the replacement watcher's callbacks the
+      // previous config, which they would apply until the replacement's own
+      // reload arrived.
+      if (generation !== watcherGeneration) {
+        // The load cleared and rebuilt the live registry on its way through, so
+        // the set left behind is this obsolete config's. Put back whatever the
+        // watcher that is actually installed loaded, or every later lookup
+        // would classify its fields with the wrong storage primitives.
+        if (installedFieldTypes) restoreFieldTypes(installedFieldTypes);
+        return null;
+      }
+
+      // This reload is the live one, so its registry is the authoritative set.
+      installedFieldTypes = loaded.fieldTypes ?? snapshotFieldTypes();
+      return loaded;
+    } catch (error) {
+      // A failed load restores the registry it found, which for a superseded
+      // reload is the obsolete config's rather than the installed one's. Put
+      // the installed set back for the same reason the success path does.
+      if (generation !== watcherGeneration && installedFieldTypes) {
+        restoreFieldTypes(installedFieldTypes);
+      }
+      console.error("[config-loader] Error reloading config:", error);
+      return null;
+    }
+  });
+
+  if (!result) return;
+
+  for (const callback of changeCallbacks) {
+    try {
+      callback(result);
+    } catch (error) {
+      console.error("[config-loader] Error in change callback:", error);
+    }
+  }
+}
+
+/**
+ * Serialize reloads triggered by the watcher.
+ *
+ * A load clears and rebuilds the process-wide field-type registry and captures
+ * what it registered on its result. Two overlapping loads share that registry,
+ * so each could capture the other's types and hand a caller a config paired
+ * with the wrong ones — which is exactly what the result's snapshot exists to
+ * prevent.
+ *
+ * Saves arriving during a reload collapse into one trailing run rather than
+ * queueing per event: they all want the state after the last of them, and the
+ * file is read fresh when that run starts.
+ */
+function scheduleWatchReload(options: LoadConfigOptions): void {
+  watcherReloadOptions = options;
+
+  if (watcherReload) {
+    watcherReloadPending = true;
+    return;
+  }
+
+  watcherReload = (async () => {
+    do {
+      watcherReloadPending = false;
+      const next = watcherReloadOptions;
+      // Cleared by `stopWatching`, which is how a reload queued against a
+      // watcher that no longer exists is dropped rather than applied.
+      if (!next) break;
+      await runWatchReload(next);
+    } while (watcherReloadPending);
+  })().finally(() => {
+    watcherReload = null;
+    // A save that arrived while this loop was leaving set the flag against a
+    // run that had already stopped checking it, so it starts the next one.
+    if (watcherReloadPending && watcherReloadOptions) {
+      scheduleWatchReload(watcherReloadOptions);
+    }
+  });
+}
+
+/** Record the registry a freshly installed config left live. */
+function markInstalledFieldTypes(result: LoadConfigResult): void {
+  installedFieldTypes = result.fieldTypes ?? snapshotFieldTypes();
+}
+
 function stopWatching(): void {
   if (fileWatcher) {
     fileWatcher.close();
     fileWatcher = null;
   }
+  // Anything this watcher had queued belongs to a config nobody is watching
+  // for any more, and applying it would hand the next watcher's callbacks a
+  // result they never asked for.
+  watcherReloadPending = false;
+  watcherReloadOptions = null;
+  watcherGeneration += 1;
 }
 
 async function loadConfigInternal(
@@ -261,10 +438,18 @@ async function loadConfigInternal(
 
   if (!configPath) {
     debugLog(options, "No config file found, using default config");
+    // Cleared here too: a long-lived process that had loaded a plugin config
+    // and then lost its config file would otherwise keep the removed plugins'
+    // types registered, and Builder saves would go on recognizing them and
+    // running their `validate` and `validateOptions`.
+    clearFieldTypes();
     return {
       config: defineConfig({}),
       configPath: undefined,
       dependencies: [],
+      // Empty, matching the clear above: work pinned to this result must not
+      // resolve plugin types a later config happens to register.
+      fieldTypes: snapshotFieldTypes(),
     };
   }
 
@@ -279,6 +464,12 @@ async function loadConfigInternal(
   }
 
   debugLog(options, "Loading config from:", configPath);
+
+  // Held across the whole load so a failure below can put the registry back.
+  // Callers that keep running on the previous config after a bad edit — the
+  // `db:sync` watcher, the HMR reload — would otherwise resolve that config's
+  // plugin field types against an empty registry.
+  const previousFieldTypes = snapshotFieldTypes();
 
   try {
     // bundleAndRequire is our Turbopack-safe alternative to the
@@ -335,6 +526,13 @@ async function loadConfigInternal(
     // Resolve (validate + topo order) before running setups, mirroring the
     // runtime boot (register.ts) so both paths agree (D5/D6/D7).
     const plugins = orderConfigPlugins(config.plugins ?? []);
+
+    // Cleared on EVERY load, not only when plugins are present. A reload that
+    // removes the last plugin would otherwise leave its types in the
+    // process-global registry, so its `validateOptions` would keep running and
+    // later Builder saves would keep treating the type as registered.
+    clearFieldTypes();
+
     if (plugins.length > 0) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let transformedConfig: any = { ...config, plugins };
@@ -377,10 +575,11 @@ async function loadConfigInternal(
       // storage primitive when reading ui-schema.json — parity with runtime boot
       // (di/register.ts). Clear-and-rebuild; ALL plugins (incl. disabled, per
       // D49) since field types are declarative + schema-affecting.
-      clearFieldTypes();
       for (const fieldTypePlugin of plugins) {
         for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {
-          registerFieldType(fieldType);
+          registerFieldType(
+            withoutDisabledBehavior(fieldType, fieldTypePlugin)
+          );
         }
       }
 
@@ -411,10 +610,7 @@ async function loadConfigInternal(
 
       // Fail fast on invalid plugin-declared custom permissions (D36) — same
       // collector the runtime boot runs (register.ts), so both paths agree (D50).
-      collectCustomPermissions(
-        config as unknown as NextlyServiceConfig,
-        plugins
-      );
+      collectCustomPermissions(config, plugins);
 
       debugLog(
         options,
@@ -430,8 +626,15 @@ async function loadConfigInternal(
       configPath,
       dependencies,
       deferredExtends,
+      // Captured after registration, so it holds exactly what this config
+      // contributed rather than whatever the live set becomes later.
+      fieldTypes: snapshotFieldTypes(),
     };
   } catch (error) {
+    // The load owns the registry from the clear above until it returns, so
+    // every failure between them leaves it half-built or empty.
+    restoreFieldTypes(previousFieldTypes);
+
     if (NextlyError.is(error)) {
       throw error;
     }
@@ -493,9 +696,18 @@ export async function loadConfig(
     return cachedConfig;
   }
 
-  const result = await loadConfigInternal(options);
+  // Serialized with the watcher's reloads, which rebuild the same registry. A
+  // reload still in flight from a watcher this call is replacing would
+  // otherwise interleave with it and put its own set back over this one's.
+  const result = await withRegistryLock(async () => {
+    const loaded = await loadConfigInternal(options);
 
-  cachedConfig = result;
+    cachedConfig = loaded;
+    // This config is now the installed one, so its registry is what a
+    // superseded reload has to put back if it finishes after the swap.
+    markInstalledFieldTypes(loaded);
+    return loaded;
+  });
 
   if (options.watch && result.configPath) {
     startWatching(result.configPath, options);

@@ -44,6 +44,7 @@ import {
 } from "../../../database/drizzle-kit-lazy";
 import { NextlyError } from "../../../errors/nextly-error";
 
+import { currentMysqlDatabaseName } from "./database-url";
 import {
   drizzleTableNames,
   filterUnsafeStatements,
@@ -94,8 +95,53 @@ export async function freshPushSchema(
     });
   }
 
-  const result = await pushForDialect(dialect, db, schema);
+  // TWO PASSES, when and only when the first one degraded.
+  //
+  // The rename resolver crashes while pairing a live table outside the desired
+  // schema against one being ADDED, and the recovery baseline is diffed from an
+  // empty snapshot — so it creates missing tables and silently drops every
+  // alteration to a table that already exists. That is why a column added to a
+  // core table never reached an installation holding ordinary content.
+  //
+  // Once the first pass has created what was missing, nothing is added any
+  // more. The resolver has no pair to resolve, does not crash, and drizzle-kit
+  // emits the alterations itself — including the table rebuilds SQLite needs
+  // for a nullability change, which it already knows how to express and this
+  // code would otherwise have to reimplement.
+  //
+  // The second pass runs only after a degraded one. An ordinary push already
+  // applied everything, and re-running it would be a wasted introspection on
+  // every boot.
+  const first = await pushForDialect(dialect, db, schema);
+  const firstPass = await applyPushResult(dialect, db, schema, first);
+  if (!first.hints.some(h => h.hint.startsWith(DEGRADED_PASS_HINT))) {
+    return firstPass;
+  }
 
+  const second = await pushForDialect(dialect, db, schema);
+  const secondPass = await applyPushResult(dialect, db, schema, second);
+  return {
+    hints: [...firstPass.hints, ...secondPass.hints],
+    statementsExecuted: [
+      ...firstPass.statementsExecuted,
+      ...secondPass.statementsExecuted,
+    ],
+  };
+}
+
+/**
+ * Filter one push result for safety and execute what survives.
+ *
+ * Extracted so a degraded first pass and the retry after it go through exactly
+ * the same guards — a second path here is a second place for a destructive
+ * statement to slip past.
+ */
+async function applyPushResult(
+  dialect: FreshPushDialect,
+  db: unknown,
+  schema: Record<string, unknown>,
+  result: { sqlStatements: string[]; hints: KitHint[] }
+): Promise<FreshPushResult> {
   const desiredTableNames = drizzleTableNames(schema);
   const pieces = splitStatements(result.sqlStatements);
   const safe = filterUnsafeStatements(pieces, desiredTableNames);
@@ -138,6 +184,15 @@ export async function freshPushSchema(
   return { hints, statementsExecuted: executed };
 }
 
+/**
+ * Marks a pass that degraded to the additive-TABLES-only baseline.
+ *
+ * That baseline is diffed from an EMPTY snapshot, so it can create a missing
+ * table but never alter an existing one. Recognising it is what lets the push
+ * run again once the tables exist.
+ */
+const DEGRADED_PASS_HINT = "[nextly] pushSchema hit v1's rename-resolver crash";
+
 // Per-dialect pushSchema invocation. MySQL's v1 entrypoint requires the
 // database name positionally; resolve it from the live connection so
 // callers don't have to thread it through.
@@ -166,7 +221,7 @@ async function pushForDialect(
     }
     case "mysql": {
       const kit = await getMySQLDrizzleKit();
-      const databaseName = await currentMysqlDatabase(db);
+      const databaseName = await currentMysqlDatabaseName(db);
       return withResolverCrashFallback(
         () => kit.pushSchema(schema, db, databaseName),
         async () =>
@@ -233,41 +288,14 @@ async function withResolverCrashFallback(
           // are not told a fully-handled fallback is an "uninterpreted
           // drizzle-kit hint".
           hint:
-            "[nextly] pushSchema hit v1's rename-resolver crash (live " +
-            "tables outside the desired schema); fell back to the " +
-            "additive-TABLES-only baseline — no drops, and no column adds " +
-            "to pre-existing tables, were applied this pass",
+            DEGRADED_PASS_HINT +
+            " (live tables outside the desired schema); applied the " +
+            "additive-TABLES-only baseline, then re-pushed so the " +
+            "alterations it cannot express are not lost",
         },
       ],
     };
   }
-}
-
-async function currentMysqlDatabase(db: unknown): Promise<string> {
-  const { sql: sqlTag } = await import("drizzle-orm");
-  type AsyncExecuteDb = { execute: (q: unknown) => Promise<unknown> };
-  // Tagged `sql` (not sql.raw): the query is static with no interpolation, so
-  // the tagged form is the idiomatic, injection-safe default and keeps drizzle
-  // in charge of parameter handling.
-  const raw = await (db as AsyncExecuteDb).execute(
-    sqlTag`SELECT DATABASE() AS db`
-  );
-  // drizzle-orm/mysql2 execute() resolves to [rows, fields].
-  const rows = Array.isArray(raw) ? raw[0] : raw;
-  const name = Array.isArray(rows)
-    ? (rows[0] as { db?: string } | undefined)?.db
-    : undefined;
-  if (!name) {
-    throw NextlyError.internal({
-      logContext: {
-        reason:
-          "freshPushSchema: could not determine the current MySQL database " +
-          "(SELECT DATABASE() returned no name). Connect with a database " +
-          "selected in the connection URL.",
-      },
-    });
-  }
-  return name;
 }
 
 // Executes statements per dialect, swallowing idempotency errors

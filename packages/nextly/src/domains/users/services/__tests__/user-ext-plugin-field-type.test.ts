@@ -37,6 +37,52 @@ describe("UserExtSchemaService — plugin field types", () => {
     expect(sql).not.toMatch(/"score"\s+TEXT/i);
   });
 
+  it("gives a json-storage field a SQLite column that round-trips", () => {
+    registerFieldType({
+      type: "chart",
+      storage: "json",
+      component: "c",
+      surfaces: ["users"],
+    });
+
+    const table = new UserExtSchemaService("sqlite").generateRuntimeSchema([
+      field("chart"),
+    ]);
+
+    // SQLite holds JSON as text, so the column has to carry the mode that
+    // serializes on write and parses on read. Plain text would store a live
+    // object as `[object Object]` and hand back a string.
+    const column = (table as unknown as Record<string, { score?: unknown }>)
+      .score as { mapToDriverValue?: (value: unknown) => unknown } | undefined;
+
+    expect(column).toBeDefined();
+    expect(column?.mapToDriverValue?.({ a: 1 })).toBe('{"a":1}');
+  });
+
+  it("reads back a row written before the column encoded JSON", () => {
+    registerFieldType({
+      type: "chart2",
+      storage: "json",
+      component: "c",
+      surfaces: ["users"],
+    });
+
+    const table = new UserExtSchemaService("sqlite").generateRuntimeSchema([
+      field("chart2"),
+    ]);
+    const column = (table as unknown as Record<string, { score?: unknown }>)
+      .score as
+      | { mapFromDriverValue?: (value: unknown) => unknown }
+      | undefined;
+
+    // Such a row was legal while this column was plain text. Decoding it
+    // unconditionally throws, and the read path treats a failed user_ext query
+    // as a missing table — so one legacy row would empty every custom field on
+    // that user.
+    expect(column?.mapFromDriverValue?.("hello")).toBe("hello");
+    expect(column?.mapFromDriverValue?.('{"a":1}')).toEqual({ a: 1 });
+  });
+
   it("maps a boolean-storage plugin field to a boolean column", () => {
     registerFieldType({
       type: "flag",

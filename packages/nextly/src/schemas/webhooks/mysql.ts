@@ -42,6 +42,11 @@ export const nextlyEvents = mysqlTable(
     // NULL means the event still needs fan-out.
     fannedOutAt: datetime("fanned_out_at"),
     // Which retention window governs this row; see the PostgreSQL definition.
+    // Whether the action this row describes succeeded. Defaults to "success"
+    // because a row is only written inside the transaction of a change that
+    // commits, so every event recorded before this column existed was one —
+    // which is also why the default is the correct value for those rows.
+    outcome: varchar("outcome", { length: 16 }).notNull().default("success"),
     retentionClass: varchar("retention_class", { length: 20 })
       .notNull()
       .default("webhook"),
@@ -90,6 +95,9 @@ export const nextlyWebhookDeliveries = mysqlTable(
   "nextly_webhook_deliveries",
   {
     id: varchar("id", { length: 191 }).primaryKey(),
+    // Both cascades are deliberate; see the PostgreSQL definition. Endpoints are
+    // soft-deleted so the webhook cascade never fires for retirement (history is
+    // kept); the event cascade is how retention prunes an event with its attempts.
     webhookId: varchar("webhook_id", { length: 191 })
       .notNull()
       .references(() => nextlyWebhooks.id, { onDelete: "cascade" }),

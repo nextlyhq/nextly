@@ -69,6 +69,17 @@ export type FieldDefinition = {
   default?: unknown;
   length?: number;
 
+  /**
+   * Whether this field's values are stored per language, on the entity's
+   * `_locales` companion rather than its main table. Absent means the
+   * per-type default decides (text-like types localize when the entity does);
+   * `false` pins a field to the main table, which is how the synthetic
+   * system columns keep their place there. Persisted on the registry row and
+   * read back by the i18n classifier, so the type has to carry it for a
+   * declaration to survive a round trip.
+   */
+  localized?: boolean;
+
   /** Storage type for number fields: whole-number `integer` (default) or exact
    * fixed-point `decimal` (sized by `precision`/`scale`). */
   dbType?: "integer" | "decimal";

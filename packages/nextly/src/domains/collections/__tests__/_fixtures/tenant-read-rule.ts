@@ -1,0 +1,102 @@
+/**
+ * A stored `custom` read rule, as a real module so the access service's dynamic
+ * `import(functionPath)` can load it.
+ *
+ * Returns a query CONSTRAINT rather than a boolean, which is the shape that
+ * exposed the bug these tests guard: the constraint used to be reduced to the
+ * first field's `equals` value, so a second field went unapplied and a falsy or
+ * non-`equals` value applied nothing at all.
+ *
+ * The shape returned is chosen per-caller so one fixture covers every case the
+ * tests need.
+ */
+export default function tenantReadRule({
+  req,
+}: {
+  req: { user?: { id?: string; tenantId?: string } };
+}): unknown {
+  switch (req.user?.id) {
+    // Two fields: both have to bind, or rows from the other region come back.
+    case "multi-field":
+      return { tenant: { equals: "acme" }, region: { equals: "eu" } };
+    // A falsy value: `equals: 0` is a legitimate predicate ("free items").
+    case "falsy-value":
+      return { price: { equals: 0 } };
+    // An operator other than `equals`.
+    case "in-operator":
+      return { region: { in: ["eu", "uk"] } };
+    // A valid predicate beside one the translators cannot handle. Geo operators
+    // reach SQL through a separate extractor, so `buildWhereClause` drops them
+    // and keeps the sibling — leaving a weaker predicate that looks translated.
+    case "partial-geo":
+      return {
+        tenant: { equals: "acme" },
+        location: { within: { lat: 0, lng: 0, radius: 1 } },
+      };
+    // A valid predicate beside a field that is not on the table at all, which
+    // `buildDrizzleCondition` skips while keeping the sibling.
+    case "partial-unknown-field":
+      return { tenant: { equals: "acme" }, nosuchcolumn: { equals: "x" } };
+    // An empty IN list — what a rule returns when the caller has no permitted
+    // ids. It should match nothing; dropped, it leaves the sibling matching
+    // everything the sibling allows.
+    case "empty-in":
+      return { tenant: { equals: "acme" }, region: { in: [] } };
+    // An inherited property name rather than a real operator.
+    case "inherited-operator":
+      return { tenant: { equals: "acme" }, region: { toString: "x" } };
+    // An inherited property name used as a FIELD. A plain lookup resolves it to
+    // a function, which reads as a present column.
+    case "inherited-field":
+      return { tenant: { equals: "acme" }, toString: { not_equals: "x" } };
+    // An empty field name, which translation drops.
+    case "empty-field-name":
+      return { tenant: { equals: "acme" }, "": { equals: "x" } };
+    // A dotted path. Translation discards the suffix and compares the base
+    // column, applying a different predicate than the rule states.
+    case "dotted-field":
+      return { tenant: { equals: "acme" }, "region.name": { equals: "eu" } };
+    // Shorthand equality: a primitive translates to `field = value`.
+    case "shorthand":
+      return { region: "eu" };
+    // A null shorthand value, which translation skips outright.
+    case "null-shorthand":
+      return { tenant: null, region: "eu" };
+    // A logical group. Refused rather than approximated: a branch that
+    // translates to nothing is dropped and its siblings decide alone.
+    case "or-group":
+      return { tenant: { equals: "acme" }, or: [{ region: { equals: "eu" } }] };
+    // A branch that translates to nothing inside a non-empty group.
+    case "or-empty-branch":
+      return { tenant: { equals: "acme" }, or: [{}] };
+    // A scalar `in`, which the translator normalizes to a one-element list, so
+    // it is a valid rule and must NOT be refused.
+    case "scalar-in":
+      return { region: { in: "eu" } };
+    // Restricts on a column the target really has, so the confirming query in
+    // relationship expansion actually runs rather than short-circuiting.
+    case "name-scoped":
+      return { name: { equals: "Draft Author" } };
+    // Keyed on a claim the framework knows nothing about. It survives only if
+    // the caller's whole user object reaches the rule rather than a rebuilt
+    // subset of the canonical fields.
+    case "claim-aware":
+      return req.user?.tenantId === "acme"
+        ? { tenant: { equals: "acme" } }
+        : false;
+    // An exclusion list that came back empty. It excludes nothing, so the rule
+    // restricts nothing and every row is readable — refusing it would turn
+    // "nobody is blocked" into "nobody may read".
+    case "empty-exclusion":
+      return { region: { not_in: [] } };
+    // The same no-op alongside a real predicate: the sibling still decides.
+    case "empty-exclusion-with-sibling":
+      return { region: { not_in: [] }, tenant: { equals: "acme" } };
+    // An empty `in` matches nothing, and the translator drops it — which would
+    // widen the read instead of narrowing it — so it stays refused.
+    case "empty-inclusion":
+      return { region: { in: [] } };
+    default:
+      return true;
+  }
+}

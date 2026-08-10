@@ -23,6 +23,7 @@ const GrayBar = ({ className }: { className?: string }) => (
   <Skeleton className={className} />
 );
 
+/** @experimental */
 export interface TableSkeletonProps {
   columns?: number;
   rowCount?: number;
@@ -30,6 +31,7 @@ export interface TableSkeletonProps {
   hideFooter?: boolean;
 }
 
+/** @experimental */
 export const TableSkeleton: React.FC<TableSkeletonProps> = ({
   columns = 5,
   rowCount = 8,
@@ -38,6 +40,7 @@ export const TableSkeleton: React.FC<TableSkeletonProps> = ({
 }) => {
   const content = (
     <>
+      {/* Square corners: this fills the bordered table wrapper edge to edge. */}
       <div className="border-0 rounded-none shadow-none">
         <Table>
           {/* Header Skeleton */}
@@ -49,7 +52,7 @@ export const TableSkeleton: React.FC<TableSkeletonProps> = ({
                     <GrayBar className="h-4 w-4" />
                   ) : colIdx === columns - 1 ? (
                     <div className="flex justify-center">
-                      <Skeleton className="h-4 w-4 rounded-none" />
+                      <Skeleton className="h-4 w-4 rounded-sm" />
                     </div>
                   ) : colIdx === 1 ? (
                     <GrayBar className="h-4 w-[70%] max-w-[180px]" />
@@ -71,11 +74,11 @@ export const TableSkeleton: React.FC<TableSkeletonProps> = ({
                       <GrayBar className="h-4 w-4" />
                     ) : colIdx === columns - 1 ? (
                       <div className="flex justify-center">
-                        <Skeleton className="h-8 w-8 rounded-none" />
+                        <Skeleton className="h-8 w-8 rounded-md" />
                       </div>
                     ) : colIdx === 1 ? (
                       <div className="flex items-center gap-3">
-                        <Skeleton className="w-9 rounded-none shrink-0" />
+                        <Skeleton className="w-9 rounded-md shrink-0" />
                         <div className="space-y-1.5 flex-1">
                           <Skeleton className="h-4 w-[120px]" />
                           <Skeleton className="h-3 w-[80px]" />
@@ -124,7 +127,7 @@ export const TableSkeleton: React.FC<TableSkeletonProps> = ({
   }
 
   return (
-    <div className="table-wrapper rounded-none  border border-border bg-card overflow-hidden">
+    <div className="table-wrapper rounded-md  border border-border bg-card overflow-hidden">
       {content}
     </div>
   );

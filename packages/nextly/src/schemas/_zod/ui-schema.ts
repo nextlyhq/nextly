@@ -12,13 +12,23 @@
  * @module schemas/_zod/ui-schema
  * @since v0.0.3-alpha (Plan D1)
  */
+
 import { z } from "zod";
+
+import { reservedSystemFieldNames } from "../../lib/system-columns";
+import {
+  isPluginOptionContainer,
+  RESERVED_PLUGIN_OPTION_KEYS,
+} from "../../plugins/plugin-options";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import { pluginStorageFieldType } from "../../shared/lib/plugin-storage";
 
 /**
  * Canonical field-type tokens supported in ui-schema.json. Mirrors the set
  * `field-column-descriptor.ts:classifyFieldKind` maps to a column, so the
  * manifest round-trips through `getColumnDescriptor` with no translation.
  */
+/** The tokens whose default shape core is able to judge. */
 export const UI_FIELD_TYPES = [
   "text",
   "textarea",
@@ -40,12 +50,29 @@ export const UI_FIELD_TYPES = [
   "chips",
 ] as const;
 
+const BUILT_IN_UI_FIELD_TYPES = new Set<string>(UI_FIELD_TYPES);
+
+/**
+ * Whether a field type is one this schema names, rather than a token a plugin contributed or a
+ * token nothing has registered at all.
+ *
+ * The field schema accepts any slug-shaped token, so "not one of ours" is a state a stored field can
+ * genuinely be in, and the layers that decide storage have to tell it apart from a built-in. Asked
+ * here because this is where the list of built-ins is declared; a caller keeping its own copy would
+ * answer wrongly the first time the list grew.
+ */
+export function isBuiltInFieldType(type: string): boolean {
+  return BUILT_IN_UI_FIELD_TYPES.has(type);
+}
+
 /** Field names the framework reserves (system columns). */
 // Universal system columns present on every entity table (collection, single,
 // component). The collection-only owner column (`created_by`/`createdBy`) is
 // NOT reserved here — it would wrongly reject valid single/component fields;
 // it is enforced per-entity by assertValidFieldsPayload({ kind: "collection" }).
-const RESERVED_FIELD_NAMES = new Set(["id", "created_at", "updated_at"]);
+const RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set(
+  reservedSystemFieldNames("uiSchema")
+);
 
 const SLUG_RE = /^[a-z][a-z0-9_-]*$/;
 
@@ -125,6 +152,15 @@ export type FieldNode = {
   // the canonical tokens.
   type: (typeof UI_FIELD_TYPES)[number] | (string & {});
   label?: string;
+  /**
+   * Options belonging to the field's own plugin type, which core never reads.
+   *
+   * Typed loosely because the value is passed through rather than rebuilt: a
+   * schema that reconstructed it would lose an own `__proto__` or refuse an own
+   * `constructor`. Read it with `pluginOptionContainer`, which checks the shape
+   * at the point of use.
+   */
+  pluginOptions?: unknown;
   required?: boolean;
   unique?: boolean;
   index?: boolean;
@@ -189,6 +225,41 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       // unregistered type falls back to a text column.
       type: z.union([z.enum(UI_FIELD_TYPES), z.string().regex(SLUG_RE)]),
       label: z.string().optional(),
+      // Options belonging to the field's own plugin type. Held in a container
+      // because the shape above is applied to every field whatever its type,
+      // so an option sharing a name with one of these keys would be judged as
+      // that key instead. Core never looks inside, which is what lets any name
+      // be used here — including the ones declared alongside it. Passed through
+      // rather than reconstructed: `z.record` refuses a container carrying an
+      // own `constructor`, and `z.looseObject` copies by assignment, so an own
+      // `__proto__` becomes the copy's prototype and every option is lost with
+      // it. Checking an untouched value keeps both names usable, and unlike a
+      // custom type it still converts to the JSON Schema the editor reads.
+      pluginOptions: z
+        .unknown()
+        .superRefine((held, ctx) => {
+          if (held === undefined) return;
+          if (!isPluginOptionContainer(held)) {
+            ctx.addIssue({
+              code: "custom",
+              message: "pluginOptions must be an object",
+            });
+            return;
+          }
+          const reserved = Object.keys(held).filter(key =>
+            RESERVED_PLUGIN_OPTION_KEYS.has(key)
+          );
+          if (reserved.length > 0) {
+            ctx.addIssue({
+              code: "custom",
+              message:
+                `pluginOptions cannot hold ${reserved.join(" or ")}: those ` +
+                "state which field the type is looking at, so an option " +
+                "under either name would never reach it",
+            });
+          }
+        })
+        .optional(),
       required: z.boolean().optional(),
       unique: z.boolean().optional(),
       index: z.boolean().optional(),
@@ -270,7 +341,7 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       // slot. Exactly one form must be present, and every referenced slug
       // must be a real slug — a blank or malformed reference points at no
       // loadable component, so runtime writes to it would be silently dropped.
-      if (f.type === "component") {
+      if (f.type === STORAGE_FORMAT.fieldType) {
         const hasSingle = f.component !== undefined;
         const hasMulti = f.components !== undefined;
         if (hasSingle === hasMulti) {
@@ -278,14 +349,18 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
             code: z.ZodIssueCode.custom,
             message:
               "component fields require either a `component` slug or a `components[]` list, but not both",
-            path: [hasSingle ? "components" : "component"],
+            path: [
+              hasSingle
+                ? STORAGE_FORMAT.refKeys.many
+                : STORAGE_FORMAT.refKeys.single,
+            ],
           });
         } else if (hasSingle) {
           if (typeof f.component !== "string" || !SLUG_RE.test(f.component)) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               message: "component must be a valid component slug",
-              path: ["component"],
+              path: [STORAGE_FORMAT.refKeys.single],
             });
           }
         } else if (
@@ -297,7 +372,7 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
             code: z.ZodIssueCode.custom,
             message:
               "components must be a non-empty list of valid component slugs",
-            path: ["components"],
+            path: [STORAGE_FORMAT.refKeys.many],
           });
         }
       }
@@ -308,11 +383,29 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
           path: ["name"],
         });
       }
-      if (f.defaultValue !== undefined) {
+      // A default is shape-checked against the token that describes the column
+      // it lands in: its own, for a built-in, and the STORAGE PRIMITIVE for a
+      // contributed type. A contributed type's own structure — which kinds a
+      // document accepts, what a record must contain — is its business and is
+      // judged by its `validate`, which is async and cannot run inside this
+      // synchronous gate. `validateOptions`, which does run here, checks the
+      // field's options and never looks at `defaultValue`, so without this a
+      // number-backed type accepted the string "five".
+      //
+      // An unregistered token resolves to nothing and is skipped: it is refused
+      // by the boot gate, and guessing a shape for it here would reject the
+      // contributed defaults this manifest exists to carry.
+      const shapeToken = BUILT_IN_UI_FIELD_TYPES.has(f.type)
+        ? f.type
+        : pluginStorageFieldType({ type: f.type });
+      if (f.defaultValue !== undefined && shapeToken !== undefined) {
         const dv = f.defaultValue;
         const okType =
-          (f.type === "number" && typeof dv === "number") ||
-          (f.type === "checkbox" && typeof dv === "boolean") ||
+          // Anything a manifest can carry is already JSON, so json storage
+          // states no shape beyond what parsing established.
+          shapeToken === "json" ||
+          (shapeToken === "number" && typeof dv === "number") ||
+          (shapeToken === "checkbox" && typeof dv === "boolean") ||
           ([
             "text",
             "textarea",
@@ -323,7 +416,7 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
             "date",
             "select",
             "radio",
-          ].includes(f.type) &&
+          ].includes(shapeToken) &&
             typeof dv === "string");
         if (!okType) {
           ctx.addIssue({
@@ -359,12 +452,28 @@ function entity(kind?: "collection" | "single" | "component") {
        */
       versions: z.boolean().optional(),
       /**
+       * Retention for version history: durable versions kept per document.
+       * `false` = unlimited, a non-negative integer = keep that many, absent =
+       * the default (50). Stripped like any unknown key, so it is declared here
+       * to survive a round-trip through the manifest.
+       */
+      versionsMaxPerDoc: z
+        .union([z.number().int().nonnegative(), z.literal(false)])
+        .optional(),
+      /**
        * Whether writes to this entity bust cache tags. Boolean rather than the
        * code-first `{ tags?, disable? }`: the Schema Builder offers on/off
        * (custom extra tags stay a code-first control). On is the default, so an
        * absent key means revalidation on; false persists `{ disable: true }`.
        */
       revalidate: z.boolean().optional(),
+      /**
+       * Whether writes to this entity are recorded to the webhook outbox.
+       * Recording is the default, so an absent key means recording on; false
+       * persists `{ record: false }`, keeping content that holds personal data
+       * out of the outbox and therefore out of every delivery.
+       */
+      webhooks: z.boolean().optional(),
       fields: z.array(uiSchemaFieldSchema),
     })
     .superRefine((e, ctx) => {
@@ -399,21 +508,54 @@ function entity(kind?: "collection" | "single" | "component") {
       // collection or single, whose versioning covers them. Accepting the key
       // here would persist a setting nothing reads and the Builder never
       // offers.
-      if (kind === "component" && e.versions !== undefined) {
+      if (
+        kind === STORAGE_FORMAT.manifest.entityKind &&
+        e.versions !== undefined
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: "'versions' is not supported on components",
           path: ["versions"],
         });
       }
+      // Retention rides with version history, which components do not have, so
+      // it is rejected for the same reason as `versions` above rather than
+      // round-tripping a setting no component metadata path reads.
+      if (
+        kind === STORAGE_FORMAT.manifest.entityKind &&
+        e.versionsMaxPerDoc !== undefined
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "'versionsMaxPerDoc' is not supported on components",
+          path: ["versionsMaxPerDoc"],
+        });
+      }
       // Components have no entries and no registry row of their own, so a
       // revalidation switch would persist a setting nothing reads and the
       // Builder never offers (same rationale as `versions` above).
-      if (kind === "component" && e.revalidate !== undefined) {
+      if (
+        kind === STORAGE_FORMAT.manifest.entityKind &&
+        e.revalidate !== undefined
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: "'revalidate' is not supported on components",
           path: ["revalidate"],
+        });
+      }
+      // Components emit no outbox events of their own: a component's writes are
+      // recorded against the collection or single that embeds it, whose own
+      // switch already governs them. Accepting the key here would persist a
+      // setting nothing reads (same rationale as `revalidate` above).
+      if (
+        kind === STORAGE_FORMAT.manifest.entityKind &&
+        e.webhooks !== undefined
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "'webhooks' is not supported on components",
+          path: ["webhooks"],
         });
       }
       // `status` reserved as a field name only when the lifecycle column is on.
@@ -474,7 +616,7 @@ export const uiSchemaManifest = z
   .superRefine((m, ctx) => {
     uniqueSlugs(m.collections, ctx, "collections");
     uniqueSlugs(m.singles, ctx, "singles");
-    uniqueSlugs(m.components, ctx, "components");
+    uniqueSlugs(m.components, ctx, STORAGE_FORMAT.manifest.key);
   });
 
 export type UiSchemaManifest = z.infer<typeof uiSchemaManifest>;

@@ -24,33 +24,46 @@
  * ```
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
-import { resolve, dirname } from "node:path";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { resolve, dirname, join } from "node:path";
 
 import type { Command } from "commander";
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
-import type { ComponentConfig } from "../../components/config/types";
-import type { NextlyServiceConfig } from "../../di/register";
 import {
   TypeGenerator,
   type TypeGeneratorOptions,
 } from "../../domains/schema/services/type-generator";
 import { ZodGenerator } from "../../domains/schema/services/zod-generator";
+import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError } from "../../errors/index";
+// Reserved-option refusals are reported through the canonical error shape, so
+// the CLI renders them like any other declaration failure.
+import type { FieldGroupConfig } from "../../field-groups/config/types";
 import { collectCodegenNames } from "../../plugins/codegen/collect-codegen-names";
-import { buildImportMapArtifact } from "../../plugins/codegen/component-import-map";
+import {
+  buildImportMapArtifact,
+  COMPONENT_IMPORT_MAP_FILENAME,
+} from "../../plugins/codegen/component-import-map";
+// The option names the field identity would overwrite, refused here because a
+// code-defined user field never passes through the manifest schema.
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
-import type { DynamicComponentRecord } from "../../schemas/dynamic-components/types";
+import type { DynamicFieldGroupRecord } from "../../schemas/dynamic-field-groups/types";
 import type { DynamicSingleRecord } from "../../schemas/dynamic-singles/types";
 import type { UserFieldDefinitionRecord } from "../../schemas/user-field-definitions/types";
 import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
+import { carriedUserFieldOptions } from "../../shared/lib/user-field-plugin-options";
 import type { SingleConfig } from "../../singles/config/types";
 import type { UserFieldConfig } from "../../users/config/types";
 import { createContext, type CommandContext } from "../program";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatDuration, formatCount } from "../utils/logger";
+
+import {
+  applyBlockManifestState,
+  readBlockManifestState,
+} from "./generate-manifest";
 
 // ============================================================================
 // Types
@@ -95,6 +108,8 @@ interface ResolvedGenerateTypesOptions extends GenerateTypesCommandOptions {
 interface GenerationResult {
   /** Path to generated TypeScript types file */
   typesFile?: string;
+  /** Path to the generated block manifest, when plugins declare blocks. */
+  blockManifestFile?: string;
   /** Path to the generated admin component import map, when plugins contribute admin UI (D60) */
   componentImportMapFile?: string;
   /** Number of collection interfaces generated */
@@ -157,7 +172,7 @@ export async function runGenerateTypes(
 
   const collectionCount = configResult.config.collections.length;
   const singleCount = configResult.config.singles?.length ?? 0;
-  const componentCount = configResult.config.components?.length ?? 0;
+  const componentCount = configResult.config.fieldGroups?.length ?? 0;
   const userFieldCount = configResult.config.users?.fields?.length ?? 0;
   logger.keyValue("Collections", collectionCount);
   logger.keyValue("Singles", singleCount);
@@ -166,7 +181,37 @@ export async function runGenerateTypes(
     logger.keyValue("User Fields", userFieldCount);
   }
 
-  if (collectionCount === 0 && singleCount === 0 && componentCount === 0) {
+  // User fields alone are enough to generate for: the `User` interface carries
+  // them, and stopping here would leave an app with no output, or a stale file
+  // from a previous run.
+  // Settled BEFORE the empty-schema return below, which exits without running
+  // anything after it. An app whose only schema came from a page-builder plugin
+  // reaches zero on every count the moment that plugin is removed, and that is
+  // exactly when its manifest most needs deleting. The path is recorded and
+  // reported on the result further down, where that object exists.
+  // Settled through the same pair `generate:manifest` uses, so the command that
+  // writes the file and the command that checks it cannot disagree about what
+  // belongs on disk. `expected === null` is expressed by REMOVING any previous
+  // manifest: writing nothing would leave the last run's file still advertising
+  // blocks the app no longer has.
+  const manifestState = await readBlockManifestState(
+    configResult.config.plugins ?? [],
+    options.output ?? configResult.config.typescript.outputFile,
+    options.cwd ?? process.cwd()
+  );
+  await applyBlockManifestState(manifestState);
+  const writtenManifestPath =
+    manifestState.expected === null ? undefined : manifestState.path;
+  if (writtenManifestPath) {
+    logger.debug(`Written block manifest to: ${writtenManifestPath}`);
+  }
+
+  if (
+    collectionCount === 0 &&
+    singleCount === 0 &&
+    componentCount === 0 &&
+    userFieldCount === 0
+  ) {
     logger.warn("No collections, singles, or components defined in config");
     logger.info(
       "Add collections, singles, or components to your nextly.config.ts to generate types."
@@ -180,6 +225,9 @@ export async function runGenerateTypes(
 
   try {
     const result = await generateTypes(configResult, options, context);
+    // Reported here because the manifest is settled earlier, before the
+    // empty-schema return, while this object is built by the call above.
+    result.blockManifestFile = writtenManifestPath;
 
     // Step 3: Display results
     displayResults(result, options, context);
@@ -210,7 +258,7 @@ async function generateTypes(
   const result: GenerationResult = {
     collectionCount: config.collections.length,
     singleCount: config.singles?.length ?? 0,
-    componentCount: config.components?.length ?? 0,
+    componentCount: config.fieldGroups?.length ?? 0,
     userFieldCount: config.users?.fields?.length ?? 0,
     zodSchemaFiles: [],
     durationMs: 0,
@@ -225,8 +273,8 @@ async function generateTypes(
   // Convert SingleConfig[] to DynamicSingleRecord[] for generators
   const singleRecords = convertToSingleRecords(config.singles ?? []);
 
-  // Convert ComponentConfig[] to DynamicComponentRecord[] for generators
-  const componentRecords = convertToComponentRecords(config.components ?? []);
+  // Convert FieldGroupConfig[] to DynamicFieldGroupRecord[] for generators
+  const componentRecords = convertToComponentRecords(config.fieldGroups ?? []);
 
   // Convert UserFieldConfig[] to UserFieldDefinitionRecord[] for generators
   const userFieldRecords = convertToUserFieldRecords(
@@ -250,7 +298,7 @@ async function generateTypes(
   // `config` is the already-merged config (plugin contributions folded by
   // loadConfig); `config.plugins` is the resolved plugin list.
   const { permissionSlugs, eventNames } = collectCodegenNames(
-    config as unknown as NextlyServiceConfig,
+    config,
     config.plugins ?? []
   );
 
@@ -286,6 +334,18 @@ async function generateTypes(
     await writeFile(importMapPath, importMap.code, "utf-8");
     result.componentImportMapFile = importMapPath;
     logger.debug(`Written plugin admin import map to: ${importMapPath}`);
+  } else {
+    // Nothing to register, which has to be expressed by removing any previous
+    // map. This one is worse than a stale data file: the generated module is
+    // IMPORTED by the app, so leaving it behind keeps importing a package that
+    // is no longer installed and breaks the next build.
+    await rm(
+      resolve(
+        cwd,
+        join(dirname(typesOutputPath), COMPONENT_IMPORT_MAP_FILENAME)
+      ),
+      { force: true }
+    );
   }
 
   // Generate Zod schemas if enabled
@@ -358,7 +418,7 @@ function convertToRecords(
 /**
  * Convert SingleConfig[] to DynamicSingleRecord[] format
  */
-function convertToSingleRecords(
+export function convertToSingleRecords(
   singles: SingleConfig[]
 ): DynamicSingleRecord[] {
   return singles.map(single => ({
@@ -386,16 +446,18 @@ function convertToSingleRecords(
 }
 
 /**
- * Convert ComponentConfig[] to DynamicComponentRecord[] format
+ * Convert FieldGroupConfig[] to DynamicFieldGroupRecord[] format
  */
-function convertToComponentRecords(
-  components: ComponentConfig[]
-): DynamicComponentRecord[] {
+export function convertToComponentRecords(
+  components: FieldGroupConfig[]
+): DynamicFieldGroupRecord[] {
   return components.map(component => ({
     id: component.slug, // Use slug as temporary ID
     slug: component.slug,
     label: component.label?.singular ?? toTitleCase(component.slug),
-    tableName: component.dbName ?? `comp_${component.slug.replace(/-/g, "_")}`,
+    // Canonical resolution keeps generated table names aligned with the
+    // registry and runtime schema for the same component.
+    tableName: resolveComponentTableName(component.slug),
     fields: component.fields,
     description: component.description ?? component.admin?.description,
     admin: component.admin,
@@ -417,7 +479,7 @@ function convertToComponentRecords(
  * Convert UserFieldConfig[] to UserFieldDefinitionRecord[] format.
  * Code-first fields are marked with `source: "code"` for precise type generation.
  */
-function convertToUserFieldRecords(
+export function convertToUserFieldRecords(
   fields: UserFieldConfig[]
 ): UserFieldDefinitionRecord[] {
   return fields.map((field, index) => {
@@ -442,6 +504,7 @@ function convertToUserFieldRecords(
           ? String(field.defaultValue ?? "") || null
           : null,
       options,
+      pluginOptions: carriedUserFieldOptions(field),
       hasMany: "hasMany" in field ? Boolean(field.hasMany) : null,
       minLength:
         "minLength" in field ? ((field.minLength as number) ?? null) : null,

@@ -14,6 +14,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { ServiceMap } from "../di/register";
+import type { FieldGroupsNamespace } from "../direct-api/namespaces/index";
 import type {
   AuthResult,
   BulkDeleteArgs,
@@ -32,8 +33,8 @@ import type {
   CreateRoleArgs,
   CreateUserArgs,
   CreateUserFieldArgs,
-  DataFromCollectionSlug,
-  DataFromSingleSlug,
+  RowFromCollectionSlug,
+  RowFromSingleSlug,
   DeleteArgs,
   DeleteEmailProviderArgs,
   DeleteEmailTemplateArgs,
@@ -142,7 +143,7 @@ export interface Nextly {
    */
   find: <TSlug extends CollectionSlug>(
     args: FindArgs<TSlug>
-  ) => Promise<ListResult<DataFromCollectionSlug<TSlug>>>;
+  ) => Promise<ListResult<RowFromCollectionSlug<TSlug>>>;
 
   /**
    * Find a single document by ID.
@@ -157,7 +158,7 @@ export interface Nextly {
    */
   findByID: <TSlug extends CollectionSlug>(
     args: FindByIDArgs<TSlug>
-  ) => Promise<DataFromCollectionSlug<TSlug> | null>;
+  ) => Promise<RowFromCollectionSlug<TSlug> | null>;
 
   /**
    * Create a new document.
@@ -172,7 +173,7 @@ export interface Nextly {
    */
   create: <TSlug extends CollectionSlug>(
     args: CreateArgs<TSlug>
-  ) => Promise<MutationResult<DataFromCollectionSlug<TSlug>>>;
+  ) => Promise<MutationResult<RowFromCollectionSlug<TSlug>>>;
 
   /**
    * Update a document by ID.
@@ -188,7 +189,7 @@ export interface Nextly {
    */
   update: <TSlug extends CollectionSlug>(
     args: UpdateArgs<TSlug>
-  ) => Promise<MutationResult<DataFromCollectionSlug<TSlug>>>;
+  ) => Promise<MutationResult<RowFromCollectionSlug<TSlug>>>;
 
   /**
    * Delete a document by ID or by where clause.
@@ -249,7 +250,7 @@ export interface Nextly {
    */
   duplicate: <TSlug extends CollectionSlug>(
     args: DuplicateArgs<TSlug>
-  ) => Promise<MutationResult<DataFromCollectionSlug<TSlug>>>;
+  ) => Promise<MutationResult<RowFromCollectionSlug<TSlug>>>;
 
   /**
    * Get a Single document.
@@ -263,22 +264,31 @@ export interface Nextly {
    */
   findSingle: <TSlug extends SingleSlug>(
     args: FindSingleArgs<TSlug>
-  ) => Promise<DataFromSingleSlug<TSlug>>;
+  ) => Promise<RowFromSingleSlug<TSlug>>;
 
   /**
    * Update a Single document.
    *
+   * Returns the same `{ message, item }` envelope the collection mutations do.
+   * `warnings` is present only when a hook failed after the write committed:
+   * the document is saved either way, so this reports a side effect that did
+   * not run rather than a failed write.
+   *
    * @example
    * ```typescript
-   * const updated = await nextly.updateSingle({
+   * const { item, warnings } = await nextly.updateSingle({
    *   slug: 'site-settings',
    *   data: { siteName: 'My Site' },
    * });
+   * item.siteName;
+   * if (warnings) {
+   *   // saved, but a post-commit hook threw
+   * }
    * ```
    */
   updateSingle: <TSlug extends SingleSlug>(
     args: UpdateSingleArgs<TSlug>
-  ) => Promise<DataFromSingleSlug<TSlug>>;
+  ) => Promise<MutationResult<RowFromSingleSlug<TSlug>>>;
 
   /**
    * List all registered Single type definitions.
@@ -622,6 +632,23 @@ export interface Nextly {
       args: FormSubmissionsArgs
     ) => Promise<ListResult<Record<string, unknown>>>;
   };
+
+  /**
+   * Field groups namespace - reusable field structures shared by collections
+   * and singles.
+   *
+   * Typed as the namespace the Direct API actually builds, so this surface
+   * cannot drift from the implementation the instance delegates to.
+   *
+   * @example
+   * ```typescript
+   * const nextly = await getNextly(config);
+   *
+   * const fieldGroups = await nextly.fieldGroups.find();
+   * const seo = await nextly.fieldGroups.findBySlug({ slug: 'seo' });
+   * ```
+   */
+  fieldGroups: FieldGroupsNamespace;
 
   /**
    * Media service - direct access to MediaService for advanced operations.

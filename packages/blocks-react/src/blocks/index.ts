@@ -1,0 +1,92 @@
+/**
+ * The core block library.
+ *
+ * These live beside the renderer rather than inside the page-builder plugin,
+ * and the move is a layering decision rather than tidying. A block definition
+ * needs the document model and React and nothing else; the plugin peers the
+ * admin and the CMS runtime. Blocks kept there could only be used by a host
+ * that has both, which contradicts the renderer's own promise that a document
+ * renders standalone. The layering test enforces the direction: a block that
+ * reaches for the plugin, the admin, or `next/*` fails the suite.
+ *
+ * They import `defineBlock` from the ENGINE, not from `@nextlyhq/plugin-sdk`.
+ * The engine is where the contract is declared; the SDK re-exports it as the
+ * stable surface offered to plugin authors. First-party blocks have no reason
+ * to route through a package whose purpose is to be a third party's import.
+ *
+ * Each block names {@link PageContext} explicitly instead of relying on the
+ * module augmentation the plugin used. That augmentation cannot be published
+ * (the declaration bundler resolves imports with a scheme older than `exports`
+ * maps, so an augmentation naming a subpath is invisible to it), which meant
+ * blocks compiled in-repo were typed and blocks compiled against the published
+ * types were not. Naming the context is one word longer and always true.
+ *
+ * @module blocks
+ */
+
+import { box } from "./box";
+import { button } from "./button";
+import { collectionLoop } from "./collection-loop";
+import { divider } from "./divider";
+import { embed } from "./embed";
+import { heading } from "./heading";
+import { image } from "./image";
+import { list } from "./list";
+import { paragraph } from "./paragraph";
+import { quote } from "./quote";
+import { section } from "./section";
+import { spacer } from "./spacer";
+
+export { box } from "./box";
+export { button, BUTTON_TYPES, type ButtonProps } from "./button";
+export { collectionLoop } from "./collection-loop";
+export { divider, type DividerProps } from "./divider";
+export { embed, type EmbedProps } from "./embed";
+export {
+  heading,
+  HEADING_LEVELS,
+  type HeadingLevel,
+  type HeadingProps,
+} from "./heading";
+export { image, IMAGE_LOADING, type ImageProps } from "./image";
+export { list, LIST_KINDS, type ListProps } from "./list";
+export { paragraph, type ParagraphProps } from "./paragraph";
+export { quote, type QuoteProps } from "./quote";
+export { section } from "./section";
+export { spacer, type SpacerProps } from "./spacer";
+export {
+  CONTAINER_TAGS,
+  CONTENT_WIDTH_CLASS,
+  renderContainer,
+  type ContainerProps,
+  type ContainerTag,
+} from "./container";
+export type { CollectionLoopProps } from "./collection-loop";
+
+/**
+ * Every block in the core library.
+ *
+ * A list rather than a registry so the caller decides what registering means:
+ * the renderer builds a resolver from it, the plugin hands it to the editor's
+ * own registration service, and a test can take a subset. Exported as a plain
+ * array because that is the shape both of those want.
+ */
+export const coreBlocks = [
+  // Layout
+  section,
+  box,
+  spacer,
+  // Typography
+  heading,
+  paragraph,
+  list,
+  // Media and interaction
+  image,
+  button,
+  // Structure
+  divider,
+  quote,
+  embed,
+  // Dynamic
+  collectionLoop,
+];

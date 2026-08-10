@@ -9,6 +9,8 @@
 
 import { resolve } from "node:path";
 
+import { resolveDeclaredSchema } from "../domains/schema/migrate/resolved-schema";
+
 interface AdapterLike {
   dialect: "postgresql" | "mysql" | "sqlite";
   getDrizzle: () => unknown;
@@ -34,17 +36,35 @@ interface MigrateCoreLike {
     ttlSeconds?: number;
     isSettled?: () => Promise<boolean>;
     ensureLedger?: () => Promise<void>;
+    knownJunctions?: ReadonlySet<string>;
   }): Promise<{ applied: number; coreChanged: boolean }>;
 }
 
 export interface RunProdMigrationsArgs {
+  /**
+   * Read only to resolve which tables are DERIVED rather than declared.
+   *
+   * A many-to-many field may carry `options.junctionTable`, whose name matches
+   * no convention and appears in no snapshot, so the drift check has to be told
+   * about it or an install that migrates on boot stops with a difference the
+   * CLI path would not have reported. The Schema Builder can declare such a
+   * field too, which is why the manifest (`db.uiSchemaFile`) is read as well as
+   * the config — resolving from the config alone would make boot and CLI
+   * disagree about the same database.
+   */
   config: {
     db: {
       runMigrationsOnBoot?: boolean;
       migrationsDir: string;
       migrateLockTtlSeconds?: number;
+      uiSchemaFile: string;
     };
+    collections: readonly unknown[];
+    singles?: readonly unknown[];
+    fieldGroups?: readonly unknown[];
   };
+  /** Plugin additions to Builder entities, when the caller has them. */
+  deferredExtends?: readonly unknown[];
   adapter: AdapterLike;
   logger: LoggerLike;
   /** Injected for tests; defaults to the real migrateCore + ledger bootstrap. */
@@ -107,6 +127,11 @@ export async function runProdMigrationsIfEnabled(
 
   try {
     logger.info("[Nextly] Running production migrations on boot...");
+    const resolvedSchema = await resolveDeclaredSchema({
+      projectRoot: process.cwd(),
+      config: args.config,
+      deferredExtends: args.deferredExtends,
+    });
     const { applied } = await core({
       dialect: adapter.dialect,
       db: adapter.getDrizzle(),
@@ -115,6 +140,7 @@ export async function runProdMigrationsIfEnabled(
       logger: coreLogger,
       lockMode: "wait",
       ttlSeconds: args.config.db.migrateLockTtlSeconds,
+      knownJunctions: resolvedSchema.knownJunctions,
       ensureLedger,
     });
     logger.info(`[Nextly] Boot migrations complete (${applied} applied).`);

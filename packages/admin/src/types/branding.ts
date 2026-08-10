@@ -42,6 +42,15 @@ export interface PluginWidgetMeta {
 /** Plugin metadata returned by the `/admin-meta` API. */
 export interface PluginMetadata {
   name: string;
+  /**
+   * The plugin's own configuration for its admin components, as declared in
+   * `contributes.admin.clientConfig` and serialized through `/api/admin-meta`.
+   *
+   * Public: `/api/admin-meta` needs no authentication, so this reaches
+   * anonymous callers and never holds secrets. Read it with
+   * `usePluginClientConfig` rather than searching this array by hand.
+   */
+  clientConfig?: Record<string, unknown>;
   version?: string;
   description?: string;
   /** Author shown in the plugins list; mirrors package.json by convention. */
@@ -72,8 +81,8 @@ export interface PluginMetadata {
   collections: string[];
   /** Slugs of contributed singles, for the detail page's contributions view. */
   singles?: string[];
-  /** Slugs of contributed components, for the detail page's contributions view. */
-  components?: string[];
+  /** Slugs of contributed field groups, for the detail page's contributions view. */
+  fieldGroups?: string[];
   /** Declared custom permissions (identity + display fields only; enabled plugins). */
   permissions?: Array<{
     action: string;

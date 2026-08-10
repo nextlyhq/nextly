@@ -251,33 +251,64 @@ export class NextlyError extends Error {
   }
 
   static notFound(opts?: {
+    // Declared so a rebuild from a status-only envelope can chain the failure
+    // it came from. Without it the option is accepted and dropped whenever it
+    // arrives through a spread, which reads as forwarded and is not.
+    cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {
     return new NextlyError({
       code: "NOT_FOUND",
       publicMessage: "Not found.",
+      cause: opts?.cause,
       logContext: opts?.logContext,
     });
   }
 
   static forbidden(opts?: {
+    cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {
     return new NextlyError({
       code: "FORBIDDEN",
       publicMessage: "You don't have permission to perform this action.",
+      cause: opts?.cause,
       logContext: opts?.logContext,
+    });
+  }
+
+  /**
+   * A call the caller got wrong, where naming the mistake IS the value of the
+   * error.
+   *
+   * The only factory that takes its public message from the caller. The
+   * generic messages elsewhere exist so an HTTP response cannot leak internal
+   * detail; this one is for arguments and configuration a developer controls
+   * and must be told about — a missing option, an unusable combination — where
+   * `internal()` would reduce the one useful sentence to "An unexpected error
+   * occurred." Do not pass user-supplied data through it.
+   */
+  static invalidInput(opts: {
+    message: string;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "INVALID_INPUT",
+      publicMessage: opts.message,
+      logContext: opts.logContext,
     });
   }
 
   static validation(opts: {
     errors: ValidationPublicData["errors"];
+    cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {
     return new NextlyError({
       code: "VALIDATION_ERROR",
       publicMessage: "Validation failed.",
       publicData: { errors: opts.errors },
+      cause: opts.cause,
       logContext: opts.logContext,
     });
   }
@@ -288,6 +319,7 @@ export class NextlyError extends Error {
     // for state conflicts where "refresh and try again" would misdirect the
     // caller (a disabled endpoint, an in-flight delivery, and so on).
     message?: string;
+    cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {
     return new NextlyError({
@@ -295,6 +327,7 @@ export class NextlyError extends Error {
       publicMessage:
         opts?.message ??
         "The resource has changed since you last loaded it. Please refresh and try again.",
+      cause: opts?.cause,
       logContext: { reason: opts?.reason, ...opts?.logContext },
     });
   }

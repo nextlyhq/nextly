@@ -8,6 +8,7 @@
  * runtime (Node scripts, edge, browser, external agents) without pulling in
  * a framework.
  */
+import { isPlainRecord } from "./plain-record";
 
 /**
  * Engine document-format version. Bumped only when the envelope shape itself
@@ -284,11 +285,11 @@ export type NodeStyles = Partial<
 
 /** True if a style value is a design-token reference. */
 export function isTokenRef(value: unknown): value is TokenRef {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as TokenRef).$token === "string"
-  );
+  // A reference must be a plain record, not merely an object carrying the key.
+  // An array or a Date decorated with `$token` reads as a reference here and
+  // then serializes to `[]` or a string, so the token is lost on the way to
+  // storage and the document fails validation the next time it is read.
+  return isPlainRecord(value) && typeof value.$token === "string";
 }
 
 // ---------------------------------------------------------------------------
@@ -317,6 +318,30 @@ export interface BreakpointSet {
 
 /** Maximum breakpoints per axis (the base breakpoint included). */
 export const MAX_BREAKPOINTS_PER_AXIS = 7;
+
+/**
+ * Maximum named classes read from the site library on one compile.
+ *
+ * The library is site settings, not part of a document, so the document's own byte cap does not
+ * bound it — and it is read on every page render. Set far above any hand-authored library so the
+ * cap is only ever reached by data that is already wrong.
+ *
+ * Applied to the STORED order, before `orderIndex` is read. Deciding by `orderIndex` instead
+ * means reading every entry to know which to keep, which is exactly the read this bounds.
+ */
+export const MAX_NAMED_CLASSES = 2000;
+
+/**
+ * Maximum class references read from one node.
+ *
+ * The per-node counterpart to the library cap. A document reaches the compiler whether or not
+ * anything validated it, and a node's `classes` array is walked on every render of the page that
+ * holds it, so without a bound one corrupt array is copied and scanned in full each time.
+ *
+ * Set far above any real design. A named class is a preset, not a utility: a block carrying
+ * dozens of them is describing a class that should have been one.
+ */
+export const MAX_CLASSES_PER_NODE = 64;
 
 // ---------------------------------------------------------------------------
 // Component instances — a distinguished node type

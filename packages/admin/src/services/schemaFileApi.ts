@@ -31,8 +31,11 @@ export const schemaFileApi = {
     protectedApi.post<DevSchemaWriteResponse>("/_dev/schema/single", entity),
 
   /** Upsert a component in ui-schema.json. */
-  writeComponent: (entity: ManifestEntity) =>
-    protectedApi.post<DevSchemaWriteResponse>("/_dev/schema/component", entity),
+  writeFieldGroup: (entity: ManifestEntity) =>
+    protectedApi.post<DevSchemaWriteResponse>(
+      "/_dev/schema/field-group",
+      entity
+    ),
 
   /** Remove a collection from ui-schema.json. */
   deleteCollection: (slug: string) =>
@@ -45,8 +48,8 @@ export const schemaFileApi = {
     protectedApi.delete<DevSchemaWriteResponse>(`/_dev/schema/single/${slug}`),
 
   /** Remove a component from ui-schema.json. */
-  deleteComponent: (slug: string) =>
+  deleteFieldGroup: (slug: string) =>
     protectedApi.delete<DevSchemaWriteResponse>(
-      `/_dev/schema/component/${slug}`
+      `/_dev/schema/field-group/${slug}`
     ),
 };

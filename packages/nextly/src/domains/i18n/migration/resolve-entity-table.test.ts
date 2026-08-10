@@ -32,6 +32,34 @@ describe("resolveEntityTable", () => {
     expect(r?.kind).toBe("component");
   });
 
+  // `i18n:restore` tries the authored config first and the persisted UI-schema
+  // manifest second. Those spell the field-group key differently, so both have
+  // to resolve or a code-first group is reported missing and its archived
+  // translations can never be replayed.
+  it("maps a field group from an authored config (`fieldGroups`)", () => {
+    const r = resolveEntityTable({ fieldGroups: [{ slug: "seo" }] }, "seo");
+    expect(r).toEqual({
+      tableName: "comp_seo",
+      companionTableName: "comp_seo_locales",
+      kind: "component",
+    });
+  });
+
+  it("maps a field group from the UI-schema manifest (`components`)", () => {
+    const r = resolveEntityTable({ components: [{ slug: "seo" }] }, "seo");
+    expect(r?.tableName).toBe("comp_seo");
+  });
+
+  it("finds a field group when only the authored key is present", () => {
+    const config = {
+      collections: [{ slug: "pages" }],
+      fieldGroups: [{ slug: "seo-meta" }],
+    };
+    expect(resolveEntityTable(config, "seo-meta")?.tableName).toBe(
+      "comp_seo_meta"
+    );
+  });
+
   it("honors an explicit dbName over the prefix convention", () => {
     const r = resolveEntityTable(
       { collections: [{ slug: "pages", dbName: "custom_pages" }] },
@@ -42,7 +70,9 @@ describe("resolveEntityTable", () => {
   });
 
   it("returns null for an unknown slug (command reports it instead of guessing a table)", () => {
-    expect(resolveEntityTable({ collections: [{ slug: "pages" }] }, "nope")).toBeNull();
+    expect(
+      resolveEntityTable({ collections: [{ slug: "pages" }] }, "nope")
+    ).toBeNull();
   });
 
   it("returns null on an empty config", () => {

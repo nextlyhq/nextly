@@ -81,12 +81,23 @@ export interface UserCustomFieldsProps {
  */
 function toFieldConfig(def: UserFieldDefinitionRecord): FieldConfig {
   const base = {
+    // Whatever a contributed type declared for itself, spread first so the
+    // modelled properties below always win. A type states what it needs to
+    // render — a rating's scale, a picker's source — and those keys have no
+    // column of their own, so a config rebuilt without them hands the plugin's
+    // own editor a field stripped of its declaration.
+    ...(def.pluginOptions ?? {}),
     name: def.name,
     label: def.label,
     type: def.type,
     required: def.required,
     defaultValue: def.defaultValue ?? undefined,
     admin: {
+      // Merged, not replaced. `admin` is one of the keys carried whole, so a
+      // declared `readOnly` or `hidden` lives inside it; assigning a fresh
+      // object here dropped everything the type declared and kept only the two
+      // values hoisted onto their own columns.
+      ...((def.pluginOptions?.admin ?? {}) as Record<string, unknown>),
       placeholder: def.placeholder ?? undefined,
       description: def.description ?? undefined,
     },
@@ -94,10 +105,10 @@ function toFieldConfig(def: UserFieldDefinitionRecord): FieldConfig {
 
   // Add options for select/radio fields
   if ((def.type === "select" || def.type === "radio") && def.options) {
-    return { ...base, options: def.options } as unknown as FieldConfig;
+    return { ...base, options: def.options } as FieldConfig;
   }
 
-  return base as unknown as FieldConfig;
+  return base as FieldConfig;
 }
 
 /**
@@ -343,7 +354,7 @@ function UserFieldInput({
         // form does, so a plugin user field is editable, not just definable.
         const unsupported = (
           // Full-strength destructive border so the boundary is perceivable.
-          <div className="rounded-none  border border-destructive bg-destructive/10 p-3 text-center">
+          <div className="rounded-md  border border-destructive bg-destructive/10 p-3 text-center">
             <p className="text-sm text-destructive">
               Unsupported field type: {fieldType}
             </p>

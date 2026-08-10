@@ -13,9 +13,18 @@
  * @module domains/webhooks/record-event
  */
 
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  SupportedDialect,
+  TransactionContext,
+} from "@nextlyhq/adapter-drizzle/types";
 
-import type { WebhookEvent } from "./types";
+import { webhookTables } from "../../schemas/webhooks";
+
+import {
+  DEFAULT_EVENT_RETENTION_CLASS,
+  type EventRetentionClass,
+} from "./retention-config";
+import { DEFAULT_EVENT_OUTCOME, type WebhookEvent } from "./types";
 
 /**
  * Row shape written to `nextly_events` (snake_case column names). `created_at`
@@ -23,7 +32,11 @@ import type { WebhookEvent } from "./types";
  * bypasses Drizzle's runtime `$defaultFn`, so a NOT NULL timestamp must be
  * provided rather than left to the column default.
  */
-function eventRow(envelope: WebhookEvent, now: Date): Record<string, unknown> {
+function eventRow(
+  envelope: WebhookEvent,
+  now: Date,
+  retentionClass: EventRetentionClass
+): Record<string, unknown> {
   return {
     id: envelope.id,
     type: envelope.type,
@@ -49,6 +62,12 @@ function eventRow(envelope: WebhookEvent, now: Date): Record<string, unknown> {
     payload: JSON.stringify(envelope),
     actor_type: envelope.actor?.type ?? null,
     actor_id: envelope.actor?.id ?? null,
+    // Absent means the action completed; see WebhookEvent.outcome.
+    outcome: envelope.outcome ?? DEFAULT_EVENT_OUTCOME,
+    // Storage policy, not envelope content: which window prunes this row. Kept
+    // off the envelope deliberately — a subscriber has no use for it, and the
+    // delivered payload should not carry the host's retention decisions.
+    retention_class: retentionClass,
     created_at: now,
   };
 }
@@ -60,12 +79,90 @@ function eventRow(envelope: WebhookEvent, now: Date): Record<string, unknown> {
  */
 export async function recordEvent(
   tx: TransactionContext,
-  params: { envelope: WebhookEvent }
+  params: { envelope: WebhookEvent; retentionClass?: EventRetentionClass }
 ): Promise<void> {
   // Project to `id` only: the result is ignored, and the default insert would
   // otherwise RETURN * (or select the row back), forcing the large JSON payload
   // we just wrote to be read and decoded again inside the content transaction.
-  await tx.insert("nextly_events", eventRow(params.envelope, new Date()), {
-    returning: ["id"],
-  });
+  await tx.insert(
+    "nextly_events",
+    eventRow(
+      params.envelope,
+      new Date(),
+      params.retentionClass ?? DEFAULT_EVENT_RETENTION_CLASS
+    ),
+    {
+      returning: ["id"],
+    }
+  );
+}
+
+/**
+ * The Drizzle table row for one event (camelCase properties). Unlike
+ * {@link eventRow}, the `payload` is passed as an OBJECT: the Drizzle json/jsonb
+ * codec serializes it per dialect, and `createdAt` is left to the column default
+ * the Drizzle insert applies.
+ *
+ * `retentionClass` is written explicitly, not defaulted. Which window prunes a
+ * row is decided by the caller from why the row was recorded, so leaving it to
+ * the column default would silently file an audit-relevant row under outbox
+ * hygiene.
+ */
+function eventRowForDrizzle(
+  envelope: WebhookEvent,
+  retentionClass: EventRetentionClass
+): Record<string, unknown> {
+  return {
+    id: envelope.id,
+    type: envelope.type,
+    resourceKind: envelope.resource.kind,
+    resourceCollection:
+      "collection" in envelope.resource
+        ? envelope.resource.collection
+        : "slug" in envelope.resource
+          ? (envelope.resource.slug ?? null)
+          : null,
+    resourceId: envelope.resource.id ?? null,
+    payload: envelope,
+    actorType: envelope.actor?.type ?? null,
+    actorId: envelope.actor?.id ?? null,
+    // Absent means the action completed; see WebhookEvent.outcome.
+    outcome: envelope.outcome ?? DEFAULT_EVENT_OUTCOME,
+    // See eventRow: storage policy, kept off the envelope.
+    retentionClass,
+  };
+}
+
+/**
+ * Minimal Drizzle-transaction surface: append one row. `BaseService.
+ * withTransaction` yields a dialect-specific Drizzle handle whose fluent insert
+ * matches this, so a service recording through it stays free of the adapter's
+ * positional context.
+ */
+export interface DrizzleEventTx {
+  insert(table: unknown): { values(data: unknown): Promise<unknown> };
+}
+
+/**
+ * Drizzle-transaction variant of {@link recordEvent}, for services that run
+ * their writes through `BaseService.withTransaction` (a Drizzle transaction)
+ * rather than the adapter's positional `TransactionContext` — the auth/user
+ * service and plugin write paths. It appends the same `nextly_events` row
+ * through the standardized Drizzle query API, so the event still commits
+ * atomically with the write and the drain fans it out afterwards.
+ */
+export async function recordEventInTx(
+  tx: DrizzleEventTx,
+  dialect: SupportedDialect,
+  params: { envelope: WebhookEvent; retentionClass?: EventRetentionClass }
+): Promise<void> {
+  const { nextlyEvents } = webhookTables(dialect);
+  await tx
+    .insert(nextlyEvents)
+    .values(
+      eventRowForDrizzle(
+        params.envelope,
+        params.retentionClass ?? DEFAULT_EVENT_RETENTION_CLASS
+      )
+    );
 }

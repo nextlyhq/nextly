@@ -1,0 +1,216 @@
+/**
+ * Preview-link minting and revocation.
+ *
+ * What matters here is which gate each endpoint asks for and what it does with
+ * the answer, because a preview link is a bearer credential: anyone holding one
+ * reads the draft it names, with no session of their own.
+ */
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("./route-auth", () => ({
+  requireRouteCollectionAccess: vi.fn(),
+  requireRoutePermission: vi.fn(),
+}));
+
+vi.mock("../init", () => ({
+  getCachedNextly: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../di", () => ({
+  container: { get: vi.fn(), has: vi.fn().mockReturnValue(false) },
+}));
+
+vi.mock("../lib/env", () => ({
+  env: { NEXTLY_SECRET: "a-test-secret-value" },
+}));
+
+import { verifyPreviewToken } from "../auth/preview/preview-token";
+import { container } from "../di";
+
+import {
+  requireRouteCollectionAccess,
+  requireRoutePermission,
+} from "./route-auth";
+
+import { mintPreviewLink, revokePreviewLinks } from "./preview-links";
+
+/** The value the mocked `env` supplies, named once so both sides agree. */
+const SECRET = "a-test-secret-value";
+
+const getGeneration = vi.fn();
+const revokeAll = vi.fn();
+
+function post(
+  body: unknown,
+  path = "http://x/api/nextly/preview-links"
+): Request {
+  return new Request(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+async function json(response: Response): Promise<Record<string, unknown>> {
+  return (await response.json()) as Record<string, unknown>;
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  getGeneration.mockResolvedValue(0);
+  revokeAll.mockResolvedValue(1);
+  (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
+    getPreviewTokenGeneration: getGeneration,
+    revokeAllPreviewTokens: revokeAll,
+  });
+});
+
+describe("mintPreviewLink", () => {
+  it("gates on update for the collection that was named", async () => {
+    // Per collection, not a blanket permission: otherwise a caller who may
+    // edit posts could mint a link into a collection they cannot read.
+    await mintPreviewLink(post({ collection: "pages", entryId: "7" }));
+
+    expect(requireRouteCollectionAccess).toHaveBeenCalledWith(
+      expect.anything(),
+      "update",
+      "pages"
+    );
+  });
+
+  it("does not mint when the gate refuses", async () => {
+    (
+      requireRouteCollectionAccess as ReturnType<typeof vi.fn>
+    ).mockRejectedValueOnce(new Error("forbidden"));
+
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "7" })
+    );
+
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    // The gate has to run BEFORE the token exists, not merely before it is
+    // returned: a token that was signed and then discarded is still a token.
+    expect(getGeneration).not.toHaveBeenCalled();
+  });
+
+  it("signs the site's current generation into the token", async () => {
+    // Asserting that the getter RAN would pass for a handler that read 4 and
+    // signed 0, which is the regression that matters: a link minted under a
+    // stale generation is already revoked, and looks to the editor like preview
+    // is simply broken. So the token is verified rather than inspected.
+    getGeneration.mockResolvedValue(4);
+
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+    const item = body.item as { token: string };
+
+    const atCurrent = await verifyPreviewToken(item.token, SECRET, {
+      generation: 4,
+    });
+    expect(atCurrent.valid).toBe(true);
+
+    // And the same token is refused once the generation moves, which is what
+    // makes revocation reach links already in circulation.
+    const afterRevoke = await verifyPreviewToken(item.token, SECRET, {
+      generation: 5,
+    });
+    expect(afterRevoke.valid).toBe(false);
+  });
+
+  it("scopes the token to the entry that was asked for", async () => {
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+    const item = body.item as { token: string };
+
+    const verified = await verifyPreviewToken(item.token, SECRET, {
+      generation: 0,
+    });
+    expect(verified.valid && verified.scope).toEqual({
+      collection: "pages",
+      entryId: "7",
+    });
+  });
+
+  it("returns a token rather than a url", async () => {
+    // Where the preview route is mounted is the app's decision; a url guessed
+    // here would 404 on any app that mounted it elsewhere.
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+    // The canonical mutation envelope, so a direct-API caller reads `.item`.
+    expect(Object.keys(body).sort()).toEqual(["item", "message"]);
+    const item = body.item as Record<string, unknown>;
+    expect(Object.keys(item).sort()).toEqual(["expiresAt", "token"]);
+    expect(String(item.token)).not.toContain("http");
+  });
+
+  it("refuses a ttl beyond the maximum rather than shortening it", async () => {
+    // Silently clamping would leave an editor believing a link lasts longer
+    // than it does, which is the failure they cannot see until it bites.
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "7", ttlSeconds: 60 * 60 * 24 * 30 })
+    );
+
+    expect(response.status).toBe(400);
+  });
+
+  it("refuses a request naming no entry", async () => {
+    const response = await mintPreviewLink(post({ collection: "pages" }));
+    expect(response.status).toBe(400);
+    expect(requireRouteCollectionAccess).not.toHaveBeenCalled();
+  });
+
+  it("refuses a body that is not json", async () => {
+    const response = await mintPreviewLink(
+      new Request("http://x/api/nextly/preview-links", {
+        method: "POST",
+        body: "not json",
+      })
+    );
+    expect(response.status).toBe(400);
+  });
+});
+
+describe("revokePreviewLinks", () => {
+  it("gates on manage settings, not on a collection", async () => {
+    // The generation is site-wide, so one editor revoking would otherwise end
+    // every other editor's outstanding links.
+    await revokePreviewLinks(
+      post({}, "http://x/api/nextly/preview-links/revoke")
+    );
+
+    expect(requireRoutePermission).toHaveBeenCalledWith(
+      expect.anything(),
+      "manage",
+      "settings"
+    );
+    expect(requireRouteCollectionAccess).not.toHaveBeenCalled();
+  });
+
+  it("does not revoke when the gate refuses", async () => {
+    (requireRoutePermission as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("forbidden")
+    );
+
+    const response = await revokePreviewLinks(
+      post({}, "http://x/api/nextly/preview-links/revoke")
+    );
+
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(revokeAll).not.toHaveBeenCalled();
+  });
+
+  it("returns the generation it moved to", async () => {
+    revokeAll.mockResolvedValue(9);
+
+    const body = await json(
+      await revokePreviewLinks(
+        post({}, "http://x/api/nextly/preview-links/revoke")
+      )
+    );
+
+    expect((body.item as { generation?: unknown }).generation).toBe(9);
+  });
+});

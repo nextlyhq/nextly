@@ -1,0 +1,112 @@
+/**
+ * Assemble the retention passes an install actually needs.
+ *
+ * Every write path that offers a retention pass needs the same set, and the set
+ * is decided the same way each time: a domain contributes a pass when its
+ * retention is configured on. Building it here means a write path cannot
+ * accidentally offer some domains' passes and not others, which would look
+ * exactly like retention working while one table grew unbounded.
+ *
+ * @module domains/retention/passes
+ * @since 1.0.0
+ */
+
+import type { Logger } from "../../shared/types";
+import { pruneAuditDataSafely, type AuditPruneAdapter } from "../audit/prune";
+import {
+  activeAuditRetention,
+  type ResolvedAuditRetentionConfig,
+} from "../audit/retention-config";
+import { pruneWebhookDataSafely, type PruneDeps } from "../webhooks/prune";
+import type { ResolvedWebhookRetentionConfig } from "../webhooks/retention-config";
+
+import {
+  AUDIT_RETENTION_GATE_KEY,
+  WEBHOOK_RETENTION_GATE_KEY,
+  type RetentionGateStore,
+} from "./gate";
+import { RetentionRunner, type RetentionPass } from "./runner";
+
+export interface RetentionPassInput {
+  adapter: AuditPruneAdapter & PruneDeps["adapter"];
+  webhookPolicy?: ResolvedWebhookRetentionConfig | null;
+  auditPolicy?: ResolvedAuditRetentionConfig;
+  gate: RetentionGateStore;
+  now?: () => Date;
+  logger?: Logger;
+}
+
+/** The passes configured on for this install. */
+export function buildRetentionPasses(
+  input: RetentionPassInput
+): RetentionPass[] {
+  const passes: RetentionPass[] = [];
+
+  if (input.webhookPolicy) {
+    const policy = input.webhookPolicy;
+    passes.push({
+      key: WEBHOOK_RETENTION_GATE_KEY,
+      intervalMs: policy.intervalMs,
+      run: async maxBatches => {
+        await pruneWebhookDataSafely(
+          { adapter: input.adapter, now: input.now, logger: input.logger },
+          maxBatches === undefined
+            ? policy
+            : { ...policy, maxBatchesPerRun: maxBatches }
+        );
+      },
+    });
+  }
+
+  // Registered whenever a policy exists at all. Whether it has anything to
+  // prune is a question for each RUN rather than for construction: a runner
+  // built at boot outlives every hot reload, so a policy captured here would
+  // keep pruning on windows the developer has already changed — including to
+  // `false`, where the stale ones go on deleting what they have just asked to
+  // keep. An entirely-`false` policy makes the pass a no-op at run time, which
+  // costs one gate claim per interval and nothing else.
+  const audit = activeAuditRetention(input.auditPolicy);
+  if (audit) {
+    passes.push({
+      key: AUDIT_RETENTION_GATE_KEY,
+      // The one field read at construction. It decides how often a pass is
+      // OFFERED, not what it deletes, so a stale value costs a differently
+      // timed pass rather than a wrong outcome.
+      intervalMs: audit.intervalMs,
+      run: async maxBatches => {
+        const policy = activeAuditRetention(input.auditPolicy);
+        if (
+          !policy ||
+          (policy.activityMaxAgeMs === false && policy.authMaxAgeMs === false)
+        ) {
+          return;
+        }
+        await pruneAuditDataSafely(
+          { adapter: input.adapter, now: input.now, logger: input.logger },
+          policy,
+          maxBatches
+        );
+      },
+    });
+  }
+
+  return passes;
+}
+
+/**
+ * The runner for this install, or undefined when nothing is configured to
+ * prune — so a caller holding an optional runner keeps meaning "no retention"
+ * rather than "a runner with nothing to do".
+ */
+export function buildRetentionRunner(
+  input: RetentionPassInput
+): RetentionRunner | undefined {
+  const passes = buildRetentionPasses(input);
+  if (passes.length === 0) return undefined;
+  return new RetentionRunner({
+    passes,
+    gate: input.gate,
+    now: input.now,
+    logger: input.logger,
+  });
+}

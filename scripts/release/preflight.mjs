@@ -7,50 +7,11 @@
 // Exit codes: 0 = safe to publish, 1 = blocked.
 
 import {
+  classifyPreflight,
   fetchAllRegistryStates,
-  findMissingPublishFields,
   getReleaseManifest,
+  readFirstPublishAcknowledgements,
 } from "./lib.mjs";
-
-/** Groups every package by the reason it can or cannot be published right now. */
-function classify(manifest, registry, expectedVersion) {
-  const metadataErrors = [];
-  const versionMismatch = [];
-  const bootstrapNeeded = [];
-  const alreadyPublished = [];
-  const toPublish = [];
-
-  for (const entry of manifest) {
-    const missing = findMissingPublishFields(entry.pkg);
-    if (missing.length > 0) {
-      metadataErrors.push({ name: entry.name, missing });
-    }
-
-    // Every publishable package shares one version through the Changesets
-    // `fixed` group; a package that drifts off it means the release is not the
-    // lockstep train the changelog and release notes will claim it is.
-    if (entry.version !== expectedVersion) {
-      versionMismatch.push({ name: entry.name, version: entry.version });
-    }
-
-    const state = registry.get(entry.name);
-    if (state === null) {
-      bootstrapNeeded.push(entry.name);
-    } else if (state.versions.includes(entry.version)) {
-      alreadyPublished.push(entry.name);
-    } else {
-      toPublish.push(entry.name);
-    }
-  }
-
-  return {
-    metadataErrors,
-    versionMismatch,
-    bootstrapNeeded,
-    alreadyPublished,
-    toPublish,
-  };
-}
 
 async function main() {
   const manifest = getReleaseManifest();
@@ -65,9 +26,16 @@ async function main() {
     metadataErrors,
     versionMismatch,
     bootstrapNeeded,
+    unprovenPublisher,
+    staleAcknowledgements,
     alreadyPublished,
     toPublish,
-  } = classify(manifest, registry, expectedVersion);
+  } = classifyPreflight(
+    manifest,
+    registry,
+    expectedVersion,
+    readFirstPublishAcknowledgements()
+  );
 
   console.log(`Release preflight for ${expectedVersion}`);
   console.log(`  publishable packages: ${manifest.length}`);
@@ -120,6 +88,38 @@ async function main() {
           .join("\n") +
         "\n\n  See the release-and-changesets skill for the full procedure."
     );
+  }
+
+  // Claimed on npm, never actually published. The registry cannot show whether
+  // a Trusted Publisher was attached, and a publish attempt without one answers
+  // 404 — the same answer as a package that does not exist. Discovering that
+  // during `changeset publish` is what leaves the rest of the train live with
+  // no tag and no release, so it is settled here instead.
+  if (unprovenPublisher.length > 0) {
+    blocked = true;
+    console.error(
+      "\nBlocked: package exists on npm but has only its bootstrap placeholder"
+    );
+    for (const name of unprovenPublisher) {
+      console.error(`  ${name}`);
+    }
+    console.error(
+      "\n  Confirm each one's Trusted Publisher at npmjs.com (repository\n" +
+        "  nextlyhq/nextly, workflow release.yml, environment Production), then\n" +
+        "  add it to scripts/release/first-publish-acknowledged.json:\n" +
+        unprovenPublisher.map(name => `    "${name}"`).join("\n")
+    );
+  }
+
+  if (staleAcknowledgements.length > 0) {
+    // Not a failure: the acknowledgement did its job and now only obscures
+    // which packages still need one.
+    console.log(
+      "\nAcknowledgements no longer needed (these have published real versions):"
+    );
+    for (const name of staleAcknowledgements) {
+      console.log(`  ${name} — remove from first-publish-acknowledged.json`);
+    }
   }
 
   if (blocked) {

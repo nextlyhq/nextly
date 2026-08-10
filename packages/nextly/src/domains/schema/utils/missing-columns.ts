@@ -25,7 +25,16 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../../../collections/fields/types/index";
+import { isBuiltInFieldType } from "../../../schemas/_zod/ui-schema";
+import type { FieldDefinition } from "../../../schemas/dynamic-collections/legacy-types";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types/index";
+import type { SupportedDialect } from "../../../types/database";
+import {
+  getColumnDescriptor,
+  type ColumnOrigin,
+} from "../services/field-column-descriptor";
+import { pluginStorageFieldType } from "../services/plugin-codegen";
 
 // Convert camelCase / PascalCase identifiers to snake_case column names.
 // Mirrors the original helper from SchemaPushService.
@@ -36,20 +45,117 @@ function toSnakeCase(name: string): string {
     .replace(/^_/, "");
 }
 
+/**
+ * The DDL type for a field, taken from the descriptor the ORM binds.
+ *
+ * `getColumnDescriptor` is the single statement of what a column holds — the
+ * runtime schema generator dispatches on its `kind` — so a path that names its
+ * own types can disagree with the columns the app actually reads and writes.
+ * Only the kinds this file needs are mapped; an unmapped kind returns nothing
+ * so the caller keeps the type it already emitted.
+ */
+function ddlTypeForKind(
+  field: FieldConfig,
+  dialect: string,
+  builtBy: ColumnOrigin
+): string | undefined {
+  const descriptor = getColumnDescriptor(
+    field as unknown as FieldDefinition,
+    dialect as SupportedDialect,
+    builtBy
+  );
+  if (!descriptor) return undefined;
+
+  switch (descriptor.kind) {
+    case "integer":
+      return "INTEGER";
+    case "double":
+      return dialect === "postgresql"
+        ? "DOUBLE PRECISION"
+        : dialect === "mysql"
+          ? "DOUBLE"
+          : "REAL";
+    case "decimal": {
+      // The dimensions come from the descriptor too. Stated here, a field
+      // declaring NUMERIC(18,6) got NUMERIC(10,2) when added to an existing
+      // table — rounding what it stored and refusing what it used to accept —
+      // while a fresh table and the runtime binding both honoured it.
+      const { precision, scale } = descriptor;
+      const dimensions =
+        precision !== undefined && scale !== undefined
+          ? `(${precision},${scale})`
+          : "";
+      return dialect === "mysql"
+        ? `DECIMAL${dimensions}`
+        : `NUMERIC${dimensions}`;
+    }
+    case "text": {
+      // Only the slug column. It is indexed by every generator that creates one, and MySQL cannot
+      // index an unbounded string, so a slug ADDed to an existing table has to arrive bounded or it
+      // cannot carry the index a freshly created table gives it.
+      //
+      // Every other `text` field deliberately keeps the TEXT below. Aligning those with the
+      // descriptor's `varchar(255)` is a real reduction in what the column can hold and is a
+      // separate decision, tracked on its own rather than taken as a side effect here.
+      if (toSnakeCase(String(field.name)) !== "slug") return undefined;
+      // Matches what the descriptor renders: bounded only where the dialect has a bounded string
+      // AND needs one.
+      return dialect === "mysql"
+        ? `VARCHAR(${descriptor.length ?? 255})`
+        : "TEXT";
+    }
+    case "shortText": {
+      // The one string kind that is not TEXT everywhere. Stated here because a column this path
+      // adds to an existing table is read back by the same descriptor the ORM binds: emitting TEXT
+      // for it left the next preview reporting a type change on a column boot had just created.
+      //
+      // Only for a type this schema names. A field group's creator deletes `options` from a
+      // contributed type before mapping it — a plugin's options are its own, and one that happens
+      // to be called `variant` must not reshape the column — so it builds such a field as TEXT.
+      // Bounding it here would report a type change on the column that creator had just made, which
+      // is the same defect in the opposite direction. Deciding it correctly needs to know which
+      // entity is being built, which this helper is not told.
+      if (!("type" in field) || !isBuiltInFieldType(String(field.type))) {
+        return undefined;
+      }
+      // SQLite has one string type, so the bound lives in validation there and TEXT is correct.
+      if (dialect === "sqlite") return "TEXT";
+      return `VARCHAR(${descriptor.length ?? 255})`;
+    }
+    case "timestamp":
+      // Only SQLite routes here; it stores a timestamp as an integer.
+      return dialect === "sqlite" ? "INTEGER" : undefined;
+    case "json":
+      return dialect === "postgresql"
+        ? "JSONB"
+        : dialect === "mysql"
+          ? "JSON"
+          : "TEXT";
+    default:
+      return undefined;
+  }
+}
+
 // Render a FieldConfig into the column part of an ALTER TABLE statement,
 // e.g. `"title" TEXT NOT NULL` or `\`is_published\` TINYINT(1) DEFAULT FALSE`.
 // Returns null when the field can't be rendered (e.g. no name).
 //
 // Each branch is the day-one type mapping; do not change behavior here
 // without a migration story for existing user data.
-function fieldToColumnDef(field: FieldConfig, dialect: string): string | null {
+export function fieldToColumnDef(
+  field: FieldConfig,
+  dialect: string,
+  // Which builder made the table this column is being added to. A column added later must match the
+  // one a fresh table gets, and the two Schema Builder creators size a text column differently.
+  builtBy: ColumnOrigin
+): string | null {
   if (!("name" in field) || !field.name) {
     return null;
   }
 
   // Component fields store their data in a separate comp_{slug} table and are
   // stripped from the parent row on write, so they get no parent column.
-  if (field.type === "component") {
+  if (field.type === STORAGE_FORMAT.fieldType) {
     return null;
   }
 
@@ -60,21 +166,34 @@ function fieldToColumnDef(field: FieldConfig, dialect: string): string | null {
   let columnType: string;
   let defaultValue: string | null = null;
 
-  switch (field.type) {
+  // A plugin-contributed type matches no case below and would fall to the TEXT
+  // fallback, so a field added to an existing table would get a text column
+  // while the same field on a fresh table gets its storage primitive. Resolved
+  // to that primitive first so both paths agree.
+  const storageType = pluginStorageFieldType(field);
+  const mappedType = storageType ?? field.type;
+
+  switch (mappedType) {
     case "text":
     case "email":
     case "code":
     case "textarea":
-      columnType = "TEXT";
+      // A field that declared its own width gets the bounded column the descriptor binds and a
+      // freshly created table gets; every other string field keeps TEXT, which is what the
+      // descriptor says for them on all three dialects.
+      columnType = ddlTypeForKind(field, dialect, builtBy) ?? "TEXT";
       break;
 
     case "number":
-      columnType =
-        dialect === "postgresql"
-          ? "NUMERIC"
-          : dialect === "mysql"
-            ? "DECIMAL(10,2)"
-            : "REAL";
+      // Derived from the descriptor rather than stated here, because the
+      // descriptor is what the ORM binds and what a freshly created table
+      // gets. Stated independently, this branch emitted NUMERIC/DECIMAL/REAL
+      // while the binder read an integer, so the same field had one storage
+      // class when the table was created and another when it was added later.
+      // The descriptor also honours the two ways a field asks for fractions —
+      // `dbType: "decimal"` and `options.format: "float"` — which a fixed
+      // string here silently overrode in both directions.
+      columnType = ddlTypeForKind(field, dialect, builtBy) ?? "INTEGER";
       break;
 
     case "checkbox": {
@@ -91,12 +210,16 @@ function fieldToColumnDef(field: FieldConfig, dialect: string): string | null {
     }
 
     case "date":
+      // SQLite binds a timestamp as an integer, so the TEXT this branch used
+      // to emit could not be read back by the binder that wrote it. Postgres
+      // and MySQL keep the types they already had; only the storage class the
+      // ORM disagreed with changes.
       columnType =
         dialect === "postgresql"
           ? "TIMESTAMP WITH TIME ZONE"
           : dialect === "mysql"
             ? "DATETIME"
-            : "TEXT";
+            : (ddlTypeForKind(field, dialect, builtBy) ?? "INTEGER");
       break;
 
     case "select":
@@ -257,14 +380,14 @@ export async function addMissingColumnsForFields(
   logger: Logger,
   tableName: string,
   fields: FieldConfig[],
-  options?: { timestamps?: boolean }
+  options: { timestamps?: boolean; builtBy: ColumnOrigin }
 ): Promise<string[]> {
   const dialect = adapter.getCapabilities().dialect as string;
   const columns = new Map<string, string>();
 
   for (const field of fields) {
     if ("name" in field && field.name) {
-      const colDef = fieldToColumnDef(field, dialect);
+      const colDef = fieldToColumnDef(field, dialect, options.builtBy);
       if (colDef) {
         columns.set(toSnakeCase(field.name), colDef);
       }

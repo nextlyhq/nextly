@@ -61,22 +61,18 @@ export function ResponsiveHeader({ onMenuClick, user }: ResponsiveHeaderProps) {
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                className="group inline-flex items-center justify-center h-9 w-9 p-0 rounded-none text-muted-foreground  border border-border border-transparent hover-subtle-row transition-all duration-200 outline-none focus-visible:bg-background focus-visible:border-primary! focus-visible:ring-1 focus-visible:ring-primary! cursor-pointer relative"
+                className="group inline-flex items-center justify-center h-9 w-9 p-0 rounded-md text-muted-foreground  border border-border border-transparent hover-subtle-row transition-all duration-200 outline-none focus-visible:bg-background focus-visible:border-primary! focus-visible:ring-1 focus-visible:ring-primary! cursor-pointer relative"
               >
-                <Avatar className="h-full w-full bg-transparent rounded-none transition-all duration-200">
-                  <AvatarImage
-                    src={user?.avatar}
-                    alt={user?.name || "User"}
-                    className="rounded-none"
-                  />
-                  <AvatarFallback className="bg-transparent text-current text-sm font-bold rounded-none">
+                <Avatar className="h-full w-full bg-transparent transition-all duration-200">
+                  <AvatarImage src={user?.avatar} alt={user?.name || "User"} />
+                  <AvatarFallback className="bg-transparent text-current text-sm font-bold">
                     {user?.name?.charAt(0)?.toUpperCase() || "U"}
                   </AvatarFallback>
                 </Avatar>
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
-              className="w-64 p-2 mt-2 rounded-none border-border shadow-xl shadow-black/5 admin-dropdown-content"
+              className="w-64 p-2 mt-2 rounded-lg border-border shadow-xl shadow-(color:--nx-shadow-color)/5 admin-dropdown-content"
               align="end"
               forceMount
             >
@@ -99,13 +95,13 @@ export function ResponsiveHeader({ onMenuClick, user }: ResponsiveHeaderProps) {
                   navigateTo(buildRoute(ROUTES.USERS_EDIT, { id: user.id }));
                   setActiveMenu(null);
                 }}
-                className="group flex w-full items-center gap-3 rounded-none px-3 py-2.5 text-[13px] font-medium transition-colors cursor-pointer hover-subtle-row"
+                className="group flex w-full items-center gap-3 rounded-sm px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer hover-subtle-row"
               >
                 <UserIcon className="h-4 w-4 text-muted-foreground group-hover-subtle-row transition-colors" />
                 <span>My Account</span>
               </DropdownMenuItem>
 
-              <DropdownMenuItem className="group flex w-full items-center p-0 rounded-none text-[13px] font-medium transition-colors admin-dropdown-item hover-subtle-row">
+              <DropdownMenuItem className="group flex w-full items-center p-0 rounded-sm text-sm font-medium transition-colors admin-dropdown-item hover-subtle-row">
                 <a
                   href="https://nextlyhq.com/docs"
                   target="_blank"
@@ -122,7 +118,7 @@ export function ResponsiveHeader({ onMenuClick, user }: ResponsiveHeaderProps) {
                   onClick={() => {
                     void logout();
                   }}
-                  className="group flex w-full cursor-pointer items-center gap-3 rounded-none px-3 py-2.5 text-[13px] font-medium transition-colors hover-subtle-row"
+                  className="group flex w-full cursor-pointer items-center gap-3 rounded-sm px-3 py-2.5 text-sm font-medium transition-colors hover-subtle-row"
                 >
                   <LogOut className="h-4 w-4 transform transition-transform group-hover-subtle-row group-hover:-translate-x-0.5" />
                   <span>Sign out</span>

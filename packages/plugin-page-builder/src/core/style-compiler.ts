@@ -7,6 +7,12 @@
  * - Design-token refs compile to CSS custom properties.
  * - Breakpoints are project-configurable DATA; default cascade is DESKTOP-FIRST.
  */
+import {
+  hashId,
+  nodeClassName,
+  nodeClassNames,
+  PAGE_ROOT_CLASS,
+} from "@nextlyhq/blocks-engine";
 import * as csstree from "css-tree";
 
 import { sanitizeBlockCss } from "./css-sanitize";
@@ -19,6 +25,11 @@ import type {
   StyleScalar,
   StyleValues,
 } from "./types";
+import {
+  fetchableValues,
+  isFetchableUrl,
+  type RemotePatternInput,
+} from "./url-policy";
 
 export interface BreakpointDef {
   id: string;
@@ -31,8 +42,36 @@ export const DEFAULT_BREAKPOINTS: BreakpointDef[] = [
   { id: "mobile", maxWidth: 640 },
 ];
 
+export type { RemotePatternInput } from "./url-policy";
+export { isAllowedRemoteUrl } from "./url-policy";
+
 export interface CompileOptions {
   breakpoints?: BreakpointDef[];
+  /**
+   * Hosts a block's images may be loaded from. Empty or absent means
+   * same-origin only, which is the default because an undeclared host is a
+   * request a custom-CSS selector can gate on a secret.
+   */
+  remotePatterns?: readonly RemotePatternInput[];
+  /**
+   * The document's own class, put in front of every node selector.
+   *
+   * Absent leaves the selectors bare, which is what a caller compiling one
+   * document in isolation wants. A page rendering more than one passes
+   * `documentScopeClass(doc)`, so two documents that share a node id — the
+   * ordinary result of rendering one reusable block in both — do not restyle
+   * each other from whichever stylesheet loaded last.
+   */
+  scope?: string;
+  /**
+   * The document's node classes, from {@link documentNodeClasses}.
+   *
+   * Supplied when the caller has the whole document, because a disambiguating
+   * suffix can only be worked out from the whole id set. A node compiled
+   * without one gets the plain class, which is what a caller holding a single
+   * node can know.
+   */
+  classes?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -66,14 +105,80 @@ export function compileTokensCss(
   return decls.length ? `.${rootClass} { ${decls.join("; ")}; }` : "";
 }
 
-/** Deterministic, short, stable scoped class for a node id (FNV-1a → base36). */
-export function nodeClass(id: string): string {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < id.length; i++) {
-    h ^= id.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return `nx-pb-${(h >>> 0).toString(36)}`;
+/**
+ * Deterministic, short, stable scoped class for a node id.
+ *
+ * The engine's function under this package's name. It had its own 32-bit digest
+ * here, emitting the same `nx-pb-` prefix from a different hash than the engine
+ * put on the same node — so the two could name one node two ways, and the
+ * narrower one carried roughly a 1-in-350 chance of a collision across 5,000
+ * ids, which a large page reaches.
+ *
+ * A whole document goes through {@link documentNodeClasses}, which is the only
+ * caller that can see a collision at all. This one is for a caller holding a
+ * single node: the editor asking which selector to scrub, or a test naming an
+ * expected class.
+ */
+export { nodeClassName as nodeClass } from "@nextlyhq/blocks-engine";
+
+/** Every node id in a document, in document order. */
+export function documentNodeIds(doc: BlockDocument): string[] {
+  const ids: string[] = [];
+  walk(doc.root, node => ids.push(node.id));
+  return ids;
+}
+
+/**
+ * The class for every node in a document, with hash collisions disambiguated.
+ *
+ * Built once per document and handed to both halves, because the disambiguating
+ * suffix depends on the whole id set: the compiler writing `-0` while the
+ * renderer writes the bare class would anchor the stylesheet to a name the
+ * markup does not carry, which is a worse failure than the collision it set out
+ * to fix.
+ *
+ * The set is the document walk, and deliberately not the subtrees that
+ * `core/ref` pulls in. Those are reached through the reusable-block library
+ * rather than the tree, so the compiler never walks them either; including them
+ * on one side only is exactly the disagreement above. A referenced node keeps
+ * the undisambiguated class {@link nodeClass} gives it, as it does today.
+ */
+export function documentNodeClasses(doc: BlockDocument): Map<string, string> {
+  return nodeClassNames(documentNodeIds(doc));
+}
+
+/**
+ * The class that identifies ONE document, for everything two documents on a
+ * page must not share.
+ *
+ * `nx-pb-page` is on every page-builder document by design — it is the public
+ * hook a host styles against — so it cannot also be what separates them. Two
+ * documents rendered into one page both anchor their custom CSS to it, and
+ * both namespace their `@keyframes` and `@font-face` off it, which means one
+ * document's `fade` is the other's and the later `<style>` wins for both. The
+ * per-node classes never had that problem because a node id is unique; this
+ * gives the document the same property.
+ *
+ * Derived from the root node's id rather than generated, because the same
+ * document has to produce the same class every time it is compiled: a
+ * counter or a random token would differ between the server render and the
+ * client's, and the styles would arrive anchored to a class the markup does
+ * not carry. Two renders of the SAME document share a scope, which is correct —
+ * they are the same document, and its names should mean the same thing in both.
+ *
+ * The engine's digest, at the width it already provides. What a collision costs
+ * here is worse than it costs a node — two documents on one page would be back
+ * to sharing their custom CSS, their token block and their namespaced
+ * `@keyframes`, which is the failure this class exists to prevent, restored
+ * silently and only when both happen to render together. 53 bits over the
+ * handful of documents a page holds is far past that mattering, and a second
+ * digest kept here to widen it is the duplication that let the two disagree.
+ */
+export function documentScopeClass(doc: BlockDocument): string {
+  const id = doc?.root?.id;
+  return typeof id === "string" && id !== ""
+    ? `nx-pb-d-${hashId(id)}`
+    : PAGE_ROOT_CLASS;
 }
 
 function resolveScalar(v: StyleScalar): string {
@@ -83,29 +188,57 @@ function resolveScalar(v: StyleScalar): string {
   return String(v);
 }
 
-/** Validate a CSS *value*. Returns the value if safe, else null (dropped). */
-function safeValue(v: string): string | null {
+/**
+ * Validate a CSS *value*. Returns the value if safe, else null (dropped).
+ *
+ * The origin check runs over EVERY value rather than the properties someone
+ * remembered can fetch. `filter: url("https://…#f")` is a request, and it
+ * reached the page because `filter` went through the plain-value path while
+ * only `backgroundImage` was checked — a hand-kept list of fetch-capable
+ * properties is the same losing shape as a hand-kept list of dangerous
+ * schemes. Asking the parser which values contain a `url()` cannot miss one.
+ */
+export function safeValue(
+  v: string,
+  remotePatterns: readonly RemotePatternInput[] = []
+): string | null {
   if (v == null || v === "") return null;
   if (/[{};<>]/.test(v)) return null; // fast reject declaration/tag breakout
+  let ast: csstree.CssNode;
   try {
-    csstree.parse(v, {
+    ast = csstree.parse(v, {
       context: "value",
       onParseError: e => {
         throw e;
       },
     });
-    return v;
   } catch {
     return null;
   }
+  const { values, unreadable } = fetchableValues(ast);
+  // Unreadable is not safe. A fragment this could not resolve may hold a URL,
+  // so the value goes rather than being emitted unchecked.
+  if (unreadable !== undefined) return null;
+  const refused = values.some(url => !isFetchableUrl(url, remotePatterns));
+  return refused ? null : v;
 }
 
-/** Validate a URL for url(). css-tree accepts quoted `javascript:` urls, so check the scheme. */
-function safeUrl(url: string): string | null {
+/**
+ * Validate a URL for url().
+ *
+ * The syntactic half is unchanged: css-tree accepts a quoted `javascript:` url,
+ * and a quote or paren in the value would break out of the `url()` this is
+ * interpolated into. The origin half is the shared policy, so a structured
+ * style value and custom CSS answer "where may this fetch from" the same way.
+ */
+function safeUrl(
+  url: string,
+  remotePatterns: readonly RemotePatternInput[]
+): string | null {
   const u = url.trim();
   if (/^(javascript|data|vbscript):/i.test(u)) return null;
   if (/["')\\]/.test(u) || /[\n\r]/.test(u)) return null; // avoid url() breakout
-  return u;
+  return isFetchableUrl(u, remotePatterns) ? u : null;
 }
 
 const SIMPLE: [keyof StyleValues, string][] = [
@@ -143,7 +276,10 @@ const SIMPLE: [keyof StyleValues, string][] = [
   ["transition", "transition"],
 ];
 
-function compileStyleValues(sv: StyleValues): string[] {
+function compileStyleValues(
+  sv: StyleValues,
+  remotePatterns: readonly RemotePatternInput[]
+): string[] {
   const out: string[] = [];
 
   const box = (prop: "margin" | "padding") => {
@@ -152,7 +288,7 @@ function compileStyleValues(sv: StyleValues): string[] {
     for (const side of ["top", "right", "bottom", "left"] as const) {
       const raw = sides[side];
       if (raw == null) continue;
-      const v = safeValue(raw);
+      const v = safeValue(raw, remotePatterns);
       if (v) out.push(`${prop}-${side}: ${v}`);
     }
   };
@@ -162,12 +298,12 @@ function compileStyleValues(sv: StyleValues): string[] {
   for (const [key, cssName] of SIMPLE) {
     const raw = sv[key] as StyleScalar | undefined;
     if (raw == null) continue;
-    const v = safeValue(resolveScalar(raw));
+    const v = safeValue(resolveScalar(raw), remotePatterns);
     if (v) out.push(`${cssName}: ${v}`);
   }
 
   if (sv.backgroundImage != null) {
-    const url = safeUrl(resolveScalar(sv.backgroundImage));
+    const url = safeUrl(resolveScalar(sv.backgroundImage), remotePatterns);
     if (url) out.push(`background-image: url("${url}")`);
   }
 
@@ -178,16 +314,16 @@ function compileStyleValues(sv: StyleValues): string[] {
       for (const side of ["top", "right", "bottom", "left"] as const) {
         const raw = b.width[side];
         if (raw == null) continue;
-        const v = safeValue(raw);
+        const v = safeValue(raw, remotePatterns);
         if (v) out.push(`border-${side}-width: ${v}`);
       }
     }
     if (b.style) {
-      const v = safeValue(b.style);
+      const v = safeValue(b.style, remotePatterns);
       if (v) out.push(`border-style: ${v}`);
     }
     if (b.color != null) {
-      const v = safeValue(resolveScalar(b.color));
+      const v = safeValue(resolveScalar(b.color), remotePatterns);
       if (v) out.push(`border-color: ${v}`);
     }
   }
@@ -196,17 +332,17 @@ function compileStyleValues(sv: StyleValues): string[] {
   if (sv.position) {
     const p = sv.position;
     if (p.type) {
-      const v = safeValue(p.type);
+      const v = safeValue(p.type, remotePatterns);
       if (v) out.push(`position: ${v}`);
     }
     for (const side of ["top", "right", "bottom", "left"] as const) {
       const raw = p[side];
       if (raw == null) continue;
-      const v = safeValue(raw);
+      const v = safeValue(raw, remotePatterns);
       if (v) out.push(`${side}: ${v}`);
     }
     if (p.zIndex != null) {
-      const v = safeValue(String(p.zIndex));
+      const v = safeValue(String(p.zIndex), remotePatterns);
       if (v) out.push(`z-index: ${v}`);
     }
   }
@@ -215,7 +351,7 @@ function compileStyleValues(sv: StyleValues): string[] {
   if (sv.backgroundImageObj) {
     const bg = sv.backgroundImageObj;
     if (bg.url != null) {
-      const url = safeUrl(resolveScalar(bg.url));
+      const url = safeUrl(resolveScalar(bg.url), remotePatterns);
       if (url) out.push(`background-image: url("${url}")`);
     }
     for (const [k, cssName] of [
@@ -226,14 +362,14 @@ function compileStyleValues(sv: StyleValues): string[] {
     ] as const) {
       const raw = bg[k];
       if (raw == null) continue;
-      const v = safeValue(raw);
+      const v = safeValue(raw, remotePatterns);
       if (v) out.push(`${cssName}: ${v}`);
     }
   }
 
   // Gradient (emitted as background-image; safeValue validates the function).
   if (sv.backgroundGradient) {
-    const v = safeValue(sv.backgroundGradient);
+    const v = safeValue(sv.backgroundGradient, remotePatterns);
     if (v) out.push(`background-image: ${v}`);
   }
 
@@ -252,23 +388,33 @@ export function compileNodeCss(
   opts: CompileOptions = {}
 ): string {
   const bps = opts.breakpoints ?? DEFAULT_BREAKPOINTS;
-  const cls = nodeClass(node.id);
+  const remotePatterns = opts.remotePatterns ?? [];
+  const cls = opts.classes?.get(node.id) ?? nodeClassName(node.id);
+  // The document's own class in front of the node's, when the caller supplies
+  // one. A node class is a hash of the node id, and two documents can hold the
+  // same id — a reusable block rendered in both is the ordinary way — so
+  // without this the later `<style>` restyles matching blocks in the other
+  // document even though their roots now carry different scopes. The same
+  // boundary the tokens and the custom CSS already sit behind.
+  const self = opts.scope ? `.${opts.scope} .${cls}` : `.${cls}`;
   const blocks: string[] = [];
 
   const hasHover = !!node.styleHover && Object.keys(node.styleHover).length > 0;
   // Smooth the normal → hover change (Elementor-style).
-  if (hasHover) blocks.push(`.${cls} { transition: all 0.2s ease; }`);
+  if (hasHover) blocks.push(`${self} { transition: all 0.2s ease; }`);
 
   const emit = (style: ResponsiveStyle | undefined, suffix: string): void => {
     if (!style) return;
-    const base = style.base ? compileStyleValues(style.base) : [];
-    if (base.length) blocks.push(`.${cls}${suffix} { ${base.join("; ")}; }`);
+    const base = style.base
+      ? compileStyleValues(style.base, remotePatterns)
+      : [];
+    if (base.length) blocks.push(`${self}${suffix} { ${base.join("; ")}; }`);
     for (const bp of bps) {
       const sv = style[bp.id];
-      const decls = sv ? compileStyleValues(sv) : [];
+      const decls = sv ? compileStyleValues(sv, remotePatterns) : [];
       if (decls.length) {
         blocks.push(
-          `@media (max-width: ${bp.maxWidth}px) { .${cls}${suffix} { ${decls.join("; ")}; } }`
+          `@media (max-width: ${bp.maxWidth}px) { ${self}${suffix} { ${decls.join("; ")}; } }`
         );
       }
     }
@@ -280,27 +426,27 @@ export function compileNodeCss(
   // Descendant link colors (Default / Hover) → `.cls a` / `.cls a:hover`.
   const base = node.style?.base;
   if (base?.linkColor != null) {
-    const v = safeValue(resolveScalar(base.linkColor));
-    if (v) blocks.push(`.${cls} a { color: ${v}; }`);
+    const v = safeValue(resolveScalar(base.linkColor), remotePatterns);
+    if (v) blocks.push(`${self} a { color: ${v}; }`);
   }
   if (base?.linkColorHover != null) {
-    const v = safeValue(resolveScalar(base.linkColorHover));
-    if (v) blocks.push(`.${cls} a:hover { color: ${v}; }`);
+    const v = safeValue(resolveScalar(base.linkColorHover), remotePatterns);
+    if (v) blocks.push(`${self} a:hover { color: ${v}; }`);
   }
 
   // Entrance motion.
-  const motionCss = compileMotionCss(node, cls);
+  const motionCss = compileMotionCss(node, self);
   if (motionCss) blocks.push(motionCss);
 
   // Per-breakpoint visibility → display:none media queries.
   if (node.visibility) {
     if (node.visibility.base === false) {
-      blocks.push(`.${cls} { display: none; }`);
+      blocks.push(`${self} { display: none; }`);
     }
     for (const bp of bps) {
       if (node.visibility[bp.id] === false) {
         blocks.push(
-          `@media (max-width: ${bp.maxWidth}px) { .${cls} { display: none; } }`
+          `@media (max-width: ${bp.maxWidth}px) { ${self} { display: none; } }`
         );
       }
     }
@@ -314,9 +460,13 @@ export function compileDocumentCss(
   doc: BlockDocument,
   opts: CompileOptions = {}
 ): string {
+  // Resolved once for the document and passed down, so every node in this
+  // stylesheet is named by the same map the markup is named by.
+  const classes = opts.classes ?? documentNodeClasses(doc);
+  const nodeOpts = { ...opts, classes };
   const parts: string[] = [];
   walk(doc.root, n => {
-    const css = compileNodeCss(n, opts);
+    const css = compileNodeCss(n, nodeOpts);
     if (css) parts.push(css);
   });
   return parts.join("\n");
@@ -332,12 +482,18 @@ export function compileDocumentMotionCss(doc: BlockDocument): string {
 }
 
 /** Collect every node's sanitized per-block custom CSS for the page <style> (spec §4.4). */
-export function compileDocumentBlockCss(doc: BlockDocument): string {
+export function compileDocumentBlockCss(
+  doc: BlockDocument,
+  classes: ReadonlyMap<string, string> = documentNodeClasses(doc)
+): string {
   const parts: string[] = [];
   walk(doc.root, n => {
     if (n.customCss) {
-      const scoped = sanitizeBlockCss(n.customCss, nodeClass(n.id));
-      if (scoped) parts.push(scoped);
+      const cls = classes.get(n.id) ?? nodeClassName(n.id);
+      const scoped = sanitizeBlockCss(n.customCss, cls);
+      // `.css`, not the result: the object is always truthy, so testing it
+      // would push an empty string for every block that has none.
+      if (scoped.css) parts.push(scoped.css);
     }
   });
   return parts.join("\n");

@@ -10,6 +10,7 @@
  */
 
 import { NextlyError } from "../../errors/nextly-error";
+import { collectingWarnings } from "../../hooks/side-effect-warnings";
 import type { PaginatedResponse } from "../../types/pagination";
 import type {
   BulkDeleteArgs,
@@ -18,7 +19,7 @@ import type {
   CountArgs,
   CountResult,
   CreateArgs,
-  DataFromCollectionSlug,
+  RowFromCollectionSlug,
   DeleteArgs,
   DeleteResult,
   DuplicateArgs,
@@ -51,7 +52,7 @@ import {
 export async function find<TSlug extends CollectionSlug>(
   ctx: NextlyContext,
   args: FindArgs<TSlug>
-): Promise<ListResult<DataFromCollectionSlug<TSlug>>> {
+): Promise<ListResult<RowFromCollectionSlug<TSlug>>> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
   const result = await ctx.collectionsHandler.listEntries({
@@ -59,14 +60,14 @@ export async function find<TSlug extends CollectionSlug>(
     page: args.page,
     limit: args.limit,
     where: args.where,
+    // Lifecycle-aware publish scope (also constrains localized companion _status).
+    status: args.status,
     depth: config.depth,
     select: args.select,
     sort: args.sort,
     richTextFormat: config.richTextFormat,
     overrideAccess: config.overrideAccess,
-    user: config.user
-      ? { id: config.user.id, role: config.user.role }
-      : undefined,
+    user: config.user,
     // i18n M4: forward the content locale + fallback so localized fields resolve.
     locale: config.locale,
     fallbackLocale: config.fallbackLocale,
@@ -81,9 +82,7 @@ export async function find<TSlug extends CollectionSlug>(
   // the canonical ListResult envelope (`{ items, meta }`). Default missing
   // pagination fields so this still produces a valid meta block when the
   // service returns a slim payload (some test fixtures omit them).
-  const legacy = result.data as PaginatedResponse<
-    DataFromCollectionSlug<TSlug>
-  >;
+  const legacy = result.data as PaginatedResponse<RowFromCollectionSlug<TSlug>>;
   const total = legacy.totalDocs ?? legacy.docs.length;
   const limit = legacy.limit ?? args.limit ?? legacy.docs.length;
   const page = legacy.page ?? args.page ?? 1;
@@ -109,7 +108,7 @@ export async function find<TSlug extends CollectionSlug>(
 export async function findByID<TSlug extends CollectionSlug>(
   ctx: NextlyContext,
   args: FindByIDArgs<TSlug>
-): Promise<DataFromCollectionSlug<TSlug> | null> {
+): Promise<RowFromCollectionSlug<TSlug> | null> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
   try {
@@ -120,9 +119,10 @@ export async function findByID<TSlug extends CollectionSlug>(
       select: args.select,
       richTextFormat: config.richTextFormat,
       overrideAccess: config.overrideAccess,
-      user: config.user
-        ? { id: config.user.id, role: config.user.role }
-        : undefined,
+      user: config.user,
+      // Overlay the pending working draft when the caller opts in; the service
+      // still gates it on an update-capability probe.
+      includeWorkingDraft: args.draft,
       // i18n M4: forward the content locale + fallback so localized fields resolve.
       locale: config.locale,
       fallbackLocale: config.fallbackLocale,
@@ -136,7 +136,7 @@ export async function findByID<TSlug extends CollectionSlug>(
       throw createErrorFromResult(result);
     }
 
-    return result.data as DataFromCollectionSlug<TSlug>;
+    return result.data as RowFromCollectionSlug<TSlug>;
   } catch (error) {
     if (config.disableErrors && isNotFoundError(error)) {
       return null;
@@ -152,26 +152,27 @@ export async function findByID<TSlug extends CollectionSlug>(
  * collection slug capitalized (e.g. `"Posts created."`) so callers can
  * surface a generic toast without hand-writing copy per collection.
  */
+
 export async function create<TSlug extends CollectionSlug>(
   ctx: NextlyContext,
   args: CreateArgs<TSlug>
-): Promise<MutationResult<DataFromCollectionSlug<TSlug>>> {
+): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
-  const result = await ctx.collectionsHandler.createEntry(
-    {
-      collectionName: args.collection,
-      overrideAccess: config.overrideAccess,
-      user: config.user
-        ? { id: config.user.id, role: config.user.role }
-        : undefined,
-      // Forward the content locale so a localized write lands in the requested
-      // language's companion row, not the default locale's.
-      locale: config.locale,
-      context: config.context,
-      disableRevalidate: config.disableRevalidate,
-    },
-    args.data
+  const { result, warnings } = await collectingWarnings(() =>
+    ctx.collectionsHandler.createEntry(
+      {
+        collectionName: args.collection,
+        overrideAccess: config.overrideAccess,
+        user: config.user,
+        // Forward the content locale so a localized write lands in the
+        // requested language's companion row, not the default locale's.
+        locale: config.locale,
+        context: config.context,
+        disableRevalidate: config.disableRevalidate,
+      },
+      args.data
+    )
   );
 
   if (!result.success) {
@@ -180,7 +181,8 @@ export async function create<TSlug extends CollectionSlug>(
 
   return {
     message: buildMutationMessage(args.collection, "created"),
-    item: result.data as DataFromCollectionSlug<TSlug>,
+    item: result.data as RowFromCollectionSlug<TSlug>,
+    ...(warnings ? { warnings } : {}),
   };
 }
 
@@ -193,7 +195,7 @@ export async function create<TSlug extends CollectionSlug>(
 export async function update<TSlug extends CollectionSlug>(
   ctx: NextlyContext,
   args: UpdateArgs<TSlug>
-): Promise<MutationResult<DataFromCollectionSlug<TSlug>>> {
+): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
   if (!args.id && !args.where) {
@@ -205,21 +207,24 @@ export async function update<TSlug extends CollectionSlug>(
   }
 
   if (args.id) {
-    const result = await ctx.collectionsHandler.updateEntry(
-      {
-        collectionName: args.collection,
-        entryId: args.id,
-        overrideAccess: config.overrideAccess,
-        user: config.user
-          ? { id: config.user.id, role: config.user.role }
-          : undefined,
-        // Forward the content locale so a localized update targets the requested
-        // language's companion row, not the default locale's.
-        locale: config.locale,
-        context: config.context,
-        disableRevalidate: config.disableRevalidate,
-      },
-      args.data
+    // Captured before the closure: the `if (args.id)` narrowing above does not
+    // reach inside a callback, and the id is what selects this branch.
+    const entryId = args.id;
+    const { result, warnings } = await collectingWarnings(() =>
+      ctx.collectionsHandler.updateEntry(
+        {
+          collectionName: args.collection,
+          entryId,
+          overrideAccess: config.overrideAccess,
+          user: config.user,
+          // Forward the content locale so a localized update targets the requested
+          // language's companion row, not the default locale's.
+          locale: config.locale,
+          context: config.context,
+          disableRevalidate: config.disableRevalidate,
+        },
+        args.data
+      )
     );
 
     if (!result.success) {
@@ -228,24 +233,28 @@ export async function update<TSlug extends CollectionSlug>(
 
     return {
       message: buildMutationMessage(args.collection, "updated"),
-      item: result.data as DataFromCollectionSlug<TSlug>,
+      item: result.data as RowFromCollectionSlug<TSlug>,
+      ...(warnings ? { warnings } : {}),
     };
   }
 
   if (args.where) {
-    const bulkResult = await ctx.collectionsHandler.bulkUpdateByQuery(
-      {
-        collectionName: args.collection,
-        where: args.where,
-        data: args.data,
-        overrideAccess: config.overrideAccess,
-        user: config.user
-          ? { id: config.user.id, role: config.user.role }
-          : undefined,
-        context: config.context,
-        disableRevalidate: config.disableRevalidate,
-      },
-      { limit: 1 }
+    // Captured before the closure: the id/where branch above narrows `where`,
+    // and that narrowing does not reach inside a callback.
+    const where = args.where;
+    const { result: bulkResult, warnings } = await collectingWarnings(() =>
+      ctx.collectionsHandler.bulkUpdateByQuery(
+        {
+          collectionName: args.collection,
+          where,
+          data: args.data,
+          overrideAccess: config.overrideAccess,
+          user: config.user,
+          context: config.context,
+          disableRevalidate: config.disableRevalidate,
+        },
+        { limit: 1 }
+      )
     );
 
     if (bulkResult.successCount === 0) {
@@ -277,6 +286,7 @@ export async function update<TSlug extends CollectionSlug>(
     return {
       message: buildMutationMessage(args.collection, "updated"),
       item: updated,
+      ...(warnings ? { warnings } : {}),
     };
   }
 
@@ -311,16 +321,19 @@ export async function deleteEntry<
   }
 
   if (args.id) {
-    const result = await ctx.collectionsHandler.deleteEntry({
-      collectionName: args.collection,
-      entryId: args.id,
-      overrideAccess: config.overrideAccess,
-      user: config.user
-        ? { id: config.user.id, role: config.user.role }
-        : undefined,
-      context: config.context,
-      disableRevalidate: config.disableRevalidate,
-    });
+    // Captured before the closure, as in `update`: the narrowing above does
+    // not reach inside a callback.
+    const entryId = args.id;
+    const { result, warnings } = await collectingWarnings(() =>
+      ctx.collectionsHandler.deleteEntry({
+        collectionName: args.collection,
+        entryId,
+        overrideAccess: config.overrideAccess,
+        user: config.user,
+        context: config.context,
+        disableRevalidate: config.disableRevalidate,
+      })
+    );
 
     if (!result.success) {
       throw createErrorFromResult(result);
@@ -328,23 +341,27 @@ export async function deleteEntry<
 
     return {
       message: buildMutationMessage(args.collection, "deleted"),
-      item: { id: args.id },
+      item: { id: entryId },
+      ...(warnings ? { warnings } : {}),
     };
   }
 
   if (args.where) {
-    const bulkResult = await ctx.collectionsHandler.bulkDeleteByQuery(
-      {
-        collectionName: args.collection,
-        where: args.where,
-        overrideAccess: config.overrideAccess,
-        user: config.user
-          ? { id: config.user.id, role: config.user.role }
-          : undefined,
-        context: config.context,
-        disableRevalidate: config.disableRevalidate,
-      },
-      { limit: 1000 }
+    // Captured before the closure: the id/where branch narrows `where`, and
+    // that narrowing does not reach inside a callback.
+    const where = args.where;
+    const { result: bulkResult, warnings } = await collectingWarnings(() =>
+      ctx.collectionsHandler.bulkDeleteByQuery(
+        {
+          collectionName: args.collection,
+          where,
+          overrideAccess: config.overrideAccess,
+          user: config.user,
+          context: config.context,
+          disableRevalidate: config.disableRevalidate,
+        },
+        { limit: 1000 }
+      )
     );
 
     // The by-where path keeps the legacy `DeleteResult` shape because a
@@ -357,6 +374,7 @@ export async function deleteEntry<
     return {
       deleted: true,
       ids: bulkResult.successes.map(s => s.id),
+      ...(warnings ? { warnings } : {}),
     };
   }
 
@@ -384,9 +402,7 @@ export async function count(
     collectionName: args.collection,
     where: args.where,
     overrideAccess: config.overrideAccess,
-    user: config.user
-      ? { id: config.user.id, role: config.user.role }
-      : undefined,
+    user: config.user,
     // i18n M4: parity with find() so locale-scoped counts match.
     locale: config.locale,
     fallbackLocale: config.fallbackLocale,
@@ -412,16 +428,16 @@ export async function bulkDelete(
 ): Promise<BulkOperationResult> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
-  const bulkResult = await ctx.collectionsHandler.bulkDeleteEntries({
-    collectionName: args.collection,
-    ids: args.ids,
-    overrideAccess: config.overrideAccess,
-    user: config.user
-      ? { id: config.user.id, role: config.user.role }
-      : undefined,
-    context: config.context,
-    disableRevalidate: config.disableRevalidate,
-  });
+  const { result: bulkResult, warnings } = await collectingWarnings(() =>
+    ctx.collectionsHandler.bulkDeleteEntries({
+      collectionName: args.collection,
+      ids: args.ids,
+      overrideAccess: config.overrideAccess,
+      user: config.user,
+      context: config.context,
+      disableRevalidate: config.disableRevalidate,
+    })
+  );
 
   // Project to the public shape so internal post-commit signals (eventRecorded,
   // revalidationIntents) — already consumed by the write path — never reach a
@@ -432,6 +448,7 @@ export async function bulkDelete(
     total: bulkResult.total,
     successCount: bulkResult.successCount,
     failedCount: bulkResult.failedCount,
+    ...(warnings ? { warnings } : {}),
   };
 }
 
@@ -443,20 +460,20 @@ export async function bulkDelete(
 export async function duplicate<TSlug extends CollectionSlug>(
   ctx: NextlyContext,
   args: DuplicateArgs<TSlug>
-): Promise<MutationResult<DataFromCollectionSlug<TSlug>>> {
+): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
-  const result = await ctx.collectionsHandler.duplicateEntry({
-    collectionName: args.collection,
-    entryId: args.id,
-    overrides: args.overrides,
-    overrideAccess: config.overrideAccess,
-    user: config.user
-      ? { id: config.user.id, role: config.user.role }
-      : undefined,
-    context: config.context,
-    disableRevalidate: config.disableRevalidate,
-  });
+  const { result, warnings } = await collectingWarnings(() =>
+    ctx.collectionsHandler.duplicateEntry({
+      collectionName: args.collection,
+      entryId: args.id,
+      overrides: args.overrides,
+      overrideAccess: config.overrideAccess,
+      user: config.user,
+      context: config.context,
+      disableRevalidate: config.disableRevalidate,
+    })
+  );
 
   if (!result.success) {
     throw createErrorFromResult(result);
@@ -464,6 +481,7 @@ export async function duplicate<TSlug extends CollectionSlug>(
 
   return {
     message: buildMutationMessage(args.collection, "duplicated"),
-    item: result.data as DataFromCollectionSlug<TSlug>,
+    item: result.data as RowFromCollectionSlug<TSlug>,
+    ...(warnings ? { warnings } : {}),
   };
 }

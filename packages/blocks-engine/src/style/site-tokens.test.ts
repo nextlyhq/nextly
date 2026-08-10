@@ -1,0 +1,626 @@
+/**
+ * What a site defines once, and what it is not allowed to define.
+ *
+ * Two rules carry real consequences and are asserted rather than described: a
+ * token prefix that would reach outside the site, and a font file fetched from
+ * somebody else's server.
+ */
+import { describe, expect, it } from "vitest";
+
+import { compileStyleValues } from "./declarations";
+import {
+  checkTokenKind,
+  DARK_MODE_ATTRIBUTE,
+  defaultSiteTokens,
+  emitFontFaces,
+  emitTokenBlocks,
+  isTokenName,
+  tokenValueFetches,
+  resolveTokenPrefix,
+  validateFontFace,
+} from "./site-tokens";
+
+const SCOPE = ".nx-pb-page-abc";
+
+describe("resolveTokenPrefix", () => {
+  it("takes the site's own prefix", () => {
+    expect(resolveTokenPrefix("--brand-").prefix).toBe("--brand-");
+    expect(resolveTokenPrefix("--brand-").issue).toBeUndefined();
+  });
+
+  it("defaults when none is set", () => {
+    expect(resolveTokenPrefix(undefined).prefix).toBe("--site-");
+  });
+
+  it.each(["--nx-", "--tw-", "--nx-pb-"])(
+    "refuses the reserved prefix %s and says what it would have changed",
+    prefix => {
+      // Reserved because the admin panel and Tailwind's internals read them: a
+      // site taking either would restyle surfaces it does not own.
+      const result = resolveTokenPrefix(prefix);
+      expect(result.prefix).toBe("--site-");
+      expect(result.issue?.message).toContain(prefix);
+    }
+  );
+
+  it("refuses a prefix that is not a custom property, rather than emitting it", () => {
+    for (const bad of ["site-", "--Brand-", "--brand_", ""]) {
+      const result = resolveTokenPrefix(bad);
+      expect(result.prefix, bad).toBe("--site-");
+      expect(result.issue, bad).toBeDefined();
+    }
+  });
+
+  it.each(["--nx-", "--tw-", "--brand_", "site-"])(
+    "sends definitions and references to the same property for %s",
+    prefix => {
+      // The two sides of one decision. A prefix refused where the table is
+      // written but accepted where `var()` is written is worse than either
+      // verdict alone: the definitions land under the fallback, every
+      // reference still reads the prefix that was asked for, and the tokens
+      // resolve to nothing with no warning on the page to say why.
+      const { css } = emitTokenBlocks(
+        {
+          prefix,
+          tokens: [
+            { name: "color.primary", kind: "color", values: { light: "#000" } },
+          ],
+        },
+        SCOPE
+      );
+      const reference = compileStyleValues(
+        { color: { $token: "color.primary" } },
+        "/styles",
+        prefix
+      );
+
+      const property = "--site-color-primary";
+      expect(css).toContain(`${property}:`);
+      expect(reference.declarations[0]?.value).toBe(`var(${property})`);
+    }
+  );
+});
+
+describe("a token value may not fetch", () => {
+  it.each([
+    "url(https://evil.example/a.png)",
+    "url(/local.png)",
+    'image-set("https://evil.example/a.png" 1x)',
+    "cross-fade(url(/a.png), url(/b.png))",
+    "attr(data-probe)",
+  ])("refuses %s outright", value => {
+    // A token is read back by a `var()` somewhere this cannot see, so custom
+    // CSS can write `background: var(--site-x)` with no URL in it for the
+    // origin policy to inspect. That is the selector-gated request channel the
+    // whole layer exists to close, reopened through stored data.
+    const { css, issues } = emitTokenBlocks(
+      { tokens: [{ name: "x", kind: "custom", values: { light: value } }] },
+      SCOPE
+    );
+    expect(css).toBe("");
+    expect(issues[0]?.severity).toBe("error");
+    expect(issues[0]?.message).toContain("load a file");
+  });
+
+  it.each([
+    '"https://evil.example/a.png"',
+    "https://evil.example/a.png",
+    "//evil.example/a.png",
+    "data:image/svg+xml,<svg/>",
+  ])("refuses the remote destination %s written as text", value => {
+    // The FUNCTION need not be in the token. A token holding just the string is
+    // inert until custom CSS writes `background-image: image-set(var(--site-x)
+    // 1x)` — and that declaration has no URL in it for the origin policy to
+    // inspect, only a substitution. The two halves are written in different
+    // places by different people, which is why neither can be judged alone.
+    expect(tokenValueFetches(value)).toBe(true);
+    const { css } = emitTokenBlocks(
+      { tokens: [{ name: "x", kind: "custom", values: { light: value } }] },
+      SCOPE
+    );
+    expect(css).toBe("");
+  });
+
+  it.each(["/logo.svg", '"/logo.svg"', "#2563eb", "1rem", '"My Font", serif'])(
+    "still writes the same-origin or ordinary value %s",
+    value => {
+      // Refusing remote destinations must not refuse a path on this site: it
+      // resolves against the page's own origin and needs no allowlisting, which
+      // is the line a font file is already held to.
+      expect(tokenValueFetches(value)).toBe(false);
+    }
+  );
+
+  it("reads an escaped spelling as the function it is", () => {
+    // `\\75 rl(` IS `url(` to a browser, so a check against the raw text is one
+    // an author writes straight past. Asserted on the check itself rather than
+    // through `emitTokenBlocks`, because the general value guard happens to
+    // refuse this spelling too — which would let this pass with the decoding
+    // removed entirely.
+    expect(tokenValueFetches("\\75 rl(https://evil.example/a.png)")).toBe(true);
+    expect(tokenValueFetches("URL(/a.png)")).toBe(true);
+    expect(tokenValueFetches("Image-Set('/a.png' 1x)")).toBe(true);
+    expect(tokenValueFetches("var(--other)")).toBe(false);
+    expect(tokenValueFetches("Urbanist, serif")).toBe(false);
+  });
+
+  it("checks the dark value too", () => {
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "x",
+            kind: "custom",
+            values: { light: "red", dark: "url(/a.png)" },
+          },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toBe("");
+  });
+
+  it("still writes the values a token is actually for", () => {
+    // Refusing a whole shape only works if the shape is not one tokens use.
+    // None of the kinds denotes a URL, so nothing legitimate is lost — but a
+    // value merely containing those letters must still pass.
+    const { css, issues } = emitTokenBlocks(
+      {
+        tokens: [
+          { name: "a", kind: "color", values: { light: "#2563eb" } },
+          {
+            name: "b",
+            kind: "dimension",
+            values: { light: "clamp(1rem, 2vw, 3rem)" },
+          },
+          { name: "c", kind: "custom", values: { light: "var(--other)" } },
+          {
+            name: "d",
+            kind: "fontFamily",
+            values: { light: "Urbanist, serif" },
+          },
+        ],
+      },
+      SCOPE
+    );
+    expect(issues).toEqual([]);
+    expect(css).toContain("--site-a:#2563eb");
+    expect(css).toContain("--site-d:Urbanist, serif");
+  });
+});
+
+describe("a value that cannot be its kind", () => {
+  it("says so, and writes it anyway", () => {
+    // The kind decides which properties may reference the token, so a colour
+    // holding a length compiles to `color:var(--site-…)` and the browser drops
+    // it at use time — nothing on the page says why. Writing it regardless
+    // keeps the verdict cheap: this is a warning, not a gate.
+    const { css, issues } = emitTokenBlocks(
+      {
+        tokens: [
+          { name: "color.brand", kind: "color", values: { light: "1rem" } },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toContain("--site-color-brand:1rem");
+    expect(issues[0]?.severity).toBe("warning");
+    expect(issues[0]?.message).toContain("not a colour");
+  });
+
+  it("checks the dark value too, not only the light one", () => {
+    // The half-fixed set: a rule applied to `light` and not to the `dark`
+    // sitting beside it passes every test written about light.
+    const { issues } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "space.gap",
+            kind: "dimension",
+            values: { light: "1rem", dark: "#ff0000" },
+          },
+        ],
+      },
+      SCOPE
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.message).toContain("dark");
+    expect(issues[0]?.message).toContain("not a length");
+  });
+
+  it.each([
+    ["color", "#2563eb"],
+    ["color", "oklch(0.6 0.1 250)"],
+    ["color", "rebeccapurple"],
+    ["color", "var(--brand)"],
+    ["color", "color-mix(in srgb, red, blue)"],
+    ["dimension", "0"],
+    ["dimension", "1.5rem"],
+    ["dimension", "clamp(20rem, 80vw, 72rem)"],
+    ["dimension", "50%"],
+    ["dimension", "2em"],
+    ["dimension", "10vmin"],
+    ["fontWeight", "lighter"],
+    ["duration", "150ms"],
+    ["duration", "0"],
+    ["number", "1.5"],
+    ["fontWeight", "700"],
+    ["fontWeight", "bold"],
+    ["fontFamily", "system-ui"],
+    ["shadow", "0 1px 2px rgba(0,0,0,.2)"],
+    ["custom", "anything at all"],
+  ] as const)("stays quiet about a valid %s value %s", (kind, value) => {
+    // The check is one-sided on purpose. A false positive here would tell an
+    // author their perfectly good `oklch()` is wrong, which is worse than the
+    // silence it replaced.
+    expect(checkTokenKind(kind, value), `${kind}: ${value}`).toBeUndefined();
+  });
+
+  it.each([
+    ["color", "16px"],
+    ["color", "3"],
+    ["dimension", "#fff"],
+    ["dimension", "16"],
+    ["duration", "16px"],
+    ["number", "16px"],
+    ["fontWeight", "1200"],
+    ["fontWeight", "700px"],
+    // Exponent spellings the rest of the token code accepts: without the
+    // exponent branch these match nothing, the check reaches no verdict, and it
+    // stays silent about a value the browser will drop.
+    ["duration", "1e3px"],
+    // A measurement in the wrong quantity: valid CSS, dropped where the token
+    // is used, and previously passed because it merely had SOME unit.
+    ["dimension", "150ms"],
+    ["dimension", "20deg"],
+    ["duration", "16px"],
+    // A word `font-weight` does not take.
+    ["fontWeight", "heavy"],
+    // `1.px` is not a CSS number followed by a unit, and `1m\\73` IS `1ms` — the
+    // pattern has to read both the way CSS does or it stays silent about a
+    // value the browser drops.
+    ["dimension", "1.px"],
+    ["dimension", "1m\\73"],
+    // A percentage is its own token: `1\\%` and `1\\25` decode to a unit reading
+    // `%` but CSS drops the declaration, so the check must not be reassured.
+    ["dimension", "1\\%"],
+    ["dimension", "1\\25"],
+    // The unit is resolved once. `1\\5c s` is a dimension whose unit decodes to
+    // the two characters `\s`, which measures nothing; decoded a second time on
+    // the way to the category it reads `s` and passes as a time.
+    ["duration", "1\\5c s"],
+    ["dimension", "1\\5c px"],
+    // Malformed numeric text is not a colour either; tightening the
+    // measurement pattern had moved this out of every branch.
+    ["color", "1.px"],
+    // A zero with a unit is still that unit's quantity: `0px` is a length, and
+    // only an UNITLESS zero is a time.
+    ["duration", "0px"],
+    ["duration", "0deg"],
+    ["number", "1e3px"],
+    ["fontWeight", "2e3"],
+  ] as const)("names what is wrong with %s value %s", (kind, value) => {
+    expect(checkTokenKind(kind, value), `${kind}: ${value}`).toBeDefined();
+  });
+});
+
+describe("the token name grammar", () => {
+  it("holds the table to what a reference can name", () => {
+    // An uppercase name is legal as a custom property, so nothing stops the
+    // table writing `--site-Color-Primary`. What stops it is that the compiler
+    // refuses `{ $token: "Color.Primary" }`, and a token nothing can reference
+    // is a token that exists, resolves to nothing, and reports no reason.
+    const { css, issues } = emitTokenBlocks(
+      {
+        tokens: [
+          { name: "Color.Primary", kind: "color", values: { light: "#000" } },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toBe("");
+    expect(issues[0]?.message).toContain("Color.Primary");
+
+    const reference = compileStyleValues(
+      { color: { $token: "Color.Primary" } },
+      "/styles"
+    );
+    expect(reference.declarations).toEqual([]);
+  });
+
+  it("keeps accepting the names the default set uses", () => {
+    // The refusal above has to be narrow: `space.4` and `content.width` are
+    // shipped defaults, and a grammar that took them out with the uppercase
+    // names would empty the table it was tightening.
+    for (const token of defaultSiteTokens()) {
+      expect(isTokenName(token.name), token.name).toBe(true);
+    }
+  });
+});
+
+describe("emitTokenBlocks", () => {
+  it("writes the values under the page's own selector, not :root", () => {
+    // At the document root a site's values would apply to the host's markup
+    // too, which is the collision everything else here works to avoid.
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "color.primary",
+            kind: "color",
+            values: { light: "#2563eb" },
+          },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toBe(`${SCOPE}{--site-color-primary:#2563eb}`);
+    expect(css).not.toContain(":root");
+  });
+
+  it("applies the site's prefix to every property", () => {
+    const { css } = emitTokenBlocks(
+      {
+        prefix: "--brand-",
+        tokens: [
+          { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toContain("--brand-space-4:1rem");
+  });
+
+  it("writes a dark block behind an attribute the host controls", () => {
+    // The host owns the document and may already have a toggle, so the values
+    // are emitted under a switch rather than under a decision about when to
+    // flip it.
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "color.text",
+            kind: "color",
+            values: { light: "#111", dark: "#eee" },
+          },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toContain(
+      `[${DARK_MODE_ATTRIBUTE}="dark"] ${SCOPE}{--site-color-text:#eee}`
+    );
+  });
+
+  it("follows the operating system when the site asks for that instead", () => {
+    const { css } = emitTokenBlocks(
+      {
+        darkMode: "media",
+        tokens: [
+          {
+            name: "color.text",
+            kind: "color",
+            values: { light: "#111", dark: "#eee" },
+          },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toContain("@media (prefers-color-scheme:dark)");
+    expect(css).not.toContain(DARK_MODE_ATTRIBUTE);
+  });
+
+  it("writes no dark block when nothing differs in dark", () => {
+    // An empty selector is not free: it is something a host reads in devtools
+    // and takes for a place where something should be happening.
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).not.toContain(DARK_MODE_ATTRIBUTE);
+    expect(css).not.toContain("@media");
+  });
+
+  it("refuses the second of two names that become one property", () => {
+    // `color.primary-dark` and `color-primary.dark` both give
+    // `--site-color-primary-dark`. Emitted together, one would silently
+    // resolve to the other's value.
+    const { css, issues } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "color.primary-dark",
+            kind: "color",
+            values: { light: "#111" },
+          },
+          {
+            name: "color-primary.dark",
+            kind: "color",
+            values: { light: "#222" },
+          },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toContain("#111");
+    expect(css).not.toContain("#222");
+    expect(issues[0]?.message).toContain("--site-color-primary-dark");
+  });
+});
+
+describe("the default token set", () => {
+  it("ships the content width the Container preset reads", () => {
+    // The token that earns its place loudest: editing it re-widths every
+    // container on the site, which is the system demonstrating its own value.
+    const width = defaultSiteTokens().find(t => t.name === "content.width");
+    expect(width?.kind).toBe("dimension");
+    expect(width?.values.light).toBeTruthy();
+  });
+
+  it("emits without complaint", () => {
+    const { css, issues } = emitTokenBlocks(
+      { tokens: defaultSiteTokens() },
+      SCOPE
+    );
+    expect(issues).toEqual([]);
+    expect(css).toContain("--site-content-width");
+  });
+});
+
+describe("font faces", () => {
+  const local = { url: "/fonts/x.woff2", format: "woff2" };
+
+  it("emits a self-hosted face, defaulting to a readable fallback", () => {
+    const { css, issues } = emitFontFaces([{ family: "Brand", src: [local] }]);
+    expect(issues).toEqual([]);
+    expect(css).toContain('font-family:"Brand"');
+    expect(css).toContain('url("/fonts/x.woff2") format("woff2")');
+    // `swap` rather than the browser default: text stays readable while the
+    // file loads instead of being invisible.
+    expect(css).toContain("font-display:swap");
+  });
+
+  it.each([
+    "https://fonts.gstatic.com/s/x.woff2",
+    "//fonts.gstatic.com/s/x.woff2",
+    "http://example.com/x.woff2",
+  ])("refuses %s and says to upload the file instead", url => {
+    // A font fetched from another server announces every visitor's IP address
+    // to it before the page is readable — the arrangement a German court found
+    // unlawful for Google Fonts.
+    const issues = validateFontFace(
+      { family: "B", src: [{ url }] },
+      "fonts[0]"
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.severity).toBe("error");
+    expect(issues[0]?.message).toContain("Upload the font file");
+  });
+
+  it("emits nothing for a face it refused", () => {
+    // Half a `@font-face` is worse than none: a family whose file never loads
+    // renders as the browser default rather than as the next family listed.
+    const { css, issues } = emitFontFaces([
+      { family: "Brand", src: [{ url: "https://fonts.example/x.woff2" }] },
+    ]);
+    expect(css).toBe("");
+    expect(issues).toHaveLength(1);
+  });
+
+  it("keeps the faces that passed when one alongside them failed", () => {
+    const { css } = emitFontFaces([
+      { family: "Good", src: [local] },
+      { family: "Bad", src: [{ url: "https://fonts.example/x.woff2" }] },
+    ]);
+    expect(css).toContain('font-family:"Good"');
+    expect(css).not.toContain('font-family:"Bad"');
+  });
+
+  it("refuses a face with no file at all", () => {
+    expect(validateFontFace({ family: "B", src: [] }, "f")).toHaveLength(1);
+  });
+});
+
+describe("stored data reaching the stylesheet", () => {
+  // Tokens and fonts are admin data, so every field here is attacker-shaped
+  // input to a text emitter. Each of these escaped the page's own rule before
+  // it was checked.
+
+  it("refuses a token name that would close the rule", () => {
+    const { css, issues } = emitTokenBlocks(
+      {
+        tokens: [
+          { name: "x:1}body{color", kind: "color", values: { light: "red" } },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toBe("");
+    expect(css).not.toContain("body{");
+    expect(issues[0]?.message).toContain("is not a token name");
+  });
+
+  it("refuses a token value that would end the custom property", () => {
+    // The semicolon ends `--site-color-primary` and what follows becomes a
+    // declaration on the page root — including a URL-bearing one.
+    const { css, issues } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "color.primary",
+            kind: "color",
+            values: { light: "#fff;color:red" },
+          },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toBe("");
+    expect(issues[0]?.message).toContain("cannot be used");
+  });
+
+  it("refuses a dark value that would inject, not only the light one", () => {
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "color.primary",
+            kind: "color",
+            values: { light: "#fff", dark: "#000}body{display:none" },
+          },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toBe("");
+  });
+
+  it("refuses a family name carrying structural characters", () => {
+    // `Brand";src:url(/ok)}body{display:none}/*` would end the quoted
+    // descriptor, then the rule, then write another. Escaping the quote alone
+    // would leave the braces and the comment opener inside a stylesheet that
+    // is written into a `<style>` element, where `</style>` ends the element
+    // whatever the CSS parser thinks of the quotes.
+    const { css, issues } = emitFontFaces([
+      {
+        family: 'Brand";src:url(/ok)}body{display:none}/*',
+        src: [{ url: "/f.woff2" }],
+      },
+    ]);
+    expect(css).toBe("");
+    expect(issues[0]?.message).toContain("not a usable font family name");
+  });
+
+  it("escapes a quote in a family name it does allow", () => {
+    // A quote alone is legal in a family name and is what the CSS escape
+    // exists for, so this one is carried through rather than refused.
+    const { css } = emitFontFaces([
+      { family: 'Say "Hi"', src: [{ url: "/f.woff2" }] },
+    ]);
+    expect(css).toContain('font-family:"Say \\"Hi\\""');
+    expect(css.match(/@font-face/g)?.length).toBe(1);
+  });
+
+  it("refuses an unquoted descriptor that would inject", () => {
+    for (const face of [
+      { family: "B", src: [{ url: "/f.woff2" }], weight: "400;color:red" },
+      { family: "B", src: [{ url: "/f.woff2" }], style: "normal}body{x:y" },
+      { family: "B", src: [{ url: "/f.woff2" }], display: "swap;a:b" },
+      { family: "B", src: [{ url: "/f.woff2" }], unicodeRange: "U+0-7F}a{b:c" },
+    ]) {
+      const { css } = emitFontFaces([face]);
+      expect(css, JSON.stringify(face)).toBe("");
+    }
+  });
+
+  it("refuses a format hint that is not a plain keyword", () => {
+    const { css } = emitFontFaces([
+      { family: "B", src: [{ url: "/f.woff2", format: 'woff2");}body{x:y' }] },
+    ]);
+    expect(css).toBe("");
+  });
+});

@@ -7,6 +7,8 @@
     "media-storage",
     "email",
     "draft-published-status",
-    "isr-caching"
+    "isr-caching",
+    "webhook-retention",
+    "routing-and-seo"
   ]
 }

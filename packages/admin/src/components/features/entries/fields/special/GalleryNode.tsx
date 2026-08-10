@@ -82,7 +82,7 @@ function GalleryComponent({ images, columns, caption }: GalleryComponentProps) {
           <button
             key={index}
             type="button"
-            className="relative overflow-hidden rounded-none aspect-square bg-primary/5 cursor-pointer hover:opacity-90 transition-opacity"
+            className="relative overflow-hidden rounded-md aspect-square bg-primary/5 cursor-pointer hover:opacity-90 transition-opacity"
             onClick={() => setLightboxIndex(index)}
           >
             <img
@@ -102,10 +102,14 @@ function GalleryComponent({ images, columns, caption }: GalleryComponentProps) {
         </figcaption>
       )}
 
-      {/* Lightbox */}
+      {/* Lightbox. `--nx-overlay-strong` rather than the modal scrim: the
+          caption and controls are read ON this surface, and the see-through
+          variant leaves a mid-grey backdrop in light mode that muted white text
+          cannot clear AA against. They stay literal white because they are read
+          against the user's image rather than the admin palette. */}
       {lightboxIndex !== null && (
         <div
-          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-overlay-strong flex items-center justify-center p-4"
           onClick={() => setLightboxIndex(null)}
           role="dialog"
           aria-modal="true"
@@ -136,7 +140,7 @@ function GalleryComponent({ images, columns, caption }: GalleryComponentProps) {
               src={images[lightboxIndex].src}
               alt={images[lightboxIndex].alt}
               title={images[lightboxIndex].title}
-              className="max-w-full max-h-[85vh] object-contain rounded-none"
+              className="max-w-full max-h-[85vh] object-contain rounded-md"
               onClick={e => e.stopPropagation()}
             />
 

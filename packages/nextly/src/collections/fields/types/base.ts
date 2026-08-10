@@ -12,7 +12,7 @@
 
 import type React from "react";
 
-import type { HookHandler } from "@nextly/hooks/types";
+import type { FieldHookHandler } from "@nextly/hooks/types";
 
 // ============================================================
 // Field Type Union
@@ -153,6 +153,22 @@ export type AccessFunction = (args: {
   id?: string;
   /** Document data being created or updated */
   data?: Record<string, unknown>;
+  /**
+   * The caller's effective permissions, as `resource:action` — the SAME
+   * spelling collection-level access control receives, so a rule reads the
+   * same string wherever it is written.
+   *
+   * Note that this is not how a permission is spelled in the database or in
+   * the admin's permission matrix, where it is `action-resource`. The two are
+   * composed from one row and mean the same thing; only the string differs.
+   *
+   * Empty for an unauthenticated caller, and empty if the lookup fails — a
+   * rule that asks for a permission therefore denies rather than opens when
+   * grants cannot be read.
+   */
+  permissions: string[];
+  /** The caller's role slugs, including roles inherited from other roles. */
+  roles: string[];
 }) => boolean | Promise<boolean>;
 
 /**
@@ -456,25 +472,25 @@ export interface FieldHooks {
    * Runs before field validation.
    * Can transform the field value before validation rules are applied.
    */
-  beforeValidate?: HookHandler[];
+  beforeValidate?: FieldHookHandler[];
 
   /**
    * Runs before the field value is saved to the database.
    * Can transform the final value to be stored.
    */
-  beforeChange?: HookHandler[];
+  beforeChange?: FieldHookHandler[];
 
   /**
    * Runs after the field value has been saved to the database.
    * Useful for side effects like sending notifications.
    */
-  afterChange?: HookHandler[];
+  afterChange?: FieldHookHandler[];
 
   /**
    * Runs after the field value is read from the database.
    * Can transform the value before it's returned to the client.
    */
-  afterRead?: HookHandler[];
+  afterRead?: FieldHookHandler[];
 }
 
 // ============================================================

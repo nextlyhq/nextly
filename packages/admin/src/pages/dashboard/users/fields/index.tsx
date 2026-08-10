@@ -261,7 +261,7 @@ function StaticFieldRow({ field }: { field: StaticField }) {
           >
             <Lock className="h-4 w-4" />
           </span>
-          <code className="rounded-none bg-muted px-1.5 py-0.5 font-mono text-sm">
+          <code className="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-sm">
             {field.name}
           </code>
         </div>
@@ -370,7 +370,7 @@ function SortableFieldRow({
             <GripVertical className="h-4 w-4" />
           </span>
           <code
-            className="text-sm bg-muted px-1.5 py-0.5 rounded-none font-mono cursor-pointer hover-unified transition-colors"
+            className="text-sm bg-muted px-1.5 py-0.5 rounded-sm font-mono cursor-pointer hover-unified transition-colors"
             onClick={e => {
               e.stopPropagation();
               if (isCode) {
@@ -704,7 +704,7 @@ function UserFieldsTable() {
           <AlertDescription className="flex items-center justify-between">
             <span>
               Restart the server (
-              <code className="text-xs bg-muted px-1 py-0.5 rounded-none">
+              <code className="text-xs bg-muted px-1 py-0.5 rounded-sm">
                 next dev
               </code>
               ) for new fields to take effect in the database.
@@ -744,8 +744,8 @@ function UserFieldsTable() {
 
       {/* Table with DnD */}
       {filteredStaticFields.length === 0 && paginatedFields.length === 0 ? (
-        <div className="border rounded-none p-12 text-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-none bg-muted mx-auto mb-4">
+        <div className="border rounded-md p-12 text-center">
+          <div className="flex h-14 w-14 items-center justify-center rounded-md bg-muted mx-auto mb-4">
             <Users className="h-7 w-7 text-muted-foreground" />
           </div>
           <h3 className="text-base font-medium mb-1">
@@ -756,7 +756,7 @@ function UserFieldsTable() {
           </p>
         </div>
       ) : (
-        <div className="table-wrapper rounded-none  border border-border bg-card overflow-hidden">
+        <div className="table-wrapper rounded-md  border border-border bg-card overflow-hidden">
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}

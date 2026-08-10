@@ -158,7 +158,7 @@ export function FolderTreePicker({
           <div className="flex-1">
             <div
               className={cn(
-                "font-medium tracking-tight text-[13px]",
+                "font-medium tracking-tight text-sm",
                 compact && "text-xs"
               )}
             >
@@ -240,7 +240,7 @@ function FolderTreePickerItem({
             onToggle(folder.id);
           }}
           className={cn(
-            "flex shrink-0 items-center justify-center rounded-none transition-colors",
+            "flex shrink-0 items-center justify-center rounded-md transition-colors",
             isSelected
               ? "text-primary/70 hover:text-primary hover:bg-primary/5"
               : "text-muted-foreground group-hover:text-primary hover:bg-primary/5",

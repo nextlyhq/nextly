@@ -31,24 +31,31 @@ Work through these in order; each layer has tests nearby to extend.
 3. **Type guard**: add it in `collections/fields/guards.ts` via
    `createTypeGuard`, and decide membership in `isDataField` /
    `isRelationalField` / `hasNestedFields`.
-4. **Catalog entry**: add to `FIELD_TYPE_CATALOG` in
+4. **Accepted-type lists (two of them, both hand-maintained)**:
+   - `VALID_FIELD_TYPES` in `packages/nextly/src/shared/base-validator.ts` —
+     the config gate. Miss this and `defineCollection` throws
+     `FIELD_TYPE_INVALID` at boot even though every other layer is wired.
+   - `DynamicFieldType` in
+     `packages/nextly/src/schemas/dynamic-collections/legacy-types.ts` — the
+     shape of a Schema-Builder-stored field definition.
+5. **Catalog entry**: add to `FIELD_TYPE_CATALOG` in
    `collections/fields/catalog.ts` (label, category, hint, Lucide icon NAME
    as a string). Pickers render from the catalog automatically. If the type
    should appear on the user-fields or form surfaces, add it to those
    allow-lists too; if it is surface-only, do NOT add it to the canonical
    union (see the catalog's comment block for why).
-5. **Column mapping (the single source of truth)**: add the per-dialect case
+6. **Column mapping (the single source of truth)**: add the per-dialect case
    in `packages/nextly/src/domains/schema/services/field-column-descriptor.ts`.
    Then verify the descriptor's `kind` is handled by
    `runtime-schema-generator.ts`, `pipeline/diff/build-from-fields.ts`, and
    the DDL emitters in `domains/schema/pipeline/ddl-emitter/`.
-6. **Validation**: add a validator under `collections/fields/validators/` and
+7. **Validation**: add a validator under `collections/fields/validators/` and
    the case in `domains/schema/services/zod-generator.ts` (the per-type
    switch).
-7. **Type generation**: add the TS mapping in
+8. **Type generation**: add the TS mapping in
    `domains/schema/services/type-generator.ts` so `nextly generate:types`
    emits the right property type.
-8. **Admin rendering**:
+9. **Admin rendering**:
    - Edit view: a component under
      `packages/admin/src/components/features/entries/fields/` and its case in
      `FieldRenderer.tsx`.
@@ -57,9 +64,9 @@ Work through these in order; each layer has tests nearby to extend.
    - Builder config: if the type has builder-editable options, extend the
      schema builder's field editor sheet under
      `packages/admin/src/components/features/schema-builder/`.
-9. **Serialization extras** (check, usually small): the collection export
-   service (`domains/collections/services/collection-export-service.ts`) and
-   `domains/schema/services/schema-hash.ts`.
+10. **Serialization extras** (check, usually small): the collection export
+    service (`domains/collections/services/collection-export-service.ts`) and
+    `domains/schema/services/schema-hash.ts`.
 
 ## Verify before opening the PR
 

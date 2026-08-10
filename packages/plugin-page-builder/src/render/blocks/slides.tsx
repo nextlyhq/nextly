@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import { defineBlock } from "../../core/registry";
 
 import { renderInline } from "./markdown";
-import { mediaUrl, safeUrl, str } from "./util";
+import { cssMediaUrl, safeUrl, str } from "./util";
 
 const track: CSSProperties = {
   display: "flex",
@@ -50,13 +50,14 @@ export const slides = defineBlock({
     customCss: true,
     customAttributes: true,
   },
-  render: ({ props, className }) => {
+  render: ({ props, className, remotePatterns }) => {
     const items = Array.isArray(props.items) ? props.items : [];
     return (
       <div className={className} style={track}>
         {items.map((raw, i) => {
           const it = (raw ?? {}) as Record<string, unknown>;
-          const url = mediaUrl(it.image);
+          // Interpolated into a CSS `url("…")`, so CSS delimiters are refused too.
+          const url = cssMediaUrl(it.image, remotePatterns);
           const link = it.link as Record<string, unknown> | undefined;
           const href = safeUrl(link?.href);
           return (

@@ -40,10 +40,12 @@ export function isVersionStatus(v: unknown): v is VersionStatus {
  * enabled; drafts add a draft/publish lifecycle; autosave coalesces the
  * in-progress draft. See the design spec section 3.
  *
- * NOTE (current stage): only history/capture is enforced today. `drafts`,
- * `autosave`, and `maxPerDoc` are parsed and persisted but not yet acted upon
- * (draft/publish split, autosave coalescing, and retention pruning are later
- * stages), so any versioning-enabled entity captures history only for now.
+ * NOTE (current stage): history/capture and the `drafts` draft/publish split
+ * are enforced. On a `status: true` collection with drafts resolved on, a
+ * status-less update to a published, non-localized document is stored as a
+ * coalesced working draft instead of overwriting the live row, and publishing
+ * promotes it. `autosave` coalescing and `maxPerDoc` retention pruning are
+ * parsed and persisted but not yet acted upon.
  */
 export interface VersionsConfig {
   /**

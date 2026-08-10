@@ -90,7 +90,7 @@ export function BuilderFieldList({
         {/* PR H feedback 2.2: top header dropped its "+ Add field"
             button. The sole + Add affordance is the centered/bordered
             box at the bottom. */}
-        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        <div className="text-xs uppercase tracking-wider text-muted-foreground">
           Your fields
         </div>
 

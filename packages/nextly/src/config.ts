@@ -24,6 +24,10 @@ export {
   type HookHandler,
 } from "./collections/config/define-collection";
 
+// The context a FIELD-level hook is handed. `FieldHooks` is already public
+// through the field types below, so the handler it is declared with is too.
+export type { FieldHookContext, FieldHookHandler } from "./hooks/types";
+
 // Single configuration (defineSingle, SingleConfig, etc.)
 export {
   defineSingle,
@@ -82,13 +86,13 @@ export {
 // Branding helpers (for server-side CSS injection)
 export { getBrandingCss } from "./utils/color-utils";
 
-// Component configuration (defineComponent, ComponentConfig, etc.)
+// Component configuration (defineFieldGroup, FieldGroupConfig, etc.)
 export {
-  defineComponent,
-  type ComponentConfig,
-  type ComponentLabel,
-  type ComponentAdminOptions,
-} from "./components/config";
+  defineFieldGroup,
+  type FieldGroupConfig,
+  type FieldGroupLabel,
+  type FieldGroupAdminOptions,
+} from "./field-groups/config";
 
 // Field builders and related runtime guards used in collection definitions.
 export {
@@ -109,10 +113,19 @@ export {
   repeater,
   group,
   json,
-  component,
+  fieldGroup,
   chips,
   option,
 } from "./collections/fields/helpers";
+
+// The factory a contributed field type is declared through. A value, not a
+// type: the block above this one re-exports the field types with `export type`,
+// which carries no runtime binding, so a caller would resolve the symbol at
+// compile time and find nothing at run time.
+export {
+  pluginField,
+  pluginFieldBrand,
+} from "./collections/fields/types/plugin-field";
 
 export {
   isTextField,
@@ -131,7 +144,7 @@ export {
   isRepeaterField,
   isGroupField,
   isJSONField,
-  isComponentField,
+  isFieldGroupField,
   isChipsField,
   isDataField,
   hasNestedFields,

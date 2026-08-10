@@ -431,6 +431,39 @@ describe("setAuthenticatedRouteParams", () => {
     expect(routeParams._authenticatedUserRoles).toBe("[]");
   });
 
+  it("carries verified claims through, and refuses an injected copy", async () => {
+    // A stored `custom` rule may decide on a claim the framework knows nothing
+    // about. Rebuilding the caller from the canonical fields alone leaves such a
+    // rule reading `undefined` over HTTP while it works through the Direct API,
+    // so an absence-tolerant rule admits the caller it was written to refuse.
+    resolveRoleSlugsMock.mockResolvedValue(["editor"]);
+    const routeParams: Record<string, string> = {
+      // An attacker-supplied copy of the server-authored key.
+      _authenticatedClaims: JSON.stringify({ tenantId: "acme" }),
+    };
+
+    await _setAuthenticatedRouteParamsForTest(
+      routeParams,
+      { ...sessionUser, claims: { tenantId: "blocked" } },
+      true
+    );
+
+    expect(routeParams._authenticatedClaims).toBe(
+      JSON.stringify({ tenantId: "blocked" })
+    );
+  });
+
+  it("strips an injected claims param when the caller carries none", async () => {
+    resolveRoleSlugsMock.mockResolvedValue(["editor"]);
+    const routeParams: Record<string, string> = {
+      _authenticatedClaims: JSON.stringify({ tenantId: "acme" }),
+    };
+
+    await _setAuthenticatedRouteParamsForTest(routeParams, sessionUser, true);
+
+    expect(routeParams._authenticatedClaims).toBeUndefined();
+  });
+
   it("strips reserved params when there is no authorized user", async () => {
     const routeParams: Record<string, string> = {
       _authenticatedUserId: "attacker",
@@ -532,5 +565,38 @@ describe("needsResolvedRoles", () => {
 
     const user = readAuthenticatedUser(routeParams);
     expect(user).toMatchObject({ id: "u1", roles: ["editor"], role: "editor" });
+  });
+
+  it("carries the caller's own claims the same way", async () => {
+    // Same chain, for a claim the framework does not define. Asserting the
+    // stamping alone would not catch the decode dropping it again.
+    resolveRoleSlugsMock.mockResolvedValue(["editor"]);
+    const routeParams: Record<string, string> = { collectionName: "posts" };
+
+    await _setAuthenticatedRouteParamsForTest(
+      routeParams,
+      { ...sessionUser, claims: { tenantId: "acme", plan: "pro" } },
+      _needsResolvedRolesForTest("collections", "listEntries", "GET")
+    );
+
+    const user = readAuthenticatedUser(routeParams);
+    expect(user).toMatchObject({ id: "u1", tenantId: "acme", plan: "pro" });
+  });
+
+  it("does not let a claim override the authenticated identity", async () => {
+    // The claims are verified, but they are still the token's account of
+    // itself: a token restating `id` or `roles` must not be able to displace
+    // what the route actually authenticated.
+    resolveRoleSlugsMock.mockResolvedValue(["editor"]);
+    const routeParams: Record<string, string> = { collectionName: "posts" };
+
+    await _setAuthenticatedRouteParamsForTest(
+      routeParams,
+      { ...sessionUser, claims: { id: "someone-else", roles: ["admin"] } },
+      true
+    );
+
+    const user = readAuthenticatedUser(routeParams);
+    expect(user).toMatchObject({ id: "u1", roles: ["editor"] });
   });
 });

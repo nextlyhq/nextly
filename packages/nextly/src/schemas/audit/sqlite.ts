@@ -15,11 +15,11 @@
 
 import { sqliteTable, integer, text, index } from "drizzle-orm/sqlite-core";
 
-import { users } from "../users/sqlite";
-
-// Append-only by application convention — operators should revoke
-// UPDATE/DELETE GRANTs on this table in production for stricter
-// integrity. metadata is JSON-encoded text since SQLite has no native
+// Append-only by application convention. SQLite has no GRANT, so the posture is
+// enforced by the application rather than the engine here; on Postgres and MySQL
+// the guidance is to revoke DELETE and to scope UPDATE to the three columns an
+// erasure touches, because a blanket revoke would make deleting a user fail —
+// see the PostgreSQL definition. metadata is JSON-encoded text since SQLite has no native
 // JSON column. NULL actor_user_id covers events with no authenticated
 // actor (failed login, failed CSRF). NULL target_user_id covers
 // non-target events (failed CSRF on a non-account-scoped path).
@@ -36,6 +36,12 @@ export const auditLog = sqliteTable(
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),
+    // When this row's request identifiers were erased, and NULL while they
+    // were not. `ip_address` and `user_agent` are nullable for rows that
+    // never carried them, so a bare NULL cannot say whether a person was
+    // removed or was never recorded — which is the evidence an erasure
+    // request needs.
+    identityErasedAt: integer("identity_erased_at", { mode: "timestamp" }),
   },
   t => [
     index("audit_log_kind_idx").on(t.kind),
@@ -57,11 +63,9 @@ export const activityLog = sqliteTable(
   "activity_log",
   {
     id: text("id").primaryKey(),
-    userId: text("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    userName: text("user_name").notNull(),
-    userEmail: text("user_email").notNull(),
+    userId: text("user_id").notNull(),
+    userName: text("user_name"),
+    userEmail: text("user_email"),
     action: text("action").notNull(), // 'create' | 'update' | 'delete'
     collection: text("collection").notNull(),
     entryId: text("entry_id"),
@@ -70,6 +74,7 @@ export const activityLog = sqliteTable(
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),
+    identityErasedAt: integer("identity_erased_at", { mode: "timestamp" }),
   },
   t => [
     index("idx_activity_log_created_at").on(t.createdAt),

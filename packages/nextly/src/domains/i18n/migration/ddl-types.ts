@@ -23,7 +23,18 @@ export function ddlType(
     case "text":
       return dialect === "mysql" ? `VARCHAR(${len})` : "TEXT";
     case "longText":
-      return dialect === "mysql" ? "LONGTEXT" : "TEXT";
+      // TEXT, not LONGTEXT, because a companion column mirrors one on the main table and the main
+      // table's creator emits ordinary TEXT for every field that lands on this kind. The canonical
+      // descriptor renders it the same way. LONGTEXT here described a column as a type nothing
+      // creates, and `longtext` and `text` do not normalise to each other, so the diff reported a
+      // type change on an untouched column for as long as it stood.
+      //
+      // Widening back is safe on an existing companion: this path only ADDs and DROPs columns, so
+      // a column already created as LONGTEXT is never rewritten to the narrower type.
+      return "TEXT";
+    case "shortText":
+      // Bounded on both dialects that have a bounded string; SQLite has only one.
+      return dialect === "sqlite" ? "TEXT" : `VARCHAR(${len})`;
     case "boolean":
       return dialect === "postgresql"
         ? "BOOLEAN"

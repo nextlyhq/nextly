@@ -19,7 +19,10 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { assertValidFieldsPayload } from "../../api/fields-payload";
+import {
+  assertValidFieldsPayload,
+  assertValidPluginFieldOptions,
+} from "../../api/fields-payload";
 import {
   respondAction,
   respondData,
@@ -27,19 +30,26 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
-import { resolveSingleDocumentId } from "../../api/versions-access";
+import {
+  assertDiffVersionPair,
+  resolveSingleDocumentId,
+} from "../../api/versions-access";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
-import { teardownEntityComponentData } from "../../domains/components/services/teardown-entity-component-data";
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
+import { teardownEntityComponentData } from "../../domains/field-groups/services/teardown-entity-field-group-data";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
-import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
+import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
-import { companionHasStatusColumn } from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
+import {
+  readForeignKeyColumns,
+  readIndexNames,
+  tableHasRows,
+} from "../../domains/schema/pipeline/live-table-facts";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
 import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
 import {
@@ -53,16 +63,20 @@ import {
 } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
-import { isIdempotencyError } from "../../domains/schema/pipeline/sql-statement-utils";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
+import { applyMigrationStatements } from "../../domains/schema/services/apply-migration-statements";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
+import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
+import { reconcileSingleCompanion } from "../../domains/singles/services/reconcile-single-companion";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
+import type { SingleMetadataService } from "../../domains/singles/services/single-metadata-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import { resolveBuilderVersions } from "../../domains/versions/builder-versions";
+import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
@@ -70,13 +84,10 @@ import { getProductionNotifier } from "../../runtime/notifications/index";
 import { isReservedResourceSlug } from "../../schemas/_zod/rbac";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import {
-  getI18nArchiveDdl,
-  getI18nArchiveIndexRepairDdl,
-} from "../../schemas/nextly-i18n-archive";
-import {
   isSuperAdmin,
   listEffectivePermissions,
 } from "../../services/lib/permissions";
+import { assertGlobalResourceSlugAvailable } from "../../services/lib/resource-slug-guard";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
@@ -87,18 +98,20 @@ import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
-  getConfigFromDI,
   getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
   getSingleEntryServiceFromDI,
+  getSingleMetadataServiceFromDI,
   getSingleRegistryFromDI,
 } from "../helpers/di";
+import { readRequestLocalized } from "../helpers/request-localized";
 import {
   offsetPaginationToMeta,
   unwrapServiceResult,
 } from "../helpers/service-envelope";
 import {
   parseRichTextFormat,
+  parseStatusParam,
   requireParam,
   toNumber,
 } from "../helpers/validation";
@@ -107,6 +120,7 @@ import type { MethodHandler, Params } from "../types";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
   assertLabelRequestValid,
+  getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
   setVersionLabelForDocument,
@@ -124,6 +138,8 @@ interface SingleField {
   label?: string;
   required?: boolean;
   unique?: boolean;
+  /** See the synthetic declarations below: system columns set this false. */
+  localized?: boolean;
   admin?: Record<string, unknown>;
   validation?: { pattern: string; message: string };
 }
@@ -140,6 +156,12 @@ const SINGLE_TITLE_FIELD: SingleField = {
   type: "text",
   label: "Title",
   required: true,
+  // A main-table system column, not content. Text-like fields localize by
+  // default, so without this the column the entity is titled by would be
+  // classified translatable on a localized single and dropped from the main
+  // table's desired shape. Collections declare their synthetic title the
+  // same way.
+  localized: false,
   admin: { placeholder: "Enter title" },
 };
 
@@ -150,6 +172,8 @@ const SINGLE_SLUG_FIELD: SingleField = {
   label: "Slug",
   required: true,
   unique: true,
+  // Main-table system column — see SINGLE_TITLE_FIELD.
+  localized: false,
   admin: { placeholder: "my-entry-slug" },
   validation: {
     pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$",
@@ -180,149 +204,14 @@ function injectSingleDefaultFields<T extends SingleWithFields | null>(
 }
 
 // ============================================================
-// Migration SQL execution helper
-// ============================================================
-
-async function executeMigrationStatements(
-  adapter: DrizzleAdapter,
-  migrationSQL: string
-): Promise<void> {
-  const statements = migrationSQL
-    .split("--> statement-breakpoint")
-    .map(s => s.trim())
-    .filter(s => s.length > 0);
-
-  for (const statement of statements) {
-    const cleanStatement = statement
-      .split("\n")
-      .filter(line => !line.trim().startsWith("--"))
-      .join("\n")
-      .trim();
-    if (cleanStatement) {
-      await adapter.executeQuery(cleanStatement);
-    }
-  }
-}
-
-// ============================================================
 // Singles services bundle
 // ============================================================
 
 interface SinglesServices {
   registry: SingleRegistryService;
   entry: SingleEntryService;
-}
-
-// ============================================================
-// i18n helpers
-// ============================================================
-
-/**
- * Provision (create / ADD-DROP columns / drop) the single's companion `single_<slug>_locales`
- * table out-of-band after a schema apply, then register its runtime table so per-language
- * reads/writes resolve without a restart. The push pipeline excludes companion tables, so every
- * single write/create/apply path that changes the localized field set goes through here.
- *
- * Shared by createSingle, updateSingleSchema and applySingleSchemaChanges so the three stay in
- * lockstep. No-op when the single isn't localized (a non-localized single has no companion).
- * The DDL reconcile throws on failure (data-integrity critical); the runtime registration is
- * best-effort (recovered on next restart).
- */
-async function reconcileSingleCompanion(args: {
-  slug: string;
-  tableName: string;
-  oldFields: FieldDefinition[];
-  newFields: FieldDefinition[];
-  /** Localization state AFTER this save (requested). */
-  localized: boolean;
-  /** Localization state BEFORE this save (persisted). Drives enable/disable detection. */
-  wasLocalized: boolean;
-  status: boolean;
-  adapter: DrizzleAdapter;
-}): Promise<void> {
-  const { slug, tableName, oldFields, newFields, localized, status, adapter } =
-    args;
-  const wasLocalized = args.wasLocalized;
-  // Nothing to do when the single was and remains non-localized.
-  if (!wasLocalized && !localized) return;
-
-  const dialect = adapter.dialect;
-  const companionTable = `${tableName}_locales`;
-  const companionExists = await adapter.tableExists(companionTable);
-  // Only introspect `_status` when it can matter: an existing companion that stays localized
-  // (a later Draft/Published toggle must ADD/DROP `_status`).
-  const companionHasStatus =
-    companionExists && wasLocalized && localized
-      ? await companionHasStatusColumn(adapter, companionTable)
-      : undefined;
-
-  // The seed (enable) and restore (disable) copy the default-locale value to/from the companion;
-  // read the configured default locale (falls back to "en" when localization isn't configured).
-  const defaultLocale = getConfigFromDI()?.localization?.defaultLocale ?? "en";
-
-  const plan = buildCompanionTransitionStatements({
-    slug,
-    tableName,
-    dialect,
-    defaultLocale,
-    status,
-    wasLocalized,
-    isLocalized: localized,
-    oldFields,
-    newFields,
-    companionExists,
-    companionHasStatus,
-  });
-
-  // A disable archives non-default translations, so ensure `nextly_i18n_archive` exists first
-  // (Builder entities have no `nextly migrate` step to provision it). Idempotent.
-  if (plan.needsArchive) {
-    for (const stmt of getI18nArchiveDdl(dialect)) {
-      await adapter.executeQuery(stmt);
-    }
-    // MySQL's table DDL cannot restore an index the table is missing, and
-    // index-only drift produces no reconcile operations, so the repair runs
-    // here. Tolerated rather than checked first: attempting it and accepting
-    // "duplicate key name" is one round trip instead of two, and the same
-    // tolerance the schema executor already applies.
-    const indexRepair = getI18nArchiveIndexRepairDdl(dialect);
-    if (indexRepair) {
-      try {
-        await adapter.executeQuery(indexRepair);
-      } catch (err) {
-        if (!isIdempotencyError(err)) throw err;
-      }
-    }
-  }
-  for (const stmt of plan.statements) {
-    await adapter.executeQuery(stmt);
-  }
-
-  // Register the companion runtime table (best-effort — next boot re-registers it). Skipped when
-  // the plan dropped the companion (disable) or the single is no longer localized.
-  if (!plan.companionDropped && localized) {
-    try {
-      const companion = buildCompanionRuntimeTable({
-        slug,
-        tableName,
-        fields: newFields,
-        dialect,
-        localized: true,
-        status,
-      });
-      if (companion) {
-        getSchemaRegistryFromDI()?.registerDynamicSchema(
-          companion.companionTableName,
-          companion.table
-        );
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(
-        `[reconcileSingleCompanion] Companion runtime registration failed for '${slug}': ${msg}.`
-      );
-    }
-  }
+  /** Owns the pairing of a table change with the registry write that records it. */
+  metadata: SingleMetadataService;
 }
 
 // ============================================================
@@ -353,6 +242,7 @@ export const SINGLE_VERSION_METHODS: Record<
         authenticatedScope: readAuthenticatedScope(p),
         limit: p.limit !== undefined ? Number(p.limit) : undefined,
         cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
+        locale: p.locale !== undefined ? String(p.locale) : undefined,
       });
       return respondList(result.items, result.meta);
     },
@@ -388,6 +278,29 @@ export const SINGLE_VERSION_METHODS: Record<
         versionNo: Number(p.versionNo),
       });
       return respondDoc(row);
+    },
+  },
+  getSingleVersionDiff: {
+    execute: async (_svc, p) => {
+      const slug = String(p.slug ?? "");
+      const from = Number(p.from);
+      const to = Number(p.to);
+      // Validate the version pair before resolving the live Single, so a
+      // malformed comparison fails as a validation error whether or not the
+      // Single has been materialized.
+      assertDiffVersionPair(from, to);
+      const entryId = await requireLiveSingleId(slug);
+      const diff = await getVersionDiffForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: userFromParams(p),
+        authenticatedScope: readAuthenticatedScope(p),
+        from,
+        to,
+        modifiedOnly: p.modifiedOnly === "1" || p.modifiedOnly === "true",
+      });
+      return respondDoc(diff);
     },
   },
   setSingleVersionLabel: {
@@ -513,8 +426,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             localized?: boolean;
             // Version history opt-in; persists to dynamic_singles.versions.
             versions?: boolean;
+            // Retention: durable versions kept per document (`false` = unlimited,
+            // a number = keep that many, undefined = the default 50).
+            versionsMaxPerDoc?: number | false;
             // Cache-revalidation opt-out; persists to dynamic_singles.revalidate.
             revalidate?: boolean;
+            // Webhook recording opt-out; persists to dynamic_singles.webhooks.
+            webhooks?: boolean;
           }
         | undefined;
 
@@ -540,144 +458,90 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       if (!b?.fields || !Array.isArray(b.fields))
         throw new Error("Single fields array is required");
 
+      // This create path persists and runs DDL without the schema
+      // preview/apply handlers. It keeps its own field rules, but nothing here
+      // can judge a plugin type's own options, so an unsatisfiable declaration
+      // would be stored and then fail on every write to the single.
+      assertValidPluginFieldOptions(b.fields);
+
       const schemaHash = calculateSchemaHash(b.fields);
       // Canonical resolver keeps the UI-create path in sync with registry
       // and DDL so every call site writes and reads the same physical table.
       const tableName = resolveSingleTableName({ slug: b.slug });
 
-      // Generate migration SQL for the Single's data table. Passing
-      // isSingle: true skips the slug column and auto-adds updated_at.
-      // Pass hasStatus so the data table also gets a `status` column
-      // when the user opted into Draft/Published — without it the
-      // runtime schema would expect a column the DDL never created.
-      const schemaService = new DynamicCollectionSchemaService();
-      const isLocalized = b.localized === true;
-      const migrationSQL = schemaService.generateMigrationSQL(
-        tableName,
-        b.fields as unknown as FieldDefinition[],
-        // i18n: omit translatable columns from the main table when localized — they live in the
-        // companion single_<slug>_locales table (provisioned below), mirroring collections.
-        { isSingle: true, hasStatus: b.status === true, localized: isLocalized }
+      // Refused before any DDL runs, and keyed on the TABLE NAME rather than the slug. A slug is
+      // normalised on its way to a table name, so `foo-bar` and `foo_bar` name one physical table
+      // while looking like two free slugs. The registry's own check runs after the DDL, by which
+      // point `CREATE TABLE IF NOT EXISTS` has reported success against the table that already
+      // exists and the runtime registration has rebound it to this request's fields.
+      const owner = (await svc.registry.getAllSingles()).find(
+        s => s.tableName === tableName
       );
-
-      // Run migration immediately (same semantics as Collections).
-      let migrationStatus: "pending" | "applied" | "failed" = "pending";
-
-      try {
-        if (container.has("adapter")) {
-          const adapter = container.get<DrizzleAdapter>("adapter");
-
-          await executeMigrationStatements(adapter, migrationSQL);
-
-          const tableExists = await adapter.tableExists(tableName);
-          if (tableExists) {
-            migrationStatus = "applied";
-
-            // Register runtime schema so the adapter can resolve this
-            // table immediately without a server restart.
-            try {
-              const { generateRuntimeSchema } = await import(
-                "../../domains/schema/services/runtime-schema-generator"
-              );
-              const dialect = adapter.getCapabilities().dialect;
-              const { table: runtimeTable } = generateRuntimeSchema(
-                tableName,
-                b.fields as unknown as FieldDefinition[],
-                dialect,
-                // i18n: main runtime table omits translatable columns for a localized single.
-                { status: b.status === true, localized: isLocalized }
-              );
-              const resolver = (
-                adapter as unknown as {
-                  tableResolver?: {
-                    registerDynamicSchema?: (
-                      name: string,
-                      table: unknown
-                    ) => void;
-                  };
-                }
-              ).tableResolver;
-              if (
-                resolver &&
-                typeof resolver.registerDynamicSchema === "function"
-              ) {
-                resolver.registerDynamicSchema(tableName, runtimeTable);
-              }
-            } catch {
-              // Non-fatal: schema will be registered on next server restart.
-            }
-
-            // i18n: provision the companion single_<slug>_locales table for a localized single
-            // (create-only — the single is brand new) and register its runtime table. The push
-            // pipeline excludes companions, so this is the only place it gets created on create.
-            try {
-              await reconcileSingleCompanion({
-                slug: b.slug,
-                tableName,
-                oldFields: [],
-                newFields: b.fields as unknown as FieldDefinition[],
-                localized: isLocalized,
-                // A brand-new single was never localized before, so a localized create is a
-                // create-only companion (no seed/drop) rather than an enable transition.
-                wasLocalized: false,
-                status: b.status === true,
-                adapter,
-              });
-            } catch (companionErr) {
-              migrationStatus = "failed";
-              const m =
-                companionErr instanceof Error
-                  ? companionErr.message
-                  : String(companionErr);
-              console.error(
-                `[Singles] Companion provisioning failed for "${tableName}": ${m}`
-              );
-            }
-          } else {
-            migrationStatus = "failed";
-            console.error(
-              `[Singles] Table "${tableName}" was not created after migration`
-            );
-          }
-        } else {
-          console.warn(
-            "[Singles] No adapter found in container, migration not executed"
-          );
-        }
-      } catch (migrationError) {
-        migrationStatus = "failed";
-        const message =
-          migrationError instanceof Error
-            ? migrationError.message
-            : String(migrationError);
-        console.error("[Singles] Migration execution failed:", message);
-        console.error("[Singles] Migration SQL was:", migrationSQL);
+      if (owner) {
+        throw NextlyError.duplicate({
+          logContext: {
+            reason: "single-table-conflict",
+            slug: b.slug,
+            tableName,
+            ownedBy: owner.slug,
+          },
+        });
       }
 
-      const single = await svc.registry.registerSingle({
-        slug: b.slug,
-        label: b.label,
-        tableName,
-        description: b.description,
-        fields: b.fields,
-        admin: b.admin,
-        source: "ui",
-        locked: false,
-        // Forward the Draft/Published flag so admin-created Singles that
-        // opt in light up the Save Draft / Publish split.
-        status: b.status === true,
-        // i18n: persist the Internationalization flag so the single reads/writes per language.
-        localized: isLocalized,
-        // Persist version history from the create payload; without it a Single
-        // created with the switch on is written unversioned and the switch
-        // reads as off the moment the editor loads.
-        versions: resolveBuilderVersions(b.versions),
-        // Cache-revalidation opt-out from the create payload (null = standard
-        // tags, { disable: true } = off), so the write path reads it back.
-        revalidate: resolveBuilderRevalidate(b.revalidate),
-        schemaHash,
-        migrationStatus,
-      });
+      // The same refusal for a slug a COLLECTION already owns, or one reserved by a system
+      // resource. `registerSingle` makes this check too, but it makes it after the table has been
+      // created, so a conflicting slug rejected the request and left `single_<slug>` behind with
+      // nothing describing it. Checked here, the rejection costs nothing and creates nothing.
+      // The registry keeps its own call because other callers reach it without passing through
+      // this handler.
+      const conflictAdapter = container.has("adapter")
+        ? container.get<DrizzleAdapter>("adapter")
+        : undefined;
+      if (conflictAdapter) {
+        await assertGlobalResourceSlugAvailable(conflictAdapter, b.slug);
+      }
+
+      // i18n: a localized single stores translatable values via the app's
+      // `localization` config; creating one without that config would split
+      // the tables into a shape the runtime cannot write to. Rejected here for
+      // the same reason as the refusals above — the create below applies the
+      // DDL and provisions the companion, so a rejection afterwards would
+      // leave both behind.
+      if (b.localized === true) {
+        assertLocalizationConfigured("single", b.slug);
+      }
+
+      // The table change and the registry row are one operation, so they are issued as one:
+      // the service persists the intent, applies the DDL, provisions the localized companion
+      // and records the outcome. Splitting them here is what left a created table with no row
+      // describing it whenever the process stopped in between.
+      const { record: single, migrationStatus } =
+        await svc.metadata.createSingle({
+          slug: b.slug,
+          label: b.label,
+          tableName,
+          description: b.description,
+          fields: b.fields,
+          admin: b.admin,
+          source: "ui",
+          locked: false,
+          // Forward the Draft/Published flag so admin-created Singles that
+          // opt in light up the Save Draft / Publish split.
+          status: b.status === true,
+          // i18n: persist the Internationalization flag so the single reads/writes per language.
+          localized: b.localized === true,
+          // Persist version history from the create payload; without it a Single
+          // created with the switch on is written unversioned and the switch
+          // reads as off the moment the editor loads. Retention rides along.
+          versions: resolveBuilderVersions(b.versions, b.versionsMaxPerDoc),
+          // Cache-revalidation opt-out from the create payload (null = standard
+          // tags, { disable: true } = off), so the write path reads it back.
+          revalidate: resolveBuilderRevalidate(b.revalidate),
+          // Webhook recording opt-out from the create payload (null = record,
+          // { record: false } = off), so boot reads it back after a restart.
+          webhooks: resolveBuilderWebhooks(b.webhooks),
+          schemaHash,
+        });
 
       // Auto-seed read/update permissions for the new single.
       if (container.has("permissionSeedService")) {
@@ -706,10 +570,20 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
       // Migration status drives the toast copy so admins see "table
       // applied" vs "run migrations" without an extra round-trip.
+      // 🔴 Three outcomes, not two. `failed` used to be rare enough to hide behind the pending
+      // wording; the shape verification makes it a routine answer, and "run migrations" is then
+      // advice that cannot work — no migration repairs a table whose columns do not match. Telling
+      // an admin their Single was created when it cannot be read is the worst of the three.
+      //
+      // Still 201, and still carrying the row: the Single WAS registered, `migrationStatus` rides
+      // in the body for a client that branches on it, and keeping the record is what makes the
+      // retry a resume rather than a duplicate.
       const message =
         migrationStatus === "applied"
           ? `Single "${b.slug}" created and table applied!`
-          : `Single "${b.slug}" created. Run migrations to apply the table.`;
+          : migrationStatus === "failed"
+            ? `Single "${b.slug}" was created but its table could not be applied. It cannot be read until the schema change succeeds.`
+            : `Single "${b.slug}" created. Run migrations to apply the table.`;
       return respondMutation(message, single, { status: 201 });
     },
   },
@@ -721,15 +595,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
     execute: async (svc, p) => {
       const slug = requireParam(p, "slug", "Single slug");
       const richTextFormat = parseRichTextFormat(p.richTextFormat);
-      // HTTP API default returns every document regardless of status; pass
-      // `?status=published` or `?status=draft` to filter. The route requires
-      // auth (see isPublicEndpoint), so this only affects callers who
-      // already have read permission. Anything outside the allowlist falls
-      // back to "all" instead of being silently dropped.
-      const status =
-        p.status === "all" || p.status === "draft" || p.status === "published"
-          ? p.status
-          : "all";
+      // Absent → undefined so the service applies its published-only default
+      // (an untrusted read must not leak a draft Single); pass
+      // `?status=all|draft|published` to widen. An invalid value is rejected
+      // with 400 rather than silently widened.
+      const status = parseStatusParam(p.status);
       // Forward the caller so the service can evaluate the Single's stored read
       // rules for them. Without it those rules cannot run at all: a rule that
       // asks who is reading has no one to judge, so the admin's read setting
@@ -866,7 +736,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // Remove the companion `_locales` table and this single's archive rows before
         // the main table. The companion holds an FK to `<main>.id`, so it must go first
         // or the main drop orphans it (Postgres) / is rejected by the FK (MySQL).
-        await teardownEntityI18n({ adapter, slug, tableName });
+        await teardownEntityI18n({ adapter, slug, tableName, kind: "single" });
 
         // Use dialect-appropriate quoting for the table name.
         const dialect = adapter.dialect || "postgresql";
@@ -971,9 +841,15 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             // Version history toggle; honoured when defined, undefined leaves
             // the existing value untouched. Persists to dynamic_singles.versions.
             versions?: boolean;
+            // Retention: durable versions kept per document (`false` = unlimited,
+            // a number = keep that many, undefined = the default 50).
+            versionsMaxPerDoc?: number | false;
             // Cache-revalidation toggle; honoured when defined, undefined leaves
             // the existing value untouched. Persists to dynamic_singles.revalidate.
             revalidate?: boolean;
+            // Webhook recording toggle; honoured when defined, undefined leaves
+            // the existing value untouched. Persists to dynamic_singles.webhooks.
+            webhooks?: boolean;
           }
         | undefined;
 
@@ -1005,18 +881,46 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // stored; off writes null. `status` is deliberately not passed to the
       // resolver: it aliases to a versioned config for back-compat, which would
       // stop the toggle from turning versioning off on a Draft/Published single.
+      // Retention without the on/off switch is ambiguous — the resolver needs
+      // the enabled state — so a retention-only patch is rejected rather than
+      // silently ignored. Mirrors the schema-detail routes.
+      if (b.versionsMaxPerDoc !== undefined && b.versions === undefined) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "versionsMaxPerDoc",
+              code: "MISSING_DEPENDENCY",
+              message: "versionsMaxPerDoc requires versions to be set.",
+            },
+          ],
+        });
+      }
       if (b.versions !== undefined) {
-        updateData.versions = resolveBuilderVersions(b.versions);
+        updateData.versions = resolveBuilderVersions(
+          b.versions,
+          b.versionsMaxPerDoc
+        );
       }
       // Cache-revalidation toggle, normalized to the resolved config the write
       // path reads; on writes null (standard tags), off writes the disable config.
       if (b.revalidate !== undefined) {
         updateData.revalidate = resolveBuilderRevalidate(b.revalidate);
       }
+      // Webhook recording toggle, normalized to the resolved policy boot reads;
+      // on writes null (record), off writes the stored opt-out.
+      if (b.webhooks !== undefined) {
+        updateData.webhooks = resolveBuilderWebhooks(b.webhooks);
+      }
       const wasLocalized = existing.localized === true;
       const isLocalized =
         b.localized !== undefined ? b.localized === true : wasLocalized;
       const alterOmitLocalized = isLocalized || wasLocalized;
+      // i18n: gate the Internationalization enable on the app-level
+      // `localization` config (false→true only — an already-localized
+      // single keeps saving, and disabling is always allowed).
+      if (!wasLocalized && isLocalized) {
+        assertLocalizationConfigured("single", slug);
+      }
 
       let migrationStatus = existing.migrationStatus;
 
@@ -1026,8 +930,17 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         updateData.fields = b.fields;
         updateData.schemaHash = calculateSchemaHash(b.fields);
 
-        // Generate and execute ALTER TABLE migration.
-        const schemaService = new DynamicCollectionSchemaService();
+        // Generate and execute ALTER TABLE migration. The dialect comes from
+        // the adapter that will run it, for the same reason as the create
+        // path above: the service's own default is "postgresql". Read
+        // optionally, matching how the execution below reads it.
+        const updateDialect = container.has("adapter")
+          ? container.get<DrizzleAdapter>("adapter").getCapabilities().dialect
+          : undefined;
+        const schemaService = new DynamicCollectionSchemaService(
+          undefined,
+          updateDialect
+        );
         const tableName = existing.tableName;
 
         // Normalize field lists for ALTER TABLE comparison. The physical
@@ -1037,8 +950,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // so the diff doesn't try to ADD COLUMN for columns that already
         // exist in the physical table.
         const systemFields: FieldDefinition[] = [
-          { name: "title", type: "text", required: true },
-          { name: "slug", type: "text", required: true },
+          // `localized: false` for the same reason the synthetic declarations
+          // carry it: these are main-table system columns, and text-like
+          // fields localize by default. Without it `omitLocalized` below
+          // strips them from a localized single's ALTER input, so the
+          // main-table diff stops seeing the `title`/`slug` it already has
+          // and plans them as additions against columns that exist.
+          { name: "title", type: "text", required: true, localized: false },
+          { name: "slug", type: "text", required: true, localized: false },
         ];
 
         const existingFields = (existing.fields ??
@@ -1055,12 +974,15 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           );
           return fields.filter(f => !localizedNames.has(f.name));
         };
+        // Keyed by the COLUMN each field becomes, matching `defineSingle` and the generators. A
+        // field named `Title` already owns the `title` column, so prepending the system one beside
+        // it hands the alter two fields for a single column.
+        const declaredColumns = (fields: FieldDefinition[]): Set<string> =>
+          columnsDeclaredBy(fields);
         const existingFieldsForAlter = omitLocalized(existingFields);
-        const existingFieldNames = new Set(
-          existingFieldsForAlter.map(f => f.name)
-        );
+        const existingFieldColumns = declaredColumns(existingFieldsForAlter);
         const normalizedOldFields: FieldDefinition[] = [
-          ...systemFields.filter(sf => !existingFieldNames.has(sf.name)),
+          ...systemFields.filter(sf => !existingFieldColumns.has(sf.name)),
           ...existingFieldsForAlter,
           {
             name: "updatedAt",
@@ -1071,9 +993,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
         const newFieldsRaw = b.fields as unknown as FieldDefinition[];
         const newFieldsForAlter = omitLocalized(newFieldsRaw);
-        const newFieldNames = new Set(newFieldsForAlter.map(f => f.name));
+        const newFieldColumns = declaredColumns(newFieldsForAlter);
         const normalizedNewFields: FieldDefinition[] = [
-          ...systemFields.filter(sf => !newFieldNames.has(sf.name)),
+          ...systemFields.filter(sf => !newFieldColumns.has(sf.name)),
           ...newFieldsForAlter,
           {
             name: "updatedAt",
@@ -1089,12 +1011,16 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         const wasStatus = (existing as { status?: boolean }).status === true;
         const hasStatus =
           b.status !== undefined ? b.status === true : wasStatus;
-        const migrationSQL = schemaService.generateAlterTableMigration(
-          tableName,
-          normalizedOldFields,
-          normalizedNewFields,
-          { wasStatus, hasStatus }
-        );
+        // Generated where the table is known to exist, below. Whether a required column can be
+        // added without a value for the rows already there, and which columns are referenced by
+        // a foreign key, are read from the live table, and neither question has an answer for a
+        // table that was never created.
+        let migrationSQL = "";
+        // Whether any statement of this migration reached the database. Everything before that
+        // point — reading the live table, generating the SQL — either succeeds or leaves the
+        // schema exactly as it was, and a failure there must not be recorded as a migration
+        // that ran and save a field list the table never received.
+        let migrationBegan = false;
 
         migrationStatus = "pending";
 
@@ -1113,9 +1039,34 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 // i18n: fresh (re)create omits translatable columns when localized.
                 { isSingle: true, hasStatus, localized: isLocalized }
               );
-              await executeMigrationStatements(adapter, createSQL);
+              // Same boundary as the ALTER branch below: once a statement is sent, a failure
+              // has left the table partly built rather than untouched.
+              migrationBegan = true;
+              await applyMigrationStatements(adapter, createSQL);
             } else {
-              await executeMigrationStatements(adapter, migrationSQL);
+              const db = adapter.getDrizzle();
+              const liveDialect = adapter.getCapabilities().dialect;
+              const [rows, foreignKeys, indexNames] = await Promise.all([
+                tableHasRows(db, liveDialect, tableName),
+                readForeignKeyColumns(db, liveDialect, tableName),
+                readIndexNames(db, liveDialect, tableName),
+              ]);
+              migrationSQL = schemaService.generateAlterTableMigration(
+                tableName,
+                normalizedOldFields,
+                normalizedNewFields,
+                {
+                  wasStatus,
+                  hasStatus,
+                  tableHasRows: rows,
+                  foreignKeysByColumn: foreignKeys,
+                  indexNames,
+                }
+              );
+              // Past this point a statement may have run, so a failure is a partly-applied
+              // migration rather than an edit that never started.
+              migrationBegan = true;
+              await applyMigrationStatements(adapter, migrationSQL);
             }
 
             const tableExistsAfter = await adapter.tableExists(tableName);
@@ -1170,6 +1121,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                   localized: isLocalized,
                   wasLocalized,
                   status: hasStatus,
+                  // Already computed above from the persisted record, for the shared ALTER. The
+                  // disable restore needs the same fact.
+                  wasStatus,
                   adapter,
                 });
               } catch (companionErr) {
@@ -1194,6 +1148,19 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             );
           }
         } catch (migrationError) {
+          // A refusal is not a failed migration. The generator rejects an edit it can never
+          // apply — a required column with no value for the rows already there, a referenced
+          // column SQLite cannot detach — before any statement runs, and the field list is
+          // still exactly what the caller sent. Recording "failed" and saving that list anyway
+          // would persist a schema the table does not have and report success for it, so the
+          // refusal is raised to the caller with the field it names.
+          //
+          // The same holds for anything else thrown before the first statement: a probe that
+          // cannot reach the database, or a catalog read the connection is not permitted, ends
+          // the save rather than reporting a migration that never began as one that failed.
+          if (migrationError instanceof NextlyError || !migrationBegan) {
+            throw migrationError;
+          }
           migrationStatus = "failed";
           const message =
             migrationError instanceof Error
@@ -1218,10 +1185,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             const tableName = existing.tableName;
             const existingFields =
               existing.fields as unknown as FieldDefinition[];
+            // What the single is being saved AS, and what it currently IS. The disable restore
+            // needs the second: whether main carried `status` and the companion `_status` before
+            // this apply.
+            const wasStatus =
+              (existing as { status?: boolean }).status === true;
             const hasStatus =
-              b.status !== undefined
-                ? b.status === true
-                : (existing as { status?: boolean }).status === true;
+              b.status !== undefined ? b.status === true : wasStatus;
             await reconcileSingleCompanion({
               slug,
               tableName,
@@ -1230,6 +1200,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               localized: isLocalized,
               wasLocalized,
               status: hasStatus,
+              wasStatus,
               adapter,
             });
             // Re-register the main runtime table so it reflects the new column shape: a disable
@@ -1322,8 +1293,15 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // the `status` column into the desired snapshot.
         status: single.status === true,
         // i18n: carry localized so the preview omits translatable columns from the
-        // single's main table (mirrors the apply path).
-        localized: (single as { localized?: boolean }).localized === true,
+        // single's main table (mirrors the apply path). The REQUEST's flag wins
+        // when the Builder sent one, for the same reason the apply prefers it:
+        // otherwise the preview collects resolutions for DDL the apply will not
+        // run, and the save fails after the user has already confirmed.
+        localized:
+          readRequestLocalized(body) ??
+          (single as { localized?: boolean }).localized === true,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
       };
 
       const pipelinePreview = await previewDesiredSchema({
@@ -1380,7 +1358,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         resolutions,
         renameResolutions,
         eventResolutions,
-        localized: requestLocalized,
       } = body as {
         fields: unknown[];
         confirmed: boolean;
@@ -1403,10 +1380,18 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
       // i18n: prefer the request's localized flag over the persisted one (which may be stale on a
       // simultaneous toggle+field-change save); fall back to the registry value.
-      const isLocalized =
-        requestLocalized !== undefined
-          ? requestLocalized === true
-          : (single as { localized?: boolean }).localized === true;
+      const wasLocalized =
+        (single as { localized?: boolean }).localized === true;
+      // Validated rather than coerced: `localized: "false"` would read as
+      // `false` under `=== true` and turn an ordinary save of a localized
+      // single into a DISABLE transition, restoring the companion's columns
+      // onto the main table and archiving it.
+      const isLocalized = readRequestLocalized(body) ?? wasLocalized;
+      // i18n: gate the Internationalization enable on the app-level
+      // `localization` config (false→true transition only).
+      if (!wasLocalized && isLocalized) {
+        assertLocalizationConfigured("single", slug);
+      }
 
       const currentVersion = single.schemaVersion ?? 1;
       // Reject a stale UI save before any DDL runs so two admins editing the
@@ -1439,6 +1424,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // from the single's main table (they live in single_<slug>_locales, reconciled
         // out-of-band below) — mirrors the collection apply path.
         localized: isLocalized,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
       };
 
       const promptDispatcher = new BrowserPromptDispatcher(
@@ -1468,6 +1455,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         promptChannel: "browser",
         databaseName,
         uiTargetSlug: slug,
+        // Named, not defaulted: the scope defaults to a collection, and a single recorded under that
+        // kind is invisible to every history query filtered by its own.
+        uiTargetKind: "single" as const,
       });
 
       if (!result.success) {
@@ -1490,6 +1480,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // seeds/restores existing rows rather than only creating an empty companion.
           wasLocalized: (single as { localized?: boolean }).localized === true,
           status: single.status === true,
+          // Read from the same persisted record as `wasLocalized`, so both describe the state
+          // before this apply.
+          wasStatus: single.status === true,
           adapter,
         });
       } catch (err) {
@@ -1586,11 +1579,13 @@ export function dispatchSingles(
 ): Promise<unknown> {
   const singleRegistry = getSingleRegistryFromDI();
   const singleEntryService = getSingleEntryServiceFromDI();
+  const singleMetadataService = getSingleMetadataServiceFromDI();
 
-  if (!singleRegistry || !singleEntryService) {
+  if (!singleRegistry || !singleEntryService || !singleMetadataService) {
     const missing: string[] = [];
     if (!singleRegistry) missing.push("singleRegistryService");
     if (!singleEntryService) missing.push("singleEntryService");
+    if (!singleMetadataService) missing.push("singleMetadataService");
 
     let containerStatus = "unknown";
     try {
@@ -1611,7 +1606,11 @@ export function dispatchSingles(
   const handler = SINGLES_METHODS[method];
   if (!handler) throw new Error(`Unknown method: ${method}`);
   return handler.execute(
-    { registry: singleRegistry, entry: singleEntryService },
+    {
+      registry: singleRegistry,
+      entry: singleEntryService,
+      metadata: singleMetadataService,
+    },
     params,
     body
   );

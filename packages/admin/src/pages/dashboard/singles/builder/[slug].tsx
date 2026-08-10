@@ -168,9 +168,17 @@ export default function SingleBuilderEditPage({
       versions:
         (single as { versions?: { enabled?: boolean } | null }).versions
           ?.enabled === true,
+      // Retention: the stored resolved config carries the effective count
+      // (`false` = unlimited), so the select reflects the true setting.
+      versionsMaxPerDoc: (
+        single as { versions?: { maxPerDoc?: number | false } | null }
+      ).versions?.maxPerDoc,
       // Cache revalidation is on unless the stored config disables it (mirrors
       // the collection builder).
       revalidate: single.revalidate?.disable !== true,
+      // Webhook recording is on unless the stored policy opts out (mirrors the
+      // collection builder).
+      webhooks: single.webhooks?.record !== false,
     };
     setSettings(loadedSettings);
     setOriginalSettings(loadedSettings);
@@ -259,8 +267,12 @@ export default function SingleBuilderEditPage({
                   status: settings.status === true,
                   localized: settings.i18n === true,
                   versions: settings.versions === true,
+                  // Retention forwarded with the switch; the server resolves it.
+                  versionsMaxPerDoc: settings.versionsMaxPerDoc,
                   // Cache revalidation: on unless explicitly turned off.
                   revalidate: settings.revalidate !== false,
+                  // Webhook recording: on unless explicitly turned off.
+                  webhooks: settings.webhooks !== false,
                 },
               },
               {
@@ -342,8 +354,12 @@ export default function SingleBuilderEditPage({
             // Version history: the server normalizes this into the resolved
             // config the registry column holds.
             versions: settings.versions === true,
+            // Retention forwarded with the switch; resolved into the config.
+            versionsMaxPerDoc: settings.versionsMaxPerDoc,
             // Cache revalidation: on unless explicitly turned off.
             revalidate: settings.revalidate !== false,
+            // Webhook recording: on unless explicitly turned off.
+            webhooks: settings.webhooks !== false,
           },
         },
         {
@@ -390,9 +406,12 @@ export default function SingleBuilderEditPage({
     if (!fieldDefinitions) return;
 
     try {
+      // i18n: preview with the toggle the apply will use, so the resolutions
+      // collected here match the DDL that actually runs.
       const preview = await singleApi.previewSchemaChanges(
         slug,
-        fieldDefinitions
+        fieldDefinitions,
+        settings?.i18n === true
       );
 
       if (!preview.hasChanges) {

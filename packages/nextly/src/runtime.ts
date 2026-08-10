@@ -44,3 +44,44 @@ export {
   type NextCacheModule,
   type CachedFindOptions,
 } from "./runtime/cache";
+
+// SEO bridge — map the plugin's `seo` field group to a Next `Metadata` object.
+// The `next` import is type-only, so this never forces `next` at load.
+export {
+  buildMetadata,
+  type BuildMetadataOptions,
+  type MetadataEntry,
+  type SeoMetaInput,
+} from "./runtime/seo";
+
+// Draft previews — the route that turns a scoped preview link into a draft
+// session, and the reader a read path asks what that session may see. `next` is
+// not imported at all: the caller passes `draftMode` and `cookies` in, which
+// also keeps both testable without a request.
+export {
+  PREVIEW_SCOPE_COOKIE,
+  createPreviewRoute,
+  readPreviewScope,
+  previewGrantsDraft,
+  type PreviewRouteConfig,
+  type PreviewScopeReaderConfig,
+} from "./runtime/preview/preview-route";
+
+// Content routing + sitemap/robots delivery. `next`/`react` are type-only and
+// `next/navigation` resolves lazily, so importing these never forces them.
+export {
+  resolveContent,
+  isReservedPath,
+  createContentRoute,
+  nextlySitemap,
+  nextlyRobots,
+  type ContentEntry,
+  type ResolveContentOptions,
+  type ContentRoute,
+  type ContentRouteArgs,
+  type ContentRouteConfig,
+  type ResolvedContext,
+  type NextlySitemapEntry,
+  type NextlySitemapOptions,
+  type NextlyRobotsOptions,
+} from "./runtime/routing";

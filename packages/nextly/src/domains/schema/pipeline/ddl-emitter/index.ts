@@ -2,16 +2,26 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { Operation } from "../diff/types";
 
+import { emitAdditiveDdl } from "./additive";
 import { emitPostgresDdl } from "./postgres";
 
 // Op types the fast path can handle end-to-end on PostgreSQL.
 //
-// The four pre-resolution-handled types
+// The rename/drop pre-resolution types
 // (rename_table / rename_column / drop_column / drop_table) are
 // intentionally NOT here — they are owned by `executePreResolutionOps`,
 // which runs before this routing decision; the emitter returns an
 // empty string list for them so a stray inclusion would still be a
 // no-op rather than a double-apply.
+//
+// drop_index is ALSO pre-resolution-owned (it must run before its
+// column's drop_column — SQLite rejects DROP COLUMN on an indexed
+// column) but stays in this set for ROUTING only: an apply whose ops
+// are all additive plus index drops must keep taking the fast path
+// rather than falling back to drizzle-kit's full re-introspection
+// (which can emit destructive DDL our differ never planned — see the
+// `_pkey` incident below). The emitter returns [] for it, same as the
+// other pre-resolved types.
 //
 // The three change_* ops are explicitly listed here because punting
 // them to drizzle-kit's pushSchema caused the silent-skip class of
@@ -31,42 +41,139 @@ const FAST_PATH_OP_TYPES = new Set<Operation["type"]>([
   "drop_index",
 ]);
 
+// Op types the fast path can handle on SQLite and MySQL — the purely
+// additive subset. change_* ops stay with drizzle-kit there: SQLite
+// implements them as a whole-table rebuild and MySQL as a full MODIFY
+// COLUMN definition, both of which the kit already owns correctly.
+const ADDITIVE_FAST_PATH_OP_TYPES = new Set<Operation["type"]>([
+  "add_column",
+  "add_table",
+  "add_index",
+  "drop_index",
+]);
+
 /**
  * Decide whether this apply's operations can ALL be emitted by the fast
- * in-memory PostgreSQL DDL emitter. Conservative: any op outside the
- * supported set, or any non-postgresql dialect, routes the whole apply
- * back to drizzle-kit (the existing slow path).
+ * in-memory DDL emitter for the given dialect. Conservative: any op
+ * outside the dialect's supported set routes the whole apply back to
+ * drizzle-kit (the existing slow path).
  *
- * Empty op list on Postgres ALSO takes the fast path (which emits
- * nothing) rather than calling drizzle-kit. Letting drizzle-kit handle
- * a "no ops" apply means it runs its own catalog re-introspection +
- * rename heuristics against the full live DB and can emit destructive
- * DDL the diff engine explicitly decided was not needed — e.g. a
- * metadata-only field-type change (`textarea` -> `richText`, both
- * stored as `text`) produced zero column-level ops here, but drizzle-
- * kit's pushSchema then emitted `DROP INDEX "<table>_pkey"` for an
- * unrelated managed table, which Postgres rejects because you cannot
- * drop a primary-key index directly. Trusting our own diff for "is
- * any DDL needed?" closes that surface.
+ * An empty op list takes the fast path (which emits nothing) on EVERY
+ * dialect rather than calling drizzle-kit. Letting drizzle-kit handle a
+ * "no ops" apply means it runs its own catalog re-introspection + rename
+ * heuristics against the full live DB and can act on drift the diff
+ * engine explicitly decided was not there. Two observed failure modes:
+ * on Postgres it emitted a destructive `DROP INDEX "<table>_pkey"` for
+ * an unrelated managed table after a metadata-only field-type change
+ * (`textarea` -> `richText`, both stored as `text`); on SQLite/MySQL —
+ * where the kit has NO introspection filter — any live table absent from
+ * the desired schema (UI-created entities, `_locales` companions) reads
+ * as "deleted" and, paired against a "created" table, crashes the v1
+ * rename resolver (`resolver(table) was called without a HintsHandler`).
+ * Trusting our own diff for "is any DDL needed?" closes both surfaces.
  */
 export function canEmitWithoutDrizzleKit(
   ops: Operation[],
   dialect: SupportedDialect
 ): boolean {
-  if (dialect !== "postgresql") return false;
   if (ops.length === 0) return true;
-  return ops.every(op => FAST_PATH_OP_TYPES.has(op.type));
+  if (dialect === "postgresql") {
+    return ops.every(op => FAST_PATH_OP_TYPES.has(op.type));
+  }
+  return ops.every(op => {
+    if (!ADDITIVE_FAST_PATH_OP_TYPES.has(op.type)) return false;
+    // MySQL refuses to index a TEXT/BLOB column without a key length, and a
+    // standalone `add_index` op carries only column NAMES — nothing says
+    // whether one of them is text-backed. An `add_table` brings its own
+    // column list, so the emitter can spell the prefix there; on its own, the
+    // apply goes to drizzle-kit, which introspects the types itself. Emitting
+    // a bare `(col)` here instead would abort the apply and keep failing
+    // identically on every retry.
+    if (dialect === "mysql" && op.type === "add_index") return false;
+    // A UNIQUE index is the one case where the prefix is not merely a
+    // spelling. `col(191)` constrains the first 191 characters, so two rows
+    // whose values differ only after that point are rejected as duplicates —
+    // uniqueness the author did not ask for, enforced silently on their data.
+    // The emitter has no way to express full-value uniqueness on a MySQL
+    // TEXT/BLOB column, so an `add_table` carrying one goes to drizzle-kit
+    // rather than being approximated here. Non-unique indexes keep the
+    // prefix: there it changes only how much of the value is indexed, which
+    // is exactly what the Builder's own DDL does for the same columns.
+    if (dialect === "mysql" && op.type === "add_table") {
+      return !hasUniqueIndexOnTextColumn(op.table);
+    }
+    return true;
+  });
+}
+
+/** Whether a table spec declares a UNIQUE index covering a TEXT/BLOB column. */
+function hasUniqueIndexOnTextColumn(table: {
+  columns?: ReadonlyArray<{ name: string; type: string }>;
+  indexes?: ReadonlyArray<{ columns: readonly string[]; unique?: boolean }>;
+}): boolean {
+  const indexes = table.indexes;
+  if (!indexes || indexes.length === 0) return false;
+  const textColumns = new Set(
+    (table.columns ?? [])
+      .filter(c => /\b(text|blob)\b/i.test(c.type))
+      .map(c => c.name)
+  );
+  if (textColumns.size === 0) return false;
+  return indexes.some(
+    index =>
+      index.unique === true && index.columns.some(c => textColumns.has(c))
+  );
+}
+
+/**
+ * Strip the indexes this emitter cannot spell correctly for the dialect,
+ * for callers that emit an `add_table` the routing decision REJECTED.
+ *
+ * The kit-path pre-creation is exactly that caller: it creates the planned
+ * tables itself so drizzle-kit's differ has an empty created set (see the
+ * HintsHandler note at its call site), and it runs on every `add_table` in
+ * the apply — including one that `canEmitWithoutDrizzleKit` sent to the kit
+ * precisely because of an index. Without this, the routing decision would be
+ * bypassed by the very branch it routed to, and a MySQL UNIQUE index over a
+ * TEXT/BLOB column would still be created with the 191-character prefix,
+ * silently rejecting rows that differ past that point.
+ *
+ * Dropping the index rather than the whole table keeps the crash guard: the
+ * table body is still pre-created, and drizzle-kit adds the index afterwards
+ * from its own introspection, which knows the column types.
+ */
+export function withoutUnemittableIndexes(
+  op: Operation,
+  dialect: SupportedDialect
+): Operation {
+  if (op.type !== "add_table" || dialect !== "mysql") return op;
+  const indexes = op.table.indexes;
+  if (!indexes || indexes.length === 0) return op;
+  const textColumns = new Set(
+    (op.table.columns ?? [])
+      .filter(c => /\b(text|blob)\b/i.test(c.type))
+      .map(c => c.name)
+  );
+  if (textColumns.size === 0) return op;
+  const safe = indexes.filter(
+    index =>
+      !(index.unique === true && index.columns.some(c => textColumns.has(c)))
+  );
+  if (safe.length === indexes.length) return op;
+  return { ...op, table: { ...op.table, indexes: safe } };
 }
 
 /**
  * Emit the SQL statements for a fast-path-eligible operation list.
- * Precondition: canEmitWithoutDrizzleKit(ops, "postgresql") === true.
+ * Precondition: canEmitWithoutDrizzleKit(ops, dialect) === true — except
+ * for the pipeline's kit-path add_table pre-creation, which may pass a
+ * pure add_table subset of a mixed op list on SQLite/MySQL, and must first
+ * run each op through `withoutUnemittableIndexes`.
  */
 export function emitDdl(ops: Operation[], dialect: SupportedDialect): string[] {
-  if (dialect !== "postgresql") {
-    throw new Error(
-      `emitDdl: unsupported dialect "${dialect}" (fast path is PostgreSQL-only)`
-    );
+  if (dialect === "postgresql") {
+    return ops.flatMap(op => emitPostgresDdl(op));
   }
-  return ops.flatMap(op => emitPostgresDdl(op));
+  // `dialect` is narrowed to "mysql" | "sqlite" here — exactly AdditiveDialect.
+  return ops.flatMap(op => emitAdditiveDdl(op, dialect));
 }

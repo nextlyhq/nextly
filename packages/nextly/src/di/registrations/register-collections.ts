@@ -21,9 +21,9 @@
 import type { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../../domains/dynamic-collections";
+import { MetaRetentionGate } from "../../domains/retention/gate";
+import { buildRetentionRunner } from "../../domains/retention/passes";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
-import { MetaRetentionGate } from "../../domains/webhooks/retention-gate";
-import { WebhookRetentionRunner } from "../../domains/webhooks/retention-runner";
 import type { CacheRevalidator } from "../../revalidation/types";
 import { AccessControlService } from "../../services/access";
 import { CollectionFileManager } from "../../services/collection-file-manager";
@@ -33,7 +33,7 @@ import { CollectionRegistryService } from "../../services/collections/collection
 import { CollectionRelationshipService } from "../../services/collections/collection-relationship-service";
 import { CollectionService } from "../../services/collections/collection-service";
 import { CollectionsHandler } from "../../services/collections-handler";
-import type { ComponentDataService } from "../../services/components";
+import type { FieldGroupDataService } from "../../services/field-groups";
 import { container } from "../container";
 
 import { createNoOpHookRegistry } from "./no-op-hook-registry";
@@ -113,7 +113,11 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       adapter,
       logger,
       // i18n: the default locale seeds/restores the companion on a localization toggle.
-      ctx.config.localization?.defaultLocale
+      ctx.config.localization?.defaultLocale,
+      // The config being registered right now is the authority for this
+      // service; reading it back out of the container would depend on the
+      // registration order within this same function.
+      ctx.config.localization != null
     );
 
     const metadataService = new CollectionMetadataService(
@@ -132,7 +136,7 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
     }
 
     // Create the relationship service and expose it via the DI container
-    // so other services (e.g. ComponentDataService) can share the same
+    // so other services (e.g. FieldGroupDataService) can share the same
     // instance instead of creating duplicates.
     const relationshipService = new CollectionRelationshipService(
       adapter,
@@ -155,8 +159,8 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
     );
 
     // Component data service may be unavailable in very minimal boots.
-    const componentDataService = container.has("componentDataService")
-      ? container.get<ComponentDataService>("componentDataService")
+    const fieldGroupDataService = container.has("fieldGroupDataService")
+      ? container.get<FieldGroupDataService>("fieldGroupDataService")
       : undefined;
 
     const entryService = new CollectionEntryService(
@@ -167,21 +171,20 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       relationshipService,
       hookRegistry ?? createNoOpHookRegistry(),
       accessControlService,
-      componentDataService,
+      fieldGroupDataService,
       rbacAccessControlService,
       // i18n M4: forward normalized localization config so localized reads resolve
       // translatable fields from the companion table.
       ctx.config.localization,
       // CollectionService writes append events through this same service, so it
       // needs its own runner — the handler's is not on this path.
-      ctx.config.webhookRetention
-        ? new WebhookRetentionRunner({
-            policy: ctx.config.webhookRetention,
-            prune: { adapter, logger },
-            gate: new MetaRetentionGate(adapter),
-            logger,
-          })
-        : undefined,
+      buildRetentionRunner({
+        adapter,
+        webhookPolicy: ctx.config.webhookRetention,
+        auditPolicy: ctx.config.auditRetention,
+        gate: new MetaRetentionGate(adapter),
+        logger,
+      }),
       // Shared post-response drain fast path (registered by the webhook
       // services). Absent only when webhooks were never registered.
       container.has("webhookFastDrainScheduler")
@@ -219,8 +222,11 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       // i18n M4: enable companion-aware reads on the dispatcher-facing handler.
       ctx.config.localization,
       // Content writes offer a retention pass, so the event ledger stays
-      // bounded in installs that never run the drain.
-      ctx.config.webhookRetention
+      // bounded in installs that never run the drain. Both policies are passed:
+      // this handler is the seam a dispatcher-driven install writes through, so
+      // a policy missing here is a trail that install never prunes.
+      ctx.config.webhookRetention,
+      ctx.config.auditRetention
     );
 
     if (container.has("permissionSeedService")) {

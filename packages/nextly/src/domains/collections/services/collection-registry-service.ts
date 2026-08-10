@@ -33,10 +33,16 @@ import type {
   BaseListOptions,
   BaseListResult,
 } from "../../../shared/base-registry-service";
+import { fieldDefaultsSignature } from "../../../shared/lib/field-defaults";
 import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
+import {
+  clearWebhookRecording,
+  setWebhookRecording,
+} from "../../webhooks/recording-policy";
+import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
 
 /** Options for updating a collection. */
 export interface UpdateCollectionOptions {
@@ -58,6 +64,8 @@ export interface CodeFirstCollectionConfig {
   versions?: DynamicCollectionInsert["versions"];
   /** Cache-revalidation config (or null when the collection sets none). */
   revalidate?: DynamicCollectionInsert["revalidate"];
+  /** Webhook recording policy (or null when the collection records, the default). */
+  webhooks?: DynamicCollectionInsert["webhooks"];
   /** Whether collection-level i18n is enabled (mirrors `status`). */
   localized?: boolean;
   admin?: DynamicCollectionInsert["admin"];
@@ -237,6 +245,8 @@ export class CollectionRegistryService extends BaseRegistryService<
       versions: data.versions ? JSON.stringify(data.versions) : null,
       // Persist the cache-revalidation config as JSON (or null), like `versions`.
       revalidate: data.revalidate ? JSON.stringify(data.revalidate) : null,
+      // Persist the webhook recording policy as JSON (or null), like `revalidate`.
+      webhooks: data.webhooks ? JSON.stringify(data.webhooks) : null,
       localized: data.localized === true ? 1 : 0,
       config_path: data.configPath,
       schema_hash: schemaHash,
@@ -255,6 +265,20 @@ export class CollectionRegistryService extends BaseRegistryService<
         record,
         { returning: "*" }
       );
+
+      // Publish the decision into the live policy as well as the column. The
+      // boot-time read only runs at startup, so without this a Builder-created
+      // collection would keep recording until the next restart — the window in
+      // which its content is most likely to be created. Code-first entities are
+      // skipped: their config is the source of truth and is already published.
+      if (!isConfigOwnedSource(data.source)) {
+        setWebhookRecording(
+          "collection",
+          data.slug,
+          data.webhooks?.record !== false,
+          "db"
+        );
+      }
 
       this.logger.info("Collection registered", {
         slug: data.slug,
@@ -394,6 +418,12 @@ export class CollectionRegistryService extends BaseRegistryService<
         ? JSON.stringify(data.revalidate)
         : null;
     }
+    // Webhook recording policy: same explicit-provide semantics as `revalidate`.
+    if (data.webhooks !== undefined) {
+      updateData.webhooks = data.webhooks
+        ? JSON.stringify(data.webhooks)
+        : null;
+    }
     if (data.localized !== undefined) {
       updateData.localized = data.localized === true ? 1 : 0;
     }
@@ -413,6 +443,24 @@ export class CollectionRegistryService extends BaseRegistryService<
       if (results.length === 0) {
         // Generic "Not found." from the factory; slug moves to logContext.
         throw NextlyError.notFound({ logContext: { slug } });
+      }
+
+      // Mirror the stored change into the live policy so turning the switch
+      // off takes effect on the next write, not the next restart. Keyed on the
+      // slug the row is actually stored under: this method validates a
+      // `data.slug` rename but never writes it, so keying on the requested new
+      // slug would publish under a name nothing reads and clear the only entry
+      // that matters.
+      if (
+        data.webhooks !== undefined &&
+        !isConfigOwnedSource(options?.source)
+      ) {
+        setWebhookRecording(
+          "collection",
+          slug,
+          data.webhooks?.record !== false,
+          "db"
+        );
       }
 
       this.logger.info("Collection updated", { slug });
@@ -452,6 +500,11 @@ export class CollectionRegistryService extends BaseRegistryService<
       if (count === 0) {
         throw NextlyError.notFound({ logContext: { slug } });
       }
+
+      // Drop the in-process recording decision with the row: a later
+      // collection created under this slug must start from the recording
+      // default rather than inherit a suppression whose row no longer exists.
+      clearWebhookRecording("collection", slug);
 
       this.logger.info("Collection deleted", { slug });
     } catch (error) {
@@ -503,6 +556,8 @@ export class CollectionRegistryService extends BaseRegistryService<
             versions: config.versions,
             // Forward the cache-revalidation config on first sync.
             revalidate: config.revalidate,
+            // Forward the webhook recording policy on first sync.
+            webhooks: config.webhooks,
             localized: config.localized === true,
             configPath: config.configPath,
             schemaHash,
@@ -519,7 +574,15 @@ export class CollectionRegistryService extends BaseRegistryService<
           // Re-sync when the cache-revalidation config changed.
           JSON.stringify(config.revalidate ?? null) !==
             JSON.stringify(existing.revalidate ?? null) ||
+          // Re-sync when the webhook recording policy changed.
+          JSON.stringify(config.webhooks ?? null) !==
+            JSON.stringify(existing.webhooks ?? null) ||
           (config.localized === true) !== (existing.localized === true) ||
+          // Declared defaults are read from the stored definitions when an
+          // entry is created, and the schema hash omits them, so they need
+          // their own comparison or a changed default never reaches the write.
+          fieldDefaultsSignature(config.fields) !==
+            fieldDefaultsSignature(existing.fields) ||
           desiredTableName !== existing.tableName
         ) {
           // Fields changed, status toggle flipped, or `dbName` resolved to a
@@ -549,6 +612,10 @@ export class CollectionRegistryService extends BaseRegistryService<
               // `revalidate`, so updateCollection actually clears the column
               // instead of leaving the stale config persisted.
               revalidate: config.revalidate ?? null,
+              // Send explicit null (not undefined) when the config removed
+              // `webhooks`, so updateCollection actually clears the column
+              // instead of leaving a stale opt-out suppressing the outbox.
+              webhooks: config.webhooks ?? null,
               localized: config.localized === true,
               tableName: desiredTableName,
             },
@@ -627,6 +694,7 @@ export class CollectionRegistryService extends BaseRegistryService<
                 localized: config.localized === true,
                 versions: config.versions,
                 revalidate: config.revalidate,
+                webhooks: config.webhooks,
                 configPath: config.configPath,
                 schemaHash: retrySchemaHash,
               });
@@ -700,6 +768,8 @@ export class CollectionRegistryService extends BaseRegistryService<
       versions: data.versions ? JSON.stringify(data.versions) : null,
       // Same as registerCollection — persist the cache-revalidation config.
       revalidate: data.revalidate ? JSON.stringify(data.revalidate) : null,
+      // Same as registerCollection — persist the webhook recording policy.
+      webhooks: data.webhooks ? JSON.stringify(data.webhooks) : null,
       localized: data.localized === true ? 1 : 0,
       config_path: data.configPath,
       schema_hash: data.schemaHash,
@@ -812,6 +882,7 @@ export class CollectionRegistryService extends BaseRegistryService<
     const admin = (r.admin || r.admin) as string | object | null;
     const versions = r.versions as string | object | null | undefined;
     const revalidate = r.revalidate as string | object | null | undefined;
+    const webhooks = r.webhooks as string | object | null | undefined;
     const hooks = (r.hooks || r.hooks) as string | object | null;
     const tableName = (r.table_name || r.tableName) as string;
     const configPath = (r.config_path || r.configPath) as string | undefined;
@@ -865,6 +936,14 @@ export class CollectionRegistryService extends BaseRegistryService<
         ? typeof revalidate === "string"
           ? JSON.parse(revalidate)
           : revalidate
+        : null,
+      // Parse the webhook recording policy (JSON string on the raw-insert path
+      // / SQLite; already an object on pg/mysql jsonb). null when unset or on
+      // rows written before this column existed, which reads as recording.
+      webhooks: webhooks
+        ? typeof webhooks === "string"
+          ? JSON.parse(webhooks)
+          : webhooks
         : null,
       localized: r.localized === 1 || r.localized === true,
       configPath,

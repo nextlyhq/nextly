@@ -61,9 +61,10 @@ import {
   type AdapterLogger,
   type PoolConfig,
   type SslConfig,
+  isApplicationError,
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
-import type { AnyRelations } from "drizzle-orm";
+import type { AnyRelations, SQL } from "drizzle-orm";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import type {
   Pool as CallbackPool,
@@ -509,6 +510,14 @@ export class MySqlAdapter extends DrizzleAdapter {
 
         lastError = error;
 
+        // Work inside a transaction may throw to roll the write back — a
+        // refused value, a denied permission — and that is the application's
+        // verdict, not the driver's failure. Rethrown before the retry check as
+        // well as before classification: a refusal re-run is the same refusal,
+        // and the caller must receive the code and payload it raised rather
+        // than a generic database error with the detail stripped out.
+        if (isApplicationError(error)) throw error;
+
         // Check if error is retryable (deadlock only per approved approach)
         const mysqlError = error as { errno?: number; code?: string };
         const isRetryable = mysqlError.errno === 1213; // ER_LOCK_DEADLOCK
@@ -780,6 +789,32 @@ export class MySqlAdapter extends DrizzleAdapter {
         return rows as T[];
       },
 
+      // Run on the transaction-bound Drizzle instance rather than the pool, so
+      // the statement is part of this transaction and sees its uncommitted rows.
+      runStatement: async (statement: SQL): Promise<void> => {
+        await txDb().execute(statement);
+      },
+
+      // mysql2 answers a `[rows, fields]` tuple; the transaction-bound instance
+      // keeps the read inside this transaction so it sees its uncommitted writes.
+      queryStatement: async <T = Record<string, unknown>>(
+        statement: SQL
+      ): Promise<T[]> => {
+        const result = await txDb().execute(statement);
+        // A tuple's first element is the rows. Anything else was not understood,
+        // and must not reach a caller as "there is nothing there" — the same
+        // reason the pooled `queryStatement` refuses rather than answering
+        // empty.
+        if (!Array.isArray(result)) {
+          throw this.createDatabaseError(
+            "query",
+            "Drizzle statement returned a result shape this adapter does not recognise; refusing to report it as an empty result.",
+            undefined
+          );
+        }
+        return result[0] as unknown as T[];
+      },
+
       lockRow: async (table: string, id: SqlParam): Promise<void> => {
         const idColumn = this.escapeIdentifier("id");
         await connection.query(
@@ -794,10 +829,7 @@ export class MySqlAdapter extends DrizzleAdapter {
         data: Record<string, unknown>,
         options?: InsertOptions
       ): Promise<T> => {
-        const mapped = this.mapKeysToSqlColumns(
-          this.getTableObject(table),
-          data
-        );
+        const mapped = this.mapRowToRawSql(this.getTableObject(table), data);
         const columns = Object.keys(mapped);
         const values = Object.values(mapped);
         const placeholders = this.buildPlaceholders(values.length, 0);
@@ -814,12 +846,25 @@ export class MySqlAdapter extends DrizzleAdapter {
 
         // MySQL has no RETURNING; select the inserted row back. Project only the
         // requested columns so a large JSON snapshot is not read unless asked.
-        const selectList =
+        const insertTableObj = this.getTableObject(table);
+        // Each timestamp's wall clock, spelled out by the database. mysql2
+        // turns one into a `Date` in the LOCAL zone before this code sees it,
+        // and that conversion cannot be undone: a wall clock inside a
+        // daylight-saving gap is normalized away.
+        const aliases = this.dateWallClockAliases(insertTableObj, ret ?? "*");
+        const spelled = aliases
+          .map(
+            a =>
+              `DATE_FORMAT(${this.escapeIdentifier(a.sqlName)}, '%Y-%m-%dT%H:%i:%s.%f') AS ${this.escapeIdentifier(a.alias)}`
+          )
+          .join(", ");
+        const projected =
           !ret || ret === "*"
             ? "*"
-            : this.mapColumnNamesToSql(this.getTableObject(table), ret)
+            : this.mapColumnNamesToSql(insertTableObj, ret)
                 .map(c => this.escapeIdentifier(c))
                 .join(", ");
+        const selectList = spelled ? `${projected}, ${spelled}` : projected;
 
         // Prefer the primary key: auto-increment via insertId, otherwise a
         // supplied id (manually-keyed tables like nextly_versions). Matching by
@@ -831,7 +876,7 @@ export class MySqlAdapter extends DrizzleAdapter {
             `SELECT ${selectList} FROM ${this.escapeIdentifier(table)} WHERE id = ?`,
             [idValue]
           );
-          return this.mapRowKeysToJs(this.getTableObject(table), rows[0] as T);
+          return this.mapRowFromRawSql(insertTableObj, rows[0] as T, aliases);
         }
 
         const whereClauses = columns.map(
@@ -841,7 +886,7 @@ export class MySqlAdapter extends DrizzleAdapter {
           `SELECT ${selectList} FROM ${this.escapeIdentifier(table)} WHERE ${whereClauses.join(" AND ")} LIMIT 1`,
           values
         );
-        return this.mapRowKeysToJs(this.getTableObject(table), rows[0] as T);
+        return this.mapRowFromRawSql(insertTableObj, rows[0] as T, aliases);
       },
 
       insertMany: async <T = unknown>(
@@ -854,9 +899,7 @@ export class MySqlAdapter extends DrizzleAdapter {
         const skipReread = Array.isArray(retMany) && retMany.length === 0;
 
         const tableObj = this.getTableObject(table);
-        const mappedRecords = data.map(r =>
-          this.mapKeysToSqlColumns(tableObj, r)
-        );
+        const mappedRecords = data.map(r => this.mapRowToRawSql(tableObj, r));
         const columns = Object.keys(mappedRecords[0]);
         const allValues: unknown[] = [];
         const valuesClauses: string[] = [];
@@ -885,11 +928,20 @@ export class MySqlAdapter extends DrizzleAdapter {
             ids.push(result.insertId + i);
           }
           const placeholders = ids.map(() => "?").join(", ");
+          const bulkAliases = this.dateWallClockAliases(tableObj, "*");
+          const bulkSpelled = bulkAliases
+            .map(
+              a =>
+                `DATE_FORMAT(${this.escapeIdentifier(a.sqlName)}, '%Y-%m-%dT%H:%i:%s.%f') AS ${this.escapeIdentifier(a.alias)}`
+            )
+            .join(", ");
           const [rows] = await connection.query<RowDataPacket[]>(
-            `SELECT * FROM ${this.escapeIdentifier(table)} WHERE id IN (${placeholders})`,
+            `SELECT *${bulkSpelled ? `, ${bulkSpelled}` : ""} FROM ${this.escapeIdentifier(table)} WHERE id IN (${placeholders})`,
             ids
           );
-          return (rows as T[]).map(r => this.mapRowKeysToJs(tableObj, r));
+          return (rows as T[]).map(r =>
+            this.mapRowFromRawSql(tableObj, r, bulkAliases)
+          );
         }
 
         // Fallback: return empty if we can't determine inserted rows

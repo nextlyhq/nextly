@@ -24,7 +24,7 @@ type Props = {
 };
 
 const NESTED_UNIQUE_TOOLTIP =
-  "Unique can't be enforced inside a repeater or repeatable component. The constraint would apply across the whole table, not per row. For per-row uniqueness, use code-first config.";
+  "Unique can't be enforced inside a repeater or repeatable field group. The constraint would apply across the whole table, not per row. For per-row uniqueness, use code-first config.";
 
 export function AdvancedTab({
   field,
@@ -99,7 +99,7 @@ function SwitchRow({
             // PR E1: neutral disabled-chip styling instead of amber.
             // Mirrors the Settings modal's Advanced tab from PR B so the
             // visual language is consistent across the admin.
-            <span className="text-[10px] border border-border bg-muted text-muted-foreground rounded-sm px-1.5 py-0.5">
+            <span className="text-xs border border-border bg-muted text-muted-foreground rounded-sm px-1.5 py-0.5">
               {badge}
             </span>
           )}

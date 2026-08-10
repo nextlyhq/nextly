@@ -65,7 +65,11 @@ import "@nextlyhq/plugin-form-builder/admin";
 
 ### Submission privacy
 
-Submissions carry visitor-entered content plus `ipAddress` and `userAgent`, so the `form-submissions` collection sets `webhooks: false` — its writes are never recorded to the webhook outbox or delivered to endpoints subscribed to `entry.created` or `*`. Any collection or single can opt out the same way (`webhooks: false`, or `{ record: false }`); recording is on by default for everything else. To send submission webhooks deliberately, override the submissions collection with `webhooks: true`.
+Submissions carry visitor-entered answers plus `ipAddress` and `userAgent`, so the `form-submissions` collection suppresses the default `entry.*` events (which would otherwise deliver that content to any endpoint subscribed to `entry.created` or `*`). In their place it emits a curated **`form.submission.created`** event carrying only safe metadata — which form, when, and the submission status — never the answers, IP, or user agent. Subscribe an endpoint to `form.submission.created` to be notified of new submissions without receiving their content.
+
+Do **not** override the submissions collection with `webhooks: true`: that would re-enable the raw `entry.*` events and deliver the PII-bearing submission content. Any collection can adopt the same pattern via the `webhooks` option: `{ record: false }` suppresses the default events, and `{ record: false, emit: { event, fields } }` additionally emits a curated event carrying only the allowlisted `fields`. Recording is on by default for everything else.
+
+A collection or single created in the **Schema Builder** can be opted out the same way, without touching code: **Settings → Advanced → Webhook recording**. The choice is stored on the entity's registry row, so it holds across restarts. For code-first entities the `webhooks` option in config remains the source of truth and is republished on every boot.
 
 ## Field types
 

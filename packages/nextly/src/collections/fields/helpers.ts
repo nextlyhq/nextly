@@ -27,6 +27,8 @@
  * ```
  */
 
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
+
 import type {
   // Text field types
   TextFieldConfig,
@@ -52,7 +54,7 @@ import type {
   GroupFieldConfig,
   JSONFieldConfig,
   // Component field types
-  ComponentFieldConfig,
+  FieldGroupFieldConfig,
   // Chips field types
   ChipsFieldConfig,
 } from "./types";
@@ -577,34 +579,6 @@ export const group = (
   type: "group",
 });
 
-/**
- * Creates a JSON field configuration.
- *
- * JSON fields store arbitrary JSON data with optional schema validation.
- * Provides a Monaco-based JSON editor in the Admin UI.
- *
- * @param config - Field configuration without the `type` property
- * @returns Complete JSON field configuration
- *
- * @example
- * ```typescript
- * // Basic JSON field
- * json({ name: 'metadata' })
- *
- * // JSON with schema validation
- * json({
- *   name: 'config',
- *   jsonSchema: {
- *     type: 'object',
- *     properties: {
- *       theme: { type: 'string', enum: ['light', 'dark'] },
- *       maxItems: { type: 'number', minimum: 1 },
- *     },
- *     required: ['theme'],
- *   },
- * })
- * ```
- */
 export const json = (
   config: Omit<JSONFieldConfig, "type">
 ): JSONFieldConfig => ({
@@ -629,17 +603,17 @@ export const json = (
  * @example
  * ```typescript
  * // Single component (one specific type)
- * component({ name: 'seo', component: 'seo' })
+ * fieldGroup({ name: 'seo', component: 'seo' })
  *
  * // Multi-component / dynamic zone (editor picks type)
- * component({
+ * fieldGroup({
  *   name: 'layout',
  *   components: ['hero', 'cta', 'content'],
  *   repeatable: true,
  * })
  *
  * // Repeatable single component
- * component({
+ * fieldGroup({
  *   name: 'features',
  *   component: 'feature-card',
  *   repeatable: true,
@@ -648,11 +622,11 @@ export const json = (
  * })
  * ```
  */
-export const component = (
-  config: Omit<ComponentFieldConfig, "type">
-): ComponentFieldConfig => ({
+export const fieldGroup = (
+  config: Omit<FieldGroupFieldConfig, "type">
+): FieldGroupFieldConfig => ({
   ...config,
-  type: "component",
+  type: STORAGE_FORMAT.fieldType,
 });
 
 // ============================================================

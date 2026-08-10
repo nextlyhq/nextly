@@ -836,11 +836,16 @@ function convertRelationshipFieldToZod(
   let singleSchema: z.ZodTypeAny;
 
   if (isPolymorphic) {
-    // Polymorphic: { relationTo: string, value: string } or just string ID
+    // Polymorphic: { relationTo, value } or just string ID.
+    //
+    // `value` is the target's id, or the target row itself once the entry was
+    // read at a populating depth — which the edit page asks for. The form
+    // validates its own defaults on every submit, so rejecting the populated
+    // shape here fails a save that only touched some other field.
     singleSchema = z
       .object({
         relationTo: z.string(),
-        value: z.string(),
+        value: z.string().or(z.object({ id: z.string() }).passthrough()),
       })
       .or(z.string()); // Allow ID string for backwards compatibility
   } else {

@@ -131,7 +131,8 @@ function ResourceSection({ group }: { group: ResourceGroup }) {
       </div>
 
       {/* Permissions table */}
-      <div className="table-wrapper rounded-none  border border-border bg-card overflow-hidden">
+      <div className="table-wrapper rounded-md  border border-border bg-card overflow-hidden">
+        {/* Square corners: this fills the bordered table wrapper edge to edge. */}
         <div className="border-0 rounded-none shadow-none">
           <table className="w-full text-sm">
             <thead className="bg-primary/5  border-b border-border">
@@ -159,7 +160,7 @@ function ResourceSection({ group }: { group: ResourceGroup }) {
                 >
                   <td className="px-6 py-4 font-medium">{perm.name}</td>
                   <td className="px-6 py-4">
-                    <code className="text-xs bg-primary/5 px-1.5 py-0.5 rounded-none font-mono">
+                    <code className="text-xs bg-primary/5 px-1.5 py-0.5 rounded-sm font-mono">
                       {perm.slug}
                     </code>
                   </td>
@@ -191,7 +192,7 @@ function PermissionsSkeleton() {
         <div key={i}>
           <div className="flex items-center gap-2 mb-2">
             <Skeleton className="h-4 w-24" />
-            <Skeleton className="h-5 w-16 rounded-none" />
+            <Skeleton className="h-5 w-16 rounded-sm" />
             <Skeleton className="h-3 w-20" />
           </div>
           <TableSkeleton columns={3} rowCount={3} />
@@ -250,10 +251,10 @@ function PermissionsContent() {
   return (
     <>
       {/* Page Header and Info */}
-      <div className="rounded-none  border border-border bg-card overflow-hidden mb-6">
+      <div className="rounded-lg  border border-border bg-card overflow-hidden mb-6">
         <div className="border-b border-border bg-primary/5 px-6 py-5">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-none bg-primary/5 shrink-0">
+            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-primary/5 shrink-0">
               <Shield className="h-5 w-5 text-primary" />
             </div>
             <div>
@@ -324,7 +325,7 @@ function PermissionsContent() {
           </AlertDescription>
         </Alert>
       ) : filteredGroups.length === 0 ? (
-        <div className="rounded-none  border border-border bg-card p-10 text-center">
+        <div className="rounded-lg  border border-border bg-card p-10 text-center">
           <Shield className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
           <p className="text-sm font-medium text-foreground">
             {search || typeFilter !== "all"

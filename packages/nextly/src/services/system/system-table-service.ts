@@ -38,6 +38,8 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
 
@@ -140,7 +142,7 @@ const POSTGRES_SQL = {
   `,
 
   createDynamicComponents: `
-    CREATE TABLE IF NOT EXISTS "dynamic_components" (
+    CREATE TABLE IF NOT EXISTS "${STORAGE_FORMAT.registryTable}" (
       "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       "slug" VARCHAR(255) NOT NULL UNIQUE,
       "label" VARCHAR(255) NOT NULL,
@@ -163,11 +165,11 @@ const POSTGRES_SQL = {
       "updated_at" TIMESTAMP NOT NULL DEFAULT NOW()
     );
 
-    CREATE INDEX IF NOT EXISTS "dynamic_components_source_idx" ON "dynamic_components" ("source");
-    CREATE INDEX IF NOT EXISTS "dynamic_components_migration_status_idx" ON "dynamic_components" ("migration_status");
-    CREATE INDEX IF NOT EXISTS "dynamic_components_created_by_idx" ON "dynamic_components" ("created_by");
-    CREATE INDEX IF NOT EXISTS "dynamic_components_created_at_idx" ON "dynamic_components" ("created_at");
-    CREATE INDEX IF NOT EXISTS "dynamic_components_updated_at_idx" ON "dynamic_components" ("updated_at");
+    CREATE INDEX IF NOT EXISTS "${STORAGE_FORMAT.registryTable}_source_idx" ON "${STORAGE_FORMAT.registryTable}" ("source");
+    CREATE INDEX IF NOT EXISTS "${STORAGE_FORMAT.registryTable}_migration_status_idx" ON "${STORAGE_FORMAT.registryTable}" ("migration_status");
+    CREATE INDEX IF NOT EXISTS "${STORAGE_FORMAT.registryTable}_created_by_idx" ON "${STORAGE_FORMAT.registryTable}" ("created_by");
+    CREATE INDEX IF NOT EXISTS "${STORAGE_FORMAT.registryTable}_created_at_idx" ON "${STORAGE_FORMAT.registryTable}" ("created_at");
+    CREATE INDEX IF NOT EXISTS "${STORAGE_FORMAT.registryTable}_updated_at_idx" ON "${STORAGE_FORMAT.registryTable}" ("updated_at");
   `,
 
   dropDynamicCollections: `
@@ -175,7 +177,7 @@ const POSTGRES_SQL = {
   `,
 
   dropDynamicComponents: `
-    DROP TABLE IF EXISTS "dynamic_components" CASCADE;
+    DROP TABLE IF EXISTS "${STORAGE_FORMAT.registryTable}" CASCADE;
   `,
 
   dropNextlyMigrations: `
@@ -239,7 +241,7 @@ const MYSQL_SQL = {
   `,
 
   createDynamicComponents: `
-    CREATE TABLE IF NOT EXISTS \`dynamic_components\` (
+    CREATE TABLE IF NOT EXISTS \`${STORAGE_FORMAT.registryTable}\` (
       \`id\` VARCHAR(36) PRIMARY KEY,
       \`slug\` VARCHAR(255) NOT NULL UNIQUE,
       \`label\` VARCHAR(255) NOT NULL,
@@ -260,11 +262,11 @@ const MYSQL_SQL = {
       \`created_by\` VARCHAR(36),
       \`created_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       \`updated_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      INDEX \`dynamic_components_source_idx\` (\`source\`),
-      INDEX \`dynamic_components_migration_status_idx\` (\`migration_status\`),
-      INDEX \`dynamic_components_created_by_idx\` (\`created_by\`),
-      INDEX \`dynamic_components_created_at_idx\` (\`created_at\`),
-      INDEX \`dynamic_components_updated_at_idx\` (\`updated_at\`)
+      INDEX \`${STORAGE_FORMAT.registryTable}_source_idx\` (\`source\`),
+      INDEX \`${STORAGE_FORMAT.registryTable}_migration_status_idx\` (\`migration_status\`),
+      INDEX \`${STORAGE_FORMAT.registryTable}_created_by_idx\` (\`created_by\`),
+      INDEX \`${STORAGE_FORMAT.registryTable}_created_at_idx\` (\`created_at\`),
+      INDEX \`${STORAGE_FORMAT.registryTable}_updated_at_idx\` (\`updated_at\`)
     );
   `,
 
@@ -273,7 +275,7 @@ const MYSQL_SQL = {
   `,
 
   dropDynamicComponents: `
-    DROP TABLE IF EXISTS \`dynamic_components\`;
+    DROP TABLE IF EXISTS \`${STORAGE_FORMAT.registryTable}\`;
   `,
 
   dropNextlyMigrations: `
@@ -341,7 +343,7 @@ const SQLITE_SQL = {
   `,
 
   createDynamicComponents: `
-    CREATE TABLE IF NOT EXISTS "dynamic_components" (
+    CREATE TABLE IF NOT EXISTS "${STORAGE_FORMAT.registryTable}" (
       "id" TEXT PRIMARY KEY,
       "slug" TEXT NOT NULL UNIQUE,
       "label" TEXT NOT NULL,
@@ -364,11 +366,11 @@ const SQLITE_SQL = {
       "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
     );
 
-    CREATE INDEX IF NOT EXISTS "dynamic_components_source_idx" ON "dynamic_components" ("source");
-    CREATE INDEX IF NOT EXISTS "dynamic_components_migration_status_idx" ON "dynamic_components" ("migration_status");
-    CREATE INDEX IF NOT EXISTS "dynamic_components_created_by_idx" ON "dynamic_components" ("created_by");
-    CREATE INDEX IF NOT EXISTS "dynamic_components_created_at_idx" ON "dynamic_components" ("created_at");
-    CREATE INDEX IF NOT EXISTS "dynamic_components_updated_at_idx" ON "dynamic_components" ("updated_at");
+    CREATE INDEX IF NOT EXISTS "${STORAGE_FORMAT.registryTable}_source_idx" ON "${STORAGE_FORMAT.registryTable}" ("source");
+    CREATE INDEX IF NOT EXISTS "${STORAGE_FORMAT.registryTable}_migration_status_idx" ON "${STORAGE_FORMAT.registryTable}" ("migration_status");
+    CREATE INDEX IF NOT EXISTS "${STORAGE_FORMAT.registryTable}_created_by_idx" ON "${STORAGE_FORMAT.registryTable}" ("created_by");
+    CREATE INDEX IF NOT EXISTS "${STORAGE_FORMAT.registryTable}_created_at_idx" ON "${STORAGE_FORMAT.registryTable}" ("created_at");
+    CREATE INDEX IF NOT EXISTS "${STORAGE_FORMAT.registryTable}_updated_at_idx" ON "${STORAGE_FORMAT.registryTable}" ("updated_at");
   `,
 
   dropDynamicCollections: `
@@ -376,7 +378,7 @@ const SQLITE_SQL = {
   `,
 
   dropDynamicComponents: `
-    DROP TABLE IF EXISTS "dynamic_components";
+    DROP TABLE IF EXISTS "${STORAGE_FORMAT.registryTable}";
   `,
 
   dropNextlyMigrations: `
@@ -423,8 +425,12 @@ export class SystemTableService extends BaseService {
     const dynamicCollectionsExists = await this.tableExists(
       "dynamic_collections"
     );
-    const dynamicComponentsExists =
-      await this.tableExists("dynamic_components");
+    // Asked about the registry this database actually holds. Checking the
+    // legacy spelling alone reports a migrated database as missing a system
+    // table, so `allReady` is false and callers conclude the install is broken.
+    const dynamicComponentsExists = await this.tableExists(
+      await resolveFieldGroupRegistryName(this.adapter)
+    );
     const nextlyMigrationsExists = await this.tableExists("nextly_migrations");
 
     return {
@@ -473,14 +479,21 @@ export class SystemTableService extends BaseService {
         this.logger.info("Created system table 'dynamic_collections'");
       }
 
-      const dcompExists = await this.tableExists("dynamic_components");
+      // 🔴 Resolved, not assumed. `createDynamicComponentsTable` writes the
+      // legacy spelling, so a database whose registry has been renamed would be
+      // found "missing" and given a second, empty one — which every reader then
+      // prefers, because the rule is legacy-if-present. Resolving first makes
+      // that impossible: the migrated name is only ever returned when the table
+      // is really there, so the create below runs on a database that has none.
+      const registryTable = await resolveFieldGroupRegistryName(this.adapter);
+      const dcompExists = await this.tableExists(registryTable);
       if (dcompExists) {
-        existing.push("dynamic_components");
-        this.logger.info("System table 'dynamic_components' already exists");
+        existing.push(registryTable);
+        this.logger.info(`System table '${registryTable}' already exists`);
       } else {
         await this.createDynamicComponentsTable();
-        created.push("dynamic_components");
-        this.logger.info("Created system table 'dynamic_components'");
+        created.push(registryTable);
+        this.logger.info(`Created system table '${registryTable}'`);
       }
 
       const nmExists = await this.tableExists("nextly_migrations");
@@ -533,7 +546,7 @@ export class SystemTableService extends BaseService {
       "-- Create dynamic_collections table",
       sql.createDynamicCollections.trim(),
       "",
-      "-- Create dynamic_components table",
+      `-- Create ${STORAGE_FORMAT.registryTable} table`,
       sql.createDynamicComponents.trim(),
       "",
       "-- Create nextly_migrations table",
@@ -544,7 +557,7 @@ export class SystemTableService extends BaseService {
       "-- Drop nextly_migrations table",
       sql.dropNextlyMigrations.trim(),
       "",
-      "-- Drop dynamic_components table",
+      `-- Drop ${STORAGE_FORMAT.registryTable} table`,
       sql.dropDynamicComponents.trim(),
       "",
       "-- Drop dynamic_collections table",
@@ -588,11 +601,13 @@ export class SystemTableService extends BaseService {
         this.logger.info("Dropped system table 'nextly_migrations'");
       }
 
-      const dcompExists = await this.tableExists("dynamic_components");
+      const dcompExists = await this.tableExists(STORAGE_FORMAT.registryTable);
       if (dcompExists) {
         await this.executeSQL(sql.dropDynamicComponents);
-        dropped.push("dynamic_components");
-        this.logger.info("Dropped system table 'dynamic_components'");
+        dropped.push(STORAGE_FORMAT.registryTable);
+        this.logger.info(
+          `Dropped system table '${STORAGE_FORMAT.registryTable}'`
+        );
       }
 
       const dcExists = await this.tableExists("dynamic_collections");

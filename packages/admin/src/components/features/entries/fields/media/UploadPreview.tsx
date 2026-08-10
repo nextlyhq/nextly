@@ -283,11 +283,15 @@ export function UploadPreview({
           </div>
         )}
 
-        {/* External link indicator on hover (for files with URL) */}
+        {/* External link indicator on hover (for files with URL). The wash is
+            `--nx-overlay-soft`, the lighter scrim meant for sitting over
+            content: the thumbnail beneath still has to read through it. Its
+            icon stays literal white, keyed to the media rather than the
+            palette. */}
         {file.url && (
           <div
             className={cn(
-              "absolute inset-0 bg-black/40 flex items-center justify-center",
+              "absolute inset-0 bg-overlay-soft flex items-center justify-center",
               "opacity-0 group-hover:opacity-100 transition-opacity",
               "pointer-events-none"
             )}
@@ -339,7 +343,9 @@ export function UploadPreview({
         </Button>
       )}
 
-      {/* File info overlay */}
+      {/* File info overlay. The gradient scrim and its caption stay literal:
+          they are composited over the thumbnail image, not over a themed
+          surface, so a token would leave the text unreadable on pale media. */}
       <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-2 pointer-events-none">
         <p className="text-xs text-white truncate">{file.filename}</p>
         <div className="flex items-center gap-2 text-xs text-white/70">

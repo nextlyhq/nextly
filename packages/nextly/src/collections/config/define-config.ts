@@ -32,8 +32,12 @@
  * ```
  */
 
-import { MAX_COMPONENT_NESTING_DEPTH } from "../../components/config/validate-component";
 import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
+import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
+import { NextlyError } from "../../errors";
+import { MAX_FIELD_GROUP_NESTING_DEPTH } from "../../field-groups/config/validate-field-group";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import { assertNoLegacyFieldGroupKey } from "../../shared/legacy-field-group-key";
 import {
   sanitizeConfig,
   type NextlyConfig,
@@ -80,7 +84,7 @@ function collectComponentRefs(
   refs: string[]
 ): void {
   for (const field of fields) {
-    if (field.type === "component") {
+    if (field.type === STORAGE_FORMAT.fieldType) {
       if (typeof field.component === "string") {
         refs.push(field.component);
       }
@@ -208,9 +212,9 @@ function validateComponentNesting(
 
   for (const slug of graph.keys()) {
     const depth = getMaxDepth(slug);
-    if (depth > MAX_COMPONENT_NESTING_DEPTH) {
+    if (depth > MAX_FIELD_GROUP_NESTING_DEPTH) {
       throw new Error(
-        `Component nesting depth exceeds maximum of ${MAX_COMPONENT_NESTING_DEPTH} levels ` +
+        `Component nesting depth exceeds maximum of ${MAX_FIELD_GROUP_NESTING_DEPTH} levels ` +
           `(component '${slug}' has a nesting chain ${depth} levels deep). ` +
           `Simplify the component structure to reduce nesting.`
       );
@@ -272,7 +276,10 @@ function validateNextlyConfig(config: NextlyConfig): void {
     slugs.add(slug);
   }
 
-  const components = config.components ?? [];
+  assertNoLegacyFieldGroupKey(config, "defineConfig");
+
+  const components = config.fieldGroups ?? [];
+  const componentTables = new Map<string, string>();
 
   for (const comp of components) {
     const slug = comp.slug.toLowerCase();
@@ -302,6 +309,33 @@ function validateNextlyConfig(config: NextlyConfig): void {
     }
 
     slugs.add(slug);
+
+    // Distinct slugs can still derive one table: the resolver collapses
+    // separator runs, so `foo-bar` and `foo--bar` both become `comp_foo_bar`.
+    // Caught here rather than at the unique index on `dynamic_components`,
+    // which would surface as an opaque database error on the second write.
+    const tableName = resolveComponentTableName(comp.slug);
+    const collidingSlug = componentTables.get(tableName);
+    if (collidingSlug !== undefined) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "fieldGroups",
+            code: "COMPONENT_TABLE_COLLISION",
+            message:
+              `Component slugs '${collidingSlug}' and '${comp.slug}' both resolve ` +
+              `to the table '${tableName}'. Choose slugs that differ by more ` +
+              `than their separators.`,
+          },
+        ],
+        logContext: {
+          reason: "component-table-collision",
+          slugs: [collidingSlug, comp.slug],
+          tableName,
+        },
+      });
+    }
+    componentTables.set(tableName, comp.slug);
   }
 
   if (components.length > 0) {
@@ -370,7 +404,7 @@ function findLocalizedEntitySlug(config: NextlyConfig): string | null {
     ...(config.singles ?? []),
     // Components localize too — a localized component with no app-level localization config
     // would route translatable writes to main comp_ columns the localized schema omits.
-    ...(config.components ?? []),
+    ...(config.fieldGroups ?? []),
   ];
   for (const entity of entities) {
     const rec = entity as {

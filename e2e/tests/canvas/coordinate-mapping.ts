@@ -1,0 +1,58 @@
+import type { Point, Rect } from "./driver";
+
+/**
+ * Convert a point inside the canvas frame to the host document's coordinates.
+ *
+ * Kept as a pure function so it can be tested against browser-reported
+ * geometry rather than inferred from whether an overlay happens to look right.
+ *
+ * A frame-local point is scaled by whatever transform the frame carries and
+ * then offset by the frame's own position in the host. The scale term is not
+ * optional: a canvas offering zoom-to-fit is exactly the case dnd-kit #1706
+ * covered, and omitting it puts the overlay progressively further out the
+ * further a point sits from the frame's transform origin.
+ */
+export function mapFramePointToHost(
+  framePoint: Point,
+  frameOrigin: Point,
+  scale = 1
+): Point {
+  return {
+    x: frameOrigin.x + framePoint.x * scale,
+    y: frameOrigin.y + framePoint.y * scale,
+  };
+}
+
+/**
+ * The inverse: a host point expressed in the canvas's own coordinates.
+ *
+ * Both directions are needed and neither is optional. Drawing an overlay in
+ * parent chrome maps canvas -> host; deciding which block sits under the
+ * pointer maps host -> canvas. A canvas that implements only one ends up
+ * open-coding the other at the call site, which is how the two drift apart.
+ */
+export function mapHostPointToFrame(
+  hostPoint: Point,
+  frameOrigin: Point,
+  scale = 1
+): Point {
+  return {
+    x: (hostPoint.x - frameOrigin.x) / scale,
+    y: (hostPoint.y - frameOrigin.y) / scale,
+  };
+}
+
+/** The same mapping for a rect, so an indicator can be drawn in parent chrome. */
+export function mapFrameRectToHost(
+  frameRect: Rect,
+  frameOrigin: Point,
+  scale = 1
+): Rect {
+  const topLeft = mapFramePointToHost(frameRect, frameOrigin, scale);
+  return {
+    x: topLeft.x,
+    y: topLeft.y,
+    width: frameRect.width * scale,
+    height: frameRect.height * scale,
+  };
+}

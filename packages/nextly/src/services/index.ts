@@ -11,9 +11,10 @@ import { RoleInheritanceService } from "../domains/auth/services/role-inheritanc
 import { RolePermissionService } from "../domains/auth/services/role-permission-service";
 import { RoleService } from "../domains/auth/services/role-service";
 import { UserRoleService } from "../domains/auth/services/user-role-service";
+import { MetaRetentionGate } from "../domains/retention/gate";
+import { buildRetentionRunner } from "../domains/retention/passes";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
-import { MetaRetentionGate } from "../domains/webhooks/retention-gate";
-import { WebhookRetentionRunner } from "../domains/webhooks/retention-runner";
+import { resolveWebhookWritePathInfra } from "../domains/webhooks/write-path-infra";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import { CollectionsHandler } from "./collections-handler";
@@ -215,12 +216,22 @@ export class ServiceContainer {
       const logger = container.has("logger")
         ? container.get<Logger>("logger")
         : (console as unknown as Logger);
+      // The dispatcher (admin REST) and the setup seeder reach users through
+      // this facade, so offer the same post-commit hooks the DI-registered user
+      // service does — otherwise their user.created/deleted events would sit in
+      // the outbox until the scheduled drain, and an install relying on
+      // write-triggered maintenance would never prune from a user write. Absent
+      // on a bare container (CLI/test), which relies on that drain.
+      const { fastDrainScheduler, retentionRunner } =
+        resolveWebhookWritePathInfra(this.adapter, logger);
       this._users = new UsersService(
         this.adapter,
         logger,
         config?.users,
         userExtSchemaService,
-        emailService
+        emailService,
+        fastDrainScheduler,
+        retentionRunner
       );
     }
     return this._users;
@@ -377,14 +388,13 @@ export class ServiceContainer {
       const config = container.has("config")
         ? container.get<NextlyServiceConfig>("config")
         : undefined;
-      const retentionRunner = config?.webhookRetention
-        ? new WebhookRetentionRunner({
-            policy: config.webhookRetention,
-            prune: { adapter: this.adapter, logger },
-            gate: new MetaRetentionGate(this.adapter),
-            logger,
-          })
-        : undefined;
+      const retentionRunner = buildRetentionRunner({
+        adapter: this.adapter,
+        webhookPolicy: config?.webhookRetention,
+        auditPolicy: config?.auditRetention,
+        gate: new MetaRetentionGate(this.adapter),
+        logger,
+      });
       this._media = new LegacyMediaService(
         this.adapter,
         logger,

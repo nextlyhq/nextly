@@ -1,0 +1,264 @@
+---
+title: Routing and SEO
+description: Turn content into pages with correct metadata, sitemap, and robots. The nextly/runtime helpers resolve a slug to a published, access-enforced entry, build a Next.js Metadata object from an seo field group, and deliver sitemap.xml and robots.txt.
+---
+
+Nextly ships a small set of Next.js helpers for the last mile of a content
+site: resolve a URL to the right entry, build its `<head>` metadata, and serve
+`sitemap.xml` / `robots.txt`. They live in `nextly/runtime` and read your
+content through the [Direct API](/docs/api-reference/direct-api), so every read
+is publish-state aware, access aware, and cached with
+[F1 tag-based ISR](/docs/guides/isr-caching).
+
+SEO **data** (the `metaTitle` / `metaDescription` / `ogImage` / `canonical` /
+`noindex` fields) is opt-in via the agnostic
+[`@nextlyhq/plugin-seo`](/docs/plugins) plugin; the **behavior** below is
+Next-only and lives in `nextly/runtime`. Nothing here forces `next` onto a
+headless or admin-only deployment — every `next` import is type-only and
+`next/navigation` is resolved lazily.
+
+## resolveContent — slug to a published entry
+
+`resolveContent(collection, slug, options?)` resolves a URL slug to a single
+entry and returns `null` on a genuine miss (render `notFound()`), rethrowing a
+transient read error so a DB blip never bakes a permanently-cached 404.
+
+```ts
+import { resolveContent } from "nextly/runtime";
+import { notFound } from "next/navigation";
+
+const post = await resolveContent("posts", slug, { depth: 2 });
+if (!post) notFound();
+```
+
+**Publish state.** By default `resolveContent` reads `status: "published"`.
+This is the lifecycle-aware scope, not a `where` clause on a `status` column, so
+it also constrains a localized collection's per-locale companion status — a
+draft translation under a published main row is never returned. On a status-less
+collection (no built-in Draft/Published lifecycle) the scope is a no-op and
+every row is live, so you can mix lifecycle and status-less collections freely.
+
+**Pending edits.** Publish state is only half the picture. An entry that has
+never been published is covered by `status`, but pending edits to an
+**already-published** entry are stored as a separate working draft that no
+`status` scope can see — the live row keeps serving until you publish. Pass
+`draft: true` to read those instead:
+
+```ts
+// The page as the editor last saved it, not as visitors see it.
+await resolveContent("posts", slug, { draft: true, overrideAccess: true });
+```
+
+The two layers are gated differently, and that difference is the important part:
+
+- **Pending edits** are judged per row, by an update-capability probe, so asking
+  for them is safe from anywhere. A caller who cannot edit the document gets the
+  published row instead.
+- **Never-published entries** are judged by nothing — the query simply returns
+  them. So `draft: true` widens `status` to `"all"` **only on a trusted read**
+  (`overrideAccess: true`). Without that, a draft read still sees published rows
+  and overlays their pending edits.
+
+That split exists because a `draft` flag wired from an untrusted request would
+otherwise publish unpublished pages. An explicit `status` always wins.
+
+A draft read is **never cached**, because cache tags are busted by writes to the
+live row while a draft changes on every save.
+
+**Access.** By default `resolveContent` **enforces** the collection's read
+policy (`overrideAccess: false`). A rule-less (public) collection still renders;
+a collection with a stored member-only or role-based read rule is hidden from an
+unauthenticated request and resolves to `null` (→ `notFound()`, so the URL does
+not reveal that the entry exists). Pass a `user` to render member content, or
+`overrideAccess: true` for a fully trusted read.
+
+```ts
+// Anonymous public read (default): stored access rules are enforced.
+await resolveContent("posts", slug);
+
+// Render member-only content for a signed-in reader.
+await resolveContent("posts", slug, { user: { id, role } });
+
+// Trusted read that ignores access rules (e.g. a preview route you gate yourself).
+await resolveContent("posts", slug, { overrideAccess: true, status: "all" });
+```
+
+> An anonymous read enforces stored rules that **deny outright**
+> (public/authenticated/role-based). A **row-level constraint** rule (owner-only,
+> or a custom rule returning a query) and inline `defineCollection({ access })`
+> code rules need a `user` context to evaluate, so they are not applied for an
+> anonymous read. Gate that content behind an authenticated read (pass a `user`)
+> rather than the anonymous default.
+
+**Caching.** Only a **trusted** (`overrideAccess: true`) read with no `user` is
+F1-cached — an enforced read is never cached, because its result depends on an
+access decision that a content-tag bust can't invalidate (a stored read-policy
+change doesn't write an entry). So a public site that wants cached pages should
+read its public content with `overrideAccess: true`; access-gated or member
+content runs fresh per request.
+
+Other options: `slugField` (default `"slug"`), `depth`, `locale`,
+`richTextFormat`, `tags` (extra cache tags for populated relations),
+`revalidate` (a time-based safety net for cached reads), and `cacheScope` (a
+discriminator when distinct readers — per tenant or database — resolve the same
+slug).
+
+## createContentRoute — the optional catch-all
+
+For the pages-collection model (add an `/about` entry and it just works), wire
+one `app/[[...slug]]/page.tsx` optional catch-all:
+
+```tsx
+// app/[[...slug]]/page.tsx
+import { createContentRoute, buildMetadata } from "nextly/runtime";
+
+const route = createContentRoute({
+  collections: ["pages"],
+  render: entry => <Page entry={entry} />,
+  buildMetadata: entry => buildMetadata(entry),
+});
+
+export const generateStaticParams = route.generateStaticParams;
+export const generateMetadata = route.generateMetadata;
+export const dynamicParams = true;
+export default route.ContentPage;
+```
+
+It resolves a path across the configured collections (first match wins), calls
+`notFound()` on a genuine miss or a reserved path (`/admin`, `/api`, `/_next`,
+`/static`, and metadata files like `sitemap.xml`), and pre-renders published
+paths in `generateStaticParams`. Access-restricted collections are skipped by
+the static scan (they have no public paths to pre-render) and enforced per
+request instead. `status` and `overrideAccess` behave as in `resolveContent`.
+
+This route always resolves **anonymously** — its config is captured once at
+module scope, so it cannot carry a per-request user. For a route that renders
+per-visitor member content, call `resolveContent` with the request's `user`
+inside your own page rather than using `createContentRoute`.
+
+### Previewing drafts
+
+Whether a visitor is previewing is a per-request fact, and route config is not —
+so `draft` takes a function the route asks on every request. Wire it to Next's
+draft mode:
+
+The function is handed the collection and slug being resolved, so the answer can
+be scoped to a document:
+
+```ts
+const route = createContentRoute({
+  collections: ["pages"],
+  draft: async ({ collection }) => {
+    const scope = await readPreviewScope(previewConfig);
+    if (scope === null || scope.collection !== collection) return false;
+    // Name the entry, do not just answer yes: slugs are not unique.
+    return { entryId: scope.entryId };
+  },
+  render: page => <Page {...page} />,
+});
+```
+
+Return `{ entryId }` rather than `true` whenever a token is backing the
+decision. A slug need not be unique — the resolver supports duplicates and
+settles them by sorting on `id` — so a bare `true` grants whichever row the
+route happens to resolve, which may not be the one the token named. With an
+`entryId` the route discards the draft when the path resolved elsewhere.
+
+**Use that argument.** Next's draft mode is a single boolean for the whole host:
+`draftMode().isEnabled` tells you a visitor opened _a_ valid preview link, never
+_which_ document it was for. Answering from it alone turns a link scoped to one
+unpublished page into a key to every unpublished page in the configured
+collections, for the life of the session — which is exactly what a preview
+token's scope exists to prevent.
+
+**Returning `true` is an authorization decision, not a display preference.** The
+route resolves anonymously and the working draft is only shown to a caller who
+could edit the document, so a request this returns `true` for is read trusted.
+Put the check inside that function — a verified preview cookie, a session — and
+never in a query parameter a visitor controls.
+
+`generateStaticParams` ignores `draft` entirely: it runs at build time, where
+there is no visitor to gate, and a draft baked into a static path would be
+published to everyone.
+
+A literal `draft: true` is accepted for a route mounted behind your own auth. It
+means **every** visitor sees unpublished content, which is almost never what a
+public site wants.
+
+> **Next 16 Cache Components:** an exported `generateStaticParams` must return at
+> least one entry under Cache Components. For a no-prerender or empty-site setup
+> in that mode, export only `ContentPage` and `generateMetadata` and let paths
+> render on demand.
+
+Not every blog needs this: if you already have typed per-type routes
+(`/blog/[slug]`, `/authors/[slug]`), keep them and use `resolveContent` +
+`buildMetadata` inside each — `createContentRoute` is for the single-catch-all
+pages model.
+
+## buildMetadata — the seo group to Next Metadata
+
+`buildMetadata(entry, options?)` turns the plugin's `seo` field group into a
+Next.js `Metadata` object (title, description, canonical, OpenGraph, Twitter
+card, and `robots` from `noindex`). Blank `seo` fields fall back to the values
+you pass; caller `openGraph` / `twitter` extras win.
+
+```ts
+export async function generateMetadata({ params }) {
+  const { slug } = await params;
+  const post = await getPostBySlug(slug);
+  if (!post) return {};
+  return buildMetadata(post, {
+    fallback: {
+      title: post.title,
+      description: post.excerpt,
+      image: post.featuredImage?.url,
+      canonical: `/blog/${slug}`,
+    },
+    openGraph: { type: "article", publishedTime: post.publishedAt },
+  });
+}
+```
+
+A `canonical` is validated to a root-relative path or an absolute http(s) URL
+(a `mailto:`/`javascript:` value falls back), and a page ships `index, follow`
+unless `seo.noindex` is set.
+
+## nextlySitemap and nextlyRobots
+
+`nextlySitemap({ entries, tags })` builds the default export for
+`app/sitemap.ts` from a caller-supplied `entries` provider and caches it with
+F1. Pass each collection's `nextlyTags(...)` so a publish or delete busts
+`/sitemap.xml` in lockstep with the pages. With no tags and no `revalidate` it
+reads uncached (and marks the render dynamic) so it never freezes stale.
+
+```ts
+// app/sitemap.ts
+import { nextlySitemap, nextlyTags } from "nextly/runtime";
+import { buildSitemapUrls } from "@nextlyhq/plugin-seo";
+
+export default nextlySitemap({
+  tags: nextlyTags("posts"),
+  entries: async () =>
+    (await buildSitemapUrls(services, { collections: ["posts"], baseUrl })).map(
+      u => ({ url: u.loc, lastModified: u.lastModified })
+    ),
+});
+```
+
+`nextlyRobots({ sitemap })` builds `app/robots.ts`, keeping `/admin` and `/api`
+out of the index on a path boundary (so `/administration` is not swallowed) and
+advertising the sitemap:
+
+```ts
+// app/robots.ts
+import { nextlyRobots } from "nextly/runtime";
+export default nextlyRobots({ sitemap: "https://example.com/sitemap.xml" });
+```
+
+## Reference: the blog template
+
+The `blog` template dogfoods these helpers: `app/robots.ts` is `nextlyRobots`,
+`app/sitemap.ts` is `nextlySitemap` over the published post/category/tag/author
+slugs, and the post detail page's `generateMetadata` is `buildMetadata` reading
+the Posts `seo` group. Its per-type typed routes keep `resolveContent`-style
+reads inside each page rather than a single catch-all.

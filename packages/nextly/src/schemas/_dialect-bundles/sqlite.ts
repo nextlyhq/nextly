@@ -38,7 +38,7 @@ export { nextlyMeta } from "../nextly-meta/sqlite";
 
 export { dynamicCollectionsSqlite as dynamicCollections } from "../dynamic-collections/sqlite";
 export { dynamicSinglesSqlite as dynamicSingles } from "../dynamic-singles/sqlite";
-export { dynamicComponentsSqlite as dynamicComponents } from "../dynamic-components/sqlite";
+export { dynamicFieldGroupsSqlite as dynamicFieldGroups } from "../dynamic-field-groups/sqlite";
 
 export { siteSettingsSqlite as siteSettings } from "../site-settings/sqlite";
 export { userFieldDefinitionsSqlite as userFieldDefinitions } from "../user-field-definitions/sqlite";

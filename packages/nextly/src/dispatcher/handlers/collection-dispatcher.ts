@@ -18,7 +18,10 @@
  * `{ id, code, message }` keyed by canonical NextlyErrorCode.
  */
 
-import { assertValidFieldsPayload } from "../../api/fields-payload";
+import {
+  assertValidFieldsPayload,
+  assertValidPluginFieldOptions,
+} from "../../api/fields-payload";
 import {
   respondAction,
   respondBulk,
@@ -28,8 +31,12 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
+import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
-import { companionHasStatusColumn } from "../../domains/i18n/runtime/companion-io";
+import {
+  companionHasStatusColumn,
+  localizedColumnsOnMain,
+} from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
@@ -87,6 +94,7 @@ import {
   getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
 } from "../helpers/di";
+import { readRequestLocalized } from "../helpers/request-localized";
 import {
   paginatedResponseToMeta,
   toPaginationMeta,
@@ -96,6 +104,7 @@ import {
   isTruthyParam,
   parseRichTextFormat,
   parseSelectParam,
+  parseStatusParam,
   parseWhereParam,
   requireBody,
   requireParam,
@@ -108,6 +117,8 @@ import type { MethodHandler, Params } from "../types";
 // all three entity kinds, so a stale UI save is rejected before any DDL runs.
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
+  discardWorkingDraftForDocument,
+  getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
   listVersionsForDocument,
@@ -173,6 +184,7 @@ export const COLLECTION_VERSION_METHODS: Record<
         authenticatedScope: readAuthenticatedScope(p),
         limit: p.limit !== undefined ? Number(p.limit) : undefined,
         cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
+        locale: p.locale !== undefined ? String(p.locale) : undefined,
       });
       return respondList(result.items, result.meta);
     },
@@ -207,6 +219,18 @@ export const COLLECTION_VERSION_METHODS: Record<
       return respondAction("Version restored.", result);
     },
   },
+  discardWorkingDraft: {
+    execute: async (_svc, p) => {
+      const item = await discardWorkingDraftForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: userFromParams(p),
+        params: p,
+      });
+      return respondMutation("Working draft discarded.", item);
+    },
+  },
   getEntryVersion: {
     execute: async (_svc, p) => {
       const row = await getVersionForDocument({
@@ -218,6 +242,21 @@ export const COLLECTION_VERSION_METHODS: Record<
         versionNo: Number(p.versionNo),
       });
       return respondDoc(row);
+    },
+  },
+  getEntryVersionDiff: {
+    execute: async (_svc, p) => {
+      const diff = await getVersionDiffForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: userFromParams(p),
+        authenticatedScope: readAuthenticatedScope(p),
+        from: Number(p.from),
+        to: Number(p.to),
+        modifiedOnly: p.modifiedOnly === "1" || p.modifiedOnly === "true",
+      });
+      return respondDoc(diff);
     },
   },
 };
@@ -233,9 +272,18 @@ const COLLECTIONS_METHODS: Record<
     // as the toast string so admin UIs see the same copy ("Collection
     // created! Restart the app...").
     execute: async (svc, _, body) => {
-      const result = await svc.createCollection(
-        requireBody(body, "Collection data is required")
+      const created = requireBody<Parameters<typeof svc.createCollection>[0]>(
+        body,
+        "Collection data is required"
       );
+      // Metadata generation validates field names and shapes downstream, but
+      // it has no way to judge a plugin type's own options, so a declaration no
+      // value could satisfy would reach the registry and fail per write.
+      const createdFields = (created as { fields?: unknown }).fields;
+      if (createdFields !== undefined) {
+        assertValidPluginFieldOptions(createdFields);
+      }
+      const result = await svc.createCollection(created);
       const collection = unwrapServiceResult(result);
       return respondMutation(
         result.message ?? "Collection created.",
@@ -358,6 +406,10 @@ const COLLECTIONS_METHODS: Record<
     execute: async (svc, p, body) => {
       if (!p.collectionName || !body)
         throw new Error("collectionName and update data are required");
+      const updatedFields = (body as { fields?: unknown }).fields;
+      if (updatedFields !== undefined) {
+        assertValidPluginFieldOptions(updatedFields);
+      }
       const result = await svc.updateCollection(
         { collectionName: p.collectionName },
         body
@@ -410,6 +462,7 @@ const COLLECTIONS_METHODS: Record<
       }
       const { fields } = body as { fields: unknown[] };
       if (!fields) throw new Error("fields is required in request body");
+      const previewLocalized = readRequestLocalized(body);
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
@@ -443,8 +496,15 @@ const COLLECTIONS_METHODS: Record<
         // companion `_locales` table). buildFullDesiredSchema already sets this
         // from the registry, but the splice above overwrites that entry, so we
         // must re-supply it or the preview would show translatable columns being
-        // added to the main table.
-        localized: (collection as { localized?: boolean }).localized === true,
+        // added to the main table. The REQUEST's flag wins when the Builder
+        // sent one: the apply prefers it too, and a preview that diffed against
+        // the persisted flag instead would collect resolutions for DDL the
+        // apply is not going to run.
+        localized:
+          previewLocalized ??
+          (collection as { localized?: boolean }).localized === true,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
       };
 
       const pipelinePreview = await previewDesiredSchema({
@@ -528,13 +588,13 @@ const COLLECTIONS_METHODS: Record<
         renameResolutions,
         eventResolutions,
         hints,
-        localized: requestLocalized,
       } = body as {
         fields: unknown[];
         confirmed: boolean;
         schemaVersion?: number;
-        // i18n: the request's Internationalization flag. Forwarded so a toggle+field-change
-        // save applies with the NEW state instead of the stale persisted `collection.localized`.
+        // i18n: the request's Internationalization flag is read through
+        // `readRequestLocalized` below rather than destructured here, so a
+        // non-boolean is rejected instead of silently coerced.
         localized?: boolean;
         // Legacy admin UI shape (per-field, used by the old
         // SchemaChangeService path). Kept alive while admin dialogs
@@ -592,10 +652,18 @@ const COLLECTIONS_METHODS: Record<
       // after this apply). `wasLocalized` drives enable/disable detection for the companion.
       const wasLocalized =
         (collection as { localized?: boolean }).localized === true;
-      const isLocalized =
-        requestLocalized !== undefined
-          ? requestLocalized === true
-          : wasLocalized;
+      // Validated rather than coerced: `localized: "false"` would read as
+      // `false` under `=== true` and turn an ordinary save of a localized
+      // collection into a DISABLE transition, restoring the companion's
+      // columns onto the main table and archiving it.
+      const isLocalized = readRequestLocalized(body) ?? wasLocalized;
+      // i18n: enabling Internationalization needs the app-level
+      // `localization` config — without it the companion reconcile below
+      // would move translatable columns into a table the runtime cannot
+      // address. Gate the false→true transition only.
+      if (!wasLocalized && isLocalized) {
+        assertLocalizationConfigured("collection", p.collectionName);
+      }
 
       // Legacy per-field resolutions get translated to typed
       // Resolution[] inside BrowserPromptDispatcher.dispatch() once the
@@ -629,6 +697,8 @@ const COLLECTIONS_METHODS: Record<
         // toggle applies immediately; without this the apply re-adds translatable
         // columns to the main table.
         localized: isLocalized,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
       };
 
       // Resolve adapter for the pipeline construction.
@@ -693,6 +763,8 @@ const COLLECTIONS_METHODS: Record<
             // editing so the admin NotificationCenter can render "Posts
             // schema updated" instead of generic "global".
             uiTargetSlug: p.collectionName,
+            // Stated rather than relying on the default, so the default stops being load-bearing.
+            uiTargetKind: "collection" as const,
           });
         },
         // The optimistic-lock check now runs up front via
@@ -746,6 +818,8 @@ const COLLECTIONS_METHODS: Record<
               ? await companionHasStatusColumn(adapter, `${tableName}_locales`)
               : undefined;
           const plan = buildCompanionTransitionStatements({
+            // The companion mirrors the main table, and a collection's table comes from the Schema Builder's collection creator.
+            builtBy: "collection" as const,
             slug: p.collectionName,
             tableName,
             dialect,
@@ -753,10 +827,24 @@ const COLLECTIONS_METHODS: Record<
             status: collection.status === true,
             wasLocalized,
             isLocalized,
+            // The PERSISTED status, which is what the disable restore needs: it decides whether
+            // main carried `status` and the companion `_status` before this apply. `collection`
+            // here is the registry record, so this is the prior state for the same reason
+            // `wasLocalized` above is.
+            wasStatus: collection.status === true,
             oldFields,
             newFields,
             companionExists,
             companionHasStatus,
+            // Which translatable columns the main table still carries. A disable must not re-add
+            // one that is already there, and must still restore it: presence says the column
+            // exists, never that its value is current, because every localized write went to the
+            // companion alone.
+            existingMainColumns: await localizedColumnsOnMain(
+              adapter,
+              tableName,
+              oldFields
+            ).then(cols => cols.map(c => c.name)),
           });
           // A disable archives non-default translations, so ensure the archive
           // table exists first. Run each statement individually (executeQuery is
@@ -779,8 +867,34 @@ const COLLECTIONS_METHODS: Record<
               }
             }
           }
+          // 🔴 STRICT on purpose, matching the other two companion paths: tolerating a re-run
+          // would make a half-finished localization ENABLE look like success, because the planner
+          // cannot tell that state from an orphan repair. A loud failure is the safer outcome.
           for (const stmt of plan.statements) {
             await adapter.executeQuery(stmt);
+          }
+
+          // The transition record describes a companion that no longer exists, so it stops being true
+          // the moment the disable succeeds. Left behind, it would refuse the next enable's real
+          // source locale — the check that protects a live transition would block a legitimate one.
+          if (plan.companionDropped) {
+            // The other half of "this companion is gone": readiness remembers only that one
+            // exists.
+            const { forgetCompanionReadiness } = await import(
+              "../../domains/i18n/runtime/companion-readiness"
+            );
+            forgetCompanionReadiness(adapter, `${tableName}_locales`);
+            const { resolveTransitionStore } = await import(
+              "../../domains/i18n/migration/transition-recorder"
+            );
+            const { forgetI18nTransition } = await import(
+              "../../domains/i18n/migration/transition-state"
+            );
+            await forgetI18nTransition(
+              await resolveTransitionStore(adapter),
+              "collection",
+              String(p.collectionName)
+            );
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -825,6 +939,12 @@ const COLLECTIONS_METHODS: Record<
           {
             fields: JSON.stringify(fields),
             schema_version: newSchemaVersion,
+            // i18n: persist the state this apply actually ran with (mirrors
+            // the singles apply). The DDL above already performed any
+            // false→true transition, so leaving the stored flag behind would
+            // make the settings write that follows read another false→true
+            // transition and reconcile the companion a second time.
+            localized: isLocalized,
             updated_at: new Date(),
           },
           { and: [{ column: "slug", op: "=", value: p.collectionName }] }
@@ -832,8 +952,30 @@ const COLLECTIONS_METHODS: Record<
       } catch (err) {
         versionPersisted = false;
         const msg = err instanceof Error ? err.message : String(err);
-        // Non-fatal: the schema apply itself already succeeded. If the
-        // metadata write fails, the actual DB column was already
+        // A localization TRANSITION that reaches this point has already moved
+        // the translatable columns between the main table and the companion.
+        // The stored flag is what every later process reads to decide which
+        // of those two tables a translatable field lives in, so failing to
+        // store it does not leave a cosmetic gap — it leaves the registry
+        // describing a layout the database no longer has, and the next boot
+        // generates runtime schemas against the wrong table. That is the same
+        // half-migrated state the companion reconcile above refuses to return
+        // success for, so it is refused the same way.
+        if (wasLocalized !== isLocalized) {
+          throw NextlyError.internal({
+            cause: err instanceof Error ? err : undefined,
+            logContext: {
+              op: "persistLocalizedFlag",
+              collection: p.collectionName,
+              detail: msg,
+              wasLocalized,
+              isLocalized,
+              note: "columns moved but dynamic_collections.localized was not updated; re-apply to retry",
+            },
+          });
+        }
+        // Otherwise non-fatal: the schema apply itself already succeeded. If
+        // the metadata write fails, the actual DB column was already
         // renamed and the collection is in a good state structurally;
         // only the admin's view of the field name is stale, and the version
         // was not advanced (the response reports the current version so a
@@ -947,17 +1089,14 @@ const COLLECTIONS_METHODS: Record<
 
       const rawLimit = p.limit;
 
-      // Why: forward the `?status=` URL param so trusted callers (the admin)
-      // HTTP API default returns every entry regardless of status; pass
-      // `?status=published` or `?status=draft` to filter. Same allowlist as
-      // getEntry — any value outside it falls back to "all". The status
-      // dropdown in the entry table layers a `where: {status: {equals: ...}}`
-      // on top of this; that still works because where-narrowing happens
-      // after the default filter.
-      const status =
-        p.status === "all" || p.status === "draft" || p.status === "published"
-          ? p.status
-          : "all";
+      // Forward the `?status=` URL param. Absent → undefined so the query
+      // service applies its published-only default (an untrusted list read must
+      // not leak drafts); pass `?status=all|draft|published` to widen. An
+      // invalid value is rejected with 400 rather than silently widened. The
+      // status dropdown in the entry table layers a `where: {status: {equals}}`
+      // on top of this, which still works because where-narrowing happens after
+      // the default filter.
+      const status = parseStatusParam(p.status);
 
       // Forward the caller so the service evaluates the collection's stored
       // read rules for them: role-based rules, and owner-only scoping folded
@@ -1014,12 +1153,11 @@ const COLLECTIONS_METHODS: Record<
     // `{ totalDocs }` internally; we translate at the boundary.
     execute: async (svc, p) => {
       requireParam(p, "collectionName");
-      // Match listEntries: count every entry regardless of status by
-      // default; pass `?status=published` (or `draft`) to filter.
-      const status =
-        p.status === "all" || p.status === "draft" || p.status === "published"
-          ? p.status
-          : "all";
+      // Match listEntries: absent → undefined so the service applies its
+      // published-only default; pass `?status=all|draft|published` to widen,
+      // invalid → 400. A count must obey the same filter as the list or the
+      // total would not match the rows returned.
+      const status = parseStatusParam(p.status);
       // The same caller context listEntries forwards. A count that ignored the
       // read rules while the list obeyed them would report totals for rows the
       // caller cannot see, which both leaks how much data exists and breaks
@@ -1092,12 +1230,10 @@ const COLLECTIONS_METHODS: Record<
       if (!p.collectionName || !p.entryId) {
         throw new Error("collectionName and entryId parameters are required");
       }
-      // HTTP API returns the entry regardless of status by default; pass
-      // `?status=published` (or `draft`) to filter. Matches listEntries.
-      const status =
-        p.status === "all" || p.status === "draft" || p.status === "published"
-          ? p.status
-          : "all";
+      // Absent → undefined so the service applies its published-only default;
+      // pass `?status=all|draft|published` to widen, invalid → 400. Matches
+      // listEntries.
+      const status = parseStatusParam(p.status);
       // Same caller context as listEntries. Fetching one document by id is the
       // path where a missing user matters most: without it an owner-only rule
       // could not deny a direct read of someone else's entry.
@@ -1117,6 +1253,11 @@ const COLLECTIONS_METHODS: Record<
         select: parseSelectParam(p.select),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
         status,
+        // `?draft=true` overlays the pending working draft in place of the live
+        // row (draft/published split), matching Payload's read-side `draft`
+        // parameter. The service gates it on an update-capability probe, so a
+        // read-only caller passing it still receives the published row.
+        includeWorkingDraft: isTruthyParam(p.draft),
         // i18n M4: `?locale=` selects the content language; `?fallback-locale=none`
         // disables fallback. Non-localized collections ignore both.
         locale: p.locale,
@@ -1184,6 +1325,7 @@ const COLLECTIONS_METHODS: Record<
       const result = await svc.publishAllLocales({
         collectionName: p.collectionName,
         entryId: p.entryId,
+        actor: readAuthenticatedActor(p),
         userId: p._authenticatedUserId
           ? String(p._authenticatedUserId)
           : undefined,

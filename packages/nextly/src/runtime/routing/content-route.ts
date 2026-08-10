@@ -1,0 +1,402 @@
+/**
+ * `createContentRoute` — a thin factory for a single `app/[[...slug]]/page.tsx`
+ * optional catch-all that resolves ANY path to a published content entry (the
+ * pages-collection model: add an `/about` entry and it just works).
+ *
+ * You keep the route file; this fills the body. It returns `generateStaticParams`
+ * (pre-render published paths, with `dynamicParams` handling the rest),
+ * `generateMetadata`, and the page component — which resolves the path across the
+ * configured collections, calls `notFound()` on a genuine miss or a reserved
+ * path, and otherwise renders your component with the resolved entry.
+ *
+ * `next`/`react` imports are TYPE-ONLY and `next/navigation` is resolved lazily,
+ * so importing this never forces those onto a non-Next consumer at load.
+ *
+ * `generateStaticParams` returns `[]` when there is nothing to pre-render (a
+ * `staticParamsLimit` of `0`, or no published slugs yet), which is valid for
+ * standard App Router builds. Next 16 Cache Components is stricter: an EXPORTED
+ * `generateStaticParams` must return at least one entry. Under that mode, do not
+ * wire `generateStaticParams` into the route file for a no-prerender/empty-site
+ * setup — export only `ContentPage` and `generateMetadata` and let paths render
+ * on demand.
+ *
+ * @module runtime/routing/content-route
+ */
+import { createRequire } from "node:module";
+
+import type { Metadata } from "next";
+
+import { getNextly } from "../../direct-api/nextly";
+import { NextlyError } from "../../errors/nextly-error";
+
+import { isReservedPath } from "./reserved-paths";
+import {
+  resolveContent,
+  type ContentEntry,
+  type NextlyContentReader,
+} from "./resolve-content";
+
+/** Where a resolved entry was found — passed to `render`/`buildMetadata`. */
+export interface ResolvedContext {
+  /** The collection the entry was resolved from. */
+  collection: string;
+  /** The joined slug path (no leading slash), e.g. `"about/team"`. */
+  slug: string;
+}
+
+/**
+ * Config for {@link createContentRoute}. `TNode` is the render output (your
+ * server component's return, e.g. `ReactNode`) — inferred from `render`, so
+ * `nextly` needs no `react` dependency of its own.
+ */
+export interface ContentRouteConfig<TNode> {
+  /**
+   * Collections to resolve a path against, in order — the first collection with
+   * a published entry whose slug matches the path wins. A status-less collection
+   * (no built-in lifecycle) works automatically: the `status` scope is a no-op
+   * there, so it can be mixed freely with lifecycle collections.
+   */
+  collections: string[];
+  /** Render the resolved entry (your server component body). May be async. */
+  render: (
+    entry: ContentEntry,
+    context: ResolvedContext
+  ) => TNode | Promise<TNode>;
+  /** Optional per-entry metadata (e.g. via `buildMetadata`). */
+  buildMetadata?: (
+    entry: ContentEntry,
+    context: ResolvedContext
+  ) => Metadata | Promise<Metadata>;
+  /** Field holding the slug (default `"slug"`). */
+  slugField?: string;
+  /**
+   * Draft/Published lifecycle scope for the resolved reads (default
+   * `"published"`). Lifecycle- and locale-aware; a no-op on status-less
+   * collections.
+   */
+  status?: "published" | "draft" | "all";
+  /**
+   * Whether this request may see pending unpublished edits at THIS path.
+   *
+   * Almost always a function, because route config is captured once at module
+   * scope while whether a visitor is previewing is a per-request fact. It is
+   * asked for every path the route resolves, and is handed the collection and
+   * slug being resolved so the answer can be scoped to a document.
+   *
+   * **The argument is the point, not a convenience.** Next's draft mode is a
+   * single boolean for the whole host — `draftMode().isEnabled` says a visitor
+   * opened *a* valid preview link, never *which* document it was for. Answering
+   * from that alone turns a link scoped to one unpublished page into a key to
+   * every unpublished page in the configured collections for the life of the
+   * session, which is precisely what the preview token's scope exists to
+   * prevent. Compare it against what the token actually granted:
+   *
+   * ```ts
+   * draft: async ({ collection, slug }) => {
+   *   const scope = await readPreviewScope(previewConfig);
+   *   if (scope === null || scope.collection !== collection) return false;
+   *   if (slug !== (await slugOf(scope.collection, scope.entryId))) return false;
+   *   return { entryId: scope.entryId };
+   * }
+   * ```
+   *
+   * Name the entry rather than returning a bare `true`. A slug is not unique,
+   * so a boolean grants whichever row this route resolves the path to, which
+   * need not be the one the token was minted for; `{ entryId }` is checked
+   * against the document that was actually resolved.
+   *
+   * **Returning `true` is an authorization decision, not a display
+   * preference.** This route always resolves anonymously, and the working-draft
+   * overlay is gated on an update-capability probe an anonymous read can never
+   * pass — so a request this returns `true` for is read TRUSTED, exactly as
+   * Payload pairs `draft: isDraftMode` with `overrideAccess: isDraftMode`. Put
+   * the authorization here, never in a query parameter the visitor controls.
+   *
+   * A literal `true` is accepted for a route mounted behind the app's own auth,
+   * and means every visitor sees unpublished content at every path. It is
+   * almost never what a public site wants.
+   *
+   * `generateStaticParams` ignores this entirely — draft paths are never
+   * pre-rendered.
+   *
+   * @default false
+   */
+  draft?:
+    | boolean
+    | ((context: ResolvedContext) => DraftGrant | Promise<DraftGrant>);
+  /** Relation depth for the resolved read (default `1`). */
+  depth?: number;
+  /** A booted Nextly instance (defaults to `getNextly()`). */
+  nextly?: NextlyContentReader;
+  /**
+   * Whether to bypass the collections' read-access rules. Defaults to `false`
+   * (enforce — the same secure default as `resolveContent`): a rule-less
+   * collection still renders, but a stored member-only/role-based collection is
+   * hidden from ANONYMOUS requests (both the resolved read and the
+   * `generateStaticParams` scan skip it), and `overrideAccess: true` reads
+   * everything trusted. This route always resolves ANONYMOUSLY — its config is
+   * captured once at module scope, so it cannot carry a per-request user. For a
+   * route that renders per-visitor member content, call `resolveContent` with
+   * the request's `user` inside your own page instead.
+   */
+  overrideAccess?: boolean;
+  /**
+   * Extra cache tags attached to every resolved read, so a write to a related
+   * collection (a populated author, category, media) can bust the page. The
+   * primary collection is always tagged; add the related collections' tags
+   * (e.g. `nextlyTags("authors")`) here when you render populated relations.
+   */
+  tags?: string[];
+  /** Time-based revalidation seconds for the resolved read. */
+  revalidate?: number | false;
+  /**
+   * A stable discriminator folded into the resolved read's cache key — supply
+   * one when distinct `nextly` readers (per-tenant/per-database) can resolve the
+   * same collection + slug, so their cached reads never alias.
+   */
+  cacheScope?: string;
+  /**
+   * Max published paths to pre-render per collection in `generateStaticParams`
+   * (default `1000`). The rest render on demand via `dynamicParams`.
+   */
+  staticParamsLimit?: number;
+}
+
+/**
+ * What a draft decision may answer.
+ *
+ * `true` grants the draft at this path unconditionally. `{ entryId }` grants it
+ * for ONE document, and the route discards the draft if the path resolved to a
+ * different one — which matters because a slug need not be unique: the resolver
+ * deliberately supports duplicates and settles them by sorting on `id`, so a
+ * token issued for one entry could otherwise reach another that shares its slug.
+ *
+ * A preview token names an entry, so `{ entryId: scope.entryId }` is the shape
+ * to return when one backs the decision.
+ */
+export type DraftGrant = boolean | { entryId: string };
+
+/** The optional-catch-all route arg: `{ params: Promise<{ slug?: string[] }> }`. */
+export interface ContentRouteArgs {
+  params: Promise<{ slug?: string[] }> | { slug?: string[] };
+}
+
+/** What {@link createContentRoute} returns — wire these into the route file. */
+export interface ContentRoute<TNode> {
+  generateStaticParams: () => Promise<Array<{ slug: string[] }>>;
+  generateMetadata: (args: ContentRouteArgs) => Promise<Metadata>;
+  ContentPage: (args: ContentRouteArgs) => Promise<TNode>;
+}
+
+// `next/navigation` is resolved lazily (opaque to bundlers), so importing this
+// module never forces `next` at load; `notFound()` throws the special error the
+// App Router catches to render the not-found page.
+let cachedNotFound: (() => never) | null | undefined;
+function loadNotFound(): () => never {
+  if (cachedNotFound === undefined) {
+    try {
+      const require = createRequire(import.meta.url);
+      const mod = require("next/navigation") as { notFound?: () => never };
+      cachedNotFound = typeof mod.notFound === "function" ? mod.notFound : null;
+    } catch {
+      cachedNotFound = null;
+    }
+  }
+  if (!cachedNotFound) {
+    // Outside a Next runtime there is no not-found boundary to trigger.
+    throw NextlyError.internal({
+      logContext: {
+        reason:
+          "createContentRoute requires next/navigation (use it inside a Next.js app)",
+      },
+    });
+  }
+  return cachedNotFound;
+}
+
+/** Trigger the App Router's not-found boundary; never returns (narrows callers). */
+function triggerNotFound(): never {
+  return loadNotFound()();
+}
+
+const MAX_STATIC_PARAMS_PER_PAGE = 500;
+
+/**
+ * Map a stored slug value to a static param, or `null` to skip it. An empty
+ * slug is the site root (`/`) — emitted as the no-segment param so the homepage
+ * pre-renders — while whitespace-only, non-string, and reserved values are
+ * dropped (the page would only `notFound()` them).
+ */
+export function slugToStaticParam(value: unknown): { slug: string[] } | null {
+  if (typeof value !== "string") return null;
+  if (value === "") return isReservedPath("/") ? null : { slug: [] };
+  if (value.trim() === "") return null;
+  // Collapse leading/trailing/duplicate slashes so a stored "/admin" or "a//b"
+  // normalizes to clean segments and can't dodge the reserved-path check.
+  const normalized = value
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "")
+    .replace(/\/{2,}/g, "/");
+  if (normalized === "") return null;
+  if (isReservedPath(`/${normalized}`)) return null;
+  return { slug: normalized.split("/") };
+}
+
+export function createContentRoute<TNode>(
+  config: ContentRouteConfig<TNode>
+): ContentRoute<TNode> {
+  const slugField = config.slugField ?? "slug";
+  const status = config.status ?? "published";
+  const depth = config.depth ?? 1;
+  const overrideAccess = config.overrideAccess ?? false;
+  const staticParamsLimit = config.staticParamsLimit ?? 1000;
+
+  const collections = [...new Set(config.collections)];
+
+  const getInstance = (): NextlyContentReader => config.nextly ?? getNextly();
+
+  /** Whether this request may see unpublished edits at one collection + slug. */
+  async function draftForThisPath(
+    context: ResolvedContext
+  ): Promise<DraftGrant> {
+    const decision = config.draft;
+    if (decision === undefined) return false;
+    return typeof decision === "function" ? decision(context) : decision;
+  }
+
+  /** Resolve the joined slug across the configured collections (first match wins). */
+  async function resolve(
+    slug: string
+  ): Promise<{ entry: ContentEntry; context: ResolvedContext } | null> {
+    for (const collection of collections) {
+      // Asked per collection, not once per request: the answer is scoped to a
+      // document, and the same slug can name a different document in each
+      // configured collection.
+      const grant = await draftForThisPath({ collection, slug });
+      // A grant that NAMES an entry is resolved by that id rather than by slug,
+      // so a duplicate slug cannot decide which document a preview opens. A
+      // bare `true` names nothing and keeps the ordinary lookup.
+      //
+      // An object grant carrying no usable id authorizes NOTHING. The decision
+      // is app-supplied code and the type is not a runtime guarantee, so a
+      // `{}` reaching here would otherwise widen the lifecycle scope while
+      // naming no entry to bound it, which is the one combination that must not
+      // exist.
+      const grantedEntryId =
+        typeof grant === "object" &&
+        grant !== null &&
+        typeof grant.entryId === "string" &&
+        grant.entryId !== ""
+          ? grant.entryId
+          : undefined;
+      const draft = grant === true || grantedEntryId !== undefined;
+      const entry = await resolveContent(collection, slug, {
+        nextly: config.nextly,
+        slugField,
+        // `status` is left to widen itself when a draft is asked for, so a
+        // route cannot end up previewing with only one of the two draft layers
+        // switched on.
+        ...(config.status ? { status: config.status } : {}),
+        draft,
+        ...(grantedEntryId === undefined ? {} : { entryId: grantedEntryId }),
+        depth,
+        tags: config.tags,
+        revalidate: config.revalidate,
+        cacheScope: config.cacheScope,
+        // A draft request reads trusted. The overlay is gated on an
+        // update-capability probe and this route resolves anonymously, so an
+        // enforced draft read could only ever return the published row — the
+        // silent no-op that makes preview look broken. The authorization that
+        // justifies this lives in the `draft` decision itself.
+        overrideAccess: overrideAccess || draft,
+      });
+      if (!entry) continue;
+      // No identity check here, deliberately. Both halves a grant has to
+      // satisfy — that it names THIS entry, and that the entry lives at THIS
+      // path — are settled inside `resolveContent`, which reads by the granted
+      // id and confirms the slug, and resolves published-only when either fails.
+      // Re-comparing ids at this layer is what the by-id read replaced: it
+      // compares a POST-`afterRead` document, so a collection that reshapes its
+      // public read would fail a valid grant and send the editor to live
+      // content.
+      return { entry, context: { collection, slug } };
+    }
+    return null;
+  }
+
+  async function generateStaticParams(): Promise<Array<{ slug: string[] }>> {
+    // A non-positive limit disables pre-rendering entirely — every path then
+    // renders on demand via `dynamicParams`. Return before querying so a `0`
+    // limit yields zero params instead of one-per-collection.
+    if (staticParamsLimit <= 0) return [];
+    const nextly = getInstance();
+    const params: Array<{ slug: string[] }> = [];
+    for (const collection of collections) {
+      let page = 1;
+      let collected = 0;
+      for (;;) {
+        let result;
+        try {
+          result = await nextly.find({
+            collection,
+            // Lifecycle-aware publish scope — a no-op on status-less collections.
+            status,
+            select: { [slugField]: true },
+            // `id` is unique and present on every collection; `createdAt` may be
+            // absent (timestamps off) or non-unique, letting rows shift between
+            // pages and duplicate or vanish across the paginated scan.
+            sort: "id",
+            limit: MAX_STATIC_PARAMS_PER_PAGE,
+            page,
+            overrideAccess,
+            // The build-time scan is anonymous — pass an explicit `undefined`
+            // so it can't inherit a default user configured on the reader.
+            user: undefined,
+          });
+        } catch (error) {
+          // An access-restricted collection has no PUBLIC paths to pre-render —
+          // skip it (its entries render on demand, enforced per request) rather
+          // than fail the build. Any non-access error still surfaces.
+          // `NextlyError.is` matches across bundled package copies.
+          if (NextlyError.is(error) && error.statusCode === 403) break;
+          throw error;
+        }
+        for (const item of result.items) {
+          const param = slugToStaticParam(item[slugField]);
+          if (!param) continue;
+          params.push(param);
+          collected += 1;
+          if (collected >= staticParamsLimit) break;
+        }
+        if (collected >= staticParamsLimit || !result.meta.hasNext) break;
+        page += 1;
+      }
+    }
+    return params;
+  }
+
+  async function generateMetadata(args: ContentRouteArgs): Promise<Metadata> {
+    if (!config.buildMetadata) return {};
+    const slug = joinSlug(await args.params);
+    if (isReservedPath(`/${slug}`)) return {};
+    const resolved = await resolve(slug);
+    if (!resolved) return {};
+    return config.buildMetadata(resolved.entry, resolved.context);
+  }
+
+  async function ContentPage(args: ContentRouteArgs): Promise<TNode> {
+    const slug = joinSlug(await args.params);
+    // Never serve content at a framework/metadata path.
+    if (isReservedPath(`/${slug}`)) triggerNotFound();
+    const resolved = await resolve(slug);
+    if (!resolved) triggerNotFound();
+    return config.render(resolved.entry, resolved.context);
+  }
+
+  return { generateStaticParams, generateMetadata, ContentPage };
+}
+
+/** Join the optional-catch-all segments into a slug path (no leading slash). */
+function joinSlug(params: { slug?: string[] }): string {
+  return (params.slug ?? []).join("/");
+}
