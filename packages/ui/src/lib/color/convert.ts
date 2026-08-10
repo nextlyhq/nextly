@@ -50,6 +50,15 @@ export interface Oklch {
 
 const clamp01 = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n);
 
+/**
+ * A chroma no displayable sRGB colour exceeds.
+ *
+ * The most saturated sRGB primaries sit near 0.37 in OKLCH; this leaves headroom above that and
+ * gives the gamut search a fixed bracket, so its error is absolute rather than proportional to
+ * whatever the caller asked for.
+ */
+const MAX_SRGB_CHROMA = 0.5;
+
 /** Wrap a hue into [0, 360), so -30 and 330 are the same angle. */
 export function normalizeHue(hue: number): number {
   if (!Number.isFinite(hue)) return 0;
@@ -236,9 +245,14 @@ export function oklchToRgb({ l, c, h }: Oklch): Rgb {
 
   if (!inGamut(fitting)) {
     let low = 0;
-    let high = requested;
-    // Twenty halvings take the interval below one part in a million of the starting chroma,
-    // which is far finer than a screen or an eye can resolve.
+    // Bracketed against an ABSOLUTE ceiling rather than the requested chroma. Halving an
+    // unbounded input a fixed number of times converges on a fraction OF THAT INPUT, so a
+    // sufficiently large chroma leaves the interval far above the gamut and the search returns
+    // zero — discarding the hue entirely and answering grey for a colour that has one. No sRGB
+    // colour exceeds a chroma of roughly 0.37, so this ceiling cannot exclude a reachable one.
+    let high = Math.min(requested, MAX_SRGB_CHROMA);
+    // Halvings of a fixed interval, so the remaining error is absolute: 0.5 / 2^20 is far below
+    // anything a screen or an eye resolves.
     for (let i = 0; i < 20; i++) {
       const mid = (low + high) / 2;
       if (inGamut(at(mid))) low = mid;

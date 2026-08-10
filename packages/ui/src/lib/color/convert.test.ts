@@ -191,3 +191,24 @@ describe("colours a screen cannot show", () => {
     }
   });
 });
+
+describe("a chroma far beyond anything displayable", () => {
+  it("still answers with the hue that was asked for", () => {
+    // Halving an unbounded input a fixed number of times converges on a fraction OF THAT INPUT,
+    // so a large enough chroma left the whole interval outside the gamut, the search returned
+    // zero, and a colour with a hue came back grey.
+    const shown = rgbToOklch(oklchToRgb({ l: 0.5, c: 400000, h: 30 }));
+    expect(shown.c).toBeGreaterThan(0.01);
+    expect(shown.h).toBeCloseTo(30, 0);
+  });
+
+  it("lands in the same place as a merely-unreachable chroma", () => {
+    // Both are outside the gamut at this lightness and hue, so both should be mapped to the same
+    // boundary colour: how far outside the request was must not change the answer.
+    const absurd = oklchToRgb({ l: 0.5, c: 400000, h: 30 });
+    const large = oklchToRgb({ l: 0.5, c: 0.45, h: 30 });
+    expect(absurd.r).toBeCloseTo(large.r, 3);
+    expect(absurd.g).toBeCloseTo(large.g, 3);
+    expect(absurd.b).toBeCloseTo(large.b, 3);
+  });
+});

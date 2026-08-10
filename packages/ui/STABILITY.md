@@ -149,5 +149,11 @@ trade for using them early.
 - **Theming beyond the tokens.** Override `--nx-*` values; do not depend on class names,
   DOM structure or Radix internals, none of which are part of the contract.
 - **Server components.** The root barrel is published with `"use client"`. Only
-  `@nextlyhq/ui/utils` and `@nextlyhq/ui/tailwind-preset` are importable from server
-  code.
+  `@nextlyhq/ui/utils`, `@nextlyhq/ui/tailwind-preset` and `@nextlyhq/ui/color` are
+  importable from server code.
+
+`@nextlyhq/ui/color` is `@experimental`: conversions between sRGB, HSV and OKLCH. It sits on
+the server-safe side deliberately — the functions are arithmetic on numbers, and a colour a
+server renders should not have to cross into client code to be converted. The OKLCH direction
+reduces chroma to reach the displayable gamut, so a colour outside sRGB is approximated by one
+of the same hue rather than a different one.
