@@ -180,6 +180,39 @@ export interface ActiveShortcut {
 
 const DEFAULT_SEQUENCE_TIMEOUT_MS = 1000;
 
+/**
+ * Whether a focused native control owns this key itself.
+ *
+ * A checkbox is not a typing target, so bare-letter shortcuts should still fire over it — but
+ * Space is how it toggles, Enter is how a button activates, and the arrows are how a radio group
+ * moves. Offering those to the shortcut stack means a global `Space` binding silently stops a
+ * focused checkbox working, which is a worse failure than the shortcut not firing.
+ */
+function controlOwnsKey(
+  target: EventTarget | null,
+  event: KeyboardEvent
+): boolean {
+  if (event.ctrlKey || event.metaKey || event.altKey) return false;
+  if (
+    !target ||
+    typeof HTMLElement === "undefined" ||
+    !(target instanceof HTMLElement)
+  ) {
+    return false;
+  }
+  const tag = target.tagName;
+  const type =
+    tag === "INPUT" ? (target as HTMLInputElement).type.toLowerCase() : "";
+  if (tag === "BUTTON" || type === "button" || type === "submit") {
+    return event.key === " " || event.key === "Enter";
+  }
+  if (type === "checkbox") return event.key === " ";
+  if (type === "radio") {
+    return event.key === " " || event.key.startsWith("Arrow");
+  }
+  return false;
+}
+
 /** Whether a keystroke is going into something the user is typing into. */
 function isTypingTarget(target: EventTarget | null): boolean {
   if (
@@ -207,7 +240,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
   // propagation, so a single-key shortcut would fire on top of the value it just changed. This
   // kit's own `Select` wraps that trigger, so the case is reachable from our own components.
   const role = target.getAttribute("role");
-  return role === "textbox" || role === "combobox" || role === "listbox";
+  return role !== null && TYPE_AHEAD_ROLES.has(role);
 }
 
 const NON_TEXT_INPUT_TYPES = new Set([
@@ -311,7 +344,13 @@ export function createShortcutManager(
    * or the grab is only half of one: the application stops acting while the BROWSER still does.
    */
   function insertsText(event: KeyboardEvent, typing: boolean): boolean {
-    if (!typing || event.ctrlKey || event.metaKey || event.altKey) return false;
+    if (!typing) return false;
+    // AltGraph is text entry wearing a modifier's clothes: on many layouts `@`, `\` and `€`
+    // arrive with ctrlKey AND altKey set. It is not composition, so `isComposing` never covers
+    // it, and rejecting it here stops those characters being typed under a blocking layer.
+    const altGraph = event.getModifierState?.("AltGraph") ?? false;
+    if (!altGraph && (event.ctrlKey || event.metaKey || event.altKey))
+      return false;
     // A single character is text. Everything else has to be named, because "unmodified" is not
     // the same question: F1, Escape and the function keys carry no text and reach the browser,
     // so treating them as editing would let a blocking layer report a key as consumed while the
@@ -411,10 +450,24 @@ export function createShortcutManager(
     // one Escape closes the modal AND runs the shell's Escape binding underneath it. That is
     // precisely the double action this manager exists to remove, arriving through our own
     // components.
-    if (event.defaultPrevented) return false;
+    if (event.defaultPrevented) {
+      // A half-typed sequence must not survive it. After `g`, an Escape that closed a dialog is
+      // a real keystroke the user made; leaving the prefix pending would let a later `d`
+      // complete `g d` across the interruption.
+      pendingAt = null;
+      pressedEvents.length = 0;
+      // Reported as consumed so `attach` stops it propagating. The manager runs no binding
+      // here, but it is the one place that can keep a window-level owner from acting on a key
+      // another component already answered — which is the whole double-action problem, and it
+      // does not stop being one just because the first owner was not us.
+      return true;
+    }
     // Pressing a modifier on its own is not a keystroke to match, and treating it as one would
     // clear any sequence in progress the moment the user reached for Shift.
     if (MODIFIER_KEYS.has(event.key)) return false;
+
+    // A focused native control gets its own activation keys before the shortcut stack sees them.
+    if (controlOwnsKey(event.target, event)) return false;
 
     const typing = isTypingTarget(event.target);
 
@@ -473,6 +526,9 @@ export function createShortcutManager(
         update(nextBindings, nextOptions) {
           layer.bindings = prepare(nextBindings);
           layer.options = nextOptions;
+          // The React hook registers empty and supplies its real bindings here, so a diagnostic
+          // that only ran at `register` would never see the bindings anyone actually writes.
+          warnOnPrefixConflicts(layer.bindings, nextOptions.name);
         },
         dispose() {
           layers.delete(layer);
@@ -511,6 +567,23 @@ const MODIFIER_KEYS = new Set(["Control", "Meta", "Alt", "Shift"]);
  * Used to decide what a blocking layer may suppress while the user is typing. A key outside this
  * set and not a character belongs to the browser, not the field.
  */
+/**
+ * Roles whose widgets consume bare characters themselves.
+ *
+ * `textbox` takes text; the rest do type-ahead — Radix's Select jumps between options on a
+ * letter, and its menus move focus the same way, neither preventing default nor stopping
+ * propagation. A shortcut firing over them acts on top of a selection the user just made.
+ */
+const TYPE_AHEAD_ROLES = new Set([
+  "textbox",
+  "combobox",
+  "listbox",
+  "menu",
+  "menuitem",
+  "menuitemcheckbox",
+  "menuitemradio",
+]);
+
 const FIELD_KEYS = new Set([
   "Backspace",
   "Delete",

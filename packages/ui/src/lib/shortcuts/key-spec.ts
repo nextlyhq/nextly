@@ -60,7 +60,9 @@ function shiftIsMeaningful(key: string): boolean {
   // Space is a single character that shift does NOT produce, so Shift+Space is a distinct
   // keystroke and a plain `"Space"` binding must not answer for it.
   if (key === " ") return true;
-  return /[a-z0-9]/i.test(key);
+  // Unicode-aware on purpose: an ASCII-only test calls every non-Latin letter punctuation, so a
+  // binding for `ж` would also answer for `Ж` on a Cyrillic layout and could swallow capitals.
+  return /[\p{L}\p{N}]/u.test(key);
 }
 
 /**

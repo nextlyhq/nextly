@@ -755,3 +755,147 @@ describe("the plus key", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("standing down without leaving a mess", () => {
+  it("stops a key another owner claimed reaching a window listener", () => {
+    // Standing down is not the same as stepping aside. If a dialog dismissed on Escape and the
+    // manager merely returned, a window-level owner still ran — one Escape closing the overlay
+    // and cancelling an in-flight request. The manager is the only place that can prevent that,
+    // and the first owner not being us does not make it less of a double action.
+    const onWindow = vi.fn();
+    const manager = managerFor();
+    const detach = manager.attach(document);
+    const dismiss = (e: Event): void => {
+      e.preventDefault();
+    };
+    document.addEventListener("keydown", dismiss, { capture: true });
+    window.addEventListener("keydown", onWindow);
+    document.body.dispatchEvent(press("Escape"));
+    window.removeEventListener("keydown", onWindow);
+    document.removeEventListener("keydown", dismiss, { capture: true });
+    detach();
+
+    expect(onWindow).not.toHaveBeenCalled();
+  });
+
+  it("abandons a half-typed sequence when another owner takes a key", () => {
+    // After `g`, an Escape that closed a dialog is a real keystroke. Leaving the prefix pending
+    // let a later `d` complete `g d` straight across the interruption.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("g d", run)], { name: "shell", depth: 0 });
+    const detach = manager.attach(document);
+
+    document.body.dispatchEvent(press("g"));
+    const claimed = press("Escape");
+    claimed.preventDefault();
+    document.body.dispatchEvent(claimed);
+    document.body.dispatchEvent(press("d"));
+    detach();
+
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("diagnostics on the path people actually use", () => {
+  it("reports a prefix conflict introduced through update()", () => {
+    // The React hook registers empty and supplies its real bindings through update, so a check
+    // that only ran at register would never see a single binding anyone wrote.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    resetDevWarnings();
+    const manager = managerFor();
+    const reg = manager.register([], { name: "shell", depth: 0 });
+    reg.update([binding("g", vi.fn()), binding("g d", vi.fn())], {
+      name: "shell",
+      depth: 0,
+    });
+    const said = warn.mock.calls.map(c => String(c[0])).join(" ");
+    warn.mockRestore();
+    expect(said).toContain("prefix");
+  });
+});
+
+describe("keys the focused control owns", () => {
+  it("lets a focused checkbox have Space", () => {
+    // A checkbox is not a typing target, so bare letters should still fire over it — but Space
+    // is how it toggles. A global Space binding silently breaking every checkbox is worse than
+    // the shortcut not firing.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("Space", run)], { name: "canvas", depth: 0 });
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    document.body.append(box);
+    const detach = manager.attach(document);
+    box.dispatchEvent(press(" "));
+    detach();
+    box.remove();
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("still fires a bare letter over that same checkbox", () => {
+    // The positive control: the guard must be about the keys the control owns, not a blanket
+    // exemption that would undo the reason checkboxes are not typing targets.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("n", run)], { name: "shell", depth: 0 });
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    document.body.append(box);
+    const detach = manager.attach(document);
+    box.dispatchEvent(press("n"));
+    detach();
+    box.remove();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a menu's type-ahead alone", () => {
+    // Radix menus move focus on unmodified letters without preventing default or stopping
+    // propagation, and this kit's DropdownMenu and ContextMenu wrap them.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("n", run)], { name: "shell", depth: 0 });
+    const item = document.createElement("div");
+    item.setAttribute("role", "menuitem");
+    document.body.append(item);
+    const detach = manager.attach(document);
+    item.dispatchEvent(press("n"));
+    detach();
+    item.remove();
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("layouts that are not US English", () => {
+  it("lets an AltGraph character be typed under a blocking layer", () => {
+    // On many layouts `@` and `€` arrive with ctrlKey AND altKey set. That is text entry, not a
+    // chord, and it is not composition either — isComposing never covers it.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("@", { ctrlKey: true, altKey: true });
+    Object.defineProperty(event, "getModifierState", {
+      value: (k: string) => k === "AltGraph",
+    });
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("distinguishes shift for a non-ASCII letter", () => {
+    // An ASCII-only test classes every non-Latin letter as punctuation and skips the shift
+    // comparison, so a binding for a Cyrillic letter also answered for its capital.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("\u0436", run)], { name: "shell", depth: 0 });
+    manager.handle(press("\u0416", { shiftKey: true }));
+    expect(run).not.toHaveBeenCalled();
+  });
+});
