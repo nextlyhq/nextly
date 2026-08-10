@@ -90,6 +90,20 @@ export interface StyleCompileContext {
    */
   mayFetchUrl?: MayFetchUrl;
   /**
+   * What this run's fetch policy IS, for a reader deciding whether a stylesheet
+   * compiled earlier may be reused.
+   *
+   * Only needed when `mayFetchUrl` is supplied directly. A predicate is opaque —
+   * nothing can tell one function from another — so a caller that supplies one
+   * and wants its compiled sheets cached has to say which policy that function
+   * represents. Omit it and a reader treats every stored sheet as compiled under
+   * different rules, which is slower and never wrong.
+   *
+   * The compiler does not read this. It travels with the compile so the answer
+   * and the thing it describes cannot be recorded separately and disagree.
+   */
+  fetchPolicyId?: string;
+  /**
    * Base styles per block type, keyed by block name. One shared rule per type
    * rather than a copy inside every node: a page of forty default sections
    * stores no style bytes, resetting a node is deleting its own values, and

@@ -4,6 +4,7 @@ import {
   walkNodes,
   type BlockDocument,
   type CompiledPageCss,
+  type RemotePatternInput,
   type NodeStyles,
   type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
@@ -24,6 +25,27 @@ import type { BlockResolver } from "./resolver";
  */
 export interface PageStyles {
   css: string;
+  /**
+   * Which host-fetch policy this CSS was compiled under, when one was in force.
+   *
+   * A stored stylesheet is a CACHE of a compile, and a cache is only sound when
+   * it is keyed on every input the compile used. The host's fetch list is such
+   * an input: the same document compiled under two different lists produces two
+   * different sheets, one of which may name a host the other refuses. Without
+   * this field a reader cannot tell them apart, so a sheet written before a
+   * policy existed keeps publishing `url(https://unlisted…)` on a site that has
+   * since forbidden it, and the block markup beside it is bounded while the
+   * stylesheet is not.
+   *
+   * An OPAQUE label rather than the list itself. The reader only ever asks
+   * "same policy as now?", which is an equality test, and storing the answer
+   * rather than the rules keeps the stored artifact from having to be re-read
+   * whenever the shape of a pattern changes.
+   *
+   * Absent means compiled under NO policy, which is exactly what every artifact
+   * written before this field existed was.
+   */
+  fetchPolicyId?: string;
   /** Node id to generated class name. */
   classes: Record<string, string>;
   /**
@@ -57,11 +79,14 @@ export interface PageStyles {
 /** The compiler's output in the storable shape. */
 export function toPageStyles(
   compiled: CompiledPageCss,
-  scope?: string
+  scope?: string,
+  /** The policy the compile ran under, recorded so a later read can check it. */
+  fetchPolicyId?: string
 ): PageStyles {
   const styles: PageStyles = {
     css: compiled.css,
     classes: Object.fromEntries(compiled.classes),
+    ...(fetchPolicyId === undefined ? {} : { fetchPolicyId }),
   };
   // Carried through because THIS is the shape that gets stored: a compiler that
   // splits the sheet and a writer that drops half of it leave the gated rules
@@ -322,6 +347,97 @@ function withGatedRules(
  * path cannot get this wrong; a consumer assembling styles by hand can, which is why the prune is
  * exported alongside this.
  */
+/**
+ * A stable label for a host-fetch policy, or `undefined` when there is none.
+ *
+ * Derived from the patterns rather than assigned by a caller, so it changes
+ * exactly when the policy does and there is nothing to remember to bump. Sorted
+ * before joining because two lists holding the same entries in a different
+ * order are the same policy, and a label that disagreed would recompile every
+ * stored sheet on a cosmetic reordering.
+ *
+ * Written as JSON, for two reasons that are both about being WRONG in a way
+ * nobody would see.
+ *
+ * It has to survive storage. This label is persisted inside the stylesheet
+ * artifact, and that artifact is written to a JSON column — which on PostgreSQL
+ * cannot hold a NUL byte at all. A separator chosen for being impossible in a
+ * hostname is exactly the kind that is also impossible to store, and the failure
+ * would be a save that errors only once a site turns the policy on.
+ *
+ * It has to keep ABSENT and EMPTY apart. `isAllowedRemoteUrl` reads an omitted
+ * `port` as "any port" and `port: ""` as "the default port only", so a policy
+ * tightened from one to the other is a different policy. Joining fields into a
+ * string collapses that difference, and a stylesheet compiled under the broader
+ * rule would go on being served under the narrower one. `JSON.stringify` drops
+ * an undefined field and keeps an empty one, which is precisely the distinction.
+ */
+export function fetchPolicyLabel(
+  patterns: readonly RemotePatternInput[] | undefined
+): string | undefined {
+  if (patterns === undefined) return undefined;
+  const parts = patterns.map(pattern => {
+    // A `URL` keeps the trailing colon on `protocol` and answers "" for the
+    // fields it has none of; the object form omits them. Normalised to the
+    // object's spelling so the same policy written either way labels the same.
+    const fields =
+      pattern instanceof URL
+        ? {
+            protocol: pattern.protocol.replace(/:$/, ""),
+            hostname: pattern.hostname,
+            port: pattern.port,
+            pathname: pattern.pathname,
+            search: pattern.search,
+          }
+        : {
+            protocol: pattern.protocol,
+            hostname: pattern.hostname,
+            port: pattern.port,
+            pathname: pattern.pathname,
+            search: pattern.search,
+          };
+    // Key order is fixed by writing the members out, so two equal patterns
+    // cannot label differently because they were built in a different order.
+    return JSON.stringify([
+      fields.protocol ?? null,
+      fields.hostname,
+      fields.port ?? null,
+      fields.pathname ?? null,
+      fields.search ?? null,
+    ]);
+  });
+  // An EMPTY list is a real policy — it allows no remote host at all — and must
+  // not label the same as having no policy, which asks nothing. The version
+  // prefix means a later change to this encoding invalidates old stamps rather
+  // than silently matching them.
+  return JSON.stringify(["v1", ...parts.sort()]);
+}
+
+/**
+ * The identity of a fetch policy that declines to identify itself.
+ *
+ * A plain word, and deliberately not valid `fetchPolicyLabel` output: every
+ * label this module produces is a JSON array, so no stored stamp can ever equal
+ * this. That makes "a custom predicate with no stated identity" mean recompile
+ * every time — the slow answer and the correct one, since the alternative is
+ * serving CSS whose URLs were admitted by a function that has since changed.
+ *
+ * Storage-safe on purpose. It can be STAMPED onto a recompiled artifact and
+ * written to a JSON column, so it must not carry the control characters an
+ * impossible-looking sentinel invites.
+ */
+export const UNIDENTIFIED_FETCH_POLICY = "unidentified-fetch-policy";
+
+/** Caller-supplied policy for one style resolution. */
+export interface ResolveStyleOptions {
+  /**
+   * Which host-fetch policy is in force now. Compared against the stamp the
+   * stored artifact carries; a difference means that artifact was compiled
+   * under other rules and cannot be trusted for this render.
+   */
+  fetchPolicyId?: string;
+}
+
 export function resolvePageStyles(
   document: BlockDocument,
   styles: PageStyles | undefined,
@@ -347,7 +463,15 @@ export function resolvePageStyles(
    * {@link withGatedRules} append exactly the survivors. The other repair
    * causes still belong here: none of them is fixed by a per-node split.
    */
-  repairedDocument = false
+  repairedDocument = false,
+  /**
+   * The host-fetch policy in force for THIS render, as an opaque label.
+   *
+   * An object rather than a sixth positional: five is already where a call
+   * stops reading by position, and the next thing added in line would sit
+   * beside a boolean with only its type to separate them.
+   */
+  options: ResolveStyleOptions = {}
 ): PageStyles {
   // An artifact naming classes for nodes this document does not contain was compiled from a
   // DIFFERENT, larger tree — which is exactly what pruning produces. Its `css` may carry those
@@ -357,8 +481,26 @@ export function resolvePageStyles(
   // the flag defaults to false and nothing else would notice.
   const compiledFromAnotherTree =
     styles !== undefined && artifactDescribesUnaccountedNodes(styles, document);
+  // A stored sheet compiled under a DIFFERENT fetch policy than the one in
+  // force is untrusted for the same reason a sheet compiled from a larger tree
+  // is: its `url(...)` values were admitted by rules that no longer apply, and
+  // the reader cannot tell which of them the current rules would refuse without
+  // compiling again. So it is treated as a repair cause, which already means
+  // recompile when the inputs are there and withhold the CSS when they are not.
+  //
+  // Equality, not containment. A list that only ever grew would still be safe
+  // to reuse a sheet from, but deciding that needs the rules rather than the
+  // label, and a reader that has to reason about the rules is one that can get
+  // it wrong quietly.
+  const compiledUnderAnotherPolicy =
+    styles !== undefined && styles.fetchPolicyId !== options.fetchPolicyId;
 
-  if (styles && !repairedDocument && !compiledFromAnotherTree) {
+  if (
+    styles &&
+    !repairedDocument &&
+    !compiledFromAnotherTree &&
+    !compiledUnderAnotherPolicy
+  ) {
     const normalized = normalizeStoredStyles(styles, document);
     // A refused artifact had its classes rebuilt, so the gated rules — written
     // against the classes it USED to carry — would select nothing. Nothing is
@@ -369,7 +511,9 @@ export function resolvePageStyles(
   }
   if (
     styles &&
-    (repairedDocument || compiledFromAnotherTree) &&
+    (repairedDocument ||
+      compiledFromAnotherTree ||
+      compiledUnderAnotherPolicy) &&
     styleContext === undefined
   ) {
     return { ...normalizeStoredStyles(styles, document).styles, css: "" };
@@ -379,7 +523,11 @@ export function resolvePageStyles(
       styleContext.blockBases === undefined
         ? { ...styleContext, blockBases: blockBasesFor(document, blocks) }
         : styleContext;
-    return toPageStyles(compilePageCss(document, context), context.scope);
+    return toPageStyles(
+      compilePageCss(document, context),
+      context.scope,
+      options.fetchPolicyId
+    );
   }
   return {
     css: "",
