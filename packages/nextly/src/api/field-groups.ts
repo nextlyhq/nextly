@@ -21,6 +21,11 @@ import { z } from "zod";
 
 import { getService } from "../di";
 import { clampLimit } from "../domains/collections/query/query-parser";
+import type {
+  CreateFieldGroupInput,
+  FieldGroupMetadataService,
+} from "../domains/field-groups/services/field-group-metadata-service";
+import { MAX_FIELD_GROUP_SLUG_LENGTH } from "../domains/field-groups/services/field-group-schema-service";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { resolveComponentTableName } from "../domains/schema/utils/resolve-table-name";
 import { getCachedNextly } from "../init";
@@ -38,11 +43,33 @@ async function getComponentRegistry(): Promise<FieldGroupRegistryService> {
   return getService("fieldGroupRegistryService");
 }
 
+/**
+ * The service that owns a field group's table and its registry row together.
+ *
+ * This route used to call the registry directly, which wrote the row and made no table: it answered
+ * 201 for a field group whose `comp_<slug>` did not exist, and every later read and write to it
+ * failed against the database.
+ */
+async function getFieldGroupMetadataService(): Promise<FieldGroupMetadataService> {
+  await getCachedNextly();
+  return getService("fieldGroupMetadataService");
+}
+
 const createComponentSchema = z.object({
   slug: z
     .string()
     .min(1, "Slug is required")
-    .max(255, "Slug must be 255 characters or less")
+    // Bounded by the longest IDENTIFIER a field group generates, not by the slug itself and not by
+    // any column width. The slug is prefixed into a table name and that table name is prefixed and
+    // suffixed into `idx_comp_<slug>_parent`, sixteen characters longer than what the caller typed.
+    // The product's usual 50 therefore still yields a 66-character index name: MySQL rejects past
+    // 64, and PostgreSQL silently truncates past 63 — leaving an index under a name nothing can
+    // address. Accepted here, the table is created and the index creation fails, so the field group
+    // is recorded failed with an unbound table and the route still answers 201.
+    .max(
+      MAX_FIELD_GROUP_SLUG_LENGTH,
+      `Slug must be ${MAX_FIELD_GROUP_SLUG_LENGTH} characters or less`
+    )
     .regex(
       /^[a-z][a-z0-9-]*$/,
       "Slug must start with a letter and contain only lowercase letters, numbers, and hyphens"
@@ -164,7 +191,7 @@ export const POST = withErrorHandler(async (request: Request) => {
 
   // Boot services before the permission check (see GET) so lazy DI init does
   // not turn a valid caller's first request into a 403/503.
-  const registry = await getComponentRegistry();
+  const metadata = await getFieldGroupMetadataService();
 
   await requireRouteAnyPermission(request, [
     { action: "create", resource: "settings" },
@@ -190,13 +217,11 @@ export const POST = withErrorHandler(async (request: Request) => {
 
   // Validated by assertValidFieldsPayload above; cast through `unknown`
   // to the registry's config type while keeping the payload unstripped.
-  const fields = validated.fields as unknown as Parameters<
-    typeof registry.registerComponent
-  >[0]["fields"];
+  const fields = validated.fields as unknown as CreateFieldGroupInput["fields"];
 
   const schemaHash = calculateSchemaHash(fields);
 
-  const component = await registry.registerComponent({
+  const { record, migrationStatus } = await metadata.createFieldGroup({
     slug: validated.slug,
     label: validated.label,
     tableName,
@@ -208,5 +233,13 @@ export const POST = withErrorHandler(async (request: Request) => {
     schemaHash,
   });
 
-  return respondMutation("Field group created.", component, { status: 201 });
+  // The status is reported rather than swallowed. A create whose DDL failed still has a row
+  // describing what was attempted, and answering an unqualified success for it is what let a field
+  // group with no table look healthy.
+  const message =
+    migrationStatus === "applied"
+      ? "Field group created."
+      : "Field group created, but its table could not be provisioned. The field group is recorded with a failed migration and holds its slug, so creating it again is refused as a duplicate: check the server logs, then delete this field group before creating it again.";
+
+  return respondMutation(message, record, { status: 201 });
 });

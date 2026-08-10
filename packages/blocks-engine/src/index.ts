@@ -287,3 +287,14 @@ export type { SiteSheetArtifact, SiteSheetInput } from "./style/site-sheet";
 export { compileSiteSheet } from "./style/site-sheet";
 export { styleOrigin } from "./style/style-origin";
 export { BREAKPOINT_AXES } from "./style/breakpoint-axes";
+
+// The remote-host policy: which hosts a compiled page may fetch from. Exported
+// so the React renderer applies the SAME matcher the style compiler does.
+export {
+  isAllowedRemoteUrl,
+  isFetchableUrl,
+  isRemoteUrl,
+  normalizeUrl,
+  type RemotePattern,
+  type RemotePatternInput,
+} from "./url-policy";
