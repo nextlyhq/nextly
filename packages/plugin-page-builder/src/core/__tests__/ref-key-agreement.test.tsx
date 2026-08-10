@@ -274,8 +274,12 @@ describe("custom CSS boundaries a shared reusable block depends on", () => {
     // boundary that stops one block's CSS restyling another.
     const { css } = sanitizeBlockCss(`.${DOC_A} p { color: red }`, NODE, DOC_A);
 
-    expect(css).toContain(`.${NODE}`);
-    expect(css).toContain(`.${DOC_A}`);
+    // ORDER, not merely presence. The document root is the block's ANCESTOR, so the block class
+    // has to go inside it. Prepending it in front produces `.<node> .<document> p`, which asks for
+    // a document root inside a block and matches nothing — and an assertion that both names occur
+    // passes on exactly that.
+    expect(css).toContain(`.${DOC_A} .${NODE}`);
+    expect(css).not.toContain(`.${NODE} .${DOC_A}`);
   });
 
   it("namespaces a keyframe name per DOCUMENT, not only per node", () => {

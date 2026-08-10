@@ -730,7 +730,32 @@ export function sanitizeCustomCss(
         const carriesDocument = outer === undefined || hasClass(outer);
         if (carriesBlock && carriesDocument) continue;
 
-        if (!carriesBlock) {
+        // The document root is the block's ANCESTOR, so the block class always goes INSIDE it.
+        // Prepending to the head is only correct when the document class is not already there —
+        // otherwise it produces `.<block> .<document> sel`, which asks for a document root nested
+        // inside a block and matches nothing, so the rule silently disappears.
+        if (!carriesBlock && carriesDocument && outer !== undefined) {
+          // Insert directly after the outer class and its combinator rather than at the head.
+          let outerItem: unknown = null;
+          sel.children.forEach((node, item) => {
+            if (
+              outerItem === null &&
+              node.type === "ClassSelector" &&
+              node.name === outer
+            ) {
+              outerItem = item;
+            }
+          });
+          if (outerItem !== null) {
+            const before = (outerItem as { next?: unknown }).next ?? null;
+            const at = before as Parameters<typeof sel.children.insertData>[1];
+            sel.children.insertData({ type: "Combinator", name: " " }, at);
+            sel.children.insertData(
+              { type: "ClassSelector", name: scopeClass },
+              at
+            );
+          }
+        } else if (!carriesBlock) {
           sel.children.prependData({ type: "Combinator", name: " " });
           sel.children.prependData({ type: "ClassSelector", name: scopeClass });
         }
