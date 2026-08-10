@@ -88,13 +88,20 @@
 
 /**
  * Table Header & Footer Background + Border System
+ *
+ * Declared here rather than in the theme's token file, so a change to the
+ * theme's surfaces does not reach it. Both values therefore carry no chroma of
+ * their own: a header sitting a step above the card is an elevation cue, and a
+ * hue held here would tint that step independently of every surface around it.
+ * The dark value keeps its lightness, which is what separates the header from
+ * the card beneath it.
  */
 .nextly-admin {
   --nx-table-header-bg: oklch(1 0 0);
 }
 
 .nextly-admin.dark {
-  --nx-table-header-bg: oklch(0.1573 0.0228 265.66);
+  --nx-table-header-bg: oklch(0.1573 0 0);
 }
 
 .nextly-admin thead {
