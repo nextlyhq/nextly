@@ -323,3 +323,31 @@ describe("a node id that collides with an object's own prototype", () => {
     expect(css).toContain("color: blue");
   });
 });
+
+describe("the trace of a document that gates a node", () => {
+  const traced = (document: BlockDocument) =>
+    compilePageCss(document, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      namedClasses: [],
+      blockBases: {},
+      trace: true,
+    } as never);
+
+  it("records only what the returned sheet contains", () => {
+    // The trace is the record of the cascade a reader received. A gated node's declarations leave
+    // `css`, so leaving them in the trace would describe declarations the browser never got — and
+    // at an interleaved position the separately appended entry does not occupy either.
+    const { css, trace } = traced(
+      page([
+        conditioned({ styles: styles({ color: "red" }) }),
+        node({ styles: styles({ color: "blue" }) }, "n2"),
+      ])
+    );
+
+    const traced_ = JSON.stringify(trace ?? []);
+    // Positive control: the surviving node IS traced, so an empty trace cannot pass this.
+    expect(traced_).toContain("blue");
+    expect(css).toContain("color: blue");
+    expect(traced_).not.toContain("red");
+  });
+});

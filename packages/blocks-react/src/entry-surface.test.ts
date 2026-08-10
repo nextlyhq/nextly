@@ -90,7 +90,11 @@ const SOURCE_MODULES: ReadonlyArray<{
     // not undefined, the other required a plain record — so a malformed map counted as coverage
     // while going unread, and the stale sheet shipped a hidden block's rules. It crosses a module
     // boundary inside this package; it is not a consumer surface.
-    internal: ["isUsableGatedEntry", "readableGatedRules"],
+    internal: [
+      "isRecordedGatedEntry",
+      "isUsableGatedEntry",
+      "readableGatedRules",
+    ],
   },
   {
     name: "visibility",

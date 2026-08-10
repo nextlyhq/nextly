@@ -179,7 +179,7 @@ function artifactDescribesUnaccountedNodes(
   const gated = readableGatedRules(styles);
   const present = new Set(documentNodeIds(document));
   return Object.keys(map).some(
-    id => !present.has(id) && !isUsableGatedEntry(gated?.[id])
+    id => !present.has(id) && !isRecordedGatedEntry(gated?.[id])
   );
 }
 
@@ -252,11 +252,29 @@ function normalizeStoredStyles(
  * the split, and gating then forces the recompile-or-withhold path.
  */
 /**
- * Whether a gated entry is a rule string a reader can actually append.
+ * Whether the compiler RECORDED this node — the coverage question.
  *
- * Shared with the coverage test, because certifying a node as covered by an entry the delivery
- * then refuses to read is the same divergence one value deeper: the repair is skipped on the
- * strength of a key whose value never reaches the sheet.
+ * An empty string is a legitimate record, not a missing one. A gated node with no node-local or
+ * device rules of its own compiles to `serializeRules([])`, which is `""`, and a gated ancestor's
+ * unstyled child does the same. Rejecting it would classify a perfectly fresh artifact as
+ * uncovered, forcing the repair — and on the ordinary stored-artifact path with no compile context
+ * that clears the WHOLE sheet, so every visible sibling loses its styling because one hidden node
+ * happened to carry no rules.
+ *
+ * Deliberately different from {@link isUsableGatedEntry}, which answers a different question. The
+ * two were briefly one function and that is what produced this defect: coverage asks whether the
+ * node was accounted for, delivery asks whether there is anything to append, and `""` answers yes
+ * to the first and no to the second.
+ */
+export function isRecordedGatedEntry(value: unknown): value is string {
+  return typeof value === "string";
+}
+
+/**
+ * Whether a gated entry carries rules worth appending — the DELIVERY question.
+ *
+ * Non-empty, because appending `""` would add a blank line to the sheet for every gated node that
+ * styles nothing and make an otherwise byte-identical page differ.
  */
 export function isUsableGatedEntry(value: unknown): value is string {
   return typeof value === "string" && value !== "";

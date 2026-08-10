@@ -126,6 +126,16 @@ const text = defineBlock<{ value: string }>({
   render: ({ props, className }) => <p className={className}>{props.value}</p>,
 });
 
+/** A second type, so a document can lose every instance of one and keep the other. */
+const onlyHidden = defineBlock<{ value: string }>({
+  name: "test/only-hidden",
+  version: 1,
+  description: "Renders its value.",
+  example: { props: { value: "hi" } },
+  defaultProps: { value: "" },
+  render: ({ props, className }) => <p className={className}>{props.value}</p>,
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
@@ -3123,6 +3133,69 @@ describe("PageRenderer", () => {
       expect(html).not.toContain("gated body");
       expect(html).not.toContain("gated-asset.png");
       expect(html).toContain("public body");
+    });
+
+    it("still withholds when pruning removes the last node of a block type", async () => {
+      // A block type's defaults are emitted ONCE into the main sheet, shared by every instance, so
+      // no per-node entry can account for them. When the last instance of a type is pruned, the
+      // stored sheet keeps publishing that type's defaults for a block nobody was served.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/only-hidden", {
+              props: { value: "gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([
+            text as AnyBlockDefinition,
+            onlyHidden as AnyBlockDefinition,
+          ])}
+          styles={{
+            css: ".nx-bt-test--only-hidden { background-image: url(/type-default.png) }",
+            classes: { a: "nx-a", b: "nx-b" },
+            gated: { a: "" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated body");
+      expect(html).not.toContain("type-default.png");
+      expect(html).toContain("public body");
+    });
+
+    it("keeps the sheet when a gated node's entry is legitimately empty", async () => {
+      // A gated node with no node-local rules of its own compiles to `serializeRules([])`, which
+      // is `""`. That is the compiler RECORDING the node, not failing to. Reading it as uncovered
+      // forces the repair, and on this path — stored artifact, no compile context — the repair
+      // clears the whole sheet, so a visible sibling loses its styling because a hidden node
+      // happened to carry no rules.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            css: ".nx-b { color: teal }",
+            classes: { a: "nx-a", b: "nx-b" },
+            gated: { a: "" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated body");
+      expect(html).toContain("public body");
+      expect(html).toContain("color: teal");
     });
 
     it("recompiles rather than withholding when it can", async () => {

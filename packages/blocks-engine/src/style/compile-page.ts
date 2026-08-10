@@ -1208,6 +1208,7 @@ export function compilePageCss(
       continue;
     }
     const selector = `${pageRoot} .${className}`;
+    const traceBeforeNode = trace?.length ?? 0;
     const nodeRules = [
       ...envelopeRules(
         node.styles,
@@ -1237,6 +1238,13 @@ export function compilePageCss(
     // each entry.
     if (nodeGated) {
       gated[node.id] = serializeRules(nodeRules);
+      // The trace has to describe the sheet that was RETURNED. `envelopeRules` appended this
+      // node's declarations while building them, and they are now leaving `css` — so left in
+      // place they would report declarations the browser never received, at an interleaved
+      // position the appended entry does not occupy either. Rolled back to where this node
+      // started rather than filtered afterwards, because the entries carry no marker saying
+      // which node produced them.
+      if (trace !== undefined) trace.length = traceBeforeNode;
       continue;
     }
     rules.push(...nodeRules);

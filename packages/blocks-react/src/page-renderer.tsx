@@ -21,7 +21,7 @@ import {
 } from "./resolver";
 import { dedupeNodeIds, sanitizeDocument } from "./sanitize";
 import {
-  isUsableGatedEntry,
+  isRecordedGatedEntry,
   readableGatedRules,
   resolvePageStyles,
   styleTextForInjection,
@@ -109,13 +109,21 @@ function gatedMapCoversPrunedNodes(
   gated: Readonly<Record<string, unknown>>
 ): boolean {
   const surviving = new Set<string>();
+  const survivingTypes = new Set<string>();
   walkNodes(after.nodes, node => {
     surviving.add(node.id);
+    survivingTypes.add(node.type);
   });
   let covered = true;
   walkNodes(before.nodes, node => {
     if (surviving.has(node.id)) return;
-    if (!isUsableGatedEntry(gated[node.id])) covered = false;
+    if (!isRecordedGatedEntry(gated[node.id])) covered = false;
+    // The map holds a node's OWN rules. A block type's defaults are shared, emitted once per type
+    // into the main sheet, and stay there — so when pruning removes the last instance of a type,
+    // the stored sheet still publishes that type's defaults, and any `url(...)` in them, for a
+    // block nobody was served. Only a recompile can drop a type-level rule, so the artifact cannot
+    // cover this case and must not claim to.
+    if (!survivingTypes.has(node.type)) covered = false;
   });
   return covered;
 }
