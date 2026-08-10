@@ -22,6 +22,8 @@
 import { describe, expect, it } from "vitest";
 
 import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
+import { FieldGroupSchemaService } from "../../../field-groups/services/field-group-schema-service";
+import { parseCreateTable } from "../../__tests__/helpers/parse-generated-ddl";
 import { getColumnDescriptor } from "../../services/field-column-descriptor";
 import { normalizeType } from "../diff/normalize-type";
 import { isTypesCompatible } from "../rename-detector-type-families";
@@ -73,6 +75,27 @@ const SHAPES: Record<DynamicFieldType, Array<Record<string, unknown>>> = {
 };
 
 /**
+ * One field per shape in `SHAPES`, named so a generated table can hold them all at once.
+ *
+ * Named per shape rather than per type: two variations of one type are two different columns, and
+ * reusing a name would have the second overwrite the first in the parsed column map.
+ */
+function probeFields(): FieldDefinition[] {
+  const out: FieldDefinition[] = [];
+  for (const [type, shapes] of Object.entries(SHAPES) as Array<
+    [DynamicFieldType, Array<Record<string, unknown>>]
+  >) {
+    shapes.forEach((shape, i) => {
+      out.push({
+        name: `probe_${type.toLowerCase()}_${i}`,
+        ...shape,
+      } as unknown as FieldDefinition);
+    });
+  }
+  return out;
+}
+
+/**
  * Every column type the product can put in a table, for one dialect.
  *
  * Both sides are collected because a rename pairs them: the LIVE column carries whatever the builder
@@ -81,33 +104,64 @@ const SHAPES: Record<DynamicFieldType, Array<Record<string, unknown>>> = {
  */
 function reachableTypes(dialect: SupportedDialect): string[] {
   const found = new Set<string>();
-  const service = new DynamicCollectionSchemaService(undefined, dialect);
+  const collections = new DynamicCollectionSchemaService(undefined, dialect);
+  const fieldGroups = new FieldGroupSchemaService(dialect);
+  const probes = probeFields();
 
-  for (const [type, shapes] of Object.entries(SHAPES) as Array<
-    [DynamicFieldType, Array<Record<string, unknown>>]
-  >) {
-    for (const shape of shapes) {
-      const field = {
-        name: `probe_${type.toLowerCase()}`,
-        ...shape,
-      } as unknown as FieldDefinition;
+  for (const field of probes) {
+    const described = getColumnDescriptor(field, dialect, "collection");
+    if (described) found.add(described.dialectType);
 
-      const described = getColumnDescriptor(field, dialect, "collection");
-      if (described) found.add(described.dialectType);
-
-      // What a table built by that rendering REPORTS when introspected, which is the string the
-      // detector actually receives. The emitted DDL spelling is not it, and using it here invents
-      // pairs that no rename can produce.
-      const emitted = service.mapFieldTypeToSQL(
-        field.type,
-        undefined,
-        field.options,
-        field.validation
-      );
-      if (emitted) found.add(asIntrospected(emitted, dialect));
-    }
+    // What a table built by that rendering REPORTS when introspected, which is the string the
+    // detector actually receives. The emitted DDL spelling is not it, and using it here invents
+    // pairs that no rename can produce.
+    const emitted = collections.mapFieldTypeToSQL(
+      field.type,
+      undefined,
+      field.options,
+      field.validation
+    );
+    if (emitted) found.add(asIntrospected(emitted, dialect));
   }
+
+  for (const type of fieldGroupTypes(fieldGroups, probes, dialect)) {
+    found.add(type);
+  }
+
   return [...found];
+}
+
+/**
+ * The column types the OTHER builder puts in a table a rename can touch.
+ *
+ * A field group's storage is a `comp_` table built by `FieldGroupSchemaService`, and a rename inside
+ * one compares live columns that builder produced. It does not render every type the way the
+ * collection builder does — a single relationship reaches `UUID` on PostgreSQL and a date reaches
+ * `DATETIME` on MySQL, neither of which the collection builder emits — so a universe built from one
+ * builder leaves the pairs only the other can produce unmeasured.
+ *
+ * Read out of the generated DDL rather than from any table of declared types, because what the
+ * builder RENDERS is what reaches the database, and those two have already diverged once.
+ *
+ * Separate from `reachableTypes` so the test can assert this contributed anything at all. A parse
+ * that silently found nothing would leave every assertion below passing while measuring one builder
+ * instead of two, which is the failure this addition exists to fix.
+ */
+function fieldGroupTypes(
+  service: FieldGroupSchemaService,
+  probes: FieldDefinition[],
+  dialect: SupportedDialect
+): string[] {
+  const columns = parseCreateTable(
+    service.generateMigrationSQL(
+      "comp_probe",
+      probes as unknown as Parameters<
+        FieldGroupSchemaService["generateMigrationSQL"]
+      >[1],
+      {}
+    )
+  );
+  return [...columns.values()].map(c => asIntrospected(c.type, dialect));
 }
 
 /**
@@ -128,9 +182,15 @@ function reachableTypes(dialect: SupportedDialect): string[] {
 function asIntrospected(declared: string, dialect: SupportedDialect): string {
   if (dialect === "sqlite") return declared;
   if (dialect === "mysql") {
-    // The one declared spelling MySQL does not preserve. Everything else — int, varchar(n), text,
-    // json, decimal(p,s), datetime — is reported back as declared.
-    return /^bool(ean)?$/i.test(declared.trim()) ? "tinyint(1)" : declared;
+    const t = declared.trim();
+    // The two declared spellings MySQL does not preserve, both measured against a live server
+    // rather than inferred: a column declared `boolean` reads back as `tinyint(1)` because MySQL
+    // has no boolean type, and one declared `integer` reads back as `int` because that is the
+    // canonical name for the type. Everything else the builders emit — varchar(n), text, json,
+    // decimal(p,s), datetime, double — is reported exactly as declared.
+    if (/^bool(ean)?$/i.test(t)) return "tinyint(1)";
+    if (/^int(eger)?$/i.test(t)) return "int";
+    return declared;
   }
   // PostgreSQL: udt_name drops the modifier and names the underlying type, which is exactly what
   // `normalizeType` canonicalises to. Reusing it keeps one definition of that mapping rather than a
@@ -175,6 +235,20 @@ describe("the diff and the rename detector agree about what one column is", () =
       expect(types.length, "types reachable on this dialect").toBeGreaterThan(
         3
       );
+
+      // The second builder is IN the universe, not merely asked for. Its columns are read by
+      // parsing generated DDL, and a parse that stops matching what the builder emits fails silently
+      // — it returns nothing, every pair it would have contributed goes unmeasured, and the ratchet
+      // keeps passing while covering half of what it claims. That is how the divergence this file
+      // records went unnoticed in the first place.
+      expect(
+        fieldGroupTypes(
+          new FieldGroupSchemaService(dialect),
+          probeFields(),
+          dialect
+        ).length,
+        "columns read from the field-group builder's DDL"
+      ).toBeGreaterThan(3);
 
       const disagreements: string[] = [];
       for (const from of types) {
