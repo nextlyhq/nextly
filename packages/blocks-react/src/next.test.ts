@@ -921,6 +921,92 @@ describe("createBlocksPage", () => {
     expect(seen?.canonical).toBe("/help/faq%3Fall");
   });
 
+  it("takes the earliest usable image, not the fastest lookup", async () => {
+    // Resolved concurrently, so completion order is not document order. The
+    // renderer shows the earliest usable image; picking whichever request
+    // finished first would publish a different picture than the page displays,
+    // silently and only under load.
+    const early = "77777777-7777-4777-8777-777777777777";
+    const late = "88888888-8888-4888-8888-888888888888";
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        { id: "1", type: "core/image", version: 1, props: { mediaId: early } },
+        { id: "2", type: "core/image", version: 1, props: { mediaId: late } },
+      ],
+    };
+    let seen: DerivedPageSeo | undefined;
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      blocks: coreResolver(),
+      nextly: reader({ slug: "about", content: page }),
+      // The EARLIER id answers slowly and the later one immediately, so a
+      // first-to-finish implementation would choose the wrong picture.
+      resolveMedia: async (id: string) => {
+        if (id === late) return { url: "/late.png" };
+        await new Promise(resolve => setTimeout(resolve, 20));
+        return { url: "/early.png" };
+      },
+      metadata: (_e, _c, derived) => {
+        seen = derived;
+        return {};
+      },
+    });
+
+    await route.generateMetadata({ params: { slug: ["about"] } });
+
+    expect(seen?.image).toBe("/early.png");
+  });
+
+  it("does not resolve missing media one round trip at a time", async () => {
+    // A page whose first images all reference deleted media paid a lookup each
+    // before reaching a usable one, inside `generateMetadata` — enough of them
+    // and the page times out instead of rendering with a later good image.
+    const missing = Array.from(
+      { length: 5 },
+      (_, i) => `9999999${i}-9999-4999-8999-999999999999`
+    );
+    const good = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [...missing, good].map((mediaId, i) => ({
+        id: `n${i}`,
+        type: "core/image",
+        version: 1,
+        props: { mediaId },
+      })),
+    };
+    let inFlight = 0;
+    let peak = 0;
+    let seen: DerivedPageSeo | undefined;
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      blocks: coreResolver(),
+      nextly: reader({ slug: "about", content: page }),
+      resolveMedia: async (id: string) => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        inFlight -= 1;
+        return id === good ? { url: "/good.png" } : null;
+      },
+      metadata: (_e, _c, derived) => {
+        seen = derived;
+        return {};
+      },
+    });
+
+    await route.generateMetadata({ params: { slug: ["about"] } });
+
+    expect(seen?.image).toBe("/good.png");
+    // Serial resolution never exceeds one concurrent lookup.
+    expect(peak).toBeGreaterThan(1);
+  });
+
   it("passes the stored stylesheet through for the resolved entry", async () => {
     const styles = { css: ".a{color:red}", classes: { n1: "a" } };
     const props = await render({

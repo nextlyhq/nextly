@@ -285,14 +285,47 @@ async function derivePageSeo(
  * before the render, so letting a media read throw would fail the page over a
  * picture.
  */
+/**
+ * How many media lookups may be in flight at once.
+ *
+ * Small on purpose. This runs inside `generateMetadata`, so the work competes
+ * with producing the page rather than happening beside it, and the candidates
+ * are a page's images rather than a dataset. The number only has to stop a
+ * chain of deleted references from being paid one round trip at a time.
+ */
+const MEDIA_LOOKUP_BATCH = 5;
+
 async function firstUsableImage(
   candidates: string[] | undefined,
   resolveMedia: (id: string) => Promise<ResolvedMedia | null>
 ): Promise<string | undefined> {
-  for (const candidate of candidates ?? []) {
-    if (!looksLikeMediaId(candidate)) return candidate;
-    const media = await resolveMedia(candidate).catch(() => null);
-    if (media) return media.url;
+  const list = candidates ?? [];
+
+  for (let start = 0; start < list.length; start += MEDIA_LOOKUP_BATCH) {
+    const batch = list.slice(start, start + MEDIA_LOOKUP_BATCH);
+
+    // A candidate that is not a media id needs no lookup, and it is a usable
+    // answer the moment it is reached — so an earlier one settles the whole
+    // question before any request is issued for the ids after it.
+    const direct = batch.findIndex(c => !looksLikeMediaId(c));
+    const lookups = direct === -1 ? batch : batch.slice(0, direct);
+
+    // Resolved together rather than one at a time. Serially, a page whose
+    // first images all reference deleted media paid a round trip each before
+    // reaching a usable one, inside metadata generation — enough of them and
+    // the page times out instead of rendering with a later, perfectly good
+    // image.
+    const resolved = await Promise.all(
+      lookups.map(id => resolveMedia(id).catch(() => null))
+    );
+
+    // Scanned in DOCUMENT order, not completion order. The earliest usable
+    // candidate is the one the renderer would show, and picking whichever
+    // request happened to finish first would publish a different picture than
+    // the page displays — silently, and only under load.
+    const hit = resolved.findIndex(media => media !== null);
+    if (hit !== -1) return resolved[hit]?.url;
+    if (direct !== -1) return batch[direct];
   }
   return undefined;
 }
