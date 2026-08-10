@@ -18,6 +18,7 @@ import { randomUUID } from "crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq, desc } from "drizzle-orm";
 
+import type { RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import { env } from "../../../lib/env";
@@ -34,6 +35,11 @@ import { BaseService } from "../../../shared/base-service";
 import { encrypt, decrypt } from "../../../utils/encryption";
 // Pull adapter type into a normal `import type` declaration so the return
 // signature on createAdapterFromProvider satisfies consistent-type-imports.
+import {
+  changedProviderFields,
+  recordProviderActivity,
+  type EmailProviderActivityInput,
+} from "../provider-activity";
 import { describeProviderFailure } from "../provider-definition";
 import type { EmailProviderAdapter } from "../types";
 
@@ -465,7 +471,12 @@ export class EmailProviderService extends BaseService {
    * in a transaction to ensure only one default exists.
    */
   async createProvider(
-    data: CreateEmailProviderInput
+    data: CreateEmailProviderInput,
+    /**
+     * Who performed this, for the audit trail. Optional so an internal or
+     * seeded write needs no ceremony; those produce no entry by design.
+     */
+    actor?: RequestActor | null
   ): Promise<EmailProviderRecord> {
     // Reject an unregistered type and an unusable configuration BEFORE the
     // insert. Without this a row stores happily and fails only when something
@@ -511,7 +522,39 @@ export class EmailProviderService extends BaseService {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
+    // Recorded after the insert commits and before the read, so a trail entry
+    // cannot exist for a provider that was never stored.
+    await this.recordActivity({
+      action: "create",
+      providerId: id,
+      providerName: data.name,
+      providerType: data.type,
+      actor,
+    });
+
     return this.getProvider(id);
+  }
+
+  /**
+   * Record a provider mutation, and never let recording break the mutation.
+   *
+   * The write has already committed by the time this runs. `recordActivity`
+   * swallows its own failures for that reason, and this wrapper is the place
+   * that turns one into a log line -- a trail that quietly stops being written
+   * should be visible somewhere.
+   */
+  private async recordActivity(
+    input: EmailProviderActivityInput
+  ): Promise<void> {
+    try {
+      await recordProviderActivity(input);
+    } catch (error) {
+      this.logger.error("Failed to record email provider activity", {
+        providerId: input.providerId,
+        action: input.action,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -552,7 +595,8 @@ export class EmailProviderService extends BaseService {
    */
   async updateProvider(
     id: string,
-    data: UpdateEmailProviderInput
+    data: UpdateEmailProviderInput,
+    actor?: RequestActor | null
   ): Promise<EmailProviderRecord> {
     const currentRow = await this.getRawProvider(id);
 
@@ -662,6 +706,39 @@ export class EmailProviderService extends BaseService {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
+    // Field NAMES only, and `configuration` counted as one name rather than by
+    // its inner paths: naming `auth.pass` in a widely-readable row says which
+    // credential changed, which is a detail about the secret in a place the
+    // secret is not supposed to reach.
+    await this.recordActivity({
+      action: "update",
+      providerId: id,
+      providerName: data.name ?? currentRow.name,
+      providerType: effectiveType,
+      changedFields: changedProviderFields(
+        {
+          name: currentRow.name,
+          type: currentRow.type,
+          fromEmail: currentRow.fromEmail,
+          fromName: currentRow.fromName,
+          isDefault: currentRow.isDefault,
+          isActive: currentRow.isActive,
+          // Compared as the ENCRYPTED stored value against the encrypted
+          // replacement. Neither is read, and decrypting to diff would put
+          // credentials in memory for the benefit of a row that records no
+          // values.
+          configuration: currentRow.configuration,
+        },
+        {
+          ...data,
+          ...(updateData.configuration !== undefined
+            ? { configuration: updateData.configuration }
+            : {}),
+        }
+      ),
+      actor,
+    });
+
     return this.getProvider(id);
   }
 
@@ -674,7 +751,7 @@ export class EmailProviderService extends BaseService {
    *
    * @throws NextlyError BUSINESS_RULE_VIOLATION if provider is the default
    */
-  async deleteProvider(id: string): Promise<void> {
+  async deleteProvider(id: string, actor?: RequestActor | null): Promise<void> {
     let row;
     try {
       row = await this.getRawProvider(id);
@@ -707,6 +784,17 @@ export class EmailProviderService extends BaseService {
     await this.db
       .delete(this.emailProviders)
       .where(eq(this.emailProviders.id, id));
+
+    // Recorded from the row read before the delete, because after it there is
+    // nothing left to name. A deleted provider's entry is the one whose
+    // subject the reader can no longer recover any other way.
+    await this.recordActivity({
+      action: "delete",
+      providerId: id,
+      providerName: row.name,
+      providerType: row.type,
+      actor,
+    });
   }
 
   /**
@@ -717,8 +805,11 @@ export class EmailProviderService extends BaseService {
    *
    * @throws NextlyError NOT_FOUND if provider doesn't exist
    */
-  async setDefault(id: string): Promise<EmailProviderRecord> {
-    await this.getRawProvider(id);
+  async setDefault(
+    id: string,
+    actor?: RequestActor | null
+  ): Promise<EmailProviderRecord> {
+    const row = await this.getRawProvider(id);
 
     const now = new Date();
 
@@ -733,6 +824,19 @@ export class EmailProviderService extends BaseService {
       .update(this.emailProviders)
       .set({ isDefault: true, updatedAt: now })
       .where(eq(this.emailProviders.id, id));
+
+    // An `update` touching `isDefault`, because that is what it is. Promotion
+    // decides which provider sends every unrouted message, so it is the change
+    // most worth attributing and the least visible in the record it otherwise
+    // leaves -- one boolean, on two rows.
+    await this.recordActivity({
+      action: "update",
+      providerId: id,
+      providerName: row.name,
+      providerType: row.type,
+      changedFields: ["isDefault"],
+      actor,
+    });
 
     return this.getProvider(id);
   }
