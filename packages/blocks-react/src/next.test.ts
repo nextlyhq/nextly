@@ -35,7 +35,13 @@ function reader(
   records: Record<string, Record<string, unknown>> = {}
 ) {
   return {
-    find: vi.fn(async () => ({ items: [entry], meta: {} })),
+    find: vi.fn(async ({ collection }: { collection: string }) => ({
+      // Only the route's primary collection holds the page being rendered; a
+      // shadowing probe against another collection finds nothing unless a test
+      // says otherwise.
+      items: collection === "pages" ? [entry] : [],
+      meta: {},
+    })),
     findByID: vi.fn(async ({ id }: { id: string }) => records[id] ?? null),
     // A real instance exposes media as its OWN namespace, not as a dynamic
     // collection, so the double has to as well or it certifies a path that
@@ -540,6 +546,72 @@ describe("createBlocksPage", () => {
     await route.generateMetadata({ params: { slug: ["y"] } });
 
     expect(seen?.title).toBe("2024");
+  });
+
+  it("stays anonymous when resolving a reference", async () => {
+    // `mergeConfig` spreads the reader's defaults UNDER the call, so omitting
+    // `user` inherits whatever identity the reader was booted with — and this
+    // route resolves anonymously. `resolveContent` passes it for that reason.
+    const instance = reader(
+      { slug: "about", content: document },
+      { p1: { slug: "contact" } }
+    ) as unknown as { findByID: ReturnType<typeof vi.fn> };
+
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: instance as never,
+    });
+    await props.context?.resolveEntryPath("pages", "p1");
+
+    expect(instance.findByID).toHaveBeenCalledWith(
+      expect.objectContaining({ user: undefined })
+    );
+  });
+
+  it("keeps an unpublished reference's href on a draft-serving route", async () => {
+    // `draft: true` is a route mounted behind the app's own auth: it serves
+    // drafts through a trusted read, so visiting the path works and the button
+    // must not lose its destination.
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      draft: true,
+      nextly: reader(
+        { slug: "about", content: document },
+        { d1: { slug: "unreleased", status: "draft" } }
+      ),
+    });
+
+    await expect(props.context?.resolveEntryPath("pages", "d1")).resolves.toBe(
+      "/unreleased"
+    );
+  });
+
+  it("gives no path when an earlier collection owns the slug", async () => {
+    // The route resolves collections in order and stops at the first match, so
+    // this href would navigate to a DIFFERENT document under the same URL.
+    const instance = reader(
+      { slug: "about", content: document },
+      { p9: { slug: "shared" } }
+    ) as unknown as { find: ReturnType<typeof vi.fn> };
+    instance.find = vi.fn(async ({ collection }: { collection: string }) => ({
+      items:
+        collection === "pages"
+          ? [{ slug: "about", content: document }]
+          : [{ slug: "shared" }],
+      meta: {},
+    }));
+
+    const props = await render({
+      collections: ["pages", "posts"],
+      field: "content",
+      nextly: instance as never,
+    });
+
+    await expect(
+      props.context?.resolveEntryPath("posts", "p9")
+    ).resolves.toBeNull();
   });
 
   it("passes the stored stylesheet through for the resolved entry", async () => {

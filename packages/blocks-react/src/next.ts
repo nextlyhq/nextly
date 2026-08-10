@@ -367,6 +367,17 @@ function entryPathResolver(
 ): (collection: string, id: string) => Promise<string | null> {
   if (config.resolveEntryPath) return config.resolveEntryPath;
   const slugField = config.slugField ?? "slug";
+  const routeCollections = [...new Set(config.collections)];
+  // A route mounted behind the app's own auth (`draft: true`) serves drafts
+  // through a trusted, lifecycle-widened read, so a reference to an
+  // unpublished page DOES resolve when visited and must keep its href. A
+  // per-path `draft` function cannot be consulted here — it answers about a
+  // slug this lookup has not found yet — so only the unconditional form
+  // widens, and the conditional form stays on the safe published read.
+  const alwaysDraft = config.draft === true;
+  const overrideAccess = alwaysDraft || (config.overrideAccess ?? false);
+  const scope = alwaysDraft ? "all" : (config.status ?? "published");
+
   return async (collection: string, id: string) => {
     // Read under the ROUTE's own policy, not with access overridden. A link is
     // only useful if the path it names resolves, and this route resolves
@@ -378,18 +389,42 @@ function entryPathResolver(
     const record = await reader.findByID({
       collection,
       id,
-      overrideAccess: config.overrideAccess ?? false,
+      overrideAccess,
+      // Passed explicitly, even as `undefined`. `mergeConfig` spreads the
+      // reader's defaults under the call's arguments, so OMITTING this inherits
+      // whatever identity the reader was booted with — and this route resolves
+      // anonymously. `resolveContent` passes it for the same reason.
+      user: undefined,
     });
     if (!record) return null;
     // `findByID` carries no lifecycle scope, so the route's own is applied
     // here. A no-op on a status-less collection, which has no such field.
-    const scope = config.status ?? "published";
     const status = record.status;
     if (scope !== "all" && typeof status === "string" && status !== scope) {
       return null;
     }
     const slug = record[slugField];
     if (typeof slug !== "string") return null;
+
+    // The route resolves its collections IN ORDER and stops at the first match,
+    // so a slug an earlier collection also carries belongs to that one. Linking
+    // to this record's path would navigate somewhere else entirely — a
+    // different document, under the same URL — which is worse than no link.
+    const earlier = routeCollections.slice(
+      0,
+      routeCollections.indexOf(collection)
+    );
+    for (const candidate of earlier) {
+      const shadowing = await reader.find({
+        collection: candidate,
+        where: { [slugField]: { equals: slug } },
+        limit: 1,
+        overrideAccess,
+        user: undefined,
+      });
+      if (shadowing.items.length > 0) return null;
+    }
+
     // An empty slug is the HOMEPAGE, which the content route resolves at `/`
     // and pre-renders as `{ slug: [] }`. Treating it as missing would strip the
     // destination from every button pointing at the site root.
