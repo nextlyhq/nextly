@@ -94,6 +94,36 @@ export const gridStructure = declareStructure({
   slots: [{ name: "default" }],
 });
 
+export const coverStructure = declareStructure({
+  type: "core/cover",
+  isContainer: true,
+  slots: [{ name: "default" }],
+});
+
+export const offCanvasStructure = declareStructure({
+  type: "core/off-canvas",
+  isContainer: true,
+  slots: [{ name: "default" }],
+});
+
+export const queryLoopStructure = declareStructure({
+  type: "core/query-loop",
+  isContainer: true,
+  slots: [{ name: "default" }],
+});
+
+export const rowStructure = declareStructure({
+  type: "core/row",
+  isContainer: true,
+  slots: [{ name: "default" }],
+});
+
+export const contentCarouselStructure = declareStructure({
+  type: "core/content-carousel",
+  isContainer: true,
+  slots: [{ name: "default" }],
+});
+
 /** Whether a node's type is one this build has structure for. */
 export function hasStructure(node: BlockNode): boolean {
   return CORE_BLOCK_STRUCTURES[node.type] !== undefined;

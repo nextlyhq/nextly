@@ -1,3 +1,4 @@
+import { coverStructure } from "../../core/block-structure";
 import { defineBlock } from "../../core/registry";
 import { safeValue } from "../../core/style-compiler";
 
@@ -5,13 +6,11 @@ import { cssMediaUrl, str } from "./util";
 
 /** A full-bleed hero: background image + color overlay, centered inner blocks. */
 export const cover = defineBlock({
-  type: "core/cover",
+  ...coverStructure,
   version: 1,
   label: "Cover",
   icon: "Image",
   category: "media",
-  isContainer: true,
-  slots: [{ name: "default" }],
   defaultProps: {
     image: undefined,
     overlayColor: "#000000",

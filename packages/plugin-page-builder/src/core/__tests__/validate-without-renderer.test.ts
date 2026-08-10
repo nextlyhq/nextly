@@ -15,7 +15,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { declaredSlotsOf } from "../block-structure";
+import { CORE_BLOCK_STRUCTURES, declaredSlotsOf } from "../block-structure";
 import { createBlockRegistry, defaultBlockRegistry } from "../registry";
 import { makeNode } from "../tree";
 import { validateDocument } from "../validate";
@@ -110,6 +110,32 @@ describe("the write path with nothing rendered", () => {
         { allowUnknown: true }
       )
     ).toContain("has no slot");
+  });
+
+  it("has structure for EVERY block that declares a slot", () => {
+    // The property that keeps the write path honest as blocks are added. A container whose
+    // structure is not declared here answers `undefined` from `declaredSlotsOf`, which the
+    // validator correctly treats as "this build cannot say" and defers to `allowUnknown` — so a
+    // new container would silently opt itself out of the slot check rather than fail loudly.
+    //
+    // Asserted against the structure source alone, with no renderer loaded: this file cannot see
+    // the definitions, which is the point. The list is written out rather than derived, so adding
+    // a container has to be a deliberate edit here.
+    expect(Object.keys(CORE_BLOCK_STRUCTURES).sort()).toEqual([
+      "core/columns",
+      "core/container",
+      "core/content-carousel",
+      "core/cover",
+      "core/grid",
+      "core/off-canvas",
+      "core/query-loop",
+      "core/row",
+    ]);
+    // Every one of them declares at least one slot: a structure with none would be a block that
+    // cannot hold children, which belongs to a later batch and not to this list.
+    for (const type of Object.keys(CORE_BLOCK_STRUCTURES)) {
+      expect(declaredSlotsOf(type)?.length ?? 0).toBeGreaterThan(0);
+    }
   });
 
   it("leaves a type this build has no structure for to allowUnknown", () => {

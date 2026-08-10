@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 
+import { contentCarouselStructure } from "../../core/block-structure";
 import { defineBlock } from "../../core/registry";
 
 import { renderInline } from "./markdown";
@@ -97,13 +98,11 @@ export const slides = defineBlock({
 
 /** A carousel of arbitrary inner blocks (scroll-snap container). */
 export const contentCarousel = defineBlock({
-  type: "core/content-carousel",
+  ...contentCarouselStructure,
   version: 1,
   label: "Content Carousel",
   icon: "Layers",
   category: "media",
-  isContainer: true,
-  slots: [{ name: "default" }],
   defaultProps: { perView: "70%" },
   contentFields: [
     { name: "perView", type: "text", label: "Item width", placeholder: "70%" },

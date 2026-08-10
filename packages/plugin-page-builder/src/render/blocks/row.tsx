@@ -1,3 +1,4 @@
+import { rowStructure } from "../../core/block-structure";
 import { defineBlock } from "../../core/registry";
 
 import { str } from "./util";
@@ -7,13 +8,11 @@ const ALIGN = ["stretch", "flex-start", "center", "flex-end"];
 
 /** A flex Row/Stack with orientation, wrap, justify and align controls. */
 export const row = defineBlock({
-  type: "core/row",
+  ...rowStructure,
   version: 1,
   label: "Row / Stack",
   icon: "Columns",
   category: "layout",
-  isContainer: true,
-  slots: [{ name: "default" }],
   defaultProps: {
     orientation: "horizontal",
     justify: "flex-start",
