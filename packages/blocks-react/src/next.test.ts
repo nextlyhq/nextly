@@ -13,6 +13,7 @@ import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { createBlocksPage } from "./next";
+import type { DerivedPageSeo } from "./next";
 import { coreBlocks } from "./blocks";
 import { createBlockResolver } from "./resolver";
 import type { PageRendererProps } from "./page-renderer";
@@ -352,7 +353,7 @@ describe("createBlocksPage", () => {
         { id: "1", type: "core/image", version: 1, props: { mediaId: "m1" } },
       ],
     };
-    let seen: { image?: string } | undefined;
+    let seen: DerivedPageSeo | undefined;
     const route = createBlocksPage({
       collections: ["pages"],
       field: "content",
@@ -383,6 +384,158 @@ describe("createBlocksPage", () => {
     await expect(
       route.generateMetadata({ params: { slug: ["about"] } })
     ).resolves.toEqual({ title: "From the caller" });
+  });
+
+  it("does not derive metadata from a condition-gated block", async () => {
+    // The renderer prunes it, so its content is deliberately absent from the
+    // HTML. Deriving from it would publish the withheld text as the page title
+    // — the same leak PB-D25 closed for CSS.
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "1",
+          type: "core/heading",
+          version: 1,
+          props: { text: "Members only" },
+          visibility: { conditions: [{ kind: "always", value: false }] },
+        } as never,
+        {
+          id: "2",
+          type: "core/heading",
+          version: 1,
+          props: { text: "Public" },
+        },
+      ],
+    };
+    let seen: DerivedPageSeo | undefined;
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader({ slug: "about", content: page }),
+      blocks: coreResolver(),
+      metadata: (_e, _c, derived) => {
+        seen = derived;
+        return {};
+      },
+    });
+
+    await route.generateMetadata({ params: { slug: ["about"] } });
+
+    expect(seen?.title).toBe("Public");
+  });
+
+  it("repairs a malformed stored document instead of failing the route", async () => {
+    // A row can predate validation or be hand-edited. Walking one unrepaired
+    // throws INSIDE generateMetadata, which fails the page rather than
+    // rendering the placeholder the render path would have shown.
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader({ slug: "about", content: { nodes: "not an array" } }),
+      blocks: coreResolver(),
+      metadata: () => ({ title: "survived" }),
+    });
+
+    await expect(
+      route.generateMetadata({ params: { slug: ["about"] } })
+    ).resolves.toEqual({ title: "survived" });
+  });
+
+  it("falls back to the image's direct src when the media record is missing", async () => {
+    // The renderer does exactly this, so metadata that stopped at the
+    // unresolvable id would disagree with the picture on the page.
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "1",
+          type: "core/image",
+          version: 1,
+          props: { mediaId: "gone", src: "/fallback.png" },
+        },
+      ],
+    };
+    let seen: DerivedPageSeo | undefined;
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader({ slug: "about", content: page }),
+      blocks: coreResolver(),
+      metadata: (_e, _c, derived) => {
+        seen = derived;
+        return {};
+      },
+    });
+
+    await route.generateMetadata({ params: { slug: ["about"] } });
+
+    expect(seen?.image).toBe("/fallback.png");
+  });
+
+  it("treats a scheme-less relative src as a URL, not a media id", async () => {
+    // `assets/hero.png` renders fine through the block, so sending it to the
+    // media collection would miss and drop the preview image.
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "1",
+          type: "core/image",
+          version: 1,
+          props: { src: "assets/hero.png" },
+        },
+      ],
+    };
+    let seen: DerivedPageSeo | undefined;
+    const instance = reader({ slug: "about", content: page }) as unknown as {
+      findByID: ReturnType<typeof vi.fn>;
+    };
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      nextly: instance as never,
+      blocks: coreResolver(),
+      metadata: (_e, _c, derived) => {
+        seen = derived;
+        return {};
+      },
+    });
+
+    await route.generateMetadata({ params: { slug: ["about"] } });
+
+    expect(seen?.image).toBe("assets/hero.png");
+    expect(instance.findByID).not.toHaveBeenCalled();
+  });
+
+  it("derives a title from a heading whose stored text is a number", async () => {
+    // The renderer normalizes `2024` to text and shows it, so skipping it here
+    // would title the page from a later heading the visitor sees second.
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        { id: "1", type: "core/heading", version: 1, props: { text: 2024 } },
+      ],
+    };
+    let seen: DerivedPageSeo | undefined;
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader({ slug: "y", content: page }),
+      blocks: coreResolver(),
+      metadata: (_e, _c, derived) => {
+        seen = derived;
+        return {};
+      },
+    });
+
+    await route.generateMetadata({ params: { slug: ["y"] } });
+
+    expect(seen?.title).toBe("2024");
   });
 
   it("passes the stored stylesheet through for the resolved entry", async () => {

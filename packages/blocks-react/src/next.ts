@@ -14,12 +14,15 @@
  * @module next
  */
 import {
+  DEFAULT_LIMITS,
   deriveSeoFromDocument,
   DOCUMENT_FORMAT_VERSION,
+  migrateDocument,
 } from "@nextlyhq/blocks-engine";
 import type {
   BlockDocument,
   BlockSeoContribution,
+  DocumentLimits,
   StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 import type { Metadata } from "next";
@@ -37,9 +40,11 @@ import { createElement } from "react";
 import { createStandaloneContext } from "./context";
 import type { BlocksDataProvider, PageContext, ResolvedMedia } from "./context";
 import { PageRenderer } from "./page-renderer";
-import { registeredBlocks } from "./resolver";
+import { migrationSourceFor, registeredBlocks } from "./resolver";
 import type { BlockResolver } from "./resolver";
+import { sanitizeDocument } from "./sanitize";
 import type { PageStyles } from "./styles";
+import { pruneHiddenNodes } from "./visibility";
 
 /**
  * Marker for the subpath's existence and its build wiring.
@@ -114,6 +119,13 @@ export interface BlocksPageConfig
   /** Shown in place of an asynchronous block until its output arrives. */
   blockFallback?: ReactNode;
   /**
+   * The caps this site holds its documents to, used while repairing a stored
+   * shape. Passed to the renderer AND used when deriving metadata, so a site
+   * that raised `maxNodes` for long pages does not have its metadata derived
+   * from a tree truncated against the default.
+   */
+  limits?: DocumentLimits;
+  /**
    * Page metadata, given what the document says about itself.
    *
    * `derived` carries the title, description and image the blocks offered plus
@@ -181,9 +193,17 @@ export interface DerivedPageSeo extends BlockSeoContribution {
   canonical: string;
 }
 
-/** Whether a derived image is already a URL rather than a media id. */
+/**
+ * Whether a candidate is already a URL rather than a media id.
+ *
+ * A media id is a UUID, so anything carrying a scheme, a leading slash, or a
+ * path separator or dot is a URL — `assets/hero.png` and `hero.png` both render
+ * fine through the image block and must not be sent to the media collection,
+ * where the lookup misses and the preview image is dropped.
+ */
 function looksLikeUrl(value: string): boolean {
-  return value.startsWith("/") || /^[a-z][a-z0-9+.-]*:/i.test(value);
+  if (value.startsWith("/") || /^[a-z][a-z0-9+.-]*:/i.test(value)) return true;
+  return value.includes("/") || value.includes(".");
 }
 
 /**
@@ -199,21 +219,64 @@ async function derivePageSeo(
   document: BlockDocument,
   blocks: BlockResolver | undefined,
   resolveMedia: (id: string) => Promise<ResolvedMedia | null>,
-  slug: string
+  slug: string,
+  limits: DocumentLimits | undefined
 ): Promise<DerivedPageSeo> {
   const resolver = blocks ?? registeredBlocks();
-  const derived = deriveSeoFromDocument(document, type => resolver.get(type));
   const canonical = `/${slug}`;
-  if (derived.image === undefined || looksLikeUrl(derived.image)) {
-    return { ...derived, canonical };
+
+  // The SAME three passes the renderer runs, in the same order, before reading
+  // anything out of the document. Metadata that described a different tree than
+  // the page would be wrong in three separate ways:
+  //
+  // - a stored row can predate validation or be hand-edited, and walking one
+  //   unrepaired throws INSIDE `generateMetadata`, which fails the route rather
+  //   than rendering the placeholder the render path would have shown;
+  // - a node behind its definition's schema version would have its current
+  //   `seo` hook called with the old prop shape, so metadata silently takes a
+  //   stale value or none;
+  // - a node hidden by `visibility.conditions` is deliberately absent from the
+  //   HTML, and deriving from it would publish the withheld content as the
+  //   page's title or preview image — the same leak PB-D25 closed for CSS.
+  const prepared = pruneHiddenNodes(
+    migrateDocument(sanitizeDocument(document, limits ?? DEFAULT_LIMITS), {
+      ...migrationSourceFor(resolver),
+    }).doc
+  );
+
+  const { image: imageCandidates, ...text } = deriveSeoFromDocument(
+    prepared,
+    type => resolver.get(type)
+  );
+  const image = await firstUsableImage(imageCandidates, resolveMedia);
+  return image === undefined
+    ? { ...text, canonical }
+    : { ...text, canonical, image };
+}
+
+/**
+ * The first candidate that yields a picture.
+ *
+ * Ordered rather than first-wins-outright because the block's preference and
+ * the block's fallback are both in the list: an image carrying a media id AND a
+ * typed URL renders the media when it resolves and the URL when it does not, so
+ * metadata that stopped at the unresolvable media id would disagree with the
+ * page it describes.
+ *
+ * A failed resolution costs the preview image, never the route: metadata runs
+ * before the render, so letting a media read throw would fail the page over a
+ * picture.
+ */
+async function firstUsableImage(
+  candidates: string[] | undefined,
+  resolveMedia: (id: string) => Promise<ResolvedMedia | null>
+): Promise<string | undefined> {
+  for (const candidate of candidates ?? []) {
+    if (looksLikeUrl(candidate)) return candidate;
+    const media = await resolveMedia(candidate).catch(() => null);
+    if (media) return media.url;
   }
-  // A failure here costs the preview image, not the page: metadata generation
-  // runs before the render, so letting a media read throw would fail the route
-  // over a picture.
-  const media = await resolveMedia(derived.image).catch(() => null);
-  return media
-    ? { ...derived, canonical, image: media.url }
-    : { ...derived, canonical, image: undefined };
+  return undefined;
 }
 
 /** A string property of the row, when it is one. */
@@ -365,6 +428,7 @@ export function createBlocksPage(
     styleContext,
     data,
     blockFallback,
+    limits,
     metadata,
     // Consumed by the resolvers built below rather than forwarded: passing them
     // on would hand `createContentRoute` options it does not define.
@@ -386,7 +450,8 @@ export function createBlocksPage(
               document,
               blocks,
               mediaResolver(config, context.reader),
-              context.slug
+              context.slug,
+              limits
             );
             return metadata(entry, context, derived);
           },
@@ -421,6 +486,7 @@ export function createBlocksPage(
         styles: resolved,
         styleContext,
         blockFallback,
+        limits,
       });
     },
   });

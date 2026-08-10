@@ -284,8 +284,18 @@ export interface BlockSeoContribution {
   title?: string;
   /** Description text, e.g. the opening paragraph. */
   description?: string;
-  /** A media id, or a URL when the block holds one directly. */
-  image?: string;
+  /**
+   * Where the page's picture may come from, best first.
+   *
+   * A list because a block can hold more than one answer and they are not
+   * equally good: an image block carries a media id AND a directly-typed URL,
+   * renders the resolved media when it can and falls back to the URL when it
+   * cannot. Offering only the first would make a link preview disagree with
+   * the page whenever the media record is missing; offering only the last
+   * would ignore the resolved one. Each entry is a media id or a URL, and the
+   * caller takes the first that resolves.
+   */
+  image?: string | readonly string[];
 }
 
 /**

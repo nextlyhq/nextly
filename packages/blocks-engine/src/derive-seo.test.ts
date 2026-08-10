@@ -62,7 +62,7 @@ describe("deriveSeoFromDocument", () => {
     expect(derived).toEqual({
       title: "Pricing",
       description: "Plans for every team.",
-      image: "m1",
+      image: ["m1"],
     });
   });
 
@@ -78,7 +78,7 @@ describe("deriveSeoFromDocument", () => {
       definitions()
     );
 
-    expect(derived).toEqual({ title: "About", image: "hero" });
+    expect(derived).toEqual({ title: "About", image: ["hero"] });
   });
 
   it("keeps the FIRST of a repeated field, not the last", () => {
@@ -188,6 +188,51 @@ describe("deriveSeoFromDocument", () => {
     );
 
     expect(derived.title).toBe("Contributed");
+  });
+
+  it("normalizes a single image offer into a candidate list", () => {
+    const derived = deriveSeoFromDocument(
+      doc([node("1", "core/image", { mediaId: "m1" })]),
+      definitions()
+    );
+
+    expect(derived.image).toEqual(["m1"]);
+  });
+
+  it("keeps a block's image candidates in the order it offered them", () => {
+    // The block's preference AND its fallback: an image renders the resolved
+    // media when it can and the typed URL when it cannot, so both travel.
+    const derived = deriveSeoFromDocument(
+      doc([node("1", "plugin/pic", {})]),
+      definitions({
+        "plugin/pic": () => ({ image: ["m1", "/fallback.png"] }),
+      })
+    );
+
+    expect(derived.image).toEqual(["m1", "/fallback.png"]);
+  });
+
+  it("drops blank entries from a candidate list", () => {
+    const derived = deriveSeoFromDocument(
+      doc([node("1", "plugin/pic", {})]),
+      definitions({
+        "plugin/pic": () => ({ image: ["", "  ", "/real.png"] }),
+      })
+    );
+
+    expect(derived.image).toEqual(["/real.png"]);
+  });
+
+  it("ignores a block offering only blank candidates", () => {
+    const derived = deriveSeoFromDocument(
+      doc([
+        node("1", "plugin/pic", {}),
+        node("2", "core/image", { mediaId: "m2" }),
+      ]),
+      definitions({ "plugin/pic": () => ({ image: [] }) })
+    );
+
+    expect(derived.image).toEqual(["m2"]);
   });
 
   it("returns nothing for an empty document", () => {

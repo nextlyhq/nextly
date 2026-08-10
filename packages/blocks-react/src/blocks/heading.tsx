@@ -83,7 +83,10 @@ export const heading = defineBlock<HeadingProps, PageContext>({
   defaultProps: { text: "", level: "h2" },
   // A heading is what a page calls itself, so the first one is the best title
   // available when nobody filled the SEO field in.
-  seo: props => ({ title: props.text }),
+  // Normalized exactly as the render does, so the title metadata claims is the
+  // heading a visitor sees: a stored `2024` renders as text and must not be
+  // skipped here for not being a string.
+  seo: props => ({ title: text(props.text) }),
   example: { props: { text: "A section title", level: "h2" } },
   supports: {
     typography: true,

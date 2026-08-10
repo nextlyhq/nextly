@@ -42,7 +42,8 @@ export const paragraph = defineBlock<ParagraphProps, PageContext>({
   // The opening prose is what a search result should quote. Offered whole and
   // untruncated: how long a description may be is the metadata layer's rule,
   // and a block trimming to its own guess would fight it.
-  seo: props => ({ description: props.text }),
+  // Normalized as the render does, for the same reason the heading is.
+  seo: props => ({ description: text(props.text) }),
   example: { props: { text: "A paragraph of text." } },
   supports: {
     typography: true,

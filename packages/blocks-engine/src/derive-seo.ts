@@ -19,6 +19,18 @@ import type { BlockSeoContribution } from "./block";
 import type { BlockDocument, BlockNode } from "./document";
 import { walkNodes } from "./tree";
 
+/**
+ * What a walk over a document produced.
+ *
+ * `image` is always the normalized candidate LIST, whichever form the block
+ * offered, so a caller resolving it never re-derives that distinction.
+ */
+export interface DerivedSeo {
+  title?: string;
+  description?: string;
+  image?: string[];
+}
+
 /** Looks a block definition up by type. */
 export type SeoDefinitionSource = (type: string) =>
   | {
@@ -31,6 +43,22 @@ function usable(value: string | undefined): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * An offer's image candidates, best first, with the empty ones dropped.
+ *
+ * A block may answer with one value or an ordered list, and both collapse to
+ * the same thing here so the caller resolves a single shape. Normalizing at
+ * the boundary rather than at each use is what keeps "the first that resolves"
+ * from having to know which form it was given.
+ */
+function candidates(value: string | readonly string[] | undefined): string[] {
+  if (value === undefined) return [];
+  const list = typeof value === "string" ? [value] : value;
+  return list
+    .map(entry => usable(entry))
+    .filter((entry): entry is string => entry !== undefined);
 }
 
 /**
@@ -65,8 +93,8 @@ function offerOf(
 export function deriveSeoFromDocument(
   document: BlockDocument,
   definitions: SeoDefinitionSource
-): BlockSeoContribution {
-  const derived: BlockSeoContribution = {};
+): DerivedSeo {
+  const derived: DerivedSeo = {};
 
   walkNodes(document.nodes, node => {
     // Every field already filled: nothing further to learn, and the walk is
@@ -82,14 +110,17 @@ export function deriveSeoFromDocument(
     if (!offer) return;
     derived.title ??= usable(offer.title);
     derived.description ??= usable(offer.description);
-    derived.image ??= usable(offer.image);
+    if (derived.image === undefined) {
+      const offered = candidates(offer.image);
+      if (offered.length > 0) derived.image = offered;
+    }
   });
 
   // `??=` assigns `undefined` when the offer had nothing, which would leave the
   // key present and defeat spreading over a caller's fallbacks. Dropped here
   // rather than guarded at each assignment, which would repeat the check three
   // times for one rule.
-  for (const key of Object.keys(derived) as (keyof BlockSeoContribution)[]) {
+  for (const key of Object.keys(derived) as (keyof DerivedSeo)[]) {
     if (derived[key] === undefined) delete derived[key];
   }
   return derived;

@@ -103,7 +103,14 @@ export const image = defineBlock<ImageProps, PageContext>({
   defaultProps: { alt: "", loading: "lazy" },
   // The media id when there is one, so the caller resolves it through the same
   // path the rendered image uses; a directly-held `src` otherwise.
-  seo: props => ({ image: props.mediaId ?? props.src }),
+  // Both candidates, in the order the render prefers them: the resolved media
+  // first, the directly-typed URL as the fallback the renderer itself uses
+  // when the media record is missing.
+  seo: props => ({
+    image: [text(props.mediaId), url(props.src) ?? ""].filter(
+      (candidate): candidate is string => candidate !== ""
+    ),
+  }),
   example: { props: { src: "/example.jpg", alt: "An example image" } },
   supports: {
     spacing: true,

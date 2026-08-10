@@ -5,6 +5,7 @@ import { blockSupports, defineBlock } from "@nextlyhq/plugin-sdk/blocks";
 import type {
   BlockEditorMeta,
   BlockExample,
+  BlockSeoContribution,
   BlockRenderArgs,
   BlockRenderContext,
   BlockRenderResult,
@@ -20,6 +21,10 @@ import type {
 expectTypeOf<SlotSpec>().toBeObject();
 expectTypeOf<BlockExample<{ text: string }>>().toBeObject();
 expectTypeOf<BlockEditorMeta<{ text: string }>>().toBeObject();
+// A block's `seo` return type is vocabulary belonging to the definition, so an
+// author factoring that logic into a helper must not have to reach past the SDK
+// for the name of what it returns.
+expectTypeOf<BlockSeoContribution>().toBeObject();
 expectTypeOf<NodeStyles>().toBeObject();
 expectTypeOf<SlotLock>().toEqualTypeOf<
   "all" | "insert" | "contentOnly" | false
