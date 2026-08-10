@@ -33,17 +33,28 @@ export interface PageBuilderOptions {
    * only on `PageRenderer` because the canvas runs in the browser, where a
    * component prop from the host's server config cannot reach it.
    *
-   * Set the SAME value on `PageRenderer.remotePatterns`. These are two
-   * assignments, not one: this configures the editor, and `PageRenderer` reads
-   * only its own prop. Setting one alone produces a mismatch in whichever
-   * direction you set it, so a shared constant in the host is what keeps them
-   * equal.
+   * **What this covers, exactly.** It is enforced by this package: the editor
+   * canvas, the style compiler that validates `url()` in custom CSS and style
+   * values, and the embed HTML sanitizer. Those are the surfaces that read it.
    *
-   * Object patterns only, unlike `PageRenderer`, which also accepts a `URL`.
-   * This value is serialized to the browser and a `URL` does not survive that:
-   * it would arrive as a string. Converting one here would mean deciding what
-   * its default `pathname` of `"/"` means as a glob, and guessing at that in a
-   * security control is worse than declining the input.
+   * **What it does NOT cover.** `@nextlyhq/blocks-react` — the renderer the
+   * blocks pipeline is moving to — has no remote-host control at all. It
+   * allowlists URL SCHEMES (`http`/`https` only, with control characters and
+   * quote-breaking characters refused), which stops a `javascript:` value but
+   * not a third-party host: a `background` image pointed at any https origin
+   * compiles and ships. Verified against the engine's compiler, not inferred.
+   *
+   * So a page rendered through that renderer is not restricted by this value,
+   * and there is no second prop to set — an earlier version of this comment
+   * told the reader to mirror it onto `PageRenderer.remotePatterns`, which has
+   * never existed on either renderer. Do not assume a published page is bounded
+   * by what you configure here until that gap is closed.
+   *
+   * Object patterns only. This value is serialized to the browser and a `URL`
+   * does not survive that: it would arrive as a string. Converting one here
+   * would mean deciding what its default `pathname` of `"/"` means as a glob,
+   * and guessing at that in a security control is worse than declining the
+   * input.
    */
   remotePatterns?: readonly RemotePattern[];
 }

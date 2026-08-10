@@ -84,14 +84,16 @@ export function EditorProvider({
    * exist.
    *
    * The registered surfaces — `PageBuilderEditView` and `PageBuilderField` —
-   * cannot supply this yet. Their props come from the admin's edit-view
-   * contract, and a plugin's own configuration has no route to a client
-   * component, so a host that configures `PageRenderer.remotePatterns` still
-   * gets an empty list in the canvas. The preview is then stricter than the
-   * page: it drops allowed remote backgrounds rather than showing forbidden
-   * ones, so the gap costs fidelity and not safety. Closing it needs a channel
-   * for plugin configuration to reach the client, which is a framework
-   * capability rather than something this component can reach for.
+   * supply it through `useRemotePatterns()`, which reads the plugin's own
+   * `clientConfig`. That channel is what carries server-side plugin
+   * configuration to a client component, so a host declaring
+   * `pageBuilder({ remotePatterns })` gets the same allowlist in the canvas
+   * that the editor's compiler enforces.
+   *
+   * A caller passing nothing still gets an empty list, and an empty list is
+   * STRICTER than an absent one: the canvas drops remote backgrounds rather
+   * than showing forbidden ones, so the failure costs preview fidelity and not
+   * safety. That is the deliberate direction for a value that did not arrive.
    */
   remotePatterns?: readonly RemotePatternInput[];
   /**
