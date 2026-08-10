@@ -126,11 +126,11 @@ describe("createSmtpProvider", () => {
     });
     await adapter.send(BASE_OPTIONS);
 
-    const options = mockCreateTransport.mock.calls[0][0] as Record<
-      string,
-      unknown
-    >;
-    expect(options).not.toHaveProperty("auth");
+    // Asserted through the matcher rather than by indexing the mock's call
+    // tuple, which vitest types as empty for an untyped mock.
+    expect(mockCreateTransport).toHaveBeenCalledWith(
+      expect.not.objectContaining({ auth: expect.anything() })
+    );
   });
 
   it("does not force STARTTLS against a loopback sink", async () => {
