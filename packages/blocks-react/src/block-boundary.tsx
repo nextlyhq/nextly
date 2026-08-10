@@ -136,6 +136,23 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
 }
 
 /**
+ * Whether React draws this value as nothing at all.
+ *
+ * The set is exact rather than a nullish check: `false` is what the ordinary
+ * conditional form `enabled && <div />` yields when disabled, and an empty
+ * string is what a cleared text value becomes. `0` is deliberately absent —
+ * React renders it as the character zero, so it is output with a root.
+ */
+function rendersNothing(output: ReactNode): boolean {
+  return (
+    output === null ||
+    output === undefined ||
+    typeof output === "boolean" ||
+    output === ""
+  );
+}
+
+/**
  * Why a node's root-level fields cannot reach the element the block returned.
  *
  * `cssId` and `attributes` are DOM props and only a host element has a DOM root
@@ -175,7 +192,14 @@ function nodeRootReason(output: ReactNode, node: BlockNode): string | null {
   // So a block may legitimately render nothing. That is a contract for every
   // block, including ones written outside this package, rather than a special
   // case for the two here that need it today.
-  if (output === null || output === undefined) return null;
+  //
+  // Every value React draws as nothing counts, not just the nullish pair.
+  // `render: () => enabled && <div />` yields `false` when disabled and is the
+  // ordinary way to write a conditional block; `""` reaches the same place from
+  // a cleared text value. Verified against React 19: `null`, `undefined`,
+  // `false`, `true` and `""` all render empty, while `0` renders "0" and is
+  // therefore real output with a root.
+  if (rendersNothing(output)) return null;
   const named = hasCssId ? "`cssId`" : "attributes";
   // A primitive or a list, on the other hand, is output that HAS a root and
   // loses the fields anyway — silently, and with the same broken anchors as a
