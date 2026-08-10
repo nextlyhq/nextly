@@ -23,7 +23,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "./context";
-import { defineBlock } from "./context";
+import { createStandaloneContext, defineBlock } from "./context";
 import { PageRenderer } from "./page-renderer";
 import { createBlockResolver } from "./resolver";
 
@@ -3694,6 +3694,96 @@ describe("PageRenderer", () => {
       // page is worse than the block being absent.
       expect(html).toContain("hidden");
       expect(html).not.toContain("No block is registered");
+    });
+  });
+
+  describe("host policy", () => {
+    const container = defineBlock({
+      name: "test/policy-box",
+      version: 1,
+      description: "Renders one slot.",
+      example: { props: {} },
+      slots: { children: {} },
+      render: ({ className, renderSlot }) => (
+        <div className={className}>{renderSlot("children")}</div>
+      ),
+    });
+
+    const reader = defineBlock({
+      name: "test/policy-reader",
+      version: 1,
+      description: "Reports what policy reached it.",
+      example: { props: {} },
+      render: ({ ctx }) => (
+        <p>{(ctx.hostPolicy?.trustedFrameOrigins ?? []).join(",") || "none"}</p>
+      ),
+    });
+
+    const blocks = createBlockResolver([
+      container as AnyBlockDefinition,
+      reader as AnyBlockDefinition,
+    ]);
+
+    it("reaches a block nested inside a slot", async () => {
+      // The prop is the seam that matters. A policy that only reached top-level
+      // blocks would be one a nested block silently rendered without, which is
+      // the failure a security default exists to prevent.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/policy-box", {
+              slots: { children: [node("b", "test/policy-reader")] },
+            })
+          )}
+          blocks={blocks}
+          hostPolicy={{ trustedFrameOrigins: ["https://player.example.com"] }}
+        />
+      );
+
+      expect(html).toContain("https://player.example.com");
+    });
+
+    it("gives a block no policy when the host configured none", async () => {
+      // Absent must read as absent rather than as anything permissive.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/policy-reader"))}
+          blocks={blocks}
+        />
+      );
+
+      expect(html).toContain("none");
+    });
+
+    it("lets the prop win over a policy already on the context", async () => {
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/policy-reader"))}
+          blocks={blocks}
+          context={createStandaloneContext({
+            hostPolicy: { trustedFrameOrigins: ["https://stale.example"] },
+          })}
+          hostPolicy={{ trustedFrameOrigins: ["https://current.example"] }}
+        />
+      );
+
+      expect(html).toContain("https://current.example");
+      expect(html).not.toContain("stale.example");
+    });
+
+    it("keeps a context's own policy when the prop is absent", async () => {
+      // Both are supported surfaces, so omitting one must not erase the other.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/policy-reader"))}
+          blocks={blocks}
+          context={createStandaloneContext({
+            hostPolicy: { trustedFrameOrigins: ["https://ctx.example"] },
+          })}
+        />
+      );
+
+      expect(html).toContain("https://ctx.example");
     });
   });
 

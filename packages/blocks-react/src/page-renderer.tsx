@@ -12,7 +12,11 @@ import {
 import type { ReactElement, ReactNode } from "react";
 
 import { BlockList } from "./block-boundary";
-import { createStandaloneContext, type PageContext } from "./context";
+import {
+  createStandaloneContext,
+  type BlockHostPolicy,
+  type PageContext,
+} from "./context";
 import { BlockPlaceholder } from "./placeholder";
 import {
   registeredBlocks,
@@ -59,6 +63,16 @@ export interface PageRendererProps {
    * limits, then to the engine defaults.
    */
   limits?: DocumentLimits;
+  /**
+   * Site-operator decisions the blocks enforce. See {@link BlockHostPolicy}.
+   *
+   * Offered here as well as on the context because this is where a host app
+   * already configures a render, and a policy is the kind of thing a host sets
+   * beside `limits` rather than something it builds a context to carry. When
+   * both are supplied this prop wins, since it is the more specific of the two
+   * and the one written at the call site the reader is looking at.
+   */
+  hostPolicy?: BlockHostPolicy;
 }
 
 /**
@@ -230,9 +244,15 @@ export function PageRenderer({
   styleContext,
   blockFallback,
   limits,
+  hostPolicy,
 }: PageRendererProps): ReactElement {
   const resolver = blocks ?? registeredBlocks();
-  const pageContext = context ?? createStandaloneContext();
+  const base = context ?? createStandaloneContext();
+  // Folded into the context rather than passed down beside it, so a block reads
+  // policy exactly where it reads everything else the host supplies. Copied
+  // only when the prop is present, so the ordinary path keeps the caller's own
+  // context object and nothing re-renders for a new identity.
+  const pageContext = hostPolicy === undefined ? base : { ...base, hostPolicy };
 
   // Migrated against the SAME resolver that will render, so the versions nodes
   // are upgraded to are the versions the definitions doing the rendering

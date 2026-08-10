@@ -98,3 +98,46 @@ export function relFor(
   }
   return parts.size > 0 ? [...parts].join(" ") : undefined;
 }
+
+/**
+ * Whether a URL's origin is one the host named as trusted.
+ *
+ * Compared as ORIGINS via the URL parser rather than by string prefix. A prefix
+ * test on `https://player.example.com` also admits
+ * `https://player.example.com.evil.test`, and a host-only test ignores the
+ * scheme, so `http://` would pass a list that named `https://`. `URL.origin`
+ * settles scheme, host and port together and lowercases the host, which is the
+ * comparison the browser itself makes.
+ *
+ * A value that will not parse answers false. That covers a relative URL, which
+ * has no origin of its own: it resolves to the page's own origin, and admitting
+ * it here would be the one grant that lets a frame reach the document around
+ * it. A host that genuinely wants that has to name the origin.
+ *
+ * An unparseable ENTRY is skipped rather than throwing, so one typo in a
+ * configuration list cannot take down every page that renders an embed.
+ */
+export function isTrustedOrigin(
+  value: string,
+  trusted: readonly string[] | undefined
+): boolean {
+  if (trusted === undefined || trusted.length === 0) return false;
+  const origin = originOf(value);
+  if (origin === undefined) return false;
+  return trusted.some(entry => originOf(entry) === origin);
+}
+
+/** A URL's origin, or nothing when it has none this comparison can use. */
+function originOf(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return undefined;
+  }
+  // "null" is what an opaque origin serialises to — a `data:` or `blob:` URL
+  // among others. Treating that as a matchable value would let two unrelated
+  // opaque origins compare equal.
+  return parsed.origin === "null" ? undefined : parsed.origin;
+}

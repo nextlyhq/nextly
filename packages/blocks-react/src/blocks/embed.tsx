@@ -7,6 +7,13 @@
  * controls the embedded URL. The permissions here are the smallest set that
  * makes a video player work.
  *
+ * Whether a frame keeps its own origin is decided by HOST CONFIGURATION, not by
+ * the document. It used to be a checkbox on the block, which meant a security
+ * posture was being chosen by whoever edited the page, could be set against any
+ * URL, and travelled with the content if that content was ever copied. It is
+ * now an origin allowlist the site operator sets once, so the grant belongs to
+ * a named origin rather than to a node.
+ *
  * A `title` is emitted always. An iframe without one is announced only as
  * "frame", which tells a screen-reader user nothing about whether to enter it.
  *
@@ -17,7 +24,7 @@ import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
-import { flag, text, url } from "./props";
+import { flag, isTrustedOrigin, text, url } from "./props";
 
 /**
  * What an embedded document may do.
@@ -33,11 +40,6 @@ export interface EmbedProps {
   src?: string;
   /** An accessible name describing what is embedded. */
   title?: string;
-  /**
-   * Drop the sandbox. A deliberate escape hatch for a first-party embed that
-   * genuinely needs its own origin, and never the default.
-   */
-  allowSameOrigin?: boolean;
   /** Whether the frame may go fullscreen. */
   allowFullscreen?: boolean;
 }
@@ -45,6 +47,7 @@ export interface EmbedProps {
 export function renderEmbed({
   props,
   className,
+  ctx,
 }: BlockRenderArgs<EmbedProps>): ReactElement | null {
   const src = url(props.src);
   // No source means no frame. An iframe with an empty `src` loads the current
@@ -52,7 +55,12 @@ export function renderEmbed({
   if (src === undefined) return null;
 
   const title = text(props.title, "Embedded content");
-  const sandbox = flag(props.allowSameOrigin)
+  // Keeping its own origin is the host's decision about this URL, not the page
+  // editor's about this block. Granted only when the origin was named in
+  // configuration, so the answer cannot be reached by typing a URL into a
+  // field, and it is scoped to the origin that was trusted rather than to
+  // whatever the field happens to hold now.
+  const sandbox = isTrustedOrigin(src, ctx.hostPolicy?.trustedFrameOrigins)
     ? `${SANDBOX} allow-same-origin`
     : SANDBOX;
 
@@ -84,7 +92,6 @@ export const embed = defineBlock<EmbedProps, PageContext>({
   props: {
     src: { type: "url" },
     title: { type: "text" },
-    allowSameOrigin: { type: "checkbox" },
     allowFullscreen: { type: "checkbox" },
   },
   defaultProps: { title: "", allowFullscreen: true },

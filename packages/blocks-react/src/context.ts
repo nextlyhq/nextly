@@ -96,6 +96,42 @@ export interface QueryBudget {
 }
 
 /**
+ * Decisions that belong to the site operator rather than to a page editor.
+ *
+ * The distinction this type exists to draw: a block's props are CONTENT, filled
+ * in by whoever edits the page, and content is untrusted input. A few of the
+ * things a block does are not content decisions at all — they are security
+ * posture, and the person who should answer them is the developer standing up
+ * the site, once, in code they control. Modelling those as props put the answer
+ * in a checkbox any editor could tick, against any URL.
+ *
+ * Supplied to `PageRenderer` and forwarded to every block through the context,
+ * so a block reads policy the same way it reads a resolver, and no block has to
+ * know how the host configured it.
+ *
+ * Every field is optional and every default is the closed one. A host that
+ * configures nothing gets the restrictive behaviour, which is the only safe
+ * direction for a value that arrives absent.
+ */
+export interface BlockHostPolicy {
+  /**
+   * Origins whose documents may keep their own origin inside a frame.
+   *
+   * An iframe granted `allow-same-origin` alongside `allow-scripts` can remove
+   * its own sandbox, so this is the one embed decision that cannot be left to
+   * content. Entries are compared as ORIGINS — scheme, host and port together,
+   * exactly — so `https://player.example.com` does not admit
+   * `http://player.example.com`, a subdomain, or a lookalike host.
+   *
+   * A relative URL never matches, deliberately. It resolves to the host's OWN
+   * origin, where `allow-same-origin` would let the frame script the page
+   * around it; that is the most dangerous grant of all, and it must be asked
+   * for by naming the origin rather than arrived at by writing `/player`.
+   */
+  trustedFrameOrigins?: readonly string[];
+}
+
+/**
  * The context every block render receives.
  *
  * Resolver functions rather than raw maps: a host that resolves media through a
@@ -143,6 +179,16 @@ export interface PageContext {
    * and status, which is a read.
    */
   resolveEntryPath(collection: string, id: string): Promise<string | null>;
+  /**
+   * Site-operator decisions a block enforces. See {@link BlockHostPolicy}.
+   *
+   * Absent means the host configured nothing, and every policy then takes its
+   * closed default. It is read through the context rather than passed as a prop
+   * because a block does not know how far down the tree it sits, and a policy
+   * that had to be threaded through every slot would be one a nested block
+   * silently rendered without.
+   */
+  hostPolicy?: BlockHostPolicy;
   /**
    * The entry the surrounding repeater is currently on.
    *
