@@ -53,6 +53,8 @@ export type NodeVisibilityTest = (node: BlockNode) => boolean;
 export type SeoDefinitionSource = (type: string) =>
   | {
       seo?: (props: never) => BlockSeoContribution | undefined;
+      /** Declared child regions, in declaration order. */
+      slots?: Record<string, unknown>;
     }
   | undefined;
 
@@ -147,8 +149,29 @@ export function deriveSeoFromDocument(
         images.push(...candidates(offer.image));
       }
 
-      if (node.slots) {
-        for (const children of Object.values(node.slots)) visit(children);
+      // Visited in the order the DEFINITION declares its slots, and only
+      // those it declares. Stored order is insertion order of a JSON object,
+      // which need not match what the block draws — so reading it could pick a
+      // different "first heading" than the page shows — and a stored slot the
+      // definition no longer declares is not rendered at all.
+      //
+      // What this cannot decide: a container that renders its slots
+      // CONDITIONALLY, such as tabs drawing only the active panel. That is
+      // settled by calling the block, which is a render, not a document read.
+      // A heading in an inactive panel can therefore still be chosen; closing
+      // that needs the definition to state which slots contribute, which is an
+      // API question rather than a walk question.
+      const slots = node.slots;
+      if (slots) {
+        const declared = definitions(node.type)?.slots;
+        const order =
+          declared === undefined
+            ? Object.keys(slots)
+            : Object.keys(declared).filter(name => name in slots);
+        for (const name of order) {
+          const children = slots[name];
+          if (children) visit(children);
+        }
       }
     }
   };

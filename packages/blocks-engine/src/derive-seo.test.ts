@@ -47,9 +47,13 @@ function definitions(
     "core/image": {
       seo: (p: never) => ({ image: (p as { mediaId?: string }).mediaId }),
     },
-    "core/box": {},
+    "core/box": { slots: { children: {} } },
+    "plugin/two": { slots: { first: {}, second: {} } },
     ...Object.fromEntries(
-      Object.entries(extra).map(([k, v]) => [k, { seo: v }])
+      Object.entries(extra).map(([k, v]) => [
+        k,
+        { seo: v, slots: { first: {}, second: {} } },
+      ])
     ),
   };
   return type => map[type];
@@ -320,6 +324,30 @@ describe("deriveSeoFromDocument", () => {
     );
 
     expect(derived.image).toEqual(["deleted", "live"]);
+  });
+
+  it("reads slots in the order the definition declares them", () => {
+    // The stored object lists `second` first; the definition declares
+    // `first` first. Declared order wins, because stored order is a JSON
+    // object's insertion order and need not match what the block draws — so
+    // reading it could pick a different first heading than the page shows.
+    const container = node(
+      "1",
+      "plugin/two",
+      {},
+      {
+        second: [node("2", "core/heading", { text: "Second" })],
+        first: [node("3", "core/heading", { text: "First" })],
+      }
+    );
+
+    const derived = deriveSeoFromDocument(
+      doc([container]),
+      definitions({ "plugin/two": () => undefined }),
+      visible
+    );
+
+    expect(derived.title).toBe("First");
   });
 
   it("returns nothing for an empty document", () => {
