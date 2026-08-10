@@ -15,6 +15,44 @@ function heading(id: string, text: string) {
 }
 
 describe("prepareDocumentForRead", () => {
+  it("returns null when every node was a placeholder", () => {
+    // `null` names a page that presents nothing but placeholders. Handing back
+    // the empty document instead would report "no content" for a page that HAS
+    // content it cannot render, and a caller spreading its own fallbacks would
+    // describe the page as empty rather than as unreadable.
+    const document: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        { id: "1", type: "plugin/unregistered", version: 1, props: {} },
+        { id: "2", type: "plugin/also-unknown", version: 1, props: {} },
+      ],
+    };
+
+    expect(
+      prepareDocumentForRead(document, {
+        resolver: createBlockResolver(coreBlocks),
+      })
+    ).toBeNull();
+  });
+
+  it("keeps an already-empty document empty rather than null", () => {
+    // Nothing was withheld there, so it is a page with no content — the other
+    // side of the distinction, and the positive control that stops the check
+    // above from passing for a function that returns null too eagerly.
+    const document: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [],
+    };
+
+    expect(
+      prepareDocumentForRead(document, {
+        resolver: createBlockResolver(coreBlocks),
+      })
+    ).toEqual(document);
+  });
+
   it("does not let a placeholder's child reserve an id the page still uses", () => {
     // The unregistered container renders as a placeholder, which replaces its
     // whole subtree — so its child is not on the page and holds no address.

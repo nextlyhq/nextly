@@ -300,20 +300,38 @@ function isDotSegment(segment: string): boolean {
  * and that is the direction a caller cannot see.
  */
 /**
- * Whether a row is inside a lifecycle scope, judged from the row itself.
+ * Whether the read that produced this entry was widened past published.
  *
- * Only used where the read cannot apply the scope for us. A collection with no
- * lifecycle has no `status` field, and there the scope is a no-op rather than a
- * reason to withhold — the same reading `resolveContent` takes, and the reason
- * an ordinary string field named `status` must not be treated as the column.
+ * Judged from `_status` ALONE, which is the lifecycle column. A collection
+ * without a lifecycle has none, and an ordinary field a collection happens to
+ * name `status` is not it — reading that as lifecycle made a status-less row
+ * holding `"archived"` look unpublished and widened a public route's callback
+ * reader on the strength of a value the route's own filter had ignored.
+ *
+ * Absent means the filter was a no-op for this collection, which is not
+ * evidence of widening.
  */
-function withinScope(row: ContentEntry | null, scope: string): boolean {
-  if (row === null) return false;
-  if (scope === "all") return true;
-  // `_status` first: it is the lifecycle column, while a plain `status` may be
-  // an ordinary field a collection happens to name that way.
-  const status = row._status ?? row.status;
-  return typeof status !== "string" || status === scope;
+function readWasWidened(entry: ContentEntry): boolean {
+  const status = entry._status;
+  return typeof status === "string" && status !== "published";
+}
+
+/**
+ * The caller's arguments, minus the keys they left explicitly `undefined`.
+ *
+ * `exactOptionalPropertyTypes` is off, so `find({ collection, status })` with an
+ * undefined `status` typechecks — and spread over the bound defaults it ERASES
+ * them, handing back the unscoped reader this facade exists to prevent. An
+ * absent key and a key holding `undefined` mean the same thing to a caller and
+ * opposite things to a spread.
+ */
+function definedOnly<T extends object>(args: T): T {
+  // Typed as `T` rather than `Partial<T>`: removing a key whose value is
+  // `undefined` leaves a value the caller could have written by omitting it, so
+  // the shape a consumer must satisfy is unchanged.
+  return Object.fromEntries(
+    Object.entries(args).filter(([, value]) => value !== undefined)
+  ) as T;
 }
 
 function routeScopedReader(
@@ -328,37 +346,44 @@ function routeScopedReader(
   // trusted read with no status filter returns draft rows. A callback naming the
   // author of a published post would then embed a never-published record in a
   // public, cached page.
+  const defaults = {
+    overrideAccess,
+    user: undefined,
+    ...(locale === undefined ? {} : { locale }),
+  };
+
   const scoped: NextlyContentReader = {
-    find: args =>
-      instance.find({
-        overrideAccess,
-        user: undefined,
-        status,
-        // The locale the route read in. A callback reading a related row
-        // without repeating it would get the instance default, so a French page
-        // could name its author in English — the same mismatch the media and
-        // loop paths already avoid, through the one reader that had not.
-        ...(locale === undefined ? {} : { locale }),
-        ...args,
-      }),
-    // `findByID` accepts no `status`, and the read beneath it does not apply
-    // one either — so on a trusted route it will happily return a row that was
-    // never published, while `find` on the same reader is published-only. The
-    // asymmetry is invisible to a caller and the two would disagree about the
-    // same collection, so the filter is applied to the RESULT instead.
+    find: args => instance.find({ ...defaults, status, ...definedOnly(args) }),
+    // `findByID` accepts no `status`, and the read beneath it applies none — so
+    // on a trusted route it returns a row that was never published while `find`
+    // on the same reader is published-only. Filtering the RESULT is not enough
+    // either: the row comes back through `afterRead`, and a hook that drops or
+    // rewrites the lifecycle field makes a draft row read as in-scope.
+    //
+    // So a scoped by-id read is issued as a `find` on the id instead, where the
+    // scope is applied by the QUERY, before any hook runs. `all` needs no scope
+    // and keeps the direct call, which is also the only path that can return a
+    // row a `find` would filter out.
     findByID: async args => {
-      const row = await instance.findByID({
-        overrideAccess,
-        user: undefined,
-        ...(locale === undefined ? {} : { locale }),
-        ...args,
+      const clean = definedOnly(args);
+      if (status === "all") {
+        return instance.findByID({ ...defaults, ...clean });
+      }
+      // The caller's remaining arguments travel: `depth`, `select`, `populate`
+      // and the rest mean the same thing to either call, and dropping them
+      // would make a scoped read quietly answer a different question than the
+      // unscoped one — the asymmetry this translation exists to remove.
+      const { id, ...rest } = clean;
+      const found = await instance.find({
+        ...defaults,
+        status,
+        ...rest,
+        where: { id: { equals: id } },
+        limit: 1,
       });
-      return withinScope(row, status) ? row : null;
+      return found.items[0] ?? null;
     },
   };
-  // The media namespace travels with it. It is a system reader rather than a
-  // dynamic collection, so it is forwarded as-is rather than re-scoped; losing
-  // it would break every consumer that resolves a media id off this reader.
   const media = (instance as { media?: unknown }).media;
   return media === undefined ? scoped : Object.assign(scoped, { media });
 }
@@ -487,9 +512,14 @@ export function createContentRoute<TNode>(
           // some fidelity; the alternative costs a stale grant a disclosure.
           reader: routeScopedReader(
             getInstance(),
-            overrideAccess || draft,
-            config.status ??
-              (withinScope(entry, "published") ? "published" : "all"),
+            // The ACCESS half follows the same evidence as the lifecycle half.
+            // A draft request that fell back to a published read — a grant
+            // naming a deleted entry, or one whose slug moved — authorized
+            // nothing at this path, so trusting the reader on the strength of
+            // the REQUEST would hand a callback access-rule bypass where the
+            // grant granted none.
+            overrideAccess || (draft && readWasWidened(entry)),
+            config.status ?? (readWasWidened(entry) ? "all" : "published"),
             config.locale
           ),
           ...(config.locale ? { locale: config.locale } : {}),

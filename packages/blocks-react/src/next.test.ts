@@ -340,6 +340,7 @@ describe("createBlocksPage", () => {
         "11111111-1111-4111-8111-111111111111": { url: "/a.png", altText: "A" },
       }
     ) as unknown as {
+      find: ReturnType<typeof vi.fn>;
       findByID: ReturnType<typeof vi.fn>;
       media: { findByID: ReturnType<typeof vi.fn> };
     };
@@ -369,6 +370,7 @@ describe("createBlocksPage", () => {
       { slug: "about", content: document },
       { "66666666-6666-4666-8666-666666666666": { url: "/own.png" } }
     ) as unknown as {
+      find: ReturnType<typeof vi.fn>;
       findByID: ReturnType<typeof vi.fn>;
       media: { findByID: ReturnType<typeof vi.fn> };
     };
@@ -381,10 +383,14 @@ describe("createBlocksPage", () => {
     });
     await props.context?.resolveMedia("66666666-6666-4666-8666-666666666666");
 
-    expect(instance.findByID).toHaveBeenCalledWith(
+    // Observed as a scoped `find` on the id: the route's reader enforces its
+    // lifecycle scope in the QUERY, so a named collection's draft image cannot
+    // reach a published page. What the test is about is unchanged — a named
+    // collection is read AS a collection and never sent to the media namespace.
+    expect(instance.find).toHaveBeenCalledWith(
       expect.objectContaining({
         collection: "photos",
-        id: "66666666-6666-4666-8666-666666666666",
+        where: { id: { equals: "66666666-6666-4666-8666-666666666666" } },
       })
     );
     expect(instance.media.findByID).not.toHaveBeenCalled();
@@ -632,6 +638,7 @@ describe("createBlocksPage", () => {
     };
     let seen: DerivedPageSeo | undefined;
     const instance = reader({ slug: "about", content: page }) as unknown as {
+      find: ReturnType<typeof vi.fn>;
       findByID: ReturnType<typeof vi.fn>;
     };
     const route = createBlocksPage({
@@ -1286,6 +1293,30 @@ describe("createBlocksPage", () => {
     ).resolves.toBeNull();
   });
 
+  it("charges a CUSTOM entry resolver against the budget too", async () => {
+    // A custom resolver is usually database-backed and is called once per
+    // reference, so a template inside a nested loop invokes it thousands of
+    // times. Exempting it would bound the resolver we wrote and leave unbounded
+    // the one a site supplies.
+    const resolveEntryPath = vi.fn(async () => "/from-the-host");
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      maxQueries: 1,
+      resolveEntryPath,
+      nextly: reader({ slug: "about", content: document }),
+    });
+
+    await expect(props.context?.resolveEntryPath("pages", "a")).resolves.toBe(
+      "/from-the-host"
+    );
+    // Budget spent: the next reference is refused without calling the host.
+    await expect(
+      props.context?.resolveEntryPath("pages", "b")
+    ).resolves.toBeNull();
+    expect(resolveEntryPath).toHaveBeenCalledTimes(1);
+  });
+
   it("gives each render its OWN budget", async () => {
     // One budget shared across requests would spend itself on the first few
     // pages and serve every later request truncated — a fault that grows with
@@ -1426,6 +1457,7 @@ describe("createBlocksPage", () => {
       slug: "about",
       content: document,
     }) as unknown as {
+      find: ReturnType<typeof vi.fn>;
       findByID: ReturnType<typeof vi.fn>;
     };
 
@@ -1438,7 +1470,7 @@ describe("createBlocksPage", () => {
     });
     await props.context?.resolveMedia("66666666-6666-4666-8666-666666666666");
 
-    expect(instance.findByID).toHaveBeenCalledWith(
+    expect(instance.find).toHaveBeenCalledWith(
       expect.objectContaining({ collection: "photos", locale: "fr" })
     );
   });
@@ -1591,7 +1623,7 @@ describe("createBlocksPage", () => {
     const instance = reader(
       { slug: "about", content: document },
       { "66666666-6666-4666-8666-666666666666": { url: "/own.png" } }
-    ) as unknown as { findByID: ReturnType<typeof vi.fn> };
+    ) as unknown as { find: ReturnType<typeof vi.fn> };
 
     const props = await render({
       collections: ["pages"],
@@ -1601,7 +1633,7 @@ describe("createBlocksPage", () => {
     });
     await props.context?.resolveMedia("66666666-6666-4666-8666-666666666666");
 
-    expect(instance.findByID).toHaveBeenCalledWith(
+    expect(instance.find).toHaveBeenCalledWith(
       expect.objectContaining({ collection: "photos", user: undefined })
     );
   });

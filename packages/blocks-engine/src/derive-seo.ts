@@ -174,11 +174,22 @@ function drawsNothing(
 ): boolean {
   const predicate = definitions(node.type)?.rendersNothing;
   if (typeof predicate !== "function") return false;
+  let answer: unknown;
   try {
-    return predicate(node.props as never) === true;
+    answer = predicate(node.props as never);
   } catch {
     return false;
   }
+  // A block mistakenly declared `async rendersNothing` returns a pending
+  // promise, so the `try` above finishes before any rejection happens and its
+  // `catch` never sees one. Node reports that as an unhandled rejection and can
+  // end the process — the whole page lost because a block was asked about
+  // itself. The same containment the `seo` hook needed, for the same reason.
+  if (typeof (answer as { then?: unknown } | undefined)?.then === "function") {
+    void Promise.resolve(answer).catch(() => undefined);
+    return false;
+  }
+  return answer === true;
 }
 
 /**

@@ -570,6 +570,30 @@ describe("deriveSeoFromDocument", () => {
     expect(derived.title).toBe("Still drawn");
   });
 
+  it("contains a rejection from an async rendersNothing", async () => {
+    // A synchronous `try` finishes before a promise rejects, so its `catch`
+    // never sees one. Unhandled, Node can end the process — the whole page lost
+    // because a block was asked about itself.
+    const map: Record<string, unknown> = {
+      "plugin/async": {
+        rendersNothing: () => Promise.reject(new Error("boom")),
+        seo: () => ({ title: "Treated as drawing" }),
+      },
+    };
+    const source = ((type: string) => map[type]) as SeoDefinitionSource;
+
+    const derived = deriveSeoFromDocument(
+      doc([node("1", "plugin/async", {})]),
+      source,
+      visible
+    );
+
+    // A pending promise is not `true`, so the block counts as drawing.
+    expect(derived.title).toBe("Treated as drawing");
+    // And the rejection is owned: an unhandled one would surface here.
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+
   it("returns nothing for an empty document", () => {
     expect(deriveSeoFromDocument(doc([]), definitions(), visible)).toEqual({});
   });

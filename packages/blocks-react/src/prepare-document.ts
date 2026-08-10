@@ -151,5 +151,15 @@ export function prepareDocumentForRead(
   const visible = dedupeNodeIds(pruneHiddenNodes(doc), node =>
     rendersOwnMarkup(node, args.resolver)
   );
-  return pruneKnownPlaceholders(visible, args.resolver);
+  const prepared = pruneKnownPlaceholders(visible, args.resolver);
+  // A document whose nodes were ALL placeholders presents nothing but
+  // placeholders, which is the case `null` names. Returning the empty document
+  // instead would report "a page with no content" for a page that has content
+  // it cannot render — the exact distinction this return value exists to draw,
+  // and a caller spreading its own fallbacks over the result would describe the
+  // page as empty rather than as unreadable.
+  //
+  // A document that was ALREADY empty stays empty: nothing was withheld there.
+  if (document.nodes.length > 0 && prepared.nodes.length === 0) return null;
+  return prepared;
 }

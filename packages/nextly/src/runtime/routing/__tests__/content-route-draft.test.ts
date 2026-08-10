@@ -295,28 +295,38 @@ describe("the reader handed to callbacks", () => {
     calls: FindArgs[];
   } {
     const calls: FindArgs[] = [];
-    const page = { id: "1", slug: "a", status: "published" };
+    const page = { id: "1", slug: "a", _status: "published" };
+    const related = { id: "related", _status: "draft" };
+    const listMeta = (total: number) => ({
+      total,
+      page: 1,
+      limit: 1,
+      totalPages: 1,
+      hasNext: false,
+      hasPrev: false,
+    });
     return {
       calls,
       reader: {
         find: async (args): Promise<ListResult<Record<string, unknown>>> => {
           calls.push(args);
-          return {
-            items: [page],
-            meta: {
-              total: 1,
-              page: 1,
-              limit: 1,
-              totalPages: 1,
-              hasNext: false,
-              hasPrev: false,
-            },
-          };
+          // A lookup BY ID is the scoped by-id path. The scope is applied by
+          // the QUERY here, exactly as the real reader applies it — before any
+          // `afterRead` runs — so a draft row is withheld from a published
+          // read rather than returned and judged afterwards.
+          const wantedId = (
+            args.where as { id?: { equals?: unknown } } | undefined
+          )?.id?.equals;
+          if (wantedId !== undefined) {
+            const inScope = args.status === "all" || args.status === "draft";
+            const items = inScope ? [related] : [];
+            return { items, meta: listMeta(items.length) };
+          }
+          return { items: [page], meta: listMeta(1) };
         },
-        findByID: async (): Promise<Record<string, unknown> | null> => ({
-          id: "related",
-          status: "draft",
-        }),
+        // Answers regardless of scope, which is what the real one does: it
+        // takes no `status` and the read beneath it applies none.
+        findByID: async (): Promise<Record<string, unknown> | null> => related,
       },
     };
   }
@@ -388,6 +398,102 @@ describe("the reader handed to callbacks", () => {
     await given.find({ collection: "authors" });
 
     expect(calls[0]?.locale).toBe("fr");
+    expect(calls[0]?.overrideAccess).toBe(false);
+  });
+});
+
+describe("the scoped reader's defaults", () => {
+  it("survives an argument the caller left explicitly undefined", async () => {
+    // `exactOptionalPropertyTypes` is off, so `find({ collection, status })`
+    // with an undefined `status` typechecks — and spread over the bound
+    // defaults it ERASED them, handing back exactly the unscoped reader this
+    // facade exists to prevent. An absent key and a key holding `undefined`
+    // mean the same thing to a caller and opposite things to a spread.
+    const calls: FindArgs[] = [];
+    const reader: NextlyContentReader = {
+      find: async (args): Promise<ListResult<Record<string, unknown>>> => {
+        calls.push(args);
+        const items = [{ id: "1", slug: "a", _status: "published" }];
+        return {
+          items,
+          meta: {
+            total: 1,
+            page: 1,
+            limit: 1,
+            totalPages: 1,
+            hasNext: false,
+            hasPrev: false,
+          },
+        };
+      },
+      findByID: async (): Promise<Record<string, unknown> | null> => null,
+    };
+
+    let seen: NextlyContentReader | undefined;
+    const route = createContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      render: (entry: ContentEntry, context) => {
+        seen = context.reader;
+        return entry;
+      },
+    });
+    await route.ContentPage(params).catch(() => undefined);
+    calls.length = 0;
+
+    await seen?.find({
+      collection: "authors",
+      status: undefined,
+      overrideAccess: undefined,
+    });
+
+    expect(calls[0]?.status).toBe("published");
+    expect(calls[0]?.overrideAccess).toBe(false);
+  });
+});
+
+describe("a status-less collection's ordinary fields", () => {
+  it("does not widen the callback reader on a field merely NAMED status", async () => {
+    // Nextly supports an ordinary string field called `status`. Judging it as
+    // the lifecycle column made a public route conclude its own published
+    // filter had been widened — on the strength of a value that filter ignored
+    // — and hand a callback an `all`-scoped, access-overriding reader.
+    const calls: FindArgs[] = [];
+    const reader: NextlyContentReader = {
+      find: async (args): Promise<ListResult<Record<string, unknown>>> => {
+        calls.push(args);
+        // No `_status`: this collection has no lifecycle at all.
+        const items = [{ id: "1", slug: "a", status: "archived" }];
+        return {
+          items,
+          meta: {
+            total: 1,
+            page: 1,
+            limit: 1,
+            totalPages: 1,
+            hasNext: false,
+            hasPrev: false,
+          },
+        };
+      },
+      findByID: async (): Promise<Record<string, unknown> | null> => null,
+    };
+
+    let seen: NextlyContentReader | undefined;
+    const route = createContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      render: (entry: ContentEntry, context) => {
+        seen = context.reader;
+        return entry;
+      },
+    });
+    await route.ContentPage(params).catch(() => undefined);
+    calls.length = 0;
+
+    await seen?.find({ collection: "authors" });
+
+    expect(calls[0]?.status).toBe("published");
     expect(calls[0]?.overrideAccess).toBe(false);
   });
 });

@@ -581,7 +581,18 @@ function entryPathResolver(
   reader: NextlyContentReader,
   budget: QueryBudget
 ): (collection: string, id: string) => Promise<string | null> {
-  if (config.resolveEntryPath) return config.resolveEntryPath;
+  if (config.resolveEntryPath) {
+    const custom = config.resolveEntryPath;
+    // Charged against the budget like the built-in path. A custom resolver is
+    // usually database-backed, and it is called once per reference — so a
+    // template inside a nested loop invokes it thousands of times. Exempting it
+    // would bound the resolver we wrote and leave unbounded the one a site
+    // supplies, which is the wrong way round.
+    return async (collection: string, id: string) => {
+      if (!budget.take()) return null;
+      return custom(collection, id);
+    };
+  }
   const slugField = config.slugField ?? "slug";
   const routeCollections = [...new Set(config.collections)];
   // A route mounted behind the app's own auth (`draft: true`) serves drafts
