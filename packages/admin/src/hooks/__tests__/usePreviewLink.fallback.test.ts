@@ -15,8 +15,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const { toast, mint } = vi.hoisted(() => ({
   toast: {
     success: vi.fn(),
-    info: vi.fn(),
+    info: vi.fn(() => "toast-id"),
     error: vi.fn(),
+    dismiss: vi.fn(),
   },
   mint: vi.fn(),
 }));
@@ -51,6 +52,16 @@ async function mintWith(writeText: () => Promise<void>): Promise<void> {
 
   result.current.mutate();
   await waitFor(() => expect(result.current.isSuccess).toBe(true));
+}
+
+/** Clicks the toast's Copy action, returning the event it was given. */
+function clickCopy(): { preventDefault: ReturnType<typeof vi.fn> } {
+  const options = toast.info.mock.calls[0]?.[1] as {
+    action: { onClick: (event: { preventDefault: () => void }) => void };
+  };
+  const event = { preventDefault: vi.fn() };
+  options.action.onClick(event);
+  return event;
 }
 
 afterEach(() => {
@@ -92,13 +103,37 @@ describe("usePreviewLink when the clipboard is refused", () => {
 
     expect(mint).toHaveBeenCalledTimes(1);
 
-    const options = toast.info.mock.calls[0]?.[1] as {
-      action: { onClick: () => void };
-    };
-    options.action.onClick();
+    clickCopy();
 
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
     expect(mint).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the link on screen when the retry fails too", async () => {
+    // Sonner closes a toast when its action is clicked unless the event is
+    // prevented, and the retry settles afterwards. Without that, a second
+    // refusal would remove the only copy of the link and leave a bare error.
+    await mintWith(() => Promise.reject(new Error("insecure origin")));
+
+    const event = clickCopy();
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(toast.dismiss).not.toHaveBeenCalled();
+  });
+
+  it("closes the link toast once the clipboard really holds it", async () => {
+    let attempts = 0;
+    await mintWith(() => {
+      attempts += 1;
+      return attempts === 1
+        ? Promise.reject(new Error("insecure origin"))
+        : Promise.resolve();
+    });
+
+    clickCopy();
+
+    await waitFor(() => expect(toast.dismiss).toHaveBeenCalledWith("toast-id"));
   });
 
   it("says so when the retry is refused as well", async () => {
@@ -106,10 +141,7 @@ describe("usePreviewLink when the clipboard is refused", () => {
     // that is not on their clipboard.
     await mintWith(() => Promise.reject(new Error("insecure origin")));
 
-    const options = toast.info.mock.calls[0]?.[1] as {
-      action: { onClick: () => void };
-    };
-    options.action.onClick();
+    clickCopy();
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
     expect(toast.success).not.toHaveBeenCalled();
