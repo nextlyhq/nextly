@@ -109,7 +109,7 @@ export async function executePreResolutionOps(
  * Absent, deliberately: `change_column_nullable`, which fails on precisely the NULL rows the probe
  * filters out.
  */
-const COVERED_CONVERSIONS = [
+export const COVERED_CONVERSIONS = [
   "change_column_type",
   "change_column_default",
 ] as const;
@@ -155,6 +155,12 @@ async function assertConversionsAreSafe(
           operation: unguarded.type,
           table: op.tableName,
           column: op.fromColumn,
+          // Named so the obvious response is to widen the probe. A refusal that only says no gets
+          // resolved under deadline by deleting the check.
+          remedy:
+            `The probe reads only rows that are NOT NULL, so it cannot speak for "${unguarded.type}". ` +
+            `Widen columnHoldsOnlyJson to cover it and add it to COVERED_CONVERSIONS before this ` +
+            `op runs on this path.`,
         },
       });
     }
