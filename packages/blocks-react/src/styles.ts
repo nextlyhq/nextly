@@ -247,6 +247,17 @@ function withGatedRules(
   return { ...styles, css: parts.join("\n") };
 }
 
+/**
+ * PRECONDITION: `document` is the tree that will RENDER, with condition-gated nodes already
+ * removed by {@link pruneHiddenNodes}.
+ *
+ * Stated on the signature because this is exported and the unsafe call is the natural-looking one.
+ * Handed a RAW document, every gated node counts as surviving, so its rules are appended from the
+ * artifact and its markup is withheld by the renderer — publishing the colours, fonts and
+ * `url(...)` of a block nobody was served. `PageRenderer` runs the pass itself, so the ordinary
+ * path cannot get this wrong; a consumer assembling styles by hand can, which is why the prune is
+ * exported alongside this.
+ */
 export function resolvePageStyles(
   document: BlockDocument,
   styles: PageStyles | undefined,

@@ -33,6 +33,13 @@
  * unification was of that kind.
  *
  * The fail-closed policy itself is covered where it belongs, in the engine's own gated-node tests.
+ *
+ * THE PER-FIXTURE POSITIVE CONTROL IS LOAD-BEARING, not setup. Every node must emit its colour
+ * SOMEWHERE before the leak assertions run. Without it a fixture that reaches no mechanism — a
+ * wrong field name, a shape the compiler skips — satisfies "no removed node's rules are in the
+ * sheet" by emitting nothing at all, and reports clean. That is not hypothetical: it is how the
+ * empty-group defect was nearly dismissed as unreproducible, and how an early probe of this same
+ * feature read clean against a stale `dist`. Do not remove it as redundant.
  */
 import { compilePageCss, type BlockDocument } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
