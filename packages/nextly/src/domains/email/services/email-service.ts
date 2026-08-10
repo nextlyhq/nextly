@@ -452,13 +452,19 @@ export class EmailService extends BaseService {
    * 1. `options.path` (per-request override)
    * 2. `emailConfig.resetPasswordPath` (global config)
    * 3. `'/admin/reset-password'` (default)
+   *
+   * Returns the send result rather than `void`. `send()` converts a provider
+   * throw into `{ success: false }` instead of propagating it, so a caller that
+   * only awaits this cannot tell a failed delivery from a completed one — and
+   * for an auth flow that difference decides what the user is told. Callers
+   * that genuinely do not care may still ignore the value.
    */
   async sendPasswordResetEmail(
     to: string,
     user: { name: string | null; email: string },
     token: string,
     options?: { path?: string }
-  ): Promise<void> {
+  ): Promise<{ success: boolean; messageId?: string }> {
     const baseUrl = this.getBaseUrl();
     const path =
       options?.path ??
@@ -466,7 +472,7 @@ export class EmailService extends BaseService {
       "/admin/reset-password";
     const resetLink = `${baseUrl}${path}?token=${encodeURIComponent(token)}`;
 
-    await this.sendWithTemplate("password-reset", to, {
+    return this.sendWithTemplate("password-reset", to, {
       resetLink,
       expiresIn: "1 hour",
       appName: this.getAppName(),
@@ -487,13 +493,19 @@ export class EmailService extends BaseService {
    * 1. `options.path` (per-request override)
    * 2. `emailConfig.verifyEmailPath` (global config)
    * 3. `'/admin/verify-email'` (default)
+   *
+   * Returns the send result rather than `void`. `send()` converts a provider
+   * throw into `{ success: false }` instead of propagating it, so a caller that
+   * only awaits this cannot tell a failed delivery from a completed one — and
+   * for an auth flow that difference decides what the user is told. Callers
+   * that genuinely do not care may still ignore the value.
    */
   async sendEmailVerificationEmail(
     to: string,
     user: { name: string | null; email: string },
     token: string,
     options?: { path?: string }
-  ): Promise<void> {
+  ): Promise<{ success: boolean; messageId?: string }> {
     const baseUrl = this.getBaseUrl();
     const path =
       options?.path ??
@@ -501,7 +513,7 @@ export class EmailService extends BaseService {
       "/admin/verify-email";
     const verifyLink = `${baseUrl}${path}?token=${encodeURIComponent(token)}`;
 
-    await this.sendWithTemplate("email-verification", to, {
+    return this.sendWithTemplate("email-verification", to, {
       verifyLink,
       expiresIn: "24 hours",
       appName: this.getAppName(),
@@ -518,13 +530,19 @@ export class EmailService extends BaseService {
    * Uses the `welcome` template slug. When `verifyLink` is provided the
    * template includes a "Verify Email" button so the user can confirm
    * their address before logging in.
+   *
+   * Returns the send result rather than `void`. `send()` converts a provider
+   * throw into `{ success: false }` instead of propagating it, so a caller that
+   * only awaits this cannot tell a failed delivery from a completed one — and
+   * for an auth flow that difference decides what the user is told. Callers
+   * that genuinely do not care may still ignore the value.
    */
   async sendWelcomeEmail(
     to: string,
     user: { name: string | null; email: string },
     options?: { verifyLink?: string }
-  ): Promise<void> {
-    await this.sendWithTemplate("welcome", to, {
+  ): Promise<{ success: boolean; messageId?: string }> {
+    return this.sendWithTemplate("welcome", to, {
       userName: user.name ?? user.email,
       appName: this.getAppName(),
       userEmail: user.email,
