@@ -1293,6 +1293,39 @@ describe("createBlocksPage", () => {
     ).resolves.toBeNull();
   });
 
+  it("clears BOTH identity channels on every read it performs", async () => {
+    // Access rules are written against `req.user`, and `mergeConfig` spreads
+    // the instance's defaults UNDER the call — so an omitted `req` restores
+    // whatever identity the instance was booted with, on reads this route
+    // performs for an anonymous visitor.
+    //
+    // Asserted as PRESENT-and-undefined rather than absent, because that is the
+    // whole mechanism: an absent key inherits, an explicit `undefined`
+    // overrides. A test checking only for absence passes for a resolver that
+    // clears nothing.
+    const instance = reader(
+      { slug: "about", content: document },
+      { p9: { slug: "contact" } }
+    ) as unknown as { find: ReturnType<typeof vi.fn> };
+
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: instance as never,
+    });
+    instance.find.mockClear();
+    await props.context?.resolveEntryPath("pages", "p9");
+
+    const calls = instance.find.mock.calls as [Record<string, unknown>][];
+    expect(calls.length).toBeGreaterThan(0);
+    for (const [args] of calls) {
+      expect(Object.keys(args)).toContain("user");
+      expect(Object.keys(args)).toContain("req");
+      expect(args.user).toBeUndefined();
+      expect(args.req).toBeUndefined();
+    }
+  });
+
   it("charges a CUSTOM media resolver against the budget too", async () => {
     // A host's resolver is the one most likely to be network-backed, and it is
     // called once per image — so a template inside nested loops invokes it

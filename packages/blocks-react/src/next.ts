@@ -539,7 +539,10 @@ async function mediaByQuery(
     status: "published" | "draft" | "all";
     overrideAccess: boolean;
     disableErrors: boolean;
+    // Both identity channels are part of this call's shape, so a caller cannot
+    // build a read here that omits one.
     user?: undefined;
+    req?: undefined;
     locale?: string;
   }
 ): Promise<Record<string, unknown> | undefined> {
@@ -607,6 +610,12 @@ function mediaResolver(
           // `afterRead` hook would then bake a personalized URL or alt text
           // into the PUBLIC cached page.
           user: undefined,
+          // Both identity channels, not just the obvious one. Access rules
+          // are written against `req.user`, and `mergeConfig` spreads the
+          // instance's defaults UNDER the call — so an omitted `req`
+          // restores whatever identity the instance was booted with, on a
+          // read this route performs for an anonymous visitor.
+          req: undefined,
           // A named collection is an ordinary collection, so its URL and alt
           // fields can be localized. Omitting the locale reads the DEFAULT
           // one's record on a route configured for another — the wrong file, or
@@ -710,6 +719,12 @@ function entryPathResolver(
         // inherits whatever identity the reader was booted with — and this
         // route resolves anonymously. `resolveContent` passes it likewise.
         user: undefined,
+        // Both identity channels, not just the obvious one. Access rules
+        // are written against `req.user`, and `mergeConfig` spreads the
+        // instance's defaults UNDER the call — so an omitted `req`
+        // restores whatever identity the instance was booted with, on a
+        // read this route performs for an anonymous visitor.
+        req: undefined,
         // A localized slug is read per locale, so omitting this returns the
         // DEFAULT-locale slug while the route resolves paths in the configured
         // one — a link to a path this very route cannot find.
@@ -769,6 +784,12 @@ function entryPathResolver(
           status: scope,
           overrideAccess,
           user: undefined,
+          // Both identity channels, not just the obvious one. Access rules
+          // are written against `req.user`, and `mergeConfig` spreads the
+          // instance's defaults UNDER the call — so an omitted `req`
+          // restores whatever identity the instance was booted with, on a
+          // read this route performs for an anonymous visitor.
+          req: undefined,
           ...(config.locale ? { locale: config.locale } : {}),
         })
         .catch(() => ({ items: [] as Record<string, unknown>[] }));
