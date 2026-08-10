@@ -48,6 +48,7 @@ jobs:
             storage-uploadthing
             blocks-engine
             blocks-react
+            builder
             plugin-form-builder
             plugin-page-builder
             plugin-seo
