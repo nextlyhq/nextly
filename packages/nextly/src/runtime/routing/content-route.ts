@@ -36,12 +36,40 @@ import {
   type NextlyContentReader,
 } from "./resolve-content";
 
-/** Where a resolved entry was found — passed to `render`/`buildMetadata`. */
+/** Where a resolved entry was found. */
 export interface ResolvedContext {
   /** The collection the entry was resolved from. */
   collection: string;
   /** The joined slug path (no leading slash), e.g. `"about/team"`. */
   slug: string;
+}
+
+/**
+ * What `render` and `buildMetadata` receive: where the entry was found.
+ *
+ * Deliberately NOT a reader. An earlier version carried the instance this route
+ * resolved through, so a render needing a second read did not have to obtain
+ * one of its own. The Direct API is a TRUSTED surface — access bypassed,
+ * lifecycle unfiltered, no locale — and a route is the opposite, so handing one
+ * to a callback meant re-binding every attribute it carries: access, both
+ * identity channels, lifecycle and locale, each of which failed independently.
+ *
+ * A caller that genuinely needs a second read passes its own instance as
+ * `nextly` and uses it directly, where the posture is visibly theirs to choose
+ * rather than inherited from a field that looks like a convenience.
+ */
+export interface RenderContext extends ResolvedContext {
+  /**
+   * The locale this route read in, when it was configured for one.
+   *
+   * Carried explicitly rather than read back off the row: the companion
+   * overlay copies localized values ONTO the entry without stamping which
+   * locale they came from, so a render inferring it from the row would find
+   * nothing on exactly the localized pages that need it — and a block or data
+   * provider reading in a different language than the page around it is a
+   * mismatch nothing surfaces as an error.
+   */
+  locale?: string;
 }
 
 /**
@@ -60,12 +88,12 @@ export interface ContentRouteConfig<TNode> {
   /** Render the resolved entry (your server component body). May be async. */
   render: (
     entry: ContentEntry,
-    context: ResolvedContext
+    context: RenderContext
   ) => TNode | Promise<TNode>;
   /** Optional per-entry metadata (e.g. via `buildMetadata`). */
   buildMetadata?: (
     entry: ContentEntry,
-    context: ResolvedContext
+    context: RenderContext
   ) => Metadata | Promise<Metadata>;
   /** Field holding the slug (default `"slug"`). */
   slugField?: string;
@@ -124,6 +152,11 @@ export interface ContentRouteConfig<TNode> {
   draft?:
     | boolean
     | ((context: ResolvedContext) => DraftGrant | Promise<DraftGrant>);
+  /**
+   * Read this locale on localized collections, and report it to `render` and
+   * `buildMetadata` as `context.locale`. Omit for the default locale.
+   */
+  locale?: string;
   /** Relation depth for the resolved read (default `1`). */
   depth?: number;
   /** A booted Nextly instance (defaults to `getNextly()`). */
@@ -227,6 +260,42 @@ const MAX_STATIC_PARAMS_PER_PAGE = 500;
  * pre-renders — while whitespace-only, non-string, and reserved values are
  * dropped (the page would only `notFound()` them).
  */
+/**
+ * Whether a STORED path segment is one URL resolution removes.
+ *
+ * Literal `.` and `..` only. The URL standard does also treat `%2e` as a dot
+ * when parsing a URL, but this reads a slug as STORED, and a stored segment
+ * reaches a URL already encoded: `%2E%2E` becomes `%252E%252E`, which stays a
+ * literal segment and decodes back to the text the lookup matches. Applying the
+ * URL-text rule to stored text would reject an entry that is perfectly
+ * addressable, taking it out of static generation and stripping its canonical.
+ */
+function isDotSegment(segment: string): boolean {
+  return segment === "." || segment === "..";
+}
+
+/**
+ * The instance, bound to the access policy this route resolved the entry with.
+ *
+ * The Direct API is a TRUSTED server surface: its documented default is
+ * `overrideAccess: true`, because the ordinary caller is application code that
+ * has already decided who is asking. A route is the opposite — it answers
+ * whoever holds the URL — and it resolves its own entry with access enforced
+ * and no user.
+ *
+ * Handing a render or metadata callback the raw instance therefore offers a
+ * reader whose defaults are the inverse of the page's. A callback doing the
+ * obvious thing — `context.reader.find({ collection: "authors" })` to name the
+ * author of the post it is rendering — would read PAST the access rules that
+ * governed the post itself, and publish restricted rows in a public response.
+ *
+ * So the defaults are restated to match the route: access enforced unless this
+ * route resolved with it overridden, and no identity, because the route
+ * resolves anonymously. A caller that genuinely wants the trusted surface can
+ * still pass `overrideAccess: true` explicitly — the arguments win, since they
+ * are spread over these defaults. What changes is which way the DEFAULT points,
+ * and that is the direction a caller cannot see.
+ */
 export function slugToStaticParam(value: unknown): { slug: string[] } | null {
   if (typeof value !== "string") return null;
   if (value === "") return isReservedPath("/") ? null : { slug: [] };
@@ -239,7 +308,25 @@ export function slugToStaticParam(value: unknown): { slug: string[] } | null {
     .replace(/\/{2,}/g, "/");
   if (normalized === "") return null;
   if (isReservedPath(`/${normalized}`)) return null;
-  return { slug: normalized.split("/") };
+  const segments = normalized.split("/");
+  // A `.` or `..` segment makes the slug UNADDRESSABLE. URL resolution removes
+  // those segments before a request is sent, so a pre-rendered `/pages/../admin`
+  // is fetched as `/admin` and the page generated here can never be reached —
+  // while the path it occupies belongs to a different, possibly reserved route.
+  // Percent-encoding does not help: the URL standard treats `%2e` as a dot for
+  // exactly this purpose, so `%2E%2E` resolves away too.
+  if (segments.some(isDotSegment)) return null;
+  // A slug NORMALIZATION changed is a slug that cannot be served. The route
+  // matches the joined incoming segments against the stored column, so an entry
+  // stored as `a//b` is fetched at `/a/b` and looked up as `a/b` — which it does
+  // not have. Pre-rendering that path builds a page the lookup can never find,
+  // and any URL derived from it names one the route answers with `notFound()`.
+  //
+  // The normalization above still happens, because a reserved path must not be
+  // smuggled past the check by a leading slash. What changes is the ANSWER:
+  // normalization is used to decide, never to rewrite.
+  if (segments.join("/") !== value) return null;
+  return { slug: segments };
 }
 
 export function createContentRoute<TNode>(
@@ -267,7 +354,7 @@ export function createContentRoute<TNode>(
   /** Resolve the joined slug across the configured collections (first match wins). */
   async function resolve(
     slug: string
-  ): Promise<{ entry: ContentEntry; context: ResolvedContext } | null> {
+  ): Promise<{ entry: ContentEntry; context: RenderContext } | null> {
     for (const collection of collections) {
       // Asked per collection, not once per request: the answer is scoped to a
       // document, and the same slug can name a different document in each
@@ -293,6 +380,7 @@ export function createContentRoute<TNode>(
       const entry = await resolveContent(collection, slug, {
         nextly: config.nextly,
         slugField,
+        ...(config.locale ? { locale: config.locale } : {}),
         // `status` is left to widen itself when a draft is asked for, so a
         // route cannot end up previewing with only one of the two draft layers
         // switched on.
@@ -319,7 +407,14 @@ export function createContentRoute<TNode>(
       // compares a POST-`afterRead` document, so a collection that reshapes its
       // public read would fail a valid grant and send the editor to live
       // content.
-      return { entry, context: { collection, slug } };
+      return {
+        entry,
+        context: {
+          collection,
+          slug,
+          ...(config.locale ? { locale: config.locale } : {}),
+        },
+      };
     }
     return null;
   }
@@ -341,6 +436,11 @@ export function createContentRoute<TNode>(
             collection,
             // Lifecycle-aware publish scope — a no-op on status-less collections.
             status,
+            // The same locale `resolve()` reads in. Without it a localized
+            // route pre-renders DEFAULT-locale slugs — paths its own resolver
+            // then answers with `notFound()` — while the slugs it does serve
+            // are absent from the scan and left to render on demand.
+            ...(config.locale ? { locale: config.locale } : {}),
             select: { [slugField]: true },
             // `id` is unique and present on every collection; `createdAt` may be
             // absent (timestamps off) or non-unique, letting rows shift between

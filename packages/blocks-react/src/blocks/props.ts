@@ -12,12 +12,26 @@
  */
 
 /** A string prop, or the fallback when the stored value is not usable text. */
-export function text(value: unknown, fallback = ""): string {
-  if (typeof value === "string") return value;
+/**
+ * Whether a stored value is text an author actually put there.
+ *
+ * Separate from {@link text} because a few props need to tell a MISSING value
+ * from an empty one, and `text()` maps both to `""`. An image's `alt` is the
+ * case that matters: absent means "nobody said", while an explicit `""` is the
+ * documented way to mark an image decorative, and those call for opposite
+ * behaviour. Sharing this predicate keeps the two from drifting apart.
+ */
+export function isAuthoredText(value: unknown): boolean {
   // A number is text a person would recognise, and a stored `0` or `2024` is
   // almost always a value someone typed. Booleans, objects and null are not.
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  return fallback;
+  return (
+    typeof value === "string" ||
+    (typeof value === "number" && Number.isFinite(value))
+  );
+}
+
+export function text(value: unknown, fallback = ""): string {
+  return isAuthoredText(value) ? String(value) : fallback;
 }
 
 /** A stored value constrained to one of a fixed set, or the fallback. */

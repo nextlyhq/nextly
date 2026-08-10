@@ -56,7 +56,10 @@ export class RegexRenameDetector implements RenameDetector {
           const compatible =
             fromType === ""
               ? false
-              : isTypesCompatible(fromType, toType, dialect);
+              : isTypesCompatible(fromType, toType, dialect, {
+                  from: drop.columnName,
+                  to: add.column.name,
+                });
           candidates.push({
             tableName,
             fromColumn: drop.columnName,

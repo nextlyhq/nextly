@@ -961,6 +961,31 @@ export class FieldGroupSchemaService {
     return sqliteText(colName);
   }
 
+  /**
+   * The identifiers a rendered migration would put in front of the database, with their lengths.
+   *
+   * 🔴 Read out of the SQL rather than re-derived from the field list, and the difference is not
+   * stylistic. An enumeration that walks the fields again is a SECOND transcription of the rules
+   * this renderer applies — which index names it emits, which fields it skips because they are
+   * localized and live in the companion, which get a `uq_` rather than an `idx_`, and that a column
+   * name is itself an identifier. A first attempt at that missed unique indexes and plain column
+   * names, and wrongly rejected localized fields for an index the renderer never emits. Three ways
+   * to be wrong, in rules that had already been written down once.
+   *
+   * Scanning what was actually rendered cannot drift, because it IS the output. Every identifier
+   * this service emits is quoted with `this.q`, and no dialect uses that character for string
+   * literals — PostgreSQL and SQLite quote strings with `'`, MySQL identifiers are backticked — so
+   * the quoted tokens are identifiers and nothing else.
+   */
+  identifiersIn(sql: string): string[] {
+    const pattern = this.q === "`" ? /`([^`]+)`/g : /"([^"]+)"/g;
+    const found = new Set<string>();
+    for (const match of sql.matchAll(pattern)) {
+      if (match[1]) found.add(match[1]);
+    }
+    return [...found];
+  }
+
   private fieldHasForeignKey(field: DataFieldConfig): boolean {
     if (!isRelationshipField(field) && !isUploadField(field)) return false;
     return (
@@ -1131,3 +1156,39 @@ export class FieldGroupSchemaService {
       .join("");
   }
 }
+
+/**
+ * The longest slug this generator can turn into a legal identifier on every dialect.
+ *
+ * Derived rather than chosen. A slug is not the identifier: it is prefixed into a table name and
+ * that table name is prefixed AND suffixed into an index name, so the longest thing the database
+ * actually sees is
+ *
+ *   `idx_` + `comp_` + <slug> + `_parent`
+ *
+ * which is sixteen characters longer than the slug the caller typed. Bounding the slug at the
+ * product's usual 50 therefore still produces a 66-character index name, and MySQL rejects any
+ * identifier past 64 — the table is created, the index creation fails, and the field group is left
+ * recorded as failed with an unbound table.
+ *
+ * The budget is PostgreSQL's 63 rather than MySQL's 64 because it is the tighter of the two, and
+ * because its failure is the worse one: PostgreSQL does not reject an over-long identifier, it
+ * silently TRUNCATES it, so the index it creates carries a name nothing else can address.
+ *
+ * Computed from the same constants the names are built from, so a change to either prefix or to the
+ * suffix moves this bound with it instead of leaving a number behind that used to be right.
+ */
+/**
+ * The longest identifier every supported dialect stores intact.
+ *
+ * PostgreSQL's 63 rather than MySQL's 64 because it is the tighter budget AND its failure is the
+ * worse one: PostgreSQL does not reject an over-long identifier, it silently TRUNCATES it, leaving
+ * an object under a name nothing else can address.
+ */
+export const MAX_IDENTIFIER_LENGTH = 63;
+
+export const MAX_FIELD_GROUP_SLUG_LENGTH =
+  MAX_IDENTIFIER_LENGTH -
+  STORAGE_FORMAT.indexPrefix.length -
+  STORAGE_FORMAT.tablePrefix.length -
+  "_parent".length;

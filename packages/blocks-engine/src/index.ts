@@ -5,6 +5,9 @@
  * it. It never imports React or Nextly at runtime, so documents can be
  * created, inspected, and transformed from any JavaScript environment.
  */
+export { deriveSeoFromDocument } from "./derive-seo";
+export type { SeoDefinitionSource, SeoImageCandidate } from "./derive-seo";
+
 export {
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
@@ -85,6 +88,8 @@ export type {
   BlockDefinition,
   BlockEditorMeta,
   BlockExample,
+  BlockSeoContribution,
+  BlockSeoImage,
   BlockRenderArgs,
   BlockRenderResult,
   BlockSupports,
@@ -287,3 +292,14 @@ export type { SiteSheetArtifact, SiteSheetInput } from "./style/site-sheet";
 export { compileSiteSheet } from "./style/site-sheet";
 export { styleOrigin } from "./style/style-origin";
 export { BREAKPOINT_AXES } from "./style/breakpoint-axes";
+
+// The remote-host policy: which hosts a compiled page may fetch from. Exported
+// so the React renderer applies the SAME matcher the style compiler does.
+export {
+  isAllowedRemoteUrl,
+  isFetchableUrl,
+  isRemoteUrl,
+  normalizeUrl,
+  type RemotePattern,
+  type RemotePatternInput,
+} from "./url-policy";

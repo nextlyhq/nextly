@@ -1,0 +1,210 @@
+// Runtime registration and companion provisioning for a field group's table.
+//
+// Both were private to the components dispatcher, which is why the two other create transports
+// could not reuse the schema half and shipped a registry row describing a table that did not
+// exist. Moved here unchanged so one service can own the table change and the registry write
+// together; the bodies are byte-identical to the versions the dispatcher carried.
+
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+
+import type { FieldConfig } from "../../../collections/fields/types";
+import {
+  getConfigFromDI,
+  getSchemaRegistryFromDI,
+} from "../../../dispatcher/helpers/di";
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import {
+  getI18nArchiveDdl,
+  getI18nArchiveIndexRepairDdl,
+} from "../../../schemas/nextly-i18n-archive";
+import { FieldGroupSchemaService } from "../../../services/field-groups/field-group-schema-service";
+import { buildCompanionTransitionStatements } from "../../i18n/migration/reconcile-companion";
+import { localizedColumnsOnMain } from "../../i18n/runtime/companion-io";
+import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
+import { isIdempotencyError } from "../../schema/pipeline/sql-statement-utils";
+
+export function registerComponentRuntimeSchema(
+  adapter: DrizzleAdapter,
+  dialect: string,
+  tableName: string,
+  fields: FieldConfig[],
+  typeColumn: string,
+  // i18n: when localized, the main comp_ runtime table omits translatable columns and the
+  // companion comp_<slug>_locales runtime table is registered for per-language reads/writes.
+  localized = false
+): void {
+  try {
+    const fieldGroupSchemaService = new FieldGroupSchemaService(
+      dialect as ConstructorParameters<typeof FieldGroupSchemaService>[0]
+    );
+    const runtimeTable = fieldGroupSchemaService.generateRuntimeSchema(
+      tableName,
+      fields,
+      { localized, typeColumn }
+    );
+    const companion = localized
+      ? buildCompanionRuntimeTable({
+          slug: tableName,
+          tableName,
+          fields: fields as { name: string; type: string }[],
+          dialect: dialect as Parameters<
+            typeof buildCompanionRuntimeTable
+          >[0]["dialect"],
+          localized: true,
+          status: false,
+        })
+      : null;
+
+    const registry = getSchemaRegistryFromDI();
+    if (registry) {
+      registry.registerDynamicSchema(tableName, runtimeTable);
+      if (companion) {
+        registry.registerDynamicSchema(
+          companion.companionTableName,
+          companion.table
+        );
+      }
+      return;
+    }
+
+    // Fallback for paths where DI isn't wired (tests, CLI).
+    const resolver = (
+      adapter as unknown as {
+        tableResolver?: {
+          registerDynamicSchema?: (name: string, table: unknown) => void;
+        };
+      }
+    ).tableResolver;
+    if (resolver && typeof resolver.registerDynamicSchema === "function") {
+      resolver.registerDynamicSchema(tableName, runtimeTable);
+      return;
+    }
+
+    console.warn(
+      `[registerComponentRuntimeSchema] No SchemaRegistry available for ` +
+        `'${tableName}'. Component queries may reference old column names ` +
+        `until next server restart.`
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[registerComponentRuntimeSchema] In-memory schema refresh failed for ` +
+        `'${tableName}': ${msg}. Component queries may reference old ` +
+        `column names until next server restart.`
+    );
+  }
+}
+
+/**
+ * Provision (create / ADD-DROP columns) the component's companion `comp_<slug>_locales` table
+ * out-of-band after a schema change, then register its runtime table. The push pipeline excludes
+ * companions, so every component create/update/apply path that changes the localized field set
+ * goes through here. No-op when the component isn't localized. Mirrors reconcileSingleCompanion.
+ * DDL throws on failure; runtime registration is best-effort. Does not move existing main-table
+ * rows into the companion — that is the `nextly migrate` enable/disable path.
+ */
+export async function reconcileComponentCompanion(args: {
+  slug: string;
+  tableName: string;
+  oldFields: FieldDefinition[];
+  newFields: FieldDefinition[];
+  /** Localization state AFTER this save (requested). */
+  localized: boolean;
+  /** Localization state BEFORE this save (persisted). Drives enable/disable detection. */
+  wasLocalized: boolean;
+  adapter: DrizzleAdapter;
+}): Promise<void> {
+  const { slug, tableName, oldFields, newFields, localized, adapter } = args;
+  const wasLocalized = args.wasLocalized;
+  // Nothing to do when the component was and remains non-localized.
+  if (!wasLocalized && !localized) return;
+
+  const dialect = adapter.dialect;
+  const defaultLocale = getConfigFromDI()?.localization?.defaultLocale ?? "en";
+
+  const plan = buildCompanionTransitionStatements({
+    // The companion mirrors the main table, and a field group's builder reads a width from a different key.
+    builtBy: "fieldGroup" as const,
+    slug,
+    tableName,
+    dialect,
+    defaultLocale,
+    // Components are never Draft/Published — companion has no `_status`.
+    status: false,
+    // And never had one, so the disable restore has no status to carry back.
+    wasStatus: false,
+    wasLocalized,
+    isLocalized: localized,
+    oldFields,
+    newFields,
+    companionExists: await adapter.tableExists(`${tableName}_locales`),
+    // Which translatable columns the main table still carries. A disable must not re-add one that
+    // is already there, and must still restore it: presence says the column exists, never that its
+    // value is current, because every localized write went to the companion alone.
+    existingMainColumns: await localizedColumnsOnMain(
+      adapter,
+      tableName,
+      oldFields
+    ).then(cols => cols.map(c => c.name)),
+  });
+
+  // A disable archives non-default translations, so ensure `nextly_i18n_archive` exists first
+  // (Builder entities have no `nextly migrate` step to provision it). Idempotent.
+  if (plan.needsArchive) {
+    for (const stmt of getI18nArchiveDdl(dialect)) {
+      await adapter.executeQuery(stmt);
+    }
+    // MySQL's table DDL cannot restore an index the table is missing, and
+    // index-only drift produces no reconcile operations, so the repair runs
+    // here. Tolerated rather than checked first: attempting it and accepting
+    // "duplicate key name" is one round trip instead of two, and the same
+    // tolerance the schema executor already applies.
+    const indexRepair = getI18nArchiveIndexRepairDdl(dialect);
+    if (indexRepair) {
+      try {
+        await adapter.executeQuery(indexRepair);
+      } catch (err) {
+        if (!isIdempotencyError(err)) throw err;
+      }
+    }
+  }
+  // 🔴 STRICT on purpose: the companion does NOT tolerate a re-run.
+  //
+  // Tolerating it would make a half-finished localization ENABLE look like success. Interrupted
+  // after the companion is created but before the seed and the main-column drops, the retry is
+  // indistinguishable from an orphan repair — the planner cannot tell them apart, because the
+  // signal that separates them (`existingMainColumns`) is consumed only on the disable path — so
+  // the duplicate columns would be swallowed and the entity recorded as localized while its
+  // default-locale content is still stranded on the main table.
+  //
+  // A loud failure is the worse experience and the safer outcome. It costs the repair of a
+  // localized entity whose create half-failed; it prevents silently reporting a migration that did
+  // not happen.
+  for (const stmt of plan.statements) {
+    await adapter.executeQuery(stmt);
+  }
+
+  // The transition record describes a companion that no longer exists, so it stops being true
+  // the moment the disable succeeds. Left behind, it would refuse the next enable's real
+  // source locale — the check that protects a live transition would block a legitimate one.
+  if (plan.companionDropped) {
+    // The other half of "this companion is gone": readiness remembers only that one exists.
+    const { forgetCompanionReadiness } = await import(
+      "../../i18n/runtime/companion-readiness"
+    );
+    forgetCompanionReadiness(adapter, `${tableName}_locales`);
+    const { resolveTransitionStore } = await import(
+      "../../i18n/migration/transition-recorder"
+    );
+    const { forgetI18nTransition } = await import(
+      "../../i18n/migration/transition-state"
+    );
+    await forgetI18nTransition(
+      await resolveTransitionStore(adapter),
+      "fieldGroup",
+      slug
+    );
+  }
+  // Runtime registration of the companion is handled by registerComponentRuntimeSchema(localized)
+  // in the calling handlers, so no separate registration is needed here.
+}
