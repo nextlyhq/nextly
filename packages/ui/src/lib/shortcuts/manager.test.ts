@@ -1119,3 +1119,111 @@ describe("composition interrupting a sequence", () => {
     expect(run).not.toHaveBeenCalled();
   });
 });
+
+describe("keystrokes claimed while an IME is composing", () => {
+  it("still stops a claimed key reaching a window listener during composition", () => {
+    // Two guards overlapped: the composition check ran first and returned "not consumed", so a
+    // claimed-AND-composing Escape never reached the branch that stops propagation. Radix
+    // prevents Escape in its capture listener whether or not composition is active.
+    const onWindow = vi.fn();
+    const manager = managerFor();
+    const detach = manager.attach(document);
+    const dismiss = (e: Event): void => {
+      e.preventDefault();
+    };
+    document.addEventListener("keydown", dismiss, { capture: true });
+    window.addEventListener("keydown", onWindow);
+    const event = press("Escape");
+    Object.defineProperty(event, "isComposing", { value: true });
+    document.body.dispatchEvent(event);
+    window.removeEventListener("keydown", onWindow);
+    document.removeEventListener("keydown", dismiss, { capture: true });
+    detach();
+
+    expect(onWindow).not.toHaveBeenCalled();
+  });
+});
+
+describe("a grab that actually holds the keyboard", () => {
+  it("suppresses Tab so focus cannot leave the layer that owns the keyboard", () => {
+    // Tab moves focus rather than editing text, so permitting it carried focus straight out of
+    // the drag or modal that had claimed the keyboard.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("Tab");
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("still lets the caret keys through", () => {
+    // The control: narrowing what a blocking layer permits must not take the editing keys with
+    // it, or the field under the modal stops working.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("ArrowLeft");
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe("a focused range input", () => {
+  it("keeps the keys that move its value", () => {
+    // A range is a slider: arrows, Home/End and PageUp/PageDown are how its value changes, so a
+    // global arrow binding was firing instead of adjusting it.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("ArrowLeft", run)], { name: "shell", depth: 0 });
+    const slider = document.createElement("input");
+    slider.type = "range";
+    document.body.append(slider);
+    const detach = manager.attach(document);
+    slider.dispatchEvent(press("ArrowLeft"));
+    detach();
+    slider.remove();
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("a binding whose callback throws", () => {
+  it("leaves no sequence prefix behind", () => {
+    // An uncaught handler exception does not stop the page, so a stale prefix outlived the
+    // keystroke that failed and a later key could complete a DIFFERENT command in a lower layer.
+    const lower = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("x y", lower)], { name: "shell", depth: 0 });
+    manager.register(
+      [
+        {
+          keys: "x",
+          description: "Throws",
+          run: () => {
+            throw new Error("handler failed");
+          },
+        },
+      ],
+      { name: "panel", depth: 1 }
+    );
+
+    expect(() => manager.handle(press("x"))).toThrow("handler failed");
+    manager.handle(press("y"));
+    expect(lower).not.toHaveBeenCalled();
+  });
+});

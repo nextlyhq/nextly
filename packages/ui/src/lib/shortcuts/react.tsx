@@ -22,14 +22,23 @@
  * // A canvas that must own the keyboard while a drag is in flight. `blocking` is what stops the
  * // shell's Escape from navigating away mid-drag: while the drag runs, nothing below this layer
  * // sees a keystroke at all.
+ * //
+ * // The bindings live in their own component so the hook is called at a component's top level.
+ * // A scope's children are ordinary React children, so a hook cannot be called among them
+ * // directly — the rules-of-hooks lint rejects it, and conditional rendering would change hook
+ * // order.
+ * function DragKeys({ isDragging, cancel }) {
+ *   useShortcuts([{ keys: "Escape", description: "Cancel drag", run: cancel }], {
+ *     name: "canvas-drag",
+ *     enabled: isDragging,
+ *     blocking: true,
+ *   });
+ *   return null;
+ * }
+ *
  * <ShortcutScope>
- *   {(() => {
- *     useShortcuts([{ keys: "Escape", description: "Cancel drag", run: cancel }], {
- *       name: "canvas-drag",
- *       enabled: isDragging,
- *       blocking: true,
- *     });
- *   })()}
+ *   <DragKeys isDragging={isDragging} cancel={cancel} />
+ *   <Canvas />
  * </ShortcutScope>
  * ```
  *

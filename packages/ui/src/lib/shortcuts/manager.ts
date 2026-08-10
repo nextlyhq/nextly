@@ -253,6 +253,10 @@ function controlOwnsKey(
     return event.key === " " || event.key === "Enter";
   }
   if (type === "checkbox") return event.key === " ";
+  // A range input is a slider: the arrows, Home/End and PageUp/PageDown are how its value moves.
+  if (type === "range") {
+    return event.key.startsWith("Arrow") || RANGE_KEYS.has(event.key);
+  }
   if (type === "radio") {
     return event.key === " " || event.key.startsWith("Arrow");
   }
@@ -338,6 +342,20 @@ export function createShortcutManager(
    * arrives, the binding may have made itself ineligible.
    */
   let consumedPress: { signature: string; prevented: boolean } | null = null;
+
+  /**
+   * Forget a partially typed sequence.
+   *
+   * Every path that hands a keystroke to someone else calls this. A pending sequence models "the
+   * user is part-way through a command", and any real keystroke in between falsifies it — a
+   * dismissal, a control taking its own key, a composition, a callback that threw. Keeping the
+   * reset with the decision to stand down is deliberate: when it was open-coded at each exit,
+   * five separate branches had to remember it and five separate reviews found one that did not.
+   */
+  function abandonSequence(): void {
+    pendingAt = null;
+    pressedEvents.length = 0;
+  }
 
   function prepare(bindings: readonly ShortcutBinding[]): PreparedBinding[] {
     return bindings.map(binding => ({
@@ -501,35 +519,45 @@ export function createShortcutManager(
 
   const pressedEvents: KeyboardEvent[] = [];
 
+  /**
+   * Offer the keystroke, leaving no sequence behind if a consumer's callback throws.
+   *
+   * An uncaught handler exception does not stop the page, so without this the half-typed prefix
+   * outlives the keystroke that failed: a later key could complete a DIFFERENT command in a
+   * lower layer, long after the one that threw had already acted.
+   */
+  function runOffer(
+    pressed: readonly KeyboardEvent[],
+    event: KeyboardEvent,
+    typing: boolean
+  ): "fired" | "pending" | "blocked" | "none" {
+    try {
+      return offer(pressed, event, typing, true);
+    } catch (error) {
+      abandonSequence();
+      consumedPress = null;
+      throw error;
+    }
+  }
+
   function handle(event: KeyboardEvent): boolean {
     // An IME turns keystrokes into composition input, and Escape there means "abandon what I am
     // composing". Acting on it would cancel the composition AND dismiss whatever the application
     // binds Escape to — a keystroke the user never aimed at the application at all.
-    if (event.isComposing) {
-      // Composition interrupts a sequence for the same reason a dismissal or a control-owned key
-      // does: real keystrokes happened in between. Otherwise a `c` typed after composing could
-      // still complete a `mod+k c` begun before it.
-      pendingAt = null;
-      pressedEvents.length = 0;
-      return false;
-    }
-    // Something closer to the keystroke has already claimed it. Radix's DismissableLayer, which
-    // every Dialog and Sheet in this kit is built on, listens on `document` in the CAPTURE phase,
-    // calls `preventDefault()` to dismiss, and does not stop propagation — so without this check
-    // one Escape closes the modal AND runs the shell's Escape binding underneath it. That is
-    // precisely the double action this manager exists to remove, arriving through our own
-    // components.
+    // Checked FIRST: an owner closer to the keystroke has already answered it, and that stays
+    // true even while an IME is composing. Reported as consumed so `attach` stops it
+    // propagating — the manager runs no binding, but it is the one place that can keep a
+    // window-level owner from acting on a key someone else already answered.
     if (event.defaultPrevented) {
-      // A half-typed sequence must not survive it. After `g`, an Escape that closed a dialog is
-      // a real keystroke the user made; leaving the prefix pending would let a later `d`
-      // complete `g d` across the interruption.
-      pendingAt = null;
-      pressedEvents.length = 0;
-      // Reported as consumed so `attach` stops it propagating. The manager runs no binding
-      // here, but it is the one place that can keep a window-level owner from acting on a key
-      // another component already answered — which is the whole double-action problem, and it
-      // does not stop being one just because the first owner was not us.
+      abandonSequence();
       return true;
+    }
+    // Composition keystrokes belong to the IME. Escape there means "abandon what I am
+    // composing", so acting on it would cancel the composition AND whatever the application
+    // binds Escape to.
+    if (event.isComposing) {
+      abandonSequence();
+      return false;
     }
     // Pressing a modifier on its own is not a keystroke to match, and treating it as one would
     // clear any sequence in progress the moment the user reached for Shift.
@@ -537,11 +565,7 @@ export function createShortcutManager(
 
     // A focused native control gets its own activation keys before the shortcut stack sees them.
     if (controlOwnsKey(event.target, event)) {
-      // And it interrupts a sequence, for the same reason a dismissal does: the user pressed
-      // Space and watched a checkbox toggle, so a later `d` must not complete a `g d` begun
-      // before it.
-      pendingAt = null;
-      pressedEvents.length = 0;
+      abandonSequence();
       return false;
     }
 
@@ -570,12 +594,11 @@ export function createShortcutManager(
     }
 
     if (pendingAt !== null && now() - pendingAt > sequenceTimeoutMs) {
-      pendingAt = null;
-      pressedEvents.length = 0;
+      abandonSequence();
     }
 
     pressedEvents.push(event);
-    let outcome = offer(pressedEvents, event, typing, true);
+    let outcome = runOffer(pressedEvents, event, typing);
 
     // A sequence that led nowhere must not eat the key that broke it: `g` then `mod+k` should
     // open the palette rather than being discarded with the abandoned prefix.
@@ -587,10 +610,9 @@ export function createShortcutManager(
       pressedEvents.length > 1 &&
       (outcome === "none" || outcome === "blocked")
     ) {
-      pressedEvents.length = 0;
+      abandonSequence();
       pressedEvents.push(event);
-      pendingAt = null;
-      outcome = offer(pressedEvents, event, typing, true);
+      outcome = runOffer(pressedEvents, event, typing);
     }
 
     if (outcome === "pending") {
@@ -602,8 +624,7 @@ export function createShortcutManager(
       return true;
     }
 
-    pendingAt = null;
-    pressedEvents.length = 0;
+    abandonSequence();
     const consumed = outcome === "fired" || outcome === "blocked";
     consumedPress = consumed
       ? { signature: signature(event), prevented: event.defaultPrevented }
@@ -662,6 +683,10 @@ const MODIFIER_KEYS = new Set(["Control", "Meta", "Alt", "Shift"]);
 /**
  * Keys a focused field consumes itself: caret movement and the edits that carry no character.
  *
+ * Tab is deliberately absent. It moves focus rather than editing text, so letting it through
+ * would carry focus straight out of the drag or modal that claimed the keyboard. A focus trap
+ * that wants Tab claims it before the manager, which the `defaultPrevented` check then honours.
+ *
  * Used to decide what a blocking layer may suppress while the user is typing. A key outside this
  * set and not a character belongs to the browser, not the field.
  */
@@ -682,10 +707,12 @@ const TYPE_AHEAD_ROLES = new Set([
   "menuitemradio",
 ]);
 
+/** The non-arrow keys a native range input uses to move its value. */
+const RANGE_KEYS = new Set(["Home", "End", "PageUp", "PageDown"]);
+
 const FIELD_KEYS = new Set([
   "Backspace",
   "Delete",
-  "Tab",
   "ArrowUp",
   "ArrowDown",
   "ArrowLeft",
