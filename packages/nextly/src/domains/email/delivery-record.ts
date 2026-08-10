@@ -41,15 +41,25 @@ export function hashRecipient(address: string): string {
 }
 
 /**
- * Anything that looks like an address, as a provider would quote it back.
+ * Anything with an `@` in it, as a provider would quote it back.
  *
- * Deliberately broad rather than RFC-exact: the cost of removing something that
- * merely resembles an address from a diagnostic is a slightly less specific
- * error message, and the cost of missing one is the address sitting in the
- * column next to the hash that exists to avoid storing it.
+ * Deliberately broader than RFC 5321, in both halves of the address:
+ *
+ * - the local part may be QUOTED — `"odd user"@example.com` is valid and
+ *   contains a space, so a pattern built from "non-whitespace" misses it;
+ * - the domain may be an ADDRESS LITERAL — `user@[192.0.2.1]` — and may have
+ *   no dot at all, as `postmaster@localhost` does on the machines most likely
+ *   to be running a local relay.
+ *
+ * Each of those was verified to pass through the previous pattern untouched.
+ *
+ * The asymmetry justifies the breadth: removing something that merely
+ * resembles an address costs a slightly vaguer diagnostic, while missing one
+ * puts the recipient in the column beside the hash that exists to avoid
+ * storing it. A status code and a reason contain no `@` and are unaffected.
  */
 const ADDRESS_SHAPED =
-  /[^\s<>()[\]{},;:"]+@[^\s<>()[\]{},;:"]+\.[^\s<>()[\]{},;:"]+/g;
+  /(?:"[^"\r\n]*"|[^\s<>()[\]{},;:"]+)@(?:\[[^\]\r\n]*\]|[^\s<>()[\]{},;:"]+)/g;
 
 /** The token an address is replaced with, so the shape of the error survives. */
 export const REDACTED_ADDRESS = "[address]";

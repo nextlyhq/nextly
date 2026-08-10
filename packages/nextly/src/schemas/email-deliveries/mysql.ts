@@ -24,13 +24,19 @@ export const emailDeliveriesMysql = mysqlTable(
     id: varchar("id", { length: 36 }).primaryKey(),
 
     /**
-     * No foreign key, unlike PostgreSQL.
+     * No foreign key, unlike PostgreSQL and SQLite.
      *
-     * The provider table's id is `varchar(36)` here and the reference would be
-     * sound, but a delivery must outlive its provider, which means `SET NULL` —
-     * and this column is read far more often than it is joined. The service
-     * nulls it on provider deletion rather than the database doing so, and
-     * `provider_type` beside it is what keeps the row meaningful either way.
+     * Which means a deleted provider leaves this pointing at a row that is
+     * gone, rather than being nulled. That is stated plainly because an earlier
+     * version of this comment claimed the service nulls it, and no code does —
+     * a comment describing behaviour that does not exist is worse than none,
+     * since the next reader stops looking.
+     *
+     * It is survivable rather than correct: `provider_type` beside it keeps
+     * every row meaningful without the join, and no read path follows this id
+     * expecting a row. Making the three dialects agree is filed rather than
+     * done here, because the honest fix is the service nulling it on delete on
+     * every dialect, not a foreign key on one more.
      */
     providerId: varchar("provider_id", { length: 36 }),
 

@@ -242,6 +242,10 @@ export class EmailService extends BaseService {
         from: fromOverride ?? dbTemplate.fromOverride ?? undefined,
         replyTo: replyToOverride ?? dbTemplate.replyTo ?? undefined,
         providerId: options?.providerId ?? dbTemplate.providerId ?? undefined,
+        // Which template this was, for the delivery log. Without it every
+        // password reset, verification and welcome message -- the entire
+        // reason the log exists -- records no template at all.
+        templateSlug,
         cc: options?.cc,
         bcc: options?.bcc,
         attachments:
@@ -279,6 +283,7 @@ export class EmailService extends BaseService {
         subject: result.subject,
         html: result.html,
         providerId: options?.providerId,
+        templateSlug,
         // Forward cc/bcc/from/replyTo here too — the DB-template path already
         // does, and omitting them on this branch silently dropped them for
         // code-first templates.
@@ -349,6 +354,7 @@ export class EmailService extends BaseService {
       adapter,
       from: resolvedFrom,
       providerType,
+      resolvedProviderId,
     } = await this.resolveProvider(options.providerId);
 
     // A per-template From override wins over the provider's default From.
@@ -417,7 +423,7 @@ export class EmailService extends BaseService {
       // send was recorded.
       await this.deliveries?.record({
         to: filtered.to,
-        providerId: options.providerId ?? null,
+        providerId: resolvedProviderId ?? null,
         providerType,
         templateSlug: options.templateSlug ?? null,
         status: result.success ? "sent" : "failed",
@@ -462,16 +468,23 @@ export class EmailService extends BaseService {
       );
       await this.deliveries?.record({
         to: filtered.to,
-        providerId: options.providerId ?? null,
+        providerId: resolvedProviderId ?? null,
         providerType,
         templateSlug: options.templateSlug ?? null,
         status: "failed",
-        // The provider's own words, which the record module strips addresses
-        // from before storing -- an SMTP rejection quotes the recipient back,
-        // and that would put the address in the row beside its own hash.
-        error:
-          describeProviderFailure(error).cause ??
-          describeProviderFailure(error).message,
+        // The NORMALISED message, never the cause. `cause` is the provider's
+        // original error, and a contributed provider throws it with decrypted
+        // configuration in scope -- `Invalid key ${config.apiKey}` is an easy
+        // thing to write. Storing it would put a credential in a database
+        // column, which is the same disclosure the provider wrapper closes for
+        // responses, arriving by a longer route and persisting.
+        //
+        // Redaction cannot substitute for this: it removes address-shaped
+        // text, and an API key is not address-shaped.
+        //
+        // The cause is not lost -- the log line below records it, which is
+        // where a provider's own diagnostic belongs.
+        error: describeProviderFailure(error).message,
       });
 
       this.logger.error("email.failed", {
@@ -672,6 +685,15 @@ export class EmailService extends BaseService {
     adapter: EmailProviderAdapter;
     from: string;
     providerType: string;
+    /**
+     * The stored provider this resolved to, when a stored one was used.
+     *
+     * The caller's `providerId` is not the same fact: a send that names no
+     * provider still uses the database DEFAULT, and recording `null` for those
+     * would leave most of a provider's history unattached to it — which is the
+     * majority of sends, not an edge case.
+     */
+    resolvedProviderId?: string;
   }> {
     // 1. Specific provider by ID
     if (providerId) {
@@ -684,6 +706,7 @@ export class EmailService extends BaseService {
           provider.fromEmail
         ),
         providerType: provider.type,
+        resolvedProviderId: provider.id,
       };
     }
 
@@ -722,6 +745,7 @@ export class EmailService extends BaseService {
           defaultProvider.fromEmail
         ),
         providerType: defaultProvider.type,
+        resolvedProviderId: defaultProvider.id,
       };
     }
 

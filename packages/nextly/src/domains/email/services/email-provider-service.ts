@@ -37,6 +37,7 @@ import { encrypt, decrypt } from "../../../utils/encryption";
 import { describeProviderFailure } from "../provider-definition";
 import type { EmailProviderAdapter } from "../types";
 
+import type { EmailDeliveryService } from "./email-delivery-service";
 import { getEmailProviderRegistry } from "./email-provider-registry";
 
 const MASKED_VALUE = "••••••••";
@@ -88,7 +89,19 @@ export class EmailProviderService extends BaseService {
   private emailProviders: EmailProvidersTable;
   private encryptionSecret: string | undefined;
 
-  constructor(adapter: DrizzleAdapter, logger: Logger) {
+  constructor(
+    adapter: DrizzleAdapter,
+    logger: Logger,
+    /**
+     * Where a test send is recorded.
+     *
+     * The Test button dispatches a REAL message, so it belongs in the delivery
+     * log for the same reason every other send does: an operator asking "did
+     * anything go out" should not have to know which button produced it.
+     * Optional, so a missing recorder never prevents a send.
+     */
+    private readonly deliveries?: EmailDeliveryService
+  ) {
     super(adapter, logger);
 
     this.encryptionSecret = env.NEXTLY_SECRET;
@@ -703,6 +716,8 @@ export class EmailProviderService extends BaseService {
         html: `<p>This is a test email from your <strong>${provider.name}</strong> email provider.</p><p>If you received this, your provider is configured correctly.</p>`,
       });
 
+      await this.recordTestDelivery(to, provider, result.success, null);
+
       return {
         success: result.success,
         error: result.success ? undefined : "Send returned unsuccessful",
@@ -726,6 +741,16 @@ export class EmailProviderService extends BaseService {
       // A NextlyError's publicMessage is a decision about what may be shown.
       // Anything else is a message the throw site happened to interpolate, and
       // a contributed adapter throws with decrypted configuration in scope.
+      await this.recordTestDelivery(
+        testEmail || "",
+        provider,
+        false,
+        // The NORMALISED message. `cause` is the provider's own error, thrown
+        // with decrypted configuration in scope, and storing it would put a
+        // credential in a database column.
+        describeProviderFailure(error).message
+      );
+
       return {
         success: false,
         error: NextlyError.is(error)
@@ -733,6 +758,32 @@ export class EmailProviderService extends BaseService {
           : "The test failed. The reason is in the server log.",
       };
     }
+  }
+
+  /**
+   * Record a test send, and never let recording change its outcome.
+   *
+   * The message has already gone out (or already failed) by the time this
+   * runs, so a recording failure must not turn a delivered test into a
+   * reported failure. `record` swallows its own errors; this wrapper exists so
+   * the call site reads as one thing.
+   */
+  private async recordTestDelivery(
+    to: string,
+    provider: EmailProviderRecord,
+    success: boolean,
+    error: string | null
+  ): Promise<void> {
+    await this.deliveries?.record({
+      to,
+      providerId: provider.id,
+      providerType: provider.type,
+      // A test carries no template. Recording one would name a message the
+      // operator never chose to send.
+      templateSlug: null,
+      status: success ? "sent" : "failed",
+      error,
+    });
   }
 
   /**

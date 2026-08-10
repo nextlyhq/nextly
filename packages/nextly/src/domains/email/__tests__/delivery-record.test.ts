@@ -74,6 +74,29 @@ describe("redacting a provider's failure message", () => {
   });
 });
 
+describe("address forms a narrower pattern misses", () => {
+  // Each of these passed through the previous pattern verbatim. They are the
+  // reason the rule is "anything with an @" rather than a shape built from
+  // what an address usually looks like.
+  it.each([
+    ['550 <"odd user"@example.com> User unknown', "odd user"],
+    ["550 <user@[192.0.2.1]> User unknown", "192.0.2.1"],
+    ["550 <postmaster@localhost> User unknown", "postmaster"],
+  ])("removes the recipient from %s", (message, leaked) => {
+    const redacted = redactAddresses(message);
+    expect(redacted).not.toContain(leaked);
+    // And the control, on every one: the diagnostic survives.
+    expect(redacted).toContain("User unknown");
+  });
+
+  it("leaves text with no @ alone", () => {
+    // The control for the breadth: a status line is not an address.
+    expect(
+      redactAddresses("535 5.7.8 Authentication credentials invalid")
+    ).toBe("535 5.7.8 Authentication credentials invalid");
+  });
+});
+
 describe("preparing an error for storage", () => {
   it("bounds a provider that returns a whole error page", () => {
     const stored = storableError("x".repeat(MAX_ERROR_LENGTH + 500));

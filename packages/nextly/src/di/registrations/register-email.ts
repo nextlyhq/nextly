@@ -23,17 +23,24 @@ import type { RegistrationContext } from "./types";
 export function registerEmailServices(ctx: RegistrationContext): void {
   const { adapter, logger, config, storage } = ctx;
 
-  // EmailProviderService — CRUD for email provider configurations
-  container.registerSingleton<EmailProviderService>(
-    "emailProviderService",
-    () => new EmailProviderService(adapter, logger)
-  );
-
-  // EmailDeliveryService — the durable record of what was sent. A log, not a
-  // queue: nothing drains it and its retry columns stay inert.
+  // EmailDeliveryService — the durable record of what was sent. Registered
+  // first because the provider service resolves it for test sends.
   container.registerSingleton<EmailDeliveryService>(
     "emailDeliveryService",
     () => new EmailDeliveryService(adapter, logger)
+  );
+
+  // EmailProviderService — CRUD for email provider configurations
+  container.registerSingleton<EmailProviderService>(
+    "emailProviderService",
+    () =>
+      new EmailProviderService(
+        adapter,
+        logger,
+        // The Test button dispatches a real message, so it belongs in the
+        // delivery log like any other send.
+        container.get<EmailDeliveryService>("emailDeliveryService")
+      )
   );
 
   // EmailTemplateService — CRUD for email templates

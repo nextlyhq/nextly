@@ -19,6 +19,7 @@ import { randomUUID } from "crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, desc, eq } from "drizzle-orm";
 
+import { NextlyError } from "../../../errors";
 import { emailDeliveriesMysql } from "../../../schemas/email-deliveries/mysql";
 import { emailDeliveriesPg } from "../../../schemas/email-deliveries/postgres";
 import { emailDeliveriesSqlite } from "../../../schemas/email-deliveries/sqlite";
@@ -97,7 +98,12 @@ export class EmailDeliveryService extends BaseService {
         this.deliveries = emailDeliveriesSqlite;
         break;
       default:
-        throw new Error(`Unsupported dialect: ${String(this.dialect)}`);
+        throw NextlyError.internal({
+          logContext: {
+            reason: "unsupported dialect for the email delivery log",
+            dialect: String(this.dialect),
+          },
+        });
     }
   }
 
