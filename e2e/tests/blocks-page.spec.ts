@@ -59,6 +59,15 @@ const LEAD_PARAGRAPH = "A page assembled from core blocks.";
  */
 const GATED_TEXT = "vip-only-marker-8f21";
 
+/**
+ * An authored colour on one node.
+ *
+ * Deliberately not a colour anything else would produce, so the assertion
+ * cannot pass on an inherited or default value. Written in the form
+ * `getComputedStyle` reports so the comparison needs no parsing.
+ */
+const STYLED_HEADING_COLOR = "rgb(17, 85, 204)";
+
 /** A node id. Stable per fixture so a failure names the same node every run. */
 const id = (suffix: string) => `00000000-0000-4000-8000-0000000000${suffix}`;
 
@@ -86,6 +95,11 @@ const DOCUMENT = {
             type: "core/heading",
             version: 1,
             props: { text: PAGE_HEADING, level: "h1" },
+            // An authored node style, so the page has something a compiled
+            // stylesheet must carry. Documents in this collection store no
+            // compiled artifact, so the rule only exists if the route supplied
+            // a compile context — see the styles assertion below.
+            styles: { base: { base: { color: STYLED_HEADING_COLOR } } },
           },
           {
             id: id("03"),
@@ -225,6 +239,19 @@ test("renders every block in the document", async ({ page }) => {
   ).toBeVisible();
 
   expect(failed).toEqual([]);
+});
+
+test("an authored node style is compiled and applied", async ({ page }) => {
+  await page.goto(`/blocks/${PUBLISHED_SLUG}`);
+
+  const heading = page.getByRole("heading", { name: PAGE_HEADING });
+
+  // The class is emitted unconditionally, so its presence proves nothing about
+  // whether any rule defines it. The COMPUTED colour is the only thing that
+  // separates "a stylesheet was compiled and served" from "a class name was
+  // printed onto an unstyled page", which is what a route with no compiled
+  // artifact and no compile context produces.
+  await expect(heading).toHaveCSS("color", STYLED_HEADING_COLOR);
 });
 
 test("a condition-gated node is never sent to the client", async ({

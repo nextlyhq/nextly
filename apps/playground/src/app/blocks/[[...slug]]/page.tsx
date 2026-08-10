@@ -19,6 +19,41 @@ import type { NextlyContentReader } from "nextly/runtime";
 
 import nextlyConfig from "../../../../nextly.config";
 
+type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
+
+/**
+ * The site's breakpoints, and the reason this route compiles its own sheet.
+ *
+ * `PageRenderer` emits class NAMES unconditionally and CSS only when it is
+ * given either a stored `styles` artifact or a `styleContext` to compile from.
+ * This collection stores the document alone — there is no write path here
+ * producing a compiled sheet — so without a context every authored node style
+ * and every `visibility.devices` rule would resolve to a class that no rule
+ * ever defines, and the page would render structurally correct and visually
+ * bare.
+ *
+ * Declared by the host because breakpoints are a site decision: the engine
+ * never reads storage and ships no default set. Ids must be unique across both
+ * axes, and the base breakpoint carries no `maxWidth` — it is the fallback the
+ * others narrow.
+ *
+ * Left unannotated deliberately. `StyleCompileContext` is what
+ * `createBlocksPage` accepts, and `@nextlyhq/blocks-react` does not re-export
+ * it — naming the type here would mean taking a direct dependency on
+ * `@nextlyhq/blocks-engine` purely to label a config object. The shape is still
+ * fully checked where it is passed, so nothing is lost but the label.
+ */
+const STYLE_CONTEXT = {
+  breakpoints: {
+    viewport: [
+      { id: "base", label: "Base" },
+      { id: "tablet", label: "Tablet", maxWidth: 1024 },
+      { id: "mobile", label: "Mobile", maxWidth: 640 },
+    ],
+    container: [],
+  },
+};
+
 /**
  * The route's reader, resolved per call.
  *
@@ -32,10 +67,31 @@ import nextlyConfig from "../../../../nextly.config";
  * indirection is per call rather than a value. `getNextly` caches its instance,
  * so every call after the first is a lookup.
  */
-const reader: NextlyContentReader = {
-  find: async args => (await getNextly({ config: nextlyConfig })).find(args),
-  findByID: async args =>
-    (await getNextly({ config: nextlyConfig })).findByID(args),
+const instance = () => getNextly({ config: nextlyConfig });
+
+/**
+ * Just the media lookup `createBlocksPage` probes for.
+ *
+ * Narrower than the instance's whole `media` namespace on purpose: this reader
+ * exists to be READ from, and forwarding `upload`/`update`/`delete` would offer
+ * a public page route a write surface it has no reason to hold.
+ */
+type MediaLookup = Pick<NextlyInstance["media"], "findByID">;
+
+const reader: NextlyContentReader & { media: MediaLookup } = {
+  find: async args => (await instance()).find(args),
+  findByID: async args => (await instance()).findByID(args),
+  // The media namespace, forwarded rather than dropped.
+  //
+  // Ordinary Nextly media lives in a SYSTEM table with its own namespace, and
+  // `createBlocksPage` resolves an image's `mediaId` through `reader.media
+  // .findByID`. A wrapper exposing only `find` and `findByID` satisfies
+  // `NextlyContentReader` and silently loses that lookup, so every `core/image`
+  // storing a media id — rather than a literal `src` — resolves to null and
+  // draws nothing.
+  media: {
+    findByID: async args => (await instance()).media.findByID(args),
+  },
 };
 
 /**
@@ -86,6 +142,7 @@ const { ContentPage, generateMetadata } = createBlocksPage({
   // editor — so a public route depending on it renders the unknown-block
   // placeholder whenever this request arrived before the admin did.
   blocks: createBlockResolver(coreBlocks),
+  styleContext: STYLE_CONTEXT,
   metadata: (entry, context, derived) => ({
     title: derived.title ?? (entry.title as string | undefined),
     description: derived.description,
