@@ -919,6 +919,47 @@ describe("through the boundary", () => {
     expect(html).toContain('data-nx-block-placeholder="invalid-output"');
   });
 
+  it("refuses a provider whose value hides from enumeration", async () => {
+    // `Object.values` reports enumerable OWN properties, and React cares about
+    // neither: it simply reads `props.value`. A forged element carrying the
+    // getter as non-enumerable is invisible to enumeration and not to React, so
+    // the read has to be by name.
+    const hostile: Record<string, unknown> = { children: null };
+    Object.defineProperty(hostile, "value", {
+      enumerable: false,
+      get(): string {
+        throw new Error("hidden hostile value");
+      },
+    });
+    const forged = {
+      ...(<TestContext.Provider value="v">{null}</TestContext.Provider>),
+      props: hostile,
+    };
+
+    const html = await renderReturning(forged, "test/hidden-provider-value");
+
+    expect(html).toContain('data-nx-block-placeholder="invalid-output"');
+  });
+
+  it("refuses a provider whose value is inherited", async () => {
+    // The other half of the same gap: enumeration of own properties never sees
+    // a prototype's accessor, and React still reads through the chain.
+    const base = {};
+    Object.defineProperty(base, "value", {
+      get(): string {
+        throw new Error("inherited hostile value");
+      },
+    });
+    const forged = {
+      ...(<TestContext.Provider value="v">{null}</TestContext.Provider>),
+      props: Object.assign(Object.create(base) as object, { children: null }),
+    };
+
+    const html = await renderReturning(forged, "test/inherited-provider-value");
+
+    expect(html).toContain('data-nx-block-placeholder="invalid-output"');
+  });
+
   it("still refuses a single-use iterator inside a fragment", async () => {
     // Not an emptiness question, and the distinction matters: React does not
     // support a single-use iterator as a JSX child at all, so the normalizer

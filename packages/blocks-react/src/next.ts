@@ -43,6 +43,7 @@ import type {
 import type { ReactElement, ReactNode } from "react";
 import { createElement } from "react";
 
+import { url } from "./blocks/props";
 import { createStandaloneContext } from "./context";
 import type {
   BlockHostPolicy,
@@ -449,8 +450,16 @@ async function firstUsableImage(
   // A candidate the host would not fetch is not usable, whichever route
   // produced it: a URL written on the block and a URL a media record resolved
   // to are the same kind of value here, exactly as they are in `core/image`.
-  const usable = (value: string): boolean =>
-    remotePatterns === undefined || isFetchableUrl(value, remotePatterns);
+  // BOTH filters, in the order the renderer applies them. The host list alone
+  // is not the whole rule: a resolver can return `javascript:alert(1)` from a
+  // media record a person filled in, and a site with no `remotePatterns` would
+  // then publish it as the link preview while the page correctly refuses to
+  // render it. `url()` is the same scheme guard every block prop passes through.
+  const usable = (value: string): boolean => {
+    const safe = url(value);
+    if (safe === undefined) return false;
+    return remotePatterns === undefined || isFetchableUrl(safe, remotePatterns);
+  };
   // A refused direct URL is removed from the LIST rather than rejected where it
   // is reached, so scanning simply continues to the next candidate in document
   // order. Rejecting it at the point of use would stop the search at a value

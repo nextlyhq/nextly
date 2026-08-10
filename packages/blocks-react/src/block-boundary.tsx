@@ -219,10 +219,20 @@ function rendersNothing(
       if (typeof props !== "object" || props === null) return false;
       // Calling a wrapper empty hands it to React, which still renders the
       // WRAPPER and reads props this check never looks at: a provider's `value`,
-      // a `Profiler`'s `onRender`. Building the array is what performs those
-      // reads, and it moves a read React was going to make anyway inside this
-      // containment — so a getter that raises becomes this block's placeholder
-      // instead of the page's error. The array itself is discarded.
+      // a `Profiler`'s `onRender`. Performing those reads here moves a read
+      // React was going to make anyway inside this containment, so a getter that
+      // raises becomes this block's placeholder instead of the page's error.
+      //
+      // Read BY NAME rather than by enumerating. `Object.values` sees only
+      // enumerable OWN properties, and React does not care about either: a
+      // forged element can carry `value` as non-enumerable, or inherit it from a
+      // prototype, and be handed straight through while React still dereferences
+      // it. The names are the ones React itself reads off these wrappers.
+      for (const name of REACT_READS) {
+        void (props as Record<string, unknown>)[name];
+      }
+      // Enumerable extras as well, so a prop React learns to read later is
+      // covered before this list hears about it.
       Object.values(props);
       if (!("children" in props)) return true;
       children = props.children;
@@ -298,6 +308,27 @@ function isHiddenActivity(type: unknown, props: unknown): boolean {
   if (typeof props !== "object" || props === null) return false;
   return "mode" in props && props.mode === "hidden";
 }
+
+/**
+ * The props React dereferences on the wrappers this contract opens.
+ *
+ * Named rather than enumerated, because enumeration answers a different question
+ * than React asks: it reports enumerable own properties, while React simply
+ * reads the property. A forged element carrying one of these as non-enumerable,
+ * or inheriting it, is invisible to enumeration and not to React.
+ *
+ * `value` belongs to a context provider, `fallback` to `Suspense`, `id` and
+ * `onRender` to `Profiler`, `mode` to `Activity`. Reading a name a given wrapper
+ * does not have costs nothing and keeps this one list rather than a branch per
+ * wrapper type.
+ */
+const REACT_READS: readonly string[] = [
+  "value",
+  "fallback",
+  "id",
+  "onRender",
+  "mode",
+];
 
 /** React's `Activity`, by the symbol this React identifies it with. */
 const ACTIVITY_TYPE = Symbol.for("react.activity");
