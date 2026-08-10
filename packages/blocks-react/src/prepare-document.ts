@@ -101,15 +101,35 @@ function pruneKnownPlaceholders(
         kept.push(node);
         continue;
       }
+      // Only the slots the DEFINITION declares. A block never calls
+      // `renderSlot` for a region it does not declare, so a stored slot left
+      // behind by a hand edit or a definition that dropped one is not on the
+      // page — and a leaf that declares none renders none at all.
+      //
+      // Pruned HERE rather than left to each reader, because this result is the
+      // documented render-equivalent tree: the style compiler walks every
+      // stored slot too, so an undeclared one would have its descendants'
+      // rules — including any `url(...)` they carry — compiled into the sheet
+      // for markup nobody receives. The SEO walk already refuses to descend
+      // into them; this makes the tree itself say so, once, for every reader.
+      const declared = resolver.get(node.type)?.slots ?? {};
       let slotsChanged = false;
       const slots: Record<string, BlockNode[]> = {};
       for (const [name, children] of Object.entries(node.slots)) {
+        if (!(name in declared)) {
+          slotsChanged = true;
+          continue;
+        }
         const next = walk(children);
         if (next !== children) slotsChanged = true;
         slots[name] = next;
       }
+      if (slotsChanged) changed = true;
       kept.push(slotsChanged ? { ...node, slots } : node);
     }
+    // `changed` tracks BOTH kinds of edit. Tracking only dropped nodes returned
+    // the original array whenever every node survived — silently discarding the
+    // rebuilt ones, so a slot-level change was computed and then thrown away.
     return changed ? kept : nodes;
   };
 

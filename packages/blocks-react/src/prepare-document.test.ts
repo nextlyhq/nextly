@@ -36,6 +36,55 @@ describe("prepareDocumentForRead", () => {
     ).toBeNull();
   });
 
+  it("drops a slot the block's definition does not declare", () => {
+    // A leaf never calls `renderSlot`, so a stored slot left by a hand edit or
+    // by a definition that dropped one is not on the page. The style compiler
+    // walks every STORED slot, so leaving it would compile its descendants'
+    // rules — and any `url(...)` they carry — into the sheet for markup nobody
+    // receives.
+    const leaf: BlockNode = {
+      id: "1",
+      type: "core/heading",
+      version: 1,
+      props: { text: "Real" },
+      slots: { children: [heading("2", "Ghost")] },
+    };
+    const document: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [leaf],
+    };
+
+    const prepared = prepareDocumentForRead(document, {
+      resolver: createBlockResolver(coreBlocks),
+    });
+
+    expect(prepared?.nodes[0]?.slots).toEqual({});
+  });
+
+  it("keeps the slots a container DOES declare", () => {
+    // The positive control. Without it the check above passes for a function
+    // that strips every slot, which would empty every container on the page.
+    const box: BlockNode = {
+      id: "1",
+      type: "core/box",
+      version: 1,
+      props: {},
+      slots: { children: [heading("2", "Kept")] },
+    };
+    const document: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [box],
+    };
+
+    const prepared = prepareDocumentForRead(document, {
+      resolver: createBlockResolver(coreBlocks),
+    });
+
+    expect(prepared?.nodes[0]?.slots?.children).toHaveLength(1);
+  });
+
   it("keeps a fully GATED page empty rather than unreadable", () => {
     // Nothing failed to render here: every block was withheld on purpose for
     // this visitor. Reporting `null` would show an unsupported-content fallback
