@@ -21,10 +21,31 @@ import { fileURLToPath } from "node:url";
 const pkgRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
+ * The source barrel behind each published subpath.
+ *
+ * Declared here rather than in the build config, and read BY it, so a retarget happens once. When
+ * the build owned this and the surface snapshot kept its own copy, pointing an entry at a
+ * different barrel left the snapshot reading the old one — the new barrel published, and its
+ * exports never compared against anything.
+ *
+ * The export map decides what ships; this decides where each shipped thing is built from. The two
+ * are checked against each other, so a subpath without a source, or a source without a subpath,
+ * is an error rather than a gap.
+ */
+const SOURCES = {
+  ".": "src/index.ts",
+  "./tailwind-preset": "src/tailwind-preset.ts",
+  "./utils": "src/lib/utils.ts",
+  "./color": "src/lib/color/index.ts",
+};
+
+/**
  * One published entry point.
  *
  * @typedef {object} PublishedEntry
  * @property {string} subpath The export key, such as `.` or `./color`.
+ * @property {string} source The barrel it is built from, relative to the package root.
+ * @property {string} name The build entry's key, such as `index` or `color`.
  * @property {string[]} declarations The declaration files it resolves to, ESM then CJS.
  * @property {string[]} artifacts The JavaScript files it resolves to, ESM then CJS.
  * @property {boolean} serverSafe Whether it is importable from server code.
@@ -72,10 +93,20 @@ export function publishedEntries() {
     }
 
     const file = value => value.replace(/^\.\//, "").replace(/^dist\//, "");
+    const source = SOURCES[subpath];
+    if (source === undefined) {
+      throw new Error(
+        `The export "${subpath}" has no source barrel. Add one to SOURCES, so the build and the ` +
+          "surface snapshot read the same file."
+      );
+    }
+    const artifacts = [file(paths.importDefault), file(paths.requireDefault)];
     entries.push({
       subpath,
+      source,
+      name: artifacts[0].replace(/\.[^.]+$/, ""),
       declarations: [file(paths.importTypes), file(paths.requireTypes)],
-      artifacts: [file(paths.importDefault), file(paths.requireDefault)],
+      artifacts,
       serverSafe: subpath !== ".",
     });
   }
@@ -104,6 +135,20 @@ export function declarationFiles() {
 }
 
 /**
+ * The built JavaScript files that MUST carry a `"use client"` banner.
+ *
+ * The mirror of {@link serverSafeArtifacts}, and derived for the same reason: hard-coding the
+ * root's artifacts leaves the guard checking files a consumer may no longer resolve to.
+ *
+ * @returns {string[]}
+ */
+export function clientArtifacts() {
+  return publishedEntries()
+    .filter(entry => !entry.serverSafe)
+    .flatMap(entry => entry.artifacts);
+}
+
+/**
  * The built JavaScript files that must NOT carry a `"use client"` banner.
  *
  * @returns {string[]}
@@ -112,4 +157,28 @@ export function serverSafeArtifacts() {
   return publishedEntries()
     .filter(entry => entry.serverSafe)
     .flatMap(entry => entry.artifacts);
+}
+
+/**
+ * The build entries for the server-safe subpaths, as tsup expects them.
+ *
+ * @returns {Record<string, string>}
+ */
+export function serverSafeBuildEntries() {
+  return Object.fromEntries(
+    publishedEntries()
+      .filter(entry => entry.serverSafe)
+      .map(entry => [entry.name, entry.source])
+  );
+}
+
+/**
+ * Every subpath's source barrel, keyed by subpath.
+ *
+ * @returns {Record<string, string>}
+ */
+export function sourcesBySubpath() {
+  return Object.fromEntries(
+    publishedEntries().map(entry => [entry.subpath, entry.source])
+  );
 }

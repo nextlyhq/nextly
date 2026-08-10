@@ -13,7 +13,10 @@
  * belong in a Node test process.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { publishedEntries } from "../scripts/published-entries.mjs";
+import {
+  publishedEntries,
+  sourcesBySubpath,
+} from "../scripts/published-entries.mjs";
 
 import {
   DECLARATION_ENTRIES,
@@ -31,16 +34,12 @@ const PKG_ROOT = path.join(SRC, "..");
 /**
  * The SOURCE barrel behind each published entry point.
  *
- * Listed rather than derived, because the export map names built files and there is no convention
- * mapping `dist/color` back to `src/lib/color/index.ts`. The list is instead tied to the export
- * map by a completeness check below, so an entry point cannot be published without one.
+ * Read from the same map the build config consumes, so a retarget cannot leave this comparing the
+ * previous barrel while the new one ships unchecked.
  */
-const ENTRY_POINTS = [
-  { subpath: ".", source: "index.ts" },
-  { subpath: "./utils", source: "lib/utils.ts" },
-  { subpath: "./tailwind-preset", source: "tailwind-preset.ts" },
-  { subpath: "./color", source: "lib/color/index.ts" },
-] as const;
+const ENTRY_POINTS = Object.entries(sourcesBySubpath()).map(
+  ([subpath, source]) => ({ subpath, source })
+);
 
 /** Just the source paths, for the checks that read files rather than compare identities. */
 const ENTRY_SOURCES = ENTRY_POINTS.map(entry => entry.source);
@@ -58,7 +57,10 @@ function stripComments(source: string): string {
 }
 
 function sourceOf(file: string): string {
-  return stripComments(readFileSync(path.join(SRC, file), "utf8"));
+  // Resolved from the PACKAGE ROOT, because these paths are the ones the build config consumes
+  // and tsup entry paths are package-relative. Reading them from `src` instead would need a
+  // second spelling of the same path, which is what having one map is meant to prevent.
+  return stripComments(readFileSync(path.join(PKG_ROOT, file), "utf8"));
 }
 
 /**
@@ -102,7 +104,9 @@ function exportedNames(file: string): string[] {
 /** Names the barrel exports, without the kind suffix. */
 function barrelNames(): Set<string> {
   return new Set(
-    exportedNames("index.ts").map(entry => entry.replace(/ \(.*\)$/, ""))
+    exportedNames(sourcesBySubpath()["."]!).map(entry =>
+      entry.replace(/ \(.*\)$/, "")
+    )
   );
 }
 
@@ -112,7 +116,10 @@ function barrelNames(): Set<string> {
  * name in it. A group heading may sit between the tag and the clause.
  */
 function taggedPerSource(): { public: Set<string>; experimental: Set<string> } {
-  const source = readFileSync(path.join(SRC, "index.ts"), "utf8");
+  const source = readFileSync(
+    path.join(PKG_ROOT, sourcesBySubpath()["."]!),
+    "utf8"
+  );
   const tagged = { public: new Set<string>(), experimental: new Set<string>() };
 
   for (const m of source.matchAll(
