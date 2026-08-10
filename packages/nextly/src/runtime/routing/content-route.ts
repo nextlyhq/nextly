@@ -3,22 +3,26 @@
  * optional catch-all that resolves ANY path to a published content entry (the
  * pages-collection model: add an `/about` entry and it just works).
  *
- * You keep the route file; this fills the body. It returns `generateStaticParams`
- * (pre-render published paths, with `dynamicParams` handling the rest),
- * `generateMetadata`, and the page component — which resolves the path across the
- * configured collections, calls `notFound()` on a genuine miss or a reserved
- * path, and otherwise renders your component with the resolved entry.
+ * You keep the route file; this fills the body. It returns `generateMetadata`
+ * and the page component — which resolves the path across the configured
+ * collections, calls `notFound()` on a genuine miss or a reserved path, and
+ * otherwise renders your component with the resolved entry.
+ *
+ * **Static generation belongs to `createPublicContentRoute`, not to this one.**
+ * `createContentRoute` reads access-enforced content, so the answer depends on
+ * who is asking and no path can be pre-rendered; it returns no
+ * `generateStaticParams` at all. Exporting one anyway is what made Next
+ * classify an inherently dynamic route as static.
  *
  * `next`/`react` imports are TYPE-ONLY and `next/navigation` is resolved lazily,
  * so importing this never forces those onto a non-Next consumer at load.
  *
- * `generateStaticParams` returns `[]` when there is nothing to pre-render (a
- * `staticParamsLimit` of `0`, or no published slugs yet), which is valid for
- * standard App Router builds. Next 16 Cache Components is stricter: an EXPORTED
- * `generateStaticParams` must return at least one entry. Under that mode, do not
- * wire `generateStaticParams` into the route file for a no-prerender/empty-site
- * setup — export only `ContentPage` and `generateMetadata` and let paths render
- * on demand.
+ * `createPublicContentRoute`'s `generateStaticParams` returns `[]` when there is
+ * nothing to pre-render — no published slugs yet — which is valid for standard
+ * App Router builds. Next 16 Cache Components is stricter: an EXPORTED
+ * `generateStaticParams` must return at least one entry. Under that mode an
+ * empty site uses `createContentRoute`, which has no such export and renders
+ * every path on demand.
  *
  * @module runtime/routing/content-route
  */
@@ -144,8 +148,9 @@ export interface ContentRouteConfig<TNode> {
    * and means every visitor sees unpublished content at every path. It is
    * almost never what a public site wants.
    *
-   * `generateStaticParams` ignores this entirely — draft paths are never
-   * pre-rendered.
+   * `draft` belongs to this factory alone. `createPublicContentRoute` refuses
+   * it: a draft read is never cacheable, so it marks the render dynamic, while
+   * a public route's `generateStaticParams` has told Next it is static.
    *
    * @default false
    */
