@@ -189,6 +189,12 @@ export const resendDefinition: RegisteredEmailProvider = defineEmailProvider({
   label: "Resend",
   description: "Send through the Resend API.",
   docsUrl: "https://resend.com/docs/api-reference/emails/send-email",
+  // Resend publishes a shared address that works before any domain is
+  // verified, so "use a verified domain" alone would make a usable test
+  // configuration look impossible. The limitation is stated with it, because
+  // the address silently only delivers to the account holder.
+  senderGuidance:
+    "For testing without a verified domain, use onboarding@resend.dev — it delivers only to the email address on your Resend account.",
   // A hosted API that only accepts senders on a domain verified in the account.
   // Declared, because nothing else in the descriptor distinguishes a hosted
   // provider from a relay the operator runs themselves.

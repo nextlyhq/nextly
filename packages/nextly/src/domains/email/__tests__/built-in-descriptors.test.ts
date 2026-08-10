@@ -12,9 +12,15 @@
  * withholding the value. This file is the guard for that.
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { defineEmailProvider, toDescriptor } from "../provider-definition";
+import {
+  assertConfigFieldsAreUsable,
+  defineEmailProvider,
+  toDescriptor,
+  type RegisteredEmailProvider,
+} from "../provider-definition";
+import { getEmailProviderRegistry } from "../services/email-provider-registry";
 import {
   BUILT_IN_EMAIL_PROVIDERS,
   resendDefinition,
@@ -253,6 +259,162 @@ describe("a credential can only be declared on a control that can hold one", () 
           { name: "sandbox", label: "Sandbox", kind: "boolean" },
           { name: "retries", label: "Retries", kind: "number" },
           { name: "region", label: "Region", kind: "select", options: [] },
+        ],
+      })
+    ).not.toThrow();
+  });
+});
+
+describe("the field rules hold at the registry boundary too", () => {
+  // `RegisteredEmailProvider` is structural, so a JavaScript plugin or a
+  // hand-built object registers without passing through `defineEmailProvider`.
+  // Checking only in the authoring helper would enforce the rules for the
+  // authors least likely to break them.
+  const registered = (
+    configFields: Parameters<typeof assertConfigFieldsAreUsable>[1]
+  ): RegisteredEmailProvider => ({
+    type: "hand-built",
+    label: "Hand Built",
+    configFields,
+    validateConfig: () => {},
+    createAdapterFrom: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+    hasConnectionTest: false,
+  });
+
+  let registry: ReturnType<typeof getEmailProviderRegistry>;
+
+  beforeEach(() => {
+    registry = getEmailProviderRegistry();
+    registry.reset();
+  });
+
+  afterEach(() => {
+    registry.reset();
+  });
+
+  it("refuses a secret declared on a switch", () => {
+    expect(() =>
+      registry.register(
+        registered([
+          { name: "flag", label: "Flag", kind: "boolean", secret: true },
+        ])
+      )
+    ).toThrow(/text or password field/);
+  });
+
+  it("refuses a path that reaches an object prototype", () => {
+    expect(() =>
+      registry.register(
+        registered([{ name: "__proto__.x", label: "X", kind: "text" }])
+      )
+    ).toThrow(/cannot be used/);
+  });
+
+  it("accepts an ordinary hand-built provider", () => {
+    // The control that keeps the guard from rejecting the legitimate case it
+    // exists to let through.
+    expect(() =>
+      registry.register(
+        registered([
+          {
+            name: "auth.pass",
+            label: "Password",
+            kind: "password",
+            secret: true,
+          },
+        ])
+      )
+    ).not.toThrow();
+  });
+});
+
+describe("a default a control cannot hold", () => {
+  const base = {
+    type: "defaults",
+    label: "Defaults",
+    parseConfig: (input: unknown) => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  };
+
+  it.each([
+    ["select", true],
+    ["number", "3"],
+    ["text", 3],
+    ["boolean", "yes"],
+  ] as const)("refuses a %s field defaulting to %p", (kind, value) => {
+    // A select defaulting to `true` renders as unselected and then fails its
+    // own generated string schema before anyone touches it; a number
+    // defaulting to "3" renders blank and submits a string. Both fail far from
+    // the declaration that caused them.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          { name: "field", label: "Field", kind, default: value, options: [] },
+        ],
+      })
+    ).toThrow(/can only default to/);
+  });
+
+  it.each([
+    ["select", "eu"],
+    ["number", 3],
+    ["text", "hello"],
+    ["boolean", false],
+  ] as const)("accepts a %s field defaulting to %p", (kind, value) => {
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          { name: "field", label: "Field", kind, default: value, options: [] },
+        ],
+      })
+    ).not.toThrow();
+  });
+});
+
+describe("two fields claiming one place in the configuration", () => {
+  const base = {
+    type: "overlap",
+    label: "Overlap",
+    parseConfig: (input: unknown) => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  };
+
+  it.each([
+    [["auth", "auth.pass"]],
+    [["auth.pass", "auth"]],
+    [["auth.pass", "auth.pass"]],
+  ])("refuses %p in either declaration order", names => {
+    // Neither order works: one makes `auth` an object where a string is
+    // expected, the other drops the nested schema while both controls still
+    // render and compete for the same path.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: names.map(name => ({
+          name,
+          label: name,
+          kind: "text" as const,
+        })),
+      })
+    ).toThrow(/same place in the stored configuration/);
+  });
+
+  it("accepts siblings under one branch", () => {
+    // The control: nesting is the supported case, and SMTP depends on it.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          { name: "auth.user", label: "User", kind: "text" },
+          { name: "auth.pass", label: "Pass", kind: "password" },
         ],
       })
     ).not.toThrow();

@@ -319,6 +319,13 @@ export function EmailProviderForm({
                           Must be an address on a{" "}
                           <strong>verified domain</strong> in your{" "}
                           {selectedDescriptor.label} account.{" "}
+                          {/* The provider's own exception to that rule, when it
+                              has one. Resend's shared testing address works
+                              before any domain is verified, and omitting it
+                              makes a usable configuration look impossible. */}
+                          {selectedDescriptor.senderGuidance && (
+                            <>{selectedDescriptor.senderGuidance} </>
+                          )}
                           {/* The link is separate from the warning: a provider
                               can require a verified sender without publishing
                               documentation, and the warning is the part that

@@ -76,6 +76,8 @@ export interface EmailProviderDescriptor {
   label: string;
   description?: string;
   docsUrl?: string;
+  /** One line about which sender addresses this provider accepts. */
+  senderGuidance?: string;
   capabilities: EmailProviderCapabilities;
   configFields: EmailProviderConfigField[];
 }

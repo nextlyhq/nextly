@@ -153,16 +153,38 @@ function fieldSchema(field: EmailProviderConfigField): z.ZodTypeAny {
 
     case "text":
     case "password": {
-      let base = z.string();
-      if (field.constraints?.maxLength !== undefined) {
-        base = base.max(
-          field.constraints.maxLength,
-          `${field.label} must be at most ${field.constraints.maxLength} characters`
-        );
-      }
-      return required
-        ? base.min(1, `${field.label} is required`)
-        : base.optional().or(z.literal(""));
+      const maxLength = field.constraints?.maxLength;
+
+      // One `superRefine` rather than chained `.min`/`.max` inside a union.
+      // A union whose members both fail reports its own generic "Invalid
+      // input" and throws away the message naming the field, which is the
+      // whole value of validating on the client.
+      return z.string().superRefine((value, ctx) => {
+        // A credential's stored value arrives as the server's eight-character
+        // mask. That is not the credential and need not satisfy its rules: a
+        // four-character PIN would otherwise be unopenable, because the mask
+        // fails the provider's own `maxLength` and the provider could not be
+        // renamed or deactivated without replacing a secret nobody wanted to
+        // change.
+        if (field.secret === true && isMaskedSecret(value)) return;
+
+        if (value === "") {
+          if (required) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `${field.label} is required`,
+            });
+          }
+          return;
+        }
+
+        if (maxLength !== undefined && value.length > maxLength) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `${field.label} must be at most ${maxLength} characters`,
+          });
+        }
+      });
     }
   }
 }

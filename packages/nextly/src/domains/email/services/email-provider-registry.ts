@@ -16,6 +16,7 @@
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   MAX_EMAIL_PROVIDER_TYPE_LENGTH,
+  assertConfigFieldsAreUsable,
   emailProviderTypeTooLong,
   type RegisteredEmailProvider,
 } from "../provider-definition";
@@ -55,6 +56,13 @@ class EmailProviderRegistry {
     if (provider.type.length > MAX_EMAIL_PROVIDER_TYPE_LENGTH) {
       throw emailProviderTypeTooLong(provider.type);
     }
+    // The field rules run here too, for the same reason the type rules do:
+    // this is the boundary every provider crosses. A secret declared on a
+    // switch, a default a control cannot hold, a path reaching an object
+    // prototype, or two fields claiming one place in the configuration all
+    // reach the admin otherwise, where each fails far from its declaration.
+    assertConfigFieldsAreUsable(provider.type, provider.configFields);
+
     if (this.providers.has(provider.type)) {
       throw new Error(
         `NEXTLY_EMAIL_PROVIDER_COLLISION: email provider type "${provider.type}" is already registered (built-in or another plugin).`

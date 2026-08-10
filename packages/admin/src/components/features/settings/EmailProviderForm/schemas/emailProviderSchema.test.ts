@@ -489,3 +489,55 @@ describe("an optional select nobody chose a value for", () => {
     );
   });
 });
+
+describe("a credential shorter than the mask that stands in for it", () => {
+  const pinDescriptor: EmailProviderDescriptor = {
+    type: "pin-mail",
+    label: "Pin Mail",
+    capabilities: {},
+    configFields: [
+      {
+        name: "pin",
+        label: "PIN",
+        kind: "password",
+        required: true,
+        secret: true,
+        constraints: { maxLength: 4 },
+      },
+    ],
+  };
+
+  const base = {
+    name: "Primary",
+    type: "pin-mail",
+    fromEmail: "noreply@example.com",
+    fromName: "",
+    isDefault: false,
+    isActive: true,
+  };
+
+  it("can be left alone while editing something else", () => {
+    // The mask is eight characters and the credential allows four, so applying
+    // the credential's own rule to the mask made the provider impossible to
+    // rename or deactivate without replacing a secret nobody wanted to change.
+    const result = buildProviderSchema(pinDescriptor).safeParse({
+      ...base,
+      configuration: { pin: MASKED_SECRET },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("still enforces its real length once actually typed", () => {
+    // The control: exempting the mask must not exempt the credential.
+    const result = buildProviderSchema(pinDescriptor).safeParse({
+      ...base,
+      configuration: { pin: "12345" },
+    });
+
+    expect(result.success).toBe(false);
+    expect(
+      result.error?.issues.map(issue => issue.message).join(" ")
+    ).toContain("at most 4 characters");
+  });
+});

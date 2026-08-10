@@ -130,6 +130,20 @@ export interface EmailProviderDefinition<TConfig = Record<string, unknown>> {
   description?: string;
   /** Where to read about getting credentials. */
   docsUrl?: string;
+  /**
+   * One line about which sender addresses this provider will accept.
+   *
+   * Shown beside the From address. Only for a provider whose rule cannot be
+   * derived from `capabilities.requiresVerifiedSender` alone — Resend, for
+   * instance, publishes a shared testing address that works before any domain
+   * is verified, and a form that says only "use a verified domain" makes a
+   * usable configuration look impossible.
+   *
+   * Prose in a wire format is a cost, and it is the same cost `help` and
+   * `description` already pay: the alternative is provider-specific copy
+   * hardcoded in a client, which is what a catalog exists to end.
+   */
+  senderGuidance?: string;
   capabilities?: EmailProviderCapabilities;
   /** Field metadata, in the order a form should render it. */
   configFields: ReadonlyArray<EmailProviderConfigField>;
@@ -195,6 +209,18 @@ const UNWALKABLE_PATH_SEGMENTS = new Set([
   "prototype",
 ]);
 
+/** The value type each control can actually hold. */
+const DEFAULT_TYPE_FOR_KIND: Record<
+  EmailProviderConfigField["kind"],
+  "string" | "number" | "boolean"
+> = {
+  text: "string",
+  password: "string",
+  select: "string",
+  number: "number",
+  boolean: "boolean",
+};
+
 /** Reject a field name that cannot be walked safely. */
 function assertFieldNameIsWalkable(
   type: string,
@@ -211,6 +237,93 @@ function assertFieldNameIsWalkable(
     publicMessage: `Email provider "${type}" declares the configuration field "${field.name}", whose path segment "${offender}" cannot be used. A field name is a dotted path into stored configuration and may not contain an empty segment or reach an object prototype.`,
     logContext: { type, field: field.name, segment: offender },
   });
+}
+
+/**
+ * Reject a default a control cannot hold.
+ *
+ * `default` is typed as the union of all three primitives, which is right for
+ * one property covering five kinds and wrong for any single field: a select
+ * defaulting to `true` renders as unselected and then fails its own generated
+ * string schema before anyone touches it, and a number field defaulting to
+ * `"3"` renders blank while quietly submitting a string. Correlating the two is
+ * a rule rather than a type, so it is checked where the definition is written.
+ */
+function assertDefaultMatchesKind(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  if (field.default === undefined) return;
+
+  const expected = DEFAULT_TYPE_FOR_KIND[field.kind];
+  if (typeof field.default === expected) return;
+
+  throw new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider "${type}" gives the ${field.kind} field "${field.name}" a ${typeof field.default} default. A ${field.kind} field can only default to a ${expected}.`,
+    logContext: {
+      type,
+      field: field.name,
+      kind: field.kind,
+      defaultType: typeof field.default,
+    },
+  });
+}
+
+/**
+ * Reject two fields that claim the same place in the configuration.
+ *
+ * A declaration and one of its own descendants — `auth` beside `auth.pass` —
+ * cannot both be represented: whichever is built second either overwrites the
+ * other's branch or tries to treat a leaf as one. Neither order produces a
+ * working form, and both fail somewhere far from the declaration, so the
+ * overlap is refused where it is written.
+ */
+function assertNoOverlappingPaths(
+  type: string,
+  fields: ReadonlyArray<EmailProviderConfigField>
+): void {
+  const seen: string[][] = [];
+
+  for (const field of fields) {
+    const path = field.name.split(".");
+    for (const other of seen) {
+      const shorter = other.length <= path.length ? other : path;
+      const longer = other.length <= path.length ? path : other;
+      const overlaps = shorter.every((part, index) => part === longer[index]);
+      if (!overlaps) continue;
+
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Email provider "${type}" declares the configuration fields "${other.join(".")}" and "${field.name}", which claim the same place in the stored configuration. Field paths must not repeat or nest inside one another.`,
+        logContext: { type, first: other.join("."), second: field.name },
+      });
+    }
+    seen.push(path);
+  }
+}
+
+/**
+ * Every rule a provider's field metadata has to satisfy.
+ *
+ * Exported and called from BOTH the authoring helper and the registry.
+ * `RegisteredEmailProvider` is a structural type, so a JavaScript plugin or a
+ * hand-built object reaches registration without passing through
+ * `defineEmailProvider` — checking in one place only would leave the rules
+ * enforced for the authors least likely to break them.
+ */
+export function assertConfigFieldsAreUsable(
+  type: string,
+  fields: ReadonlyArray<EmailProviderConfigField>
+): void {
+  for (const field of fields) {
+    assertFieldNameIsWalkable(type, field);
+    assertDefaultMatchesKind(type, field);
+    if (field.secret === true && !SECRET_CAPABLE_KINDS.includes(field.kind)) {
+      throw secretFieldMustBeTextual(type, field);
+    }
+  }
+  assertNoOverlappingPaths(type, fields);
 }
 
 /** The single error for a credential declared on a control that cannot hold one. */
@@ -244,6 +357,7 @@ export interface RegisteredEmailProvider {
   label: string;
   description?: string;
   docsUrl?: string;
+  senderGuidance?: string;
   capabilities?: EmailProviderCapabilities;
   configFields: ReadonlyArray<EmailProviderConfigField>;
   /** Throw if this configuration is unusable. Discards the parsed value. */
@@ -304,12 +418,7 @@ export function defineEmailProvider<TConfig>(
     throw emailProviderTypeTooLong(definition.type);
   }
 
-  for (const field of definition.configFields) {
-    assertFieldNameIsWalkable(definition.type, field);
-    if (field.secret === true && !SECRET_CAPABLE_KINDS.includes(field.kind)) {
-      throw secretFieldMustBeTextual(definition.type, field);
-    }
-  }
+  assertConfigFieldsAreUsable(definition.type, definition.configFields);
 
   // Captured so the branch below narrows: an optional read off the object
   // inside a closure does not stay narrowed, and asserting it would hide a
@@ -393,6 +502,7 @@ export function defineEmailProvider<TConfig>(
     label: definition.label,
     description: definition.description,
     docsUrl: definition.docsUrl,
+    senderGuidance: definition.senderGuidance,
     capabilities: definition.capabilities,
     configFields: definition.configFields,
     validateConfig: (input: unknown): void => {
@@ -453,6 +563,7 @@ export interface EmailProviderDescriptor {
   label: string;
   description?: string;
   docsUrl?: string;
+  senderGuidance?: string;
   capabilities: EmailProviderCapabilities;
   configFields: ReadonlyArray<EmailProviderConfigField>;
 }
@@ -466,6 +577,7 @@ export function toDescriptor(
     label: provider.label,
     description: provider.description,
     docsUrl: provider.docsUrl,
+    senderGuidance: provider.senderGuidance,
     capabilities: {
       ...provider.capabilities,
       // Derived, not echoed: a definition that claims the capability without
