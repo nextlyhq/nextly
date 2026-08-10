@@ -36,9 +36,12 @@ const { TWEAKCN_THEMES } = await import(
   "../src/theme-lab/themes/tweakcn.generated.ts"
 );
 const { validateTheme } = await import("../src/theme-lab/validate-contrast.ts");
-const { contrastRatio } = await import(
+const { contrastRatio, compositeOver } = await import(
   "../../../packages/ui/src/styles/contrast/color.ts"
 );
+
+/** Alpha surfaces composite over the page, which is white at the bottom. */
+const OPAQUE_WHITE = { r: 1, g: 1, b: 1, alpha: 1 };
 const { resolveColor } = await import(
   "../../../packages/ui/src/styles/contrast/resolve.ts"
 );
@@ -62,7 +65,14 @@ function ratio(tokens, fg, bg) {
   const a = resolveColor(tokens[fg], ctx);
   const b = resolveColor(tokens[bg], ctx);
   if (!a || !b) return null;
-  return contrastRatio(a, b);
+  // Composite BOTH over their backdrop before comparing. Most border tokens
+  // are translucent (`oklch(0 0 0 / 0.445)`), and comparing one as if it were
+  // opaque reports a 44%-opacity hairline as solid black -- which is how a
+  // first run of this script scored Mono's border at 21:1, the theoretical
+  // maximum, and called every theme's rules "prominent".
+  const surface = b.alpha < 1 ? compositeOver(b, OPAQUE_WHITE) : b;
+  const rule = a.alpha < 1 ? compositeOver(a, surface) : a;
+  return contrastRatio(rule, surface);
 }
 
 /**

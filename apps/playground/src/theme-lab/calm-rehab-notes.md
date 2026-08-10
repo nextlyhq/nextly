@@ -39,7 +39,9 @@ about the theme's identity.
 
 Two things follow, and the second is the more useful finding:
 
-1. Calm now has the widest margin of the four, so it is the least likely to regress.
+1. Calm now has the widest margin of the four, so it is the least likely to regress. It still has
+   ONE pairing inside the 0.25 band, at +0.238 -- an earlier draft of this file said zero, which was
+   my arithmetic slip: 0.238 < 0.25.
 2. **Thin margins are not an artifact of fitting — they are a property of the whole in-house set.**
    Mono, the shipped control nobody has tuned to this harness, sits at +0.109 with nine pairings
    within 0.25 of the gate. Any move in the contrast source threatens Mono before it threatens
