@@ -41,7 +41,13 @@ import type { ReactElement, ReactNode } from "react";
 import { createElement } from "react";
 
 import { createStandaloneContext } from "./context";
-import type { BlocksDataProvider, PageContext, ResolvedMedia } from "./context";
+import type {
+  BlockHostPolicy,
+  BlocksDataProvider,
+  PageContext,
+  QueryBudget,
+  ResolvedMedia,
+} from "./context";
 import { PageRenderer } from "./page-renderer";
 import { prepareDocumentForRead } from "./prepare-document";
 import { registeredBlocks } from "./resolver";
@@ -121,6 +127,32 @@ export interface BlocksPageConfig
   resolveEntryPath?: (collection: string, id: string) => Promise<string | null>;
   /** Data access for dynamic blocks. */
   data?: BlocksDataProvider;
+  /**
+   * How many reads one page render may perform, shared by the whole page.
+   *
+   * Defaults to {@link DEFAULT_MAX_QUERIES}. A budget is not optional here the
+   * way it is on a hand-built context: depth in a document becomes
+   * MULTIPLICATION in reads, so three nested `core/collection-loop` blocks over
+   * a hundred entries each is a million reads from one page view — and a route
+   * helper is exactly where a page becomes reachable by anyone with a URL.
+   *
+   * A fresh budget is created PER RENDER. One shared across requests would
+   * spend itself on the first few pages and serve every later request truncated.
+   *
+   * Pass `Infinity` to opt out, which is a deliberate statement that this route's
+   * documents cannot nest loops.
+   */
+  maxQueries?: number;
+  /**
+   * Site-operator decisions the blocks enforce, such as which frame origins may
+   * keep `allow-same-origin`.
+   *
+   * Forwarded to the renderer untouched. These are security posture rather than
+   * content: a page editor must not be able to grant them from a prop, and a
+   * document moved behind this route helper must not silently lose what the
+   * standalone renderer was given.
+   */
+  hostPolicy?: BlockHostPolicy;
   /** Shown in place of an asynchronous block until its output arrives. */
   blockFallback?: ReactNode;
   /**
@@ -326,6 +358,36 @@ async function derivePageSeo(
 const MEDIA_LOOKUP_BATCH = 5;
 
 /**
+ * Reads one page render may perform when the route was given no number.
+ *
+ * Generous for a page and small against a database: a document would have to
+ * nest loops to approach it, which is the shape the budget exists to bound. A
+ * page that exceeds it renders what it could reach rather than failing, so the
+ * cost of the default being low is visible content, while the cost of having no
+ * default at all is an unbounded read amplification reachable by URL.
+ */
+export const DEFAULT_MAX_QUERIES = 500;
+
+/**
+ * A budget for ONE page render.
+ *
+ * Created per render rather than per route: the counter is spent, so a single
+ * budget shared across requests would exhaust on the first few pages and serve
+ * every later request truncated — a fault that grows with uptime and disappears
+ * on restart, which is the hardest kind to attribute.
+ */
+function createQueryBudget(max: number): QueryBudget {
+  let remaining = max;
+  return {
+    take: () => {
+      if (remaining <= 0) return false;
+      remaining -= 1;
+      return true;
+    },
+  };
+}
+
+/**
  * Whether a resolution actually yielded a picture.
  *
  * `resolveMedia` may be the caller's own, so its answer is third-party data
@@ -375,7 +437,10 @@ async function firstUsableImage(
     // candidate is the one the renderer would show, and picking whichever
     // request happened to finish first would publish a different picture than
     // the page displays — silently, and only under load.
-    const hit = resolved.findIndex(usableMedia);
+    // The resolver already applies `usableMedia`, so this re-check is about the
+    // batch's own contract rather than the record's: a rejected lookup arrives
+    // as `null` and must not end the search.
+    const hit = resolved.findIndex(media => media !== null);
     if (hit !== -1) return resolved[hit]?.url;
     if (direct !== -1) return batch[direct]?.value;
   }
@@ -430,7 +495,19 @@ function mediaResolver(
   config: BlocksPageConfig,
   reader: NextlyContentReader
 ): (id: string) => Promise<ResolvedMedia | null> {
-  if (config.resolveMedia) return config.resolveMedia;
+  if (config.resolveMedia) {
+    const custom = config.resolveMedia;
+    // Normalized here rather than trusted, because this ONE function answers
+    // both the render and the metadata. Left raw, a record carrying a blank URL
+    // was rejected by the derivation — which moved on to the block's own `src`
+    // or a later image — while `renderImage` took the same non-nullish value and
+    // emitted it, so the preview picture and the page picture disagreed. The
+    // usability rule has to live where both callers meet it.
+    return async (id: string) => {
+      const record = await custom(id);
+      return usableMedia(record) ? record : null;
+    };
+  }
   return async (id: string) => {
     // `disableErrors` on both paths, because `PageContext.resolveMedia`
     // promises `null` for an id it cannot resolve and the readers THROW
@@ -713,6 +790,11 @@ export function createBlocksPage(
         locale: context.locale,
         isWorkingDraft: entry[WORKING_DRAFT_KEY] === true,
         data,
+        // Fresh for THIS render. `core/collection-loop` claims from it before
+        // each read, and an absent budget reads as unlimited — the loop's own
+        // check is `ctx.queries?.take() === false` — so a routed page without
+        // one is unbounded by construction.
+        queries: createQueryBudget(config.maxQueries ?? DEFAULT_MAX_QUERIES),
         resolveMedia,
         resolveEntryPath,
       });
@@ -725,6 +807,12 @@ export function createBlocksPage(
         styleContext,
         blockFallback,
         limits,
+        // Spread conditionally: `PageRenderer` distinguishes an absent policy
+        // from one present and undefined, and passing the second would state a
+        // posture the site never chose.
+        ...(config.hostPolicy === undefined
+          ? {}
+          : { hostPolicy: config.hostPolicy }),
       });
     },
   });

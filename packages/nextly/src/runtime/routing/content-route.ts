@@ -264,15 +264,17 @@ const MAX_STATIC_PARAMS_PER_PAGE = 500;
  * dropped (the page would only `notFound()` them).
  */
 /**
- * Whether a path segment is one URL resolution removes.
+ * Whether a STORED path segment is one URL resolution removes.
  *
- * Percent-encoded spellings count: the URL standard defines a single-dot segment
- * as `.` or `%2e` and a double-dot segment as any casing of `..`, `.%2e`, `%2e.`
- * or `%2e%2e`, so encoding the dots does not make the segment literal.
+ * Literal `.` and `..` only. The URL standard does also treat `%2e` as a dot
+ * when parsing a URL, but this reads a slug as STORED, and a stored segment
+ * reaches a URL already encoded: `%2E%2E` becomes `%252E%252E`, which stays a
+ * literal segment and decodes back to the text the lookup matches. Applying the
+ * URL-text rule to stored text would reject an entry that is perfectly
+ * addressable, taking it out of static generation and stripping its canonical.
  */
 function isDotSegment(segment: string): boolean {
-  const decoded = segment.toLowerCase().replaceAll("%2e", ".");
-  return decoded === "." || decoded === "..";
+  return segment === "." || segment === "..";
 }
 
 export function slugToStaticParam(value: unknown): { slug: string[] } | null {

@@ -264,6 +264,7 @@ describe("the next entry", () => {
     // guard is about what a consumer can CALL.
     expect(Object.keys(nextEntry).sort()).toEqual([
       "BLOCKS_REACT_NEXT_ENTRY",
+      "DEFAULT_MAX_QUERIES",
       "createBlocksPage",
     ]);
   });

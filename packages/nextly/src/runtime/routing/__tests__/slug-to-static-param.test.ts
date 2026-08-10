@@ -48,14 +48,17 @@ describe("slugToStaticParam", () => {
     expect(slugToStaticParam("..")).toBeNull();
   });
 
-  it("rejects the percent-encoded spelling of a dot segment", () => {
-    // Encoding does not make the segment literal: the URL standard defines a
-    // double-dot segment as any casing of `..`, `.%2e`, `%2e.` or `%2e%2e`, so
-    // `/pages/%2E%2E/admin` resolves to `/admin` exactly as the bare form does.
-    expect(slugToStaticParam("pages/%2E%2E/admin")).toBeNull();
-    expect(slugToStaticParam("pages/%2e%2e/admin")).toBeNull();
-    expect(slugToStaticParam("pages/.%2e/admin")).toBeNull();
-    expect(slugToStaticParam("a/%2E/b")).toBeNull();
+  it("keeps a slug whose segment literally contains a percent sequence", () => {
+    // The URL standard treats `%2e` as a dot when parsing a URL, but this reads
+    // a slug as STORED, and stored text reaches a URL already encoded: the
+    // segment `%2E%2E` is emitted as `%252E%252E`, which stays literal and
+    // decodes back to the text the lookup matches. Applying the URL-text rule
+    // here would take an addressable entry out of static generation and strip
+    // its canonical.
+    expect(slugToStaticParam("pages/%2E%2E/admin")).toEqual({
+      slug: ["pages", "%2E%2E", "admin"],
+    });
+    expect(slugToStaticParam("a/%2E/b")).toEqual({ slug: ["a", "%2E", "b"] });
   });
 
   it("keeps a segment that merely CONTAINS dots", () => {

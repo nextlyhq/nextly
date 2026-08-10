@@ -1102,6 +1102,90 @@ describe("createBlocksPage", () => {
     expect(seen?.image).toBe("/later.png");
   });
 
+  it("gives a routed page a finite query budget", async () => {
+    // `core/collection-loop` claims from `ctx.queries` before each read and its
+    // check is `ctx.queries?.take() === false`, so an ABSENT budget reads as
+    // unlimited. Depth becomes multiplication: nested loops over a hundred
+    // entries each turn one page view into millions of reads, and a route
+    // helper is where a page becomes reachable by anyone holding a URL.
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader({ slug: "about", content: document }),
+    });
+
+    expect(props.context?.queries).toBeDefined();
+    expect(props.context?.queries?.take()).toBe(true);
+  });
+
+  it("stops granting reads once the budget is spent", async () => {
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      maxQueries: 2,
+      nextly: reader({ slug: "about", content: document }),
+    });
+
+    expect(props.context?.queries?.take()).toBe(true);
+    expect(props.context?.queries?.take()).toBe(true);
+    expect(props.context?.queries?.take()).toBe(false);
+  });
+
+  it("gives each render its OWN budget", async () => {
+    // One budget shared across requests would spend itself on the first few
+    // pages and serve every later request truncated — a fault that grows with
+    // uptime and vanishes on restart.
+    const config = {
+      collections: ["pages"],
+      field: "content",
+      maxQueries: 1,
+      nextly: reader({ slug: "about", content: document }),
+    };
+    const route = createBlocksPage(config);
+
+    const first = (await route.ContentPage({
+      params: { slug: ["about"] },
+    })) as ReactElement<PageRendererProps>;
+    const second = (await route.ContentPage({
+      params: { slug: ["about"] },
+    })) as ReactElement<PageRendererProps>;
+
+    expect(first.props.context?.queries?.take()).toBe(true);
+    expect(first.props.context?.queries?.take()).toBe(false);
+    // The second render is unaffected by what the first spent.
+    expect(second.props.context?.queries?.take()).toBe(true);
+  });
+
+  it("forwards the host policy to the renderer", async () => {
+    // Site-operator posture, not content: an embed needing `allow-same-origin`
+    // for an approved origin loses that capability if moving behind this route
+    // helper silently drops the policy the standalone renderer was given.
+    const hostPolicy = { trustedFrameOrigins: ["https://maps.example"] };
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      hostPolicy,
+      nextly: reader({ slug: "about", content: document }),
+    });
+
+    expect(props.hostPolicy).toEqual(hostPolicy);
+  });
+
+  it("normalizes a custom resolver's blank url for the RENDER too", async () => {
+    // The derivation rejected a blank URL and moved on while `renderImage` took
+    // the same non-nullish value and emitted it, so the preview picture and the
+    // page picture disagreed. One resolver answers both, so the rule belongs
+    // where they meet.
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      resolveMedia: async () => ({ url: "   " }),
+      nextly: reader({ slug: "about", content: document }),
+    });
+
+    await expect(props.context?.resolveMedia("any-id")).resolves.toBeNull();
+  });
+
   it("probes a shadowing collection the way the route resolves it", async () => {
     // Two entries in one collection may share a slug, and `resolveContent`
     // settles which the URL opens by sorting on `id`. An unsorted `limit: 1`
