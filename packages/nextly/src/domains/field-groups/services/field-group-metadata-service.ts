@@ -107,13 +107,15 @@ export class FieldGroupMetadataService {
   async createFieldGroup(
     input: CreateFieldGroupInput
   ): Promise<CreateFieldGroupResult> {
-    // 0. REFUSE what cannot be provisioned, before anything is executed.
-    await this.assertIdentifiersFit(input);
+    // 0. REFUSE a table another field group owns, before anything is executed.
     await this.assertTableUnowned(input);
 
     // 1. PLAN, before anything is persisted or executed. The generator validates as well as
     // renders, so a request it refuses leaves nothing behind at all.
     const migrationSQL = await this.planCreate(input);
+
+    // 1a. REFUSE names the database would not store, read from the statements themselves.
+    await this.assertIdentifiersFit(input, migrationSQL);
 
     // 2. APPLY. Never throws; a failure is reported as a status so the row can still record it.
     const migrationStatus = await this.applyCreateDdl(input, migrationSQL);
@@ -191,26 +193,31 @@ export class FieldGroupMetadataService {
    * reappearing one level up.
    */
   private async assertIdentifiersFit(
-    input: CreateFieldGroupInput
+    input: CreateFieldGroupInput,
+    migrationSQL: string
   ): Promise<void> {
     const { FieldGroupSchemaService, MAX_IDENTIFIER_LENGTH } = await import(
       "./field-group-schema-service"
     );
 
-    const tooLong = new FieldGroupSchemaService(this.dialect)
-      .generatedIdentifiers(input.tableName, input.fields, {
-        localized: input.localized === true,
-      })
-      .filter(name => name.length > MAX_IDENTIFIER_LENGTH);
+    const schema = new FieldGroupSchemaService(this.dialect);
+    // The rendered statements, plus the companion this create would provision alongside them. The
+    // companion's DDL is generated later and separately, so its name is the one identifier the scan
+    // cannot see.
+    const names = schema.identifiersIn(migrationSQL);
+    if (input.localized === true) {
+      names.push(`${input.tableName}${STORAGE_FORMAT.companionSuffix}`);
+    }
 
+    const tooLong = names.filter(name => name.length > MAX_IDENTIFIER_LENGTH);
     if (tooLong.length === 0) return;
 
     throw NextlyError.validation({
       errors: tooLong.map(name => ({
         path: "slug",
         code: "IDENTIFIER_TOO_LONG",
-        // The offending NAME, not just its length: the caller cannot otherwise tell which of the
-        // slug and a field name to shorten.
+        // The offending NAME, not just its length: a slug, a field name and the index derived from
+        // both all reach this, and the caller cannot otherwise tell which to shorten.
         message: `Generated database identifier "${name}" is ${name.length} characters; the limit is ${MAX_IDENTIFIER_LENGTH}. Shorten the field group's slug or the field name it derives from.`,
       })),
     });

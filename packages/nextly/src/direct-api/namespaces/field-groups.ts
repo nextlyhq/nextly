@@ -194,7 +194,7 @@ export function createFieldGroupsNamespace(
         message:
           migrationStatus === "applied"
             ? "Field group created."
-            : "Field group created, but its table could not be provisioned. Check the server logs and retry.",
+            : "Field group created, but its table could not be provisioned. The field group is recorded with a failed migration and holds its slug, so creating it again is refused as a duplicate: check the server logs, then delete this field group before creating it again.",
         item: mapFieldGroupRecord(record),
       };
     },

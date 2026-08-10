@@ -962,47 +962,28 @@ export class FieldGroupSchemaService {
   }
 
   /**
-   * Every identifier a create would put in front of the database, for this field group.
+   * The identifiers a rendered migration would put in front of the database, with their lengths.
    *
-   * 🔴 A slug bound cannot make this safe on its own, and that is not a matter of picking a smaller
-   * number. A field's index is named `idx_<tableName>_<columnName>`, so the longest identifier
-   * depends on the slug AND on the longest field name — two independent inputs. A slug at any bound
-   * can still be paired with a field name that pushes its index past the limit.
+   * 🔴 Read out of the SQL rather than re-derived from the field list, and the difference is not
+   * stylistic. An enumeration that walks the fields again is a SECOND transcription of the rules
+   * this renderer applies — which index names it emits, which fields it skips because they are
+   * localized and live in the companion, which get a `uq_` rather than an `idx_`, and that a column
+   * name is itself an identifier. A first attempt at that missed unique indexes and plain column
+   * names, and wrongly rejected localized fields for an index the renderer never emits. Three ways
+   * to be wrong, in rules that had already been written down once.
    *
-   * A method rather than a free function because it reads the same `toSnakeCase` and foreign-key
-   * predicate the rendering above uses. Deriving the names any other way would be a second
-   * implementation of the naming, drifting the moment either side changed.
-   *
-   * Returned rather than validated here so the caller decides what an over-long name means: this
-   * module renders SQL and does not own the product's error vocabulary.
+   * Scanning what was actually rendered cannot drift, because it IS the output. Every identifier
+   * this service emits is quoted with `this.q`, and no dialect uses that character for string
+   * literals — PostgreSQL and SQLite quote strings with `'`, MySQL identifiers are backticked — so
+   * the quoted tokens are identifiers and nothing else.
    */
-  generatedIdentifiers(
-    tableName: string,
-    fields: FieldConfig[],
-    options: { localized?: boolean } = {}
-  ): string[] {
-    const names = [
-      tableName,
-      `${STORAGE_FORMAT.indexPrefix}${tableName}_parent`,
-    ];
-
-    if (options.localized === true) {
-      names.push(`${tableName}${STORAGE_FORMAT.companionSuffix}`);
+  identifiersIn(sql: string): string[] {
+    const pattern = this.q === "`" ? /`([^`]+)`/g : /"([^"]+)"/g;
+    const found = new Set<string>();
+    for (const match of sql.matchAll(pattern)) {
+      if (match[1]) found.add(match[1]);
     }
-
-    for (const field of fields) {
-      if (!isDataField(field) && !isPluginDataField(field)) continue;
-      if (!("name" in field) || !field.name) continue;
-      const indexed =
-        ("index" in field && field.index === true) ||
-        this.fieldHasForeignKey(field);
-      if (!indexed) continue;
-      names.push(
-        `${STORAGE_FORMAT.indexPrefix}${tableName}_${this.toSnakeCase(field.name)}`
-      );
-    }
-
-    return names;
+    return [...found];
   }
 
   private fieldHasForeignKey(field: DataFieldConfig): boolean {

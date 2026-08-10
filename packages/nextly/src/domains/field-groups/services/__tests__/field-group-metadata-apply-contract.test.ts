@@ -228,6 +228,61 @@ describe("a create whose generated names would not fit is refused", () => {
     expect(registry.registerComponent).not.toHaveBeenCalled();
   });
 
+  it("counts a unique index, which is named differently from a plain one", async () => {
+    // `uq_<table>_<column>`, emitted by its own loop. An enumeration that walked the fields looking
+    // for `index: true` missed this entirely, because a unique field need not set it.
+    const registry = registryDouble();
+    const adapter = adapterDouble(async () => true);
+
+    await expect(
+      serviceOver(registry, adapter).createFieldGroup({
+        ...INPUT,
+        tableName: longSlugTable,
+        fields: [{ name: "authorId", type: "text", unique: true }],
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    expect(adapter.executeQuery).not.toHaveBeenCalled();
+  });
+
+  it("counts the column's own name, not only names derived from it", async () => {
+    // A column IS an identifier. A field named past the limit makes MySQL reject the CREATE TABLE
+    // itself — before any index exists to be named.
+    const registry = registryDouble();
+    const adapter = adapterDouble(async () => true);
+
+    await expect(
+      serviceOver(registry, adapter).createFieldGroup({
+        ...INPUT,
+        fields: [{ name: "a".repeat(65), type: "text" }],
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    expect(adapter.executeQuery).not.toHaveBeenCalled();
+  });
+
+  it("does not count an index the renderer never emits", async () => {
+    // 🔴 A localized field's column lives in the companion, so the main table gets no index for it
+    // and no such name is ever generated. Rejecting this request would refuse a VALID create over an
+    // identifier that does not exist — a false refusal, which is worse than the miss it came from.
+    const registry = registryDouble();
+    const adapter = adapterDouble(async () => true);
+
+    const { migrationStatus } = await serviceOver(
+      registry,
+      adapter
+    ).createFieldGroup({
+      ...INPUT,
+      tableName: longSlugTable,
+      localized: true,
+      fields: [
+        { name: "authorId", type: "text", index: true, localized: true },
+      ],
+    });
+
+    expect(migrationStatus).toBe("applied");
+  });
+
   it("allows the same slug when no field derives a longer name", async () => {
     // The positive control. Without it, a rule that rejected every long slug would satisfy the case
     // above while refusing creates that are perfectly legal.
