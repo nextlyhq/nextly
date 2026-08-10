@@ -45,23 +45,20 @@ export interface ResolvedContext {
 }
 
 /**
- * What `render` and `buildMetadata` receive: where the entry was found, plus
- * the reader it was found through.
+ * What `render` and `buildMetadata` receive: where the entry was found.
  *
- * The reader travels with the result rather than being looked up again, because
- * a render that needs a second read — a referenced author, the media behind an
- * image — otherwise has to obtain an instance of its own. On a per-tenant setup
- * that is a different database, so the page and the records it embeds would
- * come from two places, and the mismatch appears as missing relations rather
- * than as an error.
+ * Deliberately NOT a reader. An earlier version carried the instance this route
+ * resolved through, so a render needing a second read did not have to obtain
+ * one of its own. The Direct API is a TRUSTED surface — access bypassed,
+ * lifecycle unfiltered, no locale — and a route is the opposite, so handing one
+ * to a callback meant re-binding every attribute it carries: access, both
+ * identity channels, lifecycle and locale, each of which failed independently.
  *
- * Deliberately NOT given to the `draft` decision, which answers from a path
- * alone: handing it a reader would invite an authorization check to read
- * content it is in the middle of deciding access to.
+ * A caller that genuinely needs a second read passes its own instance as
+ * `nextly` and uses it directly, where the posture is visibly theirs to choose
+ * rather than inherited from a field that looks like a convenience.
  */
 export interface RenderContext extends ResolvedContext {
-  /** The instance this route resolved the entry through. */
-  reader: NextlyContentReader;
   /**
    * The locale this route read in, when it was configured for one.
    *
@@ -299,86 +296,6 @@ function isDotSegment(segment: string): boolean {
  * are spread over these defaults. What changes is which way the DEFAULT points,
  * and that is the direction a caller cannot see.
  */
-/**
- * The caller's arguments, minus the keys they left explicitly `undefined`.
- *
- * `exactOptionalPropertyTypes` is off, so `find({ collection, status })` with an
- * undefined `status` typechecks — and spread over the bound defaults it ERASES
- * them, handing back the unscoped reader this facade exists to prevent. An
- * absent key and a key holding `undefined` mean the same thing to a caller and
- * opposite things to a spread.
- */
-function definedOnly<T extends object>(args: T): T {
-  // Typed as `T` rather than `Partial<T>`: removing a key whose value is
-  // `undefined` leaves a value the caller could have written by omitting it, so
-  // the shape a consumer must satisfy is unchanged.
-  return Object.fromEntries(
-    Object.entries(args).filter(([, value]) => value !== undefined)
-  ) as T;
-}
-
-function routeScopedReader(
-  instance: NextlyContentReader,
-  overrideAccess: boolean,
-  status: "published" | "draft" | "all",
-  locale: string | undefined
-): NextlyContentReader {
-  // Lifecycle travels with access, because binding one and not the other leaves
-  // the same hole through a different door: an `overrideAccess: true` route —
-  // which is the documented way to make a page cacheable — reads TRUSTED, and a
-  // trusted read with no status filter returns draft rows. A callback naming the
-  // author of a published post would then embed a never-published record in a
-  // public, cached page.
-  const defaults = {
-    overrideAccess,
-    // Both identity channels, not just the obvious one. Access rules are
-    // written against `req.user` — that is the shape the rule fixtures use —
-    // so a caller forwarding a request would carry an identity past a binding
-    // that only cleared `user`, on a route that resolves anonymously. Bound
-    // defensively rather than because a path was proven: an attribute of a
-    // trusted surface that is not named is one that has not been scoped, and
-    // the cost of naming it is nothing.
-    user: undefined,
-    req: undefined,
-    ...(locale === undefined ? {} : { locale }),
-  };
-
-  const scoped: NextlyContentReader = {
-    find: args => instance.find({ ...defaults, status, ...definedOnly(args) }),
-    // `findByID` accepts no `status`, and the read beneath it applies none — so
-    // on a trusted route it returns a row that was never published while `find`
-    // on the same reader is published-only. Filtering the RESULT is not enough
-    // either: the row comes back through `afterRead`, and a hook that drops or
-    // rewrites the lifecycle field makes a draft row read as in-scope.
-    //
-    // So a scoped by-id read is issued as a `find` on the id instead, where the
-    // scope is applied by the QUERY, before any hook runs. `all` needs no scope
-    // and keeps the direct call, which is also the only path that can return a
-    // row a `find` would filter out.
-    findByID: async args => {
-      const clean = definedOnly(args);
-      if (status === "all") {
-        return instance.findByID({ ...defaults, ...clean });
-      }
-      // The caller's remaining arguments travel: `depth`, `select`, `populate`
-      // and the rest mean the same thing to either call, and dropping them
-      // would make a scoped read quietly answer a different question than the
-      // unscoped one — the asymmetry this translation exists to remove.
-      const { id, ...rest } = clean;
-      const found = await instance.find({
-        ...defaults,
-        status,
-        ...rest,
-        where: { id: { equals: id } },
-        limit: 1,
-      });
-      return found.items[0] ?? null;
-    },
-  };
-  const media = (instance as { media?: unknown }).media;
-  return media === undefined ? scoped : Object.assign(scoped, { media });
-}
-
 export function slugToStaticParam(value: unknown): { slug: string[] } | null {
   if (typeof value !== "string") return null;
   if (value === "") return isReservedPath("/") ? null : { slug: [] };
@@ -485,41 +402,6 @@ export function createContentRoute<TNode>(
         context: {
           collection,
           slug,
-          // Derived from the entry this read ACTUALLY produced, not from the
-          // draft the request asked for. `resolveContent` falls back to a
-          // published-only lookup when a grant names a deleted entry or one
-          // whose slug no longer matches — `draft` stays true through that
-          // fallback, so widening on it handed a callback `"all"` at a path
-          // where the grant authorized nothing.
-          //
-          // An explicit `status` still wins, because that is the route's own
-          // statement. Otherwise the widening follows the evidence: a resolved
-          // entry that is not published proves the read was widened, and a
-          // published one proves it did not need to be.
-          //
-          // The conservative edge: previewing pending edits to a row that is
-          // still published leaves the reader published-only, so a callback
-          // sees live related rows rather than draft ones. That costs a preview
-          // some fidelity; the alternative costs a stale grant a disclosure.
-          reader: routeScopedReader(
-            getInstance(),
-            // The route's DECLARED policy, and nothing inferred. Two earlier
-            // attempts derived this from the request and then from the resolved
-            // row; the first trusted a stale grant, and the second read a
-            // post-`afterRead` `_status` that a presentation hook can set to
-            // anything — so a hook could hand a callback an access-overriding,
-            // `all`-scoped reader. Config is the only statement about this
-            // route that no hook and no grant can rewrite.
-            //
-            // The cost is stated rather than hidden: on a draft preview a
-            // callback reads PUBLISHED related rows, so a preview shows live
-            // relations beside pending content. That is a fidelity loss on one
-            // page. Every inference that avoided it turned out to be a
-            // disclosure on a route reachable by anyone with a URL.
-            config.overrideAccess ?? false,
-            config.status ?? "published",
-            config.locale
-          ),
           ...(config.locale ? { locale: config.locale } : {}),
         },
       };

@@ -37,7 +37,7 @@ export default ContentPage;
 
 It lives at `@nextlyhq/blocks-react/next`, so importing the renderer itself still pulls in neither Next nor the CMS. `nextly` is an optional peer dependency, and a test asserts the package root reaches no part of it.
 
-`render` and `buildMetadata` now also receive the reader the route resolved the entry through, as `context.reader`. A render that needs a second read — a referenced author, the media behind an image — no longer has to obtain an instance of its own, which on a per-tenant setup would be a different database.
+`getNextly` is exported from `nextly/runtime`. It is already the documented default for `ContentRouteConfig.nextly`, and a helper built on a content route needs the same instance the route reads through — on a per-tenant setup a second instance is a second database. Exporting it lets such a helper resolve one the same way, rather than having the route hand a general reader to every callback in order to share one.
 
 A page's blocks now supply its metadata when the entry's SEO fields are blank.
 

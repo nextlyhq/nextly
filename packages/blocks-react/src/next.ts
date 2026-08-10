@@ -27,6 +27,7 @@ import type {
 import type { Metadata } from "next";
 import {
   createContentRoute,
+  getNextly,
   nextlyTags,
   slugToStaticParam,
 } from "nextly/runtime";
@@ -219,6 +220,25 @@ function emitPath(slug: string): string | null {
   // request used their encoded form, so `faq?all` emitted raw is read as a path
   // plus a query.
   return `/${param.slug.map(encodeURIComponent).join("/")}`;
+}
+
+/**
+ * The instance this route reads through.
+ *
+ * Resolved the same way `createContentRoute` resolves its own — the caller's
+ * `nextly` when given, the process instance otherwise — so the page and the
+ * records it embeds come from ONE place. On a per-tenant setup a second
+ * instance is a second database, and the mismatch surfaces as missing relations
+ * rather than as an error.
+ *
+ * Read here rather than taken off the render context. Carrying it there meant
+ * publishing a trusted reader to every third-party callback, and every attribute
+ * that makes it trusted — access, both identity channels, lifecycle, locale —
+ * had to be re-bound, each failing independently. These resolvers pass all of
+ * them explicitly on every call, so they never depended on those defaults.
+ */
+function readerFor(config: BlocksPageConfig): NextlyContentReader {
+  return config.nextly ?? getNextly();
 }
 
 /** An empty page, for a field that exists and holds no document yet. */
@@ -502,6 +522,36 @@ function mediaNamespaceOf(
     : undefined;
 }
 
+/**
+ * One row from a named media collection, read under a lifecycle scope.
+ *
+ * `findByID` accepts no `status`, so a scoped by-id read has to be expressed as
+ * a `find` on the id. Kept beside its only caller rather than generalized: the
+ * posture here is stated explicitly on every field, which is what makes it
+ * legible — a general helper would put the same decisions somewhere a reader of
+ * this resolver cannot see.
+ */
+async function mediaByQuery(
+  reader: NextlyContentReader,
+  args: {
+    collection: string;
+    id: string;
+    status: "published" | "draft" | "all";
+    overrideAccess: boolean;
+    disableErrors: boolean;
+    user?: undefined;
+    locale?: string;
+  }
+): Promise<Record<string, unknown> | undefined> {
+  const { id, ...rest } = args;
+  const found = await reader.find({
+    ...rest,
+    where: { id: { equals: id } },
+    limit: 1,
+  });
+  return found.items[0];
+}
+
 function mediaResolver(
   config: BlocksPageConfig,
   reader: NextlyContentReader,
@@ -538,10 +588,16 @@ function mediaResolver(
     // rejected promise instead of the documented answer.
     const record = config.mediaCollection
       ? // An explicitly named collection IS a dynamic collection — a site
-        // storing its images somewhere of its own — so it reads as one.
-        await reader.findByID({
+        // storing its images somewhere of its own — so it reads as one, and
+        // that means it has a LIFECYCLE. Issued as a `find` on the id rather
+        // than `findByID`, which takes no `status`: a draft image in a site's
+        // own collection must not reach a published page, and the query is the
+        // only place that scope can be applied before an `afterRead` hook could
+        // rewrite the field a post-read check would judge.
+        await mediaByQuery(reader, {
           collection: config.mediaCollection,
           id,
+          status: config.status ?? "published",
           overrideAccess: true,
           disableErrors: true,
           // Cleared for the same reason the entry and reference reads clear it:
@@ -830,7 +886,7 @@ export function createBlocksPage(
               blocks,
               mediaResolver(
                 config,
-                context.reader,
+                readerFor(config),
                 createQueryBudget(config.maxQueries ?? DEFAULT_MAX_QUERIES)
               ),
               context.slug,
@@ -856,10 +912,10 @@ export function createBlocksPage(
       const budget = createQueryBudget(
         config.maxQueries ?? DEFAULT_MAX_QUERIES
       );
-      const resolveMedia = mediaResolver(config, context.reader, budget);
+      const resolveMedia = mediaResolver(config, readerFor(config), budget);
       const resolveEntryPath = entryPathResolver(
         config,
-        context.reader,
+        readerFor(config),
         budget
       );
 
