@@ -550,6 +550,16 @@ export function createContentRoute<TNode>(
  * calling a differently-named function keeps both signatures concrete, so
  * inference is untouched — and the name states the decision at the call site
  * rather than burying it in a string three lines down.
+ *
+ * **Under Next 16 Cache Components, an EMPTY SITE must use
+ * {@link createContentRoute} instead.** That mode rejects an exported
+ * `generateStaticParams` that returns no entries, and this one returns `[]`
+ * whenever no configured collection holds an addressable published slug — which
+ * is every site before its first page is written. It cannot be guarded at
+ * construction: whether a collection is empty is a fact about the database at
+ * build time, not about the config, and reading it here would make module
+ * evaluation depend on a query. A site that pre-renders nothing yet wants the
+ * dynamic factory anyway; move to this one once it has content.
  */
 export function createPublicContentRoute<TNode>(
   config: ContentRouteConfig<TNode>
@@ -560,30 +570,31 @@ export function createPublicContentRoute<TNode>(
   // through a different option. A module-scope throw names the incompatible
   // pair at build; the alternative is a 500 on a page whose config looked fine.
   if (config.draft !== undefined && config.draft !== false) {
-    throw new NextlyError({
-      code: "CONFIGURATION_ERROR",
-      statusCode: 500,
-      publicMessage: "Server configuration error.",
-      logMessage:
-        "createPublicContentRoute() cannot serve drafts. `draft` makes every " +
-        "resolved read uncached, which marks the render dynamic — but a public " +
-        "route exports `generateStaticParams`, so Next classifies it static, and " +
-        "a dynamic marking inside a static render is an error. Preview needs a " +
-        "dynamic route: use `createContentRoute` with `draft`.",
+    throw NextlyError.invalidInput({
+      message:
+        "createPublicContentRoute() cannot serve drafts. Use createContentRoute() " +
+        "with `draft` and mount previewable paths there.",
+      logContext: {
+        reason:
+          "`draft` makes every resolved read uncached, which marks the render " +
+          "dynamic — but a public route exports `generateStaticParams`, so Next " +
+          "classifies it static, and a dynamic marking inside a static render is " +
+          "an error.",
+      },
     });
   }
   if (config.staticParamsLimit !== undefined && config.staticParamsLimit <= 0) {
-    throw new NextlyError({
-      code: "CONFIGURATION_ERROR",
-      statusCode: 500,
-      publicMessage: "Server configuration error.",
-      logMessage:
-        "createPublicContentRoute() cannot pre-render nothing. " +
-        "`staticParamsLimit: 0` asks for a static route that builds no paths, so " +
-        "`generateStaticParams` returns `[]` — which standard App Router builds " +
-        "accept but Next 16 Cache Components rejects outright " +
-        "(EmptyGenerateStaticParamsError). Use `createContentRoute` to render " +
-        "every path on demand.",
+    throw NextlyError.invalidInput({
+      message:
+        "createPublicContentRoute() cannot pre-render nothing. Use " +
+        "createContentRoute() to render every path on demand.",
+      logContext: {
+        reason:
+          "`staticParamsLimit: 0` asks for a static route that builds no paths, so " +
+          "`generateStaticParams` returns `[]` — which standard App Router builds " +
+          "accept but Next 16 Cache Components rejects outright " +
+          "(EmptyGenerateStaticParamsError).",
+      },
     });
   }
   return buildRoute(config, "public");

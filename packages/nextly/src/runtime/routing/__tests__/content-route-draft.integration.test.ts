@@ -194,10 +194,11 @@ describe("createContentRoute + draft layers (integration)", () => {
       data: { slug: "unreleased", title: "Unreleased", status: "draft" },
     });
 
-    const params = await publicRoute(
-      current.nextly,
-      true
-    ).generateStaticParams();
+    // No `draft` — a public route refuses it, because a draft read is never
+    // cacheable and would mark a render Next has classified static. The
+    // guarantee that survives is the one this test was always really about:
+    // `status` is what keeps an unpublished entry out of a built path.
+    const params = await publicRoute(current.nextly).generateStaticParams();
 
     expect(params).toContainEqual({ slug: ["about"] });
     expect(params).not.toContainEqual({ slug: ["unreleased"] });

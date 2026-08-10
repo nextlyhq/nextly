@@ -11,7 +11,6 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { NextlyError } from "../../../errors/nextly-error";
 import { createContentRoute, createPublicContentRoute } from "../content-route";
 import type { ContentEntry } from "../resolve-content";
 
@@ -156,7 +155,7 @@ describe("createContentRoute (integration)", () => {
         render: (entry: ContentEntry) => ({ title: entry.title }),
         staticParamsLimit: 0,
       })
-    ).toThrow(NextlyError);
+    ).toThrow(/pre-render nothing/i);
   });
 
   it("refuses a public route that also serves drafts", async () => {
@@ -172,7 +171,7 @@ describe("createContentRoute (integration)", () => {
         render: (entry: ContentEntry) => ({ title: entry.title }),
         draft: true,
       })
-    ).toThrow(NextlyError);
+    ).toThrow(/cannot serve drafts/i);
   });
 
   it("still pre-renders nothing on a DYNAMIC route with a zero limit", async () => {

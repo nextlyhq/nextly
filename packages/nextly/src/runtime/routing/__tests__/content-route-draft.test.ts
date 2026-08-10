@@ -13,7 +13,6 @@ import type {
   FindByIDArgs,
 } from "../../../direct-api/types/collections";
 import type { ListResult } from "../../../direct-api/types/shared";
-import { NextlyError } from "../../../errors/nextly-error";
 import { createContentRoute, createPublicContentRoute } from "../content-route";
 import type { ResolvedContext } from "../content-route";
 import type { ContentEntry, NextlyContentReader } from "../resolve-content";
@@ -302,15 +301,7 @@ describe("the content route's draft decision", () => {
     // behave correctly inside it.
     const { reader } = stubReader();
 
-    // The public message is deliberately generic (it is the same envelope a
-    // wire response would carry); the actionable sentence lives in `logMessage`,
-    // which is what reaches the console at build.
-    expect(() => publicRouteWith(reader, true)).toThrow(NextlyError);
-    try {
-      publicRouteWith(reader, true);
-    } catch (error) {
-      expect((error as NextlyError).logMessage).toMatch(/cannot serve drafts/i);
-    }
+    expect(() => publicRouteWith(reader, true)).toThrow(/cannot serve drafts/i);
   });
 
   it("cannot be asked to pre-render a route that builds no paths", () => {
@@ -327,7 +318,7 @@ describe("the content route's draft decision", () => {
         render: (entry: ContentEntry) => entry,
         staticParamsLimit: 0,
       })
-    ).toThrow(NextlyError);
+    ).toThrow(/pre-render nothing/i);
   });
 
   it("pre-renders published paths only, and reads them trusted", async () => {
