@@ -9,14 +9,24 @@
 // table is created and the wrong one when it is added to a table that already exists, and the column
 // that results is the one the runtime has to read through.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
+import {
+  clearFieldTypes,
+  registerFieldType,
+} from "../../../schema/field-types/field-type-registry";
 import { DynamicCollectionSchemaService } from "../dynamic-collection-schema-service";
 
 type Dialect = "postgresql" | "mysql" | "sqlite";
 
 const TABLE = "dc_number_storage";
+
+// A registered type leaks into every later file in the run, and this one deliberately registers a
+// number-storage type that would change what other suites measure.
+afterEach(() => {
+  clearFieldTypes();
+});
 
 function createdColumn(dialect: Dialect, field: FieldDefinition): string {
   const sql = new DynamicCollectionSchemaService(
@@ -237,5 +247,122 @@ describe("changing a number's storage on an existing table", () => {
     expect(alter("postgresql", whole("amount"), whole("amount"))).not.toMatch(
       /ALTER COLUMN "amount" TYPE/i
     );
+  });
+});
+
+/**
+ * What an ALTER must NOT do.
+ *
+ * `isFieldModified` answers true for an index or a unique constraint as well as for a change of
+ * storage, and those are not the same question. Rewriting the column type for an index toggle is not
+ * a harmless no-op, because the type written is the DESCRIPTOR's and the descriptor does not yet
+ * agree with the generator that created the column: a Builder `select` is created as unbounded
+ * `text`, so re-rendering it as `varchar(255)` truncates every stored value past 255 characters —
+ * for an edit that never touched its storage.
+ *
+ * MySQL adds a second way to lose data silently: `MODIFY COLUMN` restates the WHOLE definition, so
+ * anything omitted is dropped. Nullability and the default both have to travel with the type.
+ */
+describe("an ALTER changes only what actually changed", () => {
+  const alter = (
+    dialect: Dialect,
+    before: FieldDefinition,
+    after: FieldDefinition
+  ): string =>
+    new DynamicCollectionSchemaService(
+      undefined,
+      dialect
+    ).generateAlterTableMigration(TABLE, [before], [after], {
+      tableHasRows: false,
+    });
+
+  const select = (extra: Record<string, unknown> = {}): FieldDefinition =>
+    ({
+      name: "category",
+      type: "select",
+      options: { options: [{ label: "One", value: "one" }] },
+      ...extra,
+    }) as unknown as FieldDefinition;
+
+  it.each<[Dialect, RegExp]>([
+    ["mysql", /MODIFY COLUMN/i],
+    ["postgresql", /ALTER COLUMN "category" TYPE/i],
+  ])(
+    "does not rewrite a column's type when only its index changed — %s",
+    (dialect, rewrite) => {
+      const sql = alter(dialect, select(), select({ index: true }));
+
+      // The index itself still gets created; it is the TYPE rewrite that must not happen.
+      expect(sql).toMatch(/CREATE INDEX/i);
+      expect(sql).not.toMatch(rewrite);
+    }
+  );
+
+  it("keeps a default when modifying a column — mysql", () => {
+    const before = {
+      name: "amount",
+      type: "number",
+      default: 0,
+    } as unknown as FieldDefinition;
+    const after = {
+      name: "amount",
+      type: "number",
+      dbType: "decimal",
+      precision: 12,
+      scale: 4,
+      default: 0,
+    } as unknown as FieldDefinition;
+
+    const sql = alter("mysql", before, after);
+
+    expect(sql).toMatch(/MODIFY COLUMN `amount`/i);
+    // Omitted, MySQL drops the default the create path emitted, and later inserts that leave the
+    // field out write NULL or fail outright on a required column.
+    expect(sql).toMatch(/MODIFY COLUMN `amount`[^;]*DEFAULT 0/i);
+  });
+
+  it("ignores decimal properties on a field that is not the built-in number", () => {
+    // A plugin type persists as the `number` storage primitive, but `dbType`/`precision`/`scale` are
+    // the built-in number field's vocabulary. Honouring them here would give the plugin a decimal
+    // column while the descriptor still describes an integer, and would route around the dimension
+    // validation, which only inspects fields whose declared type IS `number`.
+    //
+    // 🔴 The type is REGISTERED, and that is the whole precondition. An unregistered type resolves
+    // to nothing, falls through to `text`, and satisfies both assertions below without the guard
+    // ever running — a test that passes for a reason unrelated to what it claims to prove.
+    registerFieldType({
+      type: "star-rating",
+      storage: "number",
+      component: "@acme/ratings/admin#StarRating",
+      surfaces: ["entries"],
+    });
+
+    const plugin = {
+      name: "rating",
+      type: "star-rating",
+      dbType: "decimal",
+      precision: 12,
+      scale: 4,
+    } as unknown as FieldDefinition;
+
+    const sql = new DynamicCollectionSchemaService(
+      undefined,
+      "postgresql"
+    ).generateMigrationSQL(TABLE, [plugin], {});
+
+    // Reaching the number branch at all is the precondition: an unresolved type would be `text`.
+    expect(sql.toLowerCase()).toContain("integer");
+    expect(sql.toLowerCase()).not.toContain("numeric(12, 4)");
+  });
+
+  it("still honours decimal properties on the built-in number", () => {
+    // The positive control for the guard above. Without it, dropping decimal support entirely would
+    // satisfy that case while breaking every real money field.
+    const sql = new DynamicCollectionSchemaService(
+      undefined,
+      "postgresql"
+    ).generateMigrationSQL(TABLE, [money("price")], {});
+
+    expect(sql.toLowerCase()).toContain("numeric(12, 4)");
   });
 });

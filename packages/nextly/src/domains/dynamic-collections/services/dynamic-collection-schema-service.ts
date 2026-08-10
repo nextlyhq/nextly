@@ -1011,6 +1011,11 @@ ${allColumnDefs.join(",\n")}
           // be judged modified by one definition and then rewritten by another: this call used to
           // drop `options` and `validation`, so a number switched to `format: "float"` was detected
           // and then re-emitted as `integer`.
+          const before = getColumnDescriptor(
+            oldField,
+            this.dialect,
+            "collection"
+          );
           const described = getColumnDescriptor(
             field,
             this.dialect,
@@ -1026,15 +1031,49 @@ ${allColumnDefs.join(",\n")}
               field
             );
 
+          // 🔴 Whether the COLUMN changed, which is not the same question as whether the FIELD did.
+          //
+          // `isFieldModified` also answers true for an index or a unique constraint, and neither is
+          // a property of the column's shape. Rewriting the type for one of those is not a harmless
+          // no-op: the type written here is the DESCRIPTOR's, and the descriptor does not yet agree
+          // with the generator that created the column. Enabling an index on a Builder `select`
+          // would move it from the unbounded `text` it was created as to `varchar(255)`, truncating
+          // every stored value past 255 characters — for an edit that never touched its storage.
+          const columnChanged =
+            !before || !described
+              ? before !== described
+              : before.dialectType !== described.dialectType ||
+                before.nullable !== described.nullable ||
+                before.kind !== described.kind ||
+                before.name !== described.name;
+          const nullabilityChanged = field.required !== oldField.required;
+
           if (this.dialect === "mysql") {
-            // MySQL restates the WHOLE definition, so nullability travels with the type or the
-            // column silently becomes nullable. That makes it one statement rather than two, and it
-            // is issued whenever the column changes — not only when `required` did — because the
-            // MODIFY would otherwise drop a NOT NULL nobody asked to remove.
-            const nullability = field.required ? " NOT NULL" : " NULL";
-            statements.push(
-              `ALTER TABLE ${this.quoteIdentifier(tableName)} MODIFY COLUMN ${this.quoteIdentifier(alterCol)} ${type}${nullability};`
-            );
+            // MySQL restates the WHOLE definition, so everything the column carries travels with
+            // the type or it is dropped: nullability, and the default the create path emits from
+            // `field.default`. A MODIFY that omits either silently removes it.
+            //
+            // Issued when the column's shape changed OR its nullability did, because on this dialect
+            // one statement carries both.
+            if (columnChanged || nullabilityChanged) {
+              const nullability = field.required ? " NOT NULL" : " NULL";
+              const defaultClause =
+                field.default !== undefined && field.default !== null
+                  ? ` DEFAULT ${this.formatDefaultValue(field.default, field.type)}`
+                  : "";
+              statements.push(
+                `ALTER TABLE ${this.quoteIdentifier(tableName)} MODIFY COLUMN ${this.quoteIdentifier(alterCol)} ${type}${nullability}${defaultClause};`
+              );
+            }
+          } else if (!columnChanged) {
+            // Nothing about the column moved. Nullability is still handled below.
+            if (nullabilityChanged) {
+              statements.push(
+                field.required
+                  ? `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(alterCol)} SET NOT NULL;`
+                  : `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(alterCol)} DROP NOT NULL;`
+              );
+            }
           } else {
             // Rendered by the shared template rather than written out here, so this path and
             // `migrate:create` emit the same statement. It also carries the `USING` clause
@@ -1045,16 +1084,14 @@ ${allColumnDefs.join(",\n")}
                   type: "change_column_type",
                   tableName,
                   columnName: alterCol,
-                  fromType:
-                    getColumnDescriptor(oldField, this.dialect, "collection")
-                      ?.dialectType ?? type,
+                  fromType: before?.dialectType ?? type,
                   toType: type,
                 },
                 this.dialect
               )};`
             );
 
-            if (field.required !== oldField.required) {
+            if (nullabilityChanged) {
               if (field.required) {
                 statements.push(
                   `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(alterCol)} SET NOT NULL;`
@@ -1499,12 +1536,23 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
     // and the missing-column scan already make.
     const type = storageTypeToken({ type: declaredType }) ?? declaredType;
 
+    // 🔴 Only a field DECLARED as the built-in number states how a number is stored.
+    //
+    // A plugin type resolves to the `number` storage primitive above, but `dbType`, `precision` and
+    // `scale` are the built-in number field's own vocabulary — a plugin's payload carrying them
+    // means something to the plugin, not to this map. Honouring them would give the plugin a decimal
+    // column while `getColumnDescriptor` still describes its storage primitive as an integer, so the
+    // ORM would bind a different shape than the table has and every diff would propose the change
+    // again. It also routes around the dimension validation, which only inspects fields whose type
+    // IS `number` and would never see the values being interpolated here.
+    const storage = declaredType === "number" ? numberStorage : undefined;
+
     if (this.dialect === "sqlite") {
       // SQLite type mapping. SQLite has dynamic typing, so types are simplified.
       const sqliteTypeMap: Record<string, string> = {
         text: "text",
         textarea: "text",
-        number: this.numberColumnType(options, numberStorage),
+        number: this.numberColumnType(options, storage),
         checkbox: "integer", // SQLite uses 0/1 for boolean
         date: "integer", // Store as Unix timestamp
         email: "text",
@@ -1526,7 +1574,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
             ? `varchar(${validation?.maxLength || 255})`
             : "text",
         textarea: "text",
-        number: this.numberColumnType(options, numberStorage),
+        number: this.numberColumnType(options, storage),
         checkbox: "boolean",
         date: "timestamp",
         email: `varchar(${validation?.maxLength || 255})`,
@@ -1547,7 +1595,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
           ? `varchar(${validation?.maxLength || 255})`
           : "text",
       textarea: "text",
-      number: this.numberColumnType(options, numberStorage),
+      number: this.numberColumnType(options, storage),
       checkbox: "boolean",
       date: "timestamp",
       email: `varchar(${validation?.maxLength || 255})`,
