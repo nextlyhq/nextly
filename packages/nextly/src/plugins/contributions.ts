@@ -6,7 +6,7 @@ import type {
 } from "../collections/fields/catalog";
 import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-field";
 import type { GeneratedTypes } from "../direct-api/types/shared";
-import type { EmailProviderAdapter } from "../domains/email/types";
+import type { EmailProviderDefinition } from "../domains/email/provider-definition";
 import type { FieldGroupConfig } from "../field-groups/config/types";
 import type { SingleConfig } from "../singles/config/types";
 
@@ -84,16 +84,34 @@ export interface ScheduledTask {
 }
 
 /**
- * @experimental A plugin-contributed email provider. Registers a new
- * provider `type` whose adapter is built from the (decrypted) provider config an
- * admin stores. Replaces the need to fork core's hardcoded provider switch.
+ * @experimental A plugin-contributed email provider.
+ *
+ * A full provider definition rather than a bare factory. The extra members are
+ * what make the provider reachable rather than merely dispatchable: without
+ * `configFields` no form can be rendered for it and no value can be known to be
+ * secret, and without `parseConfig` an unusable configuration is stored happily
+ * and fails at send time.
+ *
+ * Registered exactly like a built-in — core holds no privileged list.
+ *
+ * @example
+ * ```ts
+ * contributes: {
+ *   emailProviders: [{
+ *     type: "postmark",
+ *     label: "Postmark",
+ *     configFields: [
+ *       { name: "serverToken", label: "Server Token", kind: "password", required: true, secret: true },
+ *     ],
+ *     parseConfig: (input) => postmarkSchema.parse(input),
+ *     createAdapter: (config) => createPostmarkAdapter(config),
+ *   }],
+ * }
+ * ```
  */
-export interface PluginEmailProvider {
-  /** Provider type id (e.g. `'mailgun'`). Must not collide with a built-in. */
-  type: string;
-  /** Build the adapter from the stored, decrypted provider configuration. */
-  createAdapter: (config: Record<string, unknown>) => EmailProviderAdapter;
-}
+export type PluginEmailProvider = EmailProviderDefinition<
+  Record<string, unknown>
+>;
 
 /**
  * @experimental A plugin-contributed email template, seeded into the

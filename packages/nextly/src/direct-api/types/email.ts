@@ -8,6 +8,7 @@
  */
 
 import type { EmailAttachmentInput } from "../../domains/email/types";
+import type { EmailProviderType } from "../../schemas/email-providers/types";
 
 import type { DirectAPIConfig } from "./shared";
 
@@ -42,7 +43,7 @@ export interface CreateEmailProviderArgs extends DirectAPIConfig {
     /** Display name */
     name: string;
     /** Provider type */
-    type: "smtp" | "resend" | "sendlayer";
+    type: EmailProviderType;
     /** From email address */
     fromEmail: string;
     /** From display name */

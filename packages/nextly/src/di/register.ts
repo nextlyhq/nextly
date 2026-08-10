@@ -42,6 +42,7 @@ import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import type { AuthService } from "../domains/auth/services/auth-service";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
+import { defineEmailProvider } from "../domains/email/provider-definition";
 import {
   getEmailProviderRegistry,
   resetEmailProviderRegistry,
@@ -2599,10 +2600,9 @@ async function initializePlugins(
 
     // Register contributed email providers (C2/D65) — fail-fast on type collision.
     for (const provider of plugin.contributes?.emailProviders ?? []) {
-      getEmailProviderRegistry().register(
-        provider.type,
-        provider.createAdapter
-      );
+      // Erased through the same entry point a built-in uses, so a contributed
+      // provider is indistinguishable from a shipped one once registered.
+      getEmailProviderRegistry().register(defineEmailProvider(provider));
     }
 
     // Register custom event names this plugin declares (D9) so its emits

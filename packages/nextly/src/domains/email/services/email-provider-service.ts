@@ -27,6 +27,7 @@ import { emailProvidersSqlite } from "../../../schemas/email-providers/sqlite";
 import type {
   EmailProviderInsert,
   EmailProviderRecord,
+  EmailProviderType,
 } from "../../../schemas/email-providers/types";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
@@ -67,7 +68,7 @@ export type CreateEmailProviderInput = EmailProviderInsert;
  */
 export interface UpdateEmailProviderInput {
   name?: string;
-  type?: "smtp" | "resend" | "sendlayer";
+  type?: EmailProviderType;
   fromEmail?: string;
   fromName?: string | null;
   configuration?: Record<string, unknown>;
@@ -177,24 +178,62 @@ export class EmailProviderService extends BaseService {
   }
 
   /**
-   * Mask a configuration object, replacing all values with `"••••••••"`.
-   * Returns a flat object with the same keys but masked values.
+   * The dotted paths a provider declared as secret, e.g. `auth.pass`.
+   *
+   * Returns null when the type is not registered — an uninstalled plugin
+   * leaves rows behind, and those must still be readable and still masked.
+   */
+  private declaredSecretPaths(type: string): ReadonlySet<string> | null {
+    const registry = getEmailProviderRegistry();
+    if (!registry.has(type)) return null;
+    return new Set(
+      registry
+        .get(type)
+        .configFields.filter(field => field.secret === true)
+        .map(field => field.name)
+    );
+  }
+
+  /**
+   * Mask a configuration object for a public read.
+   *
+   * Which values are secret is DECLARED by the provider, not guessed from key
+   * names. The name heuristic below cannot know that `credential` holds one and
+   * that a field merely containing `token` may not, and it can only ever be
+   * right about names core has seen before — which is none of a plugin's.
+   *
+   * The heuristic stays as a fallback for two cases where nothing is declared:
+   * a provider whose package has been uninstalled, and one that shipped no
+   * field metadata. Losing a mask is worse than adding one, so absence of
+   * information masks more rather than less.
    */
   private maskConfiguration(
-    config: Record<string, unknown>
+    config: Record<string, unknown>,
+    secretPaths: ReadonlySet<string> | null,
+    pathPrefix = ""
   ): Record<string, unknown> {
     const masked: Record<string, unknown> = {};
     for (const key of Object.keys(config)) {
       const value = config[key];
+      const path = pathPrefix ? `${pathPrefix}.${key}` : key;
+
       if (
         value !== null &&
         typeof value === "object" &&
         !Array.isArray(value)
       ) {
-        masked[key] = this.maskConfiguration(value as Record<string, unknown>);
-      } else {
-        masked[key] = this.isSensitiveConfigKey(key) ? MASKED_VALUE : value;
+        masked[key] = this.maskConfiguration(
+          value as Record<string, unknown>,
+          secretPaths,
+          path
+        );
+        continue;
       }
+
+      const isSecret = secretPaths
+        ? secretPaths.has(path)
+        : this.isSensitiveConfigKey(key);
+      masked[key] = isSecret ? MASKED_VALUE : value;
     }
     return masked;
   }
@@ -256,7 +295,10 @@ export class EmailProviderService extends BaseService {
     const config = this.decryptConfiguration(row.configuration);
     return {
       ...row,
-      configuration: this.maskConfiguration(config),
+      configuration: this.maskConfiguration(
+        config,
+        this.declaredSecretPaths(row.type)
+      ),
     };
   }
 
@@ -284,6 +326,14 @@ export class EmailProviderService extends BaseService {
   async createProvider(
     data: CreateEmailProviderInput
   ): Promise<EmailProviderRecord> {
+    // Reject an unregistered type and an unusable configuration BEFORE the
+    // insert. Without this a row stores happily and fails only when something
+    // tries to send through it, inside a catch that reports `{ success: false }`
+    // -- so the operator learns at the worst moment and with the least detail.
+    getEmailProviderRegistry()
+      .get(data.type)
+      .validateConfig(data.configuration);
+
     const id = randomUUID();
     const now = new Date();
 
@@ -378,6 +428,16 @@ export class EmailProviderService extends BaseService {
       );
       const incomingConfig = this.stripMaskedConfigValues(data.configuration);
       const mergedConfig = this.deepMergeConfig(existingConfig, incomingConfig);
+
+      // Validate the MERGED result, not the incoming patch: an update usually
+      // carries only the fields that changed, and the masked values it omits
+      // are supplied by the merge. Checking the patch alone would reject every
+      // partial edit for missing required fields it was never meant to send.
+      // `type` cannot change after creation, so the stored one is authoritative.
+      getEmailProviderRegistry()
+        .get(currentRow.type)
+        .validateConfig(mergedConfig);
+
       updateData.configuration = this.encryptConfiguration(mergedConfig);
     }
     if (data.isActive !== undefined) updateData.isActive = data.isActive;

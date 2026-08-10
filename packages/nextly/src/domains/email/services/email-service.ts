@@ -42,9 +42,6 @@ import { resolveAttachments } from "./attachment-resolver";
 import { getEmailProviderRegistry } from "./email-provider-registry";
 import type { EmailProviderService } from "./email-provider-service";
 import type { EmailTemplateService } from "./email-template-service";
-import { createResendProvider } from "./providers/resend-provider";
-import { createSendLayerProvider } from "./providers/sendlayer-provider";
-import { createSmtpProvider } from "./providers/smtp-provider";
 import { mergeTemplateAttachments } from "./template-attachment-merge";
 import {
   htmlToText,
@@ -737,34 +734,15 @@ export class EmailService extends BaseService {
   private createAdapterFromConfig(
     providerConfig: NonNullable<EmailConfig["providerConfig"]>
   ): EmailProviderAdapter {
-    switch (providerConfig.provider) {
-      case "smtp":
-        return createSmtpProvider({
-          host: providerConfig.host,
-          port: providerConfig.port,
-          secure: providerConfig.secure,
-          auth: providerConfig.auth,
-        });
-      case "resend":
-        return createResendProvider({
-          apiKey: providerConfig.apiKey,
-        });
-      case "sendlayer":
-        return createSendLayerProvider({
-          apiKey: providerConfig.apiKey,
-        });
-      default:
-        // Untrusted-ish: provider value from defineConfig(). Identifier still
-        // belongs in logContext; the public message stays generic.
-        throw new NextlyError({
-          code: "BUSINESS_RULE_VIOLATION",
-          publicMessage: "Unsupported email provider.",
-          statusCode: 422,
-          logContext: {
-            provider: (providerConfig as { provider: string }).provider,
-          },
-        });
-    }
+    // Resolved through the registry, exactly as a database-stored provider is.
+    // A hardcoded switch here meant a plugin could register a provider that was
+    // dispatchable from the admin and unusable from defineConfig -- the same
+    // provider working or not depending on where it was configured.
+    //
+    // `provider` names the type; the rest of the object is its configuration,
+    // which the registered provider validates before building anything.
+    const { provider, ...configuration } = providerConfig;
+    return getEmailProviderRegistry().create(provider, configuration);
   }
 
   // ============================================================

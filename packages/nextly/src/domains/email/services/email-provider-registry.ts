@@ -1,86 +1,91 @@
 /**
- * Email provider registry (C2/D65).
+ * The set of mail providers this install can use.
  *
- * Replaces the hardcoded `switch (provider.type)` with a registry so plugins can
- * contribute custom email providers via `contributes.emailProviders`. Seeded with
- * the built-ins (smtp/resend/sendlayer); plugin providers register additional
- * types at boot. `globalThis`-pinned + reset-per-boot (clear-and-rebuild, like the
- * route/service registries) so HMR re-registration never accumulates or collides.
+ * Holds definitions rather than bare factories, so everything that used to
+ * hardcode the three built-in names can ask the registry instead: the REST
+ * layer for which types are valid, the service for how to validate a stored
+ * configuration, and the admin for how to render a form. A plugin provider
+ * becomes reachable by all three at once rather than dispatchable by only one.
+ *
+ * `globalThis`-pinned and rebuilt per boot (clear-and-reseed, like the route and
+ * service registries) so HMR re-registration neither accumulates nor collides.
  *
  * @module domains/email/services/email-provider-registry
  */
 
 import { NextlyError } from "../../../errors/nextly-error";
+import type { RegisteredEmailProvider } from "../provider-definition";
 import type { EmailProviderAdapter } from "../types";
 
-import { createResendProvider } from "./providers/resend-provider";
-import { createSendLayerProvider } from "./providers/sendlayer-provider";
-import { createSmtpProvider } from "./providers/smtp-provider";
-
-/** A factory that builds a provider adapter from its (decrypted) config. */
-export type EmailProviderFactory = (
-  config: Record<string, unknown>
-) => EmailProviderAdapter;
-
-const BUILT_INS: Record<string, EmailProviderFactory> = {
-  smtp: config =>
-    createSmtpProvider(
-      config as {
-        host: string;
-        port: number;
-        secure?: boolean;
-        auth: { user: string; pass: string };
-      }
-    ),
-  resend: config => createResendProvider(config as { apiKey: string }),
-  sendlayer: config => createSendLayerProvider(config as { apiKey: string }),
-};
+import { BUILT_IN_EMAIL_PROVIDERS } from "./providers/built-in-definitions";
 
 class EmailProviderRegistry {
-  private factories = new Map<string, EmailProviderFactory>();
+  private providers = new Map<string, RegisteredEmailProvider>();
 
   constructor() {
     this.seedBuiltIns();
   }
 
   private seedBuiltIns(): void {
-    for (const [type, factory] of Object.entries(BUILT_INS)) {
-      this.factories.set(type, factory);
+    for (const provider of BUILT_IN_EMAIL_PROVIDERS) {
+      this.providers.set(provider.type, provider);
     }
   }
 
   /** Register a provider type. Throws if the type is already registered. */
-  register(type: string, factory: EmailProviderFactory): void {
-    if (this.factories.has(type)) {
+  register(provider: RegisteredEmailProvider): void {
+    if (this.providers.has(provider.type)) {
       throw new Error(
-        `NEXTLY_EMAIL_PROVIDER_COLLISION: email provider type "${type}" is already registered (built-in or another plugin).`
+        `NEXTLY_EMAIL_PROVIDER_COLLISION: email provider type "${provider.type}" is already registered (built-in or another plugin).`
       );
     }
-    this.factories.set(type, factory);
+    this.providers.set(provider.type, provider);
   }
 
   has(type: string): boolean {
-    return this.factories.has(type);
+    return this.providers.has(type);
   }
 
-  /** Build an adapter for a provider type, or throw if unsupported. */
-  create(type: string, config: Record<string, unknown>): EmailProviderAdapter {
-    const factory = this.factories.get(type);
-    if (!factory) {
-      // Generic public sentence; the offending type goes to logContext only.
+  /** Every registered provider, for listing and for building descriptors. */
+  list(): ReadonlyArray<RegisteredEmailProvider> {
+    return [...this.providers.values()];
+  }
+
+  /**
+   * Look up a provider, or throw the error a caller should surface.
+   *
+   * The type goes to `logContext` rather than the public sentence: it can come
+   * from a stored row or a request body, and neither is trusted to be repeated
+   * back verbatim.
+   */
+  get(type: string): RegisteredEmailProvider {
+    const provider = this.providers.get(type);
+    if (!provider) {
       throw new NextlyError({
         code: "BUSINESS_RULE_VIOLATION",
-        publicMessage: "Unsupported email provider type.",
+        publicMessage:
+          "Unsupported email provider type. Install the plugin that provides it, or choose a configured provider.",
         statusCode: 422,
         logContext: { type },
       });
     }
-    return factory(config);
+    return provider;
+  }
+
+  /**
+   * Build an adapter for a provider type from its stored configuration.
+   *
+   * Validation is not optional here: the registered provider parses before it
+   * builds, so a row written before its provider declared a required field
+   * fails where an operator can act on it rather than at send time.
+   */
+  create(type: string, config: Record<string, unknown>): EmailProviderAdapter {
+    return this.get(type).createAdapterFrom(config);
   }
 
   /** Drop all registrations and re-seed the built-ins (per-boot reset / HMR). */
   reset(): void {
-    this.factories.clear();
+    this.providers.clear();
     this.seedBuiltIns();
   }
 }
