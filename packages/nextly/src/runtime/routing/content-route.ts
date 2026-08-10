@@ -386,6 +386,11 @@ export function createContentRoute<TNode>(
             collection,
             // Lifecycle-aware publish scope — a no-op on status-less collections.
             status,
+            // The same locale `resolve()` reads in. Without it a localized
+            // route pre-renders DEFAULT-locale slugs — paths its own resolver
+            // then answers with `notFound()` — while the slugs it does serve
+            // are absent from the scan and left to render on demand.
+            ...(config.locale ? { locale: config.locale } : {}),
             select: { [slugField]: true },
             // `id` is unique and present on every collection; `createdAt` may be
             // absent (timestamps off) or non-unique, letting rows shift between

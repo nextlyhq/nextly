@@ -245,6 +245,25 @@ describe("the content route's draft decision", () => {
     }
   });
 
+  it("scans and resolves in the SAME locale", async () => {
+    // A localized route that pre-rendered default-locale slugs would bake paths
+    // its own resolver answers with `notFound()`, while the slugs it does serve
+    // stayed absent from the scan and fell back to rendering on demand.
+    const { reader, calls } = stubReader();
+    const route = createContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      locale: "fr",
+      render: (entry: ContentEntry) => entry,
+    });
+
+    await route.generateStaticParams();
+    await route.ContentPage(params).catch(() => undefined);
+
+    expect(calls).not.toHaveLength(0);
+    expect(calls.every(call => call.locale === "fr")).toBe(true);
+  });
+
   it("never pre-renders draft paths", async () => {
     // `generateStaticParams` runs at build time, where there is no visitor and
     // no preview. Baking a draft into a static path would publish it to
