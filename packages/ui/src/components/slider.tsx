@@ -46,6 +46,13 @@
  *   read from the thumb and inherited from nothing
  * - The root is padded so the target clears the 24px minimum (WCAG 2.5.8); the 16px thumb on a
  *   6px track does not on its own
+ * - An empty name does not count as a name: `aria-label=""` is reported the same as a missing one,
+ *   because the accessible name computes to nothing either way
+ *
+ * **Sizing**: a horizontal slider fills its container's width. A VERTICAL one carries a default
+ * height instead of filling, because `height: 100%` inside an auto-height parent collapses to a
+ * track with no length. Override it with an ordinary `className` — `h-64` for a longer control,
+ * `h-full` for the fill-the-parent behaviour.
  *
  * @example
  * ```tsx
@@ -147,12 +154,34 @@ export type SliderProps = Omit<
  * Radix renders only as many thumbs as it is given children, so a range slider whose caller
  * supplied two values but one thumb would silently drop the second — the value would still be in
  * state, and no thumb would be able to reach it.
+ *
+ * An EMPTY array floors to one rather than to zero. Zero thumbs is a track with nothing focusable
+ * in it: no `slider` role, no keyboard target, and no pointer target either, because Radix routes
+ * a track click to the nearest thumb. A control that cannot be operated at all is a worse outcome
+ * than one showing a fallback, and the empty array is reported separately.
  */
 function thumbCount(
   value: readonly number[] | undefined,
   defaultValue: readonly number[] | undefined
 ): number {
-  return value?.length ?? defaultValue?.length ?? 1;
+  return Math.max(1, value?.length ?? defaultValue?.length ?? 1);
+}
+
+/**
+ * Whether a naming attribute actually carries a name.
+ *
+ * A present-but-empty `aria-label` is the case a presence check misses: the attribute is there, so
+ * every `!== undefined` test says the thumb is named, while the accessible name computes to the
+ * empty string and assistive technology announces a bare number. It arises from ordinary code —
+ * `aria-label={field.label}` before the label loads, or a template over an absent value.
+ *
+ * The check is deliberately shallow for `aria-labelledby`: whether the referenced element exists
+ * and holds text is a property of a document this component cannot see at render, so an id that
+ * resolves to nothing still passes here. This catches the empty STRING, which is the case that is
+ * both common and knowable.
+ */
+function hasAccessibleName(value: string | undefined): boolean {
+  return value !== undefined && value.trim() !== "";
 }
 
 /**
@@ -170,6 +199,7 @@ const Slider = React.forwardRef<
       value,
       defaultValue,
       thumbs,
+      orientation = "horizontal",
       "aria-label": ariaLabel,
       "aria-labelledby": ariaLabelledBy,
       ...props
@@ -184,7 +214,30 @@ const Slider = React.forwardRef<
     const initialUncontrolledCount = React.useRef(
       thumbCount(undefined, defaultValue)
     ).current;
-    const count = value?.length ?? initialUncontrolledCount;
+    const count = Math.max(1, value?.length ?? initialUncontrolledCount);
+
+    // An empty array asks for a slider over no values, which is not a state this control can
+    // represent. The two cases differ in how far they can be repaired, so they are handled
+    // separately rather than with one blanket rule.
+    //
+    // UNCONTROLLED is fully repairable: an empty `defaultValue` is forwarded as absent, and Radix
+    // then applies its own `[min]` default. Substituting the vendor's default is exactly what an
+    // omitted prop would have done, so nothing downstream can tell the difference.
+    //
+    // CONTROLLED is NOT repairable here. Replacing an empty `value` would either flip the control
+    // to uncontrolled — handing Radix ownership of state the caller believes it holds — or display
+    // a number the caller's state does not contain, which would then never reconcile. The empty
+    // array is forwarded unchanged and reported instead; the fallback thumb keeps the control
+    // focusable, so the defect is visible rather than an inert bar.
+    const isEmptyDefault =
+      defaultValue !== undefined && defaultValue.length === 0;
+    devWarnOnce(
+      !isEmptyDefault && !(value !== undefined && value.length === 0),
+      "Slider: `value`/`defaultValue` must hold one number per thumb, and an empty array " +
+        "holds none — the control has nothing to slide. An empty `defaultValue` falls back to " +
+        "`min`; an empty `value` cannot be repaired without taking state the caller owns, so " +
+        "render nothing until the value is loaded rather than passing `[]`."
+    );
     // Everything assistive technology reads goes on the THUMB, which is what
     // carries the `slider` role and takes focus. Left on the root it is
     // announced by nothing.
@@ -202,10 +255,11 @@ const Slider = React.forwardRef<
     // check exists to report.
     const isNamed = (index: number): boolean => {
       const own = thumbs?.[index];
-      if (own?.["aria-label"] !== undefined) return true;
-      if (own?.["aria-labelledby"] !== undefined) return true;
+      if (hasAccessibleName(own?.["aria-label"])) return true;
+      if (hasAccessibleName(own?.["aria-labelledby"])) return true;
       return (
-        count === 1 && (ariaLabel !== undefined || ariaLabelledBy !== undefined)
+        count === 1 &&
+        (hasAccessibleName(ariaLabel) || hasAccessibleName(ariaLabelledBy))
       );
     };
     devWarnOnce(
@@ -218,24 +272,42 @@ const Slider = React.forwardRef<
 
     const ariaFor = (index: number): SliderThumbProps => {
       const supplied = thumbs?.[index] ?? {};
-      if (count !== 1) return supplied;
+      // An empty naming attribute is dropped rather than forwarded. Emitting `aria-label=""`
+      // states a name and supplies none, which reads to a name computation as a deliberate
+      // choice; omitting the attribute at least leaves the element honestly unnamed.
+      const ownLabel = hasAccessibleName(supplied["aria-label"])
+        ? supplied["aria-label"]
+        : undefined;
+      const ownLabelledBy = hasAccessibleName(supplied["aria-labelledby"])
+        ? supplied["aria-labelledby"]
+        : undefined;
+      if (count !== 1) {
+        return {
+          ...supplied,
+          "aria-label": ownLabel,
+          "aria-labelledby": ownLabelledBy,
+        };
+      }
       // The two naming attributes are ALTERNATIVES, not independent slots, so
       // the fallback is all-or-nothing. Filling each one separately can emit a
       // thumb `aria-label` alongside a root `aria-labelledby`, and since
       // accessible-name computation prefers `aria-labelledby`, the caller's
       // explicit per-thumb name would lose to the root's without saying so.
-      const namesItself =
-        supplied["aria-label"] !== undefined ||
-        supplied["aria-labelledby"] !== undefined;
+      const namesItself = ownLabel !== undefined || ownLabelledBy !== undefined;
       return {
-        "aria-label": namesItself ? supplied["aria-label"] : ariaLabel,
-        "aria-labelledby": namesItself
-          ? supplied["aria-labelledby"]
-          : ariaLabelledBy,
+        "aria-label": namesItself ? ownLabel : ariaLabel,
+        "aria-labelledby": namesItself ? ownLabelledBy : ariaLabelledBy,
         "aria-valuetext": supplied["aria-valuetext"],
         "aria-describedby": supplied["aria-describedby"],
       };
     };
+
+    // Orientation is a prop, so the branch belongs in JavaScript rather than in a
+    // `data-[orientation=vertical]:` variant. A variant compiles to an attribute selector, which
+    // outranks the plain utility a caller passes in `className` — `h-48` would lose to the
+    // wrapper's own height and the override would fail silently. Plain classes also let
+    // tailwind-merge do the job it is here for: same property, caller wins.
+    const isVertical = orientation === "vertical";
 
     return (
       // `aria-label`/`aria-labelledby` are destructured out above rather than
@@ -244,35 +316,41 @@ const Slider = React.forwardRef<
       <SliderPrimitive.Root
         ref={ref}
         className={cn(
-          "relative flex w-full touch-none select-none items-center",
-          // WCAG 2.5.8 wants 24px. Padding alone does not reach it: the thumb
-          // is absolutely positioned, so the cross-axis size is the 6px track
-          // plus the padding — 22px with `py-2`. An explicit minimum states
-          // the target rather than leaving it to arithmetic that moves
+          "relative flex touch-none select-none items-center",
+          // WCAG 2.5.8 wants a 24px target. Padding alone does not reach it: the
+          // thumb is absolutely positioned, so the cross-axis size is the 6px
+          // track plus the padding — 22px with `py-2`. An explicit minimum
+          // states the target rather than leaving it to arithmetic that moves
           // whenever the track thickness does.
-          "min-h-6 py-2",
-          "data-[orientation=vertical]:min-h-0 data-[orientation=vertical]:min-w-6",
-          "data-[orientation=vertical]:px-2 data-[orientation=vertical]:py-0",
-          "data-[orientation=vertical]:h-full data-[orientation=vertical]:w-auto",
-          "data-[orientation=vertical]:flex-col",
+          isVertical
+            ? // A vertical slider needs a LENGTH, and it cannot inherit one:
+              // `h-full` inside an auto-height parent resolves to zero, leaving
+              // a control with no track to drag along. A concrete default is
+              // usable everywhere and, being a plain utility, is replaced by a
+              // caller's own `h-*` — including `h-full`, for the fill-the-parent
+              // case this default gives up.
+              "h-44 min-w-6 flex-col px-2"
+            : "min-h-6 w-full py-2",
           "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
           className
         )}
+        orientation={orientation}
         value={value}
-        defaultValue={defaultValue}
+        // An empty array is forwarded as absent so Radix applies its own `[min]`
+        // default; a populated one is passed through untouched.
+        defaultValue={isEmptyDefault ? undefined : defaultValue}
         {...props}
       >
         <SliderPrimitive.Track
           className={cn(
             "bg-secondary relative grow overflow-hidden rounded-full",
-            "h-1.5 w-full",
-            "data-[orientation=vertical]:h-full data-[orientation=vertical]:w-1.5"
+            isVertical ? "h-full w-1.5" : "h-1.5 w-full"
           )}
         >
           <SliderPrimitive.Range
             className={cn(
               "bg-primary absolute",
-              "h-full data-[orientation=vertical]:h-auto data-[orientation=vertical]:w-full"
+              isVertical ? "w-full" : "h-full"
             )}
           />
         </SliderPrimitive.Track>

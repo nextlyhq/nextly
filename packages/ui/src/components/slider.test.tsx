@@ -325,4 +325,202 @@ describe("Slider", () => {
       warn.mockRestore();
     }
   });
+
+  describe("an empty value array", () => {
+    // Zero values is a state the control cannot represent, and the naive count arithmetic
+    // produced zero THUMBS from it: a track with no `slider` role in it at all. Nothing is
+    // focusable, arrow keys reach nothing, and a track click has no thumb to move — the control
+    // renders and is inert, which is the failure mode hardest to notice in review.
+
+    it("still renders an operable thumb for an empty controlled value", () => {
+      const { container } = render(
+        <Slider aria-label="Opacity" value={[]} onValueChange={() => {}} />
+      );
+      expect(thumbsIn(container)).toHaveLength(1);
+    });
+
+    it("still renders an operable thumb for an empty defaultValue", () => {
+      const { container } = render(
+        <Slider aria-label="Opacity" defaultValue={[]} />
+      );
+      expect(thumbsIn(container)).toHaveLength(1);
+    });
+
+    it("falls back to `min` when defaultValue is empty, rather than to nothing", () => {
+      // The uncontrolled case is repairable, and repairing it means landing on the value an
+      // omitted prop would have produced. Asserting the NUMBER rather than the thumb count is
+      // what separates a real fallback from a thumb rendered over no value at all.
+      const { container } = render(
+        <Slider aria-label="Opacity" defaultValue={[]} min={10} max={90} />
+      );
+      const [thumb] = thumbsIn(container);
+      expect(thumb.getAttribute("aria-valuenow")).toBe("10");
+    });
+
+    it("does not seize state the caller owns when a controlled value is empty", () => {
+      // The tempting repair — substituting a value — would either flip the control to
+      // uncontrolled or display a number the caller's state does not hold. A controlled slider
+      // must keep reporting the caller's state, however unusable that state is.
+      const onValueChange = vi.fn();
+      const { container } = render(
+        <Slider aria-label="Opacity" value={[]} onValueChange={onValueChange} />
+      );
+      const [thumb] = thumbsIn(container);
+      // A positive control: the empty defaultValue case above proves this assertion can read a
+      // number, so its absence here is the component staying out of the caller's state and not
+      // the query failing to find one.
+      expect(thumb.getAttribute("aria-valuenow")).toBeNull();
+      expect(onValueChange).not.toHaveBeenCalled();
+    });
+
+    it("reports the empty array rather than failing silently", () => {
+      resetDevWarnings();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        render(
+          <Slider aria-label="Opacity" value={[]} onValueChange={() => {}} />
+        );
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(String(warn.mock.calls[0][0])).toContain("empty array");
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
+  describe("an empty accessible name", () => {
+    // `aria-label={field.label}` before the label loads produces `aria-label=""`. The attribute
+    // is present, so a `!== undefined` check calls the thumb named; the accessible name computes
+    // to the empty string, so a screen reader announces a bare number. The warning existing at
+    // all is what made this worth catching — a safeguard that stays silent on the case it was
+    // built for is worse than none, because it certifies the defect.
+
+    it("reports a blank aria-label as unnamed", () => {
+      resetDevWarnings();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        render(<Slider aria-label="   " defaultValue={[40]} />);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(String(warn.mock.calls[0][0])).toContain("accessible name");
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("reports a range whose second thumb is named with an empty string", () => {
+      resetDevWarnings();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        render(
+          <Slider
+            defaultValue={[25, 75]}
+            thumbs={[{ "aria-label": "Minimum" }, { "aria-label": "" }]}
+          />
+        );
+        expect(warn).toHaveBeenCalledTimes(1);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("does not emit an empty naming attribute onto the thumb", () => {
+      // Present-and-empty is worse than absent: it states that a name was chosen. Omitting the
+      // attribute leaves the element honestly unnamed for anything auditing the DOM.
+      const { container } = render(
+        <Slider
+          defaultValue={[25, 75]}
+          thumbs={[{ "aria-label": "Min" }, { "aria-label": "" }]}
+        />
+      );
+      const thumbs = thumbsIn(container);
+      expect(thumbs[0].getAttribute("aria-label")).toBe("Min");
+      expect(thumbs[1].hasAttribute("aria-label")).toBe(false);
+    });
+
+    it("falls back to the root name when a single thumb's own label is blank", () => {
+      // A blank per-thumb label is not a name, so it must not suppress the root fallback the
+      // one-thumb API documents.
+      const { container } = render(
+        <Slider
+          aria-label="Opacity"
+          defaultValue={[40]}
+          thumbs={[{ "aria-label": "" }]}
+        />
+      );
+      const [thumb] = thumbsIn(container);
+      expect(thumb.getAttribute("aria-label")).toBe("Opacity");
+    });
+  });
+
+  describe("a vertical slider's length", () => {
+    // The cross-axis rules were written as `data-[orientation=vertical]:` variants, which compile
+    // to attribute selectors and therefore OUTRANK a plain utility passed in `className`. The
+    // caller's override lost the cascade silently, and the forced `h-full` collapsed to zero
+    // inside any auto-height parent — a slider with no track to drag along.
+
+    it("carries a length of its own rather than inheriting one", () => {
+      const { container } = render(
+        <Slider
+          aria-label="Opacity"
+          orientation="vertical"
+          defaultValue={[40]}
+        />
+      );
+      const root = container.firstElementChild;
+      expect(root?.className).toContain("h-44");
+      expect(root?.className).not.toContain("h-full");
+    });
+
+    it("lets a caller replace that length, including with h-full", () => {
+      // Both directions matter: a fixed override, and the fill-the-parent behaviour the default
+      // gives up. Neither can work while the wrapper's own class outranks the caller's.
+      const { container: fixed } = render(
+        <Slider
+          aria-label="A"
+          orientation="vertical"
+          defaultValue={[40]}
+          className="h-64"
+        />
+      );
+      expect(fixed.firstElementChild?.className).toContain("h-64");
+      expect(fixed.firstElementChild?.className).not.toContain("h-44");
+
+      const { container: filled } = render(
+        <Slider
+          aria-label="B"
+          orientation="vertical"
+          defaultValue={[40]}
+          className="h-full"
+        />
+      );
+      expect(filled.firstElementChild?.className).toContain("h-full");
+      expect(filled.firstElementChild?.className).not.toContain("h-44");
+    });
+
+    it("keeps the 24px target on the axis a vertical slider is thin in", () => {
+      const { container } = render(
+        <Slider
+          aria-label="Opacity"
+          orientation="vertical"
+          defaultValue={[40]}
+        />
+      );
+      expect(container.firstElementChild?.className).toContain("min-w-6");
+    });
+
+    it("still tells Radix which orientation it is", () => {
+      // Orientation drives the arrow keys a slider responds to. Reading it in JS to pick classes
+      // would be worthless if it stopped reaching the primitive that acts on it.
+      const { container } = render(
+        <Slider
+          aria-label="Opacity"
+          orientation="vertical"
+          defaultValue={[40]}
+        />
+      );
+      expect(
+        container.firstElementChild?.getAttribute("data-orientation")
+      ).toBe("vertical");
+    });
+  });
 });
