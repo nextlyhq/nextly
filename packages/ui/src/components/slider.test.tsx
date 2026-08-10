@@ -136,8 +136,11 @@ describe("Slider", () => {
     const { container } = render(
       <Slider aria-label="Opacity" defaultValue={[10]} />
     );
+    // Asserts the stated MINIMUM, not the padding that contributes to it:
+    // padding alone reached only 22px, and a test naming `py-2` passed while
+    // the documented 24px was never met.
     const root = container.firstElementChild;
-    expect(root?.className).toContain("py-2");
+    expect(root?.className).toContain("min-h-6");
   });
 
   it("puts value-text and description on the thumb, where they are read", () => {
@@ -264,5 +267,62 @@ describe("Slider", () => {
     const thumb = thumbsIn(container)[0];
     expect(thumb.getAttribute("aria-labelledby")).toBe("size-heading");
     expect(thumb.getAttribute("aria-valuetext")).toBe("40 percent");
+  });
+
+  it("keeps the uncontrolled thumb count fixed once Radix has captured it", () => {
+    // Radix captures an uncontrolled value array once, at mount. Recomputing
+    // the count from a later `defaultValue` drops a thumb while Radix still
+    // holds its value — an endpoint nothing can reach and nothing reports.
+    const { container, rerender } = render(
+      <Slider
+        defaultValue={[25, 75]}
+        thumbs={[{ "aria-label": "Min" }, { "aria-label": "Max" }]}
+      />
+    );
+    expect(thumbsIn(container)).toHaveLength(2);
+
+    rerender(
+      <Slider
+        defaultValue={[25]}
+        thumbs={[{ "aria-label": "Min" }, { "aria-label": "Max" }]}
+      />
+    );
+    expect(thumbsIn(container)).toHaveLength(2);
+  });
+
+  it("still follows a controlled value's length across rerenders", () => {
+    // The positive control: freezing BOTH paths would make a controlled range
+    // unable to change arity, which is a legitimate thing for a caller to do.
+    const { container, rerender } = render(
+      <Slider
+        value={[40]}
+        onValueChange={() => {}}
+        thumbs={[{ "aria-label": "One" }]}
+      />
+    );
+    expect(thumbsIn(container)).toHaveLength(1);
+
+    rerender(
+      <Slider
+        value={[25, 75]}
+        onValueChange={() => {}}
+        thumbs={[{ "aria-label": "Min" }, { "aria-label": "Max" }]}
+      />
+    );
+    expect(thumbsIn(container)).toHaveLength(2);
+  });
+
+  it("warns when a SINGLE thumb has no name anywhere", () => {
+    // Previously exempt: the check short-circuited on `count === 1`, so the
+    // simplest unnamed slider of all went unreported.
+    resetDevWarnings();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      render(<Slider defaultValue={[40]} />);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toContain("accessible name");
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

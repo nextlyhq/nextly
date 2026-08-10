@@ -111,8 +111,12 @@ export interface SliderThumbProps {
  *
  * @experimental
  */
-export type SliderProps = React.ComponentPropsWithoutRef<
-  typeof SliderPrimitive.Root
+export type SliderProps = Omit<
+  React.ComponentPropsWithoutRef<typeof SliderPrimitive.Root>,
+  // The wrapper always supplies a track and at least one thumb, and Radix's
+  // Slot accepts exactly one composable child — so `asChild` here throws at
+  // render. Excluded from the type rather than left to fail at runtime.
+  "asChild"
 > & {
   /**
    * Assistive-technology attributes per thumb, in value order.
@@ -172,7 +176,15 @@ const Slider = React.forwardRef<
     },
     ref
   ) => {
-    const count = thumbCount(value, defaultValue);
+    // Radix captures an uncontrolled value array ONCE, at mount. Recomputing
+    // the count from a later `defaultValue` would drop a thumb while Radix
+    // still stores its value — an endpoint the user can no longer reach and
+    // nothing reports. Controlled sliders keep deriving from `value`, which is
+    // the prop Radix itself follows.
+    const initialUncontrolledCount = React.useRef(
+      thumbCount(undefined, defaultValue)
+    ).current;
+    const count = value?.length ?? initialUncontrolledCount;
     // Everything assistive technology reads goes on the THUMB, which is what
     // carries the `slider` role and takes focus. Left on the root it is
     // announced by nothing.
@@ -184,16 +196,24 @@ const Slider = React.forwardRef<
     // the length of an array, so nothing at compile time can insist a range
     // names both of its ends. Unmet, it fails silently — the control renders
     // and is unusable with a screen reader.
+    // Every thumb needs a name from somewhere: its own entry, or — for a
+    // single thumb only — the root's. A one-thumb slider with neither was
+    // previously exempt from this check, which is the same silent failure the
+    // check exists to report.
+    const isNamed = (index: number): boolean => {
+      const own = thumbs?.[index];
+      if (own?.["aria-label"] !== undefined) return true;
+      if (own?.["aria-labelledby"] !== undefined) return true;
+      return (
+        count === 1 && (ariaLabel !== undefined || ariaLabelledBy !== undefined)
+      );
+    };
     devWarnOnce(
-      count === 1 ||
-        Array.from({ length: count }).every(
-          (_, i) =>
-            thumbs?.[i]?.["aria-label"] ?? thumbs?.[i]?.["aria-labelledby"]
-        ),
-      "Slider: a range needs one `thumbs` entry per thumb with an accessible " +
-        "name. The root's name is not inherited by the thumbs, and two thumbs " +
-        "sharing one name are announced identically, so nothing says which " +
-        "end is held."
+      Array.from({ length: count }).every((_, i) => isNamed(i)),
+      "Slider: every thumb needs an accessible name. A single thumb may take " +
+        "it from the root's `aria-label`/`aria-labelledby`; a range needs one " +
+        "`thumbs` entry per thumb, because the root's name is not inherited " +
+        "and two thumbs sharing one name are announced identically."
     );
 
     const ariaFor = (index: number): SliderThumbProps => {
@@ -225,11 +245,14 @@ const Slider = React.forwardRef<
         ref={ref}
         className={cn(
           "relative flex w-full touch-none select-none items-center",
-          "py-2 data-[orientation=vertical]:px-2 data-[orientation=vertical]:py-0",
-          // A 16px thumb on a 6px track is under the 24px minimum target size
-          // (WCAG 2.5.8), and on touch the difference between "grabbed the thumb"
-          // and "missed the control" is exactly this padding.
-
+          // WCAG 2.5.8 wants 24px. Padding alone does not reach it: the thumb
+          // is absolutely positioned, so the cross-axis size is the 6px track
+          // plus the padding — 22px with `py-2`. An explicit minimum states
+          // the target rather than leaving it to arithmetic that moves
+          // whenever the track thickness does.
+          "min-h-6 py-2",
+          "data-[orientation=vertical]:min-h-0 data-[orientation=vertical]:min-w-6",
+          "data-[orientation=vertical]:px-2 data-[orientation=vertical]:py-0",
           "data-[orientation=vertical]:h-full data-[orientation=vertical]:w-auto",
           "data-[orientation=vertical]:flex-col",
           "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
