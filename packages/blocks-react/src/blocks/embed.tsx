@@ -110,4 +110,9 @@ export const embed = defineBlock<EmbedProps, PageContext>({
     position: true,
   },
   render: renderEmbed,
+  // The whole condition is in the props: no usable source, no iframe. This is
+  // the same test `renderEmbed` applies, deliberately written as one expression
+  // in both places rather than shared, because a helper would let the two drift
+  // apart silently while looking coordinated.
+  rendersNothing: props => url(props.src) === undefined,
 });

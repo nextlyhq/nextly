@@ -110,4 +110,11 @@ export const image = defineBlock<ImageProps, PageContext>({
     position: true,
   },
   render: renderImage,
+  // A media id may still resolve to nothing, and that is settled by a call to
+  // the host — so only the case decidable from the props alone is claimed here:
+  // no id AND no usable direct url means there is nothing to draw and nothing
+  // to ask about. An id that fails to resolve falls back to drawing nothing at
+  // render time, which the boundary already treats as a deliberate decision.
+  rendersNothing: props =>
+    text(props.mediaId) === "" && url(props.src) === undefined,
 });

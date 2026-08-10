@@ -223,6 +223,34 @@ export interface BlockDefinition<
    * without buying any safety.
    */
   render(args: BlockRenderArgs<P, C>): BlockRenderResult;
+  /**
+   * Whether these props guarantee the block draws nothing, decided WITHOUT
+   * rendering.
+   *
+   * A block that draws nothing still costs a reader something: the stylesheet
+   * carries its rules, and a rule may name a URL, so an empty block can make a
+   * request on behalf of markup that never appears. A renderer can already tell
+   * that an unregistered or un-upgradable node will not draw, but only the block
+   * knows that `core/image` with no source is the same case.
+   *
+   * Answering is optional, and a block that does not is assumed to draw. That
+   * is the safe default in the expensive direction: shipping unused rules wastes
+   * bytes, while withholding the rules of a block that DOES draw ships it
+   * unstyled, which is a visibly broken page.
+   *
+   * Must be PURE and SYNCHRONOUS. It is consulted before any render, on the
+   * stored props alone, at a point where no context, no data access and no
+   * awaiting exist. A caller treats a thrown or non-boolean answer as "draws",
+   * so a mistake here degrades to the current behaviour rather than to a
+   * missing stylesheet.
+   *
+   * Declared `this: void` for the same reason `renderSlot` is: it reads nothing
+   * from the definition it arrives on, and saying so is what lets a caller pull
+   * it out and call it without binding. Kept as a METHOD signature so parameter
+   * checking stays bivariant, which is what allows a definition typed against
+   * its own props to sit in a registry of many prop shapes.
+   */
+  rendersNothing?(this: void, props: P): boolean;
   /** Editor-only metadata; never serialized. */
   editor?: BlockEditorMeta<P>;
 }
@@ -278,11 +306,17 @@ export type InferBlockProps<D> = D extends BlockDefinition<infer P> ? P : never;
 export interface AnyBlockDefinition
   extends Omit<
     BlockDefinition,
-    "example" | "defaultProps" | "props" | "localized" | "render"
+    | "example"
+    | "defaultProps"
+    | "props"
+    | "localized"
+    | "render"
+    | "rendersNothing"
   > {
   example: { props: object; slots?: Record<string, BlockNode[]> };
   defaultProps?: object;
   props?: Partial<Record<string, PropSchema>>;
   localized?: string[];
   render(args: BlockRenderArgs<object, unknown>): BlockRenderResult;
+  rendersNothing?(this: void, props: object): boolean;
 }
