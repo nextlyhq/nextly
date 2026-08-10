@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { FieldGroupMetadataService } from "../../domains/field-groups/services/field-group-metadata-service";
+import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
+import type { Logger } from "../../shared/types";
 import { createFieldGroupsNamespace } from "../namespaces/field-groups";
 
 // fieldGroups.create() derives the physical table name through the canonical
@@ -17,9 +20,29 @@ describe("fieldGroups.create derives its table name", () => {
       source: "code",
       migrationStatus: "pending",
     });
+    const logger: Logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    // Answers "no field group owns any table", which is the state a create starts from. The service
+    // refuses a table another field group already holds before it renders any DDL, so a double
+    // without this method describes a registry the create can no longer be performed against.
+    const registry = {
+      registerComponent,
+      getAllComponents: vi.fn().mockResolvedValue([]),
+    };
     const ctx = {
-      fieldGroupRegistryService: { registerComponent },
-      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      fieldGroupRegistryService: registry,
+      // The REAL service, with no adapter: the create then generates its statements and runs none,
+      // which is the configuration this product supports and the one that keeps this test about
+      // table-name derivation rather than about DDL.
+      fieldGroupMetadataService: new FieldGroupMetadataService(
+        registry as unknown as FieldGroupRegistryService,
+        logger
+      ),
+      logger,
     };
     return { ctx, registerComponent };
   }
