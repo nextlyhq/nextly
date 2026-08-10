@@ -51,7 +51,7 @@ export interface EmbedProps {
 export function renderEmbed({
   props,
   className,
-  ctx,
+  hostPolicy,
 }: BlockRenderArgs<EmbedProps>): ReactElement | null {
   const src = url(props.src);
   // No source means no frame. An iframe with an empty `src` loads the current
@@ -64,7 +64,7 @@ export function renderEmbed({
   // configuration, so the answer cannot be reached by typing a URL into a
   // field, and it is scoped to the origin that was trusted rather than to
   // whatever the field happens to hold now.
-  const sandbox = isTrustedOrigin(src, ctx.hostPolicy?.trustedFrameOrigins)
+  const sandbox = isTrustedOrigin(src, hostPolicy?.trustedFrameOrigins)
     ? `${SANDBOX} allow-same-origin`
     : SANDBOX;
 

@@ -3714,8 +3714,8 @@ describe("PageRenderer", () => {
       version: 1,
       description: "Reports what policy reached it.",
       example: { props: {} },
-      render: ({ ctx }) => (
-        <p>{(ctx.hostPolicy?.trustedFrameOrigins ?? []).join(",") || "none"}</p>
+      render: ({ hostPolicy }) => (
+        <p>{(hostPolicy?.trustedFrameOrigins ?? []).join(",") || "none"}</p>
       ),
     });
 
@@ -3755,20 +3755,27 @@ describe("PageRenderer", () => {
       expect(html).toContain("none");
     });
 
-    it("lets the prop win over a policy already on the context", async () => {
+    it("leaves the host's own context object untouched", async () => {
+      // The policy travels beside the context, never on it. Copying a host's
+      // context to add a field cannot be done faithfully: a spread drops the
+      // prototype methods of a class-based context, and even a
+      // prototype-preserving clone fails a method that reads a private field,
+      // because the clone is not branded with it.
+      const supplied = createStandaloneContext();
+      const before = Object.keys(supplied).sort();
+
       const html = await renderToHtml(
         <PageRenderer
           document={doc(node("a", "test/policy-reader"))}
           blocks={blocks}
-          context={createStandaloneContext({
-            hostPolicy: { trustedFrameOrigins: ["https://stale.example"] },
-          })}
+          context={supplied}
           hostPolicy={{ trustedFrameOrigins: ["https://current.example"] }}
         />
       );
 
       expect(html).toContain("https://current.example");
-      expect(html).not.toContain("stale.example");
+      expect(Object.keys(supplied).sort()).toEqual(before);
+      expect("hostPolicy" in supplied).toBe(false);
     });
 
     it("reaches a slot whose container replaced the context", async () => {
@@ -3825,8 +3832,12 @@ describe("PageRenderer", () => {
         render: ({ ctx, renderSlot }) =>
           renderSlot("children", {
             ...ctx,
-            hostPolicy: { trustedFrameOrigins: ["https://attacker.example"] },
-          }) as ReactElement,
+            // Not a field a context has, so this is the closest a block can get
+            // to fabricating one. It must reach the child as nothing.
+            ...{
+              hostPolicy: { trustedFrameOrigins: ["https://attacker.example"] },
+            },
+          } as PageContext) as ReactElement,
       });
 
       const html = await renderToHtml(
@@ -3852,13 +3863,18 @@ describe("PageRenderer", () => {
       // `resolveEntryPath` live on the prototype. A spread copies only own
       // enumerable properties, so it would drop them — and only for hosts that
       // supplied a policy, which is the worst way to find out.
+      // The private field is the point. A prototype-preserving clone keeps
+      // method LOOKUP working, so a class without one would pass even against a
+      // clone; a method reading `#paths` throws on any object not branded with
+      // it, which is what proves the host's own instance is the receiver.
       class HostContext implements PageContext {
         entry = null;
+        #paths = new Map([["posts:1", "/resolved"]]);
         resolveMedia(): Promise<null> {
           return Promise.resolve(null);
         }
-        resolveEntryPath(): Promise<string> {
-          return Promise.resolve("/resolved");
+        resolveEntryPath(collection: string, id: string): Promise<string> {
+          return Promise.resolve(this.#paths.get(`${collection}:${id}`) ?? "");
         }
       }
 
@@ -3887,19 +3903,40 @@ describe("PageRenderer", () => {
       expect(html).toContain("/resolved");
     });
 
-    it("keeps a context's own policy when the prop is absent", async () => {
-      // Both are supported surfaces, so omitting one must not erase the other.
+    it("keeps a class-based context usable with no policy at all", async () => {
+      // The control for the case above: the class path has to work whether or
+      // not a policy is supplied, since the original defect appeared ONLY when
+      // one was, which is the worst way for a host to discover it.
+      class HostContext implements PageContext {
+        entry = null;
+        resolveMedia(): Promise<null> {
+          return Promise.resolve(null);
+        }
+        resolveEntryPath(): Promise<string> {
+          return Promise.resolve("/resolved");
+        }
+      }
+
+      const caller = defineBlock({
+        name: "test/policy-absent-caller",
+        version: 1,
+        description: "Calls a prototype method with no policy configured.",
+        example: { props: {} },
+        render: async ({ ctx }) => (
+          <p>{await ctx.resolveEntryPath("posts", "1")}</p>
+        ),
+      });
+
       const html = await renderToHtml(
         <PageRenderer
-          document={doc(node("a", "test/policy-reader"))}
-          blocks={blocks}
-          context={createStandaloneContext({
-            hostPolicy: { trustedFrameOrigins: ["https://ctx.example"] },
-          })}
+          document={doc(node("a", "test/policy-absent-caller"))}
+          blocks={createBlockResolver([caller as AnyBlockDefinition])}
+          context={new HostContext()}
         />
       );
 
-      expect(html).toContain("https://ctx.example");
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("/resolved");
     });
   });
 

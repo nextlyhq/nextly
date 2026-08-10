@@ -105,9 +105,19 @@ export interface QueryBudget {
  * the site, once, in code they control. Modelling those as props put the answer
  * in a checkbox any editor could tick, against any URL.
  *
- * Supplied to `PageRenderer` and forwarded to every block through the context,
- * so a block reads policy the same way it reads a resolver, and no block has to
- * know how the host configured it.
+ * Supplied to `PageRenderer` and handed to every block as a render ARGUMENT,
+ * deliberately not as a field on the context. The context object belongs to the
+ * host and is passed through untouched; the policy belongs to the renderer.
+ * Putting renderer-owned data on a host-owned object meant deriving a modified
+ * copy, and no copy is faithful: a spread loses a class host's prototype
+ * methods, and a prototype-preserving clone still fails a method that reads a
+ * native private field, because the clone is not branded with it. Threading the
+ * value instead means the host's object is never rewritten.
+ *
+ * It also settles the question of who may set it. A block builds the context it
+ * hands `renderSlot`, so a policy living there could be forged by the block or
+ * dropped by a container that rebuilt the object. As an argument supplied by
+ * the boundary, it can be neither.
  *
  * Every field is optional and every default is the closed one. A host that
  * configures nothing gets the restrictive behaviour, which is the only safe
@@ -143,38 +153,6 @@ export interface BlockHostPolicy {
    * case to avoid.
    */
   trustedFrameOrigins?: readonly string[];
-}
-
-/**
- * The same context carrying a different host policy.
- *
- * Returns the input untouched when the policy already matches, so the ordinary
- * path allocates nothing and a caller can compare by identity.
- *
- * NOT a spread. A host may implement {@link PageContext} with a class, and
- * `{ ...ctx }` copies only own enumerable properties — `resolveMedia` and
- * `resolveEntryPath` live on the prototype there, so spreading would drop them
- * and every media or reference block would fail at runtime, but only for hosts
- * that supplied a policy. Creating the object against the original's prototype
- * keeps them reachable.
- *
- * The policy is set even when it is `undefined`, which is what stops a block
- * KEEPING one. A block hands `renderSlot` a context of its own making, and a
- * block that could leave a `hostPolicy` on it would be granting itself the
- * permissions the host declined to give.
- */
-export function withHostPolicy<C extends PageContext>(
-  base: C,
-  policy: BlockHostPolicy | undefined
-): C {
-  if (base.hostPolicy === policy) return base;
-  const next: C = Object.assign(
-    Object.create(Object.getPrototypeOf(base) as object) as C,
-    base
-  );
-  if (policy === undefined) delete next.hostPolicy;
-  else next.hostPolicy = policy;
-  return next;
 }
 
 /**
@@ -226,16 +204,6 @@ export interface PageContext {
    */
   resolveEntryPath(collection: string, id: string): Promise<string | null>;
   /**
-   * Site-operator decisions a block enforces. See {@link BlockHostPolicy}.
-   *
-   * Absent means the host configured nothing, and every policy then takes its
-   * closed default. It is read through the context rather than passed as a prop
-   * because a block does not know how far down the tree it sits, and a policy
-   * that had to be threaded through every slot would be one a nested block
-   * silently rendered without.
-   */
-  hostPolicy?: BlockHostPolicy;
-  /**
    * The entry the surrounding repeater is currently on.
    *
    * Distinct from `entry`, which is the record the PAGE renders: a loop over
@@ -279,6 +247,17 @@ export interface PageContext {
 export interface BlockRenderArgs<P>
   extends Omit<EngineBlockRenderArgs<P, PageContext>, "renderSlot"> {
   renderSlot(this: void, name: string, ctx?: PageContext): ReactNode;
+  /**
+   * Site-operator decisions this block enforces. See {@link BlockHostPolicy}.
+   *
+   * Absent means the host configured nothing, and every policy then takes its
+   * closed default — the only safe reading of a value that did not arrive.
+   *
+   * An argument rather than a field on `ctx`, so that the host's own context
+   * object is never copied and a block cannot reach the policy through a
+   * context it built itself.
+   */
+  hostPolicy?: BlockHostPolicy;
 }
 
 /** A context with nothing wired up: the standalone default. */

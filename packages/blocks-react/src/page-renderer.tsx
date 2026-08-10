@@ -14,7 +14,6 @@ import type { ReactElement, ReactNode } from "react";
 import { BlockList } from "./block-boundary";
 import {
   createStandaloneContext,
-  withHostPolicy,
   type BlockHostPolicy,
   type PageContext,
 } from "./context";
@@ -248,13 +247,11 @@ export function PageRenderer({
   hostPolicy,
 }: PageRendererProps): ReactElement {
   const resolver = blocks ?? registeredBlocks();
-  const base = context ?? createStandaloneContext();
-  // Folded into the context rather than passed down beside it, so a block reads
-  // policy exactly where it reads everything else the host supplies. Copied
-  // only when the prop is present, so the ordinary path keeps the caller's own
-  // context object and nothing re-renders for a new identity.
-  const pageContext =
-    hostPolicy === undefined ? base : withHostPolicy(base, hostPolicy);
+  // Passed through untouched. The policy travels beside the context rather than
+  // on it, so a host's own object is never copied — and no copy of it is
+  // faithful, since a class-based context loses prototype methods to a spread
+  // and native private fields to any clone at all.
+  const pageContext = context ?? createStandaloneContext();
 
   // Migrated against the SAME resolver that will render, so the versions nodes
   // are upgraded to are the versions the definitions doing the rendering
@@ -429,6 +426,7 @@ export function PageRenderer({
         blocks={resolver}
         classes={classes}
         fallback={blockFallback}
+        {...(hostPolicy === undefined ? {} : { hostPolicy })}
       />
     </div>
   );
