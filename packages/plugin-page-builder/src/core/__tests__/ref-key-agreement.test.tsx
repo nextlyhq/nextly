@@ -679,6 +679,31 @@ describe("styling a core/ref PLACEMENT", () => {
     expect(css).not.toContain("(min-width: 641px)");
   });
 
+  it("still hides a resolved placement when no breakpoints are configured", () => {
+    // With `breakpoints: []` the base band is every width, so its rule carries no media query at
+    // all. Treating that as "no such band" and skipping it, while the placement's own unconditional
+    // rule has already been suppressed, leaves nothing hiding it — the failure is OPEN.
+    const root = container("root", [
+      { ...ref("p1", "r1"), visibility: { base: false } },
+    ]);
+    const refs = { r1: styled("lib", "Lib", "#ee0017") };
+    const classes = documentNodeClasses(doc(root), refs);
+    const css = compileDocumentCss(doc(root), {
+      classes,
+      refs,
+      breakpoints: [],
+    });
+
+    const placement = classes.get(documentKey("p1")) ?? nodeClass("p1");
+    const target = classes.get(refScopedKey("r1", "lib")) as string;
+
+    expect(css.split("\n")).toContain(
+      `.${target}.${placement} { display: none; }`
+    );
+    // No media query, because there is no breakpoint to bound it with.
+    expect(css).not.toContain("@media");
+  });
+
   it("does not let a placement's own open-ended rule outlive its resolution", () => {
     // A placement's class is on the element its target renders, so its ordinary rules land there
     // beside the band rules. `{ base: false, tablet: true }` compiles by the ordinary path to one

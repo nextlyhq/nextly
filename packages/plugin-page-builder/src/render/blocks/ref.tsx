@@ -22,7 +22,9 @@ export const ref = defineBlock({
    *
    * `motion` is switched off EXPLICITLY, because `normalizeSupports` defaults it on: an entrance
    * of `"none"` compiles to no declaration, so a placement could not switch off an animation its
-   * target defines, and the control would be present and inert.
+   * target defines, and the control would be present and inert. `widthAlign` is left out for the
+   * same reason — its `"none"` emits nothing, so it could not undo a target's Wide or Full. The
+   * width, max-width and margin controls reach the same result and do emit declarations.
    */
   supports: {
     motion: false,

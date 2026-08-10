@@ -42,7 +42,7 @@ export const divider = defineBlock({
   ],
   supports: {
     spacing: true,
-    dimensions: {},
+    dimensions: { widthAlign: true },
     background: { gradient: true },
     visibility: true,
     customCss: true,

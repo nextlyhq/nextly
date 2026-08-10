@@ -41,7 +41,7 @@ describe("supportsToControls", () => {
   it("exposes gradient, width-alignment, shadow presets and link colors", () => {
     const groups = supportsToControls({
       background: { gradient: true },
-      dimensions: { width: true },
+      dimensions: { width: true, widthAlign: true },
       shadow: true,
       color: { link: true },
     });
@@ -86,6 +86,29 @@ describe("supportsToControls", () => {
       normalizeSupports(defaultBlockRegistry.get("core/container")?.supports)
         .motion
     ).toBe(true);
+  });
+
+  it("does not offer a reusable placement a width-alignment control it cannot honour", () => {
+    // Same reason motion is off: `widthAlign: "none"` compiles to no declaration, so choosing None
+    // on a placement could not undo a target's Wide or Full — they share one element. The width,
+    // max-width and margin controls reach the same result and do emit declarations.
+    const forRef = supportsToControls(
+      defaultBlockRegistry.get("core/ref")?.supports
+    )
+      .flatMap(g => g.controls)
+      .map(c => c.styleKey);
+    // Positive control: the placement DOES get the rest of the Layout & size group, so this is
+    // about one control being withheld rather than the whole group being absent.
+    expect(forRef).toContain("maxWidth");
+    expect(forRef).not.toContain("widthAlign");
+
+    // And a block that asks for it still gets it: the control was gated, not removed.
+    const forContainer = supportsToControls(
+      defaultBlockRegistry.get("core/container")?.supports
+    )
+      .flatMap(g => g.controls)
+      .map(c => c.styleKey);
+    expect(forContainer).toContain("widthAlign");
   });
 
   it("gives every select the options it needs to be usable", () => {

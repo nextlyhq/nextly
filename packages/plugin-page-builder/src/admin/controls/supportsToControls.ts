@@ -207,12 +207,13 @@ export function supportsToControls(
         styleKey: "aspectRatio",
         label: "Aspect ratio",
       });
-    c.push({
-      control: "select",
-      styleKey: "widthAlign",
-      label: "Width alignment",
-      options: WIDTH_ALIGN,
-    });
+    if (d.widthAlign)
+      c.push({
+        control: "select",
+        styleKey: "widthAlign",
+        label: "Width alignment",
+        options: WIDTH_ALIGN,
+      });
     push("Layout & size", c);
   }
 

@@ -535,6 +535,26 @@ describe("compileNodeCss — width alignment + link colors", () => {
     );
   });
 
+  it("ignores a placement band this compilation does not know", () => {
+    // `placementOverrides` is a public option, so `hiddenBands` can name a band that is not in the
+    // configured breakpoints. The band query for an unknown name is indistinguishable from the one
+    // for "every width", so without the guard an unrecognised band would hide the element at EVERY
+    // width rather than at none.
+    const css = compileNodeCss(
+      { ...makeNode("core/container", {}), visibility: { mobile: false } },
+      {
+        placementOverrides: [
+          { className: "nx-pb-known", hiddenBands: ["mobile"] },
+          { className: "nx-pb-bogus", hiddenBands: ["not-a-breakpoint"] },
+        ],
+      }
+    );
+
+    // Positive control: a band that IS configured still produces its rule.
+    expect(css).toContain(".nx-pb-known { display: none; }");
+    expect(css).not.toContain("nx-pb-bogus { display: none; }");
+  });
+
   it("emits link colors set in Hover mode", () => {
     // The Style tab writes every control under whichever mode is selected, and the generic hover
     // pass compiles declarations rather than these descendant rules — so a link color set in Hover

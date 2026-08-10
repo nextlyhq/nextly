@@ -60,7 +60,7 @@ export const row = defineBlock({
     spacing: true,
     border: true,
     shadow: true,
-    dimensions: { minHeight: true },
+    dimensions: { minHeight: true, widthAlign: true },
     position: true,
     visibility: true,
     customCss: true,

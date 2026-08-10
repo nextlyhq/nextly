@@ -51,7 +51,7 @@ export const grid = defineBlock<GridProps>({
     spacing: true,
     border: true,
     shadow: true,
-    dimensions: { minHeight: true },
+    dimensions: { minHeight: true, widthAlign: true },
     visibility: true,
     customCss: true,
     customAttributes: true,

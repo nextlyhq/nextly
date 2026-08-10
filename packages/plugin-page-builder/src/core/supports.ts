@@ -49,6 +49,14 @@ export interface DimensionsSupport {
   objectFit?: boolean;
   overflow?: boolean;
   aspectRatio?: boolean;
+  /**
+   * The Gutenberg-style Wide / Full preset.
+   *
+   * A sub-flag like the others rather than something every block with any dimension support gets:
+   * its neutral value compiles to no declaration, so a block that shares its element with another
+   * — a reusable placement and the block it places — cannot use it to cancel the other's.
+   */
+  widthAlign?: boolean;
 }
 export interface InteractionsSupport {
   hover?: boolean;
@@ -132,6 +140,7 @@ const DIM_KEYS: (keyof DimensionsSupport)[] = [
   "objectFit",
   "overflow",
   "aspectRatio",
+  "widthAlign",
 ];
 const INTERACT_KEYS: (keyof InteractionsSupport)[] = ["hover", "transition"];
 

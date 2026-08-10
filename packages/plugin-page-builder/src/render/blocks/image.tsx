@@ -62,6 +62,7 @@ export const image = defineBlock<ImageProps>({
       maxWidth: true,
       objectFit: true,
       aspectRatio: true,
+      widthAlign: true,
     },
     border: true,
     shadow: true,

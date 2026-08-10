@@ -62,7 +62,7 @@ export const button = defineBlock({
     border: true,
     shadow: true,
     spacing: true,
-    dimensions: { width: true },
+    dimensions: { width: true, widthAlign: true },
     interactions: { hover: true, transition: true },
     visibility: true,
   },

@@ -689,13 +689,15 @@ export function compileNodeCss(
     }
     // Each overriding placement gets rules confined to one band, never overlapping, so nothing has
     // to be undone: the band is already the answer.
+    const bands = new Set(scopesNarrowestFirst(bps));
     for (const { className, hiddenBands } of overriding) {
       for (const bandId of hiddenBands ?? []) {
+        // A band this compilation does not know is skipped rather than guessed at: `hiddenBands` is
+        // a public field, and a rule for a band that does not exist would hide at every width.
+        if (!bands.has(bandId)) continue;
         const query = bandQuery(bandId, bps);
-        if (query === undefined) continue;
-        blocks.push(
-          `@media ${query} { ${self}.${className} { display: none; } }`
-        );
+        const rule = `${self}.${className} { display: none; }`;
+        blocks.push(query === undefined ? rule : `@media ${query} { ${rule} }`);
       }
     }
   }
@@ -730,6 +732,10 @@ const BAND_EDGE = 0.02;
  * The stored breakpoints are open-ended (`max-width` alone), so they nest — `tablet` covers mobile
  * widths too. A band closes the lower end against the next breakpoint down, which is what makes a
  * per-band rule final: no other band's rule reaches those widths, so nothing has to be overridden.
+ *
+ * `undefined` means EVERY width, not "no such band": with no breakpoints configured, `base` is the
+ * only band there is and it needs a rule with no media query at all. Dropping it there would leave
+ * a placement whose ordinary rules have already been suppressed with nothing hiding it.
  */
 function bandQuery(bandId: string, bps: BreakpointDef[]): string | undefined {
   const ascending = [...bps].sort((a, b) => a.maxWidth - b.maxWidth);
