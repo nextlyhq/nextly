@@ -1,3 +1,4 @@
+import { queryLoopStructure } from "../../core/block-structure";
 import { defineBlock } from "../../core/registry";
 import { loopGridStyle } from "../query/grid";
 
@@ -11,13 +12,11 @@ import { loopGridStyle } from "../query/grid";
  * by the admin's QueryLoopSettings panel rather than generic content fields.
  */
 export const queryLoop = defineBlock({
-  type: "core/query-loop",
+  ...queryLoopStructure,
   version: 1,
   label: "Query Loop",
   icon: "Repeat",
   category: "dynamic",
-  isContainer: true,
-  slots: [{ name: "default" }],
   defaultProps: {
     collection: "",
     sort: "",
