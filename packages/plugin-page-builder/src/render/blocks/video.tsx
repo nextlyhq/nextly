@@ -78,7 +78,7 @@ export const video = defineBlock({
     { name: "start", type: "number", label: "Start at (seconds)" },
   ],
   supports: {
-    dimensions: { maxWidth: true, aspectRatio: true, widthAlign: true },
+    dimensions: { maxWidth: true, aspectRatio: true },
     spacing: true,
     border: true,
     shadow: true,

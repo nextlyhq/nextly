@@ -41,7 +41,7 @@ describe("supportsToControls", () => {
   it("exposes gradient, width-alignment, shadow presets and link colors", () => {
     const groups = supportsToControls({
       background: { gradient: true },
-      dimensions: { width: true, widthAlign: true },
+      dimensions: { width: true },
       shadow: true,
       color: { link: true },
     });
@@ -102,13 +102,21 @@ describe("supportsToControls", () => {
     expect(forRef).toContain("maxWidth");
     expect(forRef).not.toContain("widthAlign");
 
-    // And a block that asks for it still gets it: the control was gated, not removed.
+    // And every OTHER block still gets it without saying anything: the control was made
+    // opt-OUT, not opt-in, because a block defined outside this repository cannot be migrated
+    // and would otherwise lose it silently. `core/container` does not mention `widthAlign`.
     const forContainer = supportsToControls(
       defaultBlockRegistry.get("core/container")?.supports
     )
       .flatMap(g => g.controls)
       .map(c => c.styleKey);
     expect(forContainer).toContain("widthAlign");
+    // Stated directly on a definition this repository does not own the shape of: a third-party
+    // block declaring only `width` keeps the control it had before the flag existed.
+    const thirdParty = supportsToControls({ dimensions: { width: true } })
+      .flatMap(g => g.controls)
+      .map(c => c.styleKey);
+    expect(thirdParty).toContain("widthAlign");
   });
 
   it("gives every select the options it needs to be usable", () => {

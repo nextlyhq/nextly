@@ -30,7 +30,7 @@ export const heading = defineBlock({
     spacing: true,
     border: true,
     shadow: true,
-    dimensions: { width: true, maxWidth: true, widthAlign: true },
+    dimensions: { width: true, maxWidth: true },
     position: true,
     opacity: true,
     interactions: { hover: true },

@@ -27,12 +27,7 @@ export const container = defineBlock({
     spacing: true,
     border: true,
     shadow: true,
-    dimensions: {
-      maxWidth: true,
-      minHeight: true,
-      overflow: true,
-      widthAlign: true,
-    },
+    dimensions: { maxWidth: true, minHeight: true, overflow: true },
     position: true,
     opacity: true,
     filters: true,
