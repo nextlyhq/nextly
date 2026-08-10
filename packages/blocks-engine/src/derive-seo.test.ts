@@ -445,6 +445,74 @@ describe("deriveSeoFromDocument", () => {
     expect(derived.title).toBe("Kept");
   });
 
+  it("takes nothing from a slot the block may decline to draw", () => {
+    // `core/collection-loop` draws its children once per entry, so an empty
+    // query draws them zero times — and the stored document looks identical
+    // either way. Reading the template's heading would title the page with
+    // content it does not contain, and publish it to every crawler.
+    const map: Record<string, unknown> = {
+      "core/loop": {
+        slots: { children: {} },
+        conditionalSlots: ["children"],
+      },
+      "core/heading": {
+        seo: (p: never) => ({ title: (p as { text?: string }).text }),
+      },
+    };
+    const source = ((type: string) => map[type]) as SeoDefinitionSource;
+
+    const derived = deriveSeoFromDocument(
+      doc([
+        node(
+          "1",
+          "core/loop",
+          {},
+          {
+            children: [node("2", "core/heading", { text: "Template" })],
+          }
+        ),
+        node("3", "core/heading", { text: "Real" }),
+      ]),
+      source,
+      visible
+    );
+
+    expect(derived.title).toBe("Real");
+  });
+
+  it("still reads the slots a conditional block always draws", () => {
+    // Only the DECLARED slots are skipped. A block with a header it always
+    // draws and a body it may not keeps the header's contribution.
+    const map: Record<string, unknown> = {
+      "core/loop": {
+        slots: { header: {}, children: {} },
+        conditionalSlots: ["children"],
+      },
+      "core/heading": {
+        seo: (p: never) => ({ title: (p as { text?: string }).text }),
+      },
+    };
+    const source = ((type: string) => map[type]) as SeoDefinitionSource;
+
+    const derived = deriveSeoFromDocument(
+      doc([
+        node(
+          "1",
+          "core/loop",
+          {},
+          {
+            header: [node("2", "core/heading", { text: "Always drawn" })],
+            children: [node("3", "core/heading", { text: "Maybe drawn" })],
+          }
+        ),
+      ]),
+      source,
+      visible
+    );
+
+    expect(derived.title).toBe("Always drawn");
+  });
+
   it("returns nothing for an empty document", () => {
     expect(deriveSeoFromDocument(doc([]), definitions(), visible)).toEqual({});
   });

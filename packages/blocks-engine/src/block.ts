@@ -269,6 +269,27 @@ export interface BlockDefinition<
    * keeps it that way.
    */
   seo?(props: P): BlockSeoContribution | undefined;
+  /**
+   * Slots this block may decline to render for some props.
+   *
+   * @internal NOT part of the stable block-authoring surface yet — deliberately
+   * absent from `@nextlyhq/plugin-sdk`, because the shape a block author should
+   * write is a freeze decision rather than one to settle mid-review. It exists
+   * now because a CORE block needs it: `core/collection-loop` draws its children
+   * only when a query returns rows, and a reader of the stored document cannot
+   * tell whether it did.
+   *
+   * Consumed by anything deriving page-level facts from a document without
+   * rendering it. Such a reader must skip these slots: their contents may not
+   * reach the page, and describing a page by content it does not contain
+   * publishes that content off-site.
+   *
+   * This closes the class for the core library only. A contributed block that
+   * renders conditionally and declares nothing still contributes, and nothing
+   * outside the block can detect that — which is why the general answer is an
+   * API question rather than a walk question.
+   */
+  conditionalSlots?: readonly string[];
   /** Editor-only metadata; never serialized. */
   editor?: BlockEditorMeta<P>;
 }

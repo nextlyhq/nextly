@@ -55,6 +55,8 @@ export type SeoDefinitionSource = (type: string) =>
       seo?: (props: never) => BlockSeoContribution | undefined;
       /** Declared child regions, in declaration order. */
       slots?: Record<string, unknown>;
+      /** Slots the block may decline to render. See `conditionalSlots`. */
+      conditionalSlots?: readonly string[];
     }
   | undefined;
 
@@ -225,7 +227,22 @@ export function deriveSeoFromDocument(
         // heading beneath a leaf supply the title.
         const definition = definitions(node.type);
         const declared = definition?.slots ?? {};
-        const order = Object.keys(declared).filter(name => name in slots);
+        // A slot the block may decline to draw cannot speak for the page. The
+        // walk reads a stored document and cannot know whether the block DID
+        // draw it — that is settled by calling the block, which is a render —
+        // so a slot declared conditional is skipped outright. `core/collection-
+        // loop` is the case that forces it: an empty query renders no children
+        // at all, and its template's heading would otherwise become a title for
+        // content the page does not contain.
+        //
+        // Skipped rather than guessed in either direction, and this is the
+        // cautious one: a conditional slot that WAS drawn loses its
+        // contribution, which costs a field the page could have filled, while
+        // the reverse publishes text that was never served.
+        const conditional = new Set(definition?.conditionalSlots ?? []);
+        const order = Object.keys(declared).filter(
+          name => name in slots && !conditional.has(name)
+        );
         for (const name of order) {
           const children = slots[name];
           if (children) visit(children);

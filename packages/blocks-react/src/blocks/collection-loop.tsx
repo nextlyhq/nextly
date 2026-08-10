@@ -168,5 +168,10 @@ export const collectionLoop = defineBlock<CollectionLoopProps, PageContext>({
     position: true,
     container: true,
   },
+  // The children are drawn once per entry, so a query returning nothing draws
+  // them ZERO times. A reader of the stored document sees the template either
+  // way and cannot tell which happened without running the query, so it is told
+  // here instead — otherwise an empty loop's heading speaks for the page.
+  conditionalSlots: ["children"],
   render: renderCollectionLoop,
 });

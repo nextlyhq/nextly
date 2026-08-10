@@ -164,6 +164,14 @@ describe("core/collection-loop", () => {
     });
   });
 
+  it("declares its children as a slot it may not draw", async () => {
+    // Half of a two-part mechanism: the engine's SEO walk skips declared
+    // conditional slots, and this is the block saying its children are one.
+    // Without the declaration the walk has nothing to skip, and an empty loop's
+    // template would title the page with content it never rendered.
+    expect(collectionLoop.conditionalSlots).toEqual(["children"]);
+  });
+
   it("queries in the locale the page is being rendered in", async () => {
     // Without it the provider reads the default locale, so a French page
     // embeds English rows: the surrounding blocks translate and the looped
