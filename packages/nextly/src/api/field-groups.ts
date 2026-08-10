@@ -25,11 +25,11 @@ import type {
   CreateFieldGroupInput,
   FieldGroupMetadataService,
 } from "../domains/field-groups/services/field-group-metadata-service";
+import { MAX_FIELD_GROUP_SLUG_LENGTH } from "../domains/field-groups/services/field-group-schema-service";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { resolveComponentTableName } from "../domains/schema/utils/resolve-table-name";
 import { getCachedNextly } from "../init";
 import type { FieldGroupRegistryService } from "../services/field-groups/field-group-registry-service";
-import { MAX_SLUG_LENGTH } from "../shared/base-validator";
 import { requireBuilderEnabled } from "../shared/builder-access";
 
 import { assertValidFieldsPayload } from "./fields-payload";
@@ -59,11 +59,17 @@ const createComponentSchema = z.object({
   slug: z
     .string()
     .min(1, "Slug is required")
-    // The bound the rest of the product validates against, not the column width. A slug longer than
-    // this becomes a `comp_<slug>` identifier that PostgreSQL truncates and MySQL rejects, so a
-    // request accepted here would provision a table under a name it cannot then verify, record the
-    // field group as failed, and still answer 201.
-    .max(MAX_SLUG_LENGTH, `Slug must be ${MAX_SLUG_LENGTH} characters or less`)
+    // Bounded by the longest IDENTIFIER a field group generates, not by the slug itself and not by
+    // any column width. The slug is prefixed into a table name and that table name is prefixed and
+    // suffixed into `idx_comp_<slug>_parent`, sixteen characters longer than what the caller typed.
+    // The product's usual 50 therefore still yields a 66-character index name: MySQL rejects past
+    // 64, and PostgreSQL silently truncates past 63 — leaving an index under a name nothing can
+    // address. Accepted here, the table is created and the index creation fails, so the field group
+    // is recorded failed with an unbound table and the route still answers 201.
+    .max(
+      MAX_FIELD_GROUP_SLUG_LENGTH,
+      `Slug must be ${MAX_FIELD_GROUP_SLUG_LENGTH} characters or less`
+    )
     .regex(
       /^[a-z][a-z0-9-]*$/,
       "Slug must start with a letter and contain only lowercase letters, numbers, and hyphens"

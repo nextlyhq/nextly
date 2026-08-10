@@ -107,10 +107,10 @@ describe("the field-group create route", () => {
   });
 
   it("refuses a slug too long to survive becoming a table name", async () => {
-    // 51 characters: one past the bound the rest of the product validates against. `comp_` + this
-    // is 56, still inside what the engines accept — the bound is not the engine's, it is the
-    // product's, and it exists so a slug plus every prefix and companion suffix stays clear of the
-    // 63-byte ceiling where PostgreSQL stops rejecting and starts silently TRUNCATING.
+    // 48 characters: one past the bound. The bound is not the slug's own length limit, it is
+    // whatever leaves the LONGEST generated identifier legal — `idx_comp_<slug>_parent`, sixteen
+    // characters longer than this. At 48 that index name is 64: rejected by MySQL, and past the 63
+    // where PostgreSQL stops rejecting and starts silently truncating.
     const { POST } = await import("../field-groups");
 
     const response = await POST(
@@ -118,7 +118,7 @@ describe("the field-group create route", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          slug: `a${"b".repeat(50)}`,
+          slug: `a${"b".repeat(47)}`,
           label: "Too long",
           fields: [{ name: "heading", type: "text" }],
         }),
@@ -142,7 +142,7 @@ describe("the field-group create route", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          slug: `a${"b".repeat(49)}`,
+          slug: `a${"b".repeat(46)}`,
           label: "At the bound",
           fields: [{ name: "heading", type: "text" }],
         }),

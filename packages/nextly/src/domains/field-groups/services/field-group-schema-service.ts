@@ -1131,3 +1131,30 @@ export class FieldGroupSchemaService {
       .join("");
   }
 }
+
+/**
+ * The longest slug this generator can turn into a legal identifier on every dialect.
+ *
+ * Derived rather than chosen. A slug is not the identifier: it is prefixed into a table name and
+ * that table name is prefixed AND suffixed into an index name, so the longest thing the database
+ * actually sees is
+ *
+ *   `idx_` + `comp_` + <slug> + `_parent`
+ *
+ * which is sixteen characters longer than the slug the caller typed. Bounding the slug at the
+ * product's usual 50 therefore still produces a 66-character index name, and MySQL rejects any
+ * identifier past 64 — the table is created, the index creation fails, and the field group is left
+ * recorded as failed with an unbound table.
+ *
+ * The budget is PostgreSQL's 63 rather than MySQL's 64 because it is the tighter of the two, and
+ * because its failure is the worse one: PostgreSQL does not reject an over-long identifier, it
+ * silently TRUNCATES it, so the index it creates carries a name nothing else can address.
+ *
+ * Computed from the same constants the names are built from, so a change to either prefix or to the
+ * suffix moves this bound with it instead of leaving a number behind that used to be right.
+ */
+export const MAX_FIELD_GROUP_SLUG_LENGTH =
+  63 -
+  STORAGE_FORMAT.indexPrefix.length -
+  STORAGE_FORMAT.tablePrefix.length -
+  "_parent".length;
