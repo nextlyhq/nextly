@@ -64,8 +64,12 @@ function createEmailProvidersTable(sqlite: Database.Database): void {
   const { tables } = getCoreSchema("sqlite");
   const spec = tables.find(t => t.name === "email_providers");
   if (!spec) {
-    throw new Error(
-      "email_providers is absent from the core schema — the fixture can no longer be derived from it."
+    // A vitest failure rather than a thrown error: the table vanishing from
+    // the core schema is a broken precondition of this fixture, not a runtime
+    // fault, and reporting it as the test failure it is names the file that
+    // needs updating. `expect.fail` returns `never`, so `spec` narrows below.
+    expect.fail(
+      "email_providers is absent from the core schema — this fixture can no longer be derived from it."
     );
   }
   const body = createTableBody(spec, (id: string) => `"${id}"`);
