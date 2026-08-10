@@ -26,6 +26,7 @@ import type { EmailTemplateRecord } from "../../../schemas/email-templates/types
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { EmailErrorCode } from "../errors";
+import { describeProviderFailure } from "../provider-definition";
 import type {
   EmailAttachmentInput,
   EmailConfig,
@@ -42,9 +43,6 @@ import { resolveAttachments } from "./attachment-resolver";
 import { getEmailProviderRegistry } from "./email-provider-registry";
 import type { EmailProviderService } from "./email-provider-service";
 import type { EmailTemplateService } from "./email-template-service";
-import { createResendProvider } from "./providers/resend-provider";
-import { createSendLayerProvider } from "./providers/sendlayer-provider";
-import { createSmtpProvider } from "./providers/smtp-provider";
 import { mergeTemplateAttachments } from "./template-attachment-merge";
 import {
   htmlToText,
@@ -432,7 +430,11 @@ export class EmailService extends BaseService {
         event: "email.failed",
         provider: providerType,
         durationMs: Date.now() - startedAt,
-        error: error instanceof Error ? error.message : String(error),
+        // The cause too, not just the message. A provider's own diagnostic --
+        // an SMTP status line, an API error code -- is moved onto `cause` when
+        // its failure is normalised, so a log reading only `message` records
+        // the generic sentence and loses the one fact worth having.
+        ...describeProviderFailure(error),
       });
       return { success: false };
     }
@@ -637,28 +639,42 @@ export class EmailService extends BaseService {
       };
     }
 
-    // 2. DB default provider
+    // 2. DB default provider.
+    //
+    // The catch covers the LOOKUP only. Adapter construction now validates the
+    // stored configuration, and a validation failure is not a reason to fall
+    // through: a default whose configuration no longer parses would otherwise
+    // send silently through the code-first account instead, or report "no
+    // provider configured" when one is plainly selected. Falling back is right
+    // for a database that is not ready yet; it is wrong for a default that is
+    // there and broken.
+    let defaultProvider: Awaited<
+      ReturnType<EmailProviderService["getDefaultProviderDecrypted"]>
+    > = null;
     try {
-      const defaultProvider =
+      defaultProvider =
         await this.providerService.getDefaultProviderDecrypted();
-      if (defaultProvider && defaultProvider.isActive) {
-        return {
-          adapter: this.createAdapterFromRecord(defaultProvider),
-          from: this.formatFromAddress(
-            defaultProvider.fromName ?? null,
-            defaultProvider.fromEmail
-          ),
-          providerType: defaultProvider.type,
-        };
-      }
     } catch (error) {
-      // DB not ready (e.g., migrations not run yet) — fall through to code-first
       this.logger.warn(
         "Failed to look up default email provider from DB — trying code-first config",
         {
           error: error instanceof Error ? error.message : String(error),
         }
       );
+    }
+
+    if (defaultProvider && defaultProvider.isActive) {
+      // Outside the try: a throw here means the selected default is unusable,
+      // and the caller needs to hear that rather than have another account
+      // substituted for it.
+      return {
+        adapter: this.createAdapterFromRecord(defaultProvider),
+        from: this.formatFromAddress(
+          defaultProvider.fromName ?? null,
+          defaultProvider.fromEmail
+        ),
+        providerType: defaultProvider.type,
+      };
     }
 
     // 3. Code-first config
@@ -737,34 +753,26 @@ export class EmailService extends BaseService {
   private createAdapterFromConfig(
     providerConfig: NonNullable<EmailConfig["providerConfig"]>
   ): EmailProviderAdapter {
-    switch (providerConfig.provider) {
-      case "smtp":
-        return createSmtpProvider({
-          host: providerConfig.host,
-          port: providerConfig.port,
-          secure: providerConfig.secure,
-          auth: providerConfig.auth,
-        });
-      case "resend":
-        return createResendProvider({
-          apiKey: providerConfig.apiKey,
-        });
-      case "sendlayer":
-        return createSendLayerProvider({
-          apiKey: providerConfig.apiKey,
-        });
-      default:
-        // Untrusted-ish: provider value from defineConfig(). Identifier still
-        // belongs in logContext; the public message stays generic.
-        throw new NextlyError({
-          code: "BUSINESS_RULE_VIOLATION",
-          publicMessage: "Unsupported email provider.",
-          statusCode: 422,
-          logContext: {
-            provider: (providerConfig as { provider: string }).provider,
-          },
-        });
-    }
+    // Resolved through the registry, exactly as a database-stored provider is.
+    // A hardcoded switch here meant a plugin could register a provider that was
+    // dispatchable from the admin and unusable from defineConfig -- the same
+    // provider working or not depending on where it was configured.
+    //
+    // `provider` names the type; the rest of the object is its configuration,
+    // which the registered provider validates before building anything.
+    // `custom` is the union's discriminant, present only on the plugin branch
+    // and never part of a provider's own configuration, so it is dropped before
+    // parseConfig sees it. Narrowed rather than destructured off the union,
+    // since the built-in shapes do not carry the key at all.
+    const { provider, ...rest } = providerConfig;
+    const configuration =
+      "custom" in providerConfig
+        ? Object.fromEntries(
+            Object.entries(rest).filter(([key]) => key !== "custom")
+          )
+        : rest;
+
+    return getEmailProviderRegistry().create(provider, configuration);
   }
 
   // ============================================================

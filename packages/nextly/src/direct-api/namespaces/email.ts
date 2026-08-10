@@ -211,7 +211,11 @@ export function createEmailProvidersNamespace(
     async test(
       args: TestEmailProviderArgs
     ): Promise<{ success: boolean; error?: string }> {
-      return await ctx.emailProviderService.testProvider(args.id, args.to);
+      return await ctx.emailProviderService.testProvider(
+        args.id,
+        args.to,
+        args.mode
+      );
     },
   };
 }

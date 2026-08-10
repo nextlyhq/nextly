@@ -15,11 +15,14 @@
  */
 
 import {
+  SKIP_DATE_FORMATTING_HEADER,
   respondAction,
   respondData,
   respondDoc,
   respondMutation,
 } from "../../api/response-shapes";
+import { toDescriptor } from "../../domains/email/provider-definition";
+import { getEmailProviderRegistry } from "../../domains/email/services/email-provider-registry";
 import type { EmailProviderService } from "../../services/email/email-provider-service";
 import type { EmailTemplateService } from "../../services/email/email-template-service";
 import {
@@ -51,6 +54,25 @@ const EMAIL_PROVIDER_METHODS: Record<
     execute: async svc => {
       const providers = await svc.providerService.listProviders();
       return respondData({ providers });
+    },
+  },
+  listProviderTypes: {
+    // The catalog of provider types this install can configure, as descriptors.
+    // Served through the dispatcher because that is the router a default
+    // install actually mounts -- a standalone route handler the template never
+    // re-exports is reachable only by an app that opts into it by hand.
+    // Not async: the registry is in memory and this reads it synchronously.
+    // The dispatcher awaits the returned value either way.
+    execute: () => {
+      const types = getEmailProviderRegistry().list().map(toDescriptor);
+      // Marked to skip global date formatting. These are provider DEFINITIONS,
+      // not records: a contributed text or select field whose default happens
+      // to look like a timestamp would otherwise be rewritten by value, so the
+      // descriptor would stop matching the registered definition and would vary
+      // with the installation's timezone.
+      const response = respondData({ types });
+      response.headers.set(SKIP_DATE_FORMATTING_HEADER, "1");
+      return Promise.resolve(response);
     },
   },
   createProvider: {

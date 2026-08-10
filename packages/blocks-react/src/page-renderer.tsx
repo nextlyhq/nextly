@@ -2,6 +2,7 @@ import {
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   PAGE_ROOT_CLASS,
+  isFetchableUrl,
   migrateDocument,
   walkNodes,
   type BlockDocument,
@@ -25,6 +26,8 @@ import {
 } from "./resolver";
 import { dedupeNodeIds, sanitizeDocument } from "./sanitize";
 import {
+  UNIDENTIFIED_FETCH_POLICY,
+  fetchPolicyLabel,
   isRecordedGatedEntry,
   readableGatedRules,
   resolvePageStyles,
@@ -71,8 +74,10 @@ export interface PageRendererProps {
    * as a render argument, so the host's context object is passed through
    * untouched rather than copied to carry it.
    *
-   * Omitted means the host configured nothing, and every policy then takes its
-   * closed default.
+   * Omitted means the host configured nothing. What that GRANTS differs per
+   * field and is documented on each: `trustedFrameOrigins` defaults closed and
+   * grants nothing, while `remotePatterns` defaults open and asks nothing, so
+   * omitting this does not deny remote fetches.
    */
   hostPolicy?: BlockHostPolicy;
 }
@@ -401,12 +406,41 @@ export function PageRenderer({
   // another document rendered beside it, and would repair against default caps
   // a caller had deliberately raised.
   const effectiveLimits = limits ?? styleContext?.limits ?? DEFAULT_LIMITS;
+  // A stylesheet fetches too. `background-image: url(...)` is a request the
+  // browser makes on every page the rule applies to, so the host's list has to
+  // reach the compile as well as the blocks — asked of the SAME list, through a
+  // predicate the engine calls, so the two channels cannot drift apart.
+  //
+  // A caller's own `mayFetchUrl` wins. It is the more specific answer, and a
+  // host that passed one deliberately should not have it replaced by one
+  // derived here.
+  const patterns = hostPolicy?.remotePatterns;
+  // The label a compiled sheet is stamped with, and the one a stored sheet is
+  // checked against. Derived from the patterns themselves so it changes exactly
+  // when they do: an editor who adds a host gets every stored sheet recompiled
+  // once, with nothing to remember to invalidate.
+  //
+  // A caller's OWN predicate is authoritative and opaque. It can encode rules no
+  // pattern list describes, and nothing here can tell one such function from
+  // another, so no label can describe it — and reusing a stored sheet across a
+  // change to it would serve CSS whose URLs were admitted by rules that no
+  // longer hold. A caller wanting its sheets cached states which policy its
+  // predicate IS, through `fetchPolicyId` on the style context. One that does
+  // not gets the safe answer rather than the fast one: an identity no artifact
+  // can carry, so every stored sheet reads as compiled under another policy.
+  const fetchPolicyId =
+    styleContext?.mayFetchUrl === undefined
+      ? fetchPolicyLabel(patterns)
+      : (styleContext.fetchPolicyId ?? UNIDENTIFIED_FETCH_POLICY);
   const compileContext =
     styleContext === undefined
       ? undefined
       : {
           ...styleContext,
           limits: effectiveLimits,
+          ...(patterns === undefined || styleContext.mayFetchUrl !== undefined
+            ? {}
+            : { mayFetchUrl: (url: string) => isFetchableUrl(url, patterns) }),
           // Only a STRING scope is carried over. The artifact is a database
           // record, so `scope` can be null or a number, and the compiler
           // dereferences it before any block boundary exists — a malformed one
@@ -422,7 +456,8 @@ export function PageRenderer({
     styles,
     compileContext,
     resolver,
-    repairedDocument
+    repairedDocument,
+    { fetchPolicyId }
   );
   const rootClassName = scope ? `${PAGE_ROOT_CLASS} ${scope}` : PAGE_ROOT_CLASS;
 

@@ -12,7 +12,7 @@
  *
  * @module blocks/image
  */
-import { defineBlock } from "@nextlyhq/blocks-engine";
+import { defineBlock, isFetchableUrl } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
@@ -41,6 +41,7 @@ export async function renderImage({
   props,
   className,
   ctx,
+  hostPolicy,
 }: BlockRenderArgs<ImageProps>): Promise<ReactElement | null> {
   const mediaId = text(props.mediaId);
   // A resolver that throws must not take the page with it: media lives behind
@@ -49,7 +50,30 @@ export async function renderImage({
   const resolved =
     mediaId === "" ? null : await ctx.resolveMedia(mediaId).catch(() => null);
 
-  const src = resolved?.url ?? url(props.src);
+  // The host's fetch list, asked BEFORE the two candidates are chosen between
+  // rather than after. Asked here rather than at the boundary, which sees the
+  // element this returned and not the URL chosen to build it.
+  //
+  // Order is the whole point. Selecting first and filtering after means a
+  // library image the site will not fetch beats a perfectly good typed URL and
+  // then takes the block down with it — the author is left with nothing because
+  // of a setting they cannot see, while the fallback they wrote sits unused.
+  // Filtering first makes the block render the first candidate it is actually
+  // allowed to load, which is what a fallback is for and what the metadata path
+  // does with the same pair.
+  const patterns = hostPolicy?.remotePatterns;
+  const fetchable = (value: string | undefined): string | undefined =>
+    value === undefined ||
+    (patterns !== undefined && !isFetchableUrl(value, patterns))
+      ? undefined
+      : value;
+
+  // A record whose URL is unusable is dropped WHOLE, not just for its URL. Its
+  // alt text and intrinsic size describe the asset that was refused, so keeping
+  // them beside the fallback announces one image to a screen reader while
+  // reserving the other one's space.
+  const usable = fetchable(resolved?.url) === undefined ? null : resolved;
+  const src = fetchable(usable?.url) ?? fetchable(url(props.src));
   // Nothing to show. An `<img>` with no `src` still requests the current page
   // in some browsers, so render nothing rather than a broken element.
   if (src === undefined) return null;
@@ -71,7 +95,7 @@ export async function renderImage({
     ? ""
     : isAuthoredText(props.alt)
       ? text(props.alt)
-      : (resolved?.alt ?? "");
+      : (usable?.alt ?? "");
   const caption = text(props.caption);
 
   const image = (
@@ -82,8 +106,8 @@ export async function renderImage({
       loading={oneOf(props.loading, IMAGE_LOADING, "lazy")}
       // Intrinsic dimensions reserve the space before the file arrives, which
       // is what stops the text below it jumping when it loads.
-      {...(resolved?.width === undefined ? {} : { width: resolved.width })}
-      {...(resolved?.height === undefined ? {} : { height: resolved.height })}
+      {...(usable?.width === undefined ? {} : { width: usable.width })}
+      {...(usable?.height === undefined ? {} : { height: usable.height })}
       {...(decorative ? { role: "presentation" } : {})}
     />
   );

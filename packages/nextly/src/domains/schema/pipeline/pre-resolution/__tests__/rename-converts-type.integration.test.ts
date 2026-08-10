@@ -198,3 +198,423 @@ describe("a rename that also changes the column's type — MySQL", () => {
     ]);
   });
 });
+
+/**
+ * The same shape, holding prose instead of JSON — and the repair must refuse it.
+ *
+ * A leading underscore proves the old builder wrote the column. It does not prove what the column
+ * contains: the underscore affected every field type, so a field once declared as ordinary text
+ * carries `_body` too. Change that field to a repeater and the pair is indistinguishable from a
+ * genuine legacy repeater by name, by SQL type, and by anything else the schema records.
+ *
+ * On MySQL the refusal has to come BEFORE the rename. DDL commits implicitly there, so a conversion
+ * refused one statement later leaves the column renamed and unconverted with nothing able to take it
+ * back — which is why these assert the OLD name still resolves afterwards, not merely that the call
+ * rejected.
+ */
+describe("a legacy column holding prose is not converted — PostgreSQL", () => {
+  const proseCtx = makeTestContext("postgresql");
+  if (!proseCtx.available || !proseCtx.url) {
+    it.skip("Skipping: TEST_POSTGRES_URL not set", () => {});
+    return;
+  }
+
+  const table = `${proseCtx.prefix}_prose`;
+  let pool: Pool;
+  let db: ReturnType<typeof drizzlePg>;
+
+  beforeAll(async () => {
+    pool = new Pool({ connectionString: proseCtx.url ?? undefined });
+    db = drizzlePg({ client: pool });
+  });
+
+  afterAll(async () => {
+    await pool.query(`DROP TABLE IF EXISTS "${table}" CASCADE`);
+    await pool.end();
+  });
+
+  it("refuses, and leaves the column exactly as it was", async () => {
+    await pool.query(`DROP TABLE IF EXISTS "${table}" CASCADE`);
+    await pool.query(
+      `CREATE TABLE "${table}" ("id" text PRIMARY KEY, "_body" text)`
+    );
+    // Prose, which is what a text field held before someone changed it to a repeater.
+    await pool.query(`INSERT INTO "${table}" VALUES ('r1', $1)`, [
+      "the quick brown fox",
+    ]);
+
+    const ops: Operation[] = [
+      {
+        type: "rename_column",
+        tableName: table,
+        fromColumn: "_body",
+        toColumn: "body",
+        fromType: "text",
+        toType: "jsonb",
+      },
+    ];
+
+    // Asserted on the typed payload rather than the message: `NextlyError.validation` sets a generic
+    // public message and carries the detail in `publicData`, so matching on text would pass for any
+    // validation failure at all.
+    await expect(
+      executePreResolutionOps(db, ops, "postgresql")
+    ).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [expect.objectContaining({ code: "COLUMN_NOT_CONVERTIBLE" })],
+      },
+    });
+
+    // Nothing ran: the column still answers to its old name and still holds what it held.
+    const after = await pool.query<{ _body: string }>(
+      `SELECT "_body" FROM "${table}" WHERE id = 'r1'`
+    );
+    expect(after.rows[0]?._body).toBe("the quick brown fox");
+  });
+
+  it("refuses when only a LATER row is prose", async () => {
+    // The row order is the test. A probe that stops at the first row satisfying it — anything
+    // shaped `WHERE c::jsonb IS NOT NULL LIMIT 1` — reports this column convertible on the strength
+    // of row one and never reads row two, and the conversion then fails on the row the probe
+    // skipped. That is the mid-apply failure the guard exists to prevent, so it has to be the case
+    // the guard is measured against.
+    const mixed = `${proseCtx.prefix}_mixed`;
+    await pool.query(`DROP TABLE IF EXISTS "${mixed}" CASCADE`);
+    await pool.query(
+      `CREATE TABLE "${mixed}" ("id" text PRIMARY KEY, "_body" text)`
+    );
+    await pool.query(`INSERT INTO "${mixed}" VALUES ('r1', $1), ('r2', $2)`, [
+      JSON.stringify({ ok: 1 }),
+      "the quick brown fox",
+    ]);
+
+    await expect(
+      executePreResolutionOps(
+        db,
+        [
+          {
+            type: "rename_column",
+            tableName: mixed,
+            fromColumn: "_body",
+            toColumn: "body",
+            fromType: "text",
+            toType: "jsonb",
+          },
+        ] as Operation[],
+        "postgresql"
+      )
+    ).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [expect.objectContaining({ code: "COLUMN_NOT_CONVERTIBLE" })],
+      },
+    });
+
+    const after = await pool.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = $1`,
+      [mixed]
+    );
+    expect(after.rows.map(r => r.column_name)).toContain("_body");
+    await pool.query(`DROP TABLE IF EXISTS "${mixed}" CASCADE`);
+  });
+
+  it("reports a probe that could not run as itself, not as bad data", async () => {
+    // A guard that reads every error as "unconvertible" gives the operator a confident, specific and
+    // wrong diagnosis: it names their data when the real cause is a missing table, a lock timeout or
+    // a permission. They then go looking in the rows. The probe raises SQLSTATE 22P02 for malformed
+    // JSON and 42P01 for a table that is not there, and only the data class may answer the question.
+    const missing = `${proseCtx.prefix}_absent`;
+
+    await expect(
+      executePreResolutionOps(
+        db,
+        [
+          {
+            type: "rename_column",
+            tableName: missing,
+            fromColumn: "_body",
+            toColumn: "body",
+            fromType: "text",
+            toType: "jsonb",
+          },
+        ] as Operation[],
+        "postgresql"
+      )
+      // Asserted on the cause, because Drizzle wraps the driver error and the SQLSTATE stays on the
+      // original underneath — which is also why the guard walks the chain rather than reading the
+      // top object.
+    ).rejects.toMatchObject({ cause: { code: "42P01" } });
+  });
+
+  it("still converts a column that does hold JSON", async () => {
+    // The positive control. A guard that refused everything would satisfy the cases above while
+    // breaking the repair this programme exists to provide.
+    const jsonTable = `${proseCtx.prefix}_json_ok`;
+    await pool.query(`DROP TABLE IF EXISTS "${jsonTable}" CASCADE`);
+    await pool.query(
+      `CREATE TABLE "${jsonTable}" ("id" text PRIMARY KEY, "_body" text)`
+    );
+    await pool.query(`INSERT INTO "${jsonTable}" VALUES ('r1', $1)`, [
+      JSON.stringify([{ label: "one" }]),
+    ]);
+
+    await executePreResolutionOps(
+      db,
+      [
+        {
+          type: "rename_column",
+          tableName: jsonTable,
+          fromColumn: "_body",
+          toColumn: "body",
+          fromType: "text",
+          toType: "jsonb",
+        },
+      ] as Operation[],
+      "postgresql"
+    );
+
+    const shape = await pool.query<{ data_type: string }>(
+      `SELECT data_type FROM information_schema.columns WHERE table_name = $1 AND column_name = 'body'`,
+      [jsonTable]
+    );
+    expect(shape.rows[0]?.data_type).toBe("jsonb");
+    await pool.query(`DROP TABLE IF EXISTS "${jsonTable}" CASCADE`);
+  });
+});
+
+/**
+ * The same refusal on MySQL, where getting it wrong is not recoverable.
+ *
+ * PostgreSQL runs the whole apply inside a transaction, so a conversion that fails mid-way rolls
+ * back and the operator is merely inconvenienced. MySQL commits DDL as it makes it: a rename that
+ * has already executed stays executed, and no rollback exists to undo it. That makes the ordering —
+ * ask first, then execute — the entire substance of the guard here rather than a nicety, and it can
+ * only be shown against a live server that really does auto-commit.
+ */
+describe("a legacy column holding prose is not converted — MySQL", () => {
+  if (!mysqlCtx.available || !mysqlCtx.url) {
+    it.skip("Skipping: TEST_MYSQL_URL not set", () => {});
+    return;
+  }
+
+  const table = `${mysqlCtx.prefix}_prose`;
+  let pool: MysqlPool;
+  // Held as the executor's own parameter type, for the reason given on the suite above: naming
+  // drizzle's generic makes two structurally identical instantiations collide under `check-types`.
+  let db: unknown;
+
+  beforeAll(() => {
+    pool = createPool({ uri: mysqlCtx.url as string });
+    db = drizzleMysql({ client: pool });
+  });
+
+  afterAll(async () => {
+    await pool.promise().query(`DROP TABLE IF EXISTS \`${table}\``);
+    await new Promise<void>(res => pool.end(() => res()));
+  });
+
+  it("refuses before renaming, so the column is left whole", async () => {
+    const q = pool.promise();
+    await q.query(`DROP TABLE IF EXISTS \`${table}\``);
+    await q.query(
+      `CREATE TABLE \`${table}\` (\`id\` varchar(36) PRIMARY KEY, \`_body\` text)`
+    );
+    await q.query(`INSERT INTO \`${table}\` VALUES ('r1', ?)`, [
+      "the quick brown fox",
+    ]);
+
+    await expect(
+      executePreResolutionOps(
+        db,
+        [
+          {
+            type: "rename_column",
+            tableName: table,
+            fromColumn: "_body",
+            toColumn: "body",
+            fromType: "text",
+            toType: "json",
+          },
+        ] as Operation[],
+        "mysql"
+      )
+    ).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [expect.objectContaining({ code: "COLUMN_NOT_CONVERTIBLE" })],
+      },
+    });
+
+    // The assertion the dialect exists for. A refusal raised one statement too late would still
+    // reject, and `_body` would already be gone with no transaction able to bring it back.
+    const [cols] = await q.query(
+      `SELECT COLUMN_NAME FROM information_schema.columns
+       WHERE table_schema = DATABASE() AND table_name = ?`,
+      [table]
+    );
+    const names = (cols as Array<{ COLUMN_NAME: string }>).map(
+      c => c.COLUMN_NAME
+    );
+    expect(names, "the rename did not run").toContain("_body");
+    expect(names).not.toContain("body");
+
+    const [rows] = await q.query(
+      `SELECT \`_body\` FROM \`${table}\` WHERE \`id\` = 'r1'`
+    );
+    expect((rows as Array<{ _body: string }>)[0]?._body).toBe(
+      "the quick brown fox"
+    );
+  });
+
+  it("still converts a column that does hold JSON", async () => {
+    // The positive control: without it, a guard that refused every MySQL conversion would pass the
+    // test above while removing the repair entirely.
+    const q = pool.promise();
+    const jsonTable = `${mysqlCtx.prefix}_json_ok`;
+    await q.query(`DROP TABLE IF EXISTS \`${jsonTable}\``);
+    await q.query(
+      `CREATE TABLE \`${jsonTable}\` (\`id\` varchar(36) PRIMARY KEY, \`_body\` text)`
+    );
+    await q.query(`INSERT INTO \`${jsonTable}\` VALUES ('r1', ?)`, [
+      JSON.stringify([{ label: "one" }]),
+    ]);
+
+    await expect(
+      executePreResolutionOps(
+        db,
+        [
+          {
+            type: "rename_column",
+            tableName: jsonTable,
+            fromColumn: "_body",
+            toColumn: "body",
+            fromType: "text",
+            toType: "json",
+          },
+        ] as Operation[],
+        "mysql"
+      )
+    ).resolves.toBe(1);
+
+    const [cols] = await q.query(
+      `SELECT COLUMN_NAME, DATA_TYPE FROM information_schema.columns
+       WHERE table_schema = DATABASE() AND table_name = ?`,
+      [jsonTable]
+    );
+    const columns = cols as Array<{ COLUMN_NAME: string; DATA_TYPE: string }>;
+    expect(columns.find(c => c.COLUMN_NAME === "body")?.DATA_TYPE).toBe("json");
+    await q.query(`DROP TABLE IF EXISTS \`${jsonTable}\``);
+  });
+});
+
+/**
+ * What the probe must NOT refuse, and where it must look.
+ *
+ * The guard exists to stop one specific conversion running against values that cannot survive it.
+ * Two ways for it to be wrong in the other direction, both of which refuse work that was always
+ * valid — and a refusal is as damaging as a bad apply when it blocks every legitimate delta behind
+ * it.
+ */
+describe("the probe's scope — PostgreSQL", () => {
+  const scopeCtx = makeTestContext("postgresql");
+  if (!scopeCtx.available || !scopeCtx.url) {
+    it.skip("Skipping: TEST_POSTGRES_URL not set", () => {});
+    return;
+  }
+
+  let pool: Pool;
+  let db: ReturnType<typeof drizzlePg>;
+
+  beforeAll(async () => {
+    pool = new Pool({ connectionString: scopeCtx.url ?? undefined });
+    db = drizzlePg({ client: pool });
+  });
+
+  afterAll(async () => {
+    await pool.end();
+  });
+
+  it("does not run for a type change that is not into JSON", async () => {
+    // `conversionForRename` emits `change_column_type` for ANY change of type. Gating the probe on
+    // its mere presence asks "is this valid JSON?" of a column becoming `varchar(255)`, and prose
+    // answers no — refusing a rename that was never about JSON at all.
+    const table = `${scopeCtx.prefix}_widen`;
+    await pool.query(`DROP TABLE IF EXISTS "${table}" CASCADE`);
+    await pool.query(
+      `CREATE TABLE "${table}" ("id" text PRIMARY KEY, "_body" text)`
+    );
+    await pool.query(`INSERT INTO "${table}" VALUES ('r1', $1)`, [
+      "the quick brown fox",
+    ]);
+
+    await expect(
+      executePreResolutionOps(
+        db,
+        [
+          {
+            type: "rename_column",
+            tableName: table,
+            fromColumn: "_body",
+            toColumn: "body",
+            fromType: "text",
+            toType: "varchar(255)",
+          },
+        ] as Operation[],
+        "postgresql"
+      )
+    ).resolves.toBe(1);
+
+    const after = await pool.query<{ body: string }>(
+      `SELECT "body" FROM "${table}" WHERE id = 'r1'`
+    );
+    expect(after.rows[0]?.body, "the prose came with it").toBe(
+      "the quick brown fox"
+    );
+    await pool.query(`DROP TABLE IF EXISTS "${table}" CASCADE`);
+  });
+
+  it("asks the table its PRE-rename name when the table is renamed too", async () => {
+    // Column operations carry the table's post-rename name, because they normally run after
+    // `rename_table`. This preflight runs before everything, so the new name does not exist yet:
+    // probing it hits a missing table, and — correctly — that now propagates rather than being
+    // read as bad data, so the whole apply dies on a rename that was fine.
+    const oldName = `${scopeCtx.prefix}_before`;
+    const newName = `${scopeCtx.prefix}_after`;
+    await pool.query(`DROP TABLE IF EXISTS "${oldName}" CASCADE`);
+    await pool.query(`DROP TABLE IF EXISTS "${newName}" CASCADE`);
+    await pool.query(
+      `CREATE TABLE "${oldName}" ("id" text PRIMARY KEY, "_body" text)`
+    );
+    await pool.query(`INSERT INTO "${oldName}" VALUES ('r1', $1)`, [
+      JSON.stringify({ ok: 1 }),
+    ]);
+
+    await expect(
+      executePreResolutionOps(
+        db,
+        [
+          { type: "rename_table", fromName: oldName, toName: newName },
+          {
+            type: "rename_column",
+            tableName: newName,
+            fromColumn: "_body",
+            toColumn: "body",
+            fromType: "text",
+            toType: "jsonb",
+          },
+        ] as Operation[],
+        "postgresql"
+      )
+    ).resolves.toBe(2);
+
+    const shape = await pool.query<{ data_type: string }>(
+      `SELECT data_type FROM information_schema.columns WHERE table_name = $1 AND column_name = 'body'`,
+      [newName]
+    );
+    expect(shape.rows[0]?.data_type, "and the conversion still happened").toBe(
+      "jsonb"
+    );
+    await pool.query(`DROP TABLE IF EXISTS "${newName}" CASCADE`);
+  });
+});

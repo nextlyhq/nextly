@@ -23,7 +23,7 @@
  *
  * @module blocks/embed
  */
-import { defineBlock } from "@nextlyhq/blocks-engine";
+import { defineBlock, isFetchableUrl } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
@@ -57,6 +57,12 @@ export function renderEmbed({
   // No source means no frame. An iframe with an empty `src` loads the current
   // page inside itself in several browsers, which is a recursive render.
   if (src === undefined) return null;
+  // The host's fetch list, asked here rather than at the boundary: the boundary
+  // sees the element this returns, not the URL chosen to build it. An unlisted
+  // host renders nothing at all rather than an empty frame, for the same reason
+  // as above — a frame with no usable source is worse than no frame.
+  const patterns = hostPolicy?.remotePatterns;
+  if (patterns !== undefined && !isFetchableUrl(src, patterns)) return null;
 
   const title = text(props.title, "Embedded content");
   // Keeping its own origin is the host's decision about this URL, not the page
@@ -114,5 +120,10 @@ export const embed = defineBlock<EmbedProps, PageContext>({
   // the same test `renderEmbed` applies, deliberately written as one expression
   // in both places rather than shared, because a helper would let the two drift
   // apart silently while looking coordinated.
+  // Deliberately answered from the props ALONE. The declaration is read without
+  // a render, so it has no host policy to consult; a URL the policy will refuse
+  // is reported here as output, and the render then draws nothing. Erring that
+  // way costs an empty rule in a stylesheet, while erring the other way would
+  // claim a drawing block draws nothing.
   rendersNothing: props => url(props.src) === undefined,
 });

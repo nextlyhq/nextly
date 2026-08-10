@@ -39,9 +39,10 @@ async function getEmailProviderService(): Promise<EmailProviderService> {
 
 const createProviderSchema = z.object({
   name: z.string().min(1, "Name is required").max(255),
-  type: z.enum(["smtp", "resend", "sendlayer"], {
-    message: "Type must be 'smtp', 'resend', or 'sendlayer'",
-  }),
+  // Checked against the registry rather than a fixed list. A hardcoded enum
+  // rejected every plugin-contributed provider, so the contribution surface
+  // could register a type that nothing was able to store.
+  type: z.string().min(1, "Type is required"),
   fromEmail: z.string().email("Invalid from email address"),
   fromName: z.string().max(255).optional().nullable(),
   configuration: z.record(z.string(), z.unknown()),
