@@ -814,7 +814,7 @@
   /* The base colour of the elevation ramp (--shadow-sm..xl, -inner-subtle,
    * -neo). Each step mixes this down to its own alpha, so retinting every
    * shadow at once is a single token change. */
-  --nx-shadow-color: hsl(0 0% 0%);
+  --nx-shadow-color: oklch(0 0 0);
 
   /* Chart colors for data visualization */
   --nx-chart-1: var(--nx-primary);
@@ -991,7 +991,7 @@
    * One --shadow-* ramp serves both modes and inlines a single set of
    * color-mix opacities, so this token is the only place elevation is
    * retuned -- overriding it resolves the whole ramp to that hue. */
-  --nx-shadow-color: hsl(0 0% 0%);
+  --nx-shadow-color: oklch(0 0 0);
 
   /* Chart colors for data visualization (same as light mode) */
   --nx-chart-1: var(--nx-primary);
