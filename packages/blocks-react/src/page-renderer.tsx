@@ -12,7 +12,11 @@ import {
 import type { ReactElement, ReactNode } from "react";
 
 import { BlockList } from "./block-boundary";
-import { createStandaloneContext, type PageContext } from "./context";
+import {
+  createStandaloneContext,
+  type BlockHostPolicy,
+  type PageContext,
+} from "./context";
 import { BlockPlaceholder } from "./placeholder";
 import {
   registeredBlocks,
@@ -59,6 +63,18 @@ export interface PageRendererProps {
    * limits, then to the engine defaults.
    */
   limits?: DocumentLimits;
+  /**
+   * Site-operator decisions the blocks enforce. See {@link BlockHostPolicy}.
+   *
+   * THE ONLY place a policy is configured. It is not read from `context`, which
+   * carries no such field: the policy is the renderer's and reaches each block
+   * as a render argument, so the host's context object is passed through
+   * untouched rather than copied to carry it.
+   *
+   * Omitted means the host configured nothing, and every policy then takes its
+   * closed default.
+   */
+  hostPolicy?: BlockHostPolicy;
 }
 
 /**
@@ -230,8 +246,13 @@ export function PageRenderer({
   styleContext,
   blockFallback,
   limits,
+  hostPolicy,
 }: PageRendererProps): ReactElement {
   const resolver = blocks ?? registeredBlocks();
+  // Passed through untouched. The policy travels beside the context rather than
+  // on it, so a host's own object is never copied — and no copy of it is
+  // faithful, since a class-based context loses prototype methods to a spread
+  // and native private fields to any clone at all.
   const pageContext = context ?? createStandaloneContext();
 
   // Migrated against the SAME resolver that will render, so the versions nodes
@@ -407,6 +428,7 @@ export function PageRenderer({
         blocks={resolver}
         classes={classes}
         fallback={blockFallback}
+        {...(hostPolicy === undefined ? {} : { hostPolicy })}
       />
     </div>
   );

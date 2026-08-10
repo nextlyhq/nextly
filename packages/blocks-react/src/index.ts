@@ -14,6 +14,7 @@
  * @module index
  */
 export type {
+  BlockHostPolicy,
   BlockRenderArgs,
   BlocksDataProvider,
   BlocksQuery,
