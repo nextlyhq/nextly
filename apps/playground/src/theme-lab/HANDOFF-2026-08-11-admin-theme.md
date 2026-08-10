@@ -2,9 +2,9 @@
 
 **Written:** 2026-08-11. **Branch:** `explore/admin-theme-variations`.
 **Worktree:** `/Users/mobeen/Work/Products/nextly-integrations/nextly-worktrees/theme-variations`
-**Head at handoff:** `43c100fa7`. **Remote:** pushed through `c1165e003`; `43c100fa7` is LOCAL ONLY
-— push it first (see §8, step 1).
-**No open PRs.** Nothing is awaiting review; nothing has been merged to `main` from this work.
+**Open PR:** [#634](https://github.com/nextlyhq/nextly/pull/634) — carries everything, awaiting
+review. A 15-minute watcher is running. **Do not merge**: the gate is CI fully green AND zero
+unresolved threads. Nothing from this work has been merged to `main`.
 
 ---
 
@@ -36,7 +36,7 @@ user-facing.** The palette that won is a neutral achromatic set; it is simply _t
 | 8   | Port margins to the real `theme.css`, not just the lab copies                        | done                  |
 | 9   | Neutral ramp = separate task, AFTER the theme decision                               | scoped, not started   |
 | 10  | **Adopt the neutral achromatic palette as the admin theme**                          | **done, `43c100fa7`** |
-| 11  | Ship as ONE PR carrying everything, after the theme choice                           | **NOT DONE — see §8** |
+| 11  | Ship as ONE PR carrying everything, after the theme choice                           | **done, PR #634**     |
 
 **Founder's stated preference that drove #10:** they liked the neutral achromatic candidate, asked
 that its origin not be named anywhere, and asked specifically that **checkboxes and table search
