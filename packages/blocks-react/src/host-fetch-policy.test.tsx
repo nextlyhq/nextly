@@ -75,7 +75,7 @@ async function pageCss(
     <PageRenderer
       document={styledDocument(url)}
       blocks={createBlockResolver(coreBlocks)}
-      styleContext={{ breakpoints: { base: {} } }}
+      styleContext={{ breakpoints: { viewport: [], container: [] } }}
       {...(hostPolicy === undefined ? {} : { hostPolicy })}
     />
   );
@@ -138,7 +138,10 @@ describe("the host fetch list", () => {
       <PageRenderer
         document={styledDocument("https://cdn.other.test/a.png")}
         blocks={createBlockResolver(coreBlocks)}
-        styleContext={{ breakpoints: { base: {} }, mayFetchUrl: () => true }}
+        styleContext={{
+          breakpoints: { viewport: [], container: [] },
+          mayFetchUrl: () => true,
+        }}
         hostPolicy={{ remotePatterns: ALLOWED }}
       />
     );
@@ -242,7 +245,7 @@ describe("a stored stylesheet records the policy that compiled it", () => {
         document={styledDocument("https://player.allowed.test/a.png")}
         blocks={createBlockResolver(coreBlocks)}
         styles={stale}
-        styleContext={{ breakpoints: { base: {} } }}
+        styleContext={{ breakpoints: { viewport: [], container: [] } }}
         hostPolicy={{ remotePatterns: ALLOWED }}
       />
     );
@@ -263,7 +266,7 @@ describe("a stored stylesheet records the policy that compiled it", () => {
         document={styledDocument("https://player.allowed.test/a.png")}
         blocks={createBlockResolver(coreBlocks)}
         styles={stamped}
-        styleContext={{ breakpoints: { base: {} } }}
+        styleContext={{ breakpoints: { viewport: [], container: [] } }}
         hostPolicy={{ remotePatterns: ALLOWED }}
       />
     );
