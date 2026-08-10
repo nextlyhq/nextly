@@ -481,3 +481,37 @@ export { Slider } from "./components/slider";
  * so they cannot be passed through the root.
  */
 export type { SliderProps, SliderThumbProps } from "./components/slider";
+ * @experimental The application's single owner of keyboard shortcuts.
+ *
+ * Replaces per-component `document` listeners, which cannot decide who owns a key:
+ * `stopPropagation` does not stop siblings on the same node, so every global handler runs and
+ * the winner is whichever component mounted first. Precedence here follows the component tree,
+ * and a blocking layer lets a drag or a modal hold the keyboard while it is up.
+ */
+export {
+  ShortcutProvider,
+  ShortcutScope,
+  useActiveShortcuts,
+  useShortcutManager,
+  useShortcuts,
+} from "./lib/shortcuts/react";
+/** @experimental The provider's props, and the options a layer registers with. */
+export type {
+  ShortcutProviderProps,
+  UseShortcutsOptions,
+} from "./lib/shortcuts/react";
+/** @experimental The binding shape, and the manager for a host that drives its own events. */
+export { createShortcutManager } from "./lib/shortcuts/manager";
+/** @experimental */
+export type {
+  ActiveShortcut,
+  ShortcutBinding,
+  ShortcutLayerOptions,
+  ShortcutManager,
+  ShortcutManagerOptions,
+  ShortcutRegistration,
+} from "./lib/shortcuts/manager";
+/** @experimental Key-spec parsing, for a host rendering its own shortcut hints. */
+export { parseKeys } from "./lib/shortcuts/key-spec";
+/** @experimental */
+export type { KeyChord, KeySequence } from "./lib/shortcuts/key-spec";
