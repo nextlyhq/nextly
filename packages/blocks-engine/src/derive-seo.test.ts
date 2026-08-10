@@ -513,6 +513,63 @@ describe("deriveSeoFromDocument", () => {
     expect(derived.title).toBe("Always drawn");
   });
 
+  it("takes nothing from a block that declares it draws nothing", () => {
+    // The block's own answer about itself, the way gating is the document's.
+    // The subtree goes with it: a heading inside a container that draws nothing
+    // is exactly as absent as the container.
+    const map: Record<string, unknown> = {
+      "plugin/empty": {
+        slots: { children: {} },
+        rendersNothing: () => true,
+        seo: () => ({ title: "From the empty block" }),
+      },
+      "core/heading": {
+        seo: (p: never) => ({ title: (p as { text?: string }).text }),
+      },
+    };
+    const source = ((type: string) => map[type]) as SeoDefinitionSource;
+
+    const derived = deriveSeoFromDocument(
+      doc([
+        node(
+          "1",
+          "plugin/empty",
+          {},
+          {
+            children: [node("2", "core/heading", { text: "Buried" })],
+          }
+        ),
+        node("3", "core/heading", { text: "Real" }),
+      ]),
+      source,
+      visible
+    );
+
+    expect(derived.title).toBe("Real");
+  });
+
+  it("treats a block whose rendersNothing throws as drawing", () => {
+    // The safe direction: assuming otherwise removes a block that IS on the
+    // page from everything derived about it.
+    const map: Record<string, unknown> = {
+      "plugin/hostile": {
+        rendersNothing: () => {
+          throw new Error("boom");
+        },
+        seo: () => ({ title: "Still drawn" }),
+      },
+    };
+    const source = ((type: string) => map[type]) as SeoDefinitionSource;
+
+    const derived = deriveSeoFromDocument(
+      doc([node("1", "plugin/hostile", {})]),
+      source,
+      visible
+    );
+
+    expect(derived.title).toBe("Still drawn");
+  });
+
   it("returns nothing for an empty document", () => {
     expect(deriveSeoFromDocument(doc([]), definitions(), visible)).toEqual({});
   });

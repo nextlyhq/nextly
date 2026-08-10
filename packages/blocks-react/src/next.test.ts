@@ -15,7 +15,7 @@ import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { createBlocksPage } from "./next";
+import { createBlocksPage, DEFAULT_MAX_QUERIES } from "./next";
 import type { DerivedPageSeo } from "./next";
 import { coreBlocks } from "./blocks";
 import { createBlockResolver } from "./resolver";
@@ -1219,6 +1219,25 @@ describe("createBlocksPage", () => {
     expect(props.context?.queries?.take()).toBe(true);
     expect(props.context?.queries?.take()).toBe(true);
     expect(props.context?.queries?.take()).toBe(false);
+  });
+
+  it("falls back to the default when maxQueries is not a number", async () => {
+    // `Number(process.env.MAX_QUERIES)` on an unset variable is `NaN`, and every
+    // comparison against it is false — so `remaining <= 0` never fires and the
+    // budget silently becomes unlimited. A configuration mistake would defeat
+    // the bound entirely.
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      maxQueries: Number.NaN,
+      nextly: reader({ slug: "about", content: document }),
+    });
+
+    const budget = props.context?.queries;
+    for (let i = 0; i < DEFAULT_MAX_QUERIES; i += 1) {
+      expect(budget?.take()).toBe(true);
+    }
+    expect(budget?.take()).toBe(false);
   });
 
   it("gives each render its OWN budget", async () => {

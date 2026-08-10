@@ -377,7 +377,12 @@ export const DEFAULT_MAX_QUERIES = 500;
  * on restart, which is the hardest kind to attribute.
  */
 function createQueryBudget(max: number): QueryBudget {
-  let remaining = max;
+  // `NaN` is what `Number(process.env.MAX_QUERIES)` produces for an unset or
+  // malformed variable, and every comparison against it is false — so
+  // `remaining <= 0` never fires and the budget silently becomes unlimited.
+  // That is the failure this exists to prevent, reached by a configuration
+  // mistake rather than by a document.
+  let remaining = Number.isNaN(max) ? DEFAULT_MAX_QUERIES : max;
   return {
     take: () => {
       if (remaining <= 0) return false;

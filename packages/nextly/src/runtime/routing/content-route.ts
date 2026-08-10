@@ -301,10 +301,22 @@ function isDotSegment(segment: string): boolean {
  */
 function routeScopedReader(
   instance: NextlyContentReader,
-  overrideAccess: boolean
+  overrideAccess: boolean,
+  status: "published" | "draft" | "all"
 ): NextlyContentReader {
+  // Lifecycle travels with access, because binding one and not the other leaves
+  // the same hole through a different door: an `overrideAccess: true` route —
+  // which is the documented way to make a page cacheable — reads TRUSTED, and a
+  // trusted read with no status filter returns draft rows. A callback naming the
+  // author of a published post would then embed a never-published record in a
+  // public, cached page.
   const scoped: NextlyContentReader = {
-    find: args => instance.find({ overrideAccess, user: undefined, ...args }),
+    find: args =>
+      instance.find({ overrideAccess, user: undefined, status, ...args }),
+    // No `status` here, because `findByID` does not take one: it names a single
+    // row rather than searching a set, so there is no scope to narrow. The
+    // access binding still applies, which is the half that decides whether a
+    // restricted row is readable at all.
     findByID: args =>
       instance.findByID({ overrideAccess, user: undefined, ...args }),
   };
@@ -421,7 +433,15 @@ export function createContentRoute<TNode>(
         context: {
           collection,
           slug,
-          reader: routeScopedReader(getInstance(), overrideAccess || draft),
+          // The scope `resolveContent` actually resolved with, restated so the
+          // reader handed on cannot be wider than the read that produced the
+          // entry: an explicit `status` wins, and a draft request otherwise
+          // widens to `all` exactly as it does inside.
+          reader: routeScopedReader(
+            getInstance(),
+            overrideAccess || draft,
+            config.status ?? (draft ? "all" : "published")
+          ),
           ...(config.locale ? { locale: config.locale } : {}),
         },
       };

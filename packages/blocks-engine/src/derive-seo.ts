@@ -57,6 +57,8 @@ export type SeoDefinitionSource = (type: string) =>
       slots?: Record<string, unknown>;
       /** Slots the block may decline to render. See `conditionalSlots`. */
       conditionalSlots?: readonly string[];
+      /** Whether these props guarantee the block draws nothing. */
+      rendersNothing?: (props: never) => boolean;
     }
   | undefined;
 
@@ -159,6 +161,27 @@ function offerOf(
 }
 
 /**
+ * Whether a block says these props make it draw nothing.
+ *
+ * Only `true` counts. A definition that does not answer, answers with something
+ * other than a boolean, or throws is treated as drawing — the safe direction,
+ * since assuming otherwise removes a block that IS on the page from everything
+ * derived about it.
+ */
+function drawsNothing(
+  node: BlockNode,
+  definitions: SeoDefinitionSource
+): boolean {
+  const predicate = definitions(node.type)?.rendersNothing;
+  if (typeof predicate !== "function") return false;
+  try {
+    return predicate(node.props as never) === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Derive title, description and image from a document's blocks.
  *
  * Returns only the fields something answered for, so the result can be spread
@@ -190,6 +213,19 @@ export function deriveSeoFromDocument(
   const visit = (nodes: BlockNode[]): void => {
     for (const node of nodes) {
       if (!isVisible(node)) continue;
+
+      // A block that DECLARES it draws nothing for these props is not on the
+      // page, and neither is anything beneath it — the same reasoning that
+      // stops a gated node speaking, reached by the block's own answer rather
+      // than by the document's shape. Skipping the subtree matters as much as
+      // skipping the node: a heading inside a container that draws nothing is
+      // just as absent as the container.
+      //
+      // Guarded like every other call into a definition: this runs on the
+      // metadata path where a throw fails the whole route, and a non-boolean
+      // answer means the block did not really answer. Both degrade to "draws",
+      // which costs unused work rather than a missing page.
+      if (drawsNothing(node, definitions)) continue;
 
       const offer = offerOf(node, definitions);
       if (offer) {
