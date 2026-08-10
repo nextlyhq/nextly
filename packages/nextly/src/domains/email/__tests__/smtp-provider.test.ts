@@ -11,6 +11,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+import { smtpDefinition } from "../services/providers/built-in-definitions";
 import { createSmtpProvider } from "../services/providers/smtp-provider";
 
 // ── Hoist mock fns so they're available before any imports ────────────────
@@ -236,5 +237,55 @@ describe("createSmtpProvider", () => {
     await adapter.send(BASE_OPTIONS);
 
     expect(mockCreateTransport).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("the SMTP descriptor agrees with the SMTP parser", () => {
+  // The descriptor is what a catalog-driven client validates against, and
+  // `parseConfig` is what the server enforces. Where they disagree the failure
+  // has no visible cause: the client refuses input the server would have taken,
+  // and the refusal names a rule the server does not hold.
+  const credentialFields = ["auth.user", "auth.pass"];
+
+  it("does not declare conditionally-required credentials as required", () => {
+    for (const name of credentialFields) {
+      const field = smtpDefinition.configFields.find(
+        entry => entry.name === name
+      );
+      // `required` can only state an ABSOLUTE rule. These credentials are
+      // demanded for a remote host and accepted empty for a loopback one, so
+      // declaring them required would encode the stricter half as if it were
+      // the whole rule.
+      expect({ name, required: field?.required }).toEqual({
+        name,
+        required: undefined,
+      });
+    }
+  });
+
+  it("accepts the documented loopback setup with empty credentials", () => {
+    // docs/guides/email.mdx configures Mailpit with SMTP_USER= and SMTP_PASS=
+    // empty. A client validating from the descriptor must be able to submit it.
+    expect(() =>
+      smtpDefinition.validateConfig({
+        host: "localhost",
+        port: 1025,
+        secure: false,
+        auth: { user: "", pass: "" },
+      })
+    ).not.toThrow();
+  });
+
+  it("still refuses empty credentials against a remote host", () => {
+    // The positive control for the test above: loosening the descriptor must
+    // not loosen the rule, only move where it is stated.
+    expect(() =>
+      smtpDefinition.validateConfig({
+        host: "smtp.example.com",
+        port: 587,
+        secure: false,
+        auth: { user: "", pass: "" },
+      })
+    ).toThrow();
   });
 });

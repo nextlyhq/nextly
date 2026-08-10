@@ -30,8 +30,18 @@
 
 /**
  * Supported email provider types.
+ *
+ * Widened past the built-ins for the same reason `EmailConfig.providerConfig`
+ * is: the resolver builds every provider through the registry, so a contributed
+ * type is usable in `defineConfig` and stored in the database. Leaving this
+ * alias closed would have made two exported types disagree about which names
+ * exist — a consumer could configure `"postmark"` and then be unable to type
+ * the same value with the alias core exports for it.
+ *
+ * `(string & {})` rather than plain `string` so the literals still autocomplete;
+ * widening to `string` alone collapses the union and drops that affordance.
  */
-export type EmailProvider = "smtp" | "resend" | "sendlayer";
+export type EmailProvider = "smtp" | "resend" | "sendlayer" | (string & {});
 
 /**
  * SMTP provider configuration.

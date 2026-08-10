@@ -135,19 +135,24 @@ export const smtpDefinition: RegisteredEmailProvider = defineEmailProvider({
       default: false,
       help: "Required for port 465. Port 587 upgrades with STARTTLS instead.",
     },
+    // NOT marked required, because they are not unconditionally required:
+    // `smtpSchema` accepts empty credentials for a loopback host and demands
+    // them for a remote one. `required` can only state an absolute rule, so
+    // declaring it here would make a catalog-driven client refuse exactly the
+    // Mailpit setup this repository documents. The parser stays authoritative
+    // and reports the missing credential against `configuration.auth.*`.
     {
       name: "auth.user",
       label: "SMTP Username",
       kind: "text",
-      required: true,
-      help: "Account used to authenticate against the server.",
+      help: "Account used to authenticate against the server. May be left empty only for a local sink such as Mailpit.",
     },
     {
       name: "auth.pass",
       label: "SMTP Password",
       kind: "password",
-      required: true,
       secret: true,
+      help: "May be left empty only for a local sink such as Mailpit.",
     },
   ],
   parseConfig: input => {
