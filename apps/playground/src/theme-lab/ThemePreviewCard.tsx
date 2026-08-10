@@ -92,6 +92,7 @@ export function ThemePreviewCard({
   theme,
   size,
   mode,
+  contrastFailures,
   onApply,
   applied,
 }: {
@@ -104,6 +105,15 @@ export function ThemePreviewCard({
    * shows both, which is where a mode is actually compared.
    */
   mode?: "light" | "dark";
+  /**
+   * Measured WCAG AA misses across this theme's asserted pairings.
+   *
+   * Passed in rather than read here, so the card stays a pure function of a
+   * theme. Shown because the shortlist is chosen by eye and the cost of a
+   * choice is invisible to the eye: every tweakcn preset in the lab misses AA
+   * somewhere, and picking one without seeing the number is picking blind.
+   */
+  contrastFailures?: number;
   onApply: (id: string) => void;
   applied: boolean;
 }) {
@@ -115,7 +125,28 @@ export function ThemePreviewCard({
     <section className="overflow-hidden rounded-lg border border-[var(--nx-border)]">
       <header className="flex items-center justify-between gap-2 px-3 py-2">
         <div className="min-w-0">
-          <h3 className="truncate text-sm font-semibold">{theme.label}</h3>
+          <div className="flex items-center gap-1.5">
+            <h3 className="truncate text-sm font-semibold">{theme.label}</h3>
+            {contrastFailures !== undefined && (
+              <span
+                data-testid="contrast-score"
+                title={
+                  contrastFailures === 0
+                    ? "Passes every asserted WCAG AA pairing"
+                    : `${contrastFailures} asserted pairings fall below WCAG AA`
+                }
+                className={
+                  contrastFailures === 0
+                    ? "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--nx-success)]"
+                    : "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--nx-destructive)]"
+                }
+              >
+                {contrastFailures === 0
+                  ? "AA"
+                  : `${contrastFailures} AA misses`}
+              </span>
+            )}
+          </div>
           {!compact && (
             <p className="truncate text-xs text-[var(--nx-muted-foreground)]">
               {theme.description}

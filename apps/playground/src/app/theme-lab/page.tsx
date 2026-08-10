@@ -14,6 +14,8 @@
  */
 import { NEXTLY_THEMES } from "../../theme-lab/themes";
 
+import { Gallery } from "./Gallery";
+
 // Payload's base scale, fully achromatic (equal R/G/B at every step) --
 // https://github.com/payloadcms/payload, packages/ui base color tokens.
 const PAYLOAD_BASE = [
@@ -77,37 +79,49 @@ export default function ThemeLabBoard() {
 
   return (
     <main style={{ padding: 32, background: "#fff", color: "#111" }}>
-      <h1 style={{ font: "700 20px system-ui", marginBottom: 8 }}>
-        Palette comparison
-      </h1>
+      <h1 style={{ font: "700 20px system-ui", marginBottom: 8 }}>Theme lab</h1>
       <p
         style={{ font: "400 13px system-ui", marginBottom: 24, color: "#555" }}
       >
-        Reference only -- none of these palettes is selectable as a Nextly
-        theme. See the theme lab switcher, mounted on every /admin route, for
-        the themes that actually are.
+        The shortlisted themes, each shown on the admin primitives themes
+        actually fail on. The competitor palettes that prompted the comparison
+        are kept below.
       </p>
 
-      <Swatches
-        label="Payload -- base scale (fully achromatic, 11 steps shown)"
-        colors={PAYLOAD_BASE}
-      />
-      <Swatches
-        label="Strapi -- neutrals and primary (violet cast)"
-        colors={STRAPI}
-      />
-      <Swatches
-        label="Nextly -- current Mono, light mode"
-        colors={[
-          mono.light.background,
-          mono.light.card,
-          mono.light.muted,
-          mono.light["muted-foreground"],
-          mono.light.accent,
-          mono.light.foreground,
-          mono.light.primary,
-        ]}
-      />
+      <Gallery />
+
+      {/* Collapsed rather than deleted: it is the evidence behind "why do
+          Payload and Strapi look more colourful", and a claim quoted from
+          source stays checkable only while the source values are here. */}
+      <details style={{ marginTop: 8 }}>
+        <summary
+          style={{ font: "600 14px system-ui", cursor: "pointer", padding: 4 }}
+        >
+          Competitor palette reference (Payload / Strapi)
+        </summary>
+        <div style={{ marginTop: 16 }}>
+          <Swatches
+            label="Payload -- base scale (fully achromatic, 11 steps shown)"
+            colors={PAYLOAD_BASE}
+          />
+          <Swatches
+            label="Strapi -- neutrals and primary (violet cast)"
+            colors={STRAPI}
+          />
+          <Swatches
+            label="Nextly -- current Mono, light mode"
+            colors={[
+              mono.light.background,
+              mono.light.card,
+              mono.light.muted,
+              mono.light["muted-foreground"],
+              mono.light.accent,
+              mono.light.foreground,
+              mono.light.primary,
+            ]}
+          />
+        </div>
+      </details>
     </main>
   );
 }

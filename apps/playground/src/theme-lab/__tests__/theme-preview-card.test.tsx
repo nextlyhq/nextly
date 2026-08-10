@@ -70,6 +70,48 @@ describe("ThemePreviewCard", () => {
     );
   });
 
+  it("shows a passing theme's score as AA and a failing one's count", () => {
+    // The number is the whole point of showing it: a theme that misses AA
+    // looks fine, so a badge reading only "AA" or nothing would let a preset
+    // be chosen without its cost ever appearing.
+    const { unmount } = render(
+      <ThemePreviewCard
+        theme={mono}
+        size="gallery"
+        contrastFailures={0}
+        onApply={() => {}}
+        applied={false}
+      />
+    );
+    expect(screen.getByTestId("contrast-score").textContent).toBe("AA");
+    unmount();
+
+    render(
+      <ThemePreviewCard
+        theme={mono}
+        size="gallery"
+        contrastFailures={14}
+        onApply={() => {}}
+        applied={false}
+      />
+    );
+    expect(screen.getByTestId("contrast-score").textContent).toBe(
+      "14 AA misses"
+    );
+  });
+
+  it("omits the score badge when no measurement is supplied", () => {
+    render(
+      <ThemePreviewCard
+        theme={mono}
+        size="panel"
+        onApply={() => {}}
+        applied={false}
+      />
+    );
+    expect(screen.queryByTestId("contrast-score")).toBeNull();
+  });
+
   it("applies on click with the theme id", () => {
     const onApply = vi.fn();
     render(
