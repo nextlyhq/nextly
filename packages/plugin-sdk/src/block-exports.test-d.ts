@@ -6,6 +6,7 @@ import type {
   BlockEditorMeta,
   BlockExample,
   BlockSeoContribution,
+  BlockSeoImage,
   BlockRenderArgs,
   BlockRenderContext,
   BlockRenderResult,
@@ -25,6 +26,9 @@ expectTypeOf<BlockEditorMeta<{ text: string }>>().toBeObject();
 // author factoring that logic into a helper must not have to reach past the SDK
 // for the name of what it returns.
 expectTypeOf<BlockSeoContribution>().toBeObject();
+// The image contribution names its own type, and an author factoring candidate
+// construction into a helper needs to spell it without reaching past the SDK.
+expectTypeOf<BlockSeoImage>().not.toBeAny();
 expectTypeOf<NodeStyles>().toBeObject();
 expectTypeOf<SlotLock>().toEqualTypeOf<
   "all" | "insert" | "contentOnly" | false

@@ -1083,6 +1083,44 @@ describe("createBlocksPage", () => {
     ).resolves.toBeNull();
   });
 
+  it("percent-encodes a referenced entry's path too", async () => {
+    // The canonical was encoded earlier; this resolver returned raw text, so a
+    // button navigated to `/faq?all` while the route serves `/faq%3Fall`.
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader(
+        { slug: "about", content: document },
+        { q1: { slug: "help/faq?all" } }
+      ),
+    });
+
+    await expect(props.context?.resolveEntryPath("pages", "q1")).resolves.toBe(
+      "/help/faq%3Fall"
+    );
+  });
+
+  it("stays anonymous when reading a named media collection", async () => {
+    // On an overrideAccess route a user-sensitive afterRead hook would bake a
+    // personalized URL or alt text into the PUBLIC cached page.
+    const instance = reader(
+      { slug: "about", content: document },
+      { "66666666-6666-4666-8666-666666666666": { url: "/own.png" } }
+    ) as unknown as { findByID: ReturnType<typeof vi.fn> };
+
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: instance as never,
+      mediaCollection: "photos",
+    });
+    await props.context?.resolveMedia("66666666-6666-4666-8666-666666666666");
+
+    expect(instance.findByID).toHaveBeenCalledWith(
+      expect.objectContaining({ collection: "photos", user: undefined })
+    );
+  });
+
   it("passes the stored stylesheet through for the resolved entry", async () => {
     const styles = { css: ".a{color:red}", classes: { n1: "a" } };
     const props = await render({

@@ -38,3 +38,17 @@ export default ContentPage;
 It lives at `@nextlyhq/blocks-react/next`, so importing the renderer itself still pulls in neither Next nor the CMS. `nextly` is an optional peer dependency, and a test asserts the package root reaches no part of it.
 
 `render` and `buildMetadata` now also receive the reader the route resolved the entry through, as `context.reader`. A render that needs a second read — a referenced author, the media behind an image — no longer has to obtain an instance of its own, which on a per-tenant setup would be a different database.
+
+A page's blocks now supply its metadata when the entry's SEO fields are blank.
+
+`BlockDefinition` gains an optional `seo?(props)` returning a title, description and/or image. A block declares what it offers rather than a deriver guessing from prop names — a guessing deriver works for the core library and goes silent for every contributed block, which is backwards: a page built mostly from third-party blocks is exactly the one with nothing else to fall back on. Core heading, text and image blocks declare theirs.
+
+`createBlocksPage` gains a `metadata` hook receiving what the document said about itself:
+
+```ts
+metadata: (entry, ctx, derived) => buildMetadata(entry, { fallback: derived });
+```
+
+Each field is filled from the FIRST block that offers it, independently, so a page opening with an image and heading later takes both. The offer is synchronous by design, so generating metadata never puts a network call between a crawler and the page title; a derived media id is resolved afterward through the same resolver the rendered image uses, so the picture in a link preview and the picture on the page cannot disagree.
+
+The sitemap needed no change: `nextlySitemap` already takes a generic entries provider, and a blocks-backed collection is an ordinary collection.

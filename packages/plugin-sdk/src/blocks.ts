@@ -344,6 +344,7 @@ export type {
   BlockEditorMeta,
   BlockExample,
   BlockSeoContribution,
+  BlockSeoImage,
   BlockVariation,
   ComponentPath,
   NodeStyles,

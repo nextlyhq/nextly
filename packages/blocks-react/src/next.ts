@@ -148,6 +148,19 @@ export interface BlocksPageConfig
   ) => Metadata | Promise<Metadata>;
 }
 
+/**
+ * Percent-encode a slug path, keeping its `/` separators.
+ *
+ * Next hands this route the DECODED segments while the request used their
+ * encoded form, and a slug is ordinary stored text — so `faq?all` interpolated
+ * raw produces a path a URL consumer reads as a query. Shared by the canonical
+ * and by reference links, because a page describing itself one way and linking
+ * to itself another is the disagreement this exists to prevent.
+ */
+function encodePath(slug: string): string {
+  return slug.split("/").map(encodeURIComponent).join("/");
+}
+
 /** An empty page, for a field that exists and holds no document yet. */
 function emptyDocument(): BlockDocument {
   return { formatVersion: DOCUMENT_FORMAT_VERSION, kind: "page", nodes: [] };
@@ -223,12 +236,7 @@ async function derivePageSeo(
   styleContext: StyleCompileContext | undefined
 ): Promise<DerivedPageSeo> {
   const resolver = blocks ?? registeredBlocks();
-  // Encoded per SEGMENT, keeping the `/` separators. Next hands this route the
-  // DECODED segments while the request used their percent-encoded form, so a
-  // stored slug holding `?` or `#` — slugs are ordinary text — would otherwise
-  // produce a canonical a URL consumer reads as a query or a fragment instead
-  // of as the page's path.
-  const canonical = `/${slug.split("/").map(encodeURIComponent).join("/")}`;
+  const canonical = `/${encodePath(slug)}`;
 
   // One authoritative preparation, shared with the renderer rather than
   // restated here. Hand-copying the passes is what let metadata describe a
@@ -378,6 +386,13 @@ function mediaResolver(
           id,
           overrideAccess: true,
           disableErrors: true,
+          // Cleared for the same reason the entry and reference reads clear it:
+          // `mergeConfig` spreads the reader's defaults under the call, so an
+          // omitted `user` restores whatever identity the reader was booted
+          // with. On an `overrideAccess: true` route a user-sensitive
+          // `afterRead` hook would then bake a personalized URL or alt text
+          // into the PUBLIC cached page.
+          user: undefined,
         })
       : await mediaNamespaceOf(reader)?.findByID({ id, disableErrors: true });
     if (!record) return null;
@@ -513,7 +528,12 @@ function entryPathResolver(
     // An empty slug is the HOMEPAGE, which the content route resolves at `/`
     // and pre-renders as `{ slug: [] }`. Treating it as missing would strip the
     // destination from every button pointing at the site root.
-    return slug === "" ? "/" : `/${slug}`;
+    //
+    // Encoded per segment for the same reason the canonical is: a slug is
+    // stored TEXT, so `faq?all` returned raw is read by the browser as a path
+    // plus a query. The route serves that entry at `/faq%3Fall`, so the button
+    // would navigate somewhere the site does not answer.
+    return slug === "" ? "/" : `/${encodePath(slug)}`;
   };
 }
 
