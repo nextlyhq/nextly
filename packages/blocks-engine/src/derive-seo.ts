@@ -17,7 +17,6 @@
  */
 import type { BlockSeoContribution } from "./block";
 import type { BlockDocument, BlockNode } from "./document";
-import { walkNodes } from "./tree";
 
 /**
  * What a walk over a document produced.
@@ -30,6 +29,25 @@ export interface DerivedSeo {
   description?: string;
   image?: string[];
 }
+
+/**
+ * Whether a node is part of the output being described.
+ *
+ * REQUIRED, and required for a reason. A document can carry nodes the server
+ * deliberately omits — `visibility.conditions` gates personalised and
+ * status-restricted content — and deriving a page's TITLE from one publishes
+ * the withheld text on every search result and link preview. That is strictly
+ * worse than publishing its colour in a stylesheet, which is the same leak the
+ * style compiler already had to close.
+ *
+ * Injected rather than decided here, and not optional. The rule lives in one
+ * place already (`isUnconditional`, beside the renderer's pruning pass) and it
+ * fails closed on malformed shapes; a second copy in this package would be a
+ * second answer that can drift, and a DEFAULT would be a safe-looking call that
+ * silently skips the check. Making it an argument means a caller cannot reach
+ * this function without having answered the question.
+ */
+export type NodeVisibilityTest = (node: BlockNode) => boolean;
 
 /** Looks a block definition up by type. */
 export type SeoDefinitionSource = (type: string) =>
@@ -92,29 +110,46 @@ function offerOf(
  */
 export function deriveSeoFromDocument(
   document: BlockDocument,
-  definitions: SeoDefinitionSource
+  definitions: SeoDefinitionSource,
+  isVisible: NodeVisibilityTest
 ): DerivedSeo {
   const derived: DerivedSeo = {};
 
-  walkNodes(document.nodes, node => {
-    // Every field already filled: nothing further to learn, and the walk is
-    // over a tree whose size the document caps rather than a bounded list.
-    if (
-      derived.title !== undefined &&
-      derived.description !== undefined &&
-      derived.image !== undefined
-    ) {
-      return;
+  const filled = (): boolean =>
+    derived.title !== undefined &&
+    derived.description !== undefined &&
+    derived.image !== undefined;
+
+  // Walked here rather than through `walkNodes`, which descends into every
+  // slot unconditionally. A gated node takes its whole SUBTREE out of the
+  // output, so a visible-looking child of a hidden container must not speak for
+  // a page it never reaches — and stopping the descent is the only way to say
+  // that. An ancestor check at each node would be the same rule paid for
+  // repeatedly, and one that only looked at the immediate parent would miss a
+  // gated grandparent entirely.
+  const visit = (nodes: BlockNode[]): void => {
+    for (const node of nodes) {
+      // Cheap exit once nothing is left to learn. The tree is bounded by the
+      // document's own caps, but a long page still walks every node otherwise.
+      if (filled()) return;
+      if (!isVisible(node)) continue;
+
+      const offer = offerOf(node, definitions);
+      if (offer) {
+        derived.title ??= usable(offer.title);
+        derived.description ??= usable(offer.description);
+        if (derived.image === undefined) {
+          const offered = candidates(offer.image);
+          if (offered.length > 0) derived.image = offered;
+        }
+      }
+
+      if (node.slots) {
+        for (const children of Object.values(node.slots)) visit(children);
+      }
     }
-    const offer = offerOf(node, definitions);
-    if (!offer) return;
-    derived.title ??= usable(offer.title);
-    derived.description ??= usable(offer.description);
-    if (derived.image === undefined) {
-      const offered = candidates(offer.image);
-      if (offered.length > 0) derived.image = offered;
-    }
-  });
+  };
+  visit(document.nodes);
 
   // `??=` assigns `undefined` when the offer had nothing, which would leave the
   // key present and defeat spreading over a caller's fallbacks. Dropped here

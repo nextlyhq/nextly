@@ -44,7 +44,7 @@ import { migrationSourceFor, registeredBlocks } from "./resolver";
 import type { BlockResolver } from "./resolver";
 import { sanitizeDocument } from "./sanitize";
 import type { PageStyles } from "./styles";
-import { pruneHiddenNodes } from "./visibility";
+import { isUnconditional, pruneHiddenNodes } from "./visibility";
 
 /**
  * Marker for the subpath's existence and its build wiring.
@@ -246,9 +246,14 @@ async function derivePageSeo(
     }).doc
   );
 
+  // The same predicate the pruning pass uses, passed rather than re-decided.
+  // Belt and braces with the prune above — the tree here is already pruned —
+  // but the deriver requires it precisely so that a caller reaching it by
+  // another route cannot skip the question.
   const { image: imageCandidates, ...text } = deriveSeoFromDocument(
     prepared,
-    type => resolver.get(type)
+    type => resolver.get(type),
+    isUnconditional
   );
   const image = await firstUsableImage(imageCandidates, resolveMedia);
   return image === undefined

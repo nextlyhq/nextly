@@ -19,6 +19,13 @@ function node(
   return n;
 }
 
+/** The rule the renderer uses: a node with conditions is withheld. */
+function visible(node: BlockNode): boolean {
+  const conditions = (node.visibility as { conditions?: unknown } | undefined)
+    ?.conditions;
+  return !Array.isArray(conditions) || conditions.length === 0;
+}
+
 function doc(nodes: BlockNode[]): BlockDocument {
   return { formatVersion: DOCUMENT_FORMAT_VERSION, kind: "page", nodes };
 }
@@ -56,7 +63,8 @@ describe("deriveSeoFromDocument", () => {
         node("2", "core/paragraph", { text: "Plans for every team." }),
         node("3", "core/image", { mediaId: "m1" }),
       ]),
-      definitions()
+      definitions(),
+      visible
     );
 
     expect(derived).toEqual({
@@ -75,7 +83,8 @@ describe("deriveSeoFromDocument", () => {
         node("1", "core/image", { mediaId: "hero" }),
         node("2", "core/heading", { text: "About" }),
       ]),
-      definitions()
+      definitions(),
+      visible
     );
 
     expect(derived).toEqual({ title: "About", image: ["hero"] });
@@ -87,7 +96,8 @@ describe("deriveSeoFromDocument", () => {
         node("1", "core/heading", { text: "First" }),
         node("2", "core/heading", { text: "Second" }),
       ]),
-      definitions()
+      definitions(),
+      visible
     );
 
     expect(derived.title).toBe("First");
@@ -105,7 +115,8 @@ describe("deriveSeoFromDocument", () => {
           }
         ),
       ]),
-      definitions()
+      definitions(),
+      visible
     );
 
     expect(derived.title).toBe("Nested");
@@ -116,7 +127,8 @@ describe("deriveSeoFromDocument", () => {
     // holding `undefined` would erase a value that was already known.
     const derived = deriveSeoFromDocument(
       doc([node("1", "core/heading", { text: "Only a title" })]),
-      definitions()
+      definitions(),
+      visible
     );
 
     expect(Object.keys(derived)).toEqual(["title"]);
@@ -129,7 +141,8 @@ describe("deriveSeoFromDocument", () => {
         node("1", "core/heading", { text: "   " }),
         node("2", "core/heading", { text: "Real" }),
       ]),
-      definitions()
+      definitions(),
+      visible
     );
 
     expect(derived.title).toBe("Real");
@@ -138,7 +151,8 @@ describe("deriveSeoFromDocument", () => {
   it("trims what it takes", () => {
     const derived = deriveSeoFromDocument(
       doc([node("1", "core/heading", { text: "  Padded  " })]),
-      definitions()
+      definitions(),
+      visible
     );
 
     expect(derived.title).toBe("Padded");
@@ -157,7 +171,8 @@ describe("deriveSeoFromDocument", () => {
         "plugin/hostile": () => {
           throw new Error("boom");
         },
-      })
+      }),
+      visible
     );
 
     expect(derived.title).toBe("Still here");
@@ -169,7 +184,8 @@ describe("deriveSeoFromDocument", () => {
         node("1", "plugin/unknown", { text: "invisible" }),
         node("2", "core/heading", { text: "Known" }),
       ]),
-      definitions()
+      definitions(),
+      visible
     );
 
     expect(derived.title).toBe("Known");
@@ -184,7 +200,8 @@ describe("deriveSeoFromDocument", () => {
         "plugin/hero": (p: never) => ({
           title: (p as { headline?: string }).headline,
         }),
-      })
+      }),
+      visible
     );
 
     expect(derived.title).toBe("Contributed");
@@ -193,7 +210,8 @@ describe("deriveSeoFromDocument", () => {
   it("normalizes a single image offer into a candidate list", () => {
     const derived = deriveSeoFromDocument(
       doc([node("1", "core/image", { mediaId: "m1" })]),
-      definitions()
+      definitions(),
+      visible
     );
 
     expect(derived.image).toEqual(["m1"]);
@@ -206,7 +224,8 @@ describe("deriveSeoFromDocument", () => {
       doc([node("1", "plugin/pic", {})]),
       definitions({
         "plugin/pic": () => ({ image: ["m1", "/fallback.png"] }),
-      })
+      }),
+      visible
     );
 
     expect(derived.image).toEqual(["m1", "/fallback.png"]);
@@ -217,7 +236,8 @@ describe("deriveSeoFromDocument", () => {
       doc([node("1", "plugin/pic", {})]),
       definitions({
         "plugin/pic": () => ({ image: ["", "  ", "/real.png"] }),
-      })
+      }),
+      visible
     );
 
     expect(derived.image).toEqual(["/real.png"]);
@@ -229,13 +249,65 @@ describe("deriveSeoFromDocument", () => {
         node("1", "plugin/pic", {}),
         node("2", "core/image", { mediaId: "m2" }),
       ]),
-      definitions({ "plugin/pic": () => ({ image: [] }) })
+      definitions({ "plugin/pic": () => ({ image: [] }) }),
+      visible
     );
 
     expect(derived.image).toEqual(["m2"]);
   });
 
+  it("takes nothing from a gated node", () => {
+    // A conditioned node is omitted from server output, so deriving a page
+    // TITLE from it publishes the withheld text on every search result.
+    const gated = node("1", "core/heading", { text: "Members only" });
+    gated.visibility = {
+      conditions: [[{ field: "tier", op: "eq", value: "x" }]],
+    };
+
+    const derived = deriveSeoFromDocument(
+      doc([gated, node("2", "core/heading", { text: "Public" })]),
+      definitions(),
+      visible
+    );
+
+    expect(derived.title).toBe("Public");
+  });
+
+  it("takes nothing from BENEATH a gated node either", () => {
+    // The whole subtree leaves the output, so a visible-looking child of a
+    // hidden container must not speak for a page it never reaches. An
+    // immediate-parent check would miss a gated GRANDparent.
+    const gated = node(
+      "1",
+      "core/box",
+      {},
+      {
+        children: [
+          node(
+            "2",
+            "core/box",
+            {},
+            {
+              children: [node("3", "core/heading", { text: "Buried" })],
+            }
+          ),
+        ],
+      }
+    );
+    gated.visibility = {
+      conditions: [[{ field: "tier", op: "eq", value: "x" }]],
+    };
+
+    const derived = deriveSeoFromDocument(
+      doc([gated, node("4", "core/heading", { text: "Public" })]),
+      definitions(),
+      visible
+    );
+
+    expect(derived.title).toBe("Public");
+  });
+
   it("returns nothing for an empty document", () => {
-    expect(deriveSeoFromDocument(doc([]), definitions())).toEqual({});
+    expect(deriveSeoFromDocument(doc([]), definitions(), visible)).toEqual({});
   });
 });
