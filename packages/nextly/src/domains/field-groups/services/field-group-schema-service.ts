@@ -961,6 +961,50 @@ export class FieldGroupSchemaService {
     return sqliteText(colName);
   }
 
+  /**
+   * Every identifier a create would put in front of the database, for this field group.
+   *
+   * 🔴 A slug bound cannot make this safe on its own, and that is not a matter of picking a smaller
+   * number. A field's index is named `idx_<tableName>_<columnName>`, so the longest identifier
+   * depends on the slug AND on the longest field name — two independent inputs. A slug at any bound
+   * can still be paired with a field name that pushes its index past the limit.
+   *
+   * A method rather than a free function because it reads the same `toSnakeCase` and foreign-key
+   * predicate the rendering above uses. Deriving the names any other way would be a second
+   * implementation of the naming, drifting the moment either side changed.
+   *
+   * Returned rather than validated here so the caller decides what an over-long name means: this
+   * module renders SQL and does not own the product's error vocabulary.
+   */
+  generatedIdentifiers(
+    tableName: string,
+    fields: FieldConfig[],
+    options: { localized?: boolean } = {}
+  ): string[] {
+    const names = [
+      tableName,
+      `${STORAGE_FORMAT.indexPrefix}${tableName}_parent`,
+    ];
+
+    if (options.localized === true) {
+      names.push(`${tableName}${STORAGE_FORMAT.companionSuffix}`);
+    }
+
+    for (const field of fields) {
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
+      if (!("name" in field) || !field.name) continue;
+      const indexed =
+        ("index" in field && field.index === true) ||
+        this.fieldHasForeignKey(field);
+      if (!indexed) continue;
+      names.push(
+        `${STORAGE_FORMAT.indexPrefix}${tableName}_${this.toSnakeCase(field.name)}`
+      );
+    }
+
+    return names;
+  }
+
   private fieldHasForeignKey(field: DataFieldConfig): boolean {
     if (!isRelationshipField(field) && !isUploadField(field)) return false;
     return (
@@ -1153,8 +1197,17 @@ export class FieldGroupSchemaService {
  * Computed from the same constants the names are built from, so a change to either prefix or to the
  * suffix moves this bound with it instead of leaving a number behind that used to be right.
  */
+/**
+ * The longest identifier every supported dialect stores intact.
+ *
+ * PostgreSQL's 63 rather than MySQL's 64 because it is the tighter budget AND its failure is the
+ * worse one: PostgreSQL does not reject an over-long identifier, it silently TRUNCATES it, leaving
+ * an object under a name nothing else can address.
+ */
+export const MAX_IDENTIFIER_LENGTH = 63;
+
 export const MAX_FIELD_GROUP_SLUG_LENGTH =
-  63 -
+  MAX_IDENTIFIER_LENGTH -
   STORAGE_FORMAT.indexPrefix.length -
   STORAGE_FORMAT.tablePrefix.length -
   "_parent".length;

@@ -107,7 +107,8 @@ export class FieldGroupMetadataService {
   async createFieldGroup(
     input: CreateFieldGroupInput
   ): Promise<CreateFieldGroupResult> {
-    // 0. REFUSE a table another field group owns, before anything is executed.
+    // 0. REFUSE what cannot be provisioned, before anything is executed.
+    await this.assertIdentifiersFit(input);
     await this.assertTableUnowned(input);
 
     // 1. PLAN, before anything is persisted or executed. The generator validates as well as
@@ -170,6 +171,49 @@ export class FieldGroupMetadataService {
       STORAGE_FORMAT.columns.type,
       input.localized === true
     );
+  }
+
+  /**
+   * Refuse a create whose generated names the database would not store intact.
+   *
+   * 🔴 Checked over the NAMES rather than over the slug, because the slug is not the only input.
+   * A field's index is named `idx_<tableName>_<columnName>`, so the longest identifier depends on
+   * the slug AND the longest indexed field name — and no bound on one can constrain the other. A
+   * slug inside its limit paired with `authorId` still produces a 66-character index.
+   *
+   * Refused BEFORE any DDL because the failure is otherwise partial and silent-ish: the table and
+   * the parent index are created, the field index fails, and the caller gets back a record whose
+   * migration is recorded failed. Nothing is corrupted, but a field group exists that nothing can
+   * query, and the request that made it reported a success shape.
+   *
+   * Here rather than in a transport for the same reason the ownership check is: the mounted route
+   * bounded its slug and the other two transports did not, which is this service's founding defect
+   * reappearing one level up.
+   */
+  private async assertIdentifiersFit(
+    input: CreateFieldGroupInput
+  ): Promise<void> {
+    const { FieldGroupSchemaService, MAX_IDENTIFIER_LENGTH } = await import(
+      "./field-group-schema-service"
+    );
+
+    const tooLong = new FieldGroupSchemaService(this.dialect)
+      .generatedIdentifiers(input.tableName, input.fields, {
+        localized: input.localized === true,
+      })
+      .filter(name => name.length > MAX_IDENTIFIER_LENGTH);
+
+    if (tooLong.length === 0) return;
+
+    throw NextlyError.validation({
+      errors: tooLong.map(name => ({
+        path: "slug",
+        code: "IDENTIFIER_TOO_LONG",
+        // The offending NAME, not just its length: the caller cannot otherwise tell which of the
+        // slug and a field name to shorten.
+        message: `Generated database identifier "${name}" is ${name.length} characters; the limit is ${MAX_IDENTIFIER_LENGTH}. Shorten the field group's slug or the field name it derives from.`,
+      })),
+    });
   }
 
   /**

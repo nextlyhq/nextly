@@ -192,3 +192,57 @@ describe("a create that loses the race changes nothing", () => {
     expect(bound).toEqual(["comp_hero"]);
   });
 });
+
+/**
+ * Names the database would not store intact are refused before anything runs.
+ *
+ * A slug bound cannot cover this. The generator names a field's index `idx_<tableName>_<columnName>`,
+ * so the longest identifier depends on the slug AND the longest indexed field name — two independent
+ * inputs, neither of which constrains the other. A slug inside its own limit, paired with an ordinary
+ * field name, still produces an index name past what MySQL accepts and PostgreSQL stores.
+ *
+ * The failure it prevents is a partial one: the table and its parent index are created, the field
+ * index fails, and the caller receives a record whose migration is recorded failed — a field group
+ * that exists and cannot be queried, made by a request that returned a success shape.
+ */
+describe("a create whose generated names would not fit is refused", () => {
+  const longSlugTable = `comp_${"a".repeat(47)}`;
+
+  it("counts the field's index name, not only the slug", async () => {
+    const registry = registryDouble();
+    const adapter = adapterDouble(async () => true);
+
+    // The slug is AT its own bound — `comp_<47>` is 52, and its parent index is exactly 63. What
+    // pushes it over is the field: `idx_comp_<47>_author_id` is 66.
+    await expect(
+      serviceOver(registry, adapter).createFieldGroup({
+        ...INPUT,
+        tableName: longSlugTable,
+        fields: [{ name: "authorId", type: "text", index: true }],
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    // Before any DDL, which is the whole point: a refusal that has already run statements leaves
+    // exactly the half-made field group this exists to prevent.
+    expect(adapter.executeQuery).not.toHaveBeenCalled();
+    expect(registry.registerComponent).not.toHaveBeenCalled();
+  });
+
+  it("allows the same slug when no field derives a longer name", async () => {
+    // The positive control. Without it, a rule that rejected every long slug would satisfy the case
+    // above while refusing creates that are perfectly legal.
+    const registry = registryDouble();
+    const adapter = adapterDouble(async () => true);
+
+    const { migrationStatus } = await serviceOver(
+      registry,
+      adapter
+    ).createFieldGroup({
+      ...INPUT,
+      tableName: longSlugTable,
+      fields: [{ name: "body", type: "text" }],
+    });
+
+    expect(migrationStatus).toBe("applied");
+  });
+});
