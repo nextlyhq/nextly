@@ -218,10 +218,23 @@ describe("colours close to black", () => {
     // At this lightness the channel VALUES are themselves near zero, so a tolerance chosen for
     // colours near white accepted a materially negative channel. The final clamp then moved it,
     // and the hue this function exists to preserve came back 68 degrees away.
-    const asked = { l: 0.01, c: 0.5, h: 98 };
-    const shown = rgbToOklch(oklchToRgb(asked));
-    const drift = Math.abs(((shown.h - asked.h + 540) % 360) - 180);
-    expect(drift).toBeLessThan(1);
+    for (const l of [0.01, 0.001, 0.0001]) {
+      const asked = { l, c: 0.5, h: 98 };
+      const shown = rgbToOklch(oklchToRgb(asked));
+      const drift = Math.abs(((shown.h - asked.h + 540) % 360) - 180);
+      expect(
+        drift,
+        `hue drifted ${drift.toFixed(2)} degrees at l=${l}`
+      ).toBeLessThan(1);
+    }
+  });
+
+  it("returns an achromatic colour where no chromatic one exists", () => {
+    // Below a certain lightness the gamut contains nothing but near-black, so there is no hue to
+    // keep. Reporting one would be the lie; coming back achromatic is the honest answer, and the
+    // test says so rather than asserting a hue that cannot be represented.
+    const shown = rgbToOklch(oklchToRgb({ l: 0.000001, c: 0.5, h: 98 }));
+    expect(shown.c).toBeLessThan(0.001);
   });
 
   it("produces channels that are genuinely inside the gamut", () => {
