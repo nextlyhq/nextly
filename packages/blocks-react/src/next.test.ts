@@ -37,6 +37,21 @@ function reader(
   entry: Record<string, unknown>,
   records: Record<string, Record<string, unknown>> = {}
 ) {
+  // Records as a reader actually returns them: the id is a FIELD on the row,
+  // not merely the key it was stored under. A double that omitted it would
+  // certify a caller that can never identify which row answered.
+  const rows: Record<string, unknown>[] = Object.entries(records).map(
+    ([id, record]) => ({ id, ...record })
+  );
+
+  // The reader owns lifecycle filtering, so the double has to as well — one
+  // that ignored `status` would certify a path the product filters out.
+  const hidden = (row: Record<string, unknown>, status?: string): boolean =>
+    status !== undefined &&
+    status !== "all" &&
+    typeof row.status === "string" &&
+    row.status !== status;
+
   return {
     find: vi.fn(
       async ({
@@ -45,24 +60,31 @@ function reader(
         status,
       }: {
         collection: string;
-        where?: { id?: { equals?: string } };
+        where?: Record<string, { equals?: unknown }>;
         status?: string;
       }) => {
-        // A lookup BY ID is a reference resolution; anything else is the
-        // route resolving its own path, or a shadowing probe.
+        // A lookup BY ID is a reference resolution.
         const byId = where?.id?.equals;
-        if (byId !== undefined) {
+        if (typeof byId === "string") {
           const found = records[byId];
-          // The reader owns lifecycle filtering now, so the double has to as
-          // well — one that ignored `status` would certify a path the product
-          // filters out.
-          const hidden =
-            found !== undefined &&
-            status !== undefined &&
-            status !== "all" &&
-            typeof found.status === "string" &&
-            found.status !== status;
-          return { items: found && !hidden ? [found] : [], meta: {} };
+          return {
+            items:
+              found && !hidden(found, status) ? [{ id: byId, ...found }] : [],
+            meta: {},
+          };
+        }
+
+        // Any other equality is a lookup BY SLUG — the route resolving its own
+        // path, or the reference resolver asking which entry a slug opens. A
+        // real reader answers from the stored rows, so this does too; answering
+        // it with the route's page regardless of the value would certify a
+        // resolver that never checks the slug it was handed.
+        const [field, condition] = Object.entries(where ?? {})[0] ?? [];
+        if (field !== undefined) {
+          const match = rows.find(
+            row => row[field] === condition?.equals && !hidden(row, status)
+          );
+          if (match) return { items: [match], meta: {} };
         }
         return { items: collection === "pages" ? [entry] : [], meta: {} };
       }
@@ -808,10 +830,20 @@ describe("createBlocksPage", () => {
     // A status-LESS collection: the reader's scope is a no-op, so it answers
     // regardless of what the row's own `status` field happens to say.
     instance.find = vi.fn(
-      async ({ where }: { where?: { id?: { equals?: string } } }) =>
-        where?.id?.equals === "a1"
-          ? { items: [{ slug: "archive", status: "archived" }], meta: {} }
-          : { items: [{ slug: "about", content: document }], meta: {} }
+      async ({ where }: { where?: Record<string, { equals?: unknown }> }) => {
+        const archived = { id: "a1", slug: "archive", status: "archived" };
+        // Answers by id AND by slug, because the product asks both ways — and
+        // answers both regardless of the requested lifecycle scope, which is
+        // exactly what a status-LESS collection does.
+        if (where?.id?.equals === "a1") return { items: [archived], meta: {} };
+        if (where?.slug?.equals === "archive") {
+          return { items: [archived], meta: {} };
+        }
+        return {
+          items: [{ id: "p1", slug: "about", content: document }],
+          meta: {},
+        };
+      }
     );
 
     const props = await render({
@@ -956,6 +988,129 @@ describe("createBlocksPage", () => {
     await route.generateMetadata({ params: { slug: ["help", "faq?all"] } });
 
     expect(seen?.canonical).toBe("/help/faq%3Fall");
+  });
+
+  it("percent-encodes a dot segment so the canonical cannot resolve away", async () => {
+    // `encodeURIComponent` leaves `.` and `..` alone, and a URL consumer
+    // RESOLVES them: a canonical of `/pages/../admin` names `/admin`, a route
+    // this page has nothing to do with. Kept literal instead.
+    let seen: DerivedPageSeo | undefined;
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      blocks: coreResolver(),
+      nextly: reader({ slug: "pages/../admin", content: document }),
+      metadata: (_e, _c, derived) => {
+        seen = derived;
+        return {};
+      },
+    });
+
+    await route.generateMetadata({
+      params: { slug: ["pages", "..", "admin"] },
+    });
+
+    expect(seen?.canonical).toBe("/pages/%2E%2E/admin");
+  });
+
+  it("gives no path for a referenced slug holding a dot segment", async () => {
+    // A link may simply be omitted, so it is refused rather than encoded: no
+    // link beats one a browser resolves to `/admin`. The reserved-path check
+    // cannot catch this, because it reads the slug BEFORE that resolution.
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader(
+        { slug: "about", content: document },
+        { sneaky: { slug: "pages/../admin" } }
+      ),
+    });
+
+    await expect(
+      props.context?.resolveEntryPath("pages", "sneaky")
+    ).resolves.toBeNull();
+  });
+
+  it("gives no path when a hook rewrote the slug the route matches on", async () => {
+    // `resolveContent` matches the STORED column, while this read returns the
+    // post-`afterRead` value. A hook rewriting `about` to `public/about` would
+    // otherwise emit `/public/about`, which this same route answers with
+    // `notFound()`.
+    const instance = reader({
+      slug: "about",
+      content: document,
+    }) as unknown as {
+      find: ReturnType<typeof vi.fn>;
+    };
+    instance.find = vi.fn(
+      async ({ where }: { where?: Record<string, { equals?: unknown }> }) => {
+        // By id: the hook has already run, so the slug reads as rewritten.
+        if (where?.id?.equals === "p9") {
+          return { items: [{ id: "p9", slug: "public/about" }], meta: {} };
+        }
+        // By slug: the STORED column still says `about`, so nothing answers to
+        // the rewritten value.
+        if (where?.slug?.equals === "about") {
+          return {
+            items: [{ id: "p9", slug: "about", content: document }],
+            meta: {},
+          };
+        }
+        return { items: [], meta: {} };
+      }
+    );
+
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: instance as never,
+    });
+
+    await expect(
+      props.context?.resolveEntryPath("pages", "p9")
+    ).resolves.toBeNull();
+  });
+
+  it("treats a blank media URL as unresolved", async () => {
+    // A record with an empty URL would otherwise be PREFERRED over the block's
+    // own `src`, and `<img src="">` re-requests the current page in some
+    // browsers; metadata would stop here rather than try the next candidate.
+    const blank = "99999999-9999-4999-8999-999999999999";
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader(
+        { slug: "about", content: document },
+        { [blank]: { url: "   " } }
+      ),
+    });
+
+    await expect(props.context?.resolveMedia(blank)).resolves.toBeNull();
+  });
+
+  it("reads a named media collection in the route's locale", async () => {
+    // A named collection is an ordinary collection, so its URL and alt fields
+    // can be localized. Omitting the locale reads the DEFAULT locale's record
+    // on a route configured for another one.
+    const instance = reader({
+      slug: "about",
+      content: document,
+    }) as unknown as {
+      findByID: ReturnType<typeof vi.fn>;
+    };
+
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: instance as never,
+      mediaCollection: "photos",
+      locale: "fr",
+    });
+    await props.context?.resolveMedia("66666666-6666-4666-8666-666666666666");
+
+    expect(instance.findByID).toHaveBeenCalledWith(
+      expect.objectContaining({ collection: "photos", locale: "fr" })
+    );
   });
 
   it("takes the earliest usable image, not the fastest lookup", async () => {

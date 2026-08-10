@@ -134,6 +134,14 @@ export function prepareDocumentForRead(
   const limits = args.limits ?? args.styleContext?.limits ?? DEFAULT_LIMITS;
   const sanitized = sanitizeDocument(document, limits);
   const { doc } = migrateDocument(sanitized, migrationSourceFor(args.resolver));
-  const visible = dedupeNodeIds(pruneHiddenNodes(doc));
+  // The predicate matters as much as the pass: a placeholder replaces its whole
+  // subtree, so a child under one holds no address on the page. Deduping without
+  // it lets that unreachable child RESERVE an id and drop the later node that
+  // reuses it — and the placeholder prune then removes the reserving parent too,
+  // leaving neither node. The renderer keeps the later node, so the two readers
+  // would describe different pages.
+  const visible = dedupeNodeIds(pruneHiddenNodes(doc), node =>
+    rendersOwnMarkup(node, args.resolver)
+  );
   return pruneKnownPlaceholders(visible, args.resolver);
 }

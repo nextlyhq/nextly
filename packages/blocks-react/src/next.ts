@@ -158,7 +158,34 @@ export interface BlocksPageConfig
  * to itself another is the disagreement this exists to prevent.
  */
 function encodePath(slug: string): string {
-  return slug.split("/").map(encodeURIComponent).join("/");
+  return slug
+    .split("/")
+    .map(segment =>
+      // `encodeURIComponent` leaves `.` and `..` untouched, and a URL consumer
+      // RESOLVES those away — `/pages/../admin` reads as `/admin`, a different
+      // route this page has nothing to do with. Percent-encoding them keeps
+      // them literal segments, which is what a stored slug holding one means.
+      isDotSegment(segment)
+        ? segment.replace(/\./g, "%2E")
+        : encodeURIComponent(segment)
+    )
+    .join("/");
+}
+
+/** Whether a path segment is one a URL consumer resolves away. */
+function isDotSegment(segment: string): boolean {
+  return segment === "." || segment === "..";
+}
+
+/**
+ * The path a stored slug renders at.
+ *
+ * An empty slug is the HOMEPAGE, which the content route resolves at `/` and
+ * pre-renders as `{ slug: [] }`. Treating it as missing would strip the
+ * destination from every button pointing at the site root.
+ */
+function emitPath(slug: string): string {
+  return slug === "" ? "/" : `/${encodePath(slug)}`;
 }
 
 /** An empty page, for a field that exists and holds no document yet. */
@@ -236,7 +263,7 @@ async function derivePageSeo(
   styleContext: StyleCompileContext | undefined
 ): Promise<DerivedPageSeo> {
   const resolver = blocks ?? registeredBlocks();
-  const canonical = `/${encodePath(slug)}`;
+  const canonical = emitPath(slug);
 
   // One authoritative preparation, shared with the renderer rather than
   // restated here. Hand-copying the passes is what let metadata describe a
@@ -393,11 +420,21 @@ function mediaResolver(
           // `afterRead` hook would then bake a personalized URL or alt text
           // into the PUBLIC cached page.
           user: undefined,
+          // A named collection is an ordinary collection, so its URL and alt
+          // fields can be localized. Omitting the locale reads the DEFAULT
+          // one's record on a route configured for another — the wrong file, or
+          // alt text in the wrong language. The entry and reference reads pass
+          // it for the same reason.
+          ...(config.locale ? { locale: config.locale } : {}),
         })
       : await mediaNamespaceOf(reader)?.findByID({ id, disableErrors: true });
     if (!record) return null;
     const { url, altText, width, height } = record;
-    if (typeof url !== "string") return null;
+    // Blank counts as unresolved, not as resolved-to-nothing. A record with an
+    // empty URL would otherwise be preferred over the block's own `src`, and an
+    // `<img src="">` re-requests the current page in some browsers; metadata
+    // would likewise stop here instead of trying the next candidate.
+    if (typeof url !== "string" || url.trim() === "") return null;
     return {
       url,
       ...(typeof altText === "string" ? { alt: altText } : {}),
@@ -497,21 +534,33 @@ function entryPathResolver(
     // instead lead into a route the application owns.
     if (isReservedPath(slug === "" ? "/" : `/${slug}`)) return null;
 
-    // The route resolves its collections IN ORDER and stops at the first match,
-    // so a slug an earlier collection also carries belongs to that one. Linking
-    // to this record's path would navigate somewhere else entirely — a
-    // different document, under the same URL — which is worse than no link.
-    const earlier = routeCollections.slice(
-      0,
-      routeCollections.indexOf(collection)
-    );
-    for (const candidate of earlier) {
+    // A stored slug can hold a `.` or `..` segment, and a URL consumer resolves
+    // those away before the request is ever made: `/pages/../admin` is fetched
+    // as `/admin`. The reserved-path check above cannot see it, because it
+    // examines the slug BEFORE that resolution. Refused rather than encoded —
+    // the canonical has to name some path and so encodes them, but a link may
+    // simply be omitted, and no link beats one that lands somewhere the author
+    // never wrote.
+    if (slug.split("/").some(isDotSegment)) return null;
+
+    // The route serves the FIRST entry whose STORED slug matches, searching its
+    // collections in order — so that is the question to ask, rather than
+    // whether some earlier collection happens to shadow this one. Asking it
+    // this way answers both failures with one lookup per collection:
+    //
+    // - an earlier collection owns the slug, so the link would open a different
+    //   document under this URL;
+    // - the slug does not find this record AT ALL, which is what an `afterRead`
+    //   hook rewriting the slug field produces. `resolveContent` matches the
+    //   stored column while the read above returns the hook's value, so a
+    //   rewritten slug names a path this same route answers with `notFound()`.
+    for (const candidate of routeCollections) {
       // Same lifecycle scope and access semantics the route resolves with, so
       // a draft-only row cannot suppress a valid link on a published route.
       // An access denial is treated as "no such entry", which is how
       // `resolveContent` reads one — a probe that threw would take down a link
       // whose own read succeeded.
-      const shadowing = await reader
+      const match = await reader
         .find({
           collection: candidate,
           where: { [slugField]: { equals: slug } },
@@ -521,19 +570,20 @@ function entryPathResolver(
           user: undefined,
           ...(config.locale ? { locale: config.locale } : {}),
         })
-        .catch(() => ({ items: [] as unknown[] }));
-      if (shadowing.items.length > 0) return null;
+        .catch(() => ({ items: [] as Record<string, unknown>[] }));
+      const first = match.items[0];
+      if (!first) continue;
+      // The first collection that answers this slug decides what the URL opens.
+      // This link is honest only when that is this very record — same
+      // collection, same row. A duplicate slug inside the collection lands here
+      // too, and is refused for the same reason.
+      return candidate === collection && String(first.id) === id
+        ? emitPath(slug)
+        : null;
     }
 
-    // An empty slug is the HOMEPAGE, which the content route resolves at `/`
-    // and pre-renders as `{ slug: [] }`. Treating it as missing would strip the
-    // destination from every button pointing at the site root.
-    //
-    // Encoded per segment for the same reason the canonical is: a slug is
-    // stored TEXT, so `faq?all` returned raw is read by the browser as a path
-    // plus a query. The route serves that entry at `/faq%3Fall`, so the button
-    // would navigate somewhere the site does not answer.
-    return slug === "" ? "/" : `/${encodePath(slug)}`;
+    // No collection serves this slug, so there is no path to offer.
+    return null;
   };
 }
 

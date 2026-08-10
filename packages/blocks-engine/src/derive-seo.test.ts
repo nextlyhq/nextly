@@ -422,6 +422,29 @@ describe("deriveSeoFromDocument", () => {
     expect(derived.title).toBeUndefined();
   });
 
+  it("survives a malformed image offer from an untyped block", () => {
+    // A block written in JavaScript, or one whose offer round-tripped through
+    // JSON, can answer with `null` where the types promise a candidate. The
+    // guard around the block's own callback cannot contain that: the offer has
+    // already been RETURNED by the time it is read, so a throw here escapes and
+    // fails the whole route instead of costing one field.
+    const malformed: BlockSeoContribution = JSON.parse(
+      '{"image": [null, {"url": "/real.png"}]}'
+    );
+
+    const derived = deriveSeoFromDocument(
+      doc([
+        node("1", "plugin/pic", {}),
+        node("2", "core/heading", { text: "Kept" }),
+      ]),
+      definitions({ "plugin/pic": () => malformed }),
+      visible
+    );
+
+    expect(derived.image).toEqual([{ kind: "url", value: "/real.png" }]);
+    expect(derived.title).toBe("Kept");
+  });
+
   it("returns nothing for an empty document", () => {
     expect(deriveSeoFromDocument(doc([]), definitions(), visible)).toEqual({});
   });

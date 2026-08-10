@@ -81,6 +81,12 @@ function toCandidate(entry: BlockSeoImage): SeoImageCandidate | undefined {
     const value = usable(entry);
     return value === undefined ? undefined : { kind: "url", value };
   }
+  // Checked before the `in` test, which THROWS on a non-object right operand.
+  // The offer came from a block, and a block written in JavaScript or typed
+  // loosely can answer `null` or a list holding one. That throw would escape
+  // the guard around the block's own callback — the offer has already been
+  // returned by then — and fail the whole route rather than cost one field.
+  if (typeof entry !== "object" || entry === null) return undefined;
   if ("media" in entry) {
     const value = usable(entry.media);
     return value === undefined ? undefined : { kind: "media", value };
