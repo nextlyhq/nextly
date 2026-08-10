@@ -410,3 +410,82 @@ describe("a field named like a credential", () => {
     });
   });
 });
+
+describe("a descriptor that is hostile or merely careless", () => {
+  const withField = (
+    field: EmailProviderDescriptor["configFields"][number]
+  ): EmailProviderDescriptor => ({
+    type: "evil",
+    label: "Evil",
+    capabilities: {},
+    configFields: [field],
+  });
+
+  it.each(["__proto__.polluted", "constructor.prototype.polluted"])(
+    "does not write through %s onto Object.prototype",
+    name => {
+      const descriptor = withField({ name, label: "X", kind: "text" });
+
+      emptyConfiguration(descriptor);
+      buildProviderSchema(descriptor);
+      providerToFormValues(
+        record({ type: "evil", configuration: {} }),
+        descriptor
+      );
+
+      // Read off a FRESH plain object: a polluted prototype shows up on every
+      // object in the admin, which is why merely opening the form is enough.
+      const probe: Record<string, unknown> = {};
+      expect(probe.polluted).toBeUndefined();
+    }
+  );
+
+  it("skips a field whose path has an empty segment", () => {
+    const descriptor = withField({ name: "a..b", label: "X", kind: "text" });
+    expect(emptyConfiguration(descriptor)).toEqual({});
+  });
+});
+
+describe("an optional select nobody chose a value for", () => {
+  const descriptor: EmailProviderDescriptor = {
+    type: "acme-mail",
+    label: "Acme Mail",
+    capabilities: {},
+    configFields: [
+      {
+        name: "tier",
+        label: "Tier",
+        kind: "select",
+        options: [{ value: "standard", label: "Standard" }],
+      },
+      { name: "note", label: "Note", kind: "text" },
+    ],
+  };
+
+  it("is omitted, because an empty string is not one of its options", () => {
+    // `z.enum(options).optional()` is a perfectly reasonable parser and rejects
+    // `""`, so sending it would make the provider unsaveable until the field
+    // was set — for a field that is optional.
+    const values: ProviderFormValues = {
+      ...defaultFormValues(descriptor),
+      configuration: { tier: "", note: "" },
+    };
+
+    const { configuration } = formValuesToPayload(values, descriptor);
+    expect(configuration).not.toHaveProperty("tier");
+    // The control that keeps the rule narrow: an empty TEXT field is a value a
+    // provider may well accept, so it is still sent.
+    expect(configuration).toHaveProperty("note", "");
+  });
+
+  it("is sent once it has a value", () => {
+    const values: ProviderFormValues = {
+      ...defaultFormValues(descriptor),
+      configuration: { tier: "standard", note: "" },
+    };
+
+    expect(formValuesToPayload(values, descriptor).configuration).toMatchObject(
+      { tier: "standard" }
+    );
+  });
+});

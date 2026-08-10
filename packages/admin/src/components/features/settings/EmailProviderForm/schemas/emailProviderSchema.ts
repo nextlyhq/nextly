@@ -201,6 +201,43 @@ function applyNumericBounds(
 }
 
 /**
+ * Segments that must never be walked or written.
+ *
+ * A field name is an arbitrary string chosen by whoever wrote the provider, and
+ * these three reach `Object.prototype` rather than a property of the
+ * configuration. Writing through one corrupts every plain object in the admin,
+ * and merely opening the form is enough to do it — no save required.
+ *
+ * Core refuses these at registration, so a descriptor reaching this file should
+ * never contain one. The check is here anyway because this code parses a
+ * response: an older server, or anything else answering that endpoint, is not
+ * bound by a rule added to the current one.
+ */
+const UNSAFE_PATH_SEGMENTS = new Set(["__proto__", "constructor", "prototype"]);
+
+/**
+ * Split a descriptor field name into path segments, or reject it.
+ *
+ * Returns `null` for a name that cannot be walked safely. Callers skip those
+ * fields entirely: a field whose path is unsafe cannot be rendered, stored or
+ * read back, so dropping it is the only honest outcome.
+ */
+function splitFieldPath(name: string): string[] | null {
+  const segments = name.split(".");
+  if (segments.some(part => part === "" || UNSAFE_PATH_SEGMENTS.has(part))) {
+    return null;
+  }
+  return segments;
+}
+
+/** Read an own property, never one inherited from a prototype. */
+function ownProperty(source: Record<string, unknown>, key: string): unknown {
+  return Object.prototype.hasOwnProperty.call(source, key)
+    ? source[key]
+    : undefined;
+}
+
+/**
  * Nest a leaf schema at a dotted path.
  *
  * `auth.pass` has to produce `{ auth: { pass } }`, because that is the shape
@@ -218,7 +255,7 @@ function assignAtPath(
     tree[head] = leaf;
     return;
   }
-  const existing = tree[head];
+  const existing = ownProperty(tree, head);
   const branch: Record<string, unknown> =
     existing !== undefined && typeof existing === "object" && existing !== null
       ? (existing as Record<string, unknown>)
@@ -260,7 +297,9 @@ function configurationSchema(
 
   const tree: Record<string, unknown> = {};
   for (const field of descriptor.configFields) {
-    assignAtPath(tree, field.name.split("."), fieldSchema(field));
+    const path = splitFieldPath(field.name);
+    if (path === null) continue;
+    assignAtPath(tree, path, fieldSchema(field));
   }
   return toObjectSchema(tree);
 }
@@ -287,7 +326,7 @@ function readAtPath(config: Record<string, unknown>, path: string[]): unknown {
   let current: unknown = config;
   for (const segment of path) {
     if (current === null || typeof current !== "object") return undefined;
-    current = (current as Record<string, unknown>)[segment];
+    current = ownProperty(current as Record<string, unknown>, segment);
   }
   return current;
 }
@@ -303,9 +342,9 @@ function writeAtPath(
     config[head] = value;
     return;
   }
-  const existing = config[head];
+  const existing = ownProperty(config, head);
   const branch: Record<string, unknown> =
-    existing !== null && typeof existing === "object"
+    existing !== null && existing !== undefined && typeof existing === "object"
       ? (existing as Record<string, unknown>)
       : {};
   config[head] = branch;
@@ -329,7 +368,9 @@ export function emptyConfiguration(
 ): Record<string, unknown> {
   const configuration: Record<string, unknown> = {};
   for (const field of descriptor?.configFields ?? []) {
-    writeAtPath(configuration, field.name.split("."), initialFieldValue(field));
+    const path = splitFieldPath(field.name);
+    if (path === null) continue;
+    writeAtPath(configuration, path, initialFieldValue(field));
   }
   return configuration;
 }
@@ -366,7 +407,8 @@ export function providerToFormValues(
   const configuration: Record<string, unknown> = {};
 
   for (const field of descriptor?.configFields ?? []) {
-    const path = field.name.split(".");
+    const path = splitFieldPath(field.name);
+    if (path === null) continue;
     const value = readAtPath(stored, path);
     writeAtPath(
       configuration,
@@ -393,8 +435,10 @@ function deleteAtPath(config: Record<string, unknown>, path: string[]): void {
     delete config[head];
     return;
   }
-  const branch = config[head];
-  if (branch === null || typeof branch !== "object") return;
+  const branch = ownProperty(config, head);
+  if (branch === null || branch === undefined || typeof branch !== "object") {
+    return;
+  }
   const nested = branch as Record<string, unknown>;
   deleteAtPath(nested, rest);
   // An emptied branch is dropped rather than sent as `{}`: the server merges
@@ -429,7 +473,8 @@ function withoutUntouchedSecrets(
 
   for (const field of descriptor.configFields) {
     if (field.secret !== true) continue;
-    const path = field.name.split(".");
+    const path = splitFieldPath(field.name);
+    if (path === null) continue;
     const current = readAtPath(cleaned, path);
     const asStored = readAtPath(stored, path);
     // Identical to what the server sent for this credential, which is its
@@ -466,6 +511,11 @@ export function formValuesToPayload(
   descriptor?: EmailProviderDescriptor,
   stored?: Record<string, unknown>
 ): EmailProviderPayload {
+  const configuration = withoutUnselectedOptions(
+    withoutUntouchedSecrets(values.configuration ?? {}, descriptor, stored),
+    descriptor
+  );
+
   return {
     name: values.name,
     type: values.type,
@@ -473,10 +523,36 @@ export function formValuesToPayload(
     fromName: values.fromName || null,
     isDefault: values.isDefault,
     isActive: values.isActive,
-    configuration: withoutUntouchedSecrets(
-      values.configuration ?? {},
-      descriptor,
-      stored
-    ),
+    configuration,
   };
+}
+
+/**
+ * Drop an optional select nobody has chosen a value for.
+ *
+ * A select with no choice made holds `""`, which is not one of its options.
+ * Sending it makes a perfectly reasonable parser — `z.enum(options).optional()`
+ * — reject the whole request, because an empty string is neither an option nor
+ * an absent value, so the provider could not be saved at all until the field
+ * was set.
+ *
+ * Only selects, and only optional ones. An empty TEXT field is a legitimate
+ * value that a provider may well accept, and an empty REQUIRED select never
+ * reaches here — the generated schema stops it, with a message naming the
+ * field, which is a better answer than a silent omission and a server error.
+ */
+function withoutUnselectedOptions(
+  configuration: Record<string, unknown>,
+  descriptor?: EmailProviderDescriptor
+): Record<string, unknown> {
+  if (!descriptor) return configuration;
+
+  const cleaned = structuredClone(configuration);
+  for (const field of descriptor.configFields) {
+    if (field.kind !== "select" || field.required === true) continue;
+    const path = splitFieldPath(field.name);
+    if (path === null) continue;
+    if (readAtPath(cleaned, path) === "") deleteAtPath(cleaned, path);
+  }
+  return cleaned;
 }

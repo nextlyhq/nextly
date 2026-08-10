@@ -20,14 +20,23 @@ import { SMTPLogo } from "../SMTP";
  * the server. A contributed provider renders with its own label and the generic
  * mail glyph, which is honest and costs nothing.
  */
-const PROVIDER_LOGOS: Record<
+/**
+ * A `Map`, not an object literal.
+ *
+ * A provider type is an arbitrary string, so a plugin may legitimately register
+ * one called `constructor` or `toString`. Indexing a plain object with that
+ * returns an inherited function rather than `undefined`, and React would then
+ * try to render it as a component instead of falling back to the mail glyph.
+ * A `Map` has no inherited keys to collide with.
+ */
+const PROVIDER_LOGOS = new Map<
   string,
   React.ComponentType<{ className?: string; "aria-label"?: string }>
-> = {
-  smtp: SMTPLogo,
-  resend: ResendLogo,
-  sendlayer: SendlayerLogo,
-};
+>([
+  ["smtp", SMTPLogo],
+  ["resend", ResendLogo],
+  ["sendlayer", SendlayerLogo],
+]);
 
 export function ProviderTypePicker({
   descriptors,
@@ -44,7 +53,7 @@ export function ProviderTypePicker({
     <div className="flex flex-wrap gap-3">
       {descriptors.map(descriptor => {
         const isSelected = value === descriptor.type;
-        const Logo = PROVIDER_LOGOS[descriptor.type] ?? Mail;
+        const Logo = PROVIDER_LOGOS.get(descriptor.type) ?? Mail;
         const select = () => {
           if (!isSelected && !disabled) onChange(descriptor.type);
         };
@@ -86,7 +95,7 @@ export function ProviderTypePicker({
               </div>
               {/* Named for anything without artwork, so a contributed provider
                   is identifiable rather than three identical envelopes. */}
-              {PROVIDER_LOGOS[descriptor.type] === undefined && (
+              {!PROVIDER_LOGOS.has(descriptor.type) && (
                 <span className="text-xs text-muted-foreground text-center leading-tight">
                   {descriptor.label}
                 </span>

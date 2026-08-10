@@ -55,6 +55,12 @@ export function SecretField({
   // The mask this field started with, so it can be restored when the user
   // clears it by focusing and leaves without typing anything.
   const storedMask = useRef<string | null>(null);
+  // Whether anything was typed since the mask was cleared. This is what
+  // separates "looked at the field" from "deliberately emptied it": both leave
+  // an empty input, and restoring the mask in the second case would make an
+  // optional credential impossible to remove — the payload would omit it and
+  // the server's merge would put the old value back, reporting success.
+  const edited = useRef(false);
 
   return (
     <FormField
@@ -72,6 +78,7 @@ export function SecretField({
         const clearMaskForEditing = () => {
           if (isMaskedPlaceholder) {
             storedMask.current = currentValue;
+            edited.current = false;
             field.onChange("");
           }
         };
@@ -90,14 +97,25 @@ export function SecretField({
                     disabled={disabled}
                     value={currentValue}
                     onFocus={clearMaskForEditing}
+                    onChange={event => {
+                      // Any keystroke, including the one that empties the
+                      // field, makes what is left the user's decision.
+                      edited.current = true;
+                      field.onChange(event.target.value);
+                    }}
                     onBlur={() => {
-                      // Restore the mask when the field was cleared for editing
-                      // and nothing was typed, so an untouched credential stays
-                      // untouched.
-                      if (storedMask.current !== null && currentValue === "") {
+                      // Restore the mask only when the field was cleared for
+                      // editing and NOTHING was typed. Glancing at a credential
+                      // leaves it untouched; deleting one leaves it deleted.
+                      if (
+                        storedMask.current !== null &&
+                        currentValue === "" &&
+                        !edited.current
+                      ) {
                         field.onChange(storedMask.current);
                       }
                       storedMask.current = null;
+                      edited.current = false;
                       field.onBlur();
                     }}
                   />

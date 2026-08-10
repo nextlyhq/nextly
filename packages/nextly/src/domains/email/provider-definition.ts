@@ -176,6 +176,43 @@ const SECRET_CAPABLE_KINDS: ReadonlyArray<EmailProviderConfigField["kind"]> = [
   "password",
 ];
 
+/**
+ * Path segments a configuration key may never contain.
+ *
+ * A field name is a PATH that both the service and any client walk to read and
+ * write a value. These three do not name a property of the configuration; they
+ * reach the object prototype. A client assembling a form from the descriptor
+ * would write through one and corrupt every plain object it holds — and merely
+ * opening the form is enough, no save required.
+ *
+ * Refused at registration because that is the only place with the whole list,
+ * and because a provider cannot be made safe afterwards: every consumer of the
+ * descriptor would have to remember the same rule.
+ */
+const UNWALKABLE_PATH_SEGMENTS = new Set([
+  "__proto__",
+  "constructor",
+  "prototype",
+]);
+
+/** Reject a field name that cannot be walked safely. */
+function assertFieldNameIsWalkable(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  const segments = field.name.split(".");
+  const offender = segments.find(
+    segment => segment === "" || UNWALKABLE_PATH_SEGMENTS.has(segment)
+  );
+  if (offender === undefined) return;
+
+  throw new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider "${type}" declares the configuration field "${field.name}", whose path segment "${offender}" cannot be used. A field name is a dotted path into stored configuration and may not contain an empty segment or reach an object prototype.`,
+    logContext: { type, field: field.name, segment: offender },
+  });
+}
+
 /** The single error for a credential declared on a control that cannot hold one. */
 export function secretFieldMustBeTextual(
   type: string,
@@ -268,6 +305,7 @@ export function defineEmailProvider<TConfig>(
   }
 
   for (const field of definition.configFields) {
+    assertFieldNameIsWalkable(definition.type, field);
     if (field.secret === true && !SECRET_CAPABLE_KINDS.includes(field.kind)) {
       throw secretFieldMustBeTextual(definition.type, field);
     }

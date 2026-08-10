@@ -205,6 +205,44 @@ describe("a credential can only be declared on a control that can hold one", () 
     ).not.toThrow();
   });
 
+  it.each(["__proto__", "constructor", "prototype"])(
+    "refuses a field name whose path reaches %s",
+    segment => {
+      // A field name is a PATH that clients walk to read and write a value.
+      // These reach the object prototype instead, and a client building a form
+      // from the descriptor would corrupt every plain object it holds just by
+      // rendering it.
+      expect(() =>
+        defineEmailProvider({
+          ...base,
+          configFields: [
+            { name: `${segment}.polluted`, label: "X", kind: "text" },
+          ],
+        })
+      ).toThrow(/cannot be used/);
+    }
+  );
+
+  it("refuses a field name with an empty path segment", () => {
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [{ name: "a..b", label: "X", kind: "text" }],
+      })
+    ).toThrow(/cannot be used/);
+  });
+
+  it("accepts an ordinary dotted path", () => {
+    // The control for the rule's scope: nesting itself is the supported case,
+    // and SMTP's own credentials depend on it.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [{ name: "auth.pass", label: "X", kind: "password" }],
+      })
+    ).not.toThrow();
+  });
+
   it("leaves a non-secret field of any kind alone", () => {
     // The positive control for the rule's scope: it is `secret` that is
     // restricted, not the kinds themselves.
