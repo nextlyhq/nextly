@@ -95,17 +95,47 @@ function reachableTypes(dialect: SupportedDialect): string[] {
       const described = getColumnDescriptor(field, dialect, "collection");
       if (described) found.add(described.dialectType);
 
-      // The builder's own rendering, which is what an existing table actually holds.
+      // What a table built by that rendering REPORTS when introspected, which is the string the
+      // detector actually receives. The emitted DDL spelling is not it, and using it here invents
+      // pairs that no rename can produce.
       const emitted = service.mapFieldTypeToSQL(
         field.type,
         undefined,
         field.options,
         field.validation
       );
-      if (emitted) found.add(emitted);
+      if (emitted) found.add(asIntrospected(emitted, dialect));
     }
   }
   return [...found];
+}
+
+/**
+ * The string introspection returns for a column that was created with `declared`.
+ *
+ * The live side of every rename comes from `introspect-live.ts`, not from the DDL that built the
+ * table, and the two are not the same string. PostgreSQL reports `udt_name`, which is the canonical
+ * token with no modifier: a `boolean` column reads back as `bool`, `integer` as `int4`,
+ * `double precision` as `float8`. MySQL reports `COLUMN_TYPE`, which is the type as the server
+ * stores it: a column declared `boolean` reads back as `tinyint(1)`, because MySQL has no separate
+ * boolean type. SQLite reports the declaration as written.
+ *
+ * 🔴 Modelling the emitted DDL instead of this manufactures disagreements that cannot happen. A
+ * checkbox rename on MySQL compares `tinyint(1)` against `tinyint(1)`; it never compares `boolean`
+ * against anything, because that spelling exists only in the CREATE statement and never survives a
+ * round trip through the database.
+ */
+function asIntrospected(declared: string, dialect: SupportedDialect): string {
+  if (dialect === "sqlite") return declared;
+  if (dialect === "mysql") {
+    // The one declared spelling MySQL does not preserve. Everything else — int, varchar(n), text,
+    // json, decimal(p,s), datetime — is reported back as declared.
+    return /^bool(ean)?$/i.test(declared.trim()) ? "tinyint(1)" : declared;
+  }
+  // PostgreSQL: udt_name drops the modifier and names the underlying type, which is exactly what
+  // `normalizeType` canonicalises to. Reusing it keeps one definition of that mapping rather than a
+  // second copy that can drift from the introspection this models.
+  return normalizeType(declared) ?? declared;
 }
 
 /**
@@ -119,13 +149,11 @@ function reachableTypes(dialect: SupportedDialect): string[] {
  * spellings recreates the column empty, for a change the diff itself says is not a change.
  */
 const ACCEPTED: Record<string, string> = {
-  // MySQL spells a boolean `tinyint(1)`. `normalizeType` knows this and collapses the two; the
-  // family table puts `tinyint` in the INTEGER family and `boolean` in the BOOLEAN family, so they
-  // never match. Consequence: renaming ANY checkbox field on MySQL drops the column.
-  "mysql:tinyint(1)->boolean":
-    "MySQL boolean synonym unknown to the family table",
-  "mysql:boolean->tinyint(1)":
-    "MySQL boolean synonym unknown to the family table",
+  // One entry, and it is worth saying why there is not a second. The family table also splits
+  // MySQL's `boolean` from `tinyint`, which looks like the same class of bug. That spelling never
+  // reaches the detector: a column declared `boolean` is reported by MySQL as `tinyint(1)`, so a
+  // checkbox rename compares `tinyint(1)` with itself and is already compatible.
+  //
   // 🔴 `float8` is absent from the PostgreSQL family table entirely, so it is incompatible with
   // ITSELF: `typeFamilyOf` answers null and every pair involving it falls to drop_and_add. `real`
   // (float4) and `numeric` are both present, which is why this went unnoticed. Consequence:
