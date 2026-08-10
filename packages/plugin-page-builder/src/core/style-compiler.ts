@@ -90,19 +90,32 @@ export interface CompileOptions {
    */
   refScope?: string;
   /**
-   * Classes of the placements that turn this node back on, keyed by `"base"` or a breakpoint id.
+   * The placements whose own visibility settings share this element, and where each ends up hidden.
    *
    * Hiding is the one thing a placement cannot express by simply outranking its target. Every
    * other property is overridden by a later declaration of the same property, but `display: none`
    * is cancelled only by naming the display the element would otherwise have had, and no CSS value
    * means that: `revert` drops the whole author origin, taking the app's own classes with it, and
-   * `unset` resolves to `inline`. So the hide is withheld from those elements instead of fought,
-   * by compounding `:not()` onto the rule that would hide them.
+   * `unset` resolves to `inline`. So a placement that speaks about visibility is taken out of this
+   * node's hide rules and answered separately, per BAND — a range with both ends closed — because
+   * bands do not overlap and so never need undoing.
    *
    * Only the target's ROOT can carry these, because that is the only element a placement's class
    * reaches.
    */
-  unhiddenBy?: Readonly<Record<string, readonly string[]>>;
+  placementOverrides?: readonly PlacementOverride[];
+}
+
+/**
+ * One placement sharing an element with the node it places.
+ *
+ * `hiddenBands` absent means "exempt this placement, and let a nearer node answer for it" — which
+ * is what an intermediate node in a chain of root aliases needs, since the final answer belongs to
+ * the node at the end of the chain and emitting it twice would say the same thing twice.
+ */
+export interface PlacementOverride {
+  className: string;
+  hiddenBands?: readonly string[];
 }
 
 /**
@@ -596,14 +609,31 @@ export function compileNodeCss(
   emit(node.styleHover, ":hover");
 
   // Descendant link colors (Default / Hover) → `.cls a` / `.cls a:hover`.
-  const base = node.style?.base;
-  if (base?.linkColor != null) {
-    const v = safeValue(resolveScalar(base.linkColor), remotePatterns);
-    if (v) blocks.push(`${self} a { color: ${v}; }`);
-  }
-  if (base?.linkColorHover != null) {
-    const v = safeValue(resolveScalar(base.linkColorHover), remotePatterns);
-    if (v) blocks.push(`${self} a:hover { color: ${v}; }`);
+  //
+  // Per breakpoint, like every other declaration: the inspector offers these controls whatever
+  // device is selected, so reading only `base` stored the tablet and mobile values and compiled
+  // nothing from them.
+  const emitLinkColors = (
+    values: StyleValues | undefined,
+    wrap: (rule: string) => string
+  ): void => {
+    if (!values) return;
+    for (const [key, suffix] of [
+      ["linkColor", " a"],
+      ["linkColorHover", " a:hover"],
+    ] as const) {
+      const raw = values[key];
+      if (raw == null) continue;
+      const v = safeValue(resolveScalar(raw), remotePatterns);
+      if (v) blocks.push(wrap(`${self}${suffix} { color: ${v}; }`));
+    }
+  };
+  emitLinkColors(node.style?.base, rule => rule);
+  for (const bp of bps) {
+    emitLinkColors(
+      node.style?.[bp.id],
+      rule => `@media (max-width: ${bp.maxWidth}px) { ${rule} }`
+    );
   }
 
   // Entrance motion.
@@ -612,20 +642,32 @@ export function compileNodeCss(
 
   // Per-breakpoint visibility → display:none media queries.
   if (node.visibility) {
-    // The placements that asked to see this node at this breakpoint, excluded from the hide rather
-    // than overriding it. Compounded onto the node's own class, so the exclusion follows the same
-    // element the placement class is on.
-    const shownAt = (scopeKey: string): string =>
-      (opts.unhiddenBy?.[scopeKey] ?? [])
-        .map(placementClass => `:not(.${placementClass})`)
-        .join("");
+    // Every placement that speaks about visibility is taken out of this node's own hide rules and
+    // given its own, because its answer cannot be derived from theirs: a hide declared at a broad
+    // breakpoint is still in force at a narrow one, so exempting a placement from the rule for the
+    // breakpoint it named would leave a broader rule hiding it anyway.
+    const overriding = opts.placementOverrides ?? [];
+    const exempt = overriding
+      .map(({ className }) => `:not(.${className})`)
+      .join("");
     if (node.visibility.base === false) {
-      blocks.push(`${self}${shownAt("base")} { display: none; }`);
+      blocks.push(`${self}${exempt} { display: none; }`);
     }
     for (const bp of bps) {
       if (node.visibility[bp.id] === false) {
         blocks.push(
-          `@media (max-width: ${bp.maxWidth}px) { ${self}${shownAt(bp.id)} { display: none; } }`
+          `@media (max-width: ${bp.maxWidth}px) { ${self}${exempt} { display: none; } }`
+        );
+      }
+    }
+    // Each overriding placement gets rules confined to one band, never overlapping, so nothing has
+    // to be undone: the band is already the answer.
+    for (const { className, hiddenBands } of overriding) {
+      for (const bandId of hiddenBands ?? []) {
+        const query = bandQuery(bandId, bps);
+        if (query === undefined) continue;
+        blocks.push(
+          `@media ${query} { ${self}.${className} { display: none; } }`
         );
       }
     }
@@ -635,21 +677,118 @@ export function compileNodeCss(
 }
 
 /**
- * Per reusable block, the placement classes that explicitly turn it back on, keyed by `"base"` or
- * a breakpoint id.
+ * The scopes a visibility value can be declared at, NARROWEST first.
+ *
+ * Resolution order, not declaration order: a value declared at a narrow breakpoint answers for
+ * that breakpoint even when a broader one also has a value, which is what desktop-first means.
+ */
+function scopesNarrowestFirst(bps: BreakpointDef[]): string[] {
+  return [
+    ...[...bps].sort((a, b) => a.maxWidth - b.maxWidth).map(bp => bp.id),
+    "base",
+  ];
+}
+
+/**
+ * The media query for a BAND: the widths where one breakpoint answers and no narrower one does.
+ *
+ * The stored breakpoints are open-ended (`max-width` alone), so they nest — `tablet` covers mobile
+ * widths too. A band closes the lower end against the next breakpoint down, which is what makes a
+ * per-band rule final: no other band's rule reaches those widths, so nothing has to be overridden.
+ */
+function bandQuery(bandId: string, bps: BreakpointDef[]): string | undefined {
+  const ascending = [...bps].sort((a, b) => a.maxWidth - b.maxWidth);
+  const index = ascending.findIndex(bp => bp.id === bandId);
+  const narrower = index > 0 ? ascending[index - 1] : undefined;
+  const floor = narrower
+    ? `(min-width: ${narrower.maxWidth + 1}px)`
+    : undefined;
+  if (bandId === "base") {
+    const widest = ascending[ascending.length - 1];
+    return widest ? `(min-width: ${widest.maxWidth + 1}px)` : undefined;
+  }
+  const self = ascending[index];
+  if (!self) return undefined;
+  const ceiling = `(max-width: ${self.maxWidth}px)`;
+  return floor ? `${floor} and ${ceiling}` : ceiling;
+}
+
+/**
+ * Whether a node is hidden in each band, reading the tiers sharing its element outermost first.
+ *
+ * The tiers are the classes on one element: the placement, then any node whose root is an alias
+ * for this one, then the node itself. They are emitted in that order reversed, so the outermost is
+ * the last rule and wins — and this resolves them the same way, breakpoint specificity first and
+ * the outer tier breaking ties.
+ */
+function hiddenBands(
+  tiersOutermostFirst: readonly (BlockNode["visibility"] | undefined)[],
+  bps: BreakpointDef[]
+): string[] {
+  const scopes = scopesNarrowestFirst(bps);
+  const hidden: string[] = [];
+  for (const [index, band] of scopes.entries()) {
+    // The scopes that cover this band: itself and everything broader.
+    let verdict: boolean | undefined;
+    for (const scope of scopes.slice(index)) {
+      for (const tier of tiersOutermostFirst) {
+        const value = tier?.[scope];
+        if (typeof value === "boolean") {
+          verdict = value;
+          break;
+        }
+      }
+      if (verdict !== undefined) break;
+    }
+    if (verdict === false) hidden.push(band);
+  }
+  return hidden;
+}
+
+/**
+ * The chain of ref ids a placement's class actually lands on.
+ *
+ * A reusable block whose ROOT is itself a `core/ref` renders its own target in its place, so one
+ * element ends up carrying the classes of every block in the chain — and a placement's class rides
+ * all the way down with them. Registering the placement against the ref it names alone would leave
+ * the block at the end of the chain hiding the very element the placement is styling.
+ */
+function rootAliasChain(
+  refId: string,
+  refs: Record<string, BlockNode> | undefined
+): { chain: string[]; roots: BlockNode[] } {
+  const chain: string[] = [];
+  const roots: BlockNode[] = [];
+  const seen = new Set<string>();
+  let current: string | undefined = refId;
+  while (current !== undefined && !seen.has(current)) {
+    const target: BlockNode | undefined = refs?.[current];
+    if (!target) break;
+    seen.add(current);
+    chain.push(current);
+    roots.push(target);
+    current =
+      target.type === "core/ref" && typeof target.props?.refId === "string"
+        ? target.props.refId
+        : undefined;
+  }
+  return { chain, roots };
+}
+
+/**
+ * Per reusable block, the placements whose visibility settings share its root element.
  *
  * Unchecking "Hide on mobile" stores `true`, not an absent key, so a placement of a block that its
  * own definition hides is a state the inspector can reach — and one no later declaration can undo.
- * See {@link CompileOptions.unhiddenBy}.
+ * See {@link CompileOptions.placementOverrides}.
  */
-function unhiddenPlacements(
+function placementOverridesByRef(
   doc: BlockDocument,
   refs: Record<string, BlockNode> | undefined,
   classes: ReadonlyMap<string, string>,
   bps: BreakpointDef[]
-): Map<string, Record<string, string[]>> {
-  const byRef = new Map<string, Record<string, string[]>>();
-  const scopeKeys = ["base", ...bps.map(bp => bp.id)];
+): Map<string, PlacementOverride[]> {
+  const byRef = new Map<string, PlacementOverride[]>();
   const collect = (node: BlockNode, refScope?: string): void => {
     if (node.type !== "core/ref" || !node.visibility) return;
     const refId = typeof node.props?.refId === "string" ? node.props.refId : "";
@@ -658,12 +797,22 @@ function unhiddenPlacements(
       refScope === undefined || refScope === ""
         ? documentKey(node.id)
         : refScopedKey(refScope, node.id);
-    const placementClass = classes.get(key) ?? nodeClassName(key);
-    for (const scopeKey of scopeKeys) {
-      if (node.visibility[scopeKey] !== true) continue;
-      const entry = byRef.get(refId) ?? {};
-      entry[scopeKey] = [...(entry[scopeKey] ?? []), placementClass];
-      byRef.set(refId, entry);
+    const className = classes.get(key) ?? nodeClassName(key);
+    const { chain, roots } = rootAliasChain(refId, refs);
+    for (const [index, id] of chain.entries()) {
+      const last = index === chain.length - 1;
+      const entry: PlacementOverride = last
+        ? {
+            className,
+            // The tiers on that element, outermost first: the placement, then every alias root
+            // between it and the node that finally renders.
+            hiddenBands: hiddenBands(
+              [node.visibility, ...roots.map(root => root.visibility)],
+              bps
+            ),
+          }
+        : { className };
+      byRef.set(id, [...(byRef.get(id) ?? []), entry]);
     }
   };
   walk(doc.root, n => collect(n));
@@ -691,7 +840,7 @@ export function compileDocumentCss(
   //
   // The order is only observable once a placement's class reaches an element, which is why it went
   // unnoticed while a resolved ref emitted no element of its own.
-  const unhidden = unhiddenPlacements(
+  const overrides = placementOverridesByRef(
     doc,
     opts.refs,
     classes,
@@ -700,14 +849,14 @@ export function compileDocumentCss(
   for (const refId of placedRefIds(doc, opts.refs)) {
     const target = opts.refs?.[refId];
     if (!target) continue;
-    const exemptions = unhidden.get(refId);
+    const placements = overrides.get(refId);
     walk(target, n => {
       const css = compileNodeCss(n, {
         ...nodeOpts,
         refScope: refId,
         // Only the root: a placement's class is applied to the element its target renders, and the
         // target's descendants are not that element.
-        unhiddenBy: n.id === target.id ? exemptions : undefined,
+        placementOverrides: n.id === target.id ? placements : undefined,
       });
       if (css) parts.push(css);
     });

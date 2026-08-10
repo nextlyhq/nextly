@@ -26,6 +26,9 @@ const WEIGHTS = opts(
 const TRANSFORMS = opts("none", "uppercase", "lowercase", "capitalize");
 const STYLES = opts("normal", "italic");
 const DECORATIONS = opts("none", "underline", "line-through", "overline");
+// A select with no options renders an empty menu, so the capability is advertised and unusable.
+const OBJECT_FITS = opts("fill", "contain", "cover", "none", "scale-down");
+const OVERFLOWS = opts("visible", "hidden", "clip", "scroll", "auto");
 const WIDTH_ALIGN = [
   { value: "none", label: "None" },
   { value: "wide", label: "Wide" },
@@ -179,9 +182,19 @@ export function supportsToControls(
         label: "Min height",
       });
     if (d.objectFit)
-      c.push({ control: "select", styleKey: "objectFit", label: "Object fit" });
+      c.push({
+        control: "select",
+        styleKey: "objectFit",
+        label: "Object fit",
+        options: OBJECT_FITS,
+      });
     if (d.overflow)
-      c.push({ control: "select", styleKey: "overflow", label: "Overflow" });
+      c.push({
+        control: "select",
+        styleKey: "overflow",
+        label: "Overflow",
+        options: OVERFLOWS,
+      });
     if (d.aspectRatio)
       c.push({
         control: "dimension",

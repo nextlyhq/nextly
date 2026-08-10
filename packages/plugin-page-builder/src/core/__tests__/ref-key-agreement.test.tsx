@@ -535,11 +535,11 @@ describe("styling a core/ref PLACEMENT", () => {
     expect(css).not.toContain(`.${child}:not(`);
   });
 
-  it("exempts only the placements that asked to see it, at the breakpoint they asked about", () => {
-    // The exclusion is keyed on an explicit `true` at that breakpoint. A placement that also hides
-    // at mobile, and one that spoke about a different breakpoint entirely, both keep the target's
-    // hide — a blanket exclusion would un-hide the block for every placement as soon as one
-    // overrode it.
+  it("answers each placement separately, and only the one that asked is shown", () => {
+    // Every placement that speaks about visibility leaves the shared rule and gets its own, so
+    // what has to be asserted is the OUTCOME per placement rather than who is exempted. At mobile
+    // the target hides: `p1` overrode that, `p2` agreed with it, and `p3` spoke about a different
+    // breakpoint entirely — so only `p1` shows.
     const root = container("root", [
       { ...ref("p1", "r1"), visibility: { mobile: true } },
       { ...ref("p2", "r1"), visibility: { mobile: false } },
@@ -551,12 +551,74 @@ describe("styling a core/ref PLACEMENT", () => {
     const classes = documentNodeClasses(doc(root), refs);
     const css = compileDocumentCss(doc(root), { classes, refs });
 
+    const target = classes.get(refScopedKey("r1", "lib")) as string;
     const shown = classes.get(documentKey("p1")) ?? nodeClass("p1");
-    const alsoHidden = classes.get(documentKey("p2")) ?? nodeClass("p2");
-    const otherBreakpoint = classes.get(documentKey("p3")) ?? nodeClass("p3");
+    const agreed = classes.get(documentKey("p2")) ?? nodeClass("p2");
+    const elsewhere = classes.get(documentKey("p3")) ?? nodeClass("p3");
+    const hiddenAtMobile = (placement: string) =>
+      `@media (max-width: 640px) { .${target}.${placement} { display: none; } }`;
 
-    expect(css).toContain(`:not(.${shown})`);
-    expect(css).not.toContain(`:not(.${alsoHidden})`);
-    expect(css).not.toContain(`:not(.${otherBreakpoint})`);
+    // Positive control: the mechanism produced rules of this exact shape for someone.
+    expect(css).toContain(hiddenAtMobile(agreed));
+    expect(css).toContain(hiddenAtMobile(elsewhere));
+    expect(css).not.toContain(hiddenAtMobile(shown));
+    // And none of the three is left to the shared rule, which cannot distinguish them.
+    for (const placement of [shown, agreed, elsewhere]) {
+      expect(css).toContain(`:not(.${placement})`);
+    }
+  });
+
+  it("clears a hide declared at a BROADER breakpoint than the placement overrode", () => {
+    // The stored breakpoints are open-ended, so a `tablet` hide is still in force at mobile widths.
+    // Exempting the placement only from the rule for the breakpoint it named would leave the
+    // broader rule hiding it anyway — the fix has to reach every rule that covers those widths.
+    const root = container("root", [
+      { ...ref("p1", "r1"), visibility: { mobile: true } },
+    ]);
+    const refs = {
+      r1: { ...styled("lib", "Lib", "#ee0011"), visibility: { tablet: false } },
+    };
+    const classes = documentNodeClasses(doc(root), refs);
+    const css = compileDocumentCss(doc(root), { classes, refs });
+
+    const placement = classes.get(documentKey("p1")) ?? nodeClass("p1");
+    const target = classes.get(refScopedKey("r1", "lib")) as string;
+
+    // The tablet hide no longer reaches this placement at all...
+    expect(css).toContain(
+      `@media (max-width: 1024px) { .${target}:not(.${placement}) { display: none; } }`
+    );
+    // ...and comes back closed at both ends, so it covers tablet widths WITHOUT covering mobile.
+    expect(css).toContain(
+      `@media (min-width: 641px) and (max-width: 1024px) { .${target}.${placement} { display: none; } }`
+    );
+  });
+
+  it("follows a chain of root aliases when deciding which hide to clear", () => {
+    // A reusable block whose ROOT is itself a ref renders its own target in its place, so one
+    // element carries the classes of every block in the chain and the placement's class rides down
+    // with them. Registering the placement against the block it names alone leaves the block at the
+    // end of the chain hiding the element the placement is styling.
+    const root = container("root", [
+      { ...ref("p1", "alias"), visibility: { mobile: true } },
+    ]);
+    const refs = {
+      alias: ref("aliasroot", "final"),
+      final: {
+        ...styled("lib", "Lib", "#ee0012"),
+        visibility: { mobile: false },
+      },
+    };
+    const classes = documentNodeClasses(doc(root), refs);
+    const css = compileDocumentCss(doc(root), { classes, refs });
+
+    const placement = classes.get(documentKey("p1")) ?? nodeClass("p1");
+    const final = classes.get(refScopedKey("final", "lib")) as string;
+
+    // The hide belongs to the block at the END of the chain, which the placement never named.
+    expect(css).toContain(`.${final}:not(.${placement})`);
+    expect(css).not.toContain(
+      `@media (max-width: 640px) { .${final}.${placement} { display: none; } }`
+    );
   });
 });

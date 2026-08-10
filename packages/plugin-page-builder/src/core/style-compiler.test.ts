@@ -509,6 +509,31 @@ describe("compileNodeCss — width alignment + link colors", () => {
     expect(css).toMatch(/\.nx-pb-[a-z0-9]+ a \{ color: #f00; \}/);
     expect(css).toMatch(/\.nx-pb-[a-z0-9]+ a:hover \{ color: #0f0; \}/);
   });
+
+  it("emits link colors per breakpoint, not only from base", () => {
+    // The inspector offers the Link controls whatever device is selected, and writes the value
+    // under that device — so reading only `base` stored the tablet and mobile values and compiled
+    // nothing from them.
+    const css = compileNodeCss(
+      makeNode(
+        "core/container",
+        {},
+        {
+          base: { linkColor: "#f00" },
+          mobile: { linkColor: "#00f", linkColorHover: "#0ff" },
+        }
+      )
+    );
+
+    // Positive control: the base value still compiles, so this is about the breakpoint values.
+    expect(css).toMatch(/\.nx-pb-[a-z0-9]+ a \{ color: #f00; \}/);
+    expect(css).toMatch(
+      /@media \(max-width: 640px\) \{ \.nx-pb-[a-z0-9]+ a \{ color: #00f; \} \}/
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 640px\) \{ \.nx-pb-[a-z0-9]+ a:hover \{ color: #0ff; \} \}/
+    );
+  });
 });
 
 describe("isAllowedRemoteUrl", () => {

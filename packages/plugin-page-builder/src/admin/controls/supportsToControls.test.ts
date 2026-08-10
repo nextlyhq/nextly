@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { defaultBlockRegistry } from "../../core/registry";
+import { normalizeSupports } from "../../core/supports";
 import "../../render/blocks";
 
 import { supportsToControls } from "./supportsToControls";
@@ -72,6 +73,31 @@ describe("supportsToControls", () => {
     // An entrance of "none" compiles to no declaration, and the placement shares an element with
     // its target — so choosing "none" on the placement could not switch off an animation the
     // target defines. The control would be present and inert.
-    expect(defaultBlockRegistry.get("core/ref")?.supports?.motion).toBeFalsy();
+    //
+    // Asserted through `normalizeSupports`, which is what the inspector reads: `motion` defaults
+    // ON there, so an absent key and an explicit `false` are the same value on the definition and
+    // opposite values in the panel.
+    const supports = defaultBlockRegistry.get("core/ref")?.supports;
+    expect(normalizeSupports(supports).motion).toBe(false);
+    // Positive control: this reads a real block whose motion IS on, so the assertion above is not
+    // just a normalizer that returns false for everything.
+    expect(
+      normalizeSupports(defaultBlockRegistry.get("core/container")?.supports)
+        .motion
+    ).toBe(true);
+  });
+
+  it("gives every select the options it needs to be usable", () => {
+    // A select with no options renders an empty menu: the capability is advertised in the panel
+    // and cannot be set. Checked across the whole catalogue rather than one block, because the
+    // gap is in the mapping and any block enabling that support inherits it.
+    const empty = defaultBlockRegistry.all().flatMap(def =>
+      supportsToControls(def.supports)
+        .flatMap(g => g.controls)
+        .filter(c => c.control === "select" && !c.options?.length)
+        .map(c => `${def.type}.${c.styleKey}`)
+    );
+
+    expect(empty).toEqual([]);
   });
 });

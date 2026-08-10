@@ -20,11 +20,12 @@ export const ref = defineBlock({
    * classes are applied to the element the target renders, so these controls reach the same
    * element the block's own styles do and win by landing later.
    *
-   * `motion` is left off. An entrance of `"none"` compiles to no declaration, so a placement could
-   * not switch off an animation its target defines — the control would be present and inert, which
-   * is worse than absent.
+   * `motion` is switched off EXPLICITLY, because `normalizeSupports` defaults it on: an entrance
+   * of `"none"` compiles to no declaration, so a placement could not switch off an animation its
+   * target defines, and the control would be present and inert.
    */
   supports: {
+    motion: false,
     spacing: true,
     typography: true,
     color: { text: true, background: true, gradient: true, link: true },
