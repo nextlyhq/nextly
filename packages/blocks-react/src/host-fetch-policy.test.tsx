@@ -407,3 +407,65 @@ describe("a caller's own fetch predicate", () => {
     expect(markup).toContain("rebeccapurple");
   });
 });
+
+describe("the render and the link preview choose the same image", () => {
+  // A divergence here is invisible on the page and visible everywhere the link
+  // is shared, which is the worst place to find it.
+  const both = {
+    mediaId: "m1",
+    src: "https://player.allowed.test/typed.png",
+    alt: "x",
+  };
+
+  it("falls through to the typed url when the resolved one is refused", async () => {
+    const out = await renderImage({
+      props: both,
+      node: { id: "n1", type: "core/image", version: 1, props: {} },
+      className: "nx-n1",
+      ctx: {
+        ...context(),
+        resolveMedia: () =>
+          Promise.resolve({
+            url: "https://cdn.other.test/lib.png",
+            alt: "library",
+          }),
+      },
+      renderSlot: () => null,
+      hostPolicy: { remotePatterns: ALLOWED },
+    } as BlockRenderArgs<typeof both>);
+
+    const markup = renderToStaticMarkup(out);
+    // The fallback the author wrote is used rather than the block being lost to
+    // a setting they cannot see.
+    expect(markup).toContain("typed.png");
+    expect(markup).not.toContain("cdn.other.test");
+    // And the refused record is dropped WHOLE: its alt describes the asset that
+    // was refused, so carrying it here would announce one image while showing
+    // another.
+    expect(markup).not.toContain("library");
+  });
+
+  it("renders nothing when neither candidate is allowed", async () => {
+    const out = await renderImage({
+      props: {
+        mediaId: "m1",
+        src: "https://cdn.other.test/typed.png",
+        alt: "x",
+      },
+      node: { id: "n1", type: "core/image", version: 1, props: {} },
+      className: "nx-n1",
+      ctx: {
+        ...context(),
+        resolveMedia: () =>
+          Promise.resolve({
+            url: "https://cdn.other.test/lib.png",
+            alt: "library",
+          }),
+      },
+      renderSlot: () => null,
+      hostPolicy: { remotePatterns: ALLOWED },
+    } as BlockRenderArgs<{ mediaId: string; src: string; alt: string }>);
+
+    expect(out).toBeNull();
+  });
+});
