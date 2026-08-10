@@ -162,18 +162,6 @@ export interface ContentRouteConfig<TNode> {
   /** A booted Nextly instance (defaults to `getNextly()`). */
   nextly?: NextlyContentReader;
   /**
-   * Whether to bypass the collections' read-access rules. Defaults to `false`
-   * (enforce — the same secure default as `resolveContent`): a rule-less
-   * collection still renders, but a stored member-only/role-based collection is
-   * hidden from ANONYMOUS requests (both the resolved read and the
-   * `generateStaticParams` scan skip it), and `overrideAccess: true` reads
-   * everything trusted. This route always resolves ANONYMOUSLY — its config is
-   * captured once at module scope, so it cannot carry a per-request user. For a
-   * route that renders per-visitor member content, call `resolveContent` with
-   * the request's `user` inside your own page instead.
-   */
-  overrideAccess?: boolean;
-  /**
    * Extra cache tags attached to every resolved read, so a write to a related
    * collection (a populated author, category, media) can bust the page. The
    * primary collection is always tagged; add the related collections' tags
@@ -214,11 +202,33 @@ export interface ContentRouteArgs {
   params: Promise<{ slug?: string[] }> | { slug?: string[] };
 }
 
-/** What {@link createContentRoute} returns — wire these into the route file. */
+/**
+ * What a route always returns — wire these into the route file.
+ *
+ * Deliberately without `generateStaticParams`. A route reading access-enforced
+ * content answers differently per visitor, so no path it serves can be
+ * pre-rendered, and offering the function anyway is not a harmless extra: Next
+ * classifies a route as STATIC when it exports one, and every dynamic marking
+ * inside a static render is an error. Measured — an access-enforced route
+ * exporting it answered 500 on every path once its collection was empty at
+ * build time, because an empty param list left nothing to bail out and degrade
+ * the route to dynamic.
+ */
 export interface ContentRoute<TNode> {
-  generateStaticParams: () => Promise<Array<{ slug: string[] }>>;
   generateMetadata: (args: ContentRouteArgs) => Promise<Metadata>;
   ContentPage: (args: ContentRouteArgs) => Promise<TNode>;
+}
+
+/**
+ * What a `content: "public"` route returns, additionally.
+ *
+ * Present only on this shape so a route that cannot pre-render cannot export
+ * the function that claims it does. The check is the type system's rather than
+ * a runtime warning nobody reads: destructuring `generateStaticParams` from an
+ * enforced route does not compile.
+ */
+export interface StaticContentRoute<TNode> extends ContentRoute<TNode> {
+  generateStaticParams: () => Promise<Array<{ slug: string[] }>>;
 }
 
 // `next/navigation` is resolved lazily (opaque to bundlers), so importing this
@@ -329,13 +339,17 @@ export function slugToStaticParam(value: unknown): { slug: string[] } | null {
   return { slug: segments };
 }
 
-export function createContentRoute<TNode>(
-  config: ContentRouteConfig<TNode>
-): ContentRoute<TNode> {
+function buildRoute<TNode>(
+  config: ContentRouteConfig<TNode>,
+  content: "public" | "restricted"
+): StaticContentRoute<TNode> {
   const slugField = config.slugField ?? "slug";
   const status = config.status ?? "published";
   const depth = config.depth ?? 1;
-  const overrideAccess = config.overrideAccess ?? false;
+  // The secure default, unchanged: enforce unless the site says the content is
+  // public. Naming the decision does not relax it.
+  const isPublic = content === "public";
+  const overrideAccess = isPublic;
   const staticParamsLimit = config.staticParamsLimit ?? 1000;
 
   const collections = [...new Set(config.collections)];
@@ -494,6 +508,53 @@ export function createContentRoute<TNode>(
   }
 
   return { generateStaticParams, generateMetadata, ContentPage };
+}
+
+/**
+ * A route over ACCESS-ENFORCED content — the secure default.
+ *
+ * The collections' read rules decide, so the answer depends on who is asking:
+ * no read is cacheable and no path can be pre-rendered. **It therefore returns
+ * no `generateStaticParams`, and that is the whole point.**
+ *
+ * Next classifies a route as STATIC because the export exists, and every
+ * dynamic marking inside a static render is an error. An enforced route that
+ * also exported one answered 500 on every path whenever its collection was
+ * empty at build time — an empty param list left nothing to bail out and
+ * degrade the route to dynamic, so its runtime behaviour depended on whether
+ * the database had rows in it when the build ran. Not offering the function is
+ * what makes that unrepresentable rather than merely discouraged.
+ *
+ * For public content that should be cached and pre-rendered, use
+ * {@link createPublicContentRoute}.
+ */
+export function createContentRoute<TNode>(
+  config: ContentRouteConfig<TNode>
+): ContentRoute<TNode> {
+  const { generateMetadata, ContentPage } = buildRoute(config, "restricted");
+  return { generateMetadata, ContentPage };
+}
+
+/**
+ * A route over PUBLIC content: trusted reads, cacheable, pre-renderable.
+ *
+ * Access rules are not consulted — the site has stated that everything in these
+ * collections is public — which is what makes a read cacheable and a path
+ * pre-renderable. Returns `generateStaticParams` for the route file to export.
+ *
+ * **Two functions rather than one flag, and the reason is measured.** Deciding
+ * this through an option meant the return type had to vary with a value, which
+ * costs contextual typing: every callback in the config object
+ * (`render`, `buildMetadata`, `metadata`) loses its parameter types the moment
+ * the config's type depends on an inferred generic. Choosing the posture by
+ * calling a differently-named function keeps both signatures concrete, so
+ * inference is untouched — and the name states the decision at the call site
+ * rather than burying it in a string three lines down.
+ */
+export function createPublicContentRoute<TNode>(
+  config: ContentRouteConfig<TNode>
+): StaticContentRoute<TNode> {
+  return buildRoute(config, "public");
 }
 
 /** Join the optional-catch-all segments into a slug path (no leading slash). */

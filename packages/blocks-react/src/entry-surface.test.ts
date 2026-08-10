@@ -266,6 +266,7 @@ describe("the next entry", () => {
       "BLOCKS_REACT_NEXT_ENTRY",
       "DEFAULT_MAX_QUERIES",
       "createBlocksPage",
+      "createPublicBlocksPage",
     ]);
   });
 });

@@ -11,7 +11,7 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { createContentRoute } from "../content-route";
+import { createContentRoute, createPublicContentRoute } from "../content-route";
 import type { ContentEntry } from "../resolve-content";
 
 const pages = () =>
@@ -33,6 +33,22 @@ function route(nextly: TestNextly["nextly"]) {
     nextly,
     render: (entry: ContentEntry) => ({ title: entry.title }),
     buildMetadata: (entry: ContentEntry) => ({ title: String(entry.title) }),
+  });
+}
+
+/**
+ * The same route, declared public.
+ *
+ * Only a public route pre-renders, so only a public route is handed a
+ * `generateStaticParams` — an access-enforced one answers per visitor and has
+ * no set of paths to build. Kept separate from `route` rather than folded into
+ * it so the tests that exercise resolution keep the default posture.
+ */
+function publicRoute(nextly: TestNextly["nextly"]) {
+  return createPublicContentRoute({
+    collections: ["pages"],
+    nextly,
+    render: (entry: ContentEntry) => ({ title: entry.title }),
   });
 }
 
@@ -105,7 +121,7 @@ describe("createContentRoute (integration)", () => {
     current = await createTestNextly({ collections: [pages()] });
     await seed(current.nextly);
 
-    const params = await route(current.nextly).generateStaticParams();
+    const params = await publicRoute(current.nextly).generateStaticParams();
     expect(params).toContainEqual({ slug: ["about"] });
     expect(params).toContainEqual({ slug: ["contact"] });
     expect(params).not.toContainEqual({ slug: ["secret"] });
@@ -121,7 +137,7 @@ describe("createContentRoute (integration)", () => {
       data: { slug: "admin", title: "Admin", status: "published" },
     });
 
-    const params = await route(current.nextly).generateStaticParams();
+    const params = await publicRoute(current.nextly).generateStaticParams();
     expect(params).not.toContainEqual({ slug: ["admin"] });
     expect(params).toContainEqual({ slug: ["about"] });
   });
@@ -130,7 +146,7 @@ describe("createContentRoute (integration)", () => {
     current = await createTestNextly({ collections: [pages()] });
     await seed(current.nextly);
     // A `0` limit disables pre-rendering — every path renders on demand.
-    const params = await createContentRoute({
+    const params = await createPublicContentRoute({
       collections: ["pages"],
       nextly: current.nextly,
       render: (entry: ContentEntry) => ({ title: entry.title }),

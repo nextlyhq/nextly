@@ -117,22 +117,20 @@ function canonicalFor(path: string): string {
 }
 
 /**
- * Rendered per request, never prerendered at build.
+ * No `force-dynamic`, and nothing to pre-render.
  *
- * The same reason `(site)/[...slug]` gives: this repository's build environment
- * has no database, and `generateStaticParams` reads one to learn which paths
- * exist. Without this the playground build fails with "Failed to collect page
- * data" — not because the route is wrong, but because a build box has nothing
- * to collect from.
+ * This route does not set `content`, so it reads access-enforced — the secure
+ * default — and `createBlocksPage` therefore hands back no
+ * `generateStaticParams` at all. Next classifies the route dynamic because
+ * nothing claims otherwise, and the build reads no database.
  *
- * A deployed site whose build CAN reach its database wants the opposite, and
- * `createBlocksPage` returns `generateStaticParams` for exactly that. It is not
- * re-exported here because `force-dynamic` makes Next ignore it, and an export
- * that does nothing invites the next reader to conclude that static generation
- * was tried and did not work.
+ * It used to need `export const dynamic = "force-dynamic"` to survive a build
+ * box with no database. That is now handled by the shape of what the helper
+ * returns rather than by a flag the host has to remember.
+ *
+ * A site whose content IS public says `content: "public"` and gets
+ * `generateStaticParams` to export.
  */
-export const dynamic = "force-dynamic";
-
 const { ContentPage, generateMetadata } = createBlocksPage({
   collections: ["block-pages"],
   field: "content",

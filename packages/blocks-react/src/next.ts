@@ -27,6 +27,7 @@ import type {
 import type { Metadata } from "next";
 import {
   createContentRoute,
+  createPublicContentRoute,
   getNextly,
   nextlyTags,
   slugToStaticParam,
@@ -34,6 +35,7 @@ import {
 import type {
   ContentEntry,
   ContentRoute,
+  StaticContentRoute,
   ContentRouteConfig,
   NextlyContentReader,
   RenderContext,
@@ -646,6 +648,7 @@ function mediaResolver(
  */
 function entryPathResolver(
   config: BlocksPageConfig,
+  isPublic: boolean,
   reader: NextlyContentReader,
   budget: QueryBudget
 ): (collection: string, id: string) => Promise<string | null> {
@@ -670,7 +673,10 @@ function entryPathResolver(
   // slug this lookup has not found yet — so only the unconditional form
   // widens, and the conditional form stays on the safe published read.
   const alwaysDraft = config.draft === true;
-  const overrideAccess = alwaysDraft || (config.overrideAccess ?? false);
+  // The route's own posture, handed in: a public route reads trusted, so a
+  // reference lookup on that route must too, or a page resolves an href its
+  // own renderer would refuse.
+  const overrideAccess = alwaysDraft || isPublic;
   // An EXPLICIT status wins over draft widening, because that is the order
   // `createContentRoute` resolves in: it passes the configured status through
   // to `resolveContent`, where it beats the draft widening. Forcing `all`
@@ -856,9 +862,10 @@ function entryPathResolver(
  * decision and this passes it through untouched, so a preview arrives as an
  * ordinary entry that happens to be the pending one.
  */
-export function createBlocksPage(
-  config: BlocksPageConfig
-): ContentRoute<ReactElement> {
+function blocksRouteConfig(
+  config: BlocksPageConfig,
+  isPublic: boolean
+): ContentRouteConfig<ReactElement> {
   const {
     field,
     blocks,
@@ -876,7 +883,7 @@ export function createBlocksPage(
     ...routeConfig
   } = config;
 
-  return createContentRoute<ReactElement>({
+  return {
     ...routeConfig,
     // The page is tagged for the records its BLOCKS read, not only for the
     // collection it was resolved from. The media and entry-path resolvers read
@@ -933,6 +940,7 @@ export function createBlocksPage(
       const resolveMedia = mediaResolver(config, readerFor(config), budget);
       const resolveEntryPath = entryPathResolver(
         config,
+        isPublic,
         readerFor(config),
         budget
       );
@@ -974,5 +982,32 @@ export function createBlocksPage(
           : { hostPolicy: config.hostPolicy }),
       });
     },
-  });
+  };
+}
+
+/**
+ * A blocks page over ACCESS-ENFORCED content — the secure default.
+ *
+ * Returns no `generateStaticParams`, because an enforced route answers per
+ * visitor and has no set of paths to build. See
+ * {@link createContentRoute} for why offering one anyway is a defect rather
+ * than an unused convenience.
+ */
+export function createBlocksPage(
+  config: BlocksPageConfig
+): ContentRoute<ReactElement> {
+  return createContentRoute<ReactElement>(blocksRouteConfig(config, false));
+}
+
+/**
+ * A blocks page over PUBLIC content: trusted reads, cacheable, pre-renderable.
+ *
+ * Returns `generateStaticParams` for the route file to export.
+ */
+export function createPublicBlocksPage(
+  config: BlocksPageConfig
+): StaticContentRoute<ReactElement> {
+  return createPublicContentRoute<ReactElement>(
+    blocksRouteConfig(config, true)
+  );
 }
