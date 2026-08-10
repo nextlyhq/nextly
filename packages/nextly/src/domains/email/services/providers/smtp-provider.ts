@@ -112,3 +112,40 @@ export function createSmtpProvider(
     },
   };
 }
+
+/**
+ * Open an SMTP session and authenticate, without sending anything.
+ *
+ * SMTP is the one built-in protocol where a real connection test exists: the
+ * server can be reached, the TLS handshake completed and the credentials
+ * checked, all before any message is composed. The REST providers have no
+ * equivalent — short of sending, there is nothing to ask them — which is why
+ * only this definition advertises `capabilities.connectionTest`.
+ *
+ * Reuses the same transport options as `send`, so a probe that passes is
+ * evidence about the configuration that will actually be used.
+ */
+export async function verifySmtpConnection(
+  config: SmtpProviderConfig
+): Promise<{ ok: boolean; detail?: string }> {
+  const transport = nodemailer.createTransport({
+    host: config.host,
+    port: config.port,
+    secure: config.secure ?? true,
+    auth: { user: config.auth.user, pass: config.auth.pass },
+  });
+
+  try {
+    await transport.verify();
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      detail: error instanceof Error ? error.message : "Connection failed",
+    };
+  } finally {
+    // Close the pool the probe opened; leaving it holds a socket for the
+    // lifetime of the process in a long-running server.
+    transport.close();
+  }
+}

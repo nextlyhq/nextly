@@ -238,18 +238,74 @@ describe("plugin email providers + templates", () => {
     // provider actually crosses.
     current = await createTestNextly({ plugins: [emailPlugin()] });
 
-    expect(() =>
-      getEmailProviderRegistry().register({
-        type: "y".repeat(51),
-        label: "Hand Built",
-        configFields: [],
-        validateConfig: () => undefined,
-        createAdapterFrom: () => ({
-          send: async () => ({ success: true }),
-        }),
-        hasConnectionTest: false,
+    expect(
+      () =>
+        getEmailProviderRegistry().register({
+          type: "y".repeat(51),
+          label: "Hand Built",
+          configFields: [],
+          validateConfig: () => undefined,
+          createAdapterFrom: () => ({
+            send: async () => ({ success: true }),
+          }),
+          hasConnectionTest: false,
+        })
+      // Asserts the shared factory, not a message: both boundaries report this
+      // invariant through one NextlyError so they cannot describe it differently.
+    ).toThrow(NextlyError);
+  });
+
+  it("validates a type CHANGE against the new type, not the stored one", async () => {
+    // `data.type` is applied on update, so a provider can move from one type to
+    // another. Validating the merged configuration against the STORED type
+    // would check smtp's rules and store the row as resend -- accepted here and
+    // unusable at send time.
+    current = await createTestNextly({ plugins: [emailPlugin()] });
+
+    const created = await current.nextly.emailProviders.create({
+      data: {
+        name: "Fake",
+        type: "fake-mailer",
+        fromEmail: "from@example.com",
+        configuration: { apiKey: "k", token: "t" },
+      },
+    });
+
+    await expect(
+      current.nextly.emailProviders.update({
+        id: created.item.id,
+        data: { type: "not-installed" },
       })
-    ).toThrow(/TYPE_TOO_LONG/);
+    ).rejects.toThrow();
+  });
+
+  it("masks everything when a provider declares no field metadata", async () => {
+    // An empty configFields list is an ABSENCE of information, not a statement
+    // that nothing is secret -- a provider can still store credentials without
+    // describing them. Reading the empty list as permission would expose them.
+    current = await createTestNextly({ plugins: [emailPlugin()] });
+
+    getEmailProviderRegistry().register({
+      type: "no-metadata",
+      label: "No Metadata",
+      configFields: [],
+      validateConfig: () => undefined,
+      createAdapterFrom: () => ({ send: async () => ({ success: true }) }),
+      hasConnectionTest: false,
+    });
+
+    const created = await current.nextly.emailProviders.create({
+      data: {
+        name: "Opaque",
+        type: "no-metadata",
+        fromEmail: "from@example.com",
+        configuration: { anythingAtAll: "sensitive-value" },
+      },
+    });
+
+    expect(JSON.stringify(created.item.configuration)).not.toContain(
+      "sensitive-value"
+    );
   });
 
   it("rejects a type no plugin registered", async () => {

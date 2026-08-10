@@ -16,6 +16,7 @@
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   MAX_EMAIL_PROVIDER_TYPE_LENGTH,
+  emailProviderTypeTooLong,
   type RegisteredEmailProvider,
 } from "../provider-definition";
 import type { EmailProviderAdapter } from "../types";
@@ -42,9 +43,7 @@ class EmailProviderRegistry {
     // structural type, so a JavaScript plugin or a hand-built object reaches
     // registration without passing through the authoring helper.
     if (provider.type.length > MAX_EMAIL_PROVIDER_TYPE_LENGTH) {
-      throw new Error(
-        `NEXTLY_EMAIL_PROVIDER_TYPE_TOO_LONG: email provider type "${provider.type}" exceeds ${MAX_EMAIL_PROVIDER_TYPE_LENGTH} characters, the width of the column every dialect stores it in.`
-      );
+      throw emailProviderTypeTooLong(provider.type);
     }
     if (this.providers.has(provider.type)) {
       throw new Error(

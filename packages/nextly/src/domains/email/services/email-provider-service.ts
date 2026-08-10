@@ -175,11 +175,16 @@ export class EmailProviderService extends BaseService {
   private declaredSecretPaths(type: string): ReadonlySet<string> | null {
     const registry = getEmailProviderRegistry();
     if (!registry.has(type)) return null;
+
+    const fields = registry.get(type).configFields;
+    // No declared fields is not the same as declaring nothing secret. It is an
+    // absence of information, and a provider can still store configuration
+    // without describing it -- so treat it like a missing definition and mask
+    // everything, rather than reading an empty list as permission.
+    if (fields.length === 0) return null;
+
     return new Set(
-      registry
-        .get(type)
-        .configFields.filter(field => field.secret === true)
-        .map(field => field.name)
+      fields.filter(field => field.secret === true).map(field => field.name)
     );
   }
 
@@ -403,6 +408,14 @@ export class EmailProviderService extends BaseService {
       updatedAt: now,
     };
 
+    // The type this row will have once the update lands. A type change with no
+    // configuration alongside it still has to name a registered provider,
+    // otherwise the row survives as one nothing can build an adapter for.
+    const effectiveType = data.type ?? currentRow.type;
+    if (data.type !== undefined) {
+      getEmailProviderRegistry().get(effectiveType);
+    }
+
     if (data.name !== undefined) updateData.name = data.name;
     if (data.type !== undefined) updateData.type = data.type;
     if (data.fromEmail !== undefined) updateData.fromEmail = data.fromEmail;
@@ -418,9 +431,13 @@ export class EmailProviderService extends BaseService {
       // carries only the fields that changed, and the masked values it omits
       // are supplied by the merge. Checking the patch alone would reject every
       // partial edit for missing required fields it was never meant to send.
-      // `type` cannot change after creation, so the stored one is authoritative.
+      //
+      // Validated against the type this update RESULTS IN, not the stored one.
+      // `data.type` is applied a few lines above, so a change from smtp to
+      // resend would otherwise have its configuration checked by the SMTP
+      // parser and stored under resend -- accepted here and unusable at send.
       getEmailProviderRegistry()
-        .get(currentRow.type)
+        .get(effectiveType)
         .validateConfig(mergedConfig);
 
       updateData.configuration = this.encryptConfiguration(mergedConfig);

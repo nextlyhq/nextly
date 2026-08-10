@@ -32,6 +32,24 @@ import type { EmailProviderAdapter } from "./types";
 export const MAX_EMAIL_PROVIDER_TYPE_LENGTH = 50;
 
 /**
+ * The single error for an over-long provider type.
+ *
+ * Shared by the authoring helper and the registry so one invariant does not
+ * report itself two ways. A 500 would be wrong: nothing failed inside Nextly,
+ * an install declared a provider it cannot store, and the person who can fix it
+ * is reading the message. The type is named in the public sentence because it
+ * comes from the install's own code, not from a request.
+ */
+export function emailProviderTypeTooLong(type: string): NextlyError {
+  return new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider type "${type}" is longer than ${MAX_EMAIL_PROVIDER_TYPE_LENGTH} characters, the width of the column every database stores it in. Shorten the type id.`,
+    statusCode: 422,
+    logContext: { type, max: MAX_EMAIL_PROVIDER_TYPE_LENGTH },
+  });
+}
+
+/**
  * How one configuration value is entered and treated.
  *
  * Serializable on purpose: this is the only part of a definition that crosses
@@ -171,14 +189,7 @@ export function defineEmailProvider<TConfig>(
   definition: EmailProviderDefinition<TConfig>
 ): RegisteredEmailProvider {
   if (definition.type.length > MAX_EMAIL_PROVIDER_TYPE_LENGTH) {
-    throw NextlyError.internal({
-      logContext: {
-        reason: "email-provider-type-too-long",
-        type: definition.type,
-        max: MAX_EMAIL_PROVIDER_TYPE_LENGTH,
-        remedy: `Email provider type ids are limited to ${MAX_EMAIL_PROVIDER_TYPE_LENGTH} characters, the width of the column every dialect stores them in.`,
-      },
-    });
+    throw emailProviderTypeTooLong(definition.type);
   }
 
   // Captured so the branch below narrows: an optional read off the object

@@ -22,7 +22,7 @@ import { defineEmailProvider } from "../../provider-definition";
 
 import { createResendProvider } from "./resend-provider";
 import { createSendLayerProvider } from "./sendlayer-provider";
-import { createSmtpProvider } from "./smtp-provider";
+import { createSmtpProvider, verifySmtpConnection } from "./smtp-provider";
 
 /**
  * Turn a Zod failure into the error the API boundary reports.
@@ -41,7 +41,12 @@ function parseOrThrow<T>(
 
   throw NextlyError.validation({
     errors: result.error.issues.map(issue => ({
-      path: `configuration.${issue.path.join(".")}`,
+      // A root-level issue (a non-object input, say) carries an empty path, and
+      // joining it produced a trailing dot -- "configuration." names no field.
+      path:
+        issue.path.length > 0
+          ? `configuration.${issue.path.join(".")}`
+          : "configuration",
       code: "INVALID_PROVIDER_CONFIG",
       message: issue.message,
     })),
@@ -70,7 +75,8 @@ export const smtpDefinition: RegisteredEmailProvider = defineEmailProvider({
   type: "smtp",
   label: "SMTP",
   description: "Send through your own SMTP server or a relay.",
-  capabilities: { attachments: true, replyTo: true },
+  // The only built-in that can be asked whether it works without sending.
+  capabilities: { attachments: true, replyTo: true, connectionTest: true },
   configFields: [
     {
       name: "host",
@@ -113,6 +119,7 @@ export const smtpDefinition: RegisteredEmailProvider = defineEmailProvider({
   ],
   parseConfig: input => parseOrThrow(smtpSchema, input, "smtp"),
   createAdapter: config => createSmtpProvider(config),
+  testConnection: config => verifySmtpConnection(config),
 });
 
 export const resendDefinition: RegisteredEmailProvider = defineEmailProvider({
