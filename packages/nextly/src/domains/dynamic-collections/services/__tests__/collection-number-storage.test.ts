@@ -159,3 +159,83 @@ describe("decimal dimensions that cannot safely become SQL", () => {
     expect(() => generate(money("price"))).not.toThrow();
   });
 });
+
+/**
+ * The statement that CHANGES an existing column, which is a third path with its own answer.
+ *
+ * Detecting that a column must change and rendering what it becomes are two questions, and they were
+ * answered by different code: the comparison reads the descriptor, while the ALTER re-derived the
+ * type from a call that dropped `options` and `validation` on the way. A number switched to a
+ * fractional format was therefore correctly detected and then rewritten as a whole-number column.
+ *
+ * The statement's SHAPE is dialect-specific too. `ALTER COLUMN … TYPE` is PostgreSQL; MySQL spells it
+ * `MODIFY COLUMN` and restates the whole definition, so a column's NOT NULL has to travel with the
+ * type or the change quietly makes it nullable.
+ */
+describe("changing a number's storage on an existing table", () => {
+  const alter = (
+    dialect: Dialect,
+    before: FieldDefinition,
+    after: FieldDefinition
+  ): string =>
+    new DynamicCollectionSchemaService(
+      undefined,
+      dialect
+    ).generateAlterTableMigration(TABLE, [before], [after], {
+      tableHasRows: false,
+    });
+
+  const whole = (name: string): FieldDefinition =>
+    ({ name, type: "number" }) as unknown as FieldDefinition;
+
+  const float = (name: string): FieldDefinition =>
+    ({
+      name,
+      type: "number",
+      options: { format: "float" },
+    }) as unknown as FieldDefinition;
+
+  it("renders the fractional type it detected, not a whole-number one — postgresql", () => {
+    const sql = alter("postgresql", whole("amount"), float("amount"));
+
+    // The defect was silent: the ALTER ran, reported success, and left an integer column while the
+    // field metadata said float. Naming the wrong type keeps the failure legible.
+    expect(sql).not.toMatch(/TYPE\s+integer/i);
+    // `float8`, which is the DESCRIPTOR's answer for a fractional number on PostgreSQL. The old
+    // generator spelled it `decimal(10,2)`; taking the descriptor's is the point, because it is the
+    // column the runtime table and the diff both read through.
+    expect(sql).toMatch(/ALTER COLUMN "amount" TYPE float8/i);
+    // PostgreSQL refuses most cross-family changes without it, so its absence turned a migration
+    // that generated cleanly into one that failed at apply time.
+    expect(sql).toMatch(/USING "amount"::float8/i);
+  });
+
+  it("uses MODIFY COLUMN and keeps the column's nullability — mysql", () => {
+    const before = { ...whole("amount"), required: true } as FieldDefinition;
+    const after = { ...float("amount"), required: true } as FieldDefinition;
+    const sql = alter("mysql", before, after);
+
+    // PostgreSQL's spelling is a syntax error on MySQL, so the update failed before the type was
+    // ever applied.
+    expect(sql).not.toMatch(/ALTER COLUMN/i);
+    expect(sql).toMatch(/MODIFY COLUMN `amount`/i);
+    // MySQL's MODIFY replaces the definition. Without this the column silently becomes nullable.
+    expect(sql).toMatch(/MODIFY COLUMN `amount`[^;]*NOT NULL/i);
+  });
+
+  it("carries exact decimals through the change too — mysql", () => {
+    const sql = alter("mysql", whole("price"), money("price"));
+
+    // The dimensions `money` declares — 12 and 4 — not a fixed pair, so a change to the shared
+    // fixture cannot leave this asserting something the fixture no longer produces.
+    expect(sql).toMatch(/MODIFY COLUMN `price` decimal\(12,\s*4\)/i);
+  });
+
+  it("emits nothing when the storage did not change", () => {
+    // The positive control. A rule that emitted an ALTER for every field would satisfy all three
+    // cases above while rewriting every column on every save.
+    expect(alter("postgresql", whole("amount"), whole("amount"))).not.toMatch(
+      /ALTER COLUMN "amount" TYPE/i
+    );
+  });
+});

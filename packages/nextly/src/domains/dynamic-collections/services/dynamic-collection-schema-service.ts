@@ -34,6 +34,7 @@ import {
   storageTypeToken,
 } from "../../../shared/lib/plugin-storage";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import { generateSQL } from "../../schema/pipeline/sql-templates/index";
 import {
   fieldProducesColumn,
   usesJunctionTable,
@@ -1005,26 +1006,64 @@ ${allColumnDefs.join(",\n")}
         if (oldField && this.storageClassChanged(oldField, field)) continue;
         if (oldField && this.isFieldModified(oldField, field)) {
           const alterCol = toSnakeCase(field.name);
-          const type = this.mapFieldTypeToSQL(
-            field.type,
-            field.length,
-            undefined,
-            undefined,
-            field
+          // The descriptor decides the target column, the same answer the comparison above used to
+          // decide there was a change at all. Asking a different renderer here is what let a field
+          // be judged modified by one definition and then rewritten by another: this call used to
+          // drop `options` and `validation`, so a number switched to `format: "float"` was detected
+          // and then re-emitted as `integer`.
+          const described = getColumnDescriptor(
+            field,
+            this.dialect,
+            "collection"
           );
-          statements.push(
-            `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(alterCol)} TYPE ${type};`
-          );
+          const type =
+            described?.dialectType ??
+            this.mapFieldTypeToSQL(
+              field.type,
+              field.length,
+              field.options,
+              field.validation,
+              field
+            );
 
-          if (field.required !== oldField.required) {
-            if (field.required) {
-              statements.push(
-                `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(alterCol)} SET NOT NULL;`
-              );
-            } else {
-              statements.push(
-                `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(alterCol)} DROP NOT NULL;`
-              );
+          if (this.dialect === "mysql") {
+            // MySQL restates the WHOLE definition, so nullability travels with the type or the
+            // column silently becomes nullable. That makes it one statement rather than two, and it
+            // is issued whenever the column changes — not only when `required` did — because the
+            // MODIFY would otherwise drop a NOT NULL nobody asked to remove.
+            const nullability = field.required ? " NOT NULL" : " NULL";
+            statements.push(
+              `ALTER TABLE ${this.quoteIdentifier(tableName)} MODIFY COLUMN ${this.quoteIdentifier(alterCol)} ${type}${nullability};`
+            );
+          } else {
+            // Rendered by the shared template rather than written out here, so this path and
+            // `migrate:create` emit the same statement. It also carries the `USING` clause
+            // PostgreSQL requires for cross-family changes, which the hand-written form omitted.
+            statements.push(
+              `${generateSQL(
+                {
+                  type: "change_column_type",
+                  tableName,
+                  columnName: alterCol,
+                  fromType:
+                    getColumnDescriptor(oldField, this.dialect, "collection")
+                      ?.dialectType ?? type,
+                  toType: type,
+                },
+                this.dialect
+              )};`
+            );
+
+            if (field.required !== oldField.required) {
+              if (field.required) {
+                statements.push(
+                  `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(alterCol)} SET NOT NULL;`
+                );
+              } else {
+                statements.push(
+                  `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(alterCol)} DROP NOT NULL;`
+                );
+              }
             }
           }
         }
