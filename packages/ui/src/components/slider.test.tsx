@@ -327,16 +327,20 @@ describe("Slider", () => {
   });
 
   describe("an empty value array", () => {
-    // Zero values is a state the control cannot represent, and the naive count arithmetic
-    // produced zero THUMBS from it: a track with no `slider` role in it at all. Nothing is
-    // focusable, arrow keys reach nothing, and a track click has no thumb to move — the control
-    // renders and is inert, which is the failure mode hardest to notice in review.
+    // Zero values is a state the control cannot represent. The naive count arithmetic produced
+    // zero THUMBS from it — a track with no `slider` role in it at all, inert and looking
+    // finished. The two ways out are not symmetric: the uncontrolled case has a correct value to
+    // fall back to, and the controlled case does not.
 
-    it("still renders an operable thumb for an empty controlled value", () => {
+    it("renders nothing at all for an empty controlled value", () => {
+      // Not merely "no thumb": a lone track is the inert bar this started as. And a thumb
+      // without a value would be worse still — Radix routes a track click through
+      // `getClosestValueIndex`, which answers -1 for an empty array and writes nowhere, so the
+      // control would look operable and move for no input at all.
       const { container } = render(
         <Slider aria-label="Opacity" value={[]} onValueChange={() => {}} />
       );
-      expect(thumbsIn(container)).toHaveLength(1);
+      expect(container.firstElementChild).toBeNull();
     });
 
     it("still renders an operable thumb for an empty defaultValue", () => {
@@ -359,18 +363,32 @@ describe("Slider", () => {
 
     it("does not seize state the caller owns when a controlled value is empty", () => {
       // The tempting repair — substituting a value — would either flip the control to
-      // uncontrolled or display a number the caller's state does not hold. A controlled slider
-      // must keep reporting the caller's state, however unusable that state is.
+      // uncontrolled or display a number the caller's state does not hold. Rendering nothing is
+      // what keeps a controlled slider from inventing state on the caller's behalf.
       const onValueChange = vi.fn();
       const { container } = render(
         <Slider aria-label="Opacity" value={[]} onValueChange={onValueChange} />
       );
-      const [thumb] = thumbsIn(container);
-      // A positive control: the empty defaultValue case above proves this assertion can read a
-      // number, so its absence here is the component staying out of the caller's state and not
-      // the query failing to find one.
-      expect(thumb.getAttribute("aria-valuenow")).toBeNull();
+      // Counting thumbs would NOT distinguish this from the original defect: a bare track has
+      // zero thumbs too, so the assertion would hold while the inert control was still there.
+      expect(container.firstElementChild).toBeNull();
       expect(onValueChange).not.toHaveBeenCalled();
+    });
+
+    it("returns to a working control once the value arrives", () => {
+      // The scenario this whole case exists for is a value that loads late, so the empty render
+      // has to be a passing phase rather than a dead end. Without this, "render nothing" could
+      // be satisfied by a component that never recovers.
+      const { container, rerender } = render(
+        <Slider aria-label="Opacity" value={[]} onValueChange={() => {}} />
+      );
+      expect(container.firstElementChild).toBeNull();
+
+      rerender(
+        <Slider aria-label="Opacity" value={[40]} onValueChange={() => {}} />
+      );
+      const [thumb] = thumbsIn(container);
+      expect(thumb?.getAttribute("aria-valuenow")).toBe("40");
     });
 
     it("reports the empty array rather than failing silently", () => {

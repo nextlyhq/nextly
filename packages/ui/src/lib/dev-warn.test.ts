@@ -50,6 +50,46 @@ describe("devWarnOnce", () => {
     expect(warn).toHaveBeenCalledTimes(2);
   });
 
+  it("stays silent in production", () => {
+    const original = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = "production";
+      devWarnOnce(false, "a production build must not say this");
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      process.env.NODE_ENV = original;
+    }
+  });
+
+  it("stays silent when the environment cannot be identified", () => {
+    // The gate asks for a POSITIVE development signal rather than the absence of a production
+    // one. This package publishes ESM that keeps the check at runtime, and a bundle that never
+    // defines `process.env.NODE_ENV` would answer "not production" — so an `!== "production"`
+    // test would ship every warning to real users' consoles.
+    const original = process.env.NODE_ENV;
+    try {
+      delete process.env.NODE_ENV;
+      devWarnOnce(false, "an unidentified build must not say this either");
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      process.env.NODE_ENV = original;
+    }
+  });
+
+  it("speaks in development", () => {
+    // The positive control for the two silences above: the same call, in an environment that
+    // does identify itself, must still produce the warning. Without this, the gate could be
+    // silencing everything and both tests would pass.
+    const original = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = "development";
+      devWarnOnce(false, "a development build says this");
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      process.env.NODE_ENV = original;
+    }
+  });
+
   it("reports a defect without throwing, so a missing label degrades", () => {
     // The whole point is that an accessibility defect stays a defect rather
     // than becoming a blank page: warning must never be the more damaging of

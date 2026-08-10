@@ -49,6 +49,11 @@
  * - An empty name does not count as a name: `aria-label=""` is reported the same as a missing one,
  *   because the accessible name computes to nothing either way
  *
+ * **An empty value array renders nothing.** A slider over no values is not a state this control
+ * can represent: an empty `defaultValue` falls back to `min`, and an empty `value` — which a
+ * controlled caller owns and this component must not overwrite — renders no control at all,
+ * rather than a thumb that carries no value and cannot be moved.
+ *
  * **Sizing**: a horizontal slider fills its container's width. A VERTICAL one carries a default
  * height instead of filling, because `height: 100%` inside an auto-height parent collapses to a
  * track with no length. Override it with an ordinary `className` — `h-64` for a longer control,
@@ -214,7 +219,9 @@ const Slider = React.forwardRef<
     const initialUncontrolledCount = React.useRef(
       thumbCount(undefined, defaultValue)
     ).current;
-    const count = Math.max(1, value?.length ?? initialUncontrolledCount);
+    // Both sources are already at least one: an empty controlled value returns before this is
+    // used, and `thumbCount` floors the uncontrolled side.
+    const count = value?.length ?? initialUncontrolledCount;
 
     // An empty array asks for a slider over no values, which is not a state this control can
     // represent. The two cases differ in how far they can be repaired, so they are handled
@@ -224,20 +231,27 @@ const Slider = React.forwardRef<
     // then applies its own `[min]` default. Substituting the vendor's default is exactly what an
     // omitted prop would have done, so nothing downstream can tell the difference.
     //
-    // CONTROLLED is NOT repairable here. Replacing an empty `value` would either flip the control
-    // to uncontrolled — handing Radix ownership of state the caller believes it holds — or display
-    // a number the caller's state does not contain, which would then never reconcile. The empty
-    // array is forwarded unchanged and reported instead; the fallback thumb keeps the control
-    // focusable, so the defect is visible rather than an inert bar.
+    // CONTROLLED is NOT repairable, so the control renders NOTHING. Substituting a value would
+    // either flip to uncontrolled — handing Radix ownership of state the caller believes it holds
+    // — or show a number the caller's state does not contain, which then never reconciles.
+    // Emitting a thumb anyway is worse than either: Radix resolves a track click through
+    // `getClosestValueIndex`, which returns -1 for an empty array and so writes nowhere. That
+    // thumb carries no `aria-valuenow`, cannot be dragged and cannot be moved by a key — a
+    // `slider` role that looks operable and is not, which is the one outcome worse than absence.
     const isEmptyDefault =
       defaultValue !== undefined && defaultValue.length === 0;
+    const isEmptyControlled = value !== undefined && value.length === 0;
     devWarnOnce(
-      !isEmptyDefault && !(value !== undefined && value.length === 0),
+      !isEmptyDefault && !isEmptyControlled,
       "Slider: `value`/`defaultValue` must hold one number per thumb, and an empty array " +
         "holds none — the control has nothing to slide. An empty `defaultValue` falls back to " +
-        "`min`; an empty `value` cannot be repaired without taking state the caller owns, so " +
-        "render nothing until the value is loaded rather than passing `[]`."
+        "`min`; an empty `value` renders nothing at all, because a controlled slider cannot be " +
+        "given a value without taking state the caller owns. Render nothing until the value is " +
+        "loaded rather than passing `[]`."
     );
+    // Placed after the warning so the defect is always reported, and after every hook so the
+    // early return cannot change the order they are called in.
+    if (isEmptyControlled) return null;
     // Everything assistive technology reads goes on the THUMB, which is what
     // carries the `slider` role and takes focus. Left on the root it is
     // announced by nothing.

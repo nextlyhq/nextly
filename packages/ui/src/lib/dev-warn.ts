@@ -16,8 +16,13 @@
  *
  * The rules this module exists to enforce:
  *
- * - **Development only.** The check is behind `process.env.NODE_ENV`, so a
- *   production bundle drops both the call and the message.
+ * - **Development only, proven rather than assumed.** The gate requires a
+ *   POSITIVE development signal. Asking instead whether the environment is
+ *   production fails open: this package publishes ESM that keeps the runtime
+ *   check, and a browser bundle that neither defines nor shims `process`
+ *   leaves the comparison false, so every warning would reach real users'
+ *   consoles. Silence in an unidentifiable environment is the cheaper mistake
+ *   of the two.
  * - **Once per message.** A control that re-renders through a drag would
  *   otherwise emit the same line on every frame, which trains people to ignore
  *   the console — the opposite of the point.
@@ -48,6 +53,29 @@ const emitted = new Set<string>();
 declare const process: { env?: { NODE_ENV?: string } | undefined } | undefined;
 
 /**
+ * The environments a warning is allowed to speak in.
+ *
+ * `test` is here alongside `development` because a suite asserting that a
+ * warning fires is checking the same contract a developer relies on; leaving
+ * it out would make every such test pass for the wrong reason.
+ */
+const SPEAKING_ENVIRONMENTS = new Set(["development", "test"]);
+
+/**
+ * Whether this runtime has positively identified itself as a development one.
+ *
+ * Deliberately not `!== "production"`. Bundlers replace `process.env.NODE_ENV`
+ * at build time, but nothing obliges them to: a build that leaves `process`
+ * undefined would answer "not production" and ship every warning to end users.
+ * An unrecognized environment is treated as one to stay quiet in.
+ */
+function isDevelopmentRuntime(): boolean {
+  if (typeof process === "undefined") return false;
+  const env = process?.env?.NODE_ENV;
+  return env !== undefined && SPEAKING_ENVIRONMENTS.has(env);
+}
+
+/**
  * Warn once, in development, about a requirement that is unmet.
  *
  * @param condition - The requirement. Nothing is emitted while this holds.
@@ -56,12 +84,7 @@ declare const process: { env?: { NODE_ENV?: string } | undefined } | undefined;
  */
 export function devWarnOnce(condition: boolean, message: string): void {
   if (condition) return;
-  if (
-    typeof process !== "undefined" &&
-    process?.env?.NODE_ENV === "production"
-  ) {
-    return;
-  }
+  if (!isDevelopmentRuntime()) return;
   if (emitted.has(message)) return;
   emitted.add(message);
   console.warn(`[@nextlyhq/ui] ${message}`);
