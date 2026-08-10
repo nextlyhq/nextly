@@ -240,11 +240,24 @@ export function deriveSeoFromDocument(
         images.push(...candidates(offer.image));
       }
 
-      // Visited in the order the DEFINITION declares its slots, and only
-      // those it declares. Stored order is insertion order of a JSON object,
-      // which need not match what the block draws — so reading it could pick a
-      // different "first heading" than the page shows — and a stored slot the
-      // definition no longer declares is not rendered at all.
+      // Visited in the order the DEFINITION declares its slots, and only those
+      // it declares. Stored order is insertion order of a JSON object and is
+      // decided by whatever last wrote the row, so it carries no information
+      // about the page at all; a stored slot the definition no longer declares
+      // is not rendered either.
+      //
+      // Declared order is a BETTER signal, not a guaranteed one, and the
+      // difference is worth stating. `slots` is a record of named regions and
+      // nothing binds its property order to the order `render` calls
+      // `renderSlot` — a block declaring `{ sidebar, main }` while drawing
+      // `main` first is valid, and this would take the sidebar's heading as the
+      // page's. Closing that needs the definition to state its draw order,
+      // which is the same Block API question `conditionalSlots` provisionally
+      // answers and belongs with it at the freeze rather than guessed here.
+      //
+      // The exposure is bounded by what it costs: picking a later heading over
+      // an earlier one is a WORSE title for content that is genuinely on the
+      // page, not a leak of content that is not.
       //
       // What this cannot decide: a container that renders its slots
       // CONDITIONALLY, such as tabs drawing only the active panel. That is
