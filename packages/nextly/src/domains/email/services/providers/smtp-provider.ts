@@ -60,7 +60,7 @@ export interface SmtpProviderConfig {
  *
  * Returns the resolved `secure` value so callers cannot re-derive it differently.
  */
-function isLoopbackHost(host: string): boolean {
+export function isLoopbackHost(host: string): boolean {
   return host === "localhost" || host === "127.0.0.1" || host === "::1";
 }
 
@@ -106,7 +106,12 @@ function smtpTransportOptions(config: SmtpProviderConfig) {
     // requiring one there fails a configuration the guard deliberately allows
     // and that this repository ships in its own docker-compose.
     requireTLS: !secure && !isLoopbackHost(config.host),
-    auth: { user: config.auth.user, pass: config.auth.pass },
+    // Omitted entirely when empty rather than sent blank: nodemailer attempts
+    // an AUTH exchange whenever the key is present, and a local sink that wants
+    // no credentials should not be asked to negotiate them.
+    ...(config.auth.user === "" && config.auth.pass === ""
+      ? {}
+      : { auth: { user: config.auth.user, pass: config.auth.pass } }),
   };
 }
 

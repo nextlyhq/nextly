@@ -111,6 +111,28 @@ describe("createSmtpProvider", () => {
     });
   });
 
+  it("sends no auth block when credentials are empty", async () => {
+    // The documented Mailpit setup leaves SMTP_USER and SMTP_PASS empty.
+    // nodemailer attempts an AUTH exchange whenever the key is present, so a
+    // blank auth object is not the same as none -- a local sink expecting no
+    // credentials should not be asked to negotiate them.
+    mockSendMail.mockResolvedValueOnce({ messageId: "<msg-noauth>" });
+
+    const adapter = createSmtpProvider({
+      host: "localhost",
+      port: 1025,
+      secure: false,
+      auth: { user: "", pass: "" },
+    });
+    await adapter.send(BASE_OPTIONS);
+
+    const options = mockCreateTransport.mock.calls[0][0] as Record<
+      string,
+      unknown
+    >;
+    expect(options).not.toHaveProperty("auth");
+  });
+
   it("does not force STARTTLS against a loopback sink", async () => {
     // Mailpit and MailHog speak plaintext by design and advertise no STARTTLS.
     // The safety guard deliberately permits plaintext-on-loopback, and this

@@ -25,6 +25,7 @@ import { createSendLayerProvider } from "./sendlayer-provider";
 import {
   assertTransportIsSafe,
   createSmtpProvider,
+  isLoopbackHost,
   verifySmtpConnection,
 } from "./smtp-provider";
 
@@ -58,19 +59,47 @@ function parseOrThrow<T>(
   });
 }
 
-const smtpSchema = z.object({
-  host: z.string().min(1, "SMTP host is required"),
-  port: z.coerce
-    .number()
-    .int("Port must be a whole number")
-    .min(1, "Port must be between 1 and 65535")
-    .max(65535, "Port must be between 1 and 65535"),
-  secure: z.boolean().optional(),
-  auth: z.object({
-    user: z.string().min(1, "SMTP username is required"),
-    pass: z.string().min(1, "SMTP password is required"),
-  }),
-});
+/**
+ * Credentials are required for a remote server and optional for a loopback one.
+ *
+ * A local sink -- Mailpit, MailHog -- accepts anything and is documented with
+ * `SMTP_USER=` and `SMTP_PASS=` empty (`docs/guides/email.mdx`), so demanding
+ * them would reject the repository's own local development configuration.
+ * A remote server that genuinely needs no credentials is not a case worth
+ * opening the door for: unauthenticated relay to a remote host is a misconfig
+ * far more often than an intention.
+ */
+const smtpSchema = z
+  .object({
+    host: z.string().min(1, "SMTP host is required"),
+    port: z.coerce
+      .number()
+      .int("Port must be a whole number")
+      .min(1, "Port must be between 1 and 65535")
+      .max(65535, "Port must be between 1 and 65535"),
+    secure: z.boolean().optional(),
+    auth: z.object({
+      user: z.string(),
+      pass: z.string(),
+    }),
+  })
+  .superRefine((config, ctx) => {
+    if (isLoopbackHost(config.host)) return;
+    if (config.auth.user === "") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["auth", "user"],
+        message: "SMTP username is required",
+      });
+    }
+    if (config.auth.pass === "") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["auth", "pass"],
+        message: "SMTP password is required",
+      });
+    }
+  });
 
 const apiKeySchema = (label: string) =>
   z.object({ apiKey: z.string().min(1, `${label} API key is required`) });

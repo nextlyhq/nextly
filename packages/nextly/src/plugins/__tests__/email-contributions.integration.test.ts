@@ -393,6 +393,52 @@ describe("plugin email providers + templates", () => {
     expect(updated.item.type).toBe("second-mailer");
   });
 
+  it("accepts the documented local Mailpit configuration", async () => {
+    // docs/guides/email.mdx ships SMTP_USER= and SMTP_PASS= empty against
+    // localhost:1025. Requiring credentials would reject this repository's own
+    // documented local email path at the point it is saved.
+    current = await createTestNextly({ plugins: [emailPlugin()] });
+
+    const created = await current.nextly.emailProviders.create({
+      data: {
+        name: "Local Mailpit",
+        type: "smtp",
+        fromEmail: "dev@example.com",
+        configuration: {
+          host: "localhost",
+          port: 1025,
+          secure: false,
+          auth: { user: "", pass: "" },
+        },
+      },
+    });
+
+    expect(created.item.type).toBe("smtp");
+  });
+
+  it("still requires credentials for a remote SMTP server", async () => {
+    // The loopback exemption must not become a general one: unauthenticated
+    // relay to a remote host is a misconfiguration far more often than an
+    // intention.
+    current = await createTestNextly({ plugins: [emailPlugin()] });
+
+    await expect(
+      current.nextly.emailProviders.create({
+        data: {
+          name: "Remote No Auth",
+          type: "smtp",
+          fromEmail: "dev@example.com",
+          configuration: {
+            host: "smtp.example.com",
+            port: 587,
+            secure: false,
+            auth: { user: "", pass: "" },
+          },
+        },
+      })
+    ).rejects.toThrow();
+  });
+
   it("rejects a type no plugin registered", async () => {
     current = await createTestNextly({ plugins: [emailPlugin()] });
 
