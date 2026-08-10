@@ -475,5 +475,9 @@ export type { TreeNode, TreeViewProps } from "./components/tree-view";
  * for one thumb, which is what makes a range slider the same component rather than a second one.
  */
 export { Slider } from "./components/slider";
-/** @experimental The slider's props, mirroring the Radix root. */
-export type { SliderProps } from "./components/slider";
+/**
+ * @experimental The slider's props, and the per-thumb attributes assistive
+ * technology reads — which are read from the THUMB and inherited from nothing,
+ * so they cannot be passed through the root.
+ */
+export type { SliderProps, SliderThumbProps } from "./components/slider";

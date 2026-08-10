@@ -40,8 +40,10 @@
  * - A name is REQUIRED and not defaulted: an unlabelled slider announces only a number, and
  *   this kit cannot invent a name that would be honest. The name lands on the THUMB, which is
  *   what takes focus — `aria-label` on the root is inherited by nothing
- * - A RANGE needs `thumbLabels`, one per thumb: two thumbs sharing the root's name are
+ * - A RANGE needs `thumbs`, one entry per thumb: two thumbs sharing the root's name are
  *   announced identically, so nothing says which end is held
+ * - `aria-valuetext` and `aria-describedby` belong on `thumbs` too — like the name, they are
+ *   read from the thumb and inherited from nothing
  * - The root is padded so the target clears the 24px minimum (WCAG 2.5.8); the 16px thumb on a
  *   6px track does not on its own
  *
@@ -56,6 +58,8 @@
  *   step={1}
  *   onValueChange={([next]) => setPreview(next)}
  *   onValueCommit={([next]) => save(next)}
+ *   // The number alone does not say what it means; this is what gets spoken.
+ *   thumbs={[{ "aria-valuetext": `${opacity} percent` }]}
  * />
  * ```
  *
@@ -66,7 +70,10 @@
  * // thumbs sharing one name are announced identically.
  * <Slider
  *   defaultValue={[25, 75]}
- *   thumbLabels={["Minimum size", "Maximum size"]}
+ *   thumbs={[
+ *     { "aria-label": "Minimum size" },
+ *     { "aria-label": "Maximum size" },
+ *   ]}
  * />
  * ```
  *
@@ -80,6 +87,25 @@ import * as React from "react";
 import { cn } from "../lib/utils";
 
 /**
+ * The assistive-technology attributes a single thumb can carry.
+ *
+ * @experimental
+ */
+export interface SliderThumbProps {
+  /** The thumb's accessible name. */
+  "aria-label"?: string;
+  /** An element naming the thumb, when the name is already on screen. */
+  "aria-labelledby"?: string;
+  /**
+   * What the value MEANS, when the number alone does not say it — "40
+   * percent", "Medium". Announced in place of the raw number.
+   */
+  "aria-valuetext"?: string;
+  /** An element carrying help text for this thumb. */
+  "aria-describedby"?: string;
+}
+
+/**
  * The slider's props, mirroring the Radix root.
  *
  * @experimental
@@ -88,16 +114,26 @@ export type SliderProps = React.ComponentPropsWithoutRef<
   typeof SliderPrimitive.Root
 > & {
   /**
-   * An accessible name per thumb, in value order.
+   * Assistive-technology attributes per thumb, in value order.
    *
-   * Required for a RANGE, and the reason this prop exists: the focusable
-   * element is the thumb, not the root, and a name on the root is not
-   * inherited. Two thumbs named only by their shared root are announced
-   * identically, so nothing tells a screen-reader user which end they are
-   * holding. A single thumb falls back to the root's `aria-label`, so the
-   * one-thumb API stays as documented.
+   * The reason this exists at all: the focusable element with the `slider`
+   * role is the THUMB, and none of these attributes are inherited from the
+   * root. Anything a caller puts on the root is therefore announced by
+   * nothing, and the thumbs are generated internally so they cannot be
+   * reached any other way.
+   *
+   * Deliberately a curated set rather than the thumb's full prop type. This
+   * is the surface assistive technology reads; opening it to arbitrary props
+   * would let a caller replace the class names or the role the control
+   * depends on, and every escape hatch in a design system eventually gets
+   * used that way.
+   *
+   * Required for a RANGE: two thumbs sharing one name are announced
+   * identically, so nothing says which end is held. A single thumb falls back
+   * to the root's `aria-label`/`aria-labelledby`, so the one-thumb API stays
+   * as documented.
    */
-  thumbLabels?: readonly string[];
+  thumbs?: readonly SliderThumbProps[];
 };
 
 /**
@@ -128,7 +164,7 @@ const Slider = React.forwardRef<
       className,
       value,
       defaultValue,
-      thumbLabels,
+      thumbs,
       "aria-label": ariaLabel,
       "aria-labelledby": ariaLabelledBy,
       ...props
@@ -136,12 +172,28 @@ const Slider = React.forwardRef<
     ref
   ) => {
     const count = thumbCount(value, defaultValue);
-    // The name goes on the THUMB, which is what carries the `slider` role and
-    // takes focus. Left on the root it is announced by nothing.
-    const nameFor = (index: number): string | undefined =>
-      thumbLabels?.[index] ?? (count === 1 ? ariaLabel : undefined);
+    // Everything assistive technology reads goes on the THUMB, which is what
+    // carries the `slider` role and takes focus. Left on the root it is
+    // announced by nothing.
+    //
+    // The single-thumb fallback keeps the documented one-thumb API working:
+    // with one thumb the root's name is unambiguous, so it is forwarded. A
+    // range has no such fallback — one name cannot distinguish two ends.
+    const ariaFor = (index: number): SliderThumbProps => {
+      const supplied = thumbs?.[index] ?? {};
+      if (count !== 1) return supplied;
+      return {
+        "aria-label": supplied["aria-label"] ?? ariaLabel,
+        "aria-labelledby": supplied["aria-labelledby"] ?? ariaLabelledBy,
+        "aria-valuetext": supplied["aria-valuetext"],
+        "aria-describedby": supplied["aria-describedby"],
+      };
+    };
 
     return (
+      // `aria-label`/`aria-labelledby` are destructured out above rather than
+      // spread here: left on the root they would be a second, roleless copy
+      // of a name only the thumb is read for.
       <SliderPrimitive.Root
         ref={ref}
         className={cn(
@@ -177,10 +229,7 @@ const Slider = React.forwardRef<
         {Array.from({ length: count }, (_, i) => (
           <SliderPrimitive.Thumb
             key={i}
-            aria-label={nameFor(i)}
-            // Only meaningful for the single-thumb case: a range's thumbs need
-            // distinct names, which an id shared by both cannot give them.
-            aria-labelledby={count === 1 ? ariaLabelledBy : undefined}
+            {...ariaFor(i)}
             className={cn(
               "border-primary bg-background block h-4 w-4 rounded-full border-2",
               "ring-offset-background transition-colors",

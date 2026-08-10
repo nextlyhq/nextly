@@ -88,7 +88,7 @@ Everything else the barrel exports, including: `Accordion`, `Alert`, `AlertDialo
 `TreeView`, the table state components, the layout primitives (`Stack`, `Grid`, `Stat`) and
 `Toaster`.
 
-`Slider` joins them for the inspector: a bounded numeric property — opacity, blur radius,
+`Slider` (with `SliderThumbProps`) joins them for the inspector: a bounded numeric property — opacity, blur radius,
 letter spacing, a colour's alpha — is the single most repeated control in an editing surface,
 and a hand-rolled one gets pointer capture, step rounding and the per-thumb ARIA pattern wrong
 quietly. Its `value` is an array even for one thumb, which is what makes a range slider the

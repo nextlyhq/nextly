@@ -101,7 +101,10 @@ describe("Slider", () => {
       <Slider
         aria-label="Size range"
         defaultValue={[25, 75]}
-        thumbLabels={["Minimum size", "Maximum size"]}
+        thumbs={[
+          { "aria-label": "Minimum size" },
+          { "aria-label": "Maximum size" },
+        ]}
       />
     );
     const [lower, upper] = thumbsIn(container);
@@ -129,5 +132,49 @@ describe("Slider", () => {
     );
     const root = container.firstElementChild;
     expect(root?.className).toContain("py-2");
+  });
+
+  it("puts value-text and description on the thumb, where they are read", () => {
+    // The general form of the naming defect: every attribute assistive
+    // technology reads from a slider is read from the THUMB, and none are
+    // inherited from the root. Fixing only the name left the rest unreachable,
+    // since the thumbs are generated internally.
+    const { container } = render(
+      <Slider
+        value={[40]}
+        onValueChange={() => {}}
+        thumbs={[
+          {
+            "aria-label": "Opacity",
+            "aria-valuetext": "40 percent",
+            "aria-describedby": "opacity-help",
+          },
+        ]}
+      />
+    );
+    const thumb = thumbsIn(container)[0];
+    expect(thumb.getAttribute("aria-valuetext")).toBe("40 percent");
+    expect(thumb.getAttribute("aria-describedby")).toBe("opacity-help");
+  });
+
+  it("keeps the name off the roleless root", () => {
+    // A second copy on the root is not merely redundant: it is a name on an
+    // element nothing announces, which reads as correct in a DOM dump.
+    const { container } = render(
+      <Slider aria-label="Opacity" value={[40]} onValueChange={() => {}} />
+    );
+    expect(container.firstElementChild?.hasAttribute("aria-label")).toBe(false);
+  });
+
+  it("lets a thumb entry override the root name for a single thumb", () => {
+    const { container } = render(
+      <Slider
+        aria-label="Fallback"
+        value={[40]}
+        onValueChange={() => {}}
+        thumbs={[{ "aria-label": "Specific" }]}
+      />
+    );
+    expect(thumbsIn(container)[0].getAttribute("aria-label")).toBe("Specific");
   });
 });
