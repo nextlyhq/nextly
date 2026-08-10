@@ -1227,3 +1227,169 @@ describe("a binding whose callback throws", () => {
     expect(lower).not.toHaveBeenCalled();
   });
 });
+
+describe("text that arrives with a modifier held", () => {
+  it("lets macOS Option-produced text through a blocking layer", () => {
+    // Option is a TEXT modifier on macOS: Option+5 types a character outright. The key reported
+    // is the character itself, never the base letter, so rejecting anything with altKey set
+    // stopped those characters being typed under a grab.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("\u221e", { altKey: true });
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("still treats mod+s as a chord rather than text", () => {
+    // The control: Ctrl and Meta DO make a chord, and a blocking layer must keep suppressing it
+    // or the browser's own save dialog opens mid-drag.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("s", { ctrlKey: true });
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("recognises a character written as two UTF-16 units", () => {
+    // An astral character is ONE letter and two code units, so a length check on the string
+    // rejected it and the grab stopped emoji and several scripts being typed at all.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("\u{1D400}");
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe("keys that only belong to a multiline target", () => {
+  it("suppresses PageDown in a single-line input under a grab", () => {
+    // It edits nothing there and scrolls the document behind the modal instead.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("PageDown");
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("leaves PageDown alone in a textarea, where it scrolls the text", () => {
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const area = document.createElement("textarea");
+    document.body.append(area);
+    const detach = manager.attach(document);
+    const event = press("PageDown");
+    area.dispatchEvent(event);
+    detach();
+    area.remove();
+    expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe("focus that a listener on document cannot see directly", () => {
+  it("recognises an input inside an open shadow root", () => {
+    // The event is RETARGETED to the shadow host, so reading `target` alone reports a custom
+    // element and a bare shortcut fired over a field the user was typing in.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("n", run)], { name: "shell", depth: 0 });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = host.attachShadow({ mode: "open" });
+    const field = document.createElement("input");
+    root.append(field);
+
+    const detach = manager.attach(document);
+    field.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "n", bubbles: true, composed: true })
+    );
+    detach();
+    host.remove();
+
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("a link with focus", () => {
+  it("keeps Enter, which is how a link is followed", () => {
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("Enter", run)], { name: "shell", depth: 0 });
+    const link = document.createElement("a");
+    link.href = "#somewhere";
+    document.body.append(link);
+    const detach = manager.attach(document);
+    link.dispatchEvent(press("Enter"));
+    detach();
+    link.remove();
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("an outcome that is still tentative", () => {
+  it("does not cancel a key the retry hands to an allowed-default binding", () => {
+    // The first offer reached the blocking fallback with a multi-key candidate and cancelled the
+    // event; the retry then fired an exact binding that had asked NOT to preventDefault, and
+    // could not uncancel what the fallback had already done.
+    const cancel = vi.fn();
+    const manager = managerFor();
+    manager.register(
+      [
+        binding("g d", vi.fn()),
+        {
+          keys: "Escape",
+          description: "Cancel",
+          run: cancel,
+          preventDefault: false,
+        },
+      ],
+      { name: "drag", depth: 1, blocking: true }
+    );
+
+    manager.handle(press("g"));
+    const escape = press("Escape");
+    manager.handle(escape);
+
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(escape.defaultPrevented).toBe(false);
+  });
+});

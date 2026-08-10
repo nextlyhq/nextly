@@ -211,6 +211,18 @@ interface ElementLike {
   getAttribute: (name: string) => string | null;
 }
 
+/**
+ * The element the keystroke actually reached.
+ *
+ * `event.target` is RETARGETED to the shadow host when focus is inside an open shadow root, so
+ * reading it alone reports a custom element rather than the input inside it. The composed path
+ * starts at the true target and crosses the boundary.
+ */
+function eventTarget(event: KeyboardEvent): EventTarget | null {
+  const path = event.composedPath?.();
+  return path && path.length > 0 ? (path[0] ?? null) : event.target;
+}
+
 /** The event target as an element, whichever document it came from. */
 function asElement(target: EventTarget | null): ElementLike | null {
   if (target === null || typeof target !== "object") return null;
@@ -251,6 +263,11 @@ function controlOwnsKey(
     type === "reset"
   ) {
     return event.key === " " || event.key === "Enter";
+  }
+  // A link activates on Enter. Space scrolls the page rather than following it, so it is not
+  // an activation key here.
+  if (tag === "A" && element.getAttribute("href") !== null) {
+    return event.key === "Enter";
   }
   if (type === "checkbox") return event.key === " ";
   // A range input is a slider: the arrows, Home/End and PageUp/PageDown are how its value moves.
@@ -411,31 +428,26 @@ export function createShortcutManager(
    */
   function insertsText(event: KeyboardEvent, typing: boolean): boolean {
     if (!typing) return false;
-    // AltGraph is text entry wearing a modifier's clothes: on many layouts `@`, `\` and `€`
-    // arrive with ctrlKey AND altKey set. It is not composition, so `isComposing` never covers
-    // it, and rejecting it here stops those characters being typed under a blocking layer.
+    // AltGraph arrives as ctrl+alt on the layouts that use it, so it must be unwrapped before
+    // either modifier is read as a chord.
     const altGraph = event.getModifierState?.("AltGraph") ?? false;
-    if (!altGraph && (event.ctrlKey || event.metaKey || event.altKey))
-      return false;
-    // A single character is text. Everything else has to be named, because "unmodified" is not
-    // the same question: F1, Escape and the function keys carry no text and reach the browser,
-    // so treating them as editing would let a blocking layer report a key as consumed while the
-    // browser still opened its help window.
-    // `Dead` is the accent key on a dead-key layout and `Process` is a keystroke the IME has
-    // taken: both are the START of text entry, and both arrive BEFORE `isComposing` is true, so
-    // the composition guard never covers them. Suppressing either stops accented input being
-    // begun at all.
+    // Ctrl and Meta make a chord; Alt does NOT, because on macOS Option is a text modifier —
+    // Option+e begins an accent and Option+5 types a character outright. In both cases the key
+    // REPORTED is the character or `Dead`, never the base letter, so the text tests below
+    // recognise them while `mod+s` still reads as the chord it is.
+    if (!altGraph && (event.ctrlKey || event.metaKey)) return false;
+    // Both are the start of composed text and both precede `isComposing`.
     if (event.key === "Dead" || event.key === "Process") return true;
-    // Enter is field input only where it inserts a newline. In a single-line input it submits
-    // the form instead, which is application behaviour running underneath the advertised grab.
-    if (event.key === "Enter") {
-      const element = asElement(event.target);
-      return (
-        element !== null &&
-        (element.tagName === "TEXTAREA" || element.isContentEditable)
-      );
-    }
-    return event.key.length === 1 || FIELD_KEYS.has(event.key);
+    // One CODE POINT, not one code unit: an astral character is a single letter written as two
+    // UTF-16 units, and rejecting it stops emoji and many scripts being typed at all.
+    if ([...event.key].length === 1) return true;
+    // A named key with Alt held is an accelerator rather than text.
+    if (event.altKey) return false;
+    // Enter, PageUp and PageDown edit or scroll only where the target owns multiple lines. In a
+    // single-line input Enter submits the form and the page keys scroll the document behind it —
+    // application behaviour running underneath the grab, not text entry.
+    if (MULTILINE_ONLY_KEYS.has(event.key)) return ownsMultilineText(event);
+    return FIELD_KEYS.has(event.key);
   }
 
   /**
@@ -474,12 +486,7 @@ export function createShortcutManager(
         event.preventDefault();
         return "pending";
       }
-      if (layer.options.blocking) {
-        // A grab that leaves the browser default in place is not a grab: mid-drag, `mod+s`
-        // would still open the browser's own save dialog while the shell binding was blocked.
-        if (!insertsText(event, typing)) event.preventDefault();
-        return "blocked";
-      }
+      if (layer.options.blocking) return "blocked";
     }
     return "none";
   }
@@ -564,12 +571,12 @@ export function createShortcutManager(
     if (MODIFIER_KEYS.has(event.key)) return false;
 
     // A focused native control gets its own activation keys before the shortcut stack sees them.
-    if (controlOwnsKey(event.target, event)) {
+    if (controlOwnsKey(eventTarget(event), event)) {
       abandonSequence();
       return false;
     }
 
-    const typing = isTypingTarget(event.target);
+    const typing = isTypingTarget(eventTarget(event));
 
     // A held key repeats. The binding must not run again, but the key must stay CONSUMED: a
     // shortcut that suppressed the browser on the first keydown and then let every repeat
@@ -625,6 +632,14 @@ export function createShortcutManager(
     }
 
     abandonSequence();
+    if (outcome === "blocked") {
+      // Applied HERE rather than inside `offer`, because a "blocked" from a multi-key candidate
+      // is tentative: the retry below may still find an exact single-key binding, and one that
+      // sets `preventDefault: false` cannot uncancel an event the fallback already cancelled.
+      // A grab that leaves the browser default in place is still not a grab, so this runs once
+      // the outcome is final.
+      if (!insertsText(event, typing)) event.preventDefault();
+    }
     const consumed = outcome === "fired" || outcome === "blocked";
     consumedPress = consumed
       ? { signature: signature(event), prevented: event.defaultPrevented }
@@ -710,6 +725,18 @@ const TYPE_AHEAD_ROLES = new Set([
 /** The non-arrow keys a native range input uses to move its value. */
 const RANGE_KEYS = new Set(["Home", "End", "PageUp", "PageDown"]);
 
+/** Keys that belong to the target only when it holds more than one line of text. */
+const MULTILINE_ONLY_KEYS = new Set(["Enter", "PageUp", "PageDown"]);
+
+/** Whether the keystroke reached something that owns multiple lines of text. */
+function ownsMultilineText(event: KeyboardEvent): boolean {
+  const element = asElement(eventTarget(event));
+  return (
+    element !== null &&
+    (element.tagName === "TEXTAREA" || element.isContentEditable)
+  );
+}
+
 const FIELD_KEYS = new Set([
   "Backspace",
   "Delete",
@@ -719,6 +746,4 @@ const FIELD_KEYS = new Set([
   "ArrowRight",
   "Home",
   "End",
-  "PageUp",
-  "PageDown",
 ]);
