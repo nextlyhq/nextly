@@ -49,7 +49,11 @@ export async function renderImage({
   const resolved =
     mediaId === "" ? null : await ctx.resolveMedia(mediaId).catch(() => null);
 
-  const src = resolved?.url ?? url(props.src);
+  // BOTH branches go through the scheme filter. A host's resolver is trusted
+  // code, but the value it returns came from a media record a person filled in,
+  // so it is input in the same sense the direct prop is. Checking one and not
+  // the other leaves the module's own rule applied at one position of a pair.
+  const src = url(resolved?.url) ?? url(props.src);
   // Nothing to show. An `<img>` with no `src` still requests the current page
   // in some browsers, so render nothing rather than a broken element.
   if (src === undefined) return null;
