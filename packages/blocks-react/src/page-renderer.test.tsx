@@ -23,7 +23,6 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "./context";
-import { embed, image } from "./blocks/index";
 import { createStandaloneContext, defineBlock } from "./context";
 import { PageRenderer } from "./page-renderer";
 import { createBlockResolver } from "./resolver";
@@ -4640,86 +4639,6 @@ describe("PageRenderer", () => {
 
       expect(placeholderReasons(html)).toEqual(["invalid-output"]);
     });
-
-    it("drops the rules of a block that declares it draws nothing", async () => {
-      // `core/image` with no source and `core/embed` with no url draw nothing,
-      // but the renderer cannot know that from the document alone — only the
-      // block can say so. Their rules used to ship anyway, and a rule may name a
-      // URL, so an empty block could make a request for markup nobody sees.
-      const styled = (id: string, type: string, colour: string, props = {}) =>
-        node(id, type, {
-          props,
-          styles: { base: { base: { color: colour } } },
-        });
-
-      const html = await renderToHtml(
-        <PageRenderer
-          document={doc(
-            styled("a", "core/image", "#ff0000"),
-            styled("b", "core/embed", "#ff00ff"),
-            // The CONTROL, and the reason this test can fail: an image WITH a
-            // source draws, so its rule must survive. Without it, a compiler
-            // that emitted nothing at all would pass.
-            styled("c", "core/image", "#00ff00", { src: "/real.jpg" })
-          )}
-          blocks={createBlockResolver([
-            image as AnyBlockDefinition,
-            embed as AnyBlockDefinition,
-          ])}
-          styleContext={{
-            breakpoints: { viewport: [], container: [] },
-            limits: DEFAULT_LIMITS,
-          }}
-        />
-      );
-
-      expect(html).toContain("#00ff00");
-      expect(html).not.toContain("#ff0000");
-      expect(html).not.toContain("#ff00ff");
-    });
-
-    it.each([
-      [
-        "throws",
-        () => {
-          throw new Error("bad block");
-        },
-      ],
-      ["answers with something that is not a boolean", () => "yes"],
-    ])(
-      "keeps the rules of a block whose declaration %s",
-      async (_label, declare) => {
-        // Every failure mode resolves to "it draws". Withholding the rules of a
-        // block that DOES draw ships it unstyled, which a reader sees; keeping the
-        // rules of one that draws nothing wastes bytes, which nobody sees.
-        const misbehaving = defineBlock({
-          name: "test/bad-declaration",
-          version: 1,
-          description: "Declares nonsense about its own output.",
-          example: { props: {} },
-          render: ({ className }) => <p className={className}>drawn</p>,
-          rendersNothing: declare as unknown as () => boolean,
-        });
-
-        const html = await renderToHtml(
-          <PageRenderer
-            document={doc(
-              node("a", "test/bad-declaration", {
-                styles: { base: { base: { color: "#123456" } } },
-              })
-            )}
-            blocks={createBlockResolver([misbehaving as AnyBlockDefinition])}
-            styleContext={{
-              breakpoints: { viewport: [], container: [] },
-              limits: DEFAULT_LIMITS,
-            }}
-          />
-        );
-
-        expect(html).toContain("drawn");
-        expect(html).toContain("#123456");
-      }
-    );
 
     it("recompiles without the placeholder node's own rules", async () => {
       // Withholding the sheet is the fallback when there is nothing to

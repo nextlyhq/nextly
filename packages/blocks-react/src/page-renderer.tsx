@@ -4,7 +4,6 @@ import {
   PAGE_ROOT_CLASS,
   migrateDocument,
   walkNodes,
-  type AnyBlockDefinition,
   type BlockDocument,
   type BlockNode,
   type DocumentLimits,
@@ -90,12 +89,20 @@ export interface PageRendererProps {
  * stored ahead of the definition that would render it. All three are pure
  * comparisons.
  *
- * A block may also declare the answer for its own props through
- * `rendersNothing`, which is how `core/image` with no source and `core/embed`
- * with no URL are recognised. Asking the BLOCK rather than listing block names
- * here is what keeps this function generic: the same property belongs to any
- * block whose output depends on a prop being present, including ones written
- * outside this repository, and a list here would never learn about those.
+ * A block can now DECLARE that its props draw nothing (`rendersNothing`), and
+ * `core/image` with no source says so. That answer is deliberately NOT consumed
+ * here yet. Removing such a node from the style input marks the document
+ * repaired, and on the ordinary published path — a stored stylesheet with no
+ * compile context — a repaired document has its whole sheet withheld. Blanking
+ * every rule on the page because one image is waiting for its picture trades a
+ * few unused bytes for an unstyled site, and an image without a picture yet is
+ * an ordinary authoring state rather than the exceptional one the other prune
+ * cases describe.
+ *
+ * Wiring it needs the stored artifact to be able to drop ONE node's rules,
+ * which is what `CompiledPageCss.gated` already does for condition-gated nodes.
+ * Until a draws-nothing node can travel that path, the declaration is carried
+ * by the contract and read by nothing here.
  *
  * The rest are NOT knowable here, and deliberately so: whether a block throws,
  * returns something unrenderable, or renders a given slot at all is only
@@ -108,34 +115,7 @@ function rendersOwnMarkup(node: BlockNode, resolver: BlockResolver): boolean {
   if (node.migrationFailed === true) return false;
   const definition = resolver.get(node.type);
   if (definition === undefined) return false;
-  if (node.version > definition.version) return false;
-  return !declaresItDrawsNothing(definition, node);
-}
-
-/**
- * A block's own answer to "do these props draw anything", made safe to trust.
- *
- * Every failure mode resolves to "it draws": a block that does not implement
- * the hook, one that throws, and one that answers with something that is not a
- * boolean. Withholding the rules of a block that DOES draw ships it unstyled,
- * which a reader sees; keeping the rules of one that draws nothing wastes bytes,
- * which nobody sees. The asymmetry decides the default.
- *
- * The props are passed as stored. Defaults are applied by the render path, not
- * here, so a block reading a prop that defaults to a value must cope with it
- * being absent — which is the same thing its render already does.
- */
-function declaresItDrawsNothing(
-  definition: AnyBlockDefinition,
-  node: BlockNode
-): boolean {
-  const declare = definition.rendersNothing;
-  if (typeof declare !== "function") return false;
-  try {
-    return declare(node.props) === true;
-  } catch {
-    return false;
-  }
+  return node.version <= definition.version;
 }
 
 /**
