@@ -134,8 +134,10 @@ AGENTS.md permalink to the rule lines.>
 Everything in ONE review call so the PR gets one notification. Write the payload with the Write tool into `.nextly-review/` (the only directory you may write to), then run the gateway from the repository root. A raw `gh api` call of your own will be refused, and a refusal here means your whole round is lost:
 
 ```bash
-.github/scripts/review-bot-gh.sh post-review <N> .nextly-review/review.json
+.github/scripts/review-bot-gh.sh post-review <N> .nextly-review/review.json <HEAD_SHA>
 ```
+
+Pass `HEAD_SHA` — the commit you actually reviewed. The gateway re-reads the pull request and refuses to post if the branch has moved since, because a review that lands against a commit nobody is looking at any more is worse than no review: it reads as current. If it refuses for that reason, say so plainly in your final message; the run is superseded, not clean.
 
 If that call is ever refused, do NOT fall back to summarizing the review in a progress comment as though it were posted. Say plainly in your final message that posting failed and why, so the run is treated as a failed round rather than a clean one.
 
