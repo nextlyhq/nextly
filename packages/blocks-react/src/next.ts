@@ -844,19 +844,23 @@ function entryPathResolver(
  * Turn a collection of block documents into rendered pages.
  *
  * The composition `createContentRoute` was built to carry: it resolves a path
- * to an entry and owns `generateStaticParams`, `generateMetadata` and the
- * not-found decisions, and this fills in the render with the block renderer
- * over a context wired to the CMS.
+ * to an entry and owns `generateMetadata` and the not-found decisions, and this
+ * fills in the render with the block renderer over a context wired to the CMS.
  *
  * Wire the result into `app/[[...slug]]/page.tsx`:
  *
  * ```tsx
- * const { ContentPage, generateMetadata, generateStaticParams } =
+ * const { ContentPage, generateMetadata } =
  *   createBlocksPage({ collections: ["pages"], field: "content" });
  *
- * export { generateMetadata, generateStaticParams };
+ * export { generateMetadata };
  * export default ContentPage;
  * ```
+ *
+ * There is no `generateStaticParams` here, and its absence is the contract:
+ * access rules decide who may read, so the answer depends on the visitor and no
+ * path can be pre-rendered. For public content, {@link createPublicBlocksPage}
+ * reads trusted and returns one to export.
  *
  * Draft preview needs no argument here. `createContentRoute` owns the `draft`
  * decision and this passes it through untouched, so a preview arrives as an

@@ -27,8 +27,24 @@ Or turn a collection of documents into pages, in `app/[[...slug]]/page.tsx`:
 ```tsx
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 
+const { ContentPage, generateMetadata } = createBlocksPage({
+  collections: ["pages"],
+  field: "content",
+});
+
+export { generateMetadata };
+export default ContentPage;
+```
+
+Access rules decide who may read, so the page renders per request. If the
+content in those collections is **public**, say so and the route pre-renders
+instead:
+
+```tsx
+import { createPublicBlocksPage } from "@nextlyhq/blocks-react/next";
+
 const { ContentPage, generateMetadata, generateStaticParams } =
-  createBlocksPage({ collections: ["pages"], field: "content" });
+  createPublicBlocksPage({ collections: ["pages"], field: "content" });
 
 export { generateMetadata, generateStaticParams };
 export default ContentPage;

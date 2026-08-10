@@ -554,6 +554,38 @@ export function createContentRoute<TNode>(
 export function createPublicContentRoute<TNode>(
   config: ContentRouteConfig<TNode>
 ): StaticContentRoute<TNode> {
+  // Refused at construction, not tolerated at request time. Both of these make
+  // the route dynamic while its `generateStaticParams` still tells Next it is
+  // static — the same contradiction this split exists to remove, arriving
+  // through a different option. A module-scope throw names the incompatible
+  // pair at build; the alternative is a 500 on a page whose config looked fine.
+  if (config.draft !== undefined && config.draft !== false) {
+    throw new NextlyError({
+      code: "CONFIGURATION_ERROR",
+      statusCode: 500,
+      publicMessage: "Server configuration error.",
+      logMessage:
+        "createPublicContentRoute() cannot serve drafts. `draft` makes every " +
+        "resolved read uncached, which marks the render dynamic — but a public " +
+        "route exports `generateStaticParams`, so Next classifies it static, and " +
+        "a dynamic marking inside a static render is an error. Preview needs a " +
+        "dynamic route: use `createContentRoute` with `draft`.",
+    });
+  }
+  if (config.staticParamsLimit !== undefined && config.staticParamsLimit <= 0) {
+    throw new NextlyError({
+      code: "CONFIGURATION_ERROR",
+      statusCode: 500,
+      publicMessage: "Server configuration error.",
+      logMessage:
+        "createPublicContentRoute() cannot pre-render nothing. " +
+        "`staticParamsLimit: 0` asks for a static route that builds no paths, so " +
+        "`generateStaticParams` returns `[]` — which standard App Router builds " +
+        "accept but Next 16 Cache Components rejects outright " +
+        "(EmptyGenerateStaticParamsError). Use `createContentRoute` to render " +
+        "every path on demand.",
+    });
+  }
   return buildRoute(config, "public");
 }
 

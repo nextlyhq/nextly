@@ -11,6 +11,7 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { NextlyError } from "../../../errors/nextly-error";
 import { createContentRoute, createPublicContentRoute } from "../content-route";
 import type { ContentEntry } from "../resolve-content";
 
@@ -142,17 +143,52 @@ describe("createContentRoute (integration)", () => {
     expect(params).toContainEqual({ slug: ["about"] });
   });
 
-  it("returns no static params when the limit is non-positive", async () => {
+  it("refuses a public route that would pre-render nothing", async () => {
+    current = await createTestNextly({ collections: [pages()] });
+    // `staticParamsLimit: 0` asks for a static route that builds no paths. The
+    // generator would return `[]` — accepted by standard App Router builds and
+    // rejected outright by Next 16 Cache Components — so the contradiction is
+    // refused where it is stated rather than at build time.
+    expect(() =>
+      createPublicContentRoute({
+        collections: ["pages"],
+        nextly: current!.nextly,
+        render: (entry: ContentEntry) => ({ title: entry.title }),
+        staticParamsLimit: 0,
+      })
+    ).toThrow(NextlyError);
+  });
+
+  it("refuses a public route that also serves drafts", async () => {
+    current = await createTestNextly({ collections: [pages()] });
+    // A draft read is never cacheable, so it marks the render dynamic — while a
+    // public route's `generateStaticParams` tells Next the route is static. That
+    // is the same contradiction the split exists to remove, arriving through a
+    // different option, so it is refused rather than left to 500 per request.
+    expect(() =>
+      createPublicContentRoute({
+        collections: ["pages"],
+        nextly: current!.nextly,
+        render: (entry: ContentEntry) => ({ title: entry.title }),
+        draft: true,
+      })
+    ).toThrow(NextlyError);
+  });
+
+  it("still pre-renders nothing on a DYNAMIC route with a zero limit", async () => {
     current = await createTestNextly({ collections: [pages()] });
     await seed(current.nextly);
-    // A `0` limit disables pre-rendering — every path renders on demand.
-    const params = await createPublicContentRoute({
+    // The dynamic factory has no `generateStaticParams` to disable, so a zero
+    // limit is simply not a thing it can contradict. Asserted so the guard above
+    // is not read as "zero limits are illegal" — they are illegal only where a
+    // route has claimed it is static.
+    const route = createContentRoute({
       collections: ["pages"],
       nextly: current.nextly,
       render: (entry: ContentEntry) => ({ title: entry.title }),
       staticParamsLimit: 0,
-    }).generateStaticParams();
-    expect(params).toEqual([]);
+    });
+    expect("generateStaticParams" in route).toBe(false);
   });
 
   it("renders a resolved entry via the render callback", async () => {

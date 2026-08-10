@@ -13,6 +13,7 @@ import type {
   FindByIDArgs,
 } from "../../../direct-api/types/collections";
 import type { ListResult } from "../../../direct-api/types/shared";
+import { NextlyError } from "../../../errors/nextly-error";
 import { createContentRoute, createPublicContentRoute } from "../content-route";
 import type { ResolvedContext } from "../content-route";
 import type { ContentEntry, NextlyContentReader } from "../resolve-content";
@@ -291,13 +292,51 @@ describe("the content route's draft decision", () => {
     expect(calls.every(call => call.locale === "fr")).toBe(true);
   });
 
-  it("never pre-renders draft paths", async () => {
-    // `generateStaticParams` runs at build time, where there is no visitor and
-    // no preview. Baking a draft into a static path would publish it to
-    // everyone, permanently, with no request to gate it.
+  it("cannot be asked to pre-render a route that also serves drafts", () => {
+    // The guarantee used to be behavioural — `generateStaticParams` scanned
+    // published only, so a draft never reached a built path. It is now
+    // structural: a draft read is never cacheable and marks the render dynamic,
+    // while a public route's `generateStaticParams` tells Next it is static, so
+    // the pair is refused where it is written. Stronger than the old assertion,
+    // because it removes the combination rather than relying on the scan to
+    // behave correctly inside it.
+    const { reader } = stubReader();
+
+    // The public message is deliberately generic (it is the same envelope a
+    // wire response would carry); the actionable sentence lives in `logMessage`,
+    // which is what reaches the console at build.
+    expect(() => publicRouteWith(reader, true)).toThrow(NextlyError);
+    try {
+      publicRouteWith(reader, true);
+    } catch (error) {
+      expect((error as NextlyError).logMessage).toMatch(/cannot serve drafts/i);
+    }
+  });
+
+  it("cannot be asked to pre-render a route that builds no paths", () => {
+    // `staticParamsLimit: 0` asks for a static route with nothing to build. The
+    // generator returns `[]` — accepted by standard App Router builds, rejected
+    // outright by Next 16 Cache Components — so the contradiction is refused
+    // where it is written rather than at build time.
+    const { reader } = stubReader();
+
+    expect(() =>
+      createPublicContentRoute({
+        collections: ["pages"],
+        nextly: reader,
+        render: (entry: ContentEntry) => entry,
+        staticParamsLimit: 0,
+      })
+    ).toThrow(NextlyError);
+  });
+
+  it("pre-renders published paths only, and reads them trusted", async () => {
+    // What survives of the old test: the scan itself. A public route has no
+    // draft to widen with, so `status` is the only thing keeping an unpublished
+    // entry out of a built path.
     const { reader, calls, byIdCalls } = stubReader();
 
-    await publicRouteWith(reader, true).generateStaticParams();
+    await publicRouteWith(reader).generateStaticParams();
 
     expect(byIdCalls).toHaveLength(0);
     expect(calls.every(call => call.status === "published")).toBe(true);
