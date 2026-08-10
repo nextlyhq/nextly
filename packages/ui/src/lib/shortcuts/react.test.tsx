@@ -11,8 +11,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ShortcutProvider,
   ShortcutScope,
-  useShortcuts,
   type UseShortcutsOptions,
+  useShortcutManager,
+  useShortcuts,
 } from "./react";
 import { resetDevWarnings } from "../dev-warn";
 import type { ShortcutBinding } from "./manager";
@@ -684,5 +685,66 @@ describe("sibling providers mounted in one render", () => {
 
     expect(first).toHaveBeenCalledTimes(1);
     expect(second).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("providers that attach nothing", () => {
+  it("shares one manager between nested detached providers", () => {
+    // Two explicit `null` targets describe the SAME event stream: the one the host drives through
+    // `handle()`. An inner provider building its own manager means the host never sees the
+    // bindings beneath it.
+    const run = vi.fn();
+    const managerRef: { current: ShortcutManager | null } = { current: null };
+
+    function Capture(): React.JSX.Element | null {
+      managerRef.current = useShortcutManager();
+      return null;
+    }
+
+    function Keys(): React.JSX.Element | null {
+      useShortcuts([{ keys: "mod+k", description: "Open", run }], {
+        name: "inner",
+      });
+      return null;
+    }
+
+    const view = render(
+      <ShortcutProvider isApple={false} target={null}>
+        <Capture />
+        <ShortcutProvider isApple={false} target={null}>
+          <Keys />
+        </ShortcutProvider>
+      </ShortcutProvider>
+    );
+
+    // Driven through the OUTER manager, as a host in this mode would.
+    managerRef.current?.handle(
+      new KeyboardEvent("keydown", {
+        key: "k",
+        ctrlKey: true,
+        cancelable: true,
+      })
+    );
+    view.unmount();
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("options that cannot both be honoured", () => {
+  it("says so rather than silently using the first provider's", () => {
+    // Managers are shared per target, so the second provider's options are ignored. The symptom
+    // is `mod` meaning the wrong key with nothing to point at, so the situation is reported.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    resetDevWarnings();
+
+    const first = render(<ShortcutProvider isApple={false} />);
+    const second = render(<ShortcutProvider isApple={true} />);
+    const said = warn.mock.calls.map(c => String(c[0])).join(" ");
+    warn.mockRestore();
+    first.unmount();
+    second.unmount();
+
+    expect(said).toContain("different options");
   });
 });

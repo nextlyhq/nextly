@@ -78,6 +78,8 @@ interface TargetOwner {
   manager: ShortcutManager;
   providers: number;
   detach?: () => void;
+  /** The options the manager was built with, so an adopting provider can tell they differ. */
+  options: string;
   /**
    * Whether every provider that used this owner has since unmounted.
    *
@@ -100,8 +102,20 @@ interface TargetOwner {
  */
 const ownersByTarget = new WeakMap<object, TargetOwner>();
 
-/** Stands in for "no target", so a detached provider still gets a manager of its own. */
-const DETACHED = Object.freeze({});
+/**
+ * The options that change how a manager behaves, as a comparable string.
+ *
+ * `now` is a function and cannot be compared usefully, so its PRESENCE is what is recorded: two
+ * providers that both supply a clock may still disagree, and one that supplies none plainly
+ * differs from one that does.
+ */
+function optionsFingerprint(options: ShortcutManagerOptions): string {
+  return [
+    options.isApple ?? "auto",
+    options.sequenceTimeoutMs ?? "default",
+    options.now ? "clock" : "no-clock",
+  ].join("\u0000");
+}
 
 /**
  * Props for {@link ShortcutProvider}.
@@ -144,10 +158,11 @@ export function ShortcutProvider({
     target === null
       ? null
       : (target ?? (typeof document === "undefined" ? null : document));
+  // `null` is compared too: two providers that both attach nothing describe the SAME event
+  // stream, the one the host drives through `handle()`. An inner provider building its own
+  // manager there means the host never sees the bindings beneath it.
   const nestedOnSameTarget =
-    parent !== null &&
-    resolvedTarget !== null &&
-    parent.target === resolvedTarget;
+    parent !== null && parent.target === resolvedTarget;
   // Options are read once, when the manager is built. Re-creating it on a changed option would
   // drop every layer registered by a child, since registrations live on the manager instance.
   const optionsRef = React.useRef(managerOptions);
@@ -157,13 +172,21 @@ export function ShortcutProvider({
   // this provider to a new target would register that same manager for two documents — every
   // tree's shortcuts firing on both. Keyed by target, the manager this provider offers to a new
   // owner is one no other owner is using.
-  const ownManagers = React.useRef(new Map<object, ShortcutManager>());
+  // WEAK keys, so a pop-out or iframe document this provider has finished with can be collected.
+  // A strong map would hold every former target, and its whole DOM, until the provider unmounted.
+  const ownManagers = React.useRef(new WeakMap<object, ShortcutManager>());
+  // The detached case has no target to key on, so it gets its own slot rather than a sentinel
+  // object living in the map forever.
+  const ownDetached = React.useRef<ShortcutManager | null>(null);
   const detached = React.useMemo(() => {
-    const key = resolvedTarget ?? DETACHED;
-    const existing = ownManagers.current.get(key);
+    if (resolvedTarget === null) {
+      ownDetached.current ??= createShortcutManager(optionsRef.current);
+      return ownDetached.current;
+    }
+    const existing = ownManagers.current.get(resolvedTarget);
     if (existing) return existing;
     const created = createShortcutManager(optionsRef.current);
-    ownManagers.current.set(key, created);
+    ownManagers.current.set(resolvedTarget, created);
     return created;
   }, [resolvedTarget]);
 
@@ -178,11 +201,33 @@ export function ShortcutProvider({
   // someone else's `isApple`, `sequenceTimeoutMs` and clock. An owner merely awaiting its first
   // effect is a different thing: a sibling rendered in the same pass has already taken its
   // manager and registered bindings on it, and replacing it would strand them.
+  const fingerprint = optionsFingerprint(optionsRef.current);
   if (resolvedTarget !== null && (!owner || owner.retired)) {
-    owner = { manager: detached, providers: 0, retired: false };
+    owner = {
+      manager: detached,
+      providers: 0,
+      retired: false,
+      options: fingerprint,
+    };
     ownersByTarget.set(resolvedTarget, owner);
   }
-  const manager = owner ? owner.manager : detached;
+  // Adopting a shared manager means adopting the options it was built with. That is what sharing
+  // IS, and it is correct for genuine siblings — but a render that is abandoned before it commits
+  // leaves a reservation nothing will ever clean up, and the next provider on that target adopts
+  // its options silently. The mismatch is reported rather than hidden, because the symptom
+  // otherwise is `mod` meaning the wrong key with nothing to point at.
+  devWarnOnce(
+    !owner || owner.options === fingerprint,
+    "ShortcutProvider: another provider is already listening on this target with different " +
+      "options, so the ones passed here are being ignored. Managers are shared per target; give " +
+      "the providers matching options, or a target of their own."
+  );
+  const manager =
+    nestedOnSameTarget && parent
+      ? parent.manager
+      : owner
+        ? owner.manager
+        : detached;
 
   devWarnOnce(
     !nestedOnSameTarget,
@@ -201,7 +246,12 @@ export function ShortcutProvider({
       // render would find nothing on the replayed setup, so nothing would reattach and every
       // shortcut would be dead for the rest of the mount — in development only, which is the
       // worst place for it to hide.
-      entry = { manager, providers: 0, retired: false };
+      entry = {
+        manager,
+        providers: 0,
+        retired: false,
+        options: optionsFingerprint(optionsRef.current),
+      };
       ownersByTarget.set(resolvedTarget, entry);
     }
     const owned = entry;

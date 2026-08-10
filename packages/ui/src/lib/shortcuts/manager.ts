@@ -429,6 +429,11 @@ export function createShortcutManager(
     return `${keys}\u0001${options.depth}\u0001${options.blocking === true}\u0001${options.enabled !== false}`;
   }
 
+  /** Whether any enabled layer is currently holding the keyboard. */
+  function blocking(): boolean {
+    return ordered().some(layer => layer.options.blocking === true);
+  }
+
   function abandonSequence(): void {
     pendingAt = null;
     pressedEvents.length = 0;
@@ -693,13 +698,21 @@ export function createShortcutManager(
       return true;
     }
     // Pressing a modifier on its own is not a keystroke to match, and treating it as one would
-    // clear any sequence in progress the moment the user reached for Shift.
-    if (MODIFIER_KEYS.has(event.key)) return false;
+    // clear any sequence in progress the moment the user reached for Shift. A layer holding the
+    // keyboard still consumes it, though — without preventing its default, since a modifier press
+    // has no default worth suppressing, and without disturbing the sequence. Otherwise a legacy
+    // window-level handler reacting to Shift or Alt still changes application state underneath a
+    // grab that claims to hold every unmatched key.
+    if (MODIFIER_KEYS.has(event.key)) return blocking();
 
     // A focused native control gets its own activation keys before the shortcut stack sees them.
     if (controlOwnsKey(eventTarget(event), event)) {
       abandonSequence();
-      return false;
+      // Consumed WITHOUT preventing the default, exactly as a composing keystroke is: the
+      // control's own activation must go ahead, and no other listener should act on it either.
+      // A window-level owner acting on the Space that ticked a checkbox is the same double
+      // action in a quieter place.
+      return true;
     }
 
     const typing = isTypingTarget(eventTarget(event));

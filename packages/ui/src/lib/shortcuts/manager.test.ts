@@ -2293,3 +2293,75 @@ describe("a prefix conflict that only looks separable", () => {
     expect(manager).toBeDefined();
   });
 });
+
+describe("keys a grab holds without acting on them", () => {
+  it("stops a modifier press reaching a window listener", () => {
+    // A modifier press matches nothing, but a layer holding the keyboard still holds it — a
+    // legacy window handler reacting to Shift or Alt would otherwise change application state
+    // underneath a grab that claims every unmatched key.
+    const onWindow = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "drag",
+      depth: 1,
+      blocking: true,
+    });
+    const detach = manager.attach(document);
+    window.addEventListener("keydown", onWindow);
+    document.body.dispatchEvent(press("Shift"));
+    window.removeEventListener("keydown", onWindow);
+    detach();
+    expect(onWindow).not.toHaveBeenCalled();
+  });
+
+  it("lets a modifier press through when nothing is holding the keyboard", () => {
+    // The control: without a blocking layer a modifier press is not this manager's business.
+    const onWindow = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], { name: "shell", depth: 0 });
+    const detach = manager.attach(document);
+    window.addEventListener("keydown", onWindow);
+    document.body.dispatchEvent(press("Shift"));
+    window.removeEventListener("keydown", onWindow);
+    detach();
+    expect(onWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a sequence alive across a modifier press", () => {
+    // Consuming it must not disturb the sequence: reaching for Shift mid-sequence is ordinary.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("g d", run)], {
+      name: "drag",
+      depth: 1,
+      blocking: true,
+    });
+    manager.handle(press("g"));
+    manager.handle(press("Shift"));
+    manager.handle(press("d"));
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a key its own control owns", () => {
+  it("is consumed without losing the control's activation", () => {
+    // Both halves: the checkbox still toggles, because the default is untouched; and a
+    // window-level owner does not also act on the Space that ticked it.
+    const onWindow = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("Space", vi.fn())], { name: "shell", depth: 0 });
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    document.body.append(box);
+    const detach = manager.attach(document);
+    window.addEventListener("keydown", onWindow);
+    const event = press(" ");
+    box.dispatchEvent(event);
+    window.removeEventListener("keydown", onWindow);
+    detach();
+    box.remove();
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(onWindow).not.toHaveBeenCalled();
+  });
+});
