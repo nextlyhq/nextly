@@ -130,6 +130,7 @@ describe("the root entry", () => {
       "createStandaloneContext",
       "defineBlock",
       "emptyDataProvider",
+      "fetchPolicyLabel",
       "migrationSourceFor",
       "prepareDocumentForRead",
       "pruneHiddenNodes",

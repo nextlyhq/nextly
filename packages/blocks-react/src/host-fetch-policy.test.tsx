@@ -16,8 +16,11 @@ import {
 import type { RemotePattern } from "@nextlyhq/blocks-engine";
 
 import { renderEmbed } from "./blocks/embed";
+import { renderImage } from "./blocks/image";
 import type { BlockHostPolicy, BlockRenderArgs, PageContext } from "./context";
+import type { PageStyles } from "./styles";
 import { PageRenderer } from "./page-renderer";
+import { fetchPolicyLabel } from "./styles";
 import { createBlockResolver } from "./resolver";
 import { coreBlocks } from "./blocks";
 
@@ -140,5 +143,148 @@ describe("the host fetch list", () => {
       />
     );
     expect(markup).toContain("cdn.other.test");
+  });
+});
+
+describe("core/image", () => {
+  function imageArgs<P>(
+    props: P,
+    hostPolicy?: BlockHostPolicy,
+    mediaUrl?: string
+  ) {
+    return {
+      props,
+      node: { id: "n1", type: "core/image", version: 1, props: {} },
+      className: "nx-n1",
+      ctx: {
+        ...context(),
+        resolveMedia: () =>
+          Promise.resolve(
+            mediaUrl === undefined ? null : { url: mediaUrl, alt: "a" }
+          ),
+      },
+      renderSlot: () => null,
+      ...(hostPolicy === undefined ? {} : { hostPolicy }),
+    } as BlockRenderArgs<P>;
+  }
+
+  it("refuses an unlisted host on the typed src", async () => {
+    const out = await renderImage(
+      imageArgs(
+        { src: "https://cdn.other.test/a.png", alt: "x" },
+        {
+          remotePatterns: ALLOWED,
+        }
+      )
+    );
+    expect(out).toBeNull();
+  });
+
+  it("refuses an unlisted host the RESOLVER returned", async () => {
+    // The resolver is trusted code, but the URL it hands back came out of a
+    // media record a person filled in, so it names a host on the same terms the
+    // typed prop does. Checking one of the pair and not the other is the shape
+    // this exact block got wrong before.
+    const out = await renderImage(
+      imageArgs(
+        { mediaId: "m1", alt: "x" },
+        { remotePatterns: ALLOWED },
+        "https://cdn.other.test/a.png"
+      )
+    );
+    expect(out).toBeNull();
+  });
+
+  it("still renders an allowed host through both routes", async () => {
+    // The control. Without it, a render that returned null for any reason at
+    // all would satisfy both assertions above.
+    const typed = await renderImage(
+      imageArgs(
+        { src: "https://player.allowed.test/a.png", alt: "x" },
+        {
+          remotePatterns: ALLOWED,
+        }
+      )
+    );
+    expect(renderToStaticMarkup(typed)).toContain("player.allowed.test");
+
+    const resolved = await renderImage(
+      imageArgs(
+        { mediaId: "m1", alt: "x" },
+        { remotePatterns: ALLOWED },
+        "https://player.allowed.test/b.png"
+      )
+    );
+    expect(renderToStaticMarkup(resolved)).toContain("player.allowed.test");
+  });
+
+  it("asks nothing when the host configured no list", async () => {
+    const out = await renderImage(
+      imageArgs({ src: "https://cdn.other.test/a.png", alt: "x" })
+    );
+    expect(renderToStaticMarkup(out)).toContain("cdn.other.test");
+  });
+});
+
+describe("a stored stylesheet records the policy that compiled it", () => {
+  const stale: PageStyles = {
+    css: ".nx-n1{background-image:url(https://cdn.other.test/a.png)}",
+    classes: { n1: "nx-n1" },
+  };
+
+  it("does not publish a sheet compiled under another policy", () => {
+    // The artifact is a CACHE of a compile, and the fetch list is one of that
+    // compile's inputs. A sheet written before the policy existed carries URLs
+    // the current rules would refuse, so it cannot be reused just because the
+    // document is unchanged.
+    const markup = renderToStaticMarkup(
+      <PageRenderer
+        document={styledDocument("https://player.allowed.test/a.png")}
+        blocks={createBlockResolver(coreBlocks)}
+        styles={stale}
+        styleContext={{ breakpoints: { base: {} } }}
+        hostPolicy={{ remotePatterns: ALLOWED }}
+      />
+    );
+    expect(markup).not.toContain("cdn.other.test");
+  });
+
+  it("reuses a sheet stamped with the policy in force", () => {
+    // The control, and the reason the stamp exists rather than recompiling
+    // always: a sheet that WAS compiled under this policy is still served from
+    // the store, so a site with a policy does not pay a compile per render.
+    const stamped: PageStyles = {
+      ...stale,
+      css: ".nx-n1{color:rebeccapurple}",
+      fetchPolicyId: fetchPolicyLabel(ALLOWED),
+    };
+    const markup = renderToStaticMarkup(
+      <PageRenderer
+        document={styledDocument("https://player.allowed.test/a.png")}
+        blocks={createBlockResolver(coreBlocks)}
+        styles={stamped}
+        styleContext={{ breakpoints: { base: {} } }}
+        hostPolicy={{ remotePatterns: ALLOWED }}
+      />
+    );
+    expect(markup).toContain("rebeccapurple");
+  });
+
+  it("labels the same policy the same however it is written", () => {
+    // Order is cosmetic; a reordering that changed the label would recompile
+    // every stored sheet on a site for nothing.
+    const a = fetchPolicyLabel([
+      { protocol: "https", hostname: "a.test" },
+      { protocol: "https", hostname: "b.test" },
+    ]);
+    const b = fetchPolicyLabel([
+      { protocol: "https", hostname: "b.test" },
+      { protocol: "https", hostname: "a.test" },
+    ]);
+    expect(a).toBe(b);
+    // An EMPTY list allows no remote host and is a real policy; having no list
+    // asks nothing. They must not label the same.
+    expect(fetchPolicyLabel([])).not.toBe(fetchPolicyLabel(undefined));
+    expect(fetchPolicyLabel(undefined)).toBeUndefined();
   });
 });

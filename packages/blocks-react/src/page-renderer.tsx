@@ -26,6 +26,7 @@ import {
 } from "./resolver";
 import { dedupeNodeIds, sanitizeDocument } from "./sanitize";
 import {
+  fetchPolicyLabel,
   isRecordedGatedEntry,
   readableGatedRules,
   resolvePageStyles,
@@ -72,8 +73,10 @@ export interface PageRendererProps {
    * as a render argument, so the host's context object is passed through
    * untouched rather than copied to carry it.
    *
-   * Omitted means the host configured nothing, and every policy then takes its
-   * closed default.
+   * Omitted means the host configured nothing. What that GRANTS differs per
+   * field and is documented on each: `trustedFrameOrigins` defaults closed and
+   * grants nothing, while `remotePatterns` defaults open and asks nothing, so
+   * omitting this does not deny remote fetches.
    */
   hostPolicy?: BlockHostPolicy;
 }
@@ -411,6 +414,11 @@ export function PageRenderer({
   // host that passed one deliberately should not have it replaced by one
   // derived here.
   const patterns = hostPolicy?.remotePatterns;
+  // The label a compiled sheet is stamped with, and the one a stored sheet is
+  // checked against. Derived from the patterns themselves so it changes exactly
+  // when they do: an editor who adds a host gets every stored sheet recompiled
+  // once, with nothing to remember to invalidate.
+  const fetchPolicyId = fetchPolicyLabel(patterns);
   const compileContext =
     styleContext === undefined
       ? undefined
@@ -435,7 +443,8 @@ export function PageRenderer({
     styles,
     compileContext,
     resolver,
-    repairedDocument
+    repairedDocument,
+    { fetchPolicyId }
   );
   const rootClassName = scope ? `${PAGE_ROOT_CLASS} ${scope}` : PAGE_ROOT_CLASS;
 

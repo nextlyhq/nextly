@@ -120,9 +120,21 @@ export interface QueryBudget {
  * dropped by a container that rebuilt the object. As an argument supplied by
  * the boundary, it can be neither.
  *
- * Every field is optional and every default is the closed one. A host that
- * configures nothing gets the restrictive behaviour, which is the only safe
- * direction for a value that arrives absent.
+ * Every field is optional, and an absent field means one of two different
+ * things, so read the field to know which.
+ *
+ * `trustedFrameOrigins` defaults CLOSED: absent grants nothing, because the
+ * grant it controls lets a frame script the page around it, and no host should
+ * arrive at that by omission.
+ *
+ * `remotePatterns` defaults OPEN: absent means the question is not asked at all.
+ * It has to, because it arrived after the renderer shipped, and defaulting it
+ * closed would stop every existing site loading its own images the day it
+ * upgraded. A host that wants remote fetches bounded has to say so.
+ *
+ * The rule for anything added here later: a field whose closed default would
+ * break a site that never configured it defaults open and says so, in the field
+ * where someone deciding whether to configure it will read it.
  */
 export interface BlockHostPolicy {
   /**

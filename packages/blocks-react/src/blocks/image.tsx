@@ -12,7 +12,7 @@
  *
  * @module blocks/image
  */
-import { defineBlock } from "@nextlyhq/blocks-engine";
+import { defineBlock, isFetchableUrl } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
@@ -41,6 +41,7 @@ export async function renderImage({
   props,
   className,
   ctx,
+  hostPolicy,
 }: BlockRenderArgs<ImageProps>): Promise<ReactElement | null> {
   const mediaId = text(props.mediaId);
   // A resolver that throws must not take the page with it: media lives behind
@@ -53,6 +54,15 @@ export async function renderImage({
   // Nothing to show. An `<img>` with no `src` still requests the current page
   // in some browsers, so render nothing rather than a broken element.
   if (src === undefined) return null;
+  // The host's fetch list, applied to whichever URL was SELECTED rather than to
+  // the typed one alone. A URL the resolver returned came out of a media record
+  // a person filled in, so it names a host on the same terms the typed prop
+  // does, and checking only one of the pair would leave the other unbounded.
+  //
+  // Asked here rather than at the boundary, which sees the element this
+  // returned and not the URL chosen to build it.
+  const patterns = hostPolicy?.remotePatterns;
+  if (patterns !== undefined && !isFetchableUrl(src, patterns)) return null;
 
   const decorative = flag(props.decorative);
   // Three states, not two, and `text()` collapses two of them: it answers `""`
