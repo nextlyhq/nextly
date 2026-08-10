@@ -430,6 +430,21 @@ export {
   type PluginMenuItem,
 } from "./plugins";
 
+// Value exports for the email provider contract. A plugin calls
+// defineEmailProvider so its own config type is checked where the definition is
+// written, and erased only at the boundary the registry stores it behind.
+export {
+  defineEmailProvider,
+  MAX_EMAIL_PROVIDER_TYPE_LENGTH,
+} from "./domains/email/provider-definition";
+export type {
+  EmailProviderDefinition,
+  EmailProviderConfigField,
+  EmailProviderCapabilities,
+  EmailProviderDescriptor,
+  RegisteredEmailProvider,
+} from "./domains/email/provider-definition";
+
 // Field-type registry lookup (C7/D16) — lets a plugin/host ask whether a
 // contributed field type may appear on a given admin surface, so surfaces
 // (e.g. the form builder) can validate a plugin field type the same way core

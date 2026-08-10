@@ -58,14 +58,28 @@ export interface PageBuilderOptions {
    * surface a parser cannot reach and one reason `cspDirectives()` emits
    * `base-uri`. That surface is stricter than this value, not governed by it.
    *
-   * **Not `@nextlyhq/blocks-react`**, which has no way to bound what a page
-   * fetches. Its checks are about schemes: the engine's CSS compiler limits an
-   * EXPLICIT scheme to `http`/`https` and leaves a scheme-less value alone, so
-   * `//cdn.example/a.png` passes; a block's attribute props reject
-   * `javascript:`, `vbscript:` and `data:` and admit every other scheme. It does
-   * compare hosts in one place — `hostPolicy.trustedFrameOrigins` decides
-   * whether an embed keeps its own origin — but that governs a sandbox
-   * permission, not whether the frame is loaded.
+   * **Also `@nextlyhq/blocks-react`**, which now bounds what a published page
+   * fetches — but only when it is TOLD to, and from its own field. Pass the same
+   * list as `hostPolicy={{ remotePatterns }}` on its `PageRenderer`, or as
+   * `hostPolicy` in `createBlocksPage({ ... })`. Leaving it unset while this is
+   * configured means the editor and the published page enforce different rules,
+   * which is the failure this note exists to prevent: the canvas refuses a host
+   * the live page then loads.
+   *
+   * That covers the three ways the published page reaches out — a block's own
+   * markup, the compiled stylesheet, and the link-preview image in metadata.
+   * The renderer's remaining checks are about SCHEMES and stay narrower than a
+   * host rule: the engine's CSS compiler limits an explicit scheme to
+   * `http`/`https` and leaves a scheme-less value alone, so `//cdn.example/a.png`
+   * passes the scheme check and is judged by the host list instead; a block's
+   * attribute props admit `http`, `https`, `mailto` and `tel` and refuse every
+   * other scheme.
+   *
+   * A CUSTOM block written against `blocks-react` is bounded only if it asks,
+   * for the same reason as above: the boundary sees the element a block returned
+   * and not the URLs it chose. `hostPolicy.trustedFrameOrigins` remains a
+   * separate question — it decides whether an embed keeps its own origin, which
+   * is a sandbox permission rather than whether the frame is loaded.
    *
    * Object patterns only. This value is serialized to the browser and a `URL`
    * does not survive that: it would arrive as a string. Converting one here

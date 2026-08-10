@@ -1,3 +1,4 @@
+import { gridStructure } from "../../core/block-structure";
 import { defineBlock } from "../../core/registry";
 
 // Grid layout: the column count + gap are driven by the `columns`/`gap` content fields and
@@ -13,13 +14,11 @@ interface GridProps {
 const CSS_LEN = /^\d+(?:\.\d+)?(px|rem|em|%|vw|vh|ch)$/;
 
 export const grid = defineBlock<GridProps>({
-  type: "core/grid",
+  ...gridStructure,
   version: 1,
   label: "Grid",
   icon: "LayoutGrid",
   category: "layout",
-  isContainer: true,
-  slots: [{ name: "default" }],
   defaultProps: {
     columns: 2,
     gap: "16px",

@@ -1,6 +1,6 @@
 {
   "name": "nextly",
-  "version": "0.0.2-alpha.54",
+  "version": "0.0.2-alpha.55",
   "description": "Nextly - Core functionality, database, services, and APIs",
   "license": "MIT",
   "type": "module",
@@ -170,6 +170,10 @@
     "./next": {
       "types": "./dist/next.d.ts",
       "import": "./dist/next.mjs"
+    },
+    "./api/email-provider-types": {
+      "types": "./dist/api/email-provider-types.d.ts",
+      "import": "./dist/api/email-provider-types.mjs"
     }
   },
   "files": [

@@ -89,6 +89,42 @@ export interface CompileOptions {
    * node from wearing the document node's class — and its styles.
    */
   refScope?: string;
+  /**
+   * The placements whose own visibility settings share this element, and where each ends up hidden.
+   *
+   * Hiding is the one thing a placement cannot express by simply outranking its target. Every
+   * other property is overridden by a later declaration of the same property, but `display: none`
+   * is cancelled only by naming the display the element would otherwise have had, and no CSS value
+   * means that: `revert` drops the whole author origin, taking the app's own classes with it, and
+   * `unset` resolves to `inline`. So a placement that speaks about visibility is taken out of this
+   * node's hide rules and answered separately, per BAND — a range with both ends closed — because
+   * bands do not overlap and so never need undoing.
+   *
+   * Only the target's ROOT can carry these, because that is the only element a placement's class
+   * reaches.
+   */
+  placementOverrides?: readonly PlacementOverride[];
+  /**
+   * Classes of the placements whose visibility has already been resolved into bands.
+   *
+   * Those nodes must not ALSO emit the ordinary open-ended rules. Their class is on the element
+   * their target renders, so both answers would land there at one specificity — and the open-ended
+   * one hides at every width narrower than the breakpoint it names, which is exactly the reading
+   * the band resolution exists to replace.
+   */
+  resolvedPlacements?: ReadonlySet<string>;
+}
+
+/**
+ * One placement sharing an element with the node it places.
+ *
+ * `hiddenBands` absent means "exempt this placement, and let a nearer node answer for it" — which
+ * is what an intermediate node in a chain of root aliases needs, since the final answer belongs to
+ * the node at the end of the chain and emitting it twice would say the same thing twice.
+ */
+export interface PlacementOverride {
+  className: string;
+  hiddenBands?: readonly string[];
 }
 
 /**
@@ -207,6 +243,13 @@ export function documentKey(nodeId: string): string {
  *
  * Cycle-guarded by the visited set, which is what the renderer's `refStack` does for the same
  * reason: a block that references itself must not walk forever here either.
+ *
+ * Returned DEPENDENCY-FIRST: a block appears after every block it places. Emitting in this order
+ * is what lets a placement override the block it places, because a resolved ref renders its target
+ * in its place and both classes land on one element — so precedence is source order and the later
+ * rule wins. An alphabetical order would decide that by ref id, which is not a preference anyone
+ * expressed. A cycle has no dependency-first order at all; the visited set breaks it at the second
+ * visit, and the block the walk reached first is the one that ends up later.
  */
 export function placedRefIds(
   doc: BlockDocument,
@@ -220,12 +263,14 @@ export function placedRefIds(
     if (refId === "" || seen.has(refId)) return;
     const target = refs?.[refId];
     if (!target) return;
+    // Marked before recursing, not after: a block reachable from its own subtree would otherwise
+    // walk forever.
     seen.add(refId);
-    placed.push(refId);
     walk(target, visit);
+    placed.push(refId);
   };
   walk(doc.root, visit);
-  return placed.sort();
+  return placed;
 }
 
 /** Every node id in a document, in document order. */
@@ -573,14 +618,56 @@ export function compileNodeCss(
   emit(node.styleHover, ":hover");
 
   // Descendant link colors (Default / Hover) → `.cls a` / `.cls a:hover`.
-  const base = node.style?.base;
-  if (base?.linkColor != null) {
-    const v = safeValue(resolveScalar(base.linkColor), remotePatterns);
-    if (v) blocks.push(`${self} a { color: ${v}; }`);
-  }
-  if (base?.linkColorHover != null) {
-    const v = safeValue(resolveScalar(base.linkColorHover), remotePatterns);
-    if (v) blocks.push(`${self} a:hover { color: ${v}; }`);
+  //
+  // Per breakpoint, like every other declaration: the inspector offers these controls whatever
+  // device is selected, so reading only `base` stored the tablet and mobile values and compiled
+  // nothing from them.
+  //
+  // From `styleHover` as well: the Style tab writes every control under whichever mode is
+  // selected, and the generic hover pass compiles declarations rather than these descendant rules,
+  // so a link colour set in Hover mode was stored and compiled by nobody.
+  //
+  // Each rule names the element twice: the links INSIDE this block, and this block itself when it
+  // IS a link. A block whose root renders an anchor — a linked button, an uncaptioned linked image
+  // — carries the class on the `<a>`, which a descendant selector cannot reach, and that is exactly
+  // the block a reusable placement is most likely to be styling. The compiler cannot know what
+  // element a definition renders, so it addresses both; for a block whose root is a section the
+  // second selector simply matches nothing.
+  const anchorSelf = (hovered: boolean): string =>
+    `${opts.scope ? `.${opts.scope} ` : ""}a.${cls}${hovered ? ":hover" : ""}`;
+  const emitLinkColors = (
+    values: StyleValues | undefined,
+    hoveredTier: boolean,
+    wrap: (rule: string) => string
+  ): void => {
+    if (!values) return;
+    const owner = hoveredTier ? `${self}:hover` : self;
+    for (const [key, suffix] of [
+      ["linkColor", " a"],
+      ["linkColorHover", " a:hover"],
+    ] as const) {
+      const raw = values[key];
+      if (raw == null) continue;
+      const v = safeValue(resolveScalar(raw), remotePatterns);
+      if (!v) continue;
+      const hovered = hoveredTier || key === "linkColorHover";
+      blocks.push(
+        wrap(`${owner}${suffix}, ${anchorSelf(hovered)} { color: ${v}; }`)
+      );
+    }
+  };
+  for (const [style, hoveredTier] of [
+    [node.style, false],
+    [node.styleHover, true],
+  ] as const) {
+    emitLinkColors(style?.base, hoveredTier, rule => rule);
+    for (const bp of bps) {
+      emitLinkColors(
+        style?.[bp.id],
+        hoveredTier,
+        rule => `@media (max-width: ${bp.maxWidth}px) { ${rule} }`
+      );
+    }
   }
 
   // Entrance motion.
@@ -588,15 +675,43 @@ export function compileNodeCss(
   if (motionCss) blocks.push(motionCss);
 
   // Per-breakpoint visibility → display:none media queries.
-  if (node.visibility) {
-    if (node.visibility.base === false) {
-      blocks.push(`${self} { display: none; }`);
+  // Every placement that speaks about visibility is taken out of this node's own hide rules and
+  // given its own, because its answer cannot be derived from theirs: a hide declared at a broad
+  // breakpoint is still in force at a narrow one, so exempting a placement from the rule for the
+  // breakpoint it named would leave a broader rule hiding it anyway.
+  const overriding = opts.placementOverrides ?? [];
+  // A node whose visibility was resolved into bands does not also emit the open-ended rules, or the
+  // two answers land on one element and the broader one wins — which is the answer the resolution
+  // exists to replace.
+  const own = opts.resolvedPlacements?.has(cls) ? undefined : node.visibility;
+  // The band rules belong to the placements, not to this node, so they are emitted even when this
+  // node says nothing about visibility itself. Gating them on its own settings is what would make
+  // suppressing a placement's rules fail OPEN.
+  if (own || overriding.length) {
+    const exempt = overriding
+      .map(({ className }) => `:not(.${className})`)
+      .join("");
+    if (own?.base === false) {
+      blocks.push(`${self}${exempt} { display: none; }`);
     }
     for (const bp of bps) {
-      if (node.visibility[bp.id] === false) {
+      if (own?.[bp.id] === false) {
         blocks.push(
-          `@media (max-width: ${bp.maxWidth}px) { ${self} { display: none; } }`
+          `@media (max-width: ${bp.maxWidth}px) { ${self}${exempt} { display: none; } }`
         );
+      }
+    }
+    // Each overriding placement gets rules confined to one band, never overlapping, so nothing has
+    // to be undone: the band is already the answer.
+    const bands = new Set(scopesNarrowestFirst(bps));
+    for (const { className, hiddenBands } of overriding) {
+      for (const bandId of hiddenBands ?? []) {
+        // A band this compilation does not know is skipped rather than guessed at: `hiddenBands` is
+        // a public field, and a rule for a band that does not exist would hide at every width.
+        if (!bands.has(bandId)) continue;
+        const query = bandQuery(bandId, bps);
+        const rule = `${self}.${className} { display: none; }`;
+        blocks.push(query === undefined ? rule : `@media ${query} { ${rule} }`);
       }
     }
   }
@@ -604,32 +719,279 @@ export function compileNodeCss(
   return blocks.join("\n");
 }
 
-/** One <style> block worth of CSS for the whole document. */
+/**
+ * The scopes a visibility value can be declared at, NARROWEST first.
+ *
+ * Resolution order, not declaration order: a value declared at a narrow breakpoint answers for
+ * that breakpoint even when a broader one also has a value, which is what desktop-first means.
+ */
+function scopesNarrowestFirst(bps: BreakpointDef[]): string[] {
+  return [
+    ...[...bps].sort((a, b) => a.maxWidth - b.maxWidth).map(bp => bp.id),
+    "base",
+  ];
+}
+
+/**
+ * How far above a breakpoint the next band starts.
+ *
+ * Small enough that no device width falls between the two, and large enough to survive the
+ * rounding a browser applies to a media-query length.
+ */
+const BAND_EDGE = 0.02;
+
+/**
+ * The media query for a BAND: the widths where one breakpoint answers and no narrower one does.
+ *
+ * The stored breakpoints are open-ended (`max-width` alone), so they nest — `tablet` covers mobile
+ * widths too. A band closes the lower end against the next breakpoint down, which is what makes a
+ * per-band rule final: no other band's rule reaches those widths, so nothing has to be overridden.
+ *
+ * `undefined` means EVERY width, not "no such band": with no breakpoints configured, `base` is the
+ * only band there is and it needs a rule with no media query at all. Dropping it there would leave
+ * a placement whose ordinary rules have already been suppressed with nothing hiding it.
+ */
+function bandQuery(bandId: string, bps: BreakpointDef[]): string | undefined {
+  const ascending = [...bps].sort((a, b) => a.maxWidth - b.maxWidth);
+  const index = ascending.findIndex(bp => bp.id === bandId);
+  const narrower = index > 0 ? ascending[index - 1] : undefined;
+  // Just above the breakpoint below, not a whole pixel above it: a whole pixel leaves fractional
+  // widths in no band at all, so a viewport at 640.5px would match neither `max-width: 640px` nor
+  // `min-width: 641px` and the element the band exists to hide would appear. Fractional widths are
+  // ordinary — page zoom and display scaling both produce them.
+  const above = (bp: BreakpointDef): string =>
+    `(min-width: ${bp.maxWidth + BAND_EDGE}px)`;
+  const floor = narrower ? above(narrower) : undefined;
+  if (bandId === "base") {
+    const widest = ascending[ascending.length - 1];
+    return widest ? above(widest) : undefined;
+  }
+  const self = ascending[index];
+  if (!self) return undefined;
+  const ceiling = `(max-width: ${self.maxWidth}px)`;
+  return floor ? `${floor} and ${ceiling}` : ceiling;
+}
+
+/**
+ * Whether a node is hidden in each band, reading the tiers sharing its element outermost first.
+ *
+ * The tiers are the classes on one element: the placement, then any node whose root is an alias
+ * for this one, then the node itself. They are emitted in that order reversed, so the outermost is
+ * the last rule and wins — and this resolves them the same way, breakpoint specificity first and
+ * the outer tier breaking ties.
+ */
+function hiddenBands(
+  tiersOutermostFirst: readonly (BlockNode["visibility"] | undefined)[],
+  bps: BreakpointDef[]
+): string[] {
+  const scopes = scopesNarrowestFirst(bps);
+  const hidden: string[] = [];
+  for (const [index, band] of scopes.entries()) {
+    // The scopes that cover this band: itself and everything broader.
+    let verdict: boolean | undefined;
+    for (const scope of scopes.slice(index)) {
+      for (const tier of tiersOutermostFirst) {
+        const value = tier?.[scope];
+        if (typeof value === "boolean") {
+          verdict = value;
+          break;
+        }
+      }
+      if (verdict !== undefined) break;
+    }
+    if (verdict === false) hidden.push(band);
+  }
+  return hidden;
+}
+
+/**
+ * The chain of ref ids a placement's class actually lands on.
+ *
+ * A reusable block whose ROOT is itself a `core/ref` renders its own target in its place, so one
+ * element ends up carrying the classes of every block in the chain — and a placement's class rides
+ * all the way down with them. Registering the placement against the ref it names alone would leave
+ * the block at the end of the chain hiding the very element the placement is styling.
+ */
+function rootAliasChain(
+  refId: string,
+  refs: Record<string, BlockNode> | undefined
+): { chain: string[]; roots: BlockNode[] } {
+  const chain: string[] = [];
+  const roots: BlockNode[] = [];
+  const seen = new Set<string>();
+  let current: string | undefined = refId;
+  while (current !== undefined && !seen.has(current)) {
+    const target: BlockNode | undefined = refs?.[current];
+    if (!target) break;
+    seen.add(current);
+    chain.push(current);
+    roots.push(target);
+    current =
+      target.type === "core/ref" && typeof target.props?.refId === "string"
+        ? target.props.refId
+        : undefined;
+  }
+  return { chain, roots };
+}
+
+/**
+ * Per reusable block, the placements whose visibility settings share its root element.
+ *
+ * Unchecking "Hide on mobile" stores `true`, not an absent key, so a placement of a block that its
+ * own definition hides is a state the inspector can reach — and one no later declaration can undo.
+ * See {@link CompileOptions.placementOverrides}.
+ */
+function placementOverridesByRef(
+  doc: BlockDocument,
+  refs: Record<string, BlockNode> | undefined,
+  classes: ReadonlyMap<string, string>,
+  bps: BreakpointDef[]
+): { byRef: Map<string, PlacementOverride[]>; resolved: Set<string> } {
+  const byRef = new Map<string, PlacementOverride[]>();
+  const resolved = new Set<string>();
+  // A library block's own root is not a placement. It renders only because something placed the
+  // block it belongs to, so its element always has an outer tier — and one verdict per element is
+  // the whole point, since a verdict reached without the outer tier would contradict it on the very
+  // element they share.
+  const libraryRoots = new Set<BlockNode>(
+    Object.values(refs ?? {}).filter((root): root is BlockNode => !!root)
+  );
+  const collect = (node: BlockNode, refScope?: string): void => {
+    if (node.type !== "core/ref" || libraryRoots.has(node)) return;
+    const refId = typeof node.props?.refId === "string" ? node.props.refId : "";
+    if (refId === "" || !refs?.[refId]) return;
+    const { chain, roots } = rootAliasChain(refId, refs);
+    // The tiers on that element, outermost first: the placement, then every alias root between it
+    // and the node that finally renders, then that node.
+    const rendering = roots[roots.length - 1];
+    const above = [
+      node.visibility,
+      ...roots.slice(0, -1).map(r => r.visibility),
+    ];
+    // Nothing above the rendering node has an opinion, so its own rules already answer for every
+    // placement of it and per-placement ones would only repeat them once per placement.
+    if (!above.some(visibility => visibility !== undefined)) return;
+    const key =
+      refScope === undefined || refScope === ""
+        ? documentKey(node.id)
+        : refScopedKey(refScope, node.id);
+    const className = classes.get(key) ?? nodeClassName(key);
+    resolved.add(className);
+    for (const [index, id] of chain.entries()) {
+      const last = index === chain.length - 1;
+      const entry: PlacementOverride = last
+        ? {
+            className,
+            hiddenBands: hiddenBands([...above, rendering?.visibility], bps),
+          }
+        : { className };
+      byRef.set(id, [...(byRef.get(id) ?? []), entry]);
+    }
+  };
+  walk(doc.root, n => collect(n));
+  for (const refId of placedRefIds(doc, refs)) {
+    const target = refs?.[refId];
+    if (target) walk(target, n => collect(n, refId));
+  }
+  return { byRef, resolved };
+}
+
+/**
+ * The units a page's styles are emitted in, in the order they must appear.
+ *
+ * Each placed reusable block is a unit and the document is the last one, so a unit's rules all
+ * precede the rules of anything that PLACES it. Ordering the sheet by unit rather than by tier is
+ * what keeps a placement's precedence: a rule from a later unit wins whatever tier it came from,
+ * and a rule from a later TIER would otherwise win whatever unit it came from.
+ */
+function styleUnits(
+  doc: BlockDocument,
+  refs: Record<string, BlockNode> | undefined
+): { refId?: string; root: BlockNode }[] {
+  const units: { refId?: string; root: BlockNode }[] = [];
+  for (const refId of placedRefIds(doc, refs)) {
+    const target = refs?.[refId];
+    if (target) units.push({ refId, root: target });
+  }
+  units.push({ root: doc.root });
+  return units;
+}
+
+/** The generated rules of ONE unit. */
+function generatedUnitCss(
+  unit: { refId?: string; root: BlockNode },
+  nodeOpts: CompileOptions,
+  overrides: Map<string, PlacementOverride[]>
+): string[] {
+  const parts: string[] = [];
+  const placements = unit.refId ? overrides.get(unit.refId) : undefined;
+  walk(unit.root, n => {
+    const css = compileNodeCss(n, {
+      ...nodeOpts,
+      refScope: unit.refId,
+      // Only the root: a placement's class is applied to the element its target renders, and the
+      // target's descendants are not that element.
+      placementOverrides: n.id === unit.root.id ? placements : undefined,
+    });
+    if (css) parts.push(css);
+  });
+  return parts;
+}
+
+/** Everything the generated tier needs, resolved once for the whole document. */
+function styleContextFor(doc: BlockDocument, opts: CompileOptions) {
+  const classes = opts.classes ?? documentNodeClasses(doc, opts.refs);
+  const { byRef: overrides, resolved: resolvedPlacements } =
+    placementOverridesByRef(
+      doc,
+      opts.refs,
+      classes,
+      opts.breakpoints ?? DEFAULT_BREAKPOINTS
+    );
+  return {
+    classes,
+    overrides,
+    nodeOpts: { ...opts, classes, resolvedPlacements },
+  };
+}
+
+/**
+ * One <style> block worth of GENERATED CSS for the whole document.
+ *
+ * This is one tier of two. A page also has per-block custom CSS, and the two cannot simply be
+ * concatenated — see {@link compileDocumentStyles}, which is what a renderer should call.
+ */
 export function compileDocumentCss(
   doc: BlockDocument,
   opts: CompileOptions = {}
 ): string {
-  // Resolved once for the document and passed down, so every node in this
-  // stylesheet is named by the same map the markup is named by.
-  const classes = opts.classes ?? documentNodeClasses(doc, opts.refs);
-  const nodeOpts = { ...opts, classes };
-  const parts: string[] = [];
-  walk(doc.root, n => {
-    const css = compileNodeCss(n, nodeOpts);
-    if (css) parts.push(css);
-  });
-  // The library, after the document. A reusable block's own styles are the tier BELOW a
-  // placement's, so at one specificity source order is what makes a placement able to override
-  // the block it places — the same reason the tiers above are emitted whole, one after another.
-  for (const refId of placedRefIds(doc, opts.refs)) {
-    const target = opts.refs?.[refId];
-    if (!target) continue;
-    walk(target, n => {
-      const css = compileNodeCss(n, { ...nodeOpts, refScope: refId });
-      if (css) parts.push(css);
-    });
-  }
-  return parts.join("\n");
+  const { overrides, nodeOpts } = styleContextFor(doc, opts);
+  return styleUnits(doc, opts.refs)
+    .flatMap(unit => generatedUnitCss(unit, nodeOpts, overrides))
+    .join("\n");
+}
+
+/**
+ * Both style tiers for a page, ordered so that a placement outranks the block it places.
+ *
+ * The generated tier and the custom-CSS tier are emitted at the SAME specificity, so concatenating
+ * one after the other makes the later TIER win — and a reusable block's custom CSS would beat a
+ * placement's typed controls, which is the opposite of what placing a block means. Interleaved by
+ * unit, precedence is decided by which block is doing the placing, and a node's own custom CSS
+ * still beats its own generated rules because it follows them within the unit.
+ */
+export function compileDocumentStyles(
+  doc: BlockDocument,
+  opts: CompileOptions = {}
+): string {
+  const { classes, overrides, nodeOpts } = styleContextFor(doc, opts);
+  return styleUnits(doc, opts.refs)
+    .flatMap(unit => [
+      ...generatedUnitCss(unit, nodeOpts, overrides),
+      customUnitCss(unit, classes, opts.scope),
+    ])
+    .filter(Boolean)
+    .join("\n");
 }
 
 /**
@@ -690,10 +1052,35 @@ export function compileDocumentBlockCss(
     // would push an empty string for every block that has none.
     if (scoped.css) parts.push(scoped.css);
   };
-  walk(doc.root, n => collect(n));
-  for (const refId of placedRefIds(doc, refs)) {
-    const target = refs?.[refId];
-    if (target) walk(target, n => collect(n, refId));
+  // The library first and the document after it, the same order the generated-style tier uses.
+  // Both tiers put a placement's class and its target's class on one element at one specificity,
+  // so ordering one of them the other way round would let a reusable block's custom CSS override
+  // the custom CSS of a single placement of it while its generated styles lost to that placement.
+  for (const unit of styleUnits(doc, refs)) {
+    walk(unit.root, n => collect(n, unit.refId));
   }
+  return parts.join("\n");
+}
+
+/** The custom CSS of ONE unit, named through the same map as every other tier. */
+function customUnitCss(
+  unit: { refId?: string; root: BlockNode },
+  classes: ReadonlyMap<string, string>,
+  scope?: string
+): string {
+  const parts: string[] = [];
+  walk(unit.root, n => {
+    if (!n.customCss) return;
+    const key =
+      unit.refId === undefined || unit.refId === ""
+        ? documentKey(n.id)
+        : refScopedKey(unit.refId, n.id);
+    const scoped = sanitizeBlockCss(
+      n.customCss,
+      classes.get(key) ?? nodeClassName(key),
+      scope
+    );
+    if (scoped.css) parts.push(scoped.css);
+  });
   return parts.join("\n");
 }

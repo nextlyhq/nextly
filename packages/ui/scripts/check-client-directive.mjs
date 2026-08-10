@@ -39,6 +39,8 @@ const mustNotHave = [
   "tailwind-preset.cjs",
   "utils.mjs",
   "utils.cjs",
+  "color.mjs",
+  "color.cjs",
 ];
 
 const problems = [];

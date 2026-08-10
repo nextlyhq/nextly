@@ -30,8 +30,18 @@
 
 /**
  * Supported email provider types.
+ *
+ * Widened past the built-ins for the same reason `EmailConfig.providerConfig`
+ * is: the resolver builds every provider through the registry, so a contributed
+ * type is usable in `defineConfig` and stored in the database. Leaving this
+ * alias closed would have made two exported types disagree about which names
+ * exist — a consumer could configure `"postmark"` and then be unable to type
+ * the same value with the alias core exports for it.
+ *
+ * `(string & {})` rather than plain `string` so the literals still autocomplete;
+ * widening to `string` alone collapses the union and drops that affordance.
  */
-export type EmailProvider = "smtp" | "resend" | "sendlayer";
+export type EmailProvider = "smtp" | "resend" | "sendlayer" | (string & {});
 
 /**
  * SMTP provider configuration.
@@ -151,6 +161,38 @@ export type EmailTemplateFn = (data: {
   attachments?: EmailAttachmentInput[];
 };
 
+/**
+ * Configuration for a provider registered by a plugin.
+ *
+ * `provider` names a registered type; everything else is that provider's own
+ * configuration, which its `parseConfig` validates. Deliberately open — core
+ * cannot know the shape of a provider it was never compiled against.
+ *
+ * `custom: true` is a required discriminant, not decoration. Without it this
+ * branch is structurally `{ provider: string, ...anything }`, which also
+ * matches a MALFORMED built-in: `{ provider: "smtp" }` with no host, port or
+ * auth would satisfy the union and defer to a runtime failure an error the
+ * compiler used to catch. The literal keeps the built-in shapes fully checked
+ * while still admitting a provider core has never seen.
+ *
+ * @example
+ * ```ts
+ * email: {
+ *   providerConfig: {
+ *     custom: true,
+ *     provider: "postmark",
+ *     serverToken: process.env.POSTMARK_TOKEN!,
+ *   },
+ *   from: "Acme <noreply@example.com>",
+ * }
+ * ```
+ */
+export interface RegisteredProviderConfig {
+  custom: true;
+  provider: string;
+  [key: string]: unknown;
+}
+
 // ============================================================
 // Email Configuration
 // ============================================================
@@ -180,11 +222,21 @@ export type EmailTemplateFn = (data: {
  */
 export interface EmailConfig {
   /**
-   * Provider configuration. SMTP, Resend, or SendLayer.
-   * This is the code-first fallback — database-managed providers
-   * take precedence when configured via admin UI.
+   * Provider configuration. This is the code-first fallback — database-managed
+   * providers take precedence when configured via the admin UI.
+   *
+   * The three built-in shapes are named so they keep full checking and
+   * autocomplete. `RegisteredProviderConfig` admits any type a plugin
+   * registered: the resolver builds every provider through the registry, so
+   * restricting this to the built-ins would have made a contributed provider
+   * usable from the database and rejected by the compiler in `defineConfig` —
+   * the same provider working or not depending on where it was configured.
    */
-  providerConfig: SmtpConfig | ResendConfig | SendLayerConfig;
+  providerConfig:
+    | SmtpConfig
+    | ResendConfig
+    | SendLayerConfig
+    | RegisteredProviderConfig;
 
   /**
    * Default "from" address for all emails.

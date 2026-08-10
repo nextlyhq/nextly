@@ -58,7 +58,11 @@ import { mintPreviewLink, revokePreviewLinks } from "./api/preview-links";
 import { readOrGenerateRequestId, withRequestIdHeader } from "./api/request-id";
 // canonical respondX wire shapes (spec §5.1) instead of the
 // hand-rolled `{ data: <payload> }` envelope.
-import { respondData, respondMutation } from "./api/response-shapes";
+import {
+  SKIP_DATE_FORMATTING_HEADER,
+  respondData,
+  respondMutation,
+} from "./api/response-shapes";
 import { getSchemaJournal } from "./api/schema-journal";
 import {
   listWebhooks,
@@ -163,7 +167,6 @@ function getSchemaVersionHeader(): number {
  * whereas a path can be matched by a plugin route that happens to end in the
  * same segment and should keep its ordinary formatting.
  */
-const SKIP_DATE_FORMATTING_HEADER = "x-nextly-skip-date-formatting";
 
 async function applyGlobalDateFormatting(
   response: Response,
@@ -696,6 +699,20 @@ async function resolveAuthorization(
 
   // --- Email providers → manage-email-providers ---
   if (service === "emailProviders") {
+    // The provider catalog is the one read a CREATOR also needs. The
+    // permissions are seeded independently, so a role holding only
+    // create-email-providers can POST a provider and would otherwise be denied
+    // the descriptors describing which fields that provider requires --
+    // leaving the grant unusable for exactly the contributed providers the
+    // catalog exists to describe. It exposes definitions, never stored records.
+    if (method === "listProviderTypes") {
+      return requireAnyPermission(req, [
+        { action: "read", resource: "email-providers" },
+        { action: "create", resource: "email-providers" },
+        { action: "manage", resource: "email-providers" },
+      ]);
+    }
+
     const action = getActionFromMethod(httpMethod);
     return requireAnyPermission(req, [
       { action, resource: "email-providers" },

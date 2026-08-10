@@ -4,7 +4,11 @@
  * type + the `StyleValues` key it writes.
  */
 import { normalizeSupports, type BlockSupports } from "../../core/supports";
-import type { ControlRef } from "../../core/types";
+import {
+  OBJECT_FIT_VALUES,
+  OVERFLOW_VALUES,
+  type ControlRef,
+} from "../../core/types";
 
 export interface ControlGroup {
   group: string;
@@ -26,6 +30,11 @@ const WEIGHTS = opts(
 const TRANSFORMS = opts("none", "uppercase", "lowercase", "capitalize");
 const STYLES = opts("normal", "italic");
 const DECORATIONS = opts("none", "underline", "line-through", "overline");
+// A select with no options renders an empty menu, so the capability is advertised and unusable.
+// Built FROM the typed contract rather than beside it: a hand-written list here could offer a
+// value the exported types reject, and the editor would write documents nobody can represent.
+const OBJECT_FITS = opts(...OBJECT_FIT_VALUES);
+const OVERFLOWS = opts(...OVERFLOW_VALUES);
 const WIDTH_ALIGN = [
   { value: "none", label: "None" },
   { value: "wide", label: "Wide" },
@@ -179,21 +188,32 @@ export function supportsToControls(
         label: "Min height",
       });
     if (d.objectFit)
-      c.push({ control: "select", styleKey: "objectFit", label: "Object fit" });
+      c.push({
+        control: "select",
+        styleKey: "objectFit",
+        label: "Object fit",
+        options: OBJECT_FITS,
+      });
     if (d.overflow)
-      c.push({ control: "select", styleKey: "overflow", label: "Overflow" });
+      c.push({
+        control: "select",
+        styleKey: "overflow",
+        label: "Overflow",
+        options: OVERFLOWS,
+      });
     if (d.aspectRatio)
       c.push({
         control: "dimension",
         styleKey: "aspectRatio",
         label: "Aspect ratio",
       });
-    c.push({
-      control: "select",
-      styleKey: "widthAlign",
-      label: "Width alignment",
-      options: WIDTH_ALIGN,
-    });
+    if (d.widthAlign)
+      c.push({
+        control: "select",
+        styleKey: "widthAlign",
+        label: "Width alignment",
+        options: WIDTH_ALIGN,
+      });
     push("Layout & size", c);
   }
 

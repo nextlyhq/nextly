@@ -41,6 +41,7 @@ import { isConditionGated } from "../visibility";
 import { BREAKPOINT_AXES } from "./breakpoint-axes";
 import type { BreakpointAxis } from "./breakpoint-axes";
 import { escapeIdentifier } from "./css-value";
+import type { MayFetchUrl } from "./css-value";
 import { compileStyleValues, DEFAULT_TOKEN_PREFIX } from "./declarations";
 import type { Declaration } from "./declarations";
 import type { NamedClass } from "./named-class";
@@ -73,6 +74,35 @@ import type { WarningAllowance } from "./warning-allowance";
 /** Everything site-level the compiler needs; the caller loads it. */
 export interface StyleCompileContext {
   breakpoints: BreakpointSet;
+  /**
+   * Which hosts this site will fetch from.
+   *
+   * A stylesheet is a fetching surface: `background-image: url(...)` makes the
+   * browser request whatever it names, on every page that rule applies to. The
+   * scheme allowlist below the compile refuses `javascript:` and friends but has
+   * nothing to say about WHICH http(s) host is reached, and a value carrying no
+   * scheme at all can still name one — `//cdn.example/a.png` inherits the page's
+   * protocol and nothing else.
+   *
+   * Left undefined, no host question is asked and the compile behaves exactly as
+   * it did before this existed. The engine ships no list of its own because
+   * which hosts a site trusts belongs to the site, not to the document format.
+   */
+  mayFetchUrl?: MayFetchUrl;
+  /**
+   * What this run's fetch policy IS, for a reader deciding whether a stylesheet
+   * compiled earlier may be reused.
+   *
+   * Only needed when `mayFetchUrl` is supplied directly. A predicate is opaque —
+   * nothing can tell one function from another — so a caller that supplies one
+   * and wants its compiled sheets cached has to say which policy that function
+   * represents. Omit it and a reader treats every stored sheet as compiled under
+   * different rules, which is slower and never wrong.
+   *
+   * The compiler does not read this. It travels with the compile so the answer
+   * and the thing it describes cannot be recorded separately and disagree.
+   */
+  fetchPolicyId?: string;
   /**
    * Base styles per block type, keyed by block name. One shared rule per type
    * rather than a copy inside every node: a page of forty default sections
@@ -506,6 +536,15 @@ function unknownBreakpointWarnings(
   }
 }
 
+/** What one envelope is, and what may be written from it. */
+interface EnvelopeContext {
+  origin: StyleOrigin;
+  /** Appended to as declarations are emitted; absent when no caller asked for a trace. */
+  trace?: StyleTraceEntry[];
+  /** Which hosts this site will fetch from; unasked when absent. */
+  mayFetchUrl?: MayFetchUrl;
+}
+
 /** Compile one styles envelope into rules under one selector. */
 function envelopeRules(
   styles: NodeStyles | undefined,
@@ -516,10 +555,18 @@ function envelopeRules(
   warnings: ValidationIssue[],
   budget: StyleIssueBudget,
   warningAllowance: WarningAllowance,
-  origin: StyleOrigin,
-  /** Appended to as declarations are emitted; absent when no caller asked for a trace. */
-  trace: StyleTraceEntry[] | undefined
+  /**
+   * What this envelope IS and what may be written from it, grouped rather than
+   * appended. Ten positional arguments was already past the point where a call
+   * reads by position, and the policy below had to arrive with them: as an
+   * eleventh optional in line it would have sat beside `trace` with nothing but
+   * its type to tell the two apart, and a policy dropped in a mis-slotted call
+   * leaves every URL in the document unasked about. Named fields cannot be
+   * mis-slotted, and grouping takes the arity DOWN rather than up.
+   */
+  about: EnvelopeContext
 ): CssRule[] {
+  const { origin, trace, mayFetchUrl } = about;
   if (styles === undefined) return [];
   // A stored envelope that is not an object — `[]`, a string, `null` — styles
   // nothing, and this compiler reads persisted data whether or not a caller
@@ -591,7 +638,8 @@ function envelopeRules(
         path,
         tokenPrefix,
         budget,
-        warningAllowance
+        warningAllowance,
+        { mayFetchUrl }
       );
       // Appended as they come. `compileStyleValues` holds this same allowance and charges
       // everything it returns against it exactly once, so charging again here would spend it
@@ -939,6 +987,7 @@ export function compilePageCss(
   const warningAllowance = newWarningAllowance();
   const contexts = breakpointContexts(ctx.breakpoints);
   const tokenPrefix = ctx.tokenPrefix ?? DEFAULT_TOKEN_PREFIX;
+  const mayFetchUrl = ctx.mayFetchUrl;
   const scope = scopeSelector(ctx.scope, warnings);
   const pageRoot = `${PAGE_ROOT_SELECTOR}${scope}`;
 
@@ -988,8 +1037,7 @@ export function compilePageCss(
       warnings,
       budget,
       warningAllowance,
-      { kind: "page" },
-      trace
+      { origin: { kind: "page" }, trace, mayFetchUrl }
     )
   );
 
@@ -1035,8 +1083,7 @@ export function compilePageCss(
         warnings,
         budget,
         warningAllowance,
-        { kind: "blockType", type },
-        trace
+        { origin: { kind: "blockType", type }, trace, mayFetchUrl }
       )
     );
   }
@@ -1180,8 +1227,11 @@ export function compilePageCss(
         // allowance, which is shared and is what actually caps the reporting.
         newStyleIssueBudget(),
         warningAllowance,
-        { kind: "class", id: cls.id, slug: cls.slug },
-        trace
+        {
+          origin: { kind: "class", id: cls.id, slug: cls.slug },
+          trace,
+          mayFetchUrl,
+        }
       )
     );
   }
@@ -1219,8 +1269,7 @@ export function compilePageCss(
         warnings,
         budget,
         warningAllowance,
-        { kind: "node", id: node.id },
-        trace
+        { origin: { kind: "node", id: node.id }, trace, mayFetchUrl }
       ),
       ...visibilityRules(
         node,

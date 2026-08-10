@@ -1,3 +1,4 @@
+import { offCanvasStructure } from "../../core/block-structure";
 import { defineBlock } from "../../core/registry";
 import { isFetchableUrl } from "../../core/url-policy";
 
@@ -48,13 +49,11 @@ export const toggle = defineBlock({
 
 /** An off-canvas slide-in panel toggled by the CSS checkbox-hack (no JS). */
 export const offCanvas = defineBlock({
-  type: "core/off-canvas",
+  ...offCanvasStructure,
   version: 1,
   label: "Off Canvas",
   icon: "Layers",
   category: "layout",
-  isContainer: true,
-  slots: [{ name: "default" }],
   defaultProps: { triggerText: "Open menu", side: "right" },
   contentFields: [
     { name: "triggerText", type: "text", label: "Trigger label" },
