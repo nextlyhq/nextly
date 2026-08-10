@@ -24,4 +24,4 @@
 "@nextlyhq/builder": patch
 ---
 
-Add the @nextlyhq/builder package. It contains no features yet: the visual editor is built on top of it in the phase that follows.
+Add the @nextlyhq/builder package, which will hold the visual page-builder editor. It ships no features yet, so there is nothing to install it for: it exists now so the editor arrives under a name that is already reserved and already versioned in lockstep with the rest. It requires React 19, matching the renderer it draws with (@nextlyhq/blocks-react).
