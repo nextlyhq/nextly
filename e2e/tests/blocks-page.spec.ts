@@ -27,6 +27,8 @@
  */
 import { expect, test, type APIResponse } from "@playwright/test";
 
+import { STORAGE_STATE } from "../global-setup";
+
 test.describe.configure({ mode: "serial" });
 
 const ENTRIES = "/admin/api/collections/block-pages/entries";
@@ -123,36 +125,68 @@ const DOCUMENT = {
 };
 
 /** Fail with the server's message rather than with a bare status code. */
-async function expectCreated(response: APIResponse): Promise<void> {
+async function expectOk(response: APIResponse, what: string): Promise<void> {
   if (!response.ok()) {
     throw new Error(
-      `seed failed: ${response.status()} ${await response.text()}`
+      `${what} failed: ${response.status()} ${await response.text()}`
     );
   }
 }
 
-test("seeds a published and an unpublished block page", async ({ request }) => {
-  await expectCreated(
-    await request.post(ENTRIES, {
-      data: {
+/**
+ * Seeds the fixture rows, in a hook rather than in a test.
+ *
+ * As a test it was separately selectable, and every later test depended on it:
+ * `--grep` or a click in the UI picked one of them, skipped the seed, and ran
+ * against an empty database. A hook cannot be deselected.
+ *
+ * **Idempotent, and that is the half a hook alone would not fix.** `slug` is
+ * `unique: true`, and CI sets `retries: 1` over a `serial` group — so ONE later
+ * failure re-runs the whole group and the seed re-inserts. Measured before
+ * fixing: the retry did not merely die on the fixture, it reported a test that
+ * had PASSED as failed, because the group's first test is where the hook's
+ * error surfaces. A false failure in an unrelated test is worse than the
+ * original masking.
+ */
+test.beforeAll(async ({ playwright }, testInfo) => {
+  const baseURL = testInfo.project.use.baseURL;
+  if (baseURL === undefined) throw new Error("[e2e] No baseURL configured.");
+
+  // Its own context: `request` is test-scoped and cannot be taken by a
+  // `beforeAll`. The signed-in state is the same one every test runs with.
+  const api = await playwright.request.newContext({
+    baseURL,
+    storageState: STORAGE_STATE,
+  });
+
+  try {
+    for (const row of [
+      {
         title: "Dogfood",
         slug: PUBLISHED_SLUG,
         content: DOCUMENT,
         status: "published",
       },
-    })
-  );
-
-  await expectCreated(
-    await request.post(ENTRIES, {
-      data: {
+      {
         title: "Dogfood draft",
         slug: DRAFT_SLUG,
         content: DOCUMENT,
         status: "draft",
       },
-    })
-  );
+    ]) {
+      const created = await api.post(ENTRIES, { data: row });
+
+      // 409 IS the success case on a retry: the unique index on `slug` is what
+      // reports "this run already seeded me". Asking the list endpoint first
+      // looked tidier and was wrong — it answered without the draft row, so the
+      // check passed for one slug and not the other. The index is the authority
+      // on whether a slug is taken; nothing else has to agree with it.
+      if (created.status() === 409) continue;
+      await expectOk(created, `seeding ${row.slug}`);
+    }
+  } finally {
+    await api.dispose();
+  }
 });
 
 test("renders every block in the document", async ({ page }) => {
