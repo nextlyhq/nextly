@@ -403,6 +403,25 @@ export class EmailService extends BaseService {
         attachments: resolvedAttachments,
       });
 
+      // Recorded inline rather than through the after-send action seam, and
+      // BEFORE it. That seam exists for PLUGIN side-effects -- ordered,
+      // isolated, and registered by whoever installs one -- and core's own
+      // durable record of what it sent must not depend on a registry a plugin
+      // also writes into. Isolation is not enough on its own: `runActions`
+      // awaits each handler in turn, so a handler that blocks on network I/O
+      // long enough for the request to be torn down loses the record of a
+      // message the provider has already accepted. Writing first means the row
+      // exists whatever a plugin does afterwards.
+      await this.deliveries?.record({
+        to: filtered.to,
+        providerId: resolvedProviderId ?? null,
+        providerType,
+        templateSlug: options.templateSlug ?? null,
+        status: result.success ? "sent" : "failed",
+        messageId: result.messageId ?? null,
+        error: result.success ? null : "Send returned unsuccessful",
+      });
+
       // D63 action seam: ordered, isolated side-effects after a send attempt.
       await registry.runActions<EmailAfterSendValue, EmailFilterContext>(
         FilterSeams.EmailAfterSend,
@@ -414,22 +433,6 @@ export class EmailService extends BaseService {
         },
         { providerId: options.providerId }
       );
-
-      // Recorded inline rather than through the after-send action seam. That
-      // seam exists for PLUGIN side-effects -- ordered, isolated, and
-      // registered by whoever installs one -- and core's own durable record of
-      // what it sent must not depend on a registry a plugin also writes into,
-      // where ordering and another author's failure could decide whether a
-      // send was recorded.
-      await this.deliveries?.record({
-        to: filtered.to,
-        providerId: resolvedProviderId ?? null,
-        providerType,
-        templateSlug: options.templateSlug ?? null,
-        status: result.success ? "sent" : "failed",
-        messageId: result.messageId ?? null,
-        error: result.success ? null : "Send returned unsuccessful",
-      });
 
       const durationMs = Date.now() - startedAt;
       if (result.success) {
@@ -456,16 +459,10 @@ export class EmailService extends BaseService {
 
       return result;
     } catch (error) {
-      await registry.runActions<EmailAfterSendValue, EmailFilterContext>(
-        FilterSeams.EmailAfterSend,
-        {
-          to: filtered.to,
-          subject: filtered.subject,
-          success: false,
-          messageId: undefined,
-        },
-        { providerId: options.providerId }
-      );
+      // Recorded before the action seam, for the reason given in the success
+      // path: a plugin handler that blocks must not be able to cost us the
+      // record of an attempt. A throw here is the case where the record
+      // matters most, since it is the only durable trace of the failure.
       await this.deliveries?.record({
         to: filtered.to,
         providerId: resolvedProviderId ?? null,
@@ -486,6 +483,18 @@ export class EmailService extends BaseService {
         // where a provider's own diagnostic belongs.
         error: describeProviderFailure(error).message,
       });
+
+      // D63 action seam: ordered, isolated side-effects after a send attempt.
+      await registry.runActions<EmailAfterSendValue, EmailFilterContext>(
+        FilterSeams.EmailAfterSend,
+        {
+          to: filtered.to,
+          subject: filtered.subject,
+          success: false,
+          messageId: undefined,
+        },
+        { providerId: options.providerId }
+      );
 
       this.logger.error("email.failed", {
         event: "email.failed",

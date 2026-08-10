@@ -11,6 +11,7 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+import { NextlyError } from "../../../errors";
 import { getCoreSchema } from "../../../schemas";
 import type { Logger } from "../../../services/shared";
 import { createTableBody } from "../../schema/pipeline/sql-templates/create-table-body";
@@ -152,6 +153,32 @@ describe("the delivery log", () => {
       .prepare("select next_attempt_at from email_deliveries")
       .all() as Array<{ next_attempt_at: unknown }>;
     expect(rows[0]?.next_attempt_at).toBeNull();
+  });
+
+  it("reports a failed listing as a NextlyError, not a driver error", async () => {
+    // Reading and recording are deliberately asymmetric. `record` swallows,
+    // because a log that cannot be written must not fail a send. `list` is a
+    // read someone asked for, so its failure has to arrive as the typed error
+    // the API layer knows how to render — with a generic public message rather
+    // than the driver's own text.
+    sqlite.exec("drop table email_deliveries");
+
+    const error = await service.list().then(
+      () => undefined,
+      (thrown: unknown) => thrown
+    );
+
+    expect(error).toBeInstanceOf(NextlyError);
+    const nextly = error as NextlyError;
+    // A missing table is not a connection or constraint failure, so it
+    // classifies as internal — the point is that it classifies at all, and
+    // carries a status the API layer can answer with.
+    expect(nextly.code).toBe("INTERNAL_ERROR");
+    expect(nextly.statusCode).toBe(500);
+    // The control: the driver's message names the missing table, and the
+    // public message must not carry it. Without this the assertions above
+    // would pass on an error that still leaked schema details.
+    expect(nextly.message).not.toContain("email_deliveries");
   });
 
   it("does not throw when the table is missing", async () => {

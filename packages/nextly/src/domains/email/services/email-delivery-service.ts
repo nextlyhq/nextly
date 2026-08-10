@@ -19,6 +19,7 @@ import { randomUUID } from "crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, desc, eq } from "drizzle-orm";
 
+import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import { emailDeliveriesMysql } from "../../../schemas/email-deliveries/mysql";
 import { emailDeliveriesPg } from "../../../schemas/email-deliveries/postgres";
@@ -166,14 +167,24 @@ export class EmailDeliveryService extends BaseService {
         : undefined,
     ].filter(filter => filter !== undefined);
 
-    const rows = await this.db
-      .select()
-      .from(this.deliveries)
-      .where(filters.length > 0 ? and(...filters) : undefined)
-      .orderBy(desc(this.deliveries.createdAt))
-      // Bounded by default. An unbounded read of a log table is the query that
-      // works in development and takes the database down in production.
-      .limit(options.limit ?? 50);
+    // A lost connection or any other driver failure has to arrive at the
+    // caller as a `NextlyError` like every other read in the service layer:
+    // the raw driver error carries no canonical code and no public message, so
+    // an unguarded await would put a driver's own text in an API response and
+    // lose the database log context the rest of the layer records.
+    let rows: unknown[];
+    try {
+      rows = await this.db
+        .select()
+        .from(this.deliveries)
+        .where(filters.length > 0 ? and(...filters) : undefined)
+        .orderBy(desc(this.deliveries.createdAt))
+        // Bounded by default. An unbounded read of a log table is the query
+        // that works in development and takes the database down in production.
+        .limit(options.limit ?? 50);
+    } catch (error) {
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
 
     return (rows as EmailDeliveryRow[]).map(row => ({
       id: row.id,

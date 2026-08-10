@@ -208,4 +208,42 @@ describe("EmailService — D63 filter/action seams", () => {
     expect(result).toEqual({ success: false });
     expect(captured).toEqual([expect.objectContaining({ success: false })]);
   });
+
+  it.each([
+    ["accepts the message", { success: true, messageId: "msg-1" }, undefined],
+    ["throws", undefined, new Error("smtp down")],
+  ])(
+    "records the delivery before running plugin actions when the provider %s",
+    async (_case, resolved, rejection) => {
+      // `runActions` awaits every registered handler in turn. Isolation stops
+      // a thrower from breaking the send, but it cannot stop a handler that
+      // blocks on network I/O from outliving the request — and a message the
+      // provider has already accepted would then have no durable record. The
+      // order is the guarantee, so the order is what this pins.
+      const order: string[] = [];
+      getFilterRegistry().addAction(FilterSeams.EmailAfterSend, () => {
+        order.push("action");
+      });
+
+      const adapterSend = vi.fn<EmailProviderAdapter["send"]>();
+      if (rejection) adapterSend.mockRejectedValue(rejection);
+      else adapterSend.mockResolvedValue(resolved!);
+
+      const { service } = buildSend();
+      (service as unknown as { createAdapterFromRecord: unknown })[
+        "createAdapterFromRecord"
+      ] = () => ({ send: adapterSend });
+      (service as unknown as { deliveries: unknown })["deliveries"] = {
+        record: async () => {
+          order.push("record");
+        },
+      };
+
+      await service.send({ to: "a@b.com", subject: "Hi", html: "<p>x</p>" });
+
+      // The control: both steps ran, so this is an ordering assertion rather
+      // than one satisfied by a step never happening.
+      expect(order).toEqual(["record", "action"]);
+    }
+  );
 });
