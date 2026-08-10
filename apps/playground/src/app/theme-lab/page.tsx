@@ -52,9 +52,14 @@ function Swatches({ label, colors }: { label: string; colors: string[] }) {
     <section style={{ marginBottom: 32 }}>
       <h2 style={{ font: "600 14px system-ui", marginBottom: 8 }}>{label}</h2>
       <div style={{ display: "flex", flexWrap: "wrap" }}>
-        {colors.map(c => (
+        {colors.map((c, i) => (
+          // Keyed by POSITION, not by value. A palette legitimately repeats a
+          // colour -- Mono's `background` and `card` are both pure white -- and
+          // keying by value gives those two swatches the same key, so React
+          // drops one. The row then renders fewer swatches than the palette
+          // has, which reads as the palette being smaller than it is.
           <div
-            key={c}
+            key={i}
             title={c}
             style={{ width: 56, height: 56, background: c }}
           />
