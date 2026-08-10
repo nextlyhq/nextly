@@ -61,8 +61,13 @@
  *
  * @example
  * ```tsx
- * // Two thumbs: the same component, because `value` was always an array
- * <Slider aria-label="Size range" defaultValue={[25, 75]} />
+ * // Two thumbs: the same component, because `value` was always an array.
+ * // A range needs `thumbLabels` — the root's name is not inherited, and two
+ * // thumbs sharing one name are announced identically.
+ * <Slider
+ *   defaultValue={[25, 75]}
+ *   thumbLabels={["Minimum size", "Maximum size"]}
+ * />
  * ```
  *
  * @module components/slider
