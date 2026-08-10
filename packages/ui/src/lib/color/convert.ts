@@ -27,21 +27,33 @@
  * @module lib/color/convert
  */
 
-/** An sRGB colour with channels in [0, 1]. Alpha is carried separately. */
+/**
+ * An sRGB colour with channels in [0, 1]. Alpha is carried separately.
+ *
+ * @experimental
+ */
 export interface Rgb {
   r: number;
   g: number;
   b: number;
 }
 
-/** Hue in [0, 360), saturation and value in [0, 1]. */
+/**
+ * Hue in [0, 360), saturation and value in [0, 1].
+ *
+ * @experimental
+ */
 export interface Hsv {
   h: number;
   s: number;
   v: number;
 }
 
-/** Perceptual lightness in [0, 1], chroma from 0, hue in [0, 360). */
+/**
+ * Perceptual lightness in [0, 1], chroma from 0, hue in [0, 360).
+ *
+ * @experimental
+ */
 export interface Oklch {
   l: number;
   c: number;
@@ -59,7 +71,11 @@ const clamp01 = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n);
  */
 const MAX_SRGB_CHROMA = 0.5;
 
-/** Wrap a hue into [0, 360), so -30 and 330 are the same angle. */
+/**
+ * Wrap a hue into [0, 360), so -30 and 330 are the same angle.
+ *
+ * @experimental
+ */
 export function normalizeHue(hue: number): number {
   if (!Number.isFinite(hue)) return 0;
   const wrapped = hue % 360;
@@ -68,9 +84,10 @@ export function normalizeHue(hue: number): number {
 
 /**
  * HSV to sRGB.
- *
  * Saturation and value are clamped rather than rejected: a picker drags them, and a drag that
  * overshoots by a rounding error should saturate rather than throw.
+ *
+ * @experimental
  */
 export function hsvToRgb({ h, s, v }: Hsv): Rgb {
   const hue = normalizeHue(h);
@@ -96,11 +113,12 @@ export function hsvToRgb({ h, s, v }: Hsv): Rgb {
 
 /**
  * sRGB to HSV.
- *
  * Hue is UNDEFINED for a grey and value is undefined for black, and this returns 0 for both. A
  * picker must not take that 0 as the user's hue: it is the absence of one. Holding hue across a
  * drag to zero saturation is the caller's job, which is why a picker keeps HSV as its state
  * rather than deriving it from the colour each render.
+ *
+ * @experimental
  */
 export function rgbToHsv({ r, g, b }: Rgb): Hsv {
   const red = clamp01(r);
@@ -187,7 +205,11 @@ function oklabToLinearRgb(
   ];
 }
 
-/** sRGB to OKLCH. */
+/**
+ * sRGB to OKLCH.
+ *
+ * @experimental
+ */
 export function rgbToOklch({ r, g, b }: Rgb): Oklch {
   const [L, A, B] = linearRgbToOklab(
     toLinear(clamp01(r)),
@@ -219,15 +241,15 @@ function inGamut([r, g, b]: [number, number, number]): boolean {
 
 /**
  * OKLCH to sRGB, reducing chroma until the colour fits on screen.
- *
  * OKLCH can name colours a display cannot show. Clamping the channels independently is the
  * obvious response and the wrong one: clipping red without clipping green changes the ratio
  * between them, so the colour that appears is a DIFFERENT HUE from the one asked for. Lightness
  * and hue are what a person chose; chroma is the part they will not miss, so chroma is what is
  * given up.
- *
  * The search is a bisection on chroma, which converges to well under a perceptible step in the
  * fixed number of rounds below — no loop that might not terminate.
+ *
+ * @experimental
  */
 export function oklchToRgb({ l, c, h }: Oklch): Rgb {
   const lightness = clamp01(l);
