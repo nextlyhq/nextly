@@ -48,13 +48,15 @@ export interface RenameConversionContext {
   /** The column spec the collapsed `add_column` declared. */
   target?: { nullable: boolean; default?: string };
   /**
-   * The default the ORIGINAL column had, read from the previous snapshot.
+   * What the ORIGINAL column was, read from the previous snapshot.
    *
-   * Recorded on the drop so a generated DOWN can put it back: `buildInverseOperations` inverts a
-   * default change by assigning `toDefault: op.fromDefault`, so leaving this undefined makes the
-   * rollback emit a second DROP DEFAULT instead of restoring what was there.
+   * Needed in both directions. A generated DOWN restores this definition, and on MySQL it must
+   * RESTATE it — `MODIFY COLUMN` deletes whatever it omits. On PostgreSQL the default is recorded on
+   * the drop so the inverse can put it back: `buildInverseOperations` inverts a default change by
+   * assigning `toDefault: op.fromDefault`, so leaving it undefined makes the rollback emit a second
+   * DROP DEFAULT instead of restoring what was there.
    */
-  sourceDefault?: string;
+  source?: { nullable?: boolean; default?: string };
 }
 
 export function conversionForRename(
@@ -83,6 +85,12 @@ export function conversionForRename(
       change.nullable = context.target.nullable;
       change.columnDefault = context.target.default;
     }
+    // The other direction, for the generated DOWN. Recorded here because this is the only point that
+    // has both definitions at once.
+    if (context.source) {
+      change.fromNullable = context.source.nullable;
+      change.fromColumnDefault = context.source.default;
+    }
     return [change];
   }
 
@@ -101,7 +109,7 @@ export function conversionForRename(
       type: "change_column_default",
       tableName: rename.tableName,
       columnName: rename.toColumn,
-      fromDefault: context.sourceDefault,
+      fromDefault: context.source?.default,
       toDefault: undefined,
     },
     change,

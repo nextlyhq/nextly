@@ -742,16 +742,20 @@ function applyRenameDecisions(
     renames.push(renameOp);
 
     const target = consumedTarget.get(`${c.tableName}::${c.toColumn}`);
+    const sourceColumn = previousSnapshot?.tables
+      .find(t => t.name === c.tableName)
+      ?.columns.find(col => col.name === c.fromColumn);
     renames.push(
       ...conversionForRename(renameOp, dialect, {
         target: target
           ? { nullable: target.nullable, default: target.default }
           : undefined,
         // Read from the snapshot rather than from the drop, which records only a type. A generated
-        // DOWN needs the value to put back, and nothing else in the operation list carries it.
-        sourceDefault: previousSnapshot?.tables
-          .find(t => t.name === c.tableName)
-          ?.columns.find(col => col.name === c.fromColumn)?.default,
+        // DOWN needs this to put the column back as it was, and nothing else in the operation list
+        // carries it.
+        source: sourceColumn
+          ? { nullable: sourceColumn.nullable, default: sourceColumn.default }
+          : undefined,
       })
     );
   }

@@ -19,6 +19,7 @@ import {
   generateMigration,
   type MinimalConfigEntity,
 } from "../generate";
+import { buildInverseOperations } from "../down-generator";
 import { writeSnapshot } from "../snapshot-io";
 
 const NOW = new Date("2026-04-29T15:45:00.123Z");
@@ -578,6 +579,69 @@ describe("applyRenameDecisions (rename collapsing)", () => {
     expect(out[1]).toMatchObject({ fromDefault: "'{}'", toDefault: undefined });
     // And the desired default goes back on once the type is right.
     expect(out[3]).toMatchObject({ toDefault: "'{}'::jsonb" });
+  });
+
+  it("returns a MySQL column to its original definition on rollback", () => {
+    // 🔴 The DOWN is where MySQL's MODIFY bites a second time. The inverse converts the type back,
+    // and restates the whole column while doing it — so a rollback that carried only the types would
+    // return the column to `text` while silently dropping the NOT NULL and default it originally
+    // had. Asserted through buildInverseOperations rather than by reading the forward op, because
+    // the forward op looking right is exactly what made this invisible.
+    const ops = [
+      {
+        type: "drop_column" as const,
+        tableName: "dc_posts",
+        columnName: "_body",
+        columnType: "text",
+      },
+      {
+        type: "add_column" as const,
+        tableName: "dc_posts",
+        column: { name: "body", type: "json", nullable: false },
+      },
+    ];
+    const decisions = [
+      {
+        candidate: {
+          tableName: "dc_posts",
+          fromColumn: "_body",
+          toColumn: "body",
+          fromType: "text",
+          toType: "json",
+          typesCompatible: true,
+          defaultSuggestion: "rename" as const,
+        },
+        accepted: true,
+      },
+    ];
+    const previous = {
+      tables: [
+        {
+          name: "dc_posts",
+          columns: [
+            { name: "_body", type: "text", nullable: false, default: "'{}'" },
+          ],
+          indexes: [],
+        },
+      ],
+    };
+
+    const forward = applyRenameDecisionsForTest(
+      ops,
+      decisions,
+      "mysql",
+      previous as never
+    );
+    const inverse = buildInverseOperations(forward, previous as never);
+
+    const back = inverse.find(o => o.type === "change_column_type");
+    expect(back).toMatchObject({
+      toType: "text",
+      // The definition the column is being returned TO, restated because MySQL deletes what a
+      // MODIFY omits.
+      nullable: false,
+      columnDefault: "'{}'",
+    });
   });
 
   it("carries requiredness into the MySQL conversion", () => {

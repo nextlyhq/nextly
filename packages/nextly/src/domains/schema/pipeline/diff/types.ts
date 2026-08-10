@@ -173,6 +173,16 @@ export interface ChangeColumnTypeOp {
    */
   nullable?: boolean;
   columnDefault?: string;
+  /**
+   * The same two facts about the column BEFORE the change.
+   *
+   * Carried for the same reason `fromType` is: an inverse operation has to restate the definition it
+   * is returning the column to, and on MySQL `MODIFY COLUMN` deletes whatever it does not restate.
+   * Without these a generated DOWN converts the type back and silently drops the `NOT NULL` and the
+   * default the column originally had.
+   */
+  fromNullable?: boolean;
+  fromColumnDefault?: string;
 }
 
 export interface ChangeColumnNullableOp {

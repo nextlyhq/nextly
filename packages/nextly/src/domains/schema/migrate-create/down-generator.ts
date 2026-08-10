@@ -75,6 +75,15 @@ function invertOne(op: Operation, prev: NextlySchemaSnapshot): Operation {
         columnName: op.columnName,
         fromType: op.toType,
         toType: op.fromType,
+        // The definition travels with the type, in both directions. MySQL renders this as
+        // `MODIFY COLUMN`, which restates the WHOLE column — so an inverse that swapped only the
+        // types would return the column to its old type while dropping the nullability and default
+        // it originally had.
+
+        nullable: op.fromNullable,
+        columnDefault: op.fromColumnDefault,
+        fromNullable: op.nullable,
+        fromColumnDefault: op.columnDefault,
       };
     case "change_column_nullable":
       return {
