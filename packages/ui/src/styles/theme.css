@@ -701,6 +701,10 @@
   /* white */
   --nx-popover-foreground: oklch(0 0 0);
   /* slate-900 */
+  /* Table headers, table footers and the pagination bar. A surface, so it lives
+     with the other surfaces: declared next to the component that paints it, a
+     palette change would move everything around it and leave it behind. */
+  --nx-table-header-bg: oklch(1 0 0);
 
   /* Brand colors - Blue-Cyan Professional Palette */
   --nx-primary: oklch(0 0 0);
@@ -890,6 +894,9 @@
   /* slate-800 */
   --nx-popover-foreground: oklch(1 0 0);
   /* slate-50 */
+  /* A step above the card beneath it, carrying no chroma of its own: a hue here
+     would tint the header band independently of every surface around it. */
+  --nx-table-header-bg: oklch(0.1573 0 0);
 
   /* Brand colors - Blue-Cyan Professional Palette (Dark Mode) */
   --nx-primary: oklch(1 0 0); /* High contrast White for dark mode */

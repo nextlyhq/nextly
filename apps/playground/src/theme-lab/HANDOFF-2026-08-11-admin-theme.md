@@ -110,6 +110,28 @@ an active nav row was distinguished only by its fill. `sidebar-ink-hierarchy.tes
 must differ by ≥1.6:1. Resting ink now sits a step back (light `0.44`, dark `0.72`). **The test
 caught a real design regression the palette would have introduced.**
 
+### 4.6 A token the palette could not reach — `a1756cee5`, then moved
+
+Dark mode rendered table headers, table footers and the pagination bar as a navy band against
+neutral surroundings. `--nx-table-header-bg` was declared in
+`packages/admin/src/styles/globals.css`, **not** in `theme.css`, so the palette swap never touched
+it: every surface around it went achromatic and it kept its blue.
+
+Found by measuring a rendered page in dark mode, not by reading the token table. Nothing in
+`theme.css` mentions this token, so no amount of reading it would have surfaced this.
+
+The first fix dropped the hue and added a test that admin-declared tokens stay as neutral as the
+theme's surfaces. That check was **replaced**, because neutrality is a symptom and being stranded is
+the defect: the same orphan can be wrong in lightness or contrast, and under a palette that
+legitimately carries hue a neutrality check passes while the orphan keeps the OLD hue. The token now
+lives in `theme.css`, and `admin-token-reachability.test.ts` asserts the structural fact instead —
+every `--nx-*` the admin stylesheet paints with must be declared in `theme.css`, and the admin
+stylesheet declares none of them. Both assertions stub-verified.
+
+**The category, worth carrying to other lanes:** a token declared outside the file the palette
+rewrites is invisible to every palette change, and nothing in the palette mentions it. Currently
+zero such tokens; the check is what keeps it at zero.
+
 ---
 
 ## 5. Where everything lives
@@ -194,37 +216,35 @@ caught a real design regression the palette would have introduced.**
 
 ## 8. What is left, in order
 
-### Step 1 — push the theme commit (IMMEDIATE)
+### Steps 1–3 — DONE. PR #634 is open.
 
-`43c100fa7` is local only. `git push origin explore/admin-theme-variations`, then verify with
-`git ls-remote --heads origin explore/admin-theme-variations`. The pre-push hook runs a full build.
+Branch pushed and verified at the remote (`7458b57de`).
+[PR #634](https://github.com/nextlyhq/nextly/pull/634) carries `theme.css`, the two sidebar files,
+the table-header fix (§4.6) and the `apps/playground` lab, with one generated changeset covering all
+22 fixed-group packages at `patch`. `@codex please review this PR` posted; a 15-minute watcher is
+running. **Do not merge** — the gate is CI fully green AND zero unresolved threads.
 
-### Step 2 — rebuild and verify the new theme in the browser
+Browser verification is done and measured rather than eyeballed. Both modes, on a rendered page,
+with the lab stylesheet switched off so the SHIPPED theme is what is scored:
 
-```
-pnpm --filter @nextlyhq/ui build && pnpm --filter @nextlyhq/admin build
-pnpm dev:app     # from the worktree root; serves :3000
-```
+|                                                                                                | light   | dark    |
+| ---------------------------------------------------------------------------------------------- | ------- | ------- |
+| text inputs, selects, textareas, comboboxes, **checkboxes**, **table search** (`border-input`) | 3.32:1  | 3.89:1  |
+| active sidebar row ink on its fill                                                             | 17.62:1 | 12.63:1 |
+| resting sidebar row ink                                                                        | 7.62:1  | 7.47:1  |
+| elements carrying a hue the palette does not                                                   | 0       | 0       |
 
-**The founder asked specifically about checkboxes and table search.** Both use `border-input`,
-corrected to 3.4:1, but this has NOT been eyeballed. Check `/admin/collections/posts` in BOTH modes:
-checkbox borders, the table search field edge, and row dividers. The lab's own switcher can be
-ignored — clear `localStorage["nextly-theme-lab"]` to see the shipped theme.
+Two things to know before repeating any of this:
 
-### Step 3 — open ONE PR to `main`
-
-Founder decision #11. It carries:
-
-- `packages/ui/src/styles/theme.css` — the adopted palette + margins + duplicate-token cleanup
-- `packages/admin/src/components/layout/sidebar/{index,DualSidebar}.tsx` — the nav-row fix
-- the `apps/playground` lab, audit and docs (unpublished; include or strip — founder's call, but
-  the audit report is the record of WHY the theme changed and is worth carrying)
-
-**ONE changeset covering every package in the fixed group at `patch`, generated in node from
-`.changeset/config.json` — never hand-typed.** Conventional Commits, no AI attribution.
-
-Then post `@codex please review this PR`, and **set a 15-minute watcher** — there is no watcher
-running now.
+- **`localStorage["nextly-theme-lab"]` does NOT need clearing, and clearing it does not help.**
+  `DEFAULT_SELECTION.theme` is `"mono"`, so the lab applies a theme whether or not anything is
+  stored. To see the shipped theme, remove the lab's generated `<style>` (the one containing
+  `[data-theme=`) and strip the `data-theme` attributes. An earlier version of this document said
+  otherwise and was wrong.
+- **Disabling a stylesheet invalidates style asynchronously.** A computed value read in the same
+  task can still be the old one, and it reads as a real measurement rather than a stale one. Gate on
+  the whole document settling — every admin colour achromatic — not on one canary element, which can
+  settle while other subtrees have not. This produced two wrong readings before it was caught.
 
 ### Step 4 — after the PR merges
 
