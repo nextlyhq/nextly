@@ -89,6 +89,21 @@ export interface PageRendererProps {
  * stored ahead of the definition that would render it. All three are pure
  * comparisons.
  *
+ * A block can now DECLARE that its props draw nothing (`rendersNothing`), and
+ * `core/image` with no source says so. That answer is deliberately NOT consumed
+ * here yet. Removing such a node from the style input marks the document
+ * repaired, and on the ordinary published path — a stored stylesheet with no
+ * compile context — a repaired document has its whole sheet withheld. Blanking
+ * every rule on the page because one image is waiting for its picture trades a
+ * few unused bytes for an unstyled site, and an image without a picture yet is
+ * an ordinary authoring state rather than the exceptional one the other prune
+ * cases describe.
+ *
+ * Wiring it needs the stored artifact to be able to drop ONE node's rules,
+ * which is what `CompiledPageCss.gated` already does for condition-gated nodes.
+ * Until a draws-nothing node can travel that path, the declaration is carried
+ * by the contract and read by nothing here.
+ *
  * The rest are NOT knowable here, and deliberately so: whether a block throws,
  * returns something unrenderable, or renders a given slot at all is only
  * settled by calling it, which happens inside the boundary further down. A node
