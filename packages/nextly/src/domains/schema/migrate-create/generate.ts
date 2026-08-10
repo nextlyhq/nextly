@@ -43,6 +43,7 @@ import {
 } from "../pipeline/diff/build-from-fields";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import type {
+  ColumnSpec,
   NextlySchemaSnapshot,
   Operation,
   RenameColumnOp,
@@ -230,7 +231,12 @@ export async function generateMigration(
       nonInteractive: args.nonInteractive,
       autoAccept: args.autoAcceptRenames,
     });
-    operations = applyRenameDecisions(operations, decisions, args.dialect);
+    operations = applyRenameDecisions(
+      operations,
+      decisions,
+      args.dialect,
+      previousSnapshot
+    );
   }
   if (operations.length === 0 && !hasCompanions) {
     return null;
@@ -662,7 +668,8 @@ export function buildDesiredSnapshotFromConfig(
 function applyRenameDecisions(
   ops: Operation[],
   decisions: RenameDecision[],
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  previousSnapshot?: NextlySchemaSnapshot
 ): Operation[] {
   const accepted = decisions.filter(d => d.accepted);
   if (accepted.length === 0) return ops;
@@ -688,6 +695,11 @@ function applyRenameDecisions(
   // Filter out the matching drop_column / add_column pairs. TS narrows
   // `op` from the discriminated union via `op.type === "drop_column"`,
   // so no explicit cast is needed.
+  // The collapsed `add_column` is the ONLY statement of what the repaired column must end up being —
+  // its nullability and its default. Dropping it without keeping that is what let a generated repair
+  // leave the column nullable and defaultless while its own snapshot declared otherwise.
+  const consumedTarget = new Map<string, ColumnSpec>();
+
   const remaining: Operation[] = [];
   for (const op of ops) {
     if (op.type === "drop_column") {
@@ -697,6 +709,7 @@ function applyRenameDecisions(
     }
     if (op.type === "add_column") {
       if (acceptedAdds.has(`${op.tableName}::${op.column.name}`)) {
+        consumedTarget.set(`${op.tableName}::${op.column.name}`, op.column);
         continue;
       }
     }
@@ -728,7 +741,19 @@ function applyRenameDecisions(
     };
     renames.push(renameOp);
 
-    renames.push(...conversionForRename(renameOp, dialect));
+    const target = consumedTarget.get(`${c.tableName}::${c.toColumn}`);
+    renames.push(
+      ...conversionForRename(renameOp, dialect, {
+        target: target
+          ? { nullable: target.nullable, default: target.default }
+          : undefined,
+        // Read from the snapshot rather than from the drop, which records only a type. A generated
+        // DOWN needs the value to put back, and nothing else in the operation list carries it.
+        sourceDefault: previousSnapshot?.tables
+          .find(t => t.name === c.tableName)
+          ?.columns.find(col => col.name === c.fromColumn)?.default,
+      })
+    );
   }
 
   // Nothing was collapsed, so the diff's own ordering already holds and the
@@ -765,9 +790,10 @@ function applyRenameDecisions(
 export function applyRenameDecisionsForTest(
   ops: Operation[],
   decisions: RenameDecision[],
-  dialect: SupportedDialect = "postgresql"
+  dialect: SupportedDialect = "postgresql",
+  previousSnapshot?: NextlySchemaSnapshot
 ): Operation[] {
-  return applyRenameDecisions(ops, decisions, dialect);
+  return applyRenameDecisions(ops, decisions, dialect, previousSnapshot);
 }
 
 /**

@@ -23,7 +23,6 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type {
-  ChangeColumnDefaultOp,
   ChangeColumnTypeOp,
   Operation,
   RenameColumnOp,
@@ -37,9 +36,31 @@ import type {
  * convertible change name the same storage. Asking for a conversion there would raise
  * `SqliteUnsupportedOperationError` for a column that is already correct.
  */
+/**
+ * What the repaired column must still be afterwards, when the caller can say.
+ *
+ * A rename is produced by COLLAPSING a `drop_column` and an `add_column`, and the add carried the
+ * column's nullability and default. Collapsing them away discards that, so a caller which has the
+ * consumed pair passes it back in here. Without it the conversion can only restate the type, which
+ * on MySQL means the column silently loses its `NOT NULL` and its default.
+ */
+export interface RenameConversionContext {
+  /** The column spec the collapsed `add_column` declared. */
+  target?: { nullable: boolean; default?: string };
+  /**
+   * The default the ORIGINAL column had, read from the previous snapshot.
+   *
+   * Recorded on the drop so a generated DOWN can put it back: `buildInverseOperations` inverts a
+   * default change by assigning `toDefault: op.fromDefault`, so leaving this undefined makes the
+   * rollback emit a second DROP DEFAULT instead of restoring what was there.
+   */
+  sourceDefault?: string;
+}
+
 export function conversionForRename(
   rename: RenameColumnOp,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  context: RenameConversionContext = {}
 ): Operation[] {
   if (dialect === "sqlite") return [];
   if (!rename.fromType || !rename.toType) return [];
@@ -55,26 +76,52 @@ export function conversionForRename(
     toType: rename.toType,
   };
 
-  if (dialect !== "postgresql") return [change];
+  if (dialect === "mysql") {
+    // Carried on the op itself because MySQL has no other way to express them: MODIFY restates the
+    // whole definition and there is no renderable statement for nullability alone.
+    if (context.target) {
+      change.nullable = context.target.nullable;
+      change.columnDefault = context.target.default;
+    }
+    return [change];
+  }
 
-  // 🔴 PostgreSQL converts the ROWS, not the default.
+  // PostgreSQL from here.
   //
-  // `ALTER COLUMN … TYPE jsonb USING …` applies its USING expression to stored values and leaves the
-  // column's DEFAULT expression alone — so a text default that the old column legitimately carried
-  // (the `'{}'` left behind when a required repeater was added to a populated table) is still a text
-  // expression on a column that is now JSON, and PostgreSQL rejects the whole statement. Every row
-  // can be valid JSON and the conversion still fails.
+  // 🔴 It converts the ROWS, not the default. `ALTER COLUMN … TYPE jsonb USING …` applies its USING
+  // expression to stored values and leaves the DEFAULT expression alone — so a text default on a
+  // column becoming JSON is still a text expression, and PostgreSQL rejects the whole statement.
+  // Every row can be valid JSON and the conversion still fails. The old default therefore comes off
+  // first.
   //
-  // Dropped rather than translated: what the column's default SHOULD be is a property of the desired
-  // schema, not of the column being repaired, and the pass that follows this one already reconciles
-  // defaults. Translating it here would be this module inventing an answer another one owns.
-  const dropDefault: ChangeColumnDefaultOp = {
-    type: "change_column_default",
-    tableName: rename.tableName,
-    columnName: rename.toColumn,
-    fromDefault: undefined,
-    toDefault: undefined,
-  };
+  // `fromDefault` records what was there rather than `undefined`, because that is what a generated
+  // DOWN reads to put it back.
+  const ops: Operation[] = [
+    {
+      type: "change_column_default",
+      tableName: rename.tableName,
+      columnName: rename.toColumn,
+      fromDefault: context.sourceDefault,
+      toDefault: undefined,
+    },
+    change,
+  ];
 
-  return [dropDefault, change];
+  // And the desired default goes back on after the type is right. Omitted when the target declares
+  // none — an unconditional SET DEFAULT would invent one the schema never asked for.
+  //
+  // In the apply pipeline this is redundant: the schema push that follows reconciles defaults
+  // against the desired snapshot. In a generated migration file nothing follows, which is where its
+  // absence left the column without the default its own snapshot declares.
+  if (context.target?.default !== undefined) {
+    ops.push({
+      type: "change_column_default",
+      tableName: rename.tableName,
+      columnName: rename.toColumn,
+      fromDefault: undefined,
+      toDefault: context.target.default,
+    });
+  }
+
+  return ops;
 }

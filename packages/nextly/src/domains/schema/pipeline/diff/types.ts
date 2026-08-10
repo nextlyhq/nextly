@@ -155,6 +155,24 @@ export interface ChangeColumnTypeOp {
   columnName: string;
   fromType: string;
   toType: string;
+  /**
+   * The nullability and default the column must still have afterwards, when the caller knows them.
+   *
+   * 🔴 Only MySQL needs these, and it needs them absolutely. Its type change is spelled
+   * `MODIFY COLUMN <name> <type>`, which RESTATES the whole definition — so a column that was
+   * `NOT NULL DEFAULT 0` becomes nullable with no default unless both travel with the type. There
+   * is no separate statement to put them back: `change_column_nullable` cannot be rendered for
+   * MySQL at all, by design, because it would need the type it does not carry.
+   *
+   * PostgreSQL ignores them: it changes a type without disturbing either, and expresses each as its
+   * own statement.
+   *
+   * Optional because a caller inside the apply pipeline does not need them — the schema push that
+   * follows reconciles nullability and defaults against the desired snapshot. A generated migration
+   * file has no such second pass, which is where omitting them silently changed the column.
+   */
+  nullable?: boolean;
+  columnDefault?: string;
 }
 
 export interface ChangeColumnNullableOp {
