@@ -37,10 +37,8 @@ import {
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
-import { teardownEntityComponentData } from "../../domains/field-groups/services/teardown-entity-field-group-data";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
-import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -725,50 +723,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         );
       }
 
-      // Drop the data table FIRST so we don't leave orphans if deletion fails.
-      const tableName = single.tableName;
-      if (tableName && container.has("adapter")) {
-        const adapter = container.get<DrizzleAdapter>("adapter");
-        // Embedded component instances point back at this table by a plain string with
-        // no FK, so the drop below cascades nothing and would strand them. Sweep first.
-        await teardownEntityComponentData({ adapter, parentTable: tableName });
-
-        // Remove the companion `_locales` table and this single's archive rows before
-        // the main table. The companion holds an FK to `<main>.id`, so it must go first
-        // or the main drop orphans it (Postgres) / is rejected by the FK (MySQL).
-        await teardownEntityI18n({ adapter, slug, tableName, kind: "single" });
-
-        // Use dialect-appropriate quoting for the table name.
-        const dialect = adapter.dialect || "postgresql";
-        const quotedTableName =
-          dialect === "mysql" ? `\`${tableName}\`` : `"${tableName}"`;
-        // Postgres needs CASCADE to drop dependent objects: the companion's FK makes the
-        // main table an FK target, and a non-cascading drop of one raises. Failures
-        // propagate so a single that cannot be fully removed stays intact and retryable
-        // rather than losing its registry row while its tables survive.
-        const dropSql =
-          dialect === "postgresql"
-            ? `DROP TABLE IF EXISTS ${quotedTableName} CASCADE`
-            : `DROP TABLE IF EXISTS ${quotedTableName}`;
-        await adapter.executeQuery(dropSql);
-      }
-
-      // Delete the metadata from the dynamic_singles registry.
-      try {
-        await svc.registry.deleteSingle(slug, { force: true });
-      } catch (deleteError) {
-        const message =
-          deleteError instanceof Error
-            ? deleteError.message
-            : String(deleteError);
-        if (message.includes("not found")) {
-          console.log(
-            `[deleteSingle] Metadata already deleted for "${slug}", treating as success`
-          );
-        } else {
-          throw deleteError;
-        }
-      }
+      // The storage drop and the registry delete are one operation, so they are issued as one. Held
+      // apart, a failure between them loses the row that makes the tables findable.
+      // No fallback and no catch. `dispatchSingles` refuses to run any method without a metadata
+      // service, so there is no path here where one is absent, and the service already treats a
+      // registry row another request took as the outcome asked for. Everything else it raises —
+      // storage that would not go away — is a failed delete and has to reach the caller, whatever
+      // words the driver chose for it.
+      await svc.metadata.deleteSingle(slug, single.tableName);
 
       // Spec divergence: spec §5.1 / §7.4 strictly maps delete to
       // respondMutation, but registry.deleteSingle returns void (no
