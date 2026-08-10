@@ -590,7 +590,7 @@ describe("styling a core/ref PLACEMENT", () => {
     );
     // ...and comes back closed at both ends, so it covers tablet widths WITHOUT covering mobile.
     expect(css).toContain(
-      `@media (min-width: 641px) and (max-width: 1024px) { .${target}.${placement} { display: none; } }`
+      `@media (min-width: 640.02px) and (max-width: 1024px) { .${target}.${placement} { display: none; } }`
     );
   });
 
@@ -620,5 +620,62 @@ describe("styling a core/ref PLACEMENT", () => {
     expect(css).not.toContain(
       `@media (max-width: 640px) { .${final}.${placement} { display: none; } }`
     );
+  });
+
+  it("gives an element ONE verdict, not one per tier sharing it", () => {
+    // An alias root is not a placement of its own: it renders only because something placed the
+    // block it belongs to. Letting it reach a verdict independently produces a rule that matches
+    // the outer placement's element too and contradicts it there — the outer setting is simply
+    // overruled by a rule that never knew about it.
+    const root = container("root", [
+      { ...ref("p1", "alias"), visibility: { mobile: true } },
+    ]);
+    const refs = {
+      alias: { ...ref("aliasroot", "final"), visibility: { mobile: false } },
+      final: {
+        ...styled("lib", "Lib", "#ee0013"),
+        visibility: { tablet: false },
+      },
+    };
+    const classes = documentNodeClasses(doc(root), refs);
+    const css = compileDocumentCss(doc(root), { classes, refs });
+
+    const placement = classes.get(documentKey("p1")) ?? nodeClass("p1");
+    const aliasRoot = classes.get(refScopedKey("alias", "aliasroot")) as string;
+    const final = classes.get(refScopedKey("final", "lib")) as string;
+
+    // Positive control: the alias's own hide is still emitted, exempting the placement — so the
+    // assertion below is about the alias reaching a SEPARATE verdict, not about it going silent.
+    expect(css).toContain(
+      `@media (max-width: 640px) { .${aliasRoot}:not(.${placement}) { display: none; } }`
+    );
+    expect(css).not.toContain(`.${final}.${aliasRoot}`);
+    // The one verdict: the placement showed itself at mobile, and the block it reaches is hidden
+    // at tablet, so tablet widths are the only ones it is hidden at.
+    expect(css).toContain(
+      `@media (min-width: 640.02px) and (max-width: 1024px) { .${final}.${placement} { display: none; } }`
+    );
+    expect(css).not.toContain(
+      `@media (max-width: 640px) { .${final}.${placement} { display: none; } }`
+    );
+  });
+
+  it("starts a band just above the breakpoint below, not a whole pixel above", () => {
+    // A whole pixel leaves fractional widths in no band at all: at 640.5px neither `max-width:
+    // 640px` nor `min-width: 641px` matches, and the element the band exists to hide appears. Page
+    // zoom and display scaling both produce fractional widths.
+    const root = container("root", [
+      { ...ref("p1", "r1"), visibility: { mobile: true } },
+    ]);
+    const refs = {
+      r1: { ...styled("lib", "Lib", "#ee0014"), visibility: { tablet: false } },
+    };
+    const css = compileDocumentCss(doc(root), {
+      classes: documentNodeClasses(doc(root), refs),
+      refs,
+    });
+
+    expect(css).toContain("(min-width: 640.02px)");
+    expect(css).not.toContain("(min-width: 641px)");
   });
 });

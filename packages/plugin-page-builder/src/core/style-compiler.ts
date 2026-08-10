@@ -613,8 +613,13 @@ export function compileNodeCss(
   // Per breakpoint, like every other declaration: the inspector offers these controls whatever
   // device is selected, so reading only `base` stored the tablet and mobile values and compiled
   // nothing from them.
+  //
+  // From `styleHover` as well: the Style tab writes every control under whichever mode is
+  // selected, and the generic hover pass compiles declarations rather than these descendant rules,
+  // so a link colour set in Hover mode was stored and compiled by nobody.
   const emitLinkColors = (
     values: StyleValues | undefined,
+    owner: string,
     wrap: (rule: string) => string
   ): void => {
     if (!values) return;
@@ -625,15 +630,21 @@ export function compileNodeCss(
       const raw = values[key];
       if (raw == null) continue;
       const v = safeValue(resolveScalar(raw), remotePatterns);
-      if (v) blocks.push(wrap(`${self}${suffix} { color: ${v}; }`));
+      if (v) blocks.push(wrap(`${owner}${suffix} { color: ${v}; }`));
     }
   };
-  emitLinkColors(node.style?.base, rule => rule);
-  for (const bp of bps) {
-    emitLinkColors(
-      node.style?.[bp.id],
-      rule => `@media (max-width: ${bp.maxWidth}px) { ${rule} }`
-    );
+  for (const [style, owner] of [
+    [node.style, self],
+    [node.styleHover, `${self}:hover`],
+  ] as const) {
+    emitLinkColors(style?.base, owner, rule => rule);
+    for (const bp of bps) {
+      emitLinkColors(
+        style?.[bp.id],
+        owner,
+        rule => `@media (max-width: ${bp.maxWidth}px) { ${rule} }`
+      );
+    }
   }
 
   // Entrance motion.
@@ -690,6 +701,14 @@ function scopesNarrowestFirst(bps: BreakpointDef[]): string[] {
 }
 
 /**
+ * How far above a breakpoint the next band starts.
+ *
+ * Small enough that no device width falls between the two, and large enough to survive the
+ * rounding a browser applies to a media-query length.
+ */
+const BAND_EDGE = 0.02;
+
+/**
  * The media query for a BAND: the widths where one breakpoint answers and no narrower one does.
  *
  * The stored breakpoints are open-ended (`max-width` alone), so they nest — `tablet` covers mobile
@@ -700,12 +719,16 @@ function bandQuery(bandId: string, bps: BreakpointDef[]): string | undefined {
   const ascending = [...bps].sort((a, b) => a.maxWidth - b.maxWidth);
   const index = ascending.findIndex(bp => bp.id === bandId);
   const narrower = index > 0 ? ascending[index - 1] : undefined;
-  const floor = narrower
-    ? `(min-width: ${narrower.maxWidth + 1}px)`
-    : undefined;
+  // Just above the breakpoint below, not a whole pixel above it: a whole pixel leaves fractional
+  // widths in no band at all, so a viewport at 640.5px would match neither `max-width: 640px` nor
+  // `min-width: 641px` and the element the band exists to hide would appear. Fractional widths are
+  // ordinary — page zoom and display scaling both produce them.
+  const above = (bp: BreakpointDef): string =>
+    `(min-width: ${bp.maxWidth + BAND_EDGE}px)`;
+  const floor = narrower ? above(narrower) : undefined;
   if (bandId === "base") {
     const widest = ascending[ascending.length - 1];
-    return widest ? `(min-width: ${widest.maxWidth + 1}px)` : undefined;
+    return widest ? above(widest) : undefined;
   }
   const self = ascending[index];
   if (!self) return undefined;
@@ -789,27 +812,39 @@ function placementOverridesByRef(
   bps: BreakpointDef[]
 ): Map<string, PlacementOverride[]> {
   const byRef = new Map<string, PlacementOverride[]>();
+  // A library block's own root is not a placement. It renders only because something placed the
+  // block it belongs to, so its element always has an outer tier — and one verdict per element is
+  // the whole point, since a verdict reached without the outer tier would contradict it on the very
+  // element they share.
+  const libraryRoots = new Set<BlockNode>(
+    Object.values(refs ?? {}).filter((root): root is BlockNode => !!root)
+  );
   const collect = (node: BlockNode, refScope?: string): void => {
-    if (node.type !== "core/ref" || !node.visibility) return;
+    if (node.type !== "core/ref" || libraryRoots.has(node)) return;
     const refId = typeof node.props?.refId === "string" ? node.props.refId : "";
     if (refId === "" || !refs?.[refId]) return;
+    const { chain, roots } = rootAliasChain(refId, refs);
+    // The tiers on that element, outermost first: the placement, then every alias root between it
+    // and the node that finally renders, then that node.
+    const rendering = roots[roots.length - 1];
+    const above = [
+      node.visibility,
+      ...roots.slice(0, -1).map(r => r.visibility),
+    ];
+    // Nothing above the rendering node has an opinion, so its own rules already answer for every
+    // placement of it and per-placement ones would only repeat them once per placement.
+    if (!above.some(visibility => visibility !== undefined)) return;
     const key =
       refScope === undefined || refScope === ""
         ? documentKey(node.id)
         : refScopedKey(refScope, node.id);
     const className = classes.get(key) ?? nodeClassName(key);
-    const { chain, roots } = rootAliasChain(refId, refs);
     for (const [index, id] of chain.entries()) {
       const last = index === chain.length - 1;
       const entry: PlacementOverride = last
         ? {
             className,
-            // The tiers on that element, outermost first: the placement, then every alias root
-            // between it and the node that finally renders.
-            hiddenBands: hiddenBands(
-              [node.visibility, ...roots.map(root => root.visibility)],
-              bps
-            ),
+            hiddenBands: hiddenBands([...above, rendering?.visibility], bps),
           }
         : { className };
       byRef.set(id, [...(byRef.get(id) ?? []), entry]);

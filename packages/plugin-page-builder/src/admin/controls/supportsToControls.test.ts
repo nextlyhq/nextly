@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { defaultBlockRegistry } from "../../core/registry";
 import { normalizeSupports } from "../../core/supports";
+import { OBJECT_FIT_VALUES, OVERFLOW_VALUES } from "../../core/types";
 import "../../render/blocks";
 
 import { supportsToControls } from "./supportsToControls";
@@ -99,5 +100,23 @@ describe("supportsToControls", () => {
     );
 
     expect(empty).toEqual([]);
+  });
+
+  it("offers exactly the values the typed style contract holds", () => {
+    // A control offering a value the exported types reject lets the editor write a document a
+    // block author or a consumer cannot represent without a cast. Both sides are now built from
+    // one list, so this asserts they still are — a hand-written list reintroduced here is what it
+    // catches, not a value-by-value comparison, which the shared source already makes impossible.
+    //
+    // It cannot be a type-level assertion: this package excludes `**/*.test.ts` from `tsc`, so a
+    // type error written in a test is never reported by anything.
+    const optionsFor = (key: string) =>
+      supportsToControls({ dimensions: { overflow: true, objectFit: true } })
+        .flatMap(g => g.controls)
+        .find(c => c.styleKey === key)
+        ?.options?.map(o => o.value);
+
+    expect(optionsFor("overflow")).toEqual([...OVERFLOW_VALUES]);
+    expect(optionsFor("objectFit")).toEqual([...OBJECT_FIT_VALUES]);
   });
 });

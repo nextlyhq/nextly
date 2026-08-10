@@ -4,7 +4,11 @@
  * type + the `StyleValues` key it writes.
  */
 import { normalizeSupports, type BlockSupports } from "../../core/supports";
-import type { ControlRef } from "../../core/types";
+import {
+  OBJECT_FIT_VALUES,
+  OVERFLOW_VALUES,
+  type ControlRef,
+} from "../../core/types";
 
 export interface ControlGroup {
   group: string;
@@ -27,8 +31,10 @@ const TRANSFORMS = opts("none", "uppercase", "lowercase", "capitalize");
 const STYLES = opts("normal", "italic");
 const DECORATIONS = opts("none", "underline", "line-through", "overline");
 // A select with no options renders an empty menu, so the capability is advertised and unusable.
-const OBJECT_FITS = opts("fill", "contain", "cover", "none", "scale-down");
-const OVERFLOWS = opts("visible", "hidden", "clip", "scroll", "auto");
+// Built FROM the typed contract rather than beside it: a hand-written list here could offer a
+// value the exported types reject, and the editor would write documents nobody can represent.
+const OBJECT_FITS = opts(...OBJECT_FIT_VALUES);
+const OVERFLOWS = opts(...OVERFLOW_VALUES);
 const WIDTH_ALIGN = [
   { value: "none", label: "None" },
   { value: "wide", label: "Wide" },

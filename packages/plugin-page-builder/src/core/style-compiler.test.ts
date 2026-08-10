@@ -534,6 +534,24 @@ describe("compileNodeCss — width alignment + link colors", () => {
       /@media \(max-width: 640px\) \{ \.nx-pb-[a-z0-9]+ a:hover \{ color: #0ff; \} \}/
     );
   });
+
+  it("emits link colors set in Hover mode", () => {
+    // The Style tab writes every control under whichever mode is selected, and the generic hover
+    // pass compiles declarations rather than these descendant rules — so a link color set in Hover
+    // mode was stored and compiled by nobody.
+    const css = compileNodeCss({
+      ...makeNode("core/container", {}),
+      styleHover: {
+        base: { linkColor: "#f0f" },
+        mobile: { linkColor: "#ff0" },
+      },
+    });
+
+    expect(css).toMatch(/\.nx-pb-[a-z0-9]+:hover a \{ color: #f0f; \}/);
+    expect(css).toMatch(
+      /@media \(max-width: 640px\) \{ \.nx-pb-[a-z0-9]+:hover a \{ color: #ff0; \} \}/
+    );
+  });
 });
 
 describe("isAllowedRemoteUrl", () => {
