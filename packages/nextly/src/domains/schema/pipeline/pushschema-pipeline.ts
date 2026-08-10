@@ -58,6 +58,7 @@ import {
 import { diffSnapshots } from "./diff/diff";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
 import type { Operation, NextlySchemaSnapshot } from "./diff/types";
+import { describePrecondition } from "./errors";
 // Index restore uses the all-dialect templates, not ddl-emitter/: that module
 // is the PostgreSQL fast path and throws for the dialect this exists for.
 import {
@@ -1334,7 +1335,17 @@ export class PushSchemaPipeline {
       };
     } catch (err) {
       const code = this.classifyErrorCode(err);
-      const message = err instanceof Error ? err.message : String(err);
+      // A refused precondition carries its subject in the payload, not in the message: the
+      // validation factory sets a deliberately generic public message. Reading `err.message` here
+      // would report the correct CODE with no indication of which column, which is the half of the
+      // answer the operator cannot act on. Presentation comes from the shared describer so this
+      // result and `classifyError`'s cannot drift.
+      const described = NextlyError.isValidation(err)
+        ? describePrecondition(err)
+        : undefined;
+      const message =
+        described?.message ??
+        (err instanceof Error ? err.message : String(err));
       await this.deps.migrationJournal.recordEnd(journalId, {
         success: false,
         statementsExecuted: 0,
@@ -1360,8 +1371,8 @@ export class PushSchemaPipeline {
         renamesApplied: 0,
         error: {
           code,
-          message: err instanceof Error ? err.message : String(err),
-          details: err,
+          message,
+          details: described ? described.details : err,
         },
       };
     }

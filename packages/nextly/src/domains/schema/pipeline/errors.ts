@@ -34,6 +34,22 @@ export interface ClassifiedError {
 // Used by the apply pipeline to convert exceptions into the discriminated
 // failure branch of ApplyResult.
 /**
+ * How a refused precondition is presented, wherever a failure is built from one.
+ *
+ * There are two places that turn a thrown value into a returned failure — `classifyError` here, and
+ * `PushSchemaPipeline`'s own catch, which constructs its result directly rather than calling this
+ * module. They classify DIFFERENT error families on purpose (the pipeline knows its own typed errors;
+ * this one reads drizzle-kit stack frames), so they are not merged. What they must not do is disagree
+ * about how THIS answer reads, which is why the presentation lives here and both ask for it.
+ */
+export function describePrecondition(err: NextlyError): {
+  message: string;
+  details: unknown;
+} {
+  return { message: preconditionMessage(err), details: err.publicData };
+}
+
+/**
  * The operator-facing text for a refused precondition.
  *
  * Reads the per-error messages the refusal carried and falls back to the generic public message
@@ -60,14 +76,7 @@ export function classifyError(err: unknown): ClassifiedError {
   // Checked before the generic Error branch: a refused precondition IS a NextlyError, and the
   // generic branch would flatten it to its public message and lose the payload naming the column.
   if (NextlyError.isValidation(err)) {
-    return {
-      code: "PRECONDITION_FAILED",
-      // NOT `err.message`: the validation factory sets a deliberately generic public message
-      // ("Validation failed.") and puts the substance in `publicData`. Passing the generic one here
-      // would hand the operator a failure with no subject, which is the whole defect being fixed.
-      message: preconditionMessage(err),
-      details: err.publicData,
-    };
+    return { code: "PRECONDITION_FAILED", ...describePrecondition(err) };
   }
 
   if (err instanceof UnsupportedDialectVersionError) {
