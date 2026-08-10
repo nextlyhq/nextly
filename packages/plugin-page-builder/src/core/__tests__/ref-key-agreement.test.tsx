@@ -32,6 +32,7 @@ import {
   nodeClass,
   refScopedKey,
 } from "../style-compiler";
+import { sanitizeBlockCss } from "../css-sanitize";
 import { makeNode } from "../tree";
 
 import type { BlockNode } from "../types";
@@ -259,5 +260,59 @@ describe("boundaries the key space and the sheet have to hold", () => {
     // Positive control: without a scope the rule is emitted, just unnested.
     expect(unscoped).toContain(nodeClass("doc"));
     expect(unscoped).not.toContain(".nx-pb-d-abc");
+  });
+});
+
+describe("custom CSS boundaries a shared reusable block depends on", () => {
+  const NODE = "nx-pb-node";
+  const DOC_A = "nx-pb-d-aaa";
+  const DOC_B = "nx-pb-d-bbb";
+
+  it("keeps the block boundary when the author already wrote the document class", () => {
+    // `.<document> p` is under the document but NOT under the block, so it reaches every sibling
+    // block on the page. Treating "starts with the outer class" as fully scoped skips the
+    // boundary that stops one block's CSS restyling another.
+    const { css } = sanitizeBlockCss(`.${DOC_A} p { color: red }`, NODE, DOC_A);
+
+    expect(css).toContain(`.${NODE}`);
+    expect(css).toContain(`.${DOC_A}`);
+  });
+
+  it("namespaces a keyframe name per DOCUMENT, not only per node", () => {
+    // Two documents rendering the same reusable block share its node class, so a name derived
+    // from the node class alone is the same string in both — and the later stylesheet's
+    // definition wins for both pages.
+    const authored =
+      "@keyframes fade { from { opacity: 0 } } .x { animation: fade 1s }";
+    const a = sanitizeBlockCss(authored, NODE, DOC_A).css;
+    const b = sanitizeBlockCss(authored, NODE, DOC_B).css;
+
+    // Positive control: each document really did emit a keyframes block.
+    expect(a).toContain("@keyframes");
+    expect(b).toContain("@keyframes");
+    // ...under names that cannot collide across documents.
+    const nameOf = (css: string) =>
+      /@keyframes\s+([\w-]+)/.exec(css)?.[1] ?? "";
+    expect(nameOf(a)).not.toBe("");
+    expect(nameOf(a)).not.toBe(nameOf(b));
+  });
+});
+
+describe("what a consumer of the class map has to compose", () => {
+  it("does NOT answer a lookup by bare node id", () => {
+    // The contract every reader of this map depends on. The editor canvas read `classes.get(id)`
+    // and silently missed on every node — falling back to the undisambiguated class while the
+    // compiled sheet targeted the suffixed one, so a collided block lost its styling in the
+    // preview only.
+    //
+    // Asserted here rather than by rendering the canvas, because the canvas needs editor context
+    // this suite does not build. That makes it a test of the CONTRACT, not of that component: it
+    // pins the thing that would break the component, and would not catch a future consumer
+    // written against the bare id.
+    const root = container("root", [styled("n1", "One", "#dd0001")]);
+    const classes = documentNodeClasses({ root } as never);
+
+    expect(classes.get(documentKey("n1"))).toBeDefined();
+    expect(classes.get("n1")).toBeUndefined();
   });
 });

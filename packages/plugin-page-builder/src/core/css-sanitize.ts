@@ -622,7 +622,16 @@ export function sanitizeCustomCss(
     parse: csstree.parse,
     generate: csstree.generate,
   };
-  const definedNames = namespaceDefinedNames(ast, scopeClass, cssTree);
+  // Namespaced from BOTH boundaries when there is an outer one. A `@keyframes` name derived from
+  // the node class alone is the same string in two documents rendering the same reusable block,
+  // because they share that node class — so the later definition wins for both, and the selector
+  // boundary above does nothing about it. A global name is not a selector and no ancestor scopes
+  // it.
+  const globalNameScope =
+    outerClass === undefined || outerClass === ""
+      ? scopeClass
+      : `${outerClass}-${scopeClass}`;
+  const definedNames = namespaceDefinedNames(ast, globalNameScope, cssTree);
   // The same bound the origin scan follows nested rules with, passed in rather
   // than restated there: both walk the same nesting for the same reason, and
   // two numbers would let one of them reach a level the other reports as too
@@ -703,29 +712,29 @@ export function sanitizeCustomCss(
       if (node.prelude.type !== "SelectorList") return;
       for (const sel of node.prelude.children) {
         if (sel.type !== "Selector") continue;
-        const first = sel.children.first;
         const outer =
           outerClass === undefined || outerClass === ""
             ? undefined
             : outerClass;
-        const firstClass =
-          first != null && first.type === "ClassSelector"
-            ? first.name
-            : undefined;
-        // Already under the outermost boundary: nothing to add.
-        if (outer !== undefined && firstClass === outer) continue;
-        // Anchored to the inner class but not the outer one. This is the shape the `selector`
-        // keyword produces, since it is rewritten to the node class BEFORE this runs — so
-        // treating it as fully scoped would silently skip the document boundary for exactly the
-        // custom CSS most authors write.
-        const needsInner = firstClass !== scopeClass;
-        if (needsInner) {
+        // BOTH boundaries have to be present, not either one. A selector the author already
+        // anchored to the DOCUMENT class is inside the document and still reaches every sibling
+        // block in it, so skipping on the outer alone drops the block boundary — the one that
+        // stops a block's custom CSS restyling its neighbours. And the `selector` keyword is
+        // rewritten to the node class BEFORE this runs, so the inner one is frequently already
+        // there while the outer is not.
+        const hasClass = (name: string): boolean =>
+          sel.children.some(
+            child => child.type === "ClassSelector" && child.name === name
+          );
+        const carriesBlock = hasClass(scopeClass);
+        const carriesDocument = outer === undefined || hasClass(outer);
+        if (carriesBlock && carriesDocument) continue;
+
+        if (!carriesBlock) {
           sel.children.prependData({ type: "Combinator", name: " " });
           sel.children.prependData({ type: "ClassSelector", name: scopeClass });
         }
-        if (outer === undefined) {
-          if (!needsInner) continue;
-        } else {
+        if (outer !== undefined && !carriesDocument) {
           // Outermost prepended LAST, because each prepend goes to the front: this leaves
           // `.<outer> .<scope> sel` rather than the reverse.
           sel.children.prependData({ type: "Combinator", name: " " });
