@@ -117,6 +117,8 @@ interface RegisteredLayer {
   options: ShortcutLayerOptions;
   bindings: readonly PreparedBinding[];
   sequence: number;
+  /** What this layer MATCHES, so a re-render that changed nothing can be told apart. */
+  shape: string;
 }
 
 interface PreparedBinding {
@@ -269,6 +271,8 @@ function controlOwnsKey(
   if (tag === "A" && element.getAttribute("href") !== null) {
     return event.key === "Enter";
   }
+  // A summary toggles its details on either key, and the admin renders focusable ones today.
+  if (tag === "SUMMARY") return event.key === " " || event.key === "Enter";
   if (type === "checkbox") return event.key === " ";
   // A colour input opens its native picker on either key, and this product puts focusable ones
   // on screen in the page builder's colour and gradient controls.
@@ -381,6 +385,22 @@ export function createShortcutManager(
    * reset with the decision to stand down is deliberate: when it was open-coded at each exit,
    * five separate branches had to remember it and five separate reviews found one that did not.
    */
+  /**
+   * What a layer matches, ignoring the parts that change on every render.
+   *
+   * `useShortcuts` calls `update()` after each render, so a callback identity or an inline object
+   * differs constantly while the shortcuts themselves are identical. Cancelling a sequence on
+   * every update would make `g d` fail whenever a timer or a context change happened to land
+   * between the two keystrokes.
+   */
+  function layerShape(
+    bindings: readonly PreparedBinding[],
+    options: ShortcutLayerOptions
+  ): string {
+    const keys = bindings.map(b => b.binding.keys).join("\u0000");
+    return `${keys}\u0001${options.depth}\u0001${options.blocking === true}\u0001${options.enabled !== false}`;
+  }
+
   function abandonSequence(): void {
     pendingAt = null;
     pressedEvents.length = 0;
@@ -444,19 +464,27 @@ export function createShortcutManager(
     // AltGraph arrives as ctrl+alt on the layouts that use it, so it must be unwrapped before
     // either modifier is read as a chord.
     const altGraph = event.getModifierState?.("AltGraph") ?? false;
-    // Ctrl and Meta always make a chord. Alt is platform-dependent: on macOS Option is a text
-    // modifier, while on Windows and Linux Alt+F is a menu accelerator that a grab must suppress.
-    // Where Option applies, the key REPORTED is the character or `Dead`, never the base letter,
-    // so the text tests below recognise it while `mod+s` still reads as the chord it is.
-    if (!altGraph && (event.ctrlKey || event.metaKey)) return false;
-    if (!altGraph && event.altKey && !isApple) return false;
+
+    if (!altGraph && (event.ctrlKey || event.metaKey)) {
+      // A field owns its own editing commands. Suppressing these would leave a user unable to
+      // copy, paste, undo or select inside an input that sits in a blocking modal — a far worse
+      // outcome than an unbound accelerator reaching the browser. A binding that wants one of
+      // these still matches first; only UNBOUND combinations reach here.
+      const letter =
+        event.key.length === 1 ? event.key.toLowerCase() : event.key;
+      return EDITING_LETTERS.has(letter) || EDITING_NAVIGATION.has(event.key);
+    }
+    // Option turns caret keys into their by-word forms on macOS, and is a text modifier there;
+    // on Windows and Linux, Alt with a named key is a menu accelerator.
+    if (!altGraph && event.altKey) {
+      if (!isApple) return false;
+      if (EDITING_NAVIGATION.has(event.key)) return true;
+    }
     // Both are the start of composed text and both precede `isComposing`.
     if (event.key === "Dead" || event.key === "Process") return true;
     // One CODE POINT, not one code unit: an astral character is a single letter written as two
     // UTF-16 units, and rejecting it stops emoji and many scripts being typed at all.
     if ([...event.key].length === 1) return true;
-    // A named key with Alt held is an accelerator rather than text.
-    if (event.altKey) return false;
     // Enter, PageUp and PageDown edit or scroll only where the target owns multiple lines. In a
     // single-line input Enter submits the form and the page keys scroll the document behind it —
     // application behaviour running underneath the grab, not text entry.
@@ -478,37 +506,39 @@ export function createShortcutManager(
     invoke: boolean
   ): "fired" | "pending" | "blocked" | "none" {
     for (const layer of ordered()) {
-      // Only the layer that opened a sequence may complete it.
-      if (
-        pressed.length > 1 &&
-        pendingLayer !== null &&
-        layer !== pendingLayer
-      ) {
-        continue;
-      }
-      // Exact matches are resolved across the WHOLE layer before any prefix is considered.
-      // Scanning in registration order instead makes one of `g` and `g d` unreachable purely by
-      // which was registered first: `g` fires and clears the sequence, or `g d` returns pending
-      // and the exact `g` is never examined. Order of registration should not decide which
-      // binding exists.
-      let prefixed = false;
-      for (const prepared of layer.bindings) {
-        if (typing && !firesWhileTyping(prepared)) continue;
-        if (prepared.binding.when && !prepared.binding.when()) continue;
-        const depth = matchDepth(prepared, pressed);
-        if (depth === "exact") {
-          fire(prepared, event, invoke);
-          return "fired";
+      // Only the layer that opened a sequence may complete it. That is a rule about MATCHING and
+      // deliberately not about precedence: skipping the whole layer let a modal that mounted
+      // mid-sequence be stepped over entirely, so a shell command ran straight through the
+      // keyboard grab the modal had just taken.
+      const mayMatch =
+        pressed.length <= 1 || pendingLayer === null || layer === pendingLayer;
+
+      if (mayMatch) {
+        // Exact matches are resolved across the WHOLE layer before any prefix is considered.
+        // Scanning in registration order instead makes one of `g` and `g d` unreachable purely
+        // by which was registered first: `g` fires and clears the sequence, or `g d` returns
+        // pending and the exact `g` is never examined. Order of registration should not decide
+        // which binding exists.
+        let prefixed = false;
+        for (const prepared of layer.bindings) {
+          if (typing && !firesWhileTyping(prepared)) continue;
+          if (prepared.binding.when && !prepared.binding.when()) continue;
+          const depth = matchDepth(prepared, pressed);
+          if (depth === "exact") {
+            fire(prepared, event, invoke);
+            return "fired";
+          }
+          if (depth === "prefix") prefixed = true;
         }
-        if (depth === "prefix") prefixed = true;
+        if (prefixed) {
+          pendingLayer = layer;
+          // A sequence in progress must swallow its own keystroke, or the `g` of `g d` would be
+          // typed into the page while the sequence waits for `d`.
+          event.preventDefault();
+          return "pending";
+        }
       }
-      if (prefixed) {
-        pendingLayer = layer;
-        // A sequence in progress must swallow its own keystroke, or the `g` of `g d` would be
-        // typed into the page while the sequence waits for `d`.
-        event.preventDefault();
-        return "pending";
-      }
+
       if (layer.options.blocking) return "blocked";
     }
     return "none";
@@ -526,13 +556,15 @@ export function createShortcutManager(
     prepared: readonly PreparedBinding[],
     layerName: string
   ): void {
+    // `mod` is an alias, so the comparison has to happen after it is resolved: on Windows,
+    // `mod+k` and `ctrl+k` are the same physical chord and raw flags call them different.
+    const resolved = (chord: KeyChord): string => {
+      const ctrl = chord.ctrl || (chord.mod && !isApple);
+      const meta = chord.meta || (chord.mod && isApple);
+      return `${chord.key}\u0000${ctrl}${meta}${chord.alt}${chord.shift}`;
+    };
     const sameChord = (a: KeyChord, b: KeyChord): boolean =>
-      a.key === b.key &&
-      a.mod === b.mod &&
-      a.ctrl === b.ctrl &&
-      a.meta === b.meta &&
-      a.alt === b.alt &&
-      a.shift === b.shift;
+      resolved(a) === resolved(b);
     for (const short of prepared) {
       for (const long of prepared) {
         if (short === long || short.keys.length >= long.keys.length) continue;
@@ -678,10 +710,12 @@ export function createShortcutManager(
 
   return {
     register(bindings, layerOptions) {
+      const prepared = prepare(bindings);
       const layer: RegisteredLayer = {
         options: layerOptions,
-        bindings: prepare(bindings),
+        bindings: prepared,
         sequence: nextSequence++,
+        shape: layerShape(prepared, layerOptions),
       };
       warnOnPrefixConflicts(layer.bindings, layerOptions.name);
       layers.add(layer);
@@ -692,8 +726,13 @@ export function createShortcutManager(
           // The React hook registers empty and supplies its real bindings here, so a diagnostic
           // that only ran at `register` would never see the bindings anyone actually writes.
           warnOnPrefixConflicts(layer.bindings, nextOptions.name);
-          // The bindings that made the pending promise are gone.
-          if (pendingLayer === layer) abandonSequence();
+          const shape = layerShape(layer.bindings, nextOptions);
+          const changed = shape !== layer.shape;
+          layer.shape = shape;
+          // Only a change to what this layer MATCHES can invalidate a promise it made. `update`
+          // runs after every render, so cancelling unconditionally made a sequence fail whenever
+          // an unrelated re-render landed between its two keystrokes.
+          if (changed && pendingLayer === layer) abandonSequence();
         },
         dispose() {
           layers.delete(layer);
@@ -756,6 +795,26 @@ const TYPE_AHEAD_ROLES = new Set([
 
 /** The non-arrow keys a native range input uses to move its value. */
 const RANGE_KEYS = new Set(["Home", "End", "PageUp", "PageDown"]);
+
+/**
+ * The letters a text field claims with Ctrl or Command: clipboard, select-all, undo and redo.
+ *
+ * Unbound, these belong to the field rather than to the application, so a modal that grabbed the
+ * keyboard would otherwise make copy and paste impossible inside its own inputs.
+ */
+const EDITING_LETTERS = new Set(["a", "c", "v", "x", "z", "y"]);
+
+/** Caret movement and deletion, which a modifier turns into their by-word forms. */
+const EDITING_NAVIGATION = new Set([
+  "ArrowLeft",
+  "ArrowRight",
+  "ArrowUp",
+  "ArrowDown",
+  "Home",
+  "End",
+  "Backspace",
+  "Delete",
+]);
 
 /** Keys that belong to the target only when it holds more than one line of text. */
 const MULTILINE_ONLY_KEYS = new Set(["Enter", "PageUp", "PageDown"]);

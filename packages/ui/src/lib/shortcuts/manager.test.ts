@@ -1527,3 +1527,160 @@ describe("a layer whose bindings are replaced mid-sequence", () => {
     expect(replaced).not.toHaveBeenCalled();
   });
 });
+
+describe("a layer that arrives mid-sequence", () => {
+  it("still blocks, even though it cannot complete the sequence", () => {
+    // Sequence ownership is a rule about MATCHING. Applying it to the whole layer let a modal
+    // that mounted between `g` and `d` be stepped over entirely, so a shell command ran straight
+    // through the keyboard grab the modal had just taken.
+    const shell = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("g d", shell)], { name: "shell", depth: 0 });
+
+    manager.handle(press("g"));
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    manager.handle(press("d"));
+
+    expect(shell).not.toHaveBeenCalled();
+  });
+});
+
+describe("a re-render that changed nothing", () => {
+  it("keeps a sequence in progress across an unchanged update", () => {
+    // `useShortcuts` calls update() after EVERY render, so cancelling on every update made `g d`
+    // fail whenever a timer or a context change landed between the two keystrokes.
+    const run = vi.fn();
+    const manager = managerFor();
+    const layer = manager.register([binding("g d", run)], {
+      name: "shell",
+      depth: 0,
+    });
+
+    manager.handle(press("g"));
+    // Same keys, same options; only the callback identity differs, as it would each render.
+    layer.update([binding("g d", run)], { name: "shell", depth: 0 });
+    manager.handle(press("d"));
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("still cancels when the update changes what the layer matches", () => {
+    // The control: an update that genuinely replaces the bindings must still invalidate the
+    // promise the old ones made.
+    const replaced = vi.fn();
+    const manager = managerFor();
+    const layer = manager.register([binding("g x", vi.fn())], {
+      name: "shell",
+      depth: 0,
+    });
+
+    manager.handle(press("g"));
+    layer.update([binding("g d", replaced)], { name: "shell", depth: 0 });
+    manager.handle(press("d"));
+
+    expect(replaced).not.toHaveBeenCalled();
+  });
+});
+
+describe("editing a field that sits under a grab", () => {
+  it.each([
+    ["c", "copy"],
+    ["v", "paste"],
+    ["a", "select all"],
+    ["z", "undo"],
+  ])("leaves mod+%s to the field (%s)", key => {
+    // A modal that grabbed the keyboard would otherwise make clipboard and undo impossible
+    // inside its own inputs, which is a far worse outcome than an unbound accelerator reaching
+    // the browser.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press(key, { ctrlKey: true });
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("leaves word-wise caret movement to the field", () => {
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("ArrowLeft", { ctrlKey: true });
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("still suppresses an accelerator the field does not own", () => {
+    // The control: mod+s is the browser's save dialog, not a field editing command, so the grab
+    // must keep suppressing it.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("s", { ctrlKey: true });
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(true);
+  });
+});
+
+describe("prefix conflicts across a platform alias", () => {
+  it("reports mod+k against ctrl+k d on a non-Apple platform", () => {
+    // They are the same physical chord there, so one of the two bindings is unreachable — but a
+    // comparison of the raw flags calls them different and stays silent.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    resetDevWarnings();
+    const manager = managerFor(false);
+    manager.register(
+      [binding("mod+k", vi.fn()), binding("ctrl+k d", vi.fn())],
+      {
+        name: "shell",
+        depth: 0,
+      }
+    );
+    const said = warn.mock.calls.map(c => String(c[0])).join(" ");
+    warn.mockRestore();
+    expect(said).toContain("prefix");
+    expect(manager).toBeDefined();
+  });
+});
+
+describe("a focused summary", () => {
+  it("keeps the keys that toggle its details", () => {
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("Enter", run)], { name: "shell", depth: 0 });
+    const summary = document.createElement("summary");
+    document.body.append(summary);
+    const detach = manager.attach(document);
+    summary.dispatchEvent(press("Enter"));
+    detach();
+    summary.remove();
+    expect(run).not.toHaveBeenCalled();
+  });
+});
