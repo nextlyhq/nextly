@@ -36,3 +36,6 @@ export function serverSafeBuildEntries(): Record<string, string>;
 
 /** Every subpath's source barrel, keyed by subpath. */
 export function sourcesBySubpath(): Record<string, string>;
+
+/** The build entry for the root barrel, as tsup expects it. */
+export function rootBuildEntry(): string[];

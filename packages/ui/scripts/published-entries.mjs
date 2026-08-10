@@ -182,3 +182,19 @@ export function sourcesBySubpath() {
     publishedEntries().map(entry => [entry.subpath, entry.source])
   );
 }
+
+/**
+ * The build entry for the root barrel, as tsup expects it.
+ *
+ * @returns {string[]}
+ */
+export function rootBuildEntry() {
+  const root = publishedEntries().find(entry => !entry.serverSafe);
+  if (!root) {
+    throw new Error(
+      "No client entry point was found. The root export has moved or changed shape, and the " +
+        "component build would be reading a path nothing publishes."
+    );
+  }
+  return [root.source];
+}
