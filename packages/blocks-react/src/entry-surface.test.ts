@@ -27,8 +27,28 @@ import * as nextEntry from "./next";
 import type {
   BlockRenderArgs,
   PageContext,
+  QueryBudget,
   ReactBlockDefinition,
 } from "./index";
+
+/**
+ * Whether an exported value is a block definition.
+ *
+ * Structural rather than an `instanceof`: `defineBlock` returns its argument
+ * unchanged, so a definition is a plain object and there is no class to test.
+ * The three fields checked are the ones the registry requires.
+ */
+function isBlockDefinition(
+  value: unknown
+): value is { name: string; version: number } {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.name === "string" &&
+    typeof candidate.version === "number" &&
+    typeof candidate.render === "function"
+  );
+}
 
 describe("the root entry", () => {
   it("exports exactly these values", () => {
@@ -102,14 +122,27 @@ describe("the blocks entry", () => {
     // A block exported but left out of the list is registered nowhere, which is
     // the quiet half of the same mistake: the symbol resolves and the block
     // never appears.
-    const registered = new Set(blocksEntry.coreBlocks.map(block => block.name));
-    expect(registered.size).toBe(blocksEntry.coreBlocks.length);
-    expect(registered.has("core/heading")).toBe(true);
+    //
+    // The exported set is DERIVED rather than listed, so exporting a new block
+    // without adding it to `coreBlocks` fails here. Naming one member instead
+    // would leave the other eleven unchecked, which is the exact hole this
+    // guard exists to close.
+    const exported = Object.values(blocksEntry)
+      .filter(isBlockDefinition)
+      .map(block => block.name)
+      .sort();
+    const registered = blocksEntry.coreBlocks.map(block => block.name).sort();
+
+    expect(exported.length).toBeGreaterThan(0);
+    expect(registered).toEqual(exported);
+    // And no name is registered twice, which would make the comparison above
+    // pass while one block shadowed another in the registry.
+    expect(new Set(registered).size).toBe(registered.length);
   });
 });
 
 describe("the next entry", () => {
   it("exports exactly these values", () => {
-    expect(Object.keys(nextEntry).sort().length).toBeGreaterThan(0);
+    expect(Object.keys(nextEntry).sort()).toEqual(["BLOCKS_REACT_NEXT_ENTRY"]);
   });
 });
