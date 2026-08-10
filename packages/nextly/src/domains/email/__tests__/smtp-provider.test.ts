@@ -111,6 +111,26 @@ describe("createSmtpProvider", () => {
     });
   });
 
+  it("does not force STARTTLS against a loopback sink", async () => {
+    // Mailpit and MailHog speak plaintext by design and advertise no STARTTLS.
+    // The safety guard deliberately permits plaintext-on-loopback, and this
+    // repository ships Mailpit in its own docker-compose, so forcing an upgrade
+    // here would break the documented local development path.
+    mockSendMail.mockResolvedValueOnce({ messageId: "<msg-local>" });
+
+    const adapter = createSmtpProvider({
+      host: "localhost",
+      port: 1025,
+      secure: false,
+      auth: { user: "dev", pass: "dev" },
+    });
+    await adapter.send(BASE_OPTIONS);
+
+    expect(mockCreateTransport).toHaveBeenCalledWith(
+      expect.objectContaining({ secure: false, requireTLS: false })
+    );
+  });
+
   it("does not force an upgrade when the connection is already implicitly TLS", async () => {
     // secure: true (port 465) needs no STARTTLS negotiation, so requiring one
     // would be meaningless rather than safer.

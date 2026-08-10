@@ -696,6 +696,20 @@ async function resolveAuthorization(
 
   // --- Email providers → manage-email-providers ---
   if (service === "emailProviders") {
+    // The provider catalog is the one read a CREATOR also needs. The
+    // permissions are seeded independently, so a role holding only
+    // create-email-providers can POST a provider and would otherwise be denied
+    // the descriptors describing which fields that provider requires --
+    // leaving the grant unusable for exactly the contributed providers the
+    // catalog exists to describe. It exposes definitions, never stored records.
+    if (method === "listProviderTypes") {
+      return requireAnyPermission(req, [
+        { action: "read", resource: "email-providers" },
+        { action: "create", resource: "email-providers" },
+        { action: "manage", resource: "email-providers" },
+      ]);
+    }
+
     const action = getActionFromMethod(httpMethod);
     return requireAnyPermission(req, [
       { action, resource: "email-providers" },
