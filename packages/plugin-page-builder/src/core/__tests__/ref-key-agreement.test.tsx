@@ -274,12 +274,46 @@ describe("custom CSS boundaries a shared reusable block depends on", () => {
     // boundary that stops one block's CSS restyling another.
     const { css } = sanitizeBlockCss(`.${DOC_A} p { color: red }`, NODE, DOC_A);
 
-    // ORDER, not merely presence. The document root is the block's ANCESTOR, so the block class
-    // has to go inside it. Prepending it in front produces `.<node> .<document> p`, which asks for
-    // a document root inside a block and matches nothing — and an assertion that both names occur
-    // passes on exactly that.
-    expect(css).toContain(`.${DOC_A} .${NODE}`);
-    expect(css).not.toContain(`.${NODE} .${DOC_A}`);
+    // The property is that every emitted selector BEGINS with the anchor, in document-then-block
+    // order. Asserting that both names merely occur passes on `.<block> .<document> p`, which asks
+    // for a document root nested inside a block and matches nothing; asserting the anchor appears
+    // somewhere passes on a selector that reaches outside the block before coming back.
+    expect(css.startsWith(`.${DOC_A} .${NODE} `)).toBe(true);
+  });
+
+  it("anchors a compound document selector without splitting the compound", () => {
+    // `.doc.page p` is one compound naming the document root. Inserting the block class after the
+    // first class of that compound moves the root's other classes onto the block, and the rule
+    // stops matching. Prepending the whole anchor cannot do that.
+    const { css } = sanitizeBlockCss(
+      `.${DOC_A}.nx-pb-page p { color: red }`,
+      NODE,
+      DOC_A
+    );
+
+    expect(css.startsWith(`.${DOC_A} .${NODE} `)).toBe(true);
+    expect(css).toContain(`.${DOC_A}.nx-pb-page`);
+  });
+
+  it("contains a selector that reaches a sibling of the block", () => {
+    // `.wrapper selector ~ p` carries the block class and still targets a sibling OUTSIDE it, so
+    // "the block class appears somewhere" is not evidence the selected element is inside. With the
+    // anchor prepended the sibling is a sibling of an INNER copy, still inside the outer block.
+    const { css } = sanitizeBlockCss(
+      `.wrapper selector ~ p { color: red }`,
+      NODE,
+      DOC_A
+    );
+
+    expect(css.startsWith(`.${DOC_A} .${NODE} `)).toBe(true);
+  });
+
+  it("leaves a selector the author anchored correctly exactly as written", () => {
+    // The `selector` keyword rewrites to the FULL anchor, so it lands already anchored rather than
+    // being prefixed into a descendant of itself.
+    const { css } = sanitizeBlockCss(`selector { color: red }`, NODE, DOC_A);
+
+    expect(css).toBe(`.${DOC_A} .${NODE}{color:red}`);
   });
 
   it("namespaces a keyframe name per DOCUMENT, not only per node", () => {

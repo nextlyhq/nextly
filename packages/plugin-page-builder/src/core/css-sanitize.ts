@@ -716,54 +716,48 @@ export function sanitizeCustomCss(
           outerClass === undefined || outerClass === ""
             ? undefined
             : outerClass;
-        // BOTH boundaries have to be present, not either one. A selector the author already
-        // anchored to the DOCUMENT class is inside the document and still reaches every sibling
-        // block in it, so skipping on the outer alone drops the block boundary — the one that
-        // stops a block's custom CSS restyling its neighbours. And the `selector` keyword is
-        // rewritten to the node class BEFORE this runs, so the inner one is frequently already
-        // there while the outer is not.
-        const hasClass = (name: string): boolean =>
-          sel.children.some(
-            child => child.type === "ClassSelector" && child.name === name
-          );
-        const carriesBlock = hasClass(scopeClass);
-        const carriesDocument = outer === undefined || hasClass(outer);
-        if (carriesBlock && carriesDocument) continue;
+        // ONE rule, checked at the head: a selector either already BEGINS with the required
+        // anchor or gets it prepended. Nothing else about the author's selector is inspected.
+        //
+        // Analysing it was the mistake. "Does the block class appear anywhere" does not mean the
+        // SELECTED element is inside the block — `.wrapper .<block> ~ p` carries the class and
+        // still targets a sibling outside it. And inserting after a class that turned out to be
+        // part of a compound split that compound, moving the document root's other classes onto
+        // the block. Both are questions this does not have to ask: prepending an ancestor cannot
+        // widen what a selector matches, so an over-prefixed selector is contained, and a
+        // correctly prefixed one is left exactly as written.
+        const anchor: csstree.CssNode[] =
+          outer === undefined
+            ? [{ type: "ClassSelector", name: scopeClass }]
+            : [
+                { type: "ClassSelector", name: outer },
+                { type: "Combinator", name: " " },
+                { type: "ClassSelector", name: scopeClass },
+              ];
 
-        // The document root is the block's ANCESTOR, so the block class always goes INSIDE it.
-        // Prepending to the head is only correct when the document class is not already there —
-        // otherwise it produces `.<block> .<document> sel`, which asks for a document root nested
-        // inside a block and matches nothing, so the rule silently disappears.
-        if (!carriesBlock && carriesDocument && outer !== undefined) {
-          // Insert directly after the outer class and its combinator rather than at the head.
-          let outerItem: unknown = null;
-          sel.children.forEach((node, item) => {
+        const head: csstree.CssNode[] = [];
+        sel.children.forEach(node => {
+          if (head.length < anchor.length) head.push(node);
+        });
+        const alreadyAnchored =
+          head.length === anchor.length &&
+          anchor.every((want, i) => {
+            const got = head[i];
             if (
-              outerItem === null &&
-              node.type === "ClassSelector" &&
-              node.name === outer
+              want.type === "ClassSelector" &&
+              got?.type === "ClassSelector"
             ) {
-              outerItem = item;
+              return got.name === want.name;
             }
+            return got?.type === "Combinator";
           });
-          if (outerItem !== null) {
-            const before = (outerItem as { next?: unknown }).next ?? null;
-            const at = before as Parameters<typeof sel.children.insertData>[1];
-            sel.children.insertData({ type: "Combinator", name: " " }, at);
-            sel.children.insertData(
-              { type: "ClassSelector", name: scopeClass },
-              at
-            );
-          }
-        } else if (!carriesBlock) {
-          sel.children.prependData({ type: "Combinator", name: " " });
-          sel.children.prependData({ type: "ClassSelector", name: scopeClass });
-        }
-        if (outer !== undefined && !carriesDocument) {
-          // Outermost prepended LAST, because each prepend goes to the front: this leaves
-          // `.<outer> .<scope> sel` rather than the reverse.
-          sel.children.prependData({ type: "Combinator", name: " " });
-          sel.children.prependData({ type: "ClassSelector", name: outer });
+        if (alreadyAnchored) continue;
+
+        // Prepended in reverse, because each prepend goes to the front.
+        sel.children.prependData({ type: "Combinator", name: " " });
+        for (let i = anchor.length - 1; i >= 0; i -= 1) {
+          const node = anchor[i];
+          if (node !== undefined) sel.children.prependData(node);
         }
       }
     },
@@ -792,7 +786,14 @@ export function sanitizeBlockCss(
 ): SanitizedCss {
   if (!css) return { css: "", warnings: [] };
   // Replace the `selector` keyword (word-boundary, not part of .foo-selector).
-  const withScope = css.replace(/(^|[^\w.#-])selector\b/g, `$1.${scopeClass}`);
+  // Rewritten to the FULL anchor, not the block class alone. `selector` means this block's own
+  // root element, so producing `.<block>` and then prefixing it would emit `.<doc> .<block>
+  // .<block>` — the block as a descendant of itself, matching nothing.
+  const anchorText =
+    documentScope === undefined || documentScope === ""
+      ? `.${scopeClass}`
+      : `.${documentScope} .${scopeClass}`;
+  const withScope = css.replace(/(^|[^\w.#-])selector\b/g, `$1${anchorText}`);
   // The NODE class, and only it. Anchoring to a document scope instead would
   // swap one boundary for the other rather than nesting them: `p { color: red }`
   // would emit `.<document> p` and restyle every matching element in every other
