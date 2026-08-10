@@ -30,8 +30,14 @@ const SRC_DIR = dirname(fileURLToPath(import.meta.url));
  *   to be parsed to be made safe, and no seam moves that requirement
  *   elsewhere. Pure JavaScript, ships a browser build, and pulls in only
  *   `mdn-data` and `source-map-js`, so the "runs anywhere" promise holds.
+ * - `picomatch`: the glob grammar `next/image`'s `remotePatterns` is written
+ *   in. The remote-host policy has to read the same patterns a Nextly app
+ *   already declares for `next/image`, and re-implementing that grammar in a
+ *   SECURITY control to avoid a dependency would trade a known matcher for an
+ *   unknown one. Zero dependencies of its own, no Node builtins, and already
+ *   run in a browser by the page builder's canvas, so the promise holds.
  */
-const ALLOWED_RUNTIME_DEPENDENCIES = ["css-tree"];
+const ALLOWED_RUNTIME_DEPENDENCIES = ["css-tree", "picomatch"];
 
 /**
  * Files that are part of the test harness rather than the shipped engine.
