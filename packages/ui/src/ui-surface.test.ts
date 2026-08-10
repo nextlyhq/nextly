@@ -13,6 +13,7 @@
  * belong in a Node test process.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { publishedEntries } from "../scripts/published-entries.mjs";
 
 import {
   DECLARATION_ENTRIES,
@@ -27,7 +28,13 @@ import { beforeAll, describe, expect, it } from "vitest";
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = path.join(SRC, "..");
 
-/** The entry points named in the package's `exports` map. */
+/**
+ * The SOURCE barrel behind each published entry point.
+ *
+ * Listed rather than derived, because the export map names built files and there is no convention
+ * mapping `dist/color` back to `src/lib/color/index.ts`. The list is instead tied to the export
+ * map by a completeness check below, so an entry point cannot be published without one.
+ */
 const ENTRY_POINTS = [
   "index.ts",
   "lib/utils.ts",
@@ -164,6 +171,17 @@ function documentedPublic(): { names: string[]; files: string[] } {
 }
 
 describe("ui public export surface", () => {
+  it("has a source barrel for every published entry point", () => {
+    // The one guard whose list cannot be derived, tied to the same source of truth by counting.
+    // Without this, publishing a subpath and forgetting to add its source here leaves its export
+    // names and value-versus-type kinds outside the snapshot, and every assertion stays green.
+    expect(
+      ENTRY_POINTS.length,
+      `package.json publishes ${publishedEntries().length} JavaScript entry points and ` +
+        `ENTRY_POINTS lists ${ENTRY_POINTS.length}. Add the new one's SOURCE barrel here.`
+    ).toBe(publishedEntries().length);
+  });
+
   it.each(ENTRY_POINTS)("%s surface is unchanged", file => {
     expect(exportedNames(file)).toMatchSnapshot();
   });
