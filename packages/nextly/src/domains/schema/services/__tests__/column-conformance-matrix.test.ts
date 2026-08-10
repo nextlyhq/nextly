@@ -339,17 +339,6 @@ const ACCEPTED = byAspect([
     { origins: ["fieldGroup"] }
   ),
 
-  // --- 🔴 Fixed-point numbers ----------------------------------------------
-  // The field-group generator honours `dbType: "decimal"`; the collection generator never reads it
-  // and emits a whole-number column, so a money field loses its fraction. The generator moves.
-  ...everywhere(
-    ["number"],
-    ["decimal"],
-    "type",
-    "collection generator ignores dbType and emits an integer column; descriptor says exact decimal",
-    { origins: ["collection"] }
-  ),
-
   // --- Required foreign keys: nullability ----------------------------------
   // The descriptor states that every FK column is nullable and that requiredness is enforced above
   // the database. Both generators emit NOT NULL, so a row the application would have rejected with
