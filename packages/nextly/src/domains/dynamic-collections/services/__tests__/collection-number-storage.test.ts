@@ -366,3 +366,49 @@ describe("an ALTER changes only what actually changed", () => {
     expect(sql.toLowerCase()).toContain("numeric(12, 4)");
   });
 });
+
+/**
+ * Toggling requiredness is not a change of storage.
+ *
+ * The descriptor derives `nullable` from `required`, so comparing it as part of the column's SHAPE
+ * makes a requiredness toggle claim the type changed. On MySQL that rewrites the column through
+ * `MODIFY COLUMN` with the descriptor's type — the same truncation an index toggle caused, reached
+ * through a different edit, and on a table where nothing about the storage was touched.
+ */
+describe("requiredness alone does not rewrite a column's type", () => {
+  const alter = (
+    dialect: Dialect,
+    before: FieldDefinition,
+    after: FieldDefinition
+  ): string =>
+    new DynamicCollectionSchemaService(
+      undefined,
+      dialect
+    ).generateAlterTableMigration(TABLE, [before], [after], {
+      tableHasRows: false,
+    });
+
+  const sel = (extra: Record<string, unknown> = {}): FieldDefinition =>
+    ({
+      name: "category",
+      type: "select",
+      options: { options: [{ label: "One", value: "one" }] },
+      ...extra,
+    }) as unknown as FieldDefinition;
+
+  it("changes only the nullability — mysql", () => {
+    const sql = alter("mysql", sel(), sel({ required: true }));
+
+    // MySQL carries nullability in MODIFY, so the statement is expected — what must not appear is a
+    // type that differs from the column the generator created.
+    expect(sql).toMatch(/MODIFY COLUMN `category`[^;]*NOT NULL/i);
+    expect(sql).not.toMatch(/varchar\(255\)/i);
+  });
+
+  it("changes only the nullability — postgresql", () => {
+    const sql = alter("postgresql", sel(), sel({ required: true }));
+
+    expect(sql).toMatch(/ALTER COLUMN "category" SET NOT NULL/i);
+    expect(sql).not.toMatch(/ALTER COLUMN "category" TYPE/i);
+  });
+});

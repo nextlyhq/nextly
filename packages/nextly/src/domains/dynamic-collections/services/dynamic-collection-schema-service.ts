@@ -1039,11 +1039,14 @@ ${allColumnDefs.join(",\n")}
           // with the generator that created the column. Enabling an index on a Builder `select`
           // would move it from the unbounded `text` it was created as to `varchar(255)`, truncating
           // every stored value past 255 characters — for an edit that never touched its storage.
+          // Nullability is deliberately NOT part of this. The descriptor derives `nullable` from
+          // `required`, so including it would make a requiredness toggle claim the column's TYPE
+          // changed and rewrite it — the same truncation the index case caused, reached through a
+          // different edit. It is tracked on its own below, where it belongs.
           const columnChanged =
             !before || !described
               ? before !== described
               : before.dialectType !== described.dialectType ||
-                before.nullable !== described.nullable ||
                 before.kind !== described.kind ||
                 before.name !== described.name;
           const nullabilityChanged = field.required !== oldField.required;
@@ -1061,8 +1064,27 @@ ${allColumnDefs.join(",\n")}
                 field.default !== undefined && field.default !== null
                   ? ` DEFAULT ${this.formatDefaultValue(field.default, field.type)}`
                   : "";
+              // 🔴 Which type a MODIFY restates depends on WHY it is being issued, and getting this
+              // wrong rewrites a column nobody asked to change.
+              //
+              // Changing the storage means asking for the descriptor's answer. Changing only the
+              // nullability means preserving what the column already is — and what it already is,
+              // for a table this service built, is what THIS generator renders. Restating the
+              // descriptor's answer instead would move a `select` created as unbounded `text` to
+              // `varchar(255)` and truncate stored values, for an edit that touched nothing but a
+              // required flag. MySQL leaves no third option: the type has to be restated or the
+              // column definition is lost.
+              const restated = columnChanged
+                ? type
+                : this.mapFieldTypeToSQL(
+                    field.type,
+                    field.length,
+                    field.options,
+                    field.validation,
+                    field
+                  );
               statements.push(
-                `ALTER TABLE ${this.quoteIdentifier(tableName)} MODIFY COLUMN ${this.quoteIdentifier(alterCol)} ${type}${nullability}${defaultClause};`
+                `ALTER TABLE ${this.quoteIdentifier(tableName)} MODIFY COLUMN ${this.quoteIdentifier(alterCol)} ${restated}${nullability}${defaultClause};`
               );
             }
           } else if (!columnChanged) {
