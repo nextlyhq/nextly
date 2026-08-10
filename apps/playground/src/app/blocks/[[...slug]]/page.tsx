@@ -119,17 +119,18 @@ function canonicalFor(path: string): string {
 /**
  * No `force-dynamic`, and nothing to pre-render.
  *
- * This route does not set `content`, so it reads access-enforced — the secure
- * default — and `createBlocksPage` therefore hands back no
- * `generateStaticParams` at all. Next classifies the route dynamic because
- * nothing claims otherwise, and the build reads no database.
+ * `createBlocksPage` reads access-enforced content — the secure default — so
+ * the answer depends on who is asking and no path can be pre-rendered. It hands
+ * back no `generateStaticParams` at all, Next classifies the route dynamic
+ * because nothing claims otherwise, and the build reads no database.
  *
  * It used to need `export const dynamic = "force-dynamic"` to survive a build
  * box with no database. That is now handled by the shape of what the helper
  * returns rather than by a flag the host has to remember.
  *
- * A site whose content IS public says `content: "public"` and gets
- * `generateStaticParams` to export.
+ * A site whose content IS public calls `createPublicBlocksPage` instead, which
+ * reads trusted and returns a `generateStaticParams` to export alongside these
+ * two. The posture is the factory you call — there is no option for it.
  */
 const { ContentPage, generateMetadata } = createBlocksPage({
   collections: ["block-pages"],

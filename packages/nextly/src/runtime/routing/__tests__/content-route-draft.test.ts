@@ -332,7 +332,7 @@ describe("the content route's draft decision", () => {
     expect(byIdCalls).toHaveLength(0);
     expect(calls.every(call => call.status === "published")).toBe(true);
     // Trusted, and that is the posture the ROUTE declared rather than a default
-    // it inherited: only `content: "public"` pre-renders, and public means the
+    // it inherited: only a public route pre-renders, and public means the
     // collections' read rules are not consulted. The draft guarantee does not
     // rest on access enforcement — it rests on `status`, asserted above, which
     // is what keeps an unpublished entry out of a built path.

@@ -220,7 +220,7 @@ export interface ContentRoute<TNode> {
 }
 
 /**
- * What a `content: "public"` route returns, additionally.
+ * What {@link createPublicContentRoute} returns, additionally.
  *
  * Present only on this shape so a route that cannot pre-render cannot export
  * the function that claims it does. The check is the type system's rather than
