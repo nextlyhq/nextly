@@ -15,11 +15,16 @@
  * Values only. Types are erased before this runs and cannot be enumerated, so
  * they are covered by the compile-time import below instead.
  */
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import * as boundaryModule from "./block-boundary";
 import * as blocksEntry from "./blocks/index";
 import * as contextModule from "./context";
+import * as pageRendererModule from "./page-renderer";
 import * as placeholderModule from "./placeholder";
 import * as resolverModule from "./resolver";
 import * as stylesModule from "./styles";
@@ -78,6 +83,7 @@ const SOURCE_MODULES: ReadonlyArray<{
   { name: "resolver", module: resolverModule, internal: [] },
   { name: "styles", module: stylesModule, internal: [] },
   { name: "placeholder", module: placeholderModule, internal: [] },
+  { name: "page-renderer", module: pageRendererModule, internal: [] },
   {
     name: "block-boundary",
     module: boundaryModule,
@@ -104,6 +110,26 @@ describe("the root entry", () => {
       "styleTextForInjection",
       "toPageStyles",
     ]);
+  });
+
+  it("checks every module the entry re-exports from", () => {
+    // The list above is the guard's own coverage, and a guard that covers five
+    // of six modules leaves the sixth exactly as exposed as before. Read the
+    // entry's own relative imports rather than trusting the list to keep pace.
+    const source = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "index.ts"),
+      "utf8"
+    );
+    const reExported = new Set(
+      [...source.matchAll(/from "\.\/([\w-]+)"/g)].map(match => match[1])
+    );
+    const covered = new Set(SOURCE_MODULES.map(entry => entry.name));
+
+    const uncovered = [...reExported].filter(name => !covered.has(name));
+    expect(
+      uncovered,
+      `index.ts re-exports from ${uncovered.join(", ")}, which SOURCE_MODULES does not check.`
+    ).toEqual([]);
   });
 
   it("re-exports every public value its source modules define", () => {
