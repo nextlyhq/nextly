@@ -16,18 +16,25 @@
  *
  * **What registration buys today, and what it does not.** A registered block is
  * known to `@nextlyhq/blocks-engine`: validation stops calling its type unknown,
- * and generation, manifests and tooling can see it. It is also RENDERED on a
- * published page — `PageRenderer` resolves through `registeredBlocks()`, which
- * reads the engine registry this service writes to, so no bridging step stands
- * between registering a block and it appearing.
+ * and generation, manifests and tooling can see it.
  *
- * What it does not buy is the EDITOR. The canvas resolves definitions from this
- * package's own `defaultBlockRegistry`, which holds none of these, so a
- * contributed block cannot yet be inserted or drawn while editing. That half is
- * the editor's own work, not a line here.
+ * Whether it RENDERS depends on which renderer, and there are two:
  *
- * So the seam runs between the published page and the canvas, not between
- * registration and rendering.
+ * - `PageRenderer` from **`@nextlyhq/blocks-react`** resolves through
+ *   `registeredBlocks()`, which reads the engine registry this service writes
+ *   to. A contributed block renders there with no bridging step.
+ * - `PageRenderer` from **`@nextlyhq/plugin-page-builder/render`** defaults to
+ *   this package's own `defaultBlockRegistry`, which holds none of them, so the
+ *   same block draws the unknown-block placeholder. A host may pass its own
+ *   `registry` prop, but the default does not reach the engine.
+ *
+ * The editor canvas is on that second side too — it reads `defaultBlockRegistry`
+ * — so a contributed block cannot yet be inserted or drawn while editing.
+ *
+ * So the seam does not sit between registration and rendering in general. It
+ * sits between the two registries, and a plugin author following THIS package's
+ * own documented render path is on the side that does not see contributed
+ * blocks.
  *
  * @module blocks/registration-service
  */
