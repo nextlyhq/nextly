@@ -304,6 +304,43 @@ function assertNoOverlappingPaths(
 }
 
 /**
+ * Reject a select nobody can choose from.
+ *
+ * Two shapes the type permits and no form can render. A select with no options
+ * draws an empty control, and if it is required the provider can never be
+ * saved. An option whose value is the empty string is worse: the admin's select
+ * reserves `""` for "nothing selected" and throws on an item carrying it, so
+ * merely opening the form reaches an error boundary.
+ *
+ * Refused here rather than worked around in a client, because every client
+ * would otherwise need the same two workarounds and a form is not the place to
+ * discover that a provider is undeclarable.
+ */
+function assertSelectIsChoosable(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  if (field.kind !== "select") return;
+
+  const options = field.options ?? [];
+  if (options.length === 0) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" declares the select field "${field.name}" with no options. A select must offer at least one choice.`,
+      logContext: { type, field: field.name },
+    });
+  }
+
+  if (options.some(option => option.value === "")) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" gives the select field "${field.name}" an option with an empty value. An empty value means "nothing selected", so it cannot also be a choice.`,
+      logContext: { type, field: field.name },
+    });
+  }
+}
+
+/**
  * Every rule a provider's field metadata has to satisfy.
  *
  * Exported and called from BOTH the authoring helper and the registry.
@@ -319,6 +356,7 @@ export function assertConfigFieldsAreUsable(
   for (const field of fields) {
     assertFieldNameIsWalkable(type, field);
     assertDefaultMatchesKind(type, field);
+    assertSelectIsChoosable(type, field);
     if (field.secret === true && !SECRET_CAPABLE_KINDS.includes(field.kind)) {
       throw secretFieldMustBeTextual(type, field);
     }

@@ -20,7 +20,7 @@ import {
   useCreateEmailProvider,
   useEmailProviderTypes,
 } from "@admin/hooks/queries/useEmailProviders";
-import { getErrorMessage } from "@admin/lib/errors/error-types";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
 
 export default function CreateEmailProviderPage() {
@@ -45,10 +45,15 @@ export default function CreateEmailProviderPage() {
         },
         onError: (error: Error) => {
           toast.error("Failed to create provider", {
-            description: getErrorMessage(
-              error,
-              "An error occurred while creating the provider."
-            ),
+            // apiErrorMessage, not getErrorMessage: a rule that lives
+            // only in the provider's own parser -- SMTP's conditional
+            // credentials, its transport-safety check, anything a plugin
+            // enforces -- arrives as per-field reasons in `data.errors` under
+            // a top-level "Validation failed." Reading only `Error.message`
+            // shows the operator that sentence and nothing they can act on.
+            description:
+              apiErrorMessage(error) ||
+              "An error occurred while creating the provider.",
           });
         },
       });

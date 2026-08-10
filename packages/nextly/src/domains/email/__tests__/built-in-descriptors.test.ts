@@ -193,7 +193,16 @@ describe("a credential can only be declared on a control that can hold one", () 
         defineEmailProvider({
           ...base,
           configFields: [
-            { name: "credential", label: "Credential", kind, secret: true },
+            {
+              name: "credential",
+              label: "Credential",
+              kind,
+              secret: true,
+              // A real option, so a secret SELECT is refused for being secret
+              // rather than for having nothing to choose from -- otherwise the
+              // test passes on a rule it is not about.
+              options: [{ value: "one", label: "One" }],
+            },
           ],
         })
       ).toThrow(/can only be declared on a text or password field/);
@@ -205,7 +214,16 @@ describe("a credential can only be declared on a control that can hold one", () 
       defineEmailProvider({
         ...base,
         configFields: [
-          { name: "credential", label: "Credential", kind, secret: true },
+          {
+            name: "credential",
+            label: "Credential",
+            kind,
+            secret: true,
+            // A real option, so a secret SELECT is refused for being secret
+            // rather than for having nothing to choose from -- otherwise the
+            // test passes on a rule it is not about.
+            options: [{ value: "one", label: "One" }],
+          },
         ],
       })
     ).not.toThrow();
@@ -258,7 +276,12 @@ describe("a credential can only be declared on a control that can hold one", () 
         configFields: [
           { name: "sandbox", label: "Sandbox", kind: "boolean" },
           { name: "retries", label: "Retries", kind: "number" },
-          { name: "region", label: "Region", kind: "select", options: [] },
+          {
+            name: "region",
+            label: "Region",
+            kind: "select",
+            options: [{ value: "eu", label: "Europe" }],
+          },
         ],
       })
     ).not.toThrow();
@@ -354,7 +377,13 @@ describe("a default a control cannot hold", () => {
       defineEmailProvider({
         ...base,
         configFields: [
-          { name: "field", label: "Field", kind, default: value, options: [] },
+          {
+            name: "field",
+            label: "Field",
+            kind,
+            default: value,
+            options: [{ value: "eu", label: "Europe" }],
+          },
         ],
       })
     ).toThrow(/can only default to/);
@@ -370,7 +399,73 @@ describe("a default a control cannot hold", () => {
       defineEmailProvider({
         ...base,
         configFields: [
-          { name: "field", label: "Field", kind, default: value, options: [] },
+          {
+            name: "field",
+            label: "Field",
+            kind,
+            default: value,
+            options: [{ value: "eu", label: "Europe" }],
+          },
+        ],
+      })
+    ).not.toThrow();
+  });
+});
+
+describe("a select nobody can choose from", () => {
+  const base = {
+    type: "picker",
+    label: "Picker",
+    parseConfig: (input: unknown) => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  };
+
+  it("refuses a select with no options", () => {
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          { name: "region", label: "Region", kind: "select", options: [] },
+        ],
+      })
+    ).toThrow(/at least one choice/);
+  });
+
+  it("refuses an option whose value is empty", () => {
+    // The admin's select reserves "" for "nothing selected" and throws on an
+    // item carrying it, so this reaches an error boundary on render rather
+    // than failing validation.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          {
+            name: "region",
+            label: "Region",
+            kind: "select",
+            options: [
+              { value: "", label: "Any" },
+              { value: "eu", label: "Europe" },
+            ],
+          },
+        ],
+      })
+    ).toThrow(/cannot also be a choice/);
+  });
+
+  it("accepts an ordinary option list", () => {
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          {
+            name: "region",
+            label: "Region",
+            kind: "select",
+            options: [{ value: "eu", label: "Europe" }],
+          },
         ],
       })
     ).not.toThrow();

@@ -122,7 +122,15 @@ function ProviderConfigField({
                       <Input
                         {...controller}
                         type="number"
-                        inputMode="numeric"
+                        inputMode="decimal"
+                        // A native number input applies an implicit step of 1,
+                        // and the browser then blocks submission for any value
+                        // that does not land on it -- so a provider declaring
+                        // a 0.5 rate or timeout could not be saved, even
+                        // though the descriptor and the generated schema both
+                        // accept it. The descriptor has no step to declare, so
+                        // the control must not invent one.
+                        step="any"
                         min={field.constraints?.min}
                         max={field.constraints?.max}
                         placeholder={field.placeholder}

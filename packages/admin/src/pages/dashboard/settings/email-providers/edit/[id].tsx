@@ -22,6 +22,7 @@ import {
   useUpdateEmailProvider,
 } from "@admin/hooks/queries/useEmailProviders";
 import { useRouter } from "@admin/hooks/useRouter";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
 import { validateUUID } from "@admin/lib/validation";
@@ -79,10 +80,16 @@ export default function EditEmailProviderPage() {
           },
           onError: (error: Error) => {
             toast.error("Failed to update provider", {
-              description: getErrorMessage(
-                error,
-                "An error occurred while updating the provider."
-              ),
+              // apiErrorMessage, not getErrorMessage: a rule that lives only
+              // in the provider's own parser -- SMTP's conditional
+              // credentials, its transport-safety check, anything a plugin
+              // enforces -- arrives as per-field reasons in `data.errors`
+              // under a top-level "Validation failed." Reading only
+              // `Error.message` shows the operator that sentence and nothing
+              // they can act on.
+              description:
+                apiErrorMessage(error) ||
+                "An error occurred while updating the provider.",
             });
           },
         }
