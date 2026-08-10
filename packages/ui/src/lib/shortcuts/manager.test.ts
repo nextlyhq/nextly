@@ -2186,6 +2186,106 @@ describe("a permitted key whose modifiers change mid-hold", () => {
   });
 });
 
+describe("a consumed key repeating during a sequence", () => {
+  it("abandons the sequence it interrupted", () => {
+    // Holding a key this manager consumed puts it in the consumed map. Asking that map, rather
+    // than the key that opened the prefix, preserved `g d` across a keystroke from `s`.
+    const save = vi.fn();
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("mod+s", save), binding("g d", run)], {
+      name: "shell",
+      depth: 0,
+    });
+
+    manager.handle(press("s", { ctrlKey: true }));
+    manager.handle(press("g"));
+    manager.handle(press("s", { ctrlKey: true, repeat: true }));
+    manager.handle(press("d"));
+
+    expect(run).not.toHaveBeenCalled();
+    // The control: the same sequence completes when nothing comes between its two keys.
+    manager.handle(press("g"));
+    manager.handle(press("d"));
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a handler that throws while another key is held", () => {
+  it("keeps the held key's consumption", () => {
+    // Clearing every consumption forgot the older press too. Its repeat was then re-offered, and
+    // a binding whose own action had made it ineligible reported that repeat unhandled — handing
+    // the browser an accelerator the first press had suppressed.
+    let dirty = true;
+    const manager = managerFor();
+    manager.register(
+      [
+        binding(
+          "mod+s",
+          () => {
+            dirty = false;
+          },
+          { when: () => dirty }
+        ),
+        {
+          keys: "mod+k",
+          description: "Throws",
+          run: () => {
+            throw new Error("handler failed");
+          },
+        },
+      ],
+      { name: "shell", depth: 0 }
+    );
+
+    const first = press("s", { ctrlKey: true });
+    manager.handle(first);
+    expect(first.defaultPrevented).toBe(true);
+
+    expect(() => manager.handle(press("k", { ctrlKey: true }))).toThrow(
+      "handler failed"
+    );
+
+    const repeat = press("s", { ctrlKey: true, repeat: true });
+    expect(manager.handle(repeat)).toBe(true);
+    expect(repeat.defaultPrevented).toBe(true);
+  });
+});
+
+describe("a permitted key held while the stack changes", () => {
+  it("re-decides its repeats once a blocking layer appears", () => {
+    // A binding that leaves the default in place can open a modal on its first keydown. The key
+    // is still held and its modifiers have not moved, so inheriting "permitted" left the browser
+    // scrolling the page underneath a layer that claims to hold the keyboard.
+    const manager = managerFor();
+    manager.register(
+      [
+        binding(
+          "Space",
+          () => {
+            manager.register([binding("Escape", vi.fn())], {
+              name: "modal",
+              depth: 1,
+              blocking: true,
+            });
+          },
+          { preventDefault: false }
+        ),
+      ],
+      { name: "shell", depth: 0 }
+    );
+
+    const first = press(" ");
+    manager.handle(first);
+    // The control: the press itself is still permitted, so this is not a blanket suppression.
+    expect(first.defaultPrevented).toBe(false);
+
+    const repeat = press(" ", { repeat: true });
+    manager.handle(repeat);
+    expect(repeat.defaultPrevented).toBe(true);
+  });
+});
+
 describe("a keyboard with a dedicated AltGraph key", () => {
   it("does not abandon a sequence when AltGraph is pressed", () => {
     // AltGraph reports its own keydown before the character-producing one, so treating it as a
@@ -2199,6 +2299,34 @@ describe("a keyboard with a dedicated AltGraph key", () => {
     manager.handle(press("d"));
 
     expect(run).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a binding that names the modifiers AltGraph reports", () => {
+  it("still requires them to be held for real", () => {
+    // AltGraph produces a character and reports itself as Ctrl+Alt. Those synthetic flags are
+    // ignored so a binding for the CHARACTER matches, but a binding that explicitly asks for a
+    // modifier wants it held: `ctrl+@` must not fire on a plain AltGraph `@`. Because naming a
+    // modifier also makes a binding typing-enabled by default, that firing would land inside a
+    // field and suppress the character being typed.
+    const explicit = vi.fn();
+    const character = vi.fn();
+    const manager = managerFor(false);
+    manager.register([binding("ctrl+@", explicit), binding("@", character)], {
+      name: "shell",
+      depth: 0,
+    });
+
+    const typed = press("@", { ctrlKey: true, altKey: true });
+    Object.defineProperty(typed, "getModifierState", {
+      value: (k: string) => k === "AltGraph",
+    });
+    manager.handle(typed);
+
+    expect(explicit).not.toHaveBeenCalled();
+    // The control: the character binding DOES answer the same keystroke, so the synthetic flags
+    // are still being ignored where that is what makes the layout usable.
+    expect(character).toHaveBeenCalledTimes(1);
   });
 });
 

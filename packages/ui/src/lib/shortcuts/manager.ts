@@ -405,33 +405,30 @@ export function createShortcutManager(
   let pendingLayer: RegisteredLayer | null = null;
 
   /**
-   * The keystroke consumed by the most recent fresh press, so its repeats stay consumed.
+   * What each held key was consumed as, keyed by the physical key, so its repeats stay consumed.
    *
-   * Identifies the physical press rather than the binding that answered it: by the time a repeat
+   * Keyed by the physical press rather than by the binding that answered it: by the time a repeat
    * arrives, the binding may have made itself ineligible.
-   */
-  /**
-   * What each held key was consumed as, keyed by the physical key.
    *
-   * A single slot was overwritten by the next press: hold `mod+s`, press `mod+k` while `s` is
-   * still down, and the repeats of `s` no longer matched anything — so a binding that had made
-   * itself ineligible let the browser take them. Several keys are held at once routinely, and the
-   * map is bounded by the number of distinct physical keys on the keyboard.
+   * A map rather than one slot, because several keys are held at once routinely. A single slot
+   * was overwritten by the next press: hold `mod+s`, press `mod+k` while `s` is still down, and
+   * the repeats of `s` matched nothing, so a binding that had made itself ineligible let the
+   * browser take them. The map is bounded by the number of distinct physical keys on the keyboard.
    */
   const consumedPresses = new Map<
     string,
-    { prevented: boolean; modifiers: string }
+    { prevented: boolean; modifiers: string; stack: string }
   >();
 
   /**
-   * Forget a partially typed sequence.
+   * The physical key that opened the pending sequence, so its own repeats can be told apart from
+   * every other key's.
    *
-   * Every path that hands a keystroke to someone else calls this. A pending sequence models "the
-   * user is part-way through a command", and any real keystroke in between falsifies it — a
-   * dismissal, a control taking its own key, a composition, a callback that threw. Keeping the
-   * reset with the decision to stand down is deliberate: when it was open-coded at each exit,
-   * five separate branches had to remember it and five separate reviews found one that did not.
+   * Holding the key that started a prefix must not cancel that prefix, but a repeat arriving from
+   * any OTHER key is a real keystroke in between and does cancel it.
    */
+  let pendingKey: string | null = null;
+
   /**
    * What a layer matches, ignoring the parts that change on every render.
    *
@@ -453,10 +450,21 @@ export function createShortcutManager(
     return ordered().some(layer => layer.options.blocking === true);
   }
 
+  /**
+   * Forget a partially typed sequence.
+   *
+   * Every path that hands a keystroke to someone else calls this. A pending sequence models "the
+   * user is part-way through a command", and any real keystroke in between falsifies it — a
+   * dismissal, a control taking its own key, a composition, a callback that threw. One function
+   * rather than a reset open-coded at each exit, so standing down and forgetting the prefix
+   * cannot come apart: an exit that stands down without resetting leaves a later `d` completing
+   * a `g` typed before the keystroke that interrupted it.
+   */
   function abandonSequence(): void {
     pendingAt = null;
     pressedEvents.length = 0;
     pendingLayer = null;
+    pendingKey = null;
   }
 
   function prepare(bindings: readonly ShortcutBinding[]): PreparedBinding[] {
@@ -674,9 +682,64 @@ export function createShortcutManager(
   /** The last computed binding list, so repeated reads return the same array identity. */
   let snapshot: readonly ActiveShortcut[] | null = null;
 
-  /** Invalidate the snapshot and tell anyone watching that the stack changed. */
+  /** The bindings a reader sees, in precedence order. */
+  function computeSnapshot(): readonly ActiveShortcut[] {
+    return ordered().flatMap(layer =>
+      layer.bindings.map(prepared => ({
+        keys: prepared.binding.keys,
+        description: prepared.binding.description,
+        layer: layer.options.name,
+      }))
+    );
+  }
+
+  /** Whether two binding lists describe the same surface, field by field. */
+  function sameShortcuts(
+    a: readonly ActiveShortcut[],
+    b: readonly ActiveShortcut[]
+  ): boolean {
+    return (
+      a.length === b.length &&
+      a.every(
+        (entry, index) =>
+          entry.keys === b[index]?.keys &&
+          entry.description === b[index]?.description &&
+          entry.layer === b[index]?.layer
+      )
+    );
+  }
+
+  /**
+   * What the stack decides suppression by: its order, and each layer's depth, blocking, enabled
+   * and keys. Recorded with a consumed press so a repeat can tell that the answer it would
+   * inherit was decided against a stack that no longer exists.
+   */
+  function stackSignature(): string {
+    return ordered()
+      .map(layer => layer.shape)
+      .join("");
+  }
+
+  /**
+   * Invalidate the snapshot and tell anyone watching that the stack changed.
+   *
+   * Watchers are notified only when what they can OBSERVE differs. `update()` runs after every
+   * render of a registering component, so notifying unconditionally makes a component that both
+   * registers shortcuts and reads them re-render, update, and notify again without end, until
+   * React stops it with "Maximum update depth exceeded". An unchanged surface also keeps its
+   * previous array identity, which is what an external store must return for a reader not to
+   * re-render on a read.
+   */
   function changed(): void {
+    const previous = snapshot;
     snapshot = null;
+    if (watchers.size === 0) return;
+    const next = computeSnapshot();
+    if (previous && sameShortcuts(previous, next)) {
+      snapshot = previous;
+      return;
+    }
+    snapshot = next;
     for (const watcher of watchers) watcher();
   }
 
@@ -698,15 +761,16 @@ export function createShortcutManager(
       return offer(pressed, event, typing, true);
     } catch (error) {
       abandonSequence();
-      consumedPresses.clear();
+      // Only THIS key's consumption is dropped. Clearing the map forgot every other key still
+      // held: a later repeat of one of those was re-offered rather than inheriting its
+      // suppression, and a binding whose own action had made it ineligible reported the repeat
+      // unhandled, handing the browser an accelerator the first press had suppressed.
+      consumedPresses.delete(signature(event));
       throw error;
     }
   }
 
   function handle(event: KeyboardEvent): boolean {
-    // An IME turns keystrokes into composition input, and Escape there means "abandon what I am
-    // composing". Acting on it would cancel the composition AND dismiss whatever the application
-    // binds Escape to — a keystroke the user never aimed at the application at all.
     // Checked FIRST: an owner closer to the keystroke has already answered it, and that stays
     // true even while an IME is composing. Reported as consumed so `attach` stops it
     // propagating — the manager runs no binding, but it is the one place that can keep a
@@ -753,7 +817,12 @@ export function createShortcutManager(
       // A repeat of some OTHER key is a real keystroke between the sequence's own. While `x` is
       // held, pressing `g`, receiving another `x` repeat, then pressing `d` must not complete
       // `g d` as though nothing had come between them.
-      if (!consumedPresses.has(signature(event))) {
+      //
+      // Measured against the key that OPENED the prefix, not against whether this manager
+      // consumed the repeating key. Holding a consumed key — `mod+s` — while typing `g d` put
+      // that key in the consumed map, so asking the map preserved the prefix across a keystroke
+      // from an entirely different key.
+      if (pendingKey !== signature(event)) {
         abandonSequence();
       }
       // Re-offering is not enough on its own. A binding whose action changes its own condition —
@@ -772,9 +841,17 @@ export function createShortcutManager(
         // browser a Save As. A press that was PERMITTED, though, was permitted because it was
         // text: add Ctrl to a held `w` and it becomes the accelerator that closes the tab, so the
         // decision is re-made rather than inherited.
+        //
+        // The layer stack decides that too, not only the modifiers. A binding that sets
+        // `preventDefault: false` can open a blocking layer on its first keydown; the key is
+        // still held, its modifiers have not moved, and inheriting "permitted" left the browser
+        // scrolling the page underneath a modal that claims to hold the keyboard.
         if (held.prevented) {
           event.preventDefault();
-        } else if (held.modifiers !== modifierState(event)) {
+        } else if (
+          held.modifiers !== modifierState(event) ||
+          held.stack !== stackSignature()
+        ) {
           if (!insertsText(event, typing)) event.preventDefault();
         }
         return true;
@@ -792,6 +869,12 @@ export function createShortcutManager(
     if (pendingAt !== null && now() - pendingAt > sequenceTimeoutMs) {
       abandonSequence();
     }
+
+    // Read BEFORE the handler runs, because the handler is one of the things that can change the
+    // stack: a binding whose action opens a blocking layer would otherwise record the stack it
+    // just created, and its own repeats would compare equal to it and inherit a decision made
+    // when no such layer existed.
+    const stackAtPress = stackSignature();
 
     pressedEvents.push(event);
     let outcome = runOffer(pressedEvents, event, typing);
@@ -813,9 +896,11 @@ export function createShortcutManager(
 
     if (outcome === "pending") {
       pendingAt = now();
+      pendingKey = signature(event);
       consumedPresses.set(signature(event), {
         prevented: event.defaultPrevented,
         modifiers: modifierState(event),
+        stack: stackAtPress,
       });
       return true;
     }
@@ -834,6 +919,7 @@ export function createShortcutManager(
       consumedPresses.set(signature(event), {
         prevented: event.defaultPrevented,
         modifiers: modifierState(event),
+        stack: stackAtPress,
       });
     } else {
       consumedPresses.delete(signature(event));
@@ -914,13 +1000,7 @@ export function createShortcutManager(
       // Cached, because an external store must return a stable identity for an unchanged stack:
       // a fresh array on every read makes React re-render without end.
       if (snapshot) return snapshot;
-      snapshot = ordered().flatMap(layer =>
-        layer.bindings.map(prepared => ({
-          keys: prepared.binding.keys,
-          description: prepared.binding.description,
-          layer: layer.options.name,
-        }))
-      );
+      snapshot = computeSnapshot();
       return snapshot;
     },
   };
@@ -937,15 +1017,6 @@ const MODIFIER_KEYS = new Set([
   "AltGraph",
 ]);
 
-/**
- * Keys a focused field consumes itself: caret movement and the edits that carry no character.
- *
- * Tab is here because a focus trap needs it: it only cancels the wrap at the first and last
- * tabbable element, and relies on the browser default for every move in between.
- *
- * Used to decide what a blocking layer may suppress while the user is typing. A key outside this
- * set and not a character belongs to the browser, not the field.
- */
 /**
  * Roles whose widgets consume bare characters themselves.
  *
@@ -1017,6 +1088,15 @@ function targetOwnsAmbiguousKey(event: KeyboardEvent): boolean {
   return multiline || element.tagName === "SELECT";
 }
 
+/**
+ * Keys a focused field consumes itself: caret movement and the edits that carry no character.
+ *
+ * Tab is here because a focus trap needs it: it only cancels the wrap at the first and last
+ * tabbable element, and relies on the browser default for every move in between.
+ *
+ * Used to decide what a blocking layer may suppress while the user is typing. A key outside this
+ * set and not a character belongs to the browser, not the field.
+ */
 const FIELD_KEYS = new Set([
   "Backspace",
   "Delete",

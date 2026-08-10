@@ -103,6 +103,18 @@ interface TargetOwner {
 const ownersByTarget = new WeakMap<object, TargetOwner>();
 
 /**
+ * A layout effect in the browser, a plain effect where there is no DOM.
+ *
+ * These components are client code, but a consumer may still PRERENDER them, and React warns that
+ * `useLayoutEffect` does nothing on the server. Layout timing is what the browser needs:
+ * registration has to be settled before paint, or a keystroke arriving in the first frame after
+ * mount meets an empty stack. Neither effect runs during a server render, so choosing between
+ * them by environment loses nothing and silences a warning that reports no real problem.
+ */
+const useIsomorphicLayoutEffect =
+  typeof document === "undefined" ? React.useEffect : React.useLayoutEffect;
+
+/**
  * The options that change how a manager behaves, as a comparable string.
  *
  * `now` is a function and cannot be compared usefully, so its PRESENCE is what is recorded: two
@@ -364,7 +376,7 @@ export function useShortcuts(
   // to the top of its depth, changing precedence for a reason the caller never asked for.
   const latest = React.useRef({ bindings, options });
 
-  React.useLayoutEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     registration.current = manager.register([], {
       name: latest.current.options.name,
       depth,
@@ -377,7 +389,7 @@ export function useShortcuts(
 
   // No dependency array: the bindings close over render-scoped values, so re-reading them every
   // render is what keeps them from going stale, and it is cheap.
-  React.useLayoutEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     latest.current = { bindings, options };
     registration.current?.update(bindings, {
       name: options.name,

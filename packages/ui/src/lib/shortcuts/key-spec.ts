@@ -207,8 +207,14 @@ export function chordMatches(
   // character — `@` on a layout that needs AltGraph for it — would never match if those synthetic
   // flags had to be declared, and declaring them (`ctrl+alt+@`) is layout-specific: the same
   // character needs no modifiers at all elsewhere. So they are ignored for a character key.
+  //
+  // Only when the chord asks for NEITHER, though. A spec that explicitly declares `ctrl+alt+@`
+  // wants those modifiers held for real; ignoring them would let a plain AltGraph `@` fire it,
+  // and because declared modifiers make a binding typing-enabled by default, that firing can
+  // happen inside a field and suppress the character the user was typing.
   const altGraph = state.getModifierState?.("AltGraph") ?? false;
-  const synthetic = altGraph && [...chord.key].length === 1;
+  const synthetic =
+    altGraph && [...chord.key].length === 1 && !wantsCtrl && !chord.alt;
   if (!synthetic) {
     if (state.ctrlKey !== wantsCtrl) return false;
     if (state.altKey !== chord.alt) return false;

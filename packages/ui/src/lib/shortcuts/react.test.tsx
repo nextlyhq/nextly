@@ -17,7 +17,7 @@ import {
   useShortcuts,
 } from "./react";
 import { resetDevWarnings } from "../dev-warn";
-import type { ShortcutBinding } from "./manager";
+import type { ShortcutBinding, ShortcutManager } from "./manager";
 
 /** Registers one shortcut and renders nothing. */
 function Bind({
@@ -686,6 +686,36 @@ describe("sibling providers mounted in one render", () => {
 
     expect(first).toHaveBeenCalledTimes(1);
     expect(second).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a component that both registers shortcuts and lists them", () => {
+  it("settles instead of re-rendering without end", () => {
+    // `useShortcuts` updates its layer after EVERY render, because the bindings close over
+    // render-scoped values. Notifying subscribers unconditionally therefore invalidated the
+    // snapshot `useActiveShortcuts` reads, which re-rendered the component, which updated the
+    // layer again — until React stopped it with "Maximum update depth exceeded". A shortcuts
+    // help dialog that binds Escape is exactly this shape.
+    let renders = 0;
+
+    function HelpPanel(): React.JSX.Element {
+      renders++;
+      useShortcuts([{ keys: "Escape", description: "Close", run: () => {} }], {
+        name: "help",
+      });
+      return <span>{useActiveShortcuts().length}</span>;
+    }
+
+    const view = render(
+      <ShortcutProvider>
+        <HelpPanel />
+      </ShortcutProvider>
+    );
+
+    // The control: it settles having actually SEEN its own binding, so this is not passing
+    // because the panel rendered once and read an empty stack.
+    expect(view.container.textContent).toBe("1");
+    expect(renders).toBeLessThan(10);
   });
 });
 
