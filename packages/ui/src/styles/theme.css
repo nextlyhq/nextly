@@ -685,21 +685,21 @@
 
 :root {
   /* Base colors - using Slate neutral scale */
-  --nx-background: oklch(1 0 0);
+  --nx-background: oklch(0.99 0 0);
   /* Pure white for weightless aesthetic */
-  --nx-page-background: oklch(0.9818 0 0);
+  --nx-page-background: oklch(0.97 0 0);
   /* #f9f9f9 for page content area */
-  --nx-foreground: oklch(0.2079 0.0399 265.73);
+  --nx-foreground: oklch(0 0 0);
   /* slate-900 */
 
   /* Component colors */
   --nx-card: oklch(1 0 0);
   /* pure white for cards to pop on off-white bg */
-  --nx-card-foreground: oklch(0.2079 0.0399 265.73);
+  --nx-card-foreground: oklch(0 0 0);
   /* slate-900 */
-  --nx-popover: oklch(1 0 0);
+  --nx-popover: oklch(0.99 0 0);
   /* white */
-  --nx-popover-foreground: oklch(0.2079 0.0399 265.73);
+  --nx-popover-foreground: oklch(0 0 0);
   /* slate-900 */
 
   /* Brand colors - Blue-Cyan Professional Palette */
@@ -709,19 +709,19 @@
   /* white */
 
   /* Secondary colors - using slate-100 for subtle backgrounds */
-  --nx-secondary: oklch(0.9684 0.0068 247.9);
+  --nx-secondary: oklch(0.94 0 0);
   /* slate-100 */
-  --nx-secondary-foreground: oklch(0.2079 0.0399 265.73);
+  --nx-secondary-foreground: oklch(0 0 0);
   /* slate-900 */
 
   /* Utility colors */
-  --nx-muted: oklch(0.9696 0 0);
+  --nx-muted: oklch(0.97 0 0);
   /* Darkened so muted text clears WCAG 4.5:1 on the muted surface (was 4.35:1). */
-  --nx-muted-foreground: oklch(0.5218 0.0407 257.44);
+  --nx-muted-foreground: oklch(0.44 0 0);
   /* slate-500 */
-  --nx-accent: oklch(0.5547 0.0407 257.44);
+  --nx-accent: oklch(0.94 0 0);
   /* Slate-500 per user request #64748b */
-  --nx-accent-foreground: oklch(1 0 0);
+  --nx-accent-foreground: oklch(0 0 0);
   /* white */
 
   /* State colors - WCAG 2.2 AA Compliant.
@@ -732,18 +732,18 @@
    * dark mode (a fill dark enough for white text is too dark to read as text
    * on the page), so they diverge there. */
   /* Darkened from red-500; renders as #d92c32, ~4.8:1 as text on white. */
-  --nx-destructive: oklch(0.5778 0.2078 25.33);
-  --nx-destructive-solid: oklch(0.5778 0.2078 25.33);
+  --nx-destructive: oklch(0.5661 0.19 23.03);
+  --nx-destructive-solid: oklch(0.5661 0.19 23.03);
   --nx-destructive-foreground: oklch(1 0 0);
   /* white */
   /* Darkened from green-600; renders as #00852c, ~4.8:1 as text on white. */
-  --nx-success: oklch(0.53 0.17 149.2);
+  --nx-success: oklch(0.4981 0.17 149.2);
   --nx-success-solid: oklch(0.53 0.17 149.2);
   --nx-success-foreground: oklch(1 0 0);
   /* white */
   /* Darkened from amber-500 so it reads as text on white at WCAG 4.5:1 (was
    * 2.15:1); its light shades still tint badge/alert surfaces. */
-  --nx-warning: oklch(0.5496 0.1646 70.11);
+  --nx-warning: oklch(0.529 0.1646 70.11);
   --nx-warning-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 - REQUIRED for AA contrast (warning-500 on white = 3.4:1, fails AA) */
 
@@ -799,18 +799,18 @@
   /* For a scrim over CONTENT rather than the page: an image's hover actions,
    * where the content beneath still has to read through. */
   --nx-overlay-soft: oklch(0 0 0 / 0.4);
-  --nx-border-subtle: oklch(0 0 0 / 0.08);
-  --nx-border: oklch(0 0 0 / 0.14);
+  --nx-border-subtle: color-mix(in srgb, oklch(0.92 0 0), transparent 60%);
+  --nx-border: oklch(0.92 0 0);
   /* Alpha raised so the composited strong border clears WCAG 3:1 / ~4:1 (was 2.11:1). */
-  --nx-border-strong: oklch(0 0 0 / 0.502);
+  --nx-border-strong: oklch(0.63 0 0);
   /* Darkened so the field border clears WCAG 3:1 on the page (was 2.32:1). */
-  --nx-input: oklch(0.6454 0.0116 286.11);
+  --nx-input: oklch(0.6373 0 0);
   --nx-ring: var(--nx-primary);
 
   /* The base colour of the elevation ramp (--shadow-sm..xl, -inner-subtle,
    * -neo). Each step mixes this down to its own alpha, so retinting every
    * shadow at once is a single token change. */
-  --nx-shadow-color: oklch(0 0 0);
+  --nx-shadow-color: hsl(0 0% 0%);
 
   /* Chart colors for data visualization */
   --nx-chart-1: var(--nx-primary);
@@ -840,77 +840,74 @@
   /* white */
 
   /* Sidebar specific colors - using Slate scale */
-  --nx-sidebar-background: var(--nx-background);
+  --nx-sidebar-background: oklch(0.99 0 0);
   /* flat with the content surface; nav is separated by borders, not fill */
-  --nx-sidebar-foreground: oklch(0.372 0.0392 257.3);
+  /* Resting nav ink sits a step back from the active ink, so an active row
+   * reads as emphasised by its INK as well as its fill. The chosen palette
+   * used one value for both, which leaves the fill carrying the whole signal
+   * -- and the fill is the part a low-contrast surface weakens first. */
+  --nx-sidebar-foreground: oklch(0.44 0 0);
   /* slate-700 */
-  --nx-sidebar-primary: oklch(0.2079 0.0399 265.73);
+  --nx-sidebar-primary: oklch(0 0 0);
   /* slate-900 */
-  --nx-sidebar-primary-foreground: oklch(0.9838 0.0035 247.86);
+  --nx-sidebar-primary-foreground: oklch(1 0 0);
   /* slate-50 */
-  --nx-sidebar-accent: oklch(0.9684 0.0068 247.9);
+  --nx-sidebar-accent: oklch(0.94 0 0);
   /* slate-100 */
-  --nx-sidebar-accent-foreground: oklch(0.2079 0.0399 265.73);
+  --nx-sidebar-accent-foreground: oklch(0 0 0);
   /* slate-900 */
   /* Darkened so the sidebar border clears WCAG 3:1 on its surface (was 1.23:1). */
-  --nx-sidebar-border: oklch(0.6446 0.0126 255.53);
+  --nx-sidebar-border: oklch(0.63 0 0);
   /* slate-200 */
   --nx-sidebar-ring: var(--nx-primary);
 
   /* Data table specific colors */
-  --nx-table-row-hover: oklch(0.9848 0 0);
+  --nx-table-row-hover: oklch(0.97 0 0);
   --nx-table-row-selected: var(--nx-primary);
   --nx-table-border: var(--nx-border);
-
-  /* Elevation color for the light theme. When a theme overrides this,
-   * the shadow colors in the ramp will resolve to the new hue instead of
-   * staying black, which reads as elevation rather than dirt on tinted surfaces. */
-  --nx-shadow-color: oklch(0 0 0);
 }
 
 /* Dark theme overrides when using class-based theming */
 .dark {
   /* Base colors - using Slate dark scale */
-  --nx-background: oklch(0.1358 0.0163 262.71);
+  --nx-background: oklch(0 0 0);
   /* ultra deep dark background (darker than slate-950) */
-  --nx-page-background: oklch(0.1358 0.0163 262.71);
+  --nx-page-background: oklch(0.23 0 0);
   /* Matches background in dark mode */
-  --nx-foreground: oklch(0.9838 0.0035 247.86);
+  --nx-foreground: oklch(1 0 0);
   /* slate-50 */
 
   /* Component colors */
-  --nx-card: oklch(0.1916 0.0228 266.36);
+  --nx-card: oklch(0.14 0 0);
   /* raised one tonal step above --nx-background (222 47% 4%) so panels/cards
    * read as distinct surfaces in dark mode instead of merging into the page */
-  --nx-card-foreground: oklch(0.9838 0.0035 247.86);
+  --nx-card-foreground: oklch(1 0 0);
   /* slate-50 */
   /* Darkened toward the card elevation so borders, inputs, and muted text
    * placed on a popover clear their WCAG minimums (border was 2.85:1, input
    * 1.73:1); the surface was too light for its own contents. */
-  --nx-popover: oklch(0.24 0.0249 257.44);
+  --nx-popover: oklch(0.18 0 0);
   /* slate-800 */
-  --nx-popover-foreground: oklch(0.9838 0.0035 247.86);
+  --nx-popover-foreground: oklch(1 0 0);
   /* slate-50 */
 
   /* Brand colors - Blue-Cyan Professional Palette (Dark Mode) */
   --nx-primary: oklch(1 0 0); /* High contrast White for dark mode */
-  --nx-primary-foreground: oklch(0.2079 0.0399 265.73);
+  --nx-primary-foreground: oklch(0 0 0);
   /* slate-900 */
 
   /* Secondary colors - using slate-800 for dark backgrounds */
-  --nx-secondary: oklch(0.28 0.0369 259.97);
+  --nx-secondary: oklch(0.25 0 0);
   /* slate-800 */
-  --nx-secondary-foreground: oklch(0.9838 0.0035 247.86);
+  --nx-secondary-foreground: oklch(1 0 0);
   /* slate-50 */
 
   /* Utility colors */
-  --nx-muted: oklch(0.28 0.0369 259.97);
+  --nx-muted: oklch(0.23 0 0);
   /* slate-800 */
-  --nx-muted-foreground: oklch(0.7107 0.0351 256.79);
+  --nx-muted-foreground: oklch(0.72 0 0);
   /* slate-400 */
-  --nx-accent: oklch(
-    0.5547 0.0407 257.44
-  ); /* Slate-500 per user request #64748b */
+  --nx-accent: oklch(0.32 0 0); /* Slate-500 per user request #64748b */
   --nx-accent-foreground: oklch(1 0 0);
   /* white */
 
@@ -921,14 +918,14 @@
    * dark, so its base is unchanged here. */
   /* Lightened red so it reads as text at WCAG 4.5:1 on the dark page and on the
    * lighter popover surface (was 4.17:1 on the page, 4.25:1 on a popover). */
-  --nx-destructive: oklch(0.6706 0.2078 25.33);
+  --nx-destructive: oklch(0.69 0.2 23.91);
   /* Darker red fill so white on-color button text clears 4.5:1. */
-  --nx-destructive-solid: oklch(0.5778 0.2078 25.33);
-  --nx-destructive-foreground: oklch(1 0 0);
+  --nx-destructive-solid: oklch(0.69 0.2 23.91);
+  --nx-destructive-foreground: oklch(0 0 0);
   /* white */
   /* Lightened green so it reads as text at WCAG 4.5:1 on the dark page and on
    * the lighter popover surface (was 4.17:1 on the page, 4.29:1 on a popover). */
-  --nx-success: oklch(0.621 0.1921 149.58);
+  --nx-success: oklch(0.6 0.1921 149.58);
   /* Darker green fill so white on-color button text clears 4.5:1. */
   --nx-success-solid: oklch(0.5225 0.1921 149.58);
   --nx-success-foreground: oklch(1 0 0);
@@ -973,18 +970,21 @@
   --nx-overlay: oklch(0 0 0 / 0.7);
   --nx-overlay-strong: oklch(0 0 0 / 0.85);
   --nx-overlay-soft: oklch(0 0 0 / 0.5);
-  --nx-border-subtle: oklch(1 0 0 / 0.08);
-  --nx-border: oklch(1 0 0 / 0.14);
+  --nx-border-subtle: color-mix(in srgb, oklch(0.26 0 0), transparent 60%);
+  --nx-border: oklch(0.26 0 0);
   /* Alpha raised so the composited strong border clears WCAG 3:1 / ~4:1 (was 3.00:1). */
-  --nx-border-strong: oklch(1 0 0 / 0.418);
+  --nx-border-strong: oklch(0.5444 0 0);
   /* Brightened so the field border clears WCAG 3:1 on the lighter popover
    * surface as well as the page and card (was 1.73:1 on a popover). */
-  --nx-input: oklch(0.5514 0.0128 285.92);
+  --nx-input: oklch(0.519 0 0);
   --nx-ring: var(--nx-primary);
 
   /* Black in dark mode too: the ramp reads as depth against the deep surfaces
-   * rather than as a glow, which a lightened shadow colour would produce. */
-  --nx-shadow-color: oklch(0 0 0);
+   * rather than as a glow, which a lightened shadow colour would produce.
+   * One --shadow-* ramp serves both modes and inlines a single set of
+   * color-mix opacities, so this token is the only place elevation is
+   * retuned -- overriding it resolves the whole ramp to that hue. */
+  --nx-shadow-color: hsl(0 0% 0%);
 
   /* Chart colors for data visualization (same as light mode) */
   --nx-chart-1: var(--nx-primary);
@@ -998,7 +998,7 @@
   /* red-500 */
 
   /* Sidebar specific colors - dark mode */
-  --nx-sidebar-background: var(--nx-background);
+  --nx-sidebar-background: oklch(0.18 0 0);
   /* flat with the content surface; nav is separated by borders, not fill */
   /* Resting nav ink, dimmed off slate-50 so it sits a step below
    * --nx-sidebar-accent-foreground the way the light pair does: the lightness
@@ -1006,30 +1006,23 @@
    * slate-900, so an active row reads as emphasised by its ink and not only by
    * its fill. Chroma and hue track the theme's other secondary ink
    * (--nx-muted-foreground) so lightness alone carries the hierarchy. */
-  --nx-sidebar-foreground: oklch(0.82 0.0351 256.79);
-  --nx-sidebar-primary: oklch(0.9838 0.0035 247.86);
+  --nx-sidebar-foreground: oklch(0.72 0 0);
+  --nx-sidebar-primary: oklch(1 0 0);
   /* slate-50 */
-  --nx-sidebar-primary-foreground: oklch(0.2079 0.0399 265.73);
+  --nx-sidebar-primary-foreground: oklch(0 0 0);
   /* slate-900 */
-  --nx-sidebar-accent: oklch(0.28 0.0369 259.97);
+  --nx-sidebar-accent: oklch(0.32 0 0);
   /* slate-800 */
-  --nx-sidebar-accent-foreground: oklch(0.9838 0.0035 247.86);
+  --nx-sidebar-accent-foreground: oklch(1 0 0);
   /* slate-50 */
   /* Lightened so the sidebar border clears WCAG 3:1 on its surface (was 1.19:1). */
-  --nx-sidebar-border: oklch(0.4975 0.0129 257.43);
+  --nx-sidebar-border: oklch(0.519 0 0);
   --nx-sidebar-ring: var(--nx-primary);
 
   /* Data table specific colors - dark mode */
-  --nx-table-row-hover: oklch(0.28 0.0369 259.97);
+  --nx-table-row-hover: oklch(0.23 0 0);
   /* slate-800 */
   --nx-table-row-selected: var(--nx-primary);
   --nx-table-border: var(--nx-border);
   /* inherit the retuned white-alpha border (was a fixed faint slate) */
-
-  /* Elevation color for the dark theme, identical to the light-mode value.
-   * There is one --shadow-* ramp and it inlines a single set of color-mix
-   * opacities (4-10%) that both modes share, so this token is the only place
-   * elevation can be retuned: overriding it resolves the whole ramp to that
-   * hue. */
-  --nx-shadow-color: oklch(0 0 0);
 }
