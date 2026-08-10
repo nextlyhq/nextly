@@ -1240,6 +1240,52 @@ describe("createBlocksPage", () => {
     expect(budget?.take()).toBe(false);
   });
 
+  it("spends the page budget on media reads too", async () => {
+    // The budget is documented as covering the reads one page render performs.
+    // A page whose images all resolve through the media library spends the same
+    // budget a loop does, so counting only loop reads would leave the
+    // documented bound false.
+    const id = "33333333-3333-4333-8333-333333333333";
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      maxQueries: 1,
+      nextly: reader(
+        { slug: "about", content: document },
+        { [id]: { url: "/a.png" } }
+      ),
+    });
+
+    await expect(props.context?.resolveMedia(id)).resolves.toEqual({
+      url: "/a.png",
+    });
+    // Budget spent: the next read resolves to no picture rather than issuing.
+    await expect(props.context?.resolveMedia(id)).resolves.toBeNull();
+  });
+
+  it("withholds a link once the page budget is spent", async () => {
+    // `resolveEntryPath` performs a read plus two ownership probes, so a loop
+    // over N entries whose template holds one link is about 3N reads — exactly
+    // the amplification the budget exists to bound. An exhausted budget
+    // withholds the href, the direction every other uncertainty here takes.
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      // ONE read: enough for the entry lookup, so the ownership probes are
+      // what run out. A budget of zero would stop before the probes and pass
+      // this test without ever reaching the claim it is about.
+      maxQueries: 1,
+      nextly: reader(
+        { slug: "about", content: document },
+        { p9: { slug: "contact" } }
+      ),
+    });
+
+    await expect(
+      props.context?.resolveEntryPath("pages", "p9")
+    ).resolves.toBeNull();
+  });
+
   it("gives each render its OWN budget", async () => {
     // One budget shared across requests would spend itself on the first few
     // pages and serve every later request truncated — a fault that grows with

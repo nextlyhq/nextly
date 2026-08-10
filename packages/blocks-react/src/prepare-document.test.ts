@@ -9,6 +9,7 @@ import { coreBlocks } from "./blocks";
 import { prepareDocumentForRead } from "./prepare-document";
 import { createBlockResolver } from "./resolver";
 
+/** A registered node, so the test isolates duplicate-id repair from resolution. */
 function heading(id: string, text: string) {
   return { id, type: "core/heading", version: 1, props: { text } };
 }

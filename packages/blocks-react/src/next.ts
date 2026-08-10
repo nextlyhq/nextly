@@ -504,7 +504,8 @@ function mediaNamespaceOf(
 
 function mediaResolver(
   config: BlocksPageConfig,
-  reader: NextlyContentReader
+  reader: NextlyContentReader,
+  budget: QueryBudget
 ): (id: string) => Promise<ResolvedMedia | null> {
   if (config.resolveMedia) {
     const custom = config.resolveMedia;
@@ -520,6 +521,10 @@ function mediaResolver(
     };
   }
   return async (id: string) => {
+    // A read is a read: a page whose images all resolve through the media
+    // library spends the same budget a loop does, and an exhausted budget
+    // resolves to no picture rather than to an unbounded page.
+    if (!budget.take()) return null;
     // `disableErrors` on both paths, because `PageContext.resolveMedia`
     // promises `null` for an id it cannot resolve and the readers THROW
     // not-found otherwise. The core image block happens to catch that, so the
@@ -573,7 +578,8 @@ function mediaResolver(
  */
 function entryPathResolver(
   config: BlocksPageConfig,
-  reader: NextlyContentReader
+  reader: NextlyContentReader,
+  budget: QueryBudget
 ): (collection: string, id: string) => Promise<string | null> {
   if (config.resolveEntryPath) return config.resolveEntryPath;
   const slugField = config.slugField ?? "slug";
@@ -618,6 +624,7 @@ function entryPathResolver(
     //
     // Also never throws: a stale reference resolves to no rows rather than a
     // rejection, which is what `resolveEntryPath` promises its callers.
+    if (!budget.take()) return null;
     const found = await reader
       .find({
         collection,
@@ -677,6 +684,10 @@ function entryPathResolver(
       // this package builds cannot drift from the one the reader accepts.
       where: NonNullable<Parameters<NextlyContentReader["find"]>[0]["where"]>
     ): Promise<boolean> => {
+      // Each probe is its own read. An exhausted budget answers "something else
+      // owns this slug", which withholds the link — the same direction every
+      // other uncertainty here takes, since no link beats a wrong one.
+      if (!budget.take()) return true;
       const found = await reader
         .find({
           collection: collectionName,
@@ -794,10 +805,17 @@ export function createBlocksPage(
       ? {
           buildMetadata: async (entry, context) => {
             const document = readDocument(entry, field, context);
+            // Its own budget: metadata generation and the render are separate
+            // invocations, so sharing one counter would let the page's reads
+            // starve the preview image, or the reverse.
             const derived = await derivePageSeo(
               document,
               blocks,
-              mediaResolver(config, context.reader),
+              mediaResolver(
+                config,
+                context.reader,
+                createQueryBudget(config.maxQueries ?? DEFAULT_MAX_QUERIES)
+              ),
               context.slug,
               limits,
               styleContext
@@ -813,8 +831,20 @@ export function createBlocksPage(
       // Built from the reader the ROUTE resolved this entry through, handed
       // over in the context. A page and the records it embeds then always come
       // from one instance, which on a per-tenant setup is one database.
-      const resolveMedia = mediaResolver(config, context.reader);
-      const resolveEntryPath = entryPathResolver(config, context.reader);
+      // Created before the resolvers, because they claim from it too: a loop
+      // over N entries whose template holds one link performs about 3N reads
+      // through `resolveEntryPath`, which is exactly the amplification this
+      // bounds — and a budget only the loop claimed from would have counted the
+      // one read that multiplies while ignoring the ones it multiplies INTO.
+      const budget = createQueryBudget(
+        config.maxQueries ?? DEFAULT_MAX_QUERIES
+      );
+      const resolveMedia = mediaResolver(config, context.reader, budget);
+      const resolveEntryPath = entryPathResolver(
+        config,
+        context.reader,
+        budget
+      );
 
       // `isWorkingDraft` is surfaced, not acted on: the renderer draws the
       // pending content either way, and a host that wants to say so on the page
@@ -832,7 +862,7 @@ export function createBlocksPage(
         // each read, and an absent budget reads as unlimited — the loop's own
         // check is `ctx.queries?.take() === false` — so a routed page without
         // one is unbounded by construction.
-        queries: createQueryBudget(config.maxQueries ?? DEFAULT_MAX_QUERIES),
+        queries: budget,
         resolveMedia,
         resolveEntryPath,
       });

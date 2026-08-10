@@ -72,5 +72,6 @@ fixtures. The editor canvas supplies its own. One seam, four consumers.
 
 ## Status
 
-Alpha. What ships today is the package boundary, its layering guarantees, and
-the `PageContext` contract. `PageRenderer` follows.
+Alpha. `PageRenderer`, the core block library and `createBlocksPage` all ship,
+alongside the package boundary, its layering guarantees and the `PageContext`
+contract. The editor surfaces follow.

@@ -258,9 +258,15 @@ describe("the content route's draft decision", () => {
     });
 
     await route.generateStaticParams();
+    const scanned = calls.length;
     await route.ContentPage(params).catch(() => undefined);
 
-    expect(calls).not.toHaveLength(0);
+    // The two paths are asserted SEPARATELY. `generateStaticParams` alone
+    // populates `calls`, so a single "every call carried the locale" check
+    // passes even when `ContentPage` throws before reading anything — the page
+    // resolution would be uncovered while the test reported it green.
+    expect(scanned).toBeGreaterThan(0);
+    expect(calls.length).toBeGreaterThan(scanned);
     expect(calls.every(call => call.locale === "fr")).toBe(true);
   });
 
