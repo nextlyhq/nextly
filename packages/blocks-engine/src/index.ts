@@ -170,7 +170,8 @@ export {
   // IS has to fold it the same way.
   asciiLower,
 } from "./style/css-value";
-export type { CssValueRejection } from "./style/css-value";
+export type { CssValueRejection, MayFetchUrl } from "./style/css-value";
+export type { StyleValueOptions } from "./style/validate-style-value";
 export {
   validateStyleValues,
   newStyleIssueBudget,

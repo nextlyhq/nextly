@@ -35,7 +35,10 @@ import {
   structuralAllowanceSpent,
   validateStyleValues,
 } from "./validate-style-value";
-import type { StyleIssueBudget } from "./validate-style-value";
+import type {
+  StyleIssueBudget,
+  StyleValueOptions,
+} from "./validate-style-value";
 import { newWarningAllowance, pushBoundedWarning } from "./warning-allowance";
 import type { WarningAllowance } from "./warning-allowance";
 
@@ -399,7 +402,11 @@ export function compileStyleValues(
   basePath: string,
   tokenPrefix?: string,
   suppliedBudget?: StyleIssueBudget,
-  suppliedAllowance?: WarningAllowance
+  suppliedAllowance?: WarningAllowance,
+  // Same object as validation takes, forwarded whole. This decides what reaches
+  // a page from what validation REPORTED, so a policy the two do not share is a
+  // policy the stylesheet does not have.
+  options?: StyleValueOptions
 ): CompiledDeclarations {
   // Strict, because this decides what reaches a page: a property this engine
   // does not know is preserved in the document and left out of the stylesheet,
@@ -428,7 +435,15 @@ export function compileStyleValues(
   // fresh one, so the diagnostics are bounded however this is reached.
   const allowance = suppliedAllowance ?? newWarningAllowance();
   const spentBefore = structuralAllowanceSpent(budget);
-  const issues = validateStyleValues(values, basePath, "strict", budget);
+  const issues = validateStyleValues(
+    values,
+    basePath,
+    "strict",
+    budget,
+    false,
+    undefined,
+    options
+  );
   const stopped =
     spentBefore ||
     structuralAllowanceSpent(budget) ||

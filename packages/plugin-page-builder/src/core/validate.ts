@@ -3,6 +3,7 @@
  * human-readable error string. Used as the `pages.content` field validator (M3) and
  * defensively in the editor. Pure and React-free.
  */
+import { declaredSlotsOf } from "./block-structure";
 import type { BlockRegistry } from "./registry";
 import type { BlockDocument, BlockNode } from "./types";
 import { MAX_DEPTH, MAX_NODES } from "./types";
@@ -40,19 +41,30 @@ export function validateDocument(
     const def = registry.get(n.type);
     if (!def && !opts.allowUnknown) return `unknown block type ${n.type}`;
 
+    // A REGISTERED definition is the whole answer about its own slots, including when it lists
+    // none: a caller supplying its own definition is stating what its own renderer exposes, and
+    // letting a built-in's structure fill the gap would admit children that renderer never draws.
+    //
+    // Structure answers only when no definition is registered. That is the ordinary case for the
+    // config and server paths, where the registry is empty because populating it requires a
+    // side-effect import of the renderer that those paths do not perform.
+    const structuralSlots = declaredSlotsOf(n.type);
+    const declaredSlots = def ? (def.slots ?? []) : structuralSlots;
+    const structural = def !== undefined || structuralSlots !== undefined;
+
     if (n.slots) {
       if (def && !def.isContainer) {
         return `${n.type} cannot have slots (not a container)`;
       }
       for (const [slotName, children] of Object.entries(n.slots)) {
-        const spec = def?.slots?.find(s => s.name === slotName);
-        // A slot the definition does not declare has no allowlist, so every child in it would go
-        // unchecked. `spec` is undefined by two paths and `allowUnknown` gates only the first: an
-        // unregistered type, where the permissive answer is the one the caller asked for; and a
-        // KNOWN container carrying a slot name its own definition never declared, which nothing
-        // asked for. The containment is also retroactively wrong — the day a definition declares
-        // that name, children never checked against an allowlist become live.
-        if (def && !spec) {
+        const spec = declaredSlots?.find(s => s.name === slotName);
+        // A slot nothing declares has no allowlist, so every child in it would go unchecked. The
+        // absent spec means two different things and only one of them is a reason to reject: a type
+        // this build has NO structure for, where the permissive answer is the one `allowUnknown`
+        // asked for; and a KNOWN block carrying a slot name it never declared, which nothing asked
+        // for. The containment is also retroactively wrong — the day the block declares that name,
+        // children never checked against an allowlist become live.
+        if (structural && !spec) {
           return `${n.type} has no slot "${slotName}"`;
         }
         for (const child of children) {
