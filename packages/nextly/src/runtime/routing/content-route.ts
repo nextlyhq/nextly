@@ -348,7 +348,15 @@ function routeScopedReader(
   // public, cached page.
   const defaults = {
     overrideAccess,
+    // Both identity channels, not just the obvious one. Access rules are
+    // written against `req.user` — that is the shape the rule fixtures use —
+    // so a caller forwarding a request would carry an identity past a binding
+    // that only cleared `user`, on a route that resolves anonymously. Bound
+    // defensively rather than because a path was proven: an attribute of a
+    // trusted surface that is not named is one that has not been scoped, and
+    // the cost of naming it is nothing.
     user: undefined,
+    req: undefined,
     ...(locale === undefined ? {} : { locale }),
   };
 

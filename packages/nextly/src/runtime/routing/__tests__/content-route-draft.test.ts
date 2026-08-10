@@ -450,6 +450,56 @@ describe("the scoped reader's defaults", () => {
     expect(calls[0]?.status).toBe("published");
     expect(calls[0]?.overrideAccess).toBe(false);
   });
+
+  it("clears BOTH identity channels, not just `user`", async () => {
+    // Access rules are written against `req.user`, so a callback forwarding a
+    // request would carry an identity past a binding that cleared only `user` —
+    // on a route that resolves anonymously.
+    const calls: FindArgs[] = [];
+    const reader: NextlyContentReader = {
+      find: async (args): Promise<ListResult<Record<string, unknown>>> => {
+        calls.push(args);
+        const items = [{ id: "1", slug: "a", _status: "published" }];
+        return {
+          items,
+          meta: {
+            total: 1,
+            page: 1,
+            limit: 1,
+            totalPages: 1,
+            hasNext: false,
+            hasPrev: false,
+          },
+        };
+      },
+      findByID: async (): Promise<Record<string, unknown> | null> => null,
+    };
+
+    let seen: NextlyContentReader | undefined;
+    const route = createContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      render: (entry: ContentEntry, context) => {
+        seen = context.reader;
+        return entry;
+      },
+    });
+    await route.ContentPage(params).catch(() => undefined);
+    calls.length = 0;
+
+    await seen?.find({ collection: "authors" });
+
+    // Asserted as PRESENT-and-undefined, not merely absent. That distinction is
+    // the whole mechanism: `mergeConfig` spreads the instance's own defaults
+    // UNDER the call, so an omitted key restores whatever identity the instance
+    // was booted with, while an explicit `undefined` overrides it. A test that
+    // only checked for absence would pass for a reader that never cleared
+    // anything.
+    expect(Object.keys(calls[0] ?? {})).toContain("user");
+    expect(Object.keys(calls[0] ?? {})).toContain("req");
+    expect(calls[0]?.user).toBeUndefined();
+    expect(calls[0]?.req).toBeUndefined();
+  });
 });
 
 describe("a status-less collection's ordinary fields", () => {
@@ -495,5 +545,55 @@ describe("a status-less collection's ordinary fields", () => {
 
     expect(calls[0]?.status).toBe("published");
     expect(calls[0]?.overrideAccess).toBe(false);
+  });
+
+  it("clears BOTH identity channels, not just `user`", async () => {
+    // Access rules are written against `req.user`, so a callback forwarding a
+    // request would carry an identity past a binding that cleared only `user` —
+    // on a route that resolves anonymously.
+    const calls: FindArgs[] = [];
+    const reader: NextlyContentReader = {
+      find: async (args): Promise<ListResult<Record<string, unknown>>> => {
+        calls.push(args);
+        const items = [{ id: "1", slug: "a", _status: "published" }];
+        return {
+          items,
+          meta: {
+            total: 1,
+            page: 1,
+            limit: 1,
+            totalPages: 1,
+            hasNext: false,
+            hasPrev: false,
+          },
+        };
+      },
+      findByID: async (): Promise<Record<string, unknown> | null> => null,
+    };
+
+    let seen: NextlyContentReader | undefined;
+    const route = createContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      render: (entry: ContentEntry, context) => {
+        seen = context.reader;
+        return entry;
+      },
+    });
+    await route.ContentPage(params).catch(() => undefined);
+    calls.length = 0;
+
+    await seen?.find({ collection: "authors" });
+
+    // Asserted as PRESENT-and-undefined, not merely absent. That distinction is
+    // the whole mechanism: `mergeConfig` spreads the instance's own defaults
+    // UNDER the call, so an omitted key restores whatever identity the instance
+    // was booted with, while an explicit `undefined` overrides it. A test that
+    // only checked for absence would pass for a reader that never cleared
+    // anything.
+    expect(Object.keys(calls[0] ?? {})).toContain("user");
+    expect(Object.keys(calls[0] ?? {})).toContain("req");
+    expect(calls[0]?.user).toBeUndefined();
+    expect(calls[0]?.req).toBeUndefined();
   });
 });
