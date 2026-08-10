@@ -153,12 +153,28 @@ both would force the render dynamic while the route still told Next it was
 static. Use `createContentRoute` for preview or for a site that pre-renders
 nothing.
 
-It resolves a path across the configured collections (first match wins), calls
-`notFound()` on a genuine miss or a reserved path (`/admin`, `/api`, `/_next`,
-`/static`, and metadata files like `sitemap.xml`), and pre-renders published
-paths in `generateStaticParams`. Access-restricted collections are skipped by
-the static scan (they have no public paths to pre-render) and enforced per
-request instead. `status` and `overrideAccess` behave as in `resolveContent`.
+Both factories resolve a path across the configured collections (first match
+wins) and call `notFound()` on a genuine miss or a reserved path (`/admin`,
+`/api`, `/_next`, `/static`, and metadata files like `sitemap.xml`). `status`
+behaves as in `resolveContent`.
+
+**Which factory you call decides whether access rules are consulted at all, so
+choose it per collection set, not per preference.**
+
+- `createContentRoute` reads **enforced**. A rule-less collection still renders;
+  a stored member-only or role-based one is hidden from these anonymous
+  requests.
+- `createPublicContentRoute` reads **trusted** — access rules are not consulted,
+  on the resolved read and on the `generateStaticParams` scan alike. That is
+  what makes its reads cacheable and its paths pre-renderable, and it means
+  **every collection you list must be public**. A restricted collection listed
+  here has its entries read trusted and its paths pre-rendered into public HTML.
+
+**The route factories take no `overrideAccess` option** — unlike
+`resolveContent`, which still does, because a page calling it directly knows who
+is asking. Two settings that had to agree is what produced a route behaving
+differently depending on whether the database had rows in it when the build ran;
+for a route, the posture is now the name of the function you call.
 
 This route always resolves **anonymously** — its config is captured once at
 module scope, so it cannot carry a per-request user. For a route that renders
