@@ -197,3 +197,81 @@ describe("createResendProvider", () => {
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("Resend adapter — endpoint resolution", () => {
+  const ORIGINAL_BASE = process.env.RESEND_BASE_URL;
+  const ORIGINAL_UA = process.env.RESEND_USER_AGENT;
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+    delete process.env.RESEND_BASE_URL;
+    delete process.env.RESEND_USER_AGENT;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (ORIGINAL_BASE === undefined) delete process.env.RESEND_BASE_URL;
+    else process.env.RESEND_BASE_URL = ORIGINAL_BASE;
+    if (ORIGINAL_UA === undefined) delete process.env.RESEND_USER_AGENT;
+    else process.env.RESEND_USER_AGENT = ORIGINAL_UA;
+  });
+
+  async function sendOnce() {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(okResponse());
+    await createResendProvider({ apiKey: "re_k" }).send(BASE_OPTIONS);
+    return vi.mocked(globalThis.fetch).mock.calls[0];
+  }
+
+  it("defaults to the public Resend host", async () => {
+    const [url] = await sendOnce();
+    expect(url).toBe("https://api.resend.com/emails");
+  });
+
+  it("routes through RESEND_BASE_URL when set", async () => {
+    // A capture server or egress proxy. Hardcoding the public host does not
+    // fail loudly here -- the send succeeds against the wrong endpoint -- so
+    // this is the only thing standing between the override and silent bypass.
+    process.env.RESEND_BASE_URL = "https://mail-proxy.internal";
+    const [url] = await sendOnce();
+    expect(url).toBe("https://mail-proxy.internal/emails");
+  });
+
+  it("tolerates a trailing slash on the override", async () => {
+    process.env.RESEND_BASE_URL = "https://mail-proxy.internal/";
+    const [url] = await sendOnce();
+    expect(url).toBe("https://mail-proxy.internal/emails");
+  });
+
+  it("ignores a blank override rather than building a bare path", async () => {
+    process.env.RESEND_BASE_URL = "   ";
+    const [url] = await sendOnce();
+    expect(url).toBe("https://api.resend.com/emails");
+  });
+
+  it("reads the override per call, not once at import", async () => {
+    // Capturing the value at module load makes it unchangeable for the process,
+    // which breaks a test that sets it between cases and a serverless runtime
+    // that populates the environment after the module graph is warm.
+    const [firstUrl] = await sendOnce();
+    expect(firstUrl).toBe("https://api.resend.com/emails");
+
+    vi.mocked(globalThis.fetch).mockReset();
+    process.env.RESEND_BASE_URL = "https://second.example";
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(okResponse());
+    await createResendProvider({ apiKey: "re_k" }).send(BASE_OPTIONS);
+    expect(vi.mocked(globalThis.fetch).mock.calls[0][0]).toBe(
+      "https://second.example/emails"
+    );
+  });
+
+  it("sends no User-Agent header by default", async () => {
+    const [, init] = await sendOnce();
+    expect(init?.headers).not.toHaveProperty("User-Agent");
+  });
+
+  it("forwards RESEND_USER_AGENT when set", async () => {
+    process.env.RESEND_USER_AGENT = "acme-mailer/2.1";
+    const [, init] = await sendOnce();
+    expect(init?.headers).toMatchObject({ "User-Agent": "acme-mailer/2.1" });
+  });
+});
