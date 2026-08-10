@@ -318,5 +318,15 @@ export interface AnyBlockDefinition
   props?: Partial<Record<string, PropSchema>>;
   localized?: string[];
   render(args: BlockRenderArgs<object, unknown>): BlockRenderResult;
+  /**
+   * Re-declared rather than inherited, for the same reason `render` is: it
+   * CONSUMES props, so the erased type has to widen them to `object` or a
+   * definition typed against its own props could not sit in this collection.
+   *
+   * Kept as a METHOD signature, which is what preserves bivariant parameter
+   * checking. Written as a property with a function type it would be
+   * contravariant in `props`, and a registry holding blocks of many prop shapes
+   * could then hold none of them.
+   */
   rendersNothing?(this: void, props: object): boolean;
 }
