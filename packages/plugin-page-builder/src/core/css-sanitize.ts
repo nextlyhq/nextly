@@ -749,7 +749,15 @@ export function sanitizeCustomCss(
             ) {
               return got.name === want.name;
             }
-            return got?.type === "Combinator";
+            // The NAME, not just the type. The anchor is a DESCENDANT relationship, and `+` or
+            // `~` between the two classes names a SIBLING of the document root that happens to
+            // carry the block class — outside the document entirely. Accepting any combinator
+            // treats that as already anchored and lets the rule escape.
+            return (
+              want.type === "Combinator" &&
+              got?.type === "Combinator" &&
+              got.name === want.name
+            );
           });
         if (alreadyAnchored) continue;
 

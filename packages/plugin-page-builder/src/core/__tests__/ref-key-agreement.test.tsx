@@ -308,6 +308,23 @@ describe("custom CSS boundaries a shared reusable block depends on", () => {
     expect(css.startsWith(`.${DOC_A} .${NODE} `)).toBe(true);
   });
 
+  it.each(["+", "~"])(
+    "does not accept %s as the document-to-block boundary",
+    combinator => {
+      // The anchor is `.<doc> .<block>` — a DESCENDANT relationship. `.doc + .block` names a
+      // sibling of the document root that happens to carry the block class, which is outside the
+      // document entirely. Comparing the combinator by node type alone accepts it and skips the
+      // prefix, so the rule escapes.
+      const { css } = sanitizeBlockCss(
+        `.${DOC_A} ${combinator} .${NODE} p { color: red }`,
+        NODE,
+        DOC_A
+      );
+
+      expect(css.startsWith(`.${DOC_A} .${NODE} `)).toBe(true);
+    }
+  );
+
   it("leaves a selector the author anchored correctly exactly as written", () => {
     // The `selector` keyword rewrites to the FULL anchor, so it lands already anchored rather than
     // being prefixed into a descendant of itself.
