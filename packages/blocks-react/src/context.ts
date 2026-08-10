@@ -1,7 +1,6 @@
 import type {
   BlockRenderArgs as EngineBlockRenderArgs,
   BlockDefinition as EngineBlockDefinition,
-  BlockRenderResult,
 } from "@nextlyhq/blocks-engine";
 import type { ReactNode } from "react";
 
@@ -227,7 +226,20 @@ export function createStandaloneContext(
  */
 export interface ReactBlockDefinition<P extends object>
   extends Omit<EngineBlockDefinition<P, PageContext>, "render"> {
-  render(args: BlockRenderArgs<P>): BlockRenderResult;
+  /**
+   * `ReactNode | Promise<ReactNode>` rather than the engine's
+   * `BlockRenderResult`, which is `unknown`.
+   *
+   * `unknown` is right for the engine, which carries no React types, and wrong
+   * for an authoring helper: it accepts `render: () => ({ not: "a node" })`,
+   * which typechecks and then renders an `invalid-output` placeholder. A helper
+   * whose types admit what the renderer will refuse has moved a compile-time
+   * error to runtime.
+   *
+   * The promise is allowed because a block may be an async Server Component;
+   * the renderer awaits it under the same containment as a synchronous one.
+   */
+  render(args: BlockRenderArgs<P>): ReactNode | Promise<ReactNode>;
 }
 
 /**

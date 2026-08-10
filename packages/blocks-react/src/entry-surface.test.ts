@@ -17,7 +17,12 @@
  */
 import { describe, expect, it } from "vitest";
 
+import * as boundaryModule from "./block-boundary";
 import * as blocksEntry from "./blocks/index";
+import * as contextModule from "./context";
+import * as placeholderModule from "./placeholder";
+import * as resolverModule from "./resolver";
+import * as stylesModule from "./styles";
 import * as rootEntry from "./index";
 import * as nextEntry from "./next";
 
@@ -50,6 +55,38 @@ function isBlockDefinition(
   );
 }
 
+/**
+ * Source modules the root entry re-exports from, and the values each one
+ * deliberately keeps internal.
+ *
+ * The snapshot below catches an export REMOVED from the entry. It cannot catch
+ * one that never arrived: adding a public value to `context.ts` and forgetting
+ * the re-export leaves `Object.keys(rootEntry)` unchanged, and that is exactly
+ * the defect this suite was written after.
+ *
+ * So the entry is compared against its sources. A new public value fails here
+ * until it is either re-exported or named below with a reason, which makes
+ * withholding one a deliberate act rather than an oversight.
+ */
+const SOURCE_MODULES: ReadonlyArray<{
+  name: string;
+  module: Record<string, unknown>;
+  /** Values that exist for this package's own use, and why. */
+  internal: readonly string[];
+}> = [
+  { name: "context", module: contextModule, internal: [] },
+  { name: "resolver", module: resolverModule, internal: [] },
+  { name: "styles", module: stylesModule, internal: [] },
+  { name: "placeholder", module: placeholderModule, internal: [] },
+  {
+    name: "block-boundary",
+    module: boundaryModule,
+    // The renderer calls these; a consumer composes `PageRenderer` or
+    // `BlockList` instead of driving normalization itself.
+    internal: ["checkedOutput", "nodeRootReason"],
+  },
+];
+
 describe("the root entry", () => {
   it("exports exactly these values", () => {
     expect(Object.keys(rootEntry).sort()).toEqual([
@@ -67,6 +104,26 @@ describe("the root entry", () => {
       "styleTextForInjection",
       "toPageStyles",
     ]);
+  });
+
+  it("re-exports every public value its source modules define", () => {
+    // The snapshot above sees an export leaving the entry. This sees one that
+    // never reached it, which is the failure that produced this suite: a symbol
+    // added to a module, announced in a changeset, and importable by nobody.
+    const exported = new Set(Object.keys(rootEntry));
+
+    for (const source of SOURCE_MODULES) {
+      const internal = new Set(source.internal);
+      const missing = Object.keys(source.module).filter(
+        name => !exported.has(name) && !internal.has(name)
+      );
+
+      expect(
+        missing,
+        `${source.name}.ts exports ${missing.join(", ")} but the entry does not. ` +
+          `Re-export it, or add it to that module's \`internal\` list with a reason.`
+      ).toEqual([]);
+    }
   });
 
   it("offers everything needed to declare a block without a relative import", () => {
