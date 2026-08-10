@@ -7,6 +7,7 @@ import {
   forwardRef,
   memo,
   type ReactElement,
+  type ReactNode,
 } from "react";
 import { renderToReadableStream } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -243,7 +244,7 @@ describe("PageRenderer", () => {
         version: 1,
         description: "Returns a plain object.",
         example: { props: {} },
-        render: () => ({ not: "a node" }),
+        render: () => ({ not: "a node" }) as unknown as ReactNode,
       });
 
       const html = await renderToHtml(
@@ -331,7 +332,7 @@ describe("PageRenderer", () => {
         version: 1,
         description: "Returns a deeply nested invalid value.",
         example: { props: {} },
-        render: () => nested,
+        render: () => nested as ReactNode,
       });
 
       const html = await renderToHtml(
@@ -588,7 +589,7 @@ describe("PageRenderer", () => {
         version: 1,
         description: "Returns a memo component instead of an element.",
         example: { props: {} },
-        render: () => memo(Component),
+        render: () => memo(Component) as unknown as ReactNode,
       });
 
       const html = await renderToHtml(
@@ -679,11 +680,12 @@ describe("PageRenderer", () => {
         version: 1,
         description: "Returns an object whose then getter throws.",
         example: { props: {} },
-        render: () => ({
-          get then() {
-            throw new Error("then getter");
-          },
-        }),
+        render: () =>
+          ({
+            get then() {
+              throw new Error("then getter");
+            },
+          }) as unknown as ReactNode,
       });
 
       const html = await renderToHtml(
@@ -834,7 +836,7 @@ describe("PageRenderer", () => {
         version: 1,
         description: "Returns a portal.",
         example: { props: {} },
-        render: () => portalLike,
+        render: () => portalLike as unknown as ReactNode,
       });
 
       const html = await renderToHtml(
@@ -1471,7 +1473,7 @@ describe("PageRenderer", () => {
               resolve(<span>awaited</span>);
             },
           });
-          return thenable;
+          return thenable as unknown as ReactNode;
         },
       });
 
