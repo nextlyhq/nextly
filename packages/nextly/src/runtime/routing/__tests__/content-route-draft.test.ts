@@ -283,3 +283,111 @@ describe("the content route's draft decision", () => {
     expect(calls.every(call => call.overrideAccess === false)).toBe(true);
   });
 });
+
+describe("the reader handed to callbacks", () => {
+  /**
+   * A stub whose by-id read answers with a NEVER-PUBLISHED row, which is what
+   * the real one does: `findByID` takes no `status` and the read beneath it
+   * applies none, so the scope has to be enforced above it or not at all.
+   */
+  function draftAnsweringReader(): {
+    reader: NextlyContentReader;
+    calls: FindArgs[];
+  } {
+    const calls: FindArgs[] = [];
+    const page = { id: "1", slug: "a", status: "published" };
+    return {
+      calls,
+      reader: {
+        find: async (args): Promise<ListResult<Record<string, unknown>>> => {
+          calls.push(args);
+          return {
+            items: [page],
+            meta: {
+              total: 1,
+              page: 1,
+              limit: 1,
+              totalPages: 1,
+              hasNext: false,
+              hasPrev: false,
+            },
+          };
+        },
+        findByID: async (): Promise<Record<string, unknown> | null> => ({
+          id: "related",
+          status: "draft",
+        }),
+      },
+    };
+  }
+
+  /** Capture the reader a render callback receives. */
+  async function readerGivenTo(
+    stub: NextlyContentReader,
+    config: Partial<Parameters<typeof createContentRoute>[0]> = {}
+  ): Promise<NextlyContentReader> {
+    let seen: NextlyContentReader | undefined;
+    const route = createContentRoute({
+      collections: ["pages"],
+      nextly: stub,
+      render: (entry: ContentEntry, context) => {
+        seen = context.reader;
+        return entry;
+      },
+      ...config,
+    });
+    await route.ContentPage(params).catch(() => undefined);
+    if (!seen) throw new Error("render never ran");
+    return seen;
+  }
+
+  it("filters a by-id read against the route's lifecycle scope", async () => {
+    // Otherwise `findByID` returns a never-published row while `find` on the
+    // SAME reader is published-only: two answers about one collection, and the
+    // asymmetry is invisible to the caller.
+    const { reader } = draftAnsweringReader();
+    const given = await readerGivenTo(reader);
+
+    await expect(
+      given.findByID({ collection: "authors", id: "x" })
+    ).resolves.toBeNull();
+  });
+
+  it("keeps a by-id read that IS in scope", async () => {
+    // The positive control. Without it the test above passes for a reader that
+    // rejects everything, which would be a different bug wearing the same green.
+    const { reader } = draftAnsweringReader();
+    const given = await readerGivenTo(reader, { status: "all" });
+
+    await expect(
+      given.findByID({ collection: "authors", id: "x" })
+    ).resolves.toMatchObject({ id: "related" });
+  });
+
+  it("stays published when a stale grant fell back to a published read", async () => {
+    // `resolveContent` falls back to a published-only lookup when a grant names
+    // an entry it cannot confirm, and `draft` stays true through that fallback.
+    // Widening on the REQUEST handed a callback `"all"` at a path the grant
+    // authorized nothing for; the resolved entry is the evidence instead.
+    const { reader, calls } = draftAnsweringReader();
+    const given = await readerGivenTo(reader, {
+      draft: () => ({ entryId: "gone" }),
+    });
+    calls.length = 0;
+
+    await given.find({ collection: "authors" });
+
+    expect(calls[0]?.status).toBe("published");
+  });
+
+  it("binds the route's locale, so a callback need not repeat it", async () => {
+    const { reader, calls } = draftAnsweringReader();
+    const given = await readerGivenTo(reader, { locale: "fr" });
+    calls.length = 0;
+
+    await given.find({ collection: "authors" });
+
+    expect(calls[0]?.locale).toBe("fr");
+    expect(calls[0]?.overrideAccess).toBe(false);
+  });
+});

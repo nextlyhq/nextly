@@ -299,10 +299,28 @@ function isDotSegment(segment: string): boolean {
  * are spread over these defaults. What changes is which way the DEFAULT points,
  * and that is the direction a caller cannot see.
  */
+/**
+ * Whether a row is inside a lifecycle scope, judged from the row itself.
+ *
+ * Only used where the read cannot apply the scope for us. A collection with no
+ * lifecycle has no `status` field, and there the scope is a no-op rather than a
+ * reason to withhold — the same reading `resolveContent` takes, and the reason
+ * an ordinary string field named `status` must not be treated as the column.
+ */
+function withinScope(row: ContentEntry | null, scope: string): boolean {
+  if (row === null) return false;
+  if (scope === "all") return true;
+  // `_status` first: it is the lifecycle column, while a plain `status` may be
+  // an ordinary field a collection happens to name that way.
+  const status = row._status ?? row.status;
+  return typeof status !== "string" || status === scope;
+}
+
 function routeScopedReader(
   instance: NextlyContentReader,
   overrideAccess: boolean,
-  status: "published" | "draft" | "all"
+  status: "published" | "draft" | "all",
+  locale: string | undefined
 ): NextlyContentReader {
   // Lifecycle travels with access, because binding one and not the other leaves
   // the same hole through a different door: an `overrideAccess: true` route —
@@ -312,13 +330,31 @@ function routeScopedReader(
   // public, cached page.
   const scoped: NextlyContentReader = {
     find: args =>
-      instance.find({ overrideAccess, user: undefined, status, ...args }),
-    // No `status` here, because `findByID` does not take one: it names a single
-    // row rather than searching a set, so there is no scope to narrow. The
-    // access binding still applies, which is the half that decides whether a
-    // restricted row is readable at all.
-    findByID: args =>
-      instance.findByID({ overrideAccess, user: undefined, ...args }),
+      instance.find({
+        overrideAccess,
+        user: undefined,
+        status,
+        // The locale the route read in. A callback reading a related row
+        // without repeating it would get the instance default, so a French page
+        // could name its author in English — the same mismatch the media and
+        // loop paths already avoid, through the one reader that had not.
+        ...(locale === undefined ? {} : { locale }),
+        ...args,
+      }),
+    // `findByID` accepts no `status`, and the read beneath it does not apply
+    // one either — so on a trusted route it will happily return a row that was
+    // never published, while `find` on the same reader is published-only. The
+    // asymmetry is invisible to a caller and the two would disagree about the
+    // same collection, so the filter is applied to the RESULT instead.
+    findByID: async args => {
+      const row = await instance.findByID({
+        overrideAccess,
+        user: undefined,
+        ...(locale === undefined ? {} : { locale }),
+        ...args,
+      });
+      return withinScope(row, status) ? row : null;
+    },
   };
   // The media namespace travels with it. It is a system reader rather than a
   // dynamic collection, so it is forwarded as-is rather than re-scoped; losing
@@ -433,14 +469,28 @@ export function createContentRoute<TNode>(
         context: {
           collection,
           slug,
-          // The scope `resolveContent` actually resolved with, restated so the
-          // reader handed on cannot be wider than the read that produced the
-          // entry: an explicit `status` wins, and a draft request otherwise
-          // widens to `all` exactly as it does inside.
+          // Derived from the entry this read ACTUALLY produced, not from the
+          // draft the request asked for. `resolveContent` falls back to a
+          // published-only lookup when a grant names a deleted entry or one
+          // whose slug no longer matches — `draft` stays true through that
+          // fallback, so widening on it handed a callback `"all"` at a path
+          // where the grant authorized nothing.
+          //
+          // An explicit `status` still wins, because that is the route's own
+          // statement. Otherwise the widening follows the evidence: a resolved
+          // entry that is not published proves the read was widened, and a
+          // published one proves it did not need to be.
+          //
+          // The conservative edge: previewing pending edits to a row that is
+          // still published leaves the reader published-only, so a callback
+          // sees live related rows rather than draft ones. That costs a preview
+          // some fidelity; the alternative costs a stale grant a disclosure.
           reader: routeScopedReader(
             getInstance(),
             overrideAccess || draft,
-            config.status ?? (draft ? "all" : "published")
+            config.status ??
+              (withinScope(entry, "published") ? "published" : "all"),
+            config.locale
           ),
           ...(config.locale ? { locale: config.locale } : {}),
         },
