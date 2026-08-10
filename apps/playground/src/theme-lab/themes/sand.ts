@@ -73,7 +73,7 @@ export const SAND: ThemeDefinition = {
     success: "oklch(0.51 0.165 149)",
     "success-solid": "oklch(0.51 0.165 149)",
     "success-foreground": "oklch(0.99 0.005 85)",
-    warning: "oklch(0.545 0.16 72)",
+    warning: "oklch(0.5157 0.16 72)",
     "warning-foreground": "oklch(0.24 0.02 60)",
     // The code surface is a shade of paper rather than the usual cool slab, so
     // a snippet stays inside the theme. Every syntax colour comes down with it:
