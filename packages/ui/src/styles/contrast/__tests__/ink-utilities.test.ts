@@ -64,12 +64,6 @@ const PAGE_SURFACES = [
 const REQUIRED = { text: 4.5, ring: 3 } as const;
 
 /**
- * `text-muted/10` and `ring-muted/5` are chart tracks and decorative washes: an
- * explicit opacity modifier is the author saying this is not carrying meaning.
- * Utilities WITHOUT a modifier are the ones asserted; a modifier is how a
- * deliberate exception is written, and it is visible in the diff.
- */
-/**
  * A utility, with its variant chain, ending at a quote, whitespace, `}` or the
  * end of the string.
  *
@@ -144,16 +138,6 @@ const sources = SCANNED.flatMap(root => walk(resolve(repo, root)))
   );
 
 /**
- * An `-foreground` token is painted on its own partner, not on the page:
- * `primary-foreground` is white BECAUSE it sits on the primary fill, and
- * measuring it against the page would reject it for being correct. Those pairs
- * are the token-pair suite's subject.
- *
- * The exception is a partner of a surface that IS a page backdrop --
- * `foreground` on `background`, `muted-foreground` on `muted` -- which is page
- * ink and stays in scope.
- */
-/**
  * The fills an `-foreground` ink is declared for, derived from what the theme
  * declares rather than listed:
  *
@@ -170,6 +154,15 @@ function surfacesFor(partner: string): string[] {
   );
 }
 
+/**
+ * An `-foreground` token painted on its own partner rather than on the page.
+ * `primary-foreground` is white BECAUSE it sits on the primary fill, so
+ * measuring it against the page would reject it for being correct.
+ *
+ * The exception is a partner of a surface that IS a page backdrop --
+ * `foreground` on `background`, `muted-foreground` on `muted` -- which is page
+ * ink and stays in scope.
+ */
 function isInkOnItsOwnFill(role: string): boolean {
   if (!role.endsWith("-foreground")) return false;
   const partner = role.slice(0, -"-foreground".length);
