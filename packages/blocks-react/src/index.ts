@@ -14,13 +14,20 @@
  * @module index
  */
 export type {
+  BlockRenderArgs,
   BlocksDataProvider,
   BlocksQuery,
   BlocksResult,
   PageContext,
+  QueryBudget,
+  ReactBlockDefinition,
   ResolvedMedia,
 } from "./context";
-export { createStandaloneContext, emptyDataProvider } from "./context";
+export {
+  createStandaloneContext,
+  defineBlock,
+  emptyDataProvider,
+} from "./context";
 
 export { PageRenderer } from "./page-renderer";
 export type { PageRendererProps } from "./page-renderer";
