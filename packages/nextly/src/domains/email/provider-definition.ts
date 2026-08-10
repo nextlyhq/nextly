@@ -256,7 +256,7 @@ export function defineEmailProvider<TConfig>(
    */
   const normalizeCallbackFailure = (
     error: unknown,
-    stage: "createAdapter" | "testConnection"
+    stage: "createAdapter" | "testConnection" | "send"
   ): unknown => {
     if (NextlyError.is(error)) return error;
     // Constructed rather than `NextlyError.internal()`, which fixes its own
@@ -283,11 +283,30 @@ export function defineEmailProvider<TConfig>(
     },
     createAdapterFrom: (input: unknown): EmailProviderAdapter => {
       const config = parse(input);
+      let adapter: EmailProviderAdapter;
       try {
-        return definition.createAdapter(config);
+        adapter = definition.createAdapter(config);
       } catch (error) {
         throw normalizeCallbackFailure(error, "createAdapter");
       }
+
+      // The adapter CLOSES OVER the parsed configuration, so its `send` is the
+      // longest-lived route from a credential to an error message: building it
+      // succeeds and the disclosure happens later, on a rejection nothing here
+      // would otherwise see. Wrapping the factory alone left that open.
+      //
+      // `adapter.send(...)` is called through the adapter rather than a
+      // detached reference, so a class-based implementation keeps its `this`.
+      return {
+        ...adapter,
+        send: async options => {
+          try {
+            return await adapter.send(options);
+          } catch (error) {
+            throw normalizeCallbackFailure(error, "send");
+          }
+        },
+      };
     },
     testConnectionFrom: probe
       ? async (input: unknown) => {

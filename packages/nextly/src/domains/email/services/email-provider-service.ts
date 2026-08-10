@@ -707,9 +707,31 @@ export class EmailProviderService extends BaseService {
         error: result.success ? undefined : "Send returned unsuccessful",
       };
     } catch (error) {
+      // Logged HERE, with the cause. Attaching an original error to a
+      // NextlyError does not record it anywhere: this catch converts the error
+      // into a result and the request ends, so a provider's actual diagnostic
+      // was retained and then dropped — while the message told the operator to
+      // go and read it. A promise about a log entry has to be made true by
+      // something writing one.
+      this.logger.error("Email provider test failed", {
+        providerId: id,
+        providerType: provider.type,
+        mode,
+        message: error instanceof Error ? error.message : String(error),
+        cause:
+          error instanceof Error && error.cause instanceof Error
+            ? error.cause.message
+            : undefined,
+      });
+
+      // A NextlyError's publicMessage is a decision about what may be shown.
+      // Anything else is a message the throw site happened to interpolate, and
+      // a contributed adapter throws with decrypted configuration in scope.
       return {
         success: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: NextlyError.is(error)
+          ? error.publicMessage
+          : "The test failed. The reason is in the server log.",
       };
     }
   }

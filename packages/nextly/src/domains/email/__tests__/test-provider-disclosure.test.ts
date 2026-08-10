@@ -154,3 +154,75 @@ describe("testProvider disclosure", () => {
     ).rejects.toThrow(/Unknown email provider test mode/);
   });
 });
+
+describe("an adapter that rejects while sending", () => {
+  /**
+   * The longest-lived route from a credential to a message: the adapter closes
+   * over decrypted configuration, so building it succeeds and the disclosure
+   * happens later, on a rejection. Wrapping only the factory left this open.
+   */
+  const leakyOnSend = defineEmailProvider<{ apiKey: string }>({
+    type: "leaky-send",
+    label: "Leaky Send",
+    configFields: [
+      { name: "apiKey", label: "API Key", kind: "password", secret: true },
+    ],
+    parseConfig: input => input as { apiKey: string },
+    createAdapter: config => ({
+      send: () => Promise.reject(new Error(`Invalid key ${config.apiKey}`)),
+    }),
+  });
+
+  let sqlite: Database.Database;
+  let service: EmailProviderService;
+  let providerId: string;
+
+  beforeEach(async () => {
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(leakyOnSend);
+
+    const created = await service.createProvider({
+      name: "Leaky",
+      type: "leaky-send",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { apiKey: SECRET },
+      isDefault: false,
+      isActive: true,
+    });
+    providerId = created.id;
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    getEmailProviderRegistry().reset();
+  });
+
+  it("does not return the adapter's own message", async () => {
+    const result = await service.testProvider(
+      providerId,
+      "someone@example.com"
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).not.toContain(SECRET);
+  });
+
+  it("writes the reason to the log it points at", async () => {
+    await service.testProvider(providerId, "someone@example.com");
+
+    // The message tells the operator to read the server log, so something has
+    // to have written one. A `cause` attached to an error is not a log entry.
+    const logged = vi
+      .mocked(logger.error)
+      .mock.calls.map(call => JSON.stringify(call))
+      .join("\n");
+    expect(logged).toContain(SECRET);
+  });
+});

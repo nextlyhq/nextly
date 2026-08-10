@@ -125,3 +125,63 @@ describe("a probe that RETURNS a failure", () => {
     expect(result).toEqual({ ok: false, detail: `Invalid key ${SECRET}` });
   });
 });
+
+describe("the adapter returned by createAdapterFrom", () => {
+  // Isolates the wrapper itself. The service has its own fallback for a bare
+  // Error, so a service-level test passes with or without this and proves
+  // nothing about it — while every other caller of `send` depends on it.
+  it("normalises a rejection from the provider's own send", async () => {
+    const provider = defineEmailProvider<{ apiKey: string }>({
+      type: "rejecting",
+      label: "Rejecting",
+      configFields: [
+        { name: "apiKey", label: "API Key", kind: "password", secret: true },
+      ],
+      parseConfig: input => input as { apiKey: string },
+      createAdapter: config => ({
+        send: () => Promise.reject(new Error(`Invalid key ${config.apiKey}`)),
+      }),
+    });
+
+    const adapter = provider.createAdapterFrom({ apiKey: SECRET });
+
+    await expect(
+      adapter.send({
+        to: "someone@example.com",
+        from: "noreply@example.com",
+        subject: "Hi",
+        html: "<p>Hi</p>",
+      })
+    ).rejects.toSatisfy((error: unknown) => {
+      expect(NextlyError.is(error)).toBe(true);
+      const message = NextlyError.is(error) ? error.publicMessage : "";
+      expect(message).not.toContain(SECRET);
+      // The original is kept as the cause, so nothing is lost for the log.
+      const cause = NextlyError.is(error) ? error.cause : undefined;
+      expect(cause instanceof Error ? cause.message : "").toContain(SECRET);
+      return true;
+    });
+  });
+
+  it("leaves a successful send untouched", async () => {
+    // The control: the wrapper must not change the shape of a normal send.
+    const provider = defineEmailProvider({
+      type: "working",
+      label: "Working",
+      configFields: [],
+      parseConfig: input => input as Record<string, unknown>,
+      createAdapter: () => ({
+        send: () => Promise.resolve({ success: true, messageId: "<abc@x>" }),
+      }),
+    });
+
+    await expect(
+      provider.createAdapterFrom({}).send({
+        to: "someone@example.com",
+        from: "noreply@example.com",
+        subject: "Hi",
+        html: "<p>Hi</p>",
+      })
+    ).resolves.toEqual({ success: true, messageId: "<abc@x>" });
+  });
+});
