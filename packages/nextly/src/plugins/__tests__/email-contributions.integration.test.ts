@@ -88,6 +88,37 @@ const emailPlugin = () =>
             },
           }),
         }),
+        defineEmailProvider<{ secondKey: string }>({
+          type: "second-mailer",
+          label: "Second Mailer",
+          configFields: [
+            {
+              name: "secondKey",
+              label: "Second Key",
+              kind: "password",
+              required: true,
+              secret: true,
+            },
+          ],
+          parseConfig: (input: unknown) => {
+            const config = input as { secondKey?: unknown };
+            if (typeof config.secondKey !== "string" || !config.secondKey) {
+              throw NextlyError.validation({
+                errors: [
+                  {
+                    path: "configuration.secondKey",
+                    code: "INVALID_PROVIDER_CONFIG",
+                    message: "Second key is required",
+                  },
+                ],
+              });
+            }
+            return { secondKey: config.secondKey };
+          },
+          createAdapter: () => ({
+            send: async () => ({ success: true, messageId: "second-1" }),
+          }),
+        }),
       ],
       emailTemplates: [
         {
@@ -333,6 +364,33 @@ describe("plugin email providers + templates", () => {
       to: "probe@example.com",
       subject: "Nextly — Test Email",
     });
+  });
+
+  it("switches provider type with the SUBMITTED configuration, not the old one", async () => {
+    // The admin's supported flow: change type and supply the new provider's
+    // credentials in the same edit. Validating the STORED configuration here
+    // fails every real switch, because the submitted key is exactly what the
+    // previous shape lacked.
+    current = await createTestNextly({ plugins: [emailPlugin()] });
+
+    const created = await current.nextly.emailProviders.create({
+      data: {
+        name: "Switcher",
+        type: "fake-mailer",
+        fromEmail: "from@example.com",
+        configuration: { apiKey: "original", token: "t" },
+      },
+    });
+
+    const updated = await current.nextly.emailProviders.update({
+      id: created.item.id,
+      data: {
+        type: "second-mailer",
+        configuration: { secondKey: "brand-new" },
+      },
+    });
+
+    expect(updated.item.type).toBe("second-mailer");
   });
 
   it("rejects a type no plugin registered", async () => {

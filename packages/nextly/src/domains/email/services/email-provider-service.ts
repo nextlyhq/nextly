@@ -432,22 +432,21 @@ export class EmailProviderService extends BaseService {
     // configuration alongside it still has to name a registered provider,
     // otherwise the row survives as one nothing can build an adapter for.
     const effectiveType = data.type ?? currentRow.type;
-    if (data.type !== undefined && data.type !== currentRow.type) {
-      // Changing type re-parses the configuration already stored, because the
-      // rules that accepted it belonged to the OLD provider. A type-only
-      // update carries no configuration of its own, so without this an SMTP
-      // configuration survives under `resend` -- accepted here and unusable at
-      // send. The admin supports switching type on edit, so this is a real
-      // path rather than a hypothetical one.
-      const registry = getEmailProviderRegistry();
-      const existingConfig = this.decryptConfiguration(
-        currentRow.configuration
-      );
-      const merged =
+    const typeChanged =
+      data.type !== undefined && data.type !== currentRow.type;
+    if (typeChanged) {
+      // A type change REPLACES the provider-specific configuration rather than
+      // merging it: the two providers have different shapes, and an SMTP host
+      // carried into a Resend config is not a partial edit, it is leftover.
+      // Validating the OLD configuration here would fail every real switch,
+      // because the submitted API key is exactly what the old shape lacks.
+      const submitted =
         data.configuration !== undefined
-          ? existingConfig
-          : this.stripMaskedConfigValues(existingConfig);
-      registry.get(data.type).validateConfig(merged);
+          ? this.stripMaskedConfigValues(data.configuration)
+          : {};
+      getEmailProviderRegistry()
+        .get(data.type as string)
+        .validateConfig(submitted);
     }
 
     if (data.name !== undefined) updateData.name = data.name;
@@ -459,7 +458,11 @@ export class EmailProviderService extends BaseService {
         currentRow.configuration
       );
       const incomingConfig = this.stripMaskedConfigValues(data.configuration);
-      const mergedConfig = this.deepMergeConfig(existingConfig, incomingConfig);
+      // Across a type change the stored configuration belongs to the previous
+      // provider, so it is discarded rather than merged into the new shape.
+      const mergedConfig = typeChanged
+        ? incomingConfig
+        : this.deepMergeConfig(existingConfig, incomingConfig);
 
       // Validate the MERGED result, not the incoming patch: an update usually
       // carries only the fields that changed, and the masked values it omits
@@ -614,7 +617,7 @@ export class EmailProviderService extends BaseService {
      * reports `capabilities.connectionTest`. Defaulted so every existing caller
      * keeps the contract it was written against.
      */
-    mode: "send" | "connection" = "send"
+    mode: "send" | "connection" | undefined = "send"
   ): Promise<{ success: boolean; error?: string }> {
     const provider = await this.getProviderDecrypted(id);
 

@@ -89,6 +89,13 @@ export interface TestEmailProviderArgs extends DirectAPIConfig {
   id: string;
   /** Recipient email address (required) */
   to: string;
+  /**
+   * `"send"` (default) dispatches a real message to `to`, which is what the
+   * admin's Send Test button promises. `"connection"` asks the provider's own
+   * probe and sends nothing — available only where the descriptor reports
+   * `capabilities.connectionTest`, and `to` is then ignored.
+   */
+  mode?: "send" | "connection";
 }
 
 /**

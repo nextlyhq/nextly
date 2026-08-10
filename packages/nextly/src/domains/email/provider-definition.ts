@@ -41,10 +41,12 @@ export const MAX_EMAIL_PROVIDER_TYPE_LENGTH = 50;
  * comes from the install's own code, not from a request.
  */
 export function emailProviderTypeTooLong(type: string): NextlyError {
+  // No inline statusCode: `BUSINESS_RULE_VIOLATION` now carries 422 in the
+  // canonical map, so every throw site of this code answers the same way and
+  // a change to that meaning happens in one place.
   return new NextlyError({
     code: "BUSINESS_RULE_VIOLATION",
     publicMessage: `Email provider type "${type}" is longer than ${MAX_EMAIL_PROVIDER_TYPE_LENGTH} characters, the width of the column every database stores it in. Shorten the type id.`,
-    statusCode: 422,
     logContext: { type, max: MAX_EMAIL_PROVIDER_TYPE_LENGTH },
   });
 }
@@ -211,18 +213,27 @@ export function defineEmailProvider<TConfig>(
     try {
       return definition.parseConfig(input);
     } catch (error) {
-      if (error instanceof NextlyError) throw error;
+      // `NextlyError.is` rather than `instanceof`: a provider package bundling
+      // its own copy of nextly throws an error from a different class object,
+      // and the brand is what survives that boundary. Without it, a plugin's
+      // carefully-pathed validation error would be flattened below.
+      if (NextlyError.is(error)) throw error;
+
+      // The parser's own message is NOT made public. A plugin may interpolate
+      // configuration into it -- `Invalid API key ${input.apiKey}` is an easy
+      // thing to write -- and adapter resolution parses DECRYPTED stored
+      // configuration before sending, so an authenticated caller could provoke
+      // a failure and read back a credential the masked provider APIs exist to
+      // withhold. The original is kept as the logged cause for operators.
       throw NextlyError.validation({
         errors: [
           {
             path: "configuration",
             code: "INVALID_PROVIDER_CONFIG",
-            message:
-              error instanceof Error
-                ? error.message
-                : "Provider configuration is invalid.",
+            message: "Provider configuration is invalid.",
           },
         ],
+        cause: error instanceof Error ? error : undefined,
         logContext: { providerType: definition.type },
       });
     }
