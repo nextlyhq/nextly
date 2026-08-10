@@ -24,9 +24,19 @@
  * widening it from that stylesheet to both packages took the count of distinct
  * consumed tokens from 16 to 66 and surfaced a second defect.
  *
- * `--nx-*` is the palette's namespace. Knobs genuinely local to the admin, with
- * no business in a palette (`--sidebar-width-safe`), carry no `--nx-` prefix and
- * are out of scope.
+ * **The theme owns two namespaces, and the check covers both.** `--nx-*` is the
+ * palette's own vocabulary; `--color-*`, `--font-*`, `--space-*` and the rest are
+ * Tailwind's `@theme` names, which Tailwind requires by name and which therefore
+ * cannot be moved into `--nx-*`. Covering only `--nx-*` would leave the
+ * symmetric defect invisible: a component consuming `--font-mono` that the theme
+ * did not declare fails in exactly the way `--nx-font-mono` did. The split is
+ * also what caused that defect -- somebody reached for the palette namespace for
+ * a role that lives in Tailwind's.
+ *
+ * Ownership is derived from what the theme declares rather than listed, so
+ * namespaces belonging to somebody else (`--radix-*`, injected by a primitive at
+ * runtime; `--sidebar-width*`, a local layout knob) are out of scope without
+ * anyone maintaining a list of them.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, relative, resolve } from "node:path";
@@ -78,22 +88,59 @@ const sources = SCANNED.flatMap(root => walk(resolve(repo, root)))
 function declaredIn(css: string): Set<string> {
   const names = new Set<string>();
   postcss.parse(css).walkDecls(decl => {
-    if (decl.prop.startsWith("--nx-")) names.add(decl.prop);
+    if (decl.prop.startsWith("--")) names.add(decl.prop);
   });
   return names;
 }
 
 /**
- * `var(--nx-name)` references. Read lexically, because the same reference has to
- * be found in CSS, in a JSX style object and inside a Tailwind arbitrary value,
- * and only one of those has a stylesheet parser. A reference sitting in a
- * commented-out block still counts, which only matters if the token it names was
- * also deleted -- and the fix for that is to delete the dead code.
+ * `var(--name)` references, required to end at a `)` or a `,` so a glob in prose
+ * (`var(--nx-*)` in a doc comment) is not read as a reference to a token called
+ * `--nx-`.
+ *
+ * Read lexically, because the same reference has to be found in CSS, in a JSX
+ * style object and inside a Tailwind arbitrary value, and only one of those has
+ * a stylesheet parser. A reference sitting in a commented-out block still
+ * counts. That is a false positive for CONSUMPTION, which fails toward demanding
+ * a declaration rather than toward permitting a missing one -- the safe
+ * direction for this check, and the reason it is not worth parsing three
+ * languages to remove.
  */
-const REFERENCE = /var\(\s*(--nx-[a-z0-9-]+)/g;
+const REFERENCE = /var\(\s*(--[a-z][a-z0-9-]*?)\s*(?=[),])/g;
+
+/**
+ * The first segment of a custom property: `--nx-card` and `--nx-border` are both
+ * `--nx`. The theme owns a namespace if it declares anything in it.
+ */
+function namespaceOf(property: string): string {
+  const [, first = ""] = property.match(/^(--[a-z0-9]+)/) ?? [];
+  return first;
+}
+
+/**
+ * Consumed properties in namespaces the theme does NOT own, which are therefore
+ * somebody else's to declare:
+ *
+ * - `--radix-*` are injected at runtime by Radix primitives (content height,
+ *   trigger width) and only exist while a primitive is open.
+ * - `--sidebar-width*` are layout knobs local to the admin shell, the documented
+ *   shape of a value with no business in a palette.
+ *
+ * Neither is enumerated here: both fall out of the namespace rule, so a new
+ * Radix property needs no maintenance. Only `--font-inter` is named, below.
+ */
+
+/**
+ * The one property in a theme-owned namespace that the theme legitimately does
+ * not declare. `--font-inter` is injected by `next/font` at runtime and read
+ * from inside `theme.css` itself (`--font-sans: var(--font-inter), Inter, ...`),
+ * so the theme is its consumer, not its author.
+ */
+const INJECTED_AT_RUNTIME = new Set(["--font-inter"]);
 
 const themeCss = readFileSync(resolve(repo, THEME), "utf8");
 const declaredByTheme = declaredIn(themeCss);
+const ownedNamespaces = new Set([...declaredByTheme].map(namespaceOf));
 
 const consumers = new Map<string, Set<string>>();
 const declarers = new Map<string, Set<string>>();
@@ -101,12 +148,15 @@ const declarers = new Map<string, Set<string>>();
 for (const path of sources) {
   const source = readFileSync(resolve(repo, path), "utf8");
   for (const [, name] of source.matchAll(REFERENCE)) {
+    if (!ownedNamespaces.has(namespaceOf(name))) continue;
+    if (INJECTED_AT_RUNTIME.has(name)) continue;
     const files = consumers.get(name) ?? new Set<string>();
     files.add(path);
     consumers.set(name, files);
   }
   if (path === THEME || extname(path) !== ".css") continue;
   for (const name of declaredIn(source)) {
+    if (!name.startsWith("--nx-")) continue;
     const files = declarers.get(name) ?? new Set<string>();
     files.add(path);
     declarers.set(name, files);
@@ -120,6 +170,26 @@ describe("admin tokens are reachable by a palette change", () => {
     expect(sources.length).toBeGreaterThan(100);
     expect(consumers.size).toBeGreaterThan(0);
     expect(declaredByTheme.size).toBeGreaterThan(0);
+  });
+
+  it("covers both namespaces the theme owns", () => {
+    // The namespace filter is the easiest part of this check to narrow by
+    // accident, and narrowing it produces a pass. Both sides must be present in
+    // what was actually collected, not merely reachable in principle.
+    const namespaces = new Set([...consumers.keys()].map(namespaceOf));
+    expect(namespaces.has("--nx")).toBe(true);
+    expect([...namespaces].some(space => space !== "--nx")).toBe(true);
+  });
+
+  it("still needs its one runtime-injected exception", () => {
+    // An exception nobody rechecks outlives its reason. If `--font-inter` is no
+    // longer consumed, or the theme starts declaring it, the entry should go
+    // rather than sit here explaining a situation that has changed.
+    const consumed = sources.some(path =>
+      readFileSync(resolve(repo, path), "utf8").includes("var(--font-inter)")
+    );
+    expect(consumed).toBe(true);
+    expect(declaredByTheme.has("--font-inter")).toBe(false);
   });
 
   it("reads declarations the way a stylesheet is written, not as lines", () => {

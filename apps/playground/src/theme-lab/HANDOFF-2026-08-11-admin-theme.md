@@ -242,9 +242,20 @@ Two things to know before repeating any of this:
   `[data-theme=`) and strip the `data-theme` attributes. An earlier version of this document said
   otherwise and was wrong.
 - **Disabling a stylesheet invalidates style asynchronously.** A computed value read in the same
-  task can still be the old one, and it reads as a real measurement rather than a stale one. Gate on
-  the whole document settling — every admin colour achromatic — not on one canary element, which can
-  settle while other subtrees have not. This produced two wrong readings before it was caught.
+  task can still be the old one, and it reads as a real measurement rather than a stale one.
+
+  The failure case, because a rule without one gets discarded as excessive caution: gating on a
+  single canary element — one input whose border resolved to the shipped value — reported **11
+  hue-carrying elements in a palette that is achromatic by construction**. The canary had settled
+  while sibling subtrees had not. The true answer was **3**, and I believed the 11 until a re-read
+  disagreed with it.
+
+  **So the rule is convergence, not settling: read twice and require the two reads to agree, with a
+  bounded retry that throws rather than returning the last value.** "Wait until it looks settled" is
+  a judgement about when to look, and every such judgement is a race that comes back on a slower
+  machine or under CI load. Requiring agreement is self-calibrating, needs no model of which
+  subtrees matter, and is the check that exposed the bug in the first place. It also turns the
+  failure from a silently wrong number into a loud one.
 
 ### Step 4 — after the PR merges
 
