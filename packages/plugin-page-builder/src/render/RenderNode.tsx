@@ -102,6 +102,23 @@ export interface RenderNodeProps {
    * another block, and one rule serves every placement.
    */
   refScope?: string;
+  /**
+   * Classes belonging to a `core/ref` PLACEMENT, applied to the element this node renders.
+   *
+   * A resolved ref renders its target IN ITS PLACE and emits no element of its own, so a rule
+   * written for the placement's class had nothing to match — every style an author set on a
+   * placement was silently discarded while the editor went on offering the controls.
+   *
+   * Carried onto the target's own root rather than wrapped in a new element, because a block
+   * renders a single element and never wraps it: an extra `div` would change flex and grid layout
+   * around every reusable block on the page. Both classes then land on one element and the cascade
+   * decides, which is why the library is emitted BEFORE the document — the placement is a document
+   * node, so it comes later and wins.
+   *
+   * Applied to the target's root only. It is not carried into that target's own slots, where it
+   * would restyle children the placement never named.
+   */
+  placementClass?: string;
 }
 
 const REF_TYPE = "core/ref";
@@ -117,6 +134,7 @@ export function RenderNode({
   refStack,
   classes,
   refScope,
+  placementClass,
 }: RenderNodeProps): ReactNode {
   // The same key the compiler names this node by. Deriving it differently on
   // either side writes a stylesheet against a selector the markup never carries.
@@ -127,6 +145,7 @@ export function RenderNode({
   const className = [
     classes?.get(styleKey) ?? nodeClassName(styleKey),
     node.customClass,
+    placementClass,
   ]
     .filter(Boolean)
     .join(" ");
@@ -157,6 +176,10 @@ export function RenderNode({
         // the naming.
         classes={classes}
         refScope={refId}
+        // The placement's own classes, so a style set on the placement reaches the element the
+        // target renders. Computed above from the placement's node, which is why it is passed
+        // rather than recomputed here.
+        placementClass={className}
       />
     );
   }

@@ -614,13 +614,13 @@ export function compileDocumentCss(
   const classes = opts.classes ?? documentNodeClasses(doc, opts.refs);
   const nodeOpts = { ...opts, classes };
   const parts: string[] = [];
-  walk(doc.root, n => {
-    const css = compileNodeCss(n, nodeOpts);
-    if (css) parts.push(css);
-  });
-  // The library, after the document. A reusable block's own styles are the tier BELOW a
-  // placement's, so at one specificity source order is what makes a placement able to override
-  // the block it places — the same reason the tiers above are emitted whole, one after another.
+  // The library FIRST, the document after it. Everything here is emitted at one specificity, so
+  // precedence is source order and the LATER rule wins — which makes a reusable block's own styles
+  // the tier a placement overrides, not the other way round. A placement customising the block it
+  // places is the point of placing it.
+  //
+  // The order is only observable once a placement's class reaches an element, which is why it went
+  // unnoticed while a resolved ref emitted no element of its own.
   for (const refId of placedRefIds(doc, opts.refs)) {
     const target = opts.refs?.[refId];
     if (!target) continue;
@@ -629,6 +629,10 @@ export function compileDocumentCss(
       if (css) parts.push(css);
     });
   }
+  walk(doc.root, n => {
+    const css = compileNodeCss(n, nodeOpts);
+    if (css) parts.push(css);
+  });
   return parts.join("\n");
 }
 

@@ -371,3 +371,80 @@ describe("what a consumer of the class map has to compose", () => {
     expect(classes.get("n1")).toBeUndefined();
   });
 });
+
+describe("styling a core/ref PLACEMENT", () => {
+  const doc = (root: BlockNode) => ({ root }) as never;
+
+  it("puts the placement's class on the element the target renders", () => {
+    // A resolved ref renders its target IN ITS PLACE and emits no element of its own, so a rule
+    // written for the placement's class had nothing to match. Both classes land on one element
+    // rather than the target being wrapped, because a block renders a single element and an extra
+    // wrapper would change the layout around every reusable block on the page.
+    const root = container("root", [ref("p1", "r1")]);
+    const refs = { r1: styled("lib", "Lib", "#ee0001") };
+    const classes = documentNodeClasses(doc(root), refs);
+    const html = renderToStaticMarkup(
+      <RenderNode
+        node={root}
+        registry={defaultBlockRegistry}
+        refs={refs}
+        classes={classes}
+      />
+    );
+    const markup = html.replace(/<style[\s\S]*?<\/style>/g, "");
+
+    const placement = classes.get(documentKey("p1")) ?? nodeClass("p1");
+    const target = classes.get(refScopedKey("r1", "lib")) as string;
+
+    // Positive control: the target's own class is there, so a fixture that rendered nothing could
+    // not satisfy the assertion below.
+    expect(markup).toContain(target);
+    // The placement's class is on the SAME element, not on a wrapper around it.
+    expect(markup).toMatch(
+      new RegExp(`class="[^"]*${target}[^"]*${placement}[^"]*"`)
+    );
+  });
+
+  it("emits the library BEFORE the document, so a placement overrides the block", () => {
+    // Everything is emitted at one specificity, so precedence is source order and the later rule
+    // wins. The placement is a document node; the block it places is a library node. Emitting the
+    // library second would let the shared block override the customisation applied to one
+    // placement of it, which is backwards.
+    const root = container("root", [
+      { ...ref("p1", "r1"), style: { base: { color: "#ee0002" } } },
+    ]);
+    const refs = { r1: styled("lib", "Lib", "#ee0003") };
+    const css = compileDocumentCss(doc(root), {
+      classes: documentNodeClasses(doc(root), refs),
+      refs,
+    });
+
+    // Positive control: both rules are present, so an ordering assertion is not comparing -1s.
+    expect(css).toContain("#ee0002");
+    expect(css).toContain("#ee0003");
+    expect(css.indexOf("#ee0003")).toBeLessThan(css.indexOf("#ee0002"));
+  });
+
+  it("does not carry the placement's class into the target's own slots", () => {
+    // The placement names the block it places, not that block's children. Carrying it down would
+    // restyle nodes the author never addressed.
+    const root = container("root", [ref("p1", "r1")]);
+    const refs = {
+      r1: container("libroot", [styled("libchild", "Child", "#ee0004")]),
+    };
+    const classes = documentNodeClasses(doc(root), refs);
+    const html = renderToStaticMarkup(
+      <RenderNode
+        node={root}
+        registry={defaultBlockRegistry}
+        refs={refs}
+        classes={classes}
+      />
+    );
+    const markup = html.replace(/<style[\s\S]*?<\/style>/g, "");
+    const placement = classes.get(documentKey("p1")) ?? nodeClass("p1");
+
+    // Exactly one element carries it: the target's root.
+    expect(markup.split(placement).length - 1).toBe(1);
+  });
+});
