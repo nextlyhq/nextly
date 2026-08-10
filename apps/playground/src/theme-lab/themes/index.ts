@@ -41,6 +41,4 @@ export const NEXTLY_THEMES: ThemeDefinition[] = [MONO, SIGNAL, SAND, CALM];
  * measurement moved with it. The number is the harness's current reading,
  * re-measured 2026-08-10, not a design change to Calm.
  */
-export const EXPECTED_CONTRAST_FAILURES: Record<string, number> = {
-  calm: 48,
-};
+export const EXPECTED_CONTRAST_FAILURES: Record<string, number> = {};
