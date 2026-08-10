@@ -65,8 +65,14 @@ export function pruneUndeclaredSlots(
   registry: BlockRegistry
 ): BlockNode {
   const kept = declaredSlotEntries(node, registry);
-  const storedCount = node.slots ? Object.keys(node.slots).length : 0;
-  let changed = kept.length !== storedCount;
+  const storedNames = node.slots ? Object.keys(node.slots) : [];
+  // A REORDER counts as a change, not only a drop. Comparing lengths alone leaves a node whose
+  // slots are all declared but stored in another order untouched — so `declaredSlotEntries` would
+  // answer in declared order while the tree every generic walker sees stayed in stored order, and
+  // the two would disagree exactly where this normalisation is supposed to make them agree.
+  let changed =
+    kept.length !== storedNames.length ||
+    kept.some(([name], i) => name !== storedNames[i]);
   const slots: Record<string, BlockNode[]> = {};
   for (const [name, children] of kept) {
     const pruned = children.map(child => pruneUndeclaredSlots(child, registry));

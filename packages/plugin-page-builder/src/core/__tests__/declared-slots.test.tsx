@@ -218,5 +218,12 @@ describe("a slot the definition does not declare", () => {
       "alpha",
       "omega",
     ]);
+
+    // And the PRUNED TREE carries that order, which is the half that matters: every generic
+    // walker reads the tree, not this helper. A node whose slots are all declared but stored in
+    // another order has nothing dropped, so a change test that only counts slots leaves it alone
+    // and the two answers diverge precisely where they are meant to agree.
+    const pruned = pruneUndeclaredSlots(node, registry);
+    expect(Object.keys(pruned.slots ?? {})).toEqual(["alpha", "omega"]);
   });
 });
