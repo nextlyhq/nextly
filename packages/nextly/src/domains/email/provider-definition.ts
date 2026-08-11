@@ -289,6 +289,19 @@ function declaredSecretValues(
       continue;
     }
 
+    // A declared credential ABSENT from the stored configuration is the case a
+    // parser default fires on -- `z.string().default(process.env.KEY)` fills an
+    // undefined key and the adapter then holds a credential that was never
+    // stored, so there is nothing here to compare an id against. Absence is
+    // distinguished from an empty value on purpose: a default does not fire for
+    // `""`, so the adapter holds the empty string and has no secret to leak.
+    // The built-in SMTP provider's loopback sink sends `auth.pass` as `""` and
+    // keeps its message ids because of that distinction.
+    if (current === undefined) {
+      hasUnmatchable = true;
+      continue;
+    }
+
     // An object or an array is skipped: its rendering is not what a provider
     // would interpolate, and stringifying one produces a needle that matches
     // nothing while looking like protection.

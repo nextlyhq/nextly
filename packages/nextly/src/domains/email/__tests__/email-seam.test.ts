@@ -515,3 +515,204 @@ describe("a message id that carries a recipient", () => {
     expect(result.messageId).toBe("<20260811.abc123@mail.provider.test>");
   });
 });
+
+describe("a send whose primary recipient was refused", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetFilterRegistry();
+  });
+
+  afterEach(() => {
+    resetFilterRegistry();
+  });
+
+  /** A provider that accepts the message but names an address it would not take. */
+  function refusing(rejected: string[]) {
+    const { service } = buildSend();
+    (service as unknown as { createAdapterFromRecord: unknown })[
+      "createAdapterFromRecord"
+    ] = () => ({
+      send: () =>
+        Promise.resolve({ success: true, messageId: "msg-1", rejected }),
+    });
+    return service;
+  }
+
+  it("is not reported to the caller as a success", async () => {
+    // `AuthService` assigns this to `delivered` and withholds a password-reset
+    // token from the response when it is true. A user the server refused would
+    // otherwise be told the mail was sent and left with no way to continue.
+    const service = refusing(["primary@b.com"]);
+
+    const result = await service.send({
+      to: "primary@b.com",
+      subject: "Reset",
+      html: "<p>x</p>",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("agrees with the row already written for that address", async () => {
+    // The delivery table was per-recipient and correct while the returned
+    // value was message-level, so one send produced two different answers to
+    // the same question.
+    const recorded: Array<{ to: string; status: string }> = [];
+    const service = refusing(["primary@b.com"]);
+    (service as unknown as { deliveries: unknown })["deliveries"] = {
+      record: (input: { to: string; status: string }) => {
+        recorded.push(input);
+        return Promise.resolve();
+      },
+      recordAll: (inputs: Array<{ to: string; status: string }>) => {
+        recorded.push(...inputs);
+        return Promise.resolve();
+      },
+    };
+
+    const result = await service.send({
+      to: "primary@b.com",
+      subject: "Reset",
+      html: "<p>x</p>",
+    });
+
+    expect(recorded).toEqual([
+      expect.objectContaining({ to: "primary@b.com", status: "failed" }),
+    ]);
+    expect(result.success).toBe(false);
+  });
+
+  it("is not rescued by a copy the caller never asked for", async () => {
+    // A `beforeSend` filter adding a BCC must not turn a refused primary into
+    // a successful send: the address the caller wrote is the one the answer is
+    // about.
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: Record<string, unknown>) => ({
+        ...payload,
+        bcc: ["archive@b.com"],
+      })
+    );
+    const service = refusing(["primary@b.com"]);
+
+    const result = await service.send({
+      to: "primary@b.com",
+      subject: "Reset",
+      html: "<p>x</p>",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("still succeeds when only a CC was refused", async () => {
+    // The control. The caller's recipient received the message, so this is a
+    // successful send with one copy undelivered — and the CC's own row still
+    // records the refusal.
+    const service = refusing(["cc@b.com"]);
+
+    const result = await service.send({
+      to: "primary@b.com",
+      cc: ["cc@b.com"],
+      subject: "Notice",
+      html: "<p>x</p>",
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("still succeeds when nothing was refused", async () => {
+    // The second control: the rule must not make every send a failure.
+    const service = refusing([]);
+
+    const result = await service.send({
+      to: "primary@b.com",
+      subject: "Notice",
+      html: "<p>x</p>",
+    });
+
+    expect(result).toEqual({ success: true, messageId: "msg-1" });
+  });
+});
+
+describe("a message id built out of the message body", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetFilterRegistry();
+  });
+
+  afterEach(() => {
+    resetFilterRegistry();
+  });
+
+  /** A single-use token, the shape `randomBytes(32).toString("hex")` produces. */
+  const TOKEN =
+    "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+
+  function echoing(messageId: string) {
+    const { service } = buildSend();
+    (service as unknown as { createAdapterFromRecord: unknown })[
+      "createAdapterFromRecord"
+    ] = () => ({ send: () => Promise.resolve({ success: true, messageId }) });
+    return service;
+  }
+
+  it("is withheld when it repeats a token from the html", async () => {
+    // The adapter is handed the body as well as the addresses, so a provider
+    // can build an identifier out of a password-reset token as easily as out
+    // of a recipient — and that id is then returned, actioned, logged and
+    // stored, giving a single-use token a permanent home.
+    const service = echoing(`sent-${TOKEN}`);
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Reset your password",
+      html: `<a href="https://x.test/reset?token=${TOKEN}">Reset</a>`,
+    });
+
+    expect(result.messageId).toBeUndefined();
+  });
+
+  it("is withheld when it repeats a token from the text part", async () => {
+    const service = echoing(`sent-${TOKEN}`);
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Reset your password",
+      // The token is in the TEXT part only, so the html cannot be what
+      // catches it.
+      html: "<p>Follow the link in this message.</p>",
+      plainText: `Use ${TOKEN} to continue`,
+    });
+
+    expect(result.messageId).toBeUndefined();
+  });
+
+  it("leaves an ordinary id alone when the body shares only words", async () => {
+    // The control. An id legitimately contains a date and a hostname, and a
+    // message legitimately contains the sender's name — comparing short runs
+    // would delete real ids for every message that happened to use the word.
+    const service = echoing("<20260811.abc123@mail.acmemail.test>");
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Your Acmemail receipt",
+      html: "<p>Sent 20260811 via mail.acmemail.test</p>",
+    });
+
+    expect(result.messageId).toBe("<20260811.abc123@mail.acmemail.test>");
+  });
+
+  it("leaves an id alone when nothing of it appears in the message", async () => {
+    // The second control: a long opaque id is exactly what a real provider
+    // returns, and it must survive.
+    const service = echoing("01HQ8ZK5TM9WXYZP4R7N2VBCDE");
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Receipt",
+      html: "<p>Thanks for your order.</p>",
+    });
+
+    expect(result.messageId).toBe("01HQ8ZK5TM9WXYZP4R7N2VBCDE");
+  });
+});

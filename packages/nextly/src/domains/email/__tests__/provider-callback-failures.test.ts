@@ -383,6 +383,75 @@ describe("a credential the parser normalised on the way in", () => {
   });
 });
 
+describe("a credential the parser supplied rather than the store", () => {
+  function defaultingProvider(fallback: string) {
+    return defineEmailProvider<{ apiKey: string }>({
+      type: "defaulting",
+      label: "Defaulting",
+      configFields: [
+        { name: "apiKey", label: "API Key", kind: "password", secret: true },
+      ],
+      // What `z.string().default(process.env.PROVIDER_KEY)` does: an absent
+      // key is filled in, and the adapter holds a credential the stored
+      // configuration never contained.
+      parseConfig: input => ({
+        apiKey: (input as { apiKey?: string }).apiKey ?? fallback,
+      }),
+      createAdapter: config => ({
+        send: () =>
+          Promise.resolve({
+            success: true,
+            messageId: `id-${config.apiKey}`,
+          }),
+      }),
+    });
+  }
+
+  it("drops the id when the declared credential was not stored", async () => {
+    // Nothing here can say what the parser filled in, so no id from this
+    // provider can be trusted -- the same conclusion the short-credential and
+    // undeclared-leaf rules reach.
+    const adapter = defaultingProvider(
+      "sk-live-from-the-environment"
+    ).createAdapterFrom({});
+
+    await expect(
+      adapter.send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" })
+    ).resolves.toEqual({ success: true, messageId: undefined });
+  });
+
+  it("keeps ids when the credential is stored as an empty string", async () => {
+    // The control that matters most. A default does not fire for `""`, so the
+    // adapter holds the empty string and there is no secret to leak -- and the
+    // built-in SMTP loopback sink stores exactly this. Treating absent and
+    // empty alike would cost that provider every message id it returns.
+    const provider = defineEmailProvider<{ apiKey: string }>({
+      type: "defaulting",
+      label: "Defaulting",
+      configFields: [
+        { name: "apiKey", label: "API Key", kind: "password", secret: true },
+      ],
+      parseConfig: input => input as { apiKey: string },
+      createAdapter: () => ({
+        send: () =>
+          Promise.resolve({
+            success: true,
+            messageId: "<abc123@mail.example.com>",
+          }),
+      }),
+    });
+
+    await expect(
+      provider
+        .createAdapterFrom({ apiKey: "" })
+        .send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" })
+    ).resolves.toEqual({
+      success: true,
+      messageId: "<abc123@mail.example.com>",
+    });
+  });
+});
+
 describe("a provider that never passed through the authoring helper", () => {
   const KEY = "sk-live-must-never-be-stored";
 

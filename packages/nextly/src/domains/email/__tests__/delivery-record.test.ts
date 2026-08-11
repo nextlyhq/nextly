@@ -100,9 +100,21 @@ describe("address forms a narrower pattern would miss", () => {
 
 describe("preparing an error for storage", () => {
   it("bounds a provider that returns a whole error page", () => {
+    // The bound INCLUDES the ellipsis. An exported constant named for the
+    // longest text stored is one a caller may size a column or a display
+    // from, so returning one character more than it says would be wrong
+    // wherever it is trusted.
     const stored = storableError("x".repeat(MAX_ERROR_LENGTH + 500));
-    expect(stored.length).toBe(MAX_ERROR_LENGTH + 1);
+    expect(stored.length).toBe(MAX_ERROR_LENGTH);
     expect(stored.endsWith("…")).toBe(true);
+  });
+
+  it("leaves a message exactly at the bound untouched", () => {
+    // The control: the reservation must cost only messages that were going to
+    // be cut anyway, not one that already fits.
+    const exact = "x".repeat(MAX_ERROR_LENGTH);
+    expect(storableError(exact)).toBe(exact);
+    expect(storableError(exact)).not.toContain("…");
   });
 
   it("redacts before it truncates", () => {

@@ -103,9 +103,63 @@ export const MAX_ERROR_LENGTH = 2000;
  */
 export function storableError(message: string): string {
   const redacted = redactAddresses(message);
+  // The ellipsis is part of the budget, not an addition to it. Slicing to the
+  // full limit and then appending would return one character MORE than the
+  // exported bound, for every truncated error -- and the bound is what a
+  // caller sizing a column or a display from this constant would trust.
   return redacted.length > MAX_ERROR_LENGTH
-    ? `${redacted.slice(0, MAX_ERROR_LENGTH)}…`
+    ? `${redacted.slice(0, MAX_ERROR_LENGTH - 1)}…`
     : redacted;
+}
+
+/**
+ * The shortest run of identifier characters worth treating as an echo.
+ *
+ * A message id is split on punctuation and each run compared against the
+ * message that was sent, so the floor decides what counts as "the same value"
+ * rather than a coincidence. Password-reset and verification tokens here are
+ * `randomBytes(32).toString("hex")` — 64 characters — so sixteen catches them
+ * with room to spare while sitting far above any word that appears in both an
+ * identifier and English prose.
+ */
+const MIN_ECHOED_RUN = 16;
+
+/**
+ * Whether a message id repeats something the message itself carried.
+ *
+ * An adapter is handed the subject, the HTML and the text alongside the
+ * recipients, so a provider can build its identifier out of the BODY as easily
+ * as out of an address — and the body of a password-reset message contains a
+ * single-use token. That id is then returned to the caller, handed to every
+ * after-send action, written to the process log and stored in the delivery
+ * table, which turns a token with a short life into one sitting in a database
+ * column.
+ *
+ * Asked in this direction on purpose. The id is short and the body is not, so
+ * "does the id contain the body" answers nothing; what is detectable is a
+ * distinctive run FROM the id turning up in what was sent.
+ *
+ * Runs shorter than the floor are ignored rather than compared, because an id
+ * legitimately contains words — a provider name, a date — that prose contains
+ * too, and comparing those would delete ordinary ids for every message that
+ * happened to use the same word.
+ */
+export function messageIdEchoesPayload(
+  messageId: string | undefined,
+  texts: ReadonlyArray<string | undefined>
+): boolean {
+  if (messageId === undefined) return false;
+
+  const runs = messageId
+    .split(/[^A-Za-z0-9]+/)
+    .filter(run => run.length >= MIN_ECHOED_RUN);
+  if (runs.length === 0) return false;
+
+  return texts.some(text => {
+    if (text === undefined || text === "") return false;
+    const haystack = text.toLowerCase();
+    return runs.some(run => haystack.includes(run.toLowerCase()));
+  });
 }
 
 /**

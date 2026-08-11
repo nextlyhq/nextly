@@ -26,6 +26,7 @@ import type { EmailTemplateRecord } from "../../../schemas/email-templates/types
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import {
+  messageIdEchoesPayload,
   messageIdWithoutRecipients,
   type EmailDeliveryRecipientKind,
 } from "../delivery-record";
@@ -506,10 +507,41 @@ export class EmailService extends BaseService {
       // Compared against the ACTUAL mailboxes rather than redacted by shape:
       // a Message-ID legitimately contains an `@`, so address-shaped redaction
       // would destroy every RFC-form id while catching nothing else.
-      const safeMessageId = messageIdWithoutRecipients(
-        result.messageId,
-        recipients.map(recipient => recipient.to)
-      );
+      // Two ways an id can carry something it should not: out of the envelope,
+      // and out of the body. The adapter is handed both.
+      const safeMessageId = messageIdEchoesPayload(result.messageId, [
+        filtered.subject,
+        filtered.html,
+        filtered.text,
+      ])
+        ? null
+        : messageIdWithoutRecipients(
+            result.messageId,
+            recipients.map(recipient => recipient.to)
+          );
+
+      /**
+       * Whether the message reached the address the caller addressed it to.
+       *
+       * SMTP answers `RCPT TO` per address, so a server can accept a message
+       * for a CC -- including one an `email.beforeSend` filter added, which
+       * the caller never asked for -- while refusing the primary recipient,
+       * and the message-level result still says it succeeded. `AuthService`
+       * assigns this value to `delivered` and withholds a password-reset
+       * token from the response on the strength of it, so reporting that send
+       * as successful leaves someone who received nothing with no way to
+       * continue.
+       *
+       * The delivery rows are already per-recipient and say `failed` for that
+       * address. This makes the value every OTHER sink reads agree with them.
+       */
+      const deliveredToCaller =
+        result.success &&
+        !recipients.some(
+          recipient =>
+            recipient.recipientKind === "to" &&
+            refused.has(recipient.to.trim().toLowerCase())
+        );
       await this.deliveries?.recordAll(
         recipients.map(recipient => {
           const wasRefused = refused.has(recipient.to.trim().toLowerCase());
@@ -536,14 +568,14 @@ export class EmailService extends BaseService {
         {
           to: filtered.to,
           subject: filtered.subject,
-          success: result.success,
+          success: deliveredToCaller,
           messageId: safeMessageId ?? undefined,
         },
         { providerId: options.providerId }
       );
 
       const durationMs = Date.now() - startedAt;
-      if (result.success) {
+      if (deliveredToCaller) {
         // Stable, greppable send record for terminal / log-aggregator use.
         // Do not log recipient PII (addresses/subject). Counts keep the record
         // useful for a log aggregator without persisting personal data.
@@ -561,7 +593,12 @@ export class EmailService extends BaseService {
           event: "email.failed",
           provider: providerType,
           durationMs,
-          reason: "provider returned unsuccessful",
+          // A refused primary recipient and a provider-level failure are
+          // different operational problems: one is an address the server would
+          // not take, the other is the send itself.
+          reason: result.success
+            ? "primary recipient refused"
+            : "provider returned unsuccessful",
         });
       }
 
@@ -573,7 +610,7 @@ export class EmailService extends BaseService {
       // provider can put anything else there while holding decrypted
       // configuration. What this method promises is what it returns.
       return {
-        success: result.success,
+        success: deliveredToCaller,
         ...(safeMessageId !== null ? { messageId: safeMessageId } : {}),
       };
     } catch (error) {
