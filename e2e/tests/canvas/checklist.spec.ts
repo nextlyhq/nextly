@@ -323,26 +323,27 @@ test("[informational] point 9: the library's Insert button adds a block", async 
 /**
  * The editor survives Escape mid-drag. It did not always.
  *
- * The admin shell used to treat Escape as "go back": its handler and the
- * canvas's were independent `document` listeners, `stopPropagation` does not
- * stop a sibling on the same node, so both ran and mount order decided the
- * winner. Mid-drag that navigated out of the entry editor and unmounted the
- * canvas, measured as `{"hasEditor":false}`. The admin's keydown owners now
- * register through the shared shortcut manager, which holds one listener and
- * takes precedence from the component tree, so Escape no longer leaves.
+ * The admin shell used to treat Escape as "go back", and mid-drag that
+ * navigated out of the entry editor and unmounted the canvas, measured as
+ * `{"hasEditor":false}`. It no longer does, since the admin's keydown owners
+ * moved onto the shared shortcut manager.
  *
- * Escape DOES cancel the drag, and the handler is not in this repository.
- * `dragSensors` includes `@dnd-kit/dom`'s `PointerSensor`, which installs its
- * own `keydown` listener for the duration of a pointer drag and ends the
- * operation with `canceled: true`; `EditorSurface.onDragEnd` returns early on
- * that flag, so no drop is planned. Searching this package for "Escape" finds
- * nothing and proves nothing — the mechanism lives in a dependency.
+ * Escape also cancels the drag itself, and that handler is NOT in this
+ * repository: `dragSensors` includes `@dnd-kit/dom`'s `PointerSensor`, which
+ * handles Escape for the duration of a pointer drag and ends the operation with
+ * `canceled: true`, and `EditorSurface.onDragEnd` returns early on that flag so
+ * no drop is planned. Searching this package for "Escape" finds nothing and
+ * proves nothing — the mechanism lives in a dependency, and a grep of
+ * first-party source cannot see it.
  *
- * So point 12 is met by two separate parties: the sensor cancels the drag, and
- * the admin (since its keydown owners moved onto the shared shortcut manager)
- * no longer navigates away from the editor while it happens. This test covers
- * the second; 12b covers the tree staying unmutated. Neither asserts the drag's
- * own cancellation directly, which is the assertion worth adding next.
+ * Two separate parties, then: the sensor cancels the drag, the admin stays put.
+ * This test covers the second, 12b covers the tree staying unmutated, and
+ * neither observes the sensor's own cancellation.
+ *
+ * The URL is asserted alongside the editor because navigation starts before the
+ * unmount lands: `navigateTo` changes the location synchronously while the
+ * router defers its event, so reading `hasEditor` on its own can still see the
+ * old DOM and pass while the route has already moved.
  */
 test("[acceptance] point 12a: Escape keeps the editor mounted", async ({
   page,
@@ -351,6 +352,8 @@ test("[acceptance] point 12a: Escape keeps the editor mounted", async ({
   const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
   const driver = createPocDriver(page);
   await driver.mountTree(fixture);
+
+  const urlBeforeEscape = page.url();
 
   await startLibraryDrag(driver);
   for (let step = 0; step < 30; step++) await driver.moveBy(0, 8);
@@ -362,6 +365,14 @@ test("[acceptance] point 12a: Escape keeps the editor mounted", async ({
     description: JSON.stringify(state),
   });
 
+  // Both, because either alone can pass while the other has already gone wrong:
+  // the editor can still be in the DOM one tick after navigation began, and a
+  // stable URL says nothing about whether the canvas unmounted for another
+  // reason.
+  expect(
+    state.url,
+    `Escape started navigating away: ${JSON.stringify(state)}`
+  ).toBe(urlBeforeEscape);
   expect(
     state.hasEditor,
     `Escape left the editor: ${JSON.stringify(state)}`
