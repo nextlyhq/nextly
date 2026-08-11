@@ -328,13 +328,11 @@ test("[informational] point 9: the library's Insert button adds a block", async 
  * `{"hasEditor":false}`. It no longer does, since the admin's keydown owners
  * moved onto the shared shortcut manager.
  *
- * Escape also cancels the drag itself, and that handler is NOT in this
- * repository: `dragSensors` includes `@dnd-kit/dom`'s `PointerSensor`, which
- * handles Escape for the duration of a pointer drag and ends the operation with
+ * Escape also cancels the drag itself, from a handler this repository does not
+ * own: `dragSensors` includes `@dnd-kit/dom`'s `PointerSensor`, which handles
+ * Escape for the duration of a pointer drag and ends the operation with
  * `canceled: true`, and `EditorSurface.onDragEnd` returns early on that flag so
- * no drop is planned. Searching this package for "Escape" finds nothing and
- * proves nothing — the mechanism lives in a dependency, and a grep of
- * first-party source cannot see it.
+ * no drop is planned.
  *
  * Two separate parties, then: the sensor cancels the drag, the admin stays put.
  * This test covers the second, 12b covers the tree staying unmutated, and
