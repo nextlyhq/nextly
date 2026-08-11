@@ -102,6 +102,23 @@ describe("reading an artifact's specifiers", () => {
     ).toEqual(["node:module", "react"]);
   });
 
+  it("sees a load through the CommonJS module object", () => {
+    // `module.require` survives a format guard into the CJS artifact and is opaque to the bundler,
+    // so it appears in neither the specifier list nor the metafile inputs.
+    expect(
+      read(
+        `export const react = typeof module === "undefined" ? null : module.require("react");`
+      )
+    ).toEqual(["react"]);
+    // The control: a module binding its own `module` is not reaching the ambient loader.
+    expect(
+      read(`
+        const module = { require: (n) => n };
+        export const x = module.require("react");
+      `)
+    ).toEqual([]);
+  });
+
   it("does not treat a local helper of the same name as the loader", () => {
     // The name proves nothing; where it came from does. A module defining its own `createRequire`
     // has no dependency on Node's, and reading one in would reject an artifact that imports
@@ -344,7 +361,8 @@ describe("reading what the build bundled", () => {
     expect(
       bundledPackages(metafile, ["dist/utils.mjs", "dist/chunk-abc.mjs"])
     ).toEqual(["culori"]);
-    // The control: the entry on its own looks clean, which is the finding.
+    // The negative control, and the reason the aggregation is necessary rather than tidy: read on
+    // its own, the entry reports nothing, because its record holds only its own source.
     expect(bundledPackages(metafile, ["dist/utils.mjs"])).toEqual([]);
   });
 

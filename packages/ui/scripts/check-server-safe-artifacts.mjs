@@ -154,6 +154,24 @@ export function specifiersIn(source, fileName) {
     );
   };
 
+  // Names the artifact binds itself. A module that declares its own `module` or `require` is not
+  // reaching the ambient loader, and reporting its argument would name something that is not a
+  // module specifier at all.
+  const declaredNames = new Set();
+  const collectDeclaredNames = node => {
+    if (
+      (ts.isVariableDeclaration(node) ||
+        ts.isFunctionDeclaration(node) ||
+        ts.isParameter(node)) &&
+      node.name !== undefined &&
+      ts.isIdentifier(node.name)
+    ) {
+      declaredNames.add(node.name.text);
+    }
+    ts.forEachChild(node, collectDeclaredNames);
+  };
+  collectDeclaredNames(tree);
+
   // Names bound to a loader before the walk, because the call that uses one can appear above the
   // declaration in the emitted file. `const load = createRequire(import.meta.url)` makes `load`
   // the module loader, and a bundler leaves that opaque exactly as it leaves `createRequire`.
@@ -201,6 +219,15 @@ export function specifiersIn(source, fileName) {
       const callee = node.expression;
       const isDynamicImport = callee.kind === ts.SyntaxKind.ImportKeyword;
       const isRequire = ts.isIdentifier(callee) && callee.text === "require";
+      // `module.require("react")` is the CommonJS loader reached through the module object, which
+      // survives a format guard into the CJS artifact and is opaque to the bundler, so it appears
+      // in neither the specifier list nor the metafile. `module` must be the ambient one.
+      const isModuleRequire =
+        ts.isPropertyAccessExpression(callee) &&
+        callee.name.text === "require" &&
+        ts.isIdentifier(callee.expression) &&
+        callee.expression.text === "module" &&
+        !declaredNames.has("module");
       // `createRequire(import.meta.url)("react")` loads a module while naming only `node:module`
       // as an import. The loader is the RESULT of a call, so the callee is not the `require`
       // identifier and the direct check never sees it. This package uses `createRequire` itself,
@@ -212,7 +239,7 @@ export function specifiersIn(source, fileName) {
         // stored under.
         (ts.isIdentifier(callee) && loaders.has(callee.text));
       if (
-        (isDynamicImport || isRequire || isCreatedRequire) &&
+        (isDynamicImport || isRequire || isCreatedRequire || isModuleRequire) &&
         node.arguments.length > 0
       ) {
         record(node.arguments[0]);
