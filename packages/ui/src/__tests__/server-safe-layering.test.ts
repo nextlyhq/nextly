@@ -18,7 +18,14 @@
  * `react/jsx-runtime` import appearing nowhere in the source), or reading a browser global where
  * the module body runs.
  */
-import { existsSync, readFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -60,6 +67,18 @@ const BROWSER_GLOBALS = new Set([
   "sessionStorage",
   "history",
   "location",
+  "matchMedia",
+  "getComputedStyle",
+  "requestAnimationFrame",
+  "cancelAnimationFrame",
+  "HTMLElement",
+  "Element",
+  "Node",
+  "Image",
+  "DOMParser",
+  "IntersectionObserver",
+  "ResizeObserver",
+  "MutationObserver",
 ]);
 
 /** What one module does that could put it on the client side of the boundary. */
@@ -104,8 +123,23 @@ function analyze(source: string, fileName: string): Analysis {
       (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
     ) {
       specifiers.push(node.text);
+      return;
     }
+    // Anything else is FAILED CLOSED rather than skipped. A bundler folds constant expressions —
+    // `import("re" + "act")` resolves to React — and this does not evaluate them. Recording a name
+    // no allow-list can contain reports it as unreadable instead of passing it in silence, which
+    // is the behaviour that would hide exactly the dependency this guard exists to find.
+    if (node) specifiers.push(`<unreadable specifier: ${node.getText()}>`);
   };
+
+  /** Whether every name a declaration binds is type-only, so the whole import is erased. */
+  const allBindingsAreTypes = (
+    bindings: ts.NamedImportBindings | ts.NamedExportBindings | undefined
+  ): boolean =>
+    bindings !== undefined &&
+    (ts.isNamedImports(bindings) || ts.isNamedExports(bindings)) &&
+    bindings.elements.length > 0 &&
+    bindings.elements.every(element => element.isTypeOnly);
 
   // A directive prologue is the leading run of string-expression statements. Taken from the tree,
   // so comments before it are irrelevant: `"use client"` sits under a module doc comment in every
@@ -123,8 +157,31 @@ function analyze(source: string, fileName: string): Analysis {
     return false;
   })();
 
+  // Names the module declares itself. `const location = "home"` is not the browser global, and a
+  // name-only check rejects ordinary server-safe code for using an ordinary word.
+  const declared = new Set<string>();
+  const collectDeclared = (node: ts.Node): void => {
+    if (
+      (ts.isVariableDeclaration(node) ||
+        ts.isFunctionDeclaration(node) ||
+        ts.isClassDeclaration(node) ||
+        ts.isParameter(node) ||
+        ts.isBindingElement(node) ||
+        ts.isImportSpecifier(node) ||
+        ts.isImportClause(node) ||
+        ts.isNamespaceImport(node)) &&
+      node.name !== undefined &&
+      ts.isIdentifier(node.name)
+    ) {
+      declared.add(node.name.text);
+    }
+    ts.forEachChild(node, collectDeclared);
+  };
+  collectDeclared(tree);
+
   /** Whether this identifier reads the global, rather than naming something in another position. */
   const readsTheGlobal = (node: ts.Identifier): boolean => {
+    if (declared.has(node.text)) return false;
     const parent = node.parent;
     // `shape.window` and `{ window: 1 }` name a property, not the global.
     if (ts.isPropertyAccessExpression(parent) && parent.name === node) {
@@ -144,9 +201,22 @@ function analyze(source: string, fileName: string): Analysis {
     if (ts.isImportDeclaration(node)) {
       // `import type` is erased before the emitted JavaScript exists, so it cannot pull in a
       // runtime. Reporting it would fail a change that only affects declarations.
-      if (!node.importClause?.isTypeOnly) record(node.moduleSpecifier);
+      //
+      // `import { type A, type B } from "x"` is erased too — the flags sit on the SPECIFIERS
+      // rather than the declaration, and with `verbatimModuleSyntax` unset TypeScript elides an
+      // import once every name it binds is a type. A default or namespace binding is a value, so
+      // those keep it.
+      const clause = node.importClause;
+      const erased =
+        clause?.isTypeOnly === true ||
+        (clause !== undefined &&
+          clause.name === undefined &&
+          allBindingsAreTypes(clause.namedBindings));
+      if (!erased) record(node.moduleSpecifier);
     } else if (ts.isExportDeclaration(node)) {
-      if (!node.isTypeOnly) record(node.moduleSpecifier);
+      if (!node.isTypeOnly && !allBindingsAreTypes(node.exportClause)) {
+        record(node.moduleSpecifier);
+      }
     } else if (
       ts.isImportEqualsDeclaration(node) &&
       ts.isExternalModuleReference(node.moduleReference)
@@ -178,7 +248,7 @@ function analyze(source: string, fileName: string): Analysis {
       globals.push(node.text);
     }
 
-    const entersFunction =
+    const isFunction =
       ts.isFunctionDeclaration(node) ||
       ts.isFunctionExpression(node) ||
       ts.isArrowFunction(node) ||
@@ -186,6 +256,24 @@ function analyze(source: string, fileName: string): Analysis {
       ts.isGetAccessor(node) ||
       ts.isSetAccessor(node) ||
       ts.isConstructorDeclaration(node);
+
+    // An immediately invoked function is not deferred: its body runs while the module is being
+    // imported, so a browser global inside one throws on a server exactly as a bare read would.
+    // Treating every function body as deferred suppressed it.
+    const runsNow = ((): boolean => {
+      if (!isFunction) return false;
+      let invoked: ts.Node = node;
+      while (invoked.parent && ts.isParenthesizedExpression(invoked.parent)) {
+        invoked = invoked.parent;
+      }
+      const parent = invoked.parent;
+      return (
+        parent !== undefined &&
+        ts.isCallExpression(parent) &&
+        parent.expression === invoked
+      );
+    })();
+    const entersFunction = isFunction && !runsNow;
 
     ts.forEachChild(node, child =>
       visit(child, insideFunction || entersFunction)
@@ -200,10 +288,16 @@ function analyze(source: string, fileName: string): Analysis {
 function resolveLocal(fromFile: string, specifier: string): string | null {
   if (!specifier.startsWith(".")) return null;
   const base = path.resolve(path.dirname(fromFile), specifier);
+  // A TypeScript module may import `./helper.js` while the source is `helper.ts`, and the bundler
+  // substitutes the extension. Probing `helper.js.ts` finds nothing, and the specifier would then
+  // be recorded as an external PACKAGE, failing the allow-list for an ordinary local import.
+  const swapped = base.replace(/\.(?:js|jsx|mjs|cjs)$/, "");
   for (const candidate of [
     base,
     `${base}.ts`,
     `${base}.tsx`,
+    `${swapped}.ts`,
+    `${swapped}.tsx`,
     path.join(base, "index.ts"),
     path.join(base, "index.tsx"),
   ]) {
@@ -361,6 +455,48 @@ describe("reading a module", () => {
     ]);
   });
 
+  it("reports a browser global inside an immediately invoked function", () => {
+    // An IIFE is not deferred: its body runs while the module is being imported, so this throws on
+    // a server exactly as a bare read would. Treating every function body as deferred hid it.
+    expect(
+      read(`export const width = (() => window.innerWidth)();`).globals
+    ).toEqual(["window"]);
+  });
+
+  it("does not report a name the module declares itself", () => {
+    // `location` and `history` are ordinary words. A name-only check rejects valid server-safe
+    // code for using one as a local, an import, or a parameter.
+    expect(
+      read(`
+        const location = "home";
+        import { history } from "./router";
+        export const where = location + history;
+      `).globals
+    ).toEqual([]);
+  });
+
+  it("reports a specifier it cannot read, rather than passing it in silence", () => {
+    // A bundler folds constant expressions — `import("re" + "act")` resolves to React — and this
+    // does not evaluate them. Failing closed reports it as unreadable; skipping it would hide
+    // exactly the dependency this guard exists to find.
+    const found = read(`const a = await import("re" + "act");`).specifiers;
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain("unreadable specifier");
+  });
+
+  it("ignores an import whose named bindings are all types", () => {
+    // The flags sit on the SPECIFIERS, not the declaration. With `verbatimModuleSyntax` unset,
+    // TypeScript elides the import once every name it binds is a type — so reporting it fails a
+    // change that affects declarations only.
+    expect(
+      read(`
+        import { type ComponentType } from "all-types";
+        export { type Other } from "all-types-export";
+        import { type A, real } from "mixed";
+      `).specifiers.sort()
+    ).toEqual(["mixed"]);
+  });
+
   it("does not report one inside a function, or behind a typeof guard", () => {
     // The controls. A global inside a function is reached when that function is CALLED, which a
     // server importing the module never does; `typeof window` is the guard that makes a module
@@ -375,6 +511,30 @@ describe("reading a module", () => {
         export const w = shape.window;
       `).globals
     ).toEqual([]);
+  });
+});
+
+describe("resolving a local import", () => {
+  it("follows a `.js` specifier to its TypeScript source", () => {
+    // A TypeScript module may import `./helper.js` while the source is `helper.ts`, and the
+    // bundler substitutes the extension. Probing `helper.js.ts` finds nothing, and the specifier
+    // would then be recorded as an external PACKAGE — failing the allow-list for an ordinary local
+    // import. Written to a temp directory so the fixture is real files, which is what the resolver
+    // reads, without adding a `.js`-specifier module to this package's own sources.
+    const dir = mkdtempSync(path.join(os.tmpdir(), "nx-layering-"));
+    writeFileSync(path.join(dir, "helper.ts"), "export const helper = 1;\n");
+    const entry = path.join(dir, "entry.ts");
+    writeFileSync(
+      entry,
+      'export { helper } from "./helper.js";\nexport const x = helper;\n'
+    );
+
+    const { files, packages } = reach(entry);
+    expect([...packages.keys()]).toEqual([]);
+    expect(files.map(({ file }) => path.basename(file)).sort()).toEqual([
+      "entry.ts",
+      "helper.ts",
+    ]);
   });
 });
 
