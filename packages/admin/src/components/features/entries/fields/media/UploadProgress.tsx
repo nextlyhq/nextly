@@ -102,7 +102,12 @@ export function UploadProgress({
           className={cn(
             "tabular-nums font-medium ml-auto",
             isError && "text-destructive",
-            isComplete && "text-success-600"
+            // Completion uses the per-mode success ink so it matches the
+            // error ink beside it, which is already semantic. A fixed ramp
+            // step (`success-600`) darkens the brand green by a constant and
+            // reads at 4.38:1 on the dark surface, under the 4.5:1 minimum
+            // this percentage must meet as text.
+            isComplete && "text-success"
           )}
         >
           {Math.round(clampedProgress)}%

@@ -316,15 +316,36 @@ describe("a provider nested inside another", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("tells the developer the inner provider is ignored", () => {
-    // Silently reusing the outer manager would leave someone wondering why their options had no
-    // effect, so the situation is reported rather than merely survived.
+  it("says nothing when the inner provider agrees with the outer one", () => {
+    // A component that owns keys and can be rendered standalone has to bring a provider with it,
+    // or it throws wherever no shell wrapped it. That composition costs nothing — the target's
+    // manager is reused — so warning about it trains people to ignore the warning that matters.
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     resetDevWarnings();
 
     const view = render(
       <ShortcutProvider isApple={false}>
         <ShortcutProvider isApple={false}>
+          <Bind keys="Escape" run={vi.fn()} options={{ name: "inner" }} />
+        </ShortcutProvider>
+      </ShortcutProvider>
+    );
+    const said = warn.mock.calls.map(c => String(c[0])).join(" ");
+    warn.mockRestore();
+    view.unmount();
+
+    expect(said).toBe("");
+  });
+
+  it("still reports options that disagree", () => {
+    // The control, and the case that genuinely loses something: the inner options ARE ignored,
+    // so someone would otherwise be left wondering why they had no effect.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    resetDevWarnings();
+
+    const view = render(
+      <ShortcutProvider isApple={false}>
+        <ShortcutProvider isApple>
           <span />
         </ShortcutProvider>
       </ShortcutProvider>
@@ -333,7 +354,7 @@ describe("a provider nested inside another", () => {
     warn.mockRestore();
     view.unmount();
 
-    expect(said).toContain("already mounted above");
+    expect(said).toContain("different options");
   });
 });
 

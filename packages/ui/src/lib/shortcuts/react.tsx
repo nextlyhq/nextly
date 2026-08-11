@@ -234,19 +234,17 @@ export function ShortcutProvider({
       "options, so the ones passed here are being ignored. Managers are shared per target; give " +
       "the providers matching options, or a target of their own."
   );
+  // Nesting with matching options is SUPPORTED, not a mistake, and is deliberately not warned
+  // about: a component that owns keys and can be rendered on its own — a command palette exported
+  // for embedding — has to bring a provider with it, or it throws wherever no shell wrapped it.
+  // Reusing the target's manager makes that composition free, and the warning above still reports
+  // the case that genuinely loses something, which is options that disagree.
   const manager =
     nestedOnSameTarget && parent
       ? parent.manager
       : owner
         ? owner.manager
         : detached;
-
-  devWarnOnce(
-    !nestedOnSameTarget,
-    "ShortcutProvider: a provider is already mounted above this one. The inner one is being " +
-      "ignored, because two listeners on the same target would each run a binding for the same " +
-      "key. Render one provider at the root, and use ShortcutScope to raise precedence inside it."
-  );
 
   // Layout timing, matching the effects that register the layers. A passive effect installs the
   // listener AFTER paint, so a keydown delivered between the commit and the passive flush reaches

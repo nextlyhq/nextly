@@ -1,0 +1,26 @@
+/**
+ * Density variations.
+ *
+ * Every control component (button, input, select) already sizes itself off
+ * the single `--nx-control-height` knob, with the sm/md/lg variants derived
+ * from it via calc(), so changing that one value rescales every control
+ * together. Tailwind's own spacing scale is likewise driven by a single
+ * `--spacing` custom property that every padding/gap/margin utility reads
+ * through calc(var(--spacing) * n), so it moves with the control height -
+ * controls that shrink inside padding sized for the taller variant would
+ * read as a rendering bug rather than a denser layout.
+ */
+.nextly-admin[data-density="compact"] {
+  --nx-control-height: 2rem;
+  --spacing: 0.2rem;
+}
+
+.nextly-admin[data-density="default"] {
+  --nx-control-height: 2.5rem;
+  --spacing: 0.25rem;
+}
+
+.nextly-admin[data-density="comfortable"] {
+  --nx-control-height: 3rem;
+  --spacing: 0.3rem;
+}

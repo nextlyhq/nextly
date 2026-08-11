@@ -88,15 +88,11 @@
 
 /**
  * Table Header & Footer Background + Border System
+ *
+ * The surface itself is `--nx-table-header-bg` in the theme's token file, where
+ * a palette change can reach it. This file only says which elements paint with
+ * it.
  */
-.nextly-admin {
-  --nx-table-header-bg: oklch(1 0 0);
-}
-
-.nextly-admin.dark {
-  --nx-table-header-bg: oklch(0.1573 0.0228 265.66);
-}
-
 .nextly-admin thead {
   background-color: var(--nx-table-header-bg);
 }
@@ -233,7 +229,7 @@
 /**
     * Enhanced Data-Slot Component Styles
     * 
-    * Styles targeting our data-slot attributes from Phase 2
+    * Styles targeting the data-slot attributes components carry
     */
 
 /* Button enhancements */
