@@ -163,6 +163,15 @@ function importsOfSource(text: string, fileName = "module.ts"): string[] {
       ts.isStringLiteralLike(node.moduleSpecifier)
     ) {
       found.push(node.moduleSpecifier.text);
+    } else if (ts.isJSDocImportTag(node)) {
+      // `/** @import { X } from "pkg" */`. A tag with its own module specifier, not the
+      // `ImportTypeNode` a `@typedef` produces, so entering the JSDoc tree is not enough.
+      const target = node.moduleSpecifier;
+      found.push(
+        target && ts.isStringLiteralLike(target)
+          ? target.text
+          : UNRESOLVABLE_SPECIFIER
+      );
     } else if (ts.isImportTypeNode(node)) {
       // `type A = typeof import("pkg")`. A type query, so it never reaches a bundle — but it is
       // still a dependency on that package's internals, which is what the admin rule forbids.
@@ -274,6 +283,18 @@ describe("reading a module's imports", () => {
     expect(
       importsOfSource(`/// <reference types="@nextlyhq/admin" />\nexport {};`)
     ).toEqual(["@nextlyhq/admin"]);
+  });
+
+  it("sees a JSDoc @import tag, which carries its own module specifier", () => {
+    // Distinct from the `@typedef` form: `@import` parses to a JSDocImportTag, so walking into
+    // JSDoc reaches it but no ImportTypeNode branch records it. Asserted against a subpath the
+    // guard genuinely must catch, since admin is unresolvable here anyway.
+    expect(
+      importsOfSource(
+        `/** @import { N } from "@nextlyhq/blocks-react/next" */\nexport const x = 1;`,
+        "probe.js"
+      )
+    ).toContain("@nextlyhq/blocks-react/next");
   });
 
   it("sees an import type inside a JSDoc typedef, which JavaScript files use", () => {
