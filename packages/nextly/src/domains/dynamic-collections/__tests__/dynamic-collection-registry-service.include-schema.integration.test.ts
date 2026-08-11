@@ -14,10 +14,13 @@
  * wide one without any caller noticing.
  */
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, afterEach, beforeEach } from "vitest";
 
+import { sqliteTableDdl } from "../../../database/sqlite-table-ddl";
+import { dynamicCollectionsSqlite } from "../../../schemas/dynamic-collections/sqlite";
 import type { Logger } from "../../../shared/types";
 import { DynamicCollectionRegistryService } from "../services/dynamic-collection-registry-service";
 
@@ -34,9 +37,14 @@ const FIELDS_JSON = JSON.stringify([
 ]);
 
 /**
- * Every column the narrow projection carries. `fields` is the one it drops, so
- * asserting the presence of the rest is what distinguishes "omits the schema
- * blob" from "omits whatever the last edit forgot to list".
+ * Every column the narrow projection carries: the table's, less `fields`.
+ *
+ * The list is exhaustive on purpose. `ListCollectionsResponse<false>` is
+ * `Omit<CollectionMetadata, "fields">`, so a column the query forgets to name
+ * still type-checks at every call site and simply arrives `undefined` — the
+ * failure a reader of `status` or `versions` sees is a missing value, never a
+ * missing property. Asserting only a subset reproduces exactly that blind
+ * spot, which is how ten columns went missing from the shape unnoticed.
  */
 const PROJECTED_COLUMNS = [
   "id",
@@ -45,11 +53,21 @@ const PROJECTED_COLUMNS = [
   "description",
   "labels",
   "timestamps",
+  "status",
+  "localized",
+  "versions",
+  "revalidate",
+  "webhooks",
   "admin",
+  "hooks",
   "source",
   "locked",
+  "configPath",
+  "schemaHash",
   "schemaVersion",
   "migrationStatus",
+  "lastMigrationId",
+  "accessRules",
   "createdBy",
   "createdAt",
   "updatedAt",
@@ -63,111 +81,90 @@ describe("DynamicCollectionRegistryService.listCollections — includeSchema pro
     sqlite = new Database(":memory:");
     sqlite.pragma("foreign_keys = OFF");
 
-    // The production dynamic_collections schema, sqlite dialect.
-    //
-    // Written out rather than reused: no generator owns this table.
-    // `generateSqliteCoreTableStatements` does not emit it and the ddl
-    // emitters cover user collections, not the registry that lists them, so
-    // there is no equivalent of `getSchemaEventsDdl` to call here.
-    //
-    // It has to carry every column. The wide `select()` names all of them, so
-    // one missing here fails the query outright instead of returning a
-    // narrower row — which makes an incomplete fixture look like a suite that
-    // simply never exercises `includeSchema: true`.
-    sqlite.exec(`
-      CREATE TABLE dynamic_collections (
-        id TEXT PRIMARY KEY,
-        slug TEXT NOT NULL,
-        table_name TEXT NOT NULL,
-        description TEXT,
-        labels TEXT NOT NULL,
-        fields TEXT NOT NULL,
-        timestamps INTEGER NOT NULL DEFAULT 1,
-        status INTEGER NOT NULL DEFAULT 0,
-        localized INTEGER NOT NULL DEFAULT 0,
-        versions TEXT,
-        revalidate TEXT,
-        webhooks TEXT,
-        admin TEXT,
-        source TEXT NOT NULL DEFAULT 'ui',
-        locked INTEGER NOT NULL DEFAULT 0,
-        config_path TEXT,
-        schema_hash TEXT NOT NULL,
-        schema_version INTEGER NOT NULL DEFAULT 1,
-        migration_status TEXT NOT NULL DEFAULT 'pending',
-        last_migration_id TEXT,
-        access_rules TEXT,
-        hooks TEXT,
-        created_by TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE UNIQUE INDEX dynamic_collections_slug_unique ON dynamic_collections(slug);
-      CREATE UNIQUE INDEX dynamic_collections_table_name_unique ON dynamic_collections(table_name);
-    `);
+    // Built from the schema the service itself reads, so the fixture cannot
+    // describe a table shape that production does not have. A column added to
+    // `dynamicCollectionsSqlite` appears here without anyone maintaining it —
+    // which matters most for the wide `select()`, whose statement names every
+    // column and fails outright when the fixture is one behind.
+    for (const statement of sqliteTableDdl(dynamicCollectionsSqlite)) {
+      sqlite.exec(statement);
+    }
 
     // Three rows, inserted oldest-first, with slugs that are NOT in creation
     // order so the sorting assertion below cannot pass by accident.
+    //
+    // Every NOT NULL column is given a value rather than left to a default:
+    // the generated DDL emits no defaults, and a row that leans on one is a
+    // row this suite did not describe.
     const baseTime = 1_700_000_000_000;
     const insert = sqlite.prepare(
       `INSERT INTO dynamic_collections
-         (id, slug, table_name, description, labels, fields, schema_hash, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, slug, table_name, description, labels, fields, timestamps,
+          status, localized, source, locked, schema_hash, schema_version,
+          migration_status, created_at, updated_at)
+       VALUES (@id, @slug, @tableName, @description, @labels, @fields, 1,
+          0, 0, 'ui', 0, @schemaHash, 1,
+          'pending', @createdAt, @updatedAt)`
     );
-    insert.run(
-      "id-zebra",
-      "zebra",
-      "dc_zebra",
-      "posts about zebras",
-      `{"singular":"Zebra","plural":"Zebras"}`,
-      FIELDS_JSON,
-      "h1",
-      baseTime,
-      baseTime
-    );
-    insert.run(
-      "id-alpha",
-      "alpha",
-      "dc_alpha",
-      "posts about alphas",
-      `{"singular":"Alpha","plural":"Alphas"}`,
-      FIELDS_JSON,
-      "h2",
-      baseTime + 100,
-      baseTime + 100
-    );
-    insert.run(
-      "id-mango",
-      "mango",
-      "dc_mango",
-      "posts about mangoes",
-      `{"singular":"Mango","plural":"Mangoes"}`,
-      FIELDS_JSON,
-      "h3",
-      baseTime + 200,
-      baseTime + 200
-    );
+    const seed = (
+      slug: string,
+      schemaHash: string,
+      createdAt: number
+    ): void => {
+      insert.run({
+        id: `id-${slug}`,
+        slug,
+        tableName: `dc_${slug}`,
+        description: `posts about ${slug}`,
+        labels: JSON.stringify({ singular: slug, plural: `${slug}s` }),
+        fields: FIELDS_JSON,
+        schemaHash,
+        createdAt,
+        updatedAt: createdAt,
+      });
+    };
+    seed("zebra", "h1", baseTime);
+    seed("alpha", "h2", baseTime + 100);
+    seed("mango", "h3", baseTime + 200);
 
     const db = drizzle({ client: sqlite });
-    const fakeAdapter = {
-      getDrizzle: () => db,
+    // `satisfies` rather than a cast: the two methods the registry reaches for
+    // are checked against the adapter's own declarations, so a change to
+    // either signature fails here instead of leaving the suite exercising a
+    // shape production no longer accepts. The widening that follows is the
+    // narrow part — this stands in for an adapter, and only these two members
+    // are ever called.
+    const adapter = {
+      getDrizzle: <T>() => db as T,
+      // The values @nextlyhq/adapter-sqlite reports. A fixture that claims a
+      // capability the real adapter does not have steers the query builder
+      // down a branch production never takes.
       getCapabilities: () => ({
         dialect: "sqlite" as const,
         supportsJsonb: false,
         supportsJson: true,
         supportsArrays: false,
+        supportsGeneratedColumns: true,
+        supportsFts: true,
         supportsIlike: false,
         supportsReturning: true,
         supportsSavepoints: true,
         supportsOnConflict: true,
-        supportsFts: false,
+        maxParamsPerQuery: 999,
+        maxIdentifierLength: 128,
       }),
-    };
+    } satisfies Pick<DrizzleAdapter, "getDrizzle" | "getCapabilities">;
+
     registry = new DynamicCollectionRegistryService(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal hand-rolled adapter for this isolated integration test
-      fakeAdapter as any,
+      adapter as unknown as DrizzleAdapter,
       noopLogger
     );
+  });
+
+  afterEach(() => {
+    // better-sqlite3 holds a native handle; an in-memory database is only
+    // reclaimed when it is closed, and this suite opens one per test.
+    sqlite.close();
   });
 
   it("omits fields when includeSchema is false", async () => {

@@ -363,6 +363,13 @@ export class DynamicCollectionRegistryService extends BaseService {
           .limit(limit)
           .offset(offset)
       : await this.db
+          // `fields` is the only column this shape drops, and the return type
+          // says so: `Omit<CollectionMetadata, "fields">`. Every other column
+          // has to be named here, because an omission is invisible — the row
+          // still satisfies the declared type while the value arrives
+          // `undefined`, so a caller reading `status` or `versions` off a list
+          // gets nothing and no error. Dropping the schema blob is what makes
+          // the shape cheap; dropping metadata alongside it only makes it wrong.
           .select({
             id: this.dynamicCollections.id,
             slug: this.dynamicCollections.slug,
@@ -370,15 +377,25 @@ export class DynamicCollectionRegistryService extends BaseService {
             description: this.dynamicCollections.description,
             labels: this.dynamicCollections.labels,
             timestamps: this.dynamicCollections.timestamps,
+            status: this.dynamicCollections.status,
+            localized: this.dynamicCollections.localized,
+            versions: this.dynamicCollections.versions,
+            revalidate: this.dynamicCollections.revalidate,
+            webhooks: this.dynamicCollections.webhooks,
             admin: this.dynamicCollections.admin,
+            hooks: this.dynamicCollections.hooks,
             source: this.dynamicCollections.source,
             locked: this.dynamicCollections.locked,
+            configPath: this.dynamicCollections.configPath,
+            schemaHash: this.dynamicCollections.schemaHash,
             schemaVersion: this.dynamicCollections.schemaVersion,
             migrationStatus: this.dynamicCollections.migrationStatus,
+            lastMigrationId: this.dynamicCollections.lastMigrationId,
+            accessRules: this.dynamicCollections.accessRules,
             createdBy: this.dynamicCollections.createdBy,
             createdAt: this.dynamicCollections.createdAt,
             updatedAt: this.dynamicCollections.updatedAt,
-            // fields is intentionally excluded for performance
+            // `fields` intentionally excluded — the reason this shape exists.
           })
           .from(this.dynamicCollections)
           .where(whereClause)
