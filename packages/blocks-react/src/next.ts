@@ -1074,3 +1074,15 @@ export function createPublicBlocksPage(
     blocksRouteConfig(config, true)
   );
 }
+
+/**
+ * `BlockSeoContribution` and `BlockSeoImage` are NOT re-exported here even
+ * though `DerivedPageSeo` extends the first and this entry's SEO derivation is
+ * their only consumer.
+ *
+ * They are exported from the package root instead, which resolves without the
+ * `next` and `nextly` peers this entry's declarations import. A caller of
+ * `createBlocksPage` can always reach the root; a block author on a standalone
+ * install could not reach this entry, and two import paths for one type costs
+ * more than the one path both audiences already have.
+ */
