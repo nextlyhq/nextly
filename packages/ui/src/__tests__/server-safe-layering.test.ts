@@ -27,25 +27,34 @@ const PKG_ROOT = path.join(
 );
 
 /**
- * Packages that make a module client-only.
+ * The packages a server-safe entry point is allowed to reach.
  *
- * React itself is the substantive one; the rest are component libraries whose modules call hooks,
- * so importing any of them drags the same runtime in behind a different name.
+ * An ALLOW-list, not a list of client-only packages to refuse. A deny-list has to name every way
+ * of pulling in a client runtime, and it cannot name the ones that do not exist yet: a workspace
+ * package added later, or a sibling that itself imports React, is not "react" by name and would
+ * pass. Listing what is permitted fails closed instead, and makes each addition a decision someone
+ * takes deliberately.
+ *
+ * Both entries here are pure functions over strings, with no React and no DOM.
  */
-const CLIENT_ONLY = [
-  "react",
-  "react-dom",
-  "lucide-react",
-  "cmdk",
-  "sonner",
-  "@radix-ui/",
-  "@tanstack/react-virtual",
-  "react-resizable-panels",
-  "class-variance-authority",
-];
+const ALLOWED_PACKAGES = new Set(["clsx", "tailwind-merge"]);
+
+/**
+ * Strip comments before reading specifiers.
+ *
+ * Doc comments here legitimately contain `import … from "@nextlyhq/ui/tailwind-preset"` as usage
+ * examples, and matching the raw text reports them as real imports — which it did, naming a
+ * package the entry does not actually reach.
+ */
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
 
 /** Every specifier a module imports or re-exports, including type-only positions. */
-function specifiers(source: string): string[] {
+function specifiers(raw: string): string[] {
+  const source = stripComments(raw);
   return [
     ...source.matchAll(
       /(?:^|\n)\s*(?:import|export)[\s\S]*?from\s*["']([^"']+)["']/g
@@ -118,24 +127,23 @@ describe("what a server-safe entry point reaches", () => {
     expect(SERVER_SAFE.length).toBeGreaterThan(0);
   });
 
-  it.each(SERVER_SAFE)("%s pulls in no client runtime", (_subpath, entry) => {
-    const { packages } = reach(entry);
-    const offenders = [...packages.entries()]
-      .filter(([specifier]) =>
-        CLIENT_ONLY.some(
-          banned =>
-            specifier === banned ||
-            specifier.startsWith(banned.endsWith("/") ? banned : `${banned}/`)
-        )
-      )
-      .map(([specifier, importer]) => `${specifier} (from ${importer})`);
+  it.each(SERVER_SAFE)(
+    "%s reaches only packages that are allowed",
+    (_subpath, entry) => {
+      const { packages } = reach(entry);
+      const unlisted = [...packages.entries()]
+        .filter(([specifier]) => !ALLOWED_PACKAGES.has(specifier))
+        .map(([specifier, importer]) => `${specifier} (from ${importer})`);
 
-    expect(
-      offenders,
-      "a server-safe entry point reached a client-only package, so a server component importing " +
-        "it would fail at runtime while the build and the client-directive guard both passed"
-    ).toEqual([]);
-  });
+      expect(
+        unlisted,
+        "a server-safe entry point reached a package that is not on the allow-list. If it is genuinely " +
+          "free of React and the DOM — including everything IT reaches — add it to ALLOWED_PACKAGES; " +
+          "otherwise a server component importing this subpath will fail at runtime while the build " +
+          "and the client-directive guard both pass"
+      ).toEqual([]);
+    }
+  );
 
   it.each(SERVER_SAFE)(
     "%s reaches no module marked client",
