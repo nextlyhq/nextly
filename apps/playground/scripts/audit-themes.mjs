@@ -112,10 +112,11 @@ for (const theme of ALL) {
       boundaries[label] = { ratio: r === null ? null : +r.toFixed(2), band: band(r) };
     }
 
-    // Does the selected nav row use the PRIMARY colour as its fill? The
-    // founder's report was "menu items are using primary". `sidebar-accent`
-    // is the intended selected-row fill; equality with primary means the
-    // theme routed a brand colour into a nav state.
+    // Does the selected nav row use the PRIMARY colour as its fill?
+    // `sidebar-accent` is the intended selected-row fill, so equality with
+    // primary means the theme routed a brand colour into a nav state: every
+    // row then reads as selected, and the one that IS selected reads as
+    // nothing in particular.
     const navUsesPrimary =
       t["sidebar-accent"] === t.primary ||
       t["sidebar-accent"] === t["sidebar-primary"];

@@ -191,45 +191,79 @@ interface Violation {
 const strip = (line: string): string =>
   line.replace(/^\s*(\/\*+|\*\/|\/\/|\*)\s*/, "").replace(/\s*\*\/\s*$/, "");
 
-function violationsIn(path: string): Violation[] {
+/**
+ * Every PHYSICAL comment line in the file, in source order.
+ *
+ * A span is a poor unit to reason in, because the two comment syntaxes span
+ * differently: a block comment holds all of its lines, while each `//` run is
+ * a span of its own. Prose that wraps across two `//` lines is therefore two
+ * spans, and anything looking one line ahead inside a span never sees it.
+ *
+ * Flattening first makes the two syntaxes indistinguishable to the rule below,
+ * so a phrase is caught wherever it wraps rather than only where the syntax
+ * happened to keep it together.
+ */
+function commentLines(spans: CommentSpan[]): CommentSpan[] {
+  return spans.flatMap(span =>
+    span.text
+      .split("\n")
+      .map((text, offset) => ({ line: span.line + offset, text }))
+  );
+}
+
+/** The rule itself, over source text, so both directions can be pinned. */
+function violationsInSource(
+  source: string,
+  allowLineComments: boolean,
+  label: string
+): Violation[] {
   const found: Violation[] = [];
-  const source = readFileSync(resolve(repo, path), "utf8");
-  const spans = commentsIn(source, LINE_COMMENTS.has(extname(path)));
+  // A block comment can run for pages, so each of its lines is judged on its
+  // own and reports its own line number. Reporting the line the comment OPENS
+  // on would point a reader at the top of a doc block and leave them to find
+  // the offending sentence.
+  const lines = commentLines(commentsIn(source, allowLineComments));
 
-  for (const span of spans) {
-    // A block comment can run for pages, so each of its lines is judged on its
-    // own and reports its own line number. Reporting the line the comment
-    // OPENS on would point a reader at the top of a doc block and leave them
-    // to find the offending sentence.
-    const lines = span.text.split("\n");
-    lines.forEach((text, offset) => {
-      // Each line is also joined with the one after it, with comment markers
-      // stripped, because prose wraps and a pattern is not a line. A sentence
-      // ending "half of a" and continuing "fix" on the next line expresses
-      // exactly what these patterns exist to catch, and matching per line
-      // alone lets any phrase escape by falling across a line break -- an
-      // escape hatch that opens by accident, whenever a comment is reflowed.
-      //
-      // The pair is searched but the FIRST line is reported, so a reader lands
-      // on where the phrase starts rather than where it happened to break.
-      const next = lines[offset + 1];
-      const joined =
-        next === undefined
-          ? text
-          : `${strip(text)} ${strip(next)}`.replace(/\s+/g, " ");
+  lines.forEach((current, index) => {
+    // Each line is also searched joined to the one after it, with comment
+    // markers stripped, because prose wraps and a pattern is not a line. A
+    // sentence ending "half of a" and continuing "fix" below expresses exactly
+    // what these patterns exist to catch, and matching per line alone lets any
+    // phrase escape through a line break -- an escape hatch that opens by
+    // accident, whenever a comment is reflowed.
+    //
+    // Only PHYSICALLY ADJACENT lines join. Joining every comment to the next
+    // one in source order would splice unrelated sentences from opposite ends
+    // of a file into a phrase nobody wrote, and a rule that invents its own
+    // violations gets switched off faster than one that misses some.
+    //
+    // The pair is searched but the FIRST line is reported, so a reader lands
+    // on where the phrase starts rather than where it happened to break.
+    const next = lines[index + 1];
+    const joined =
+      next === undefined || next.line !== current.line + 1
+        ? current.text
+        : `${strip(current.text)} ${strip(next.text)}`.replace(/\s+/g, " ");
 
-      for (const [pattern, kind] of META_REFERENCES) {
-        if (!pattern.test(text) && !pattern.test(joined)) continue;
-        found.push({
-          where: `${path}:${span.line + offset}`,
-          kind,
-          text: text.trim().slice(0, 100),
-        });
-        return;
-      }
-    });
-  }
+    for (const [pattern, kind] of META_REFERENCES) {
+      if (!pattern.test(current.text) && !pattern.test(joined)) continue;
+      found.push({
+        where: `${label}:${current.line}`,
+        kind,
+        text: current.text.trim().slice(0, 100),
+      });
+      return;
+    }
+  });
   return found;
+}
+
+function violationsIn(path: string): Violation[] {
+  return violationsInSource(
+    readFileSync(resolve(repo, path), "utf8"),
+    LINE_COMMENTS.has(extname(path)),
+    path
+  );
 }
 
 describe("comments describe the code, not the process", () => {
@@ -276,6 +310,43 @@ describe("comments describe the code, not the process", () => {
       .split("\n")
       .findIndex(l => /\btask[-\s]?\d+/i.test(l));
     expect(offending + 1).toBe(3);
+  });
+
+  it("matches a phrase that wraps, in either comment syntax", () => {
+    const kinds = (source: string) =>
+      violationsInSource(source, true, "x.ts").map(v => `${v.where} ${v.kind}`);
+
+    // Unwrapped: the baseline the patterns were written against.
+    expect(kinds("// this is the second half of a fix")).toEqual([
+      "x.ts:1 an edit sequence",
+    ]);
+
+    // Wrapped inside one block comment: all of its lines live in one span.
+    expect(
+      kinds(
+        ["/**", " * this is the second half of a", " * fix", " */"].join("\n")
+      )
+    ).toEqual(["x.ts:2 an edit sequence"]);
+
+    // Wrapped across two line comments. Each `//` run is a SEPARATE span, so a
+    // rule that looks ahead only within a span never sees this pair, and every
+    // pattern here can be evaded by pressing return.
+    expect(
+      kinds(["// this is the second half of a", "// fix"].join("\n"))
+    ).toEqual(["x.ts:1 an edit sequence"]);
+
+    // A trailing comment wrapping into a standalone one, which is how a real
+    // comment grows past the line width.
+    expect(
+      kinds(["const a = 1; // the second half of a", "// fix"].join("\n"))
+    ).toEqual(["x.ts:1 an edit sequence"]);
+
+    // Comments that are not physically adjacent must NOT be joined. Splicing
+    // every comment onto the next one in source order would manufacture
+    // phrases nobody wrote, anywhere in a file.
+    expect(
+      kinds(["// the second half of a", "const a = 1;", "// fix"].join("\n"))
+    ).toEqual([]);
   });
 
   it("has no comment pointing outside the codebase", () => {
