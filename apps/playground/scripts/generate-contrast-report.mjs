@@ -18,16 +18,11 @@
  *
  * Run: node --experimental-strip-types scripts/generate-contrast-report.mjs
  */
-import { register } from "node:module";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { contrastSourceStamp } from "./contrast-source-stamp.mjs";
-
-// Registered before the theme-lab modules are imported below, so their own
-// extensionless internal imports resolve. See ts-extension-loader.mjs.
-register("./ts-extension-loader.mjs", import.meta.url);
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -94,8 +89,17 @@ const banner = `/**
  */
 export const CONTRAST_REPORT: Record<string, number> = `;
 
-const body = JSON.stringify(report, Object.keys(report).sort(), 2);
-writeFileSync(outPath, `${banner}${body};\n`);
+// Emitted the way the repo's formatter writes it, not the way JSON.stringify
+// does: a key that is a valid identifier goes unquoted, and the object ends
+// with a trailing comma. Without this the committed file (formatted on commit)
+// and a fresh run differ in quoting alone, so regenerating shows a diff on
+// every id that never changed and the real scores hide inside the noise.
+const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+const body = Object.keys(report)
+  .sort()
+  .map(id => `  ${IDENTIFIER.test(id) ? id : JSON.stringify(id)}: ${report[id]},`)
+  .join("\n");
+writeFileSync(outPath, `${banner}{\n${body}\n};\n`);
 
 console.log(
   `generate-contrast-report: wrote ${ALL_THEMES.length} theme scores to ${outPath}`

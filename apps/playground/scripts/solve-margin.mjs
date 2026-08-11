@@ -7,12 +7,9 @@
  * the assertion by construction. Hue and chroma are held fixed, which is what
  * keeps a retune a change of legibility rather than of identity.
  *
- * Usage: node scripts/solve-margin.mjs <themeId> <mode> <token> <surfaceToken> <target>
- * Example: node scripts/solve-margin.mjs mono light warning card 5.0
+ * Usage: pnpm theme:solve -- <themeId> <mode> <token> <surfaceToken> <target>
+ * Example: pnpm theme:solve -- mono light warning card 5.0
  */
-import { register } from "node:module";
-
-register("./ts-extension-loader.mjs", import.meta.url);
 
 const { NEXTLY_THEMES } = await import("../src/theme-lab/themes/index.ts");
 const { TWEAKCN_THEMES } = await import(

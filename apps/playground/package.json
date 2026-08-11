@@ -16,7 +16,12 @@
     "db:seed": "tsx --env-file=.env scripts/seed.ts",
     "dev:reset": "tsx --env-file=.env scripts/reset.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "theme:audit": "tsx scripts/audit-themes.mjs",
+    "theme:capture": "tsx scripts/capture-themes.mjs",
+    "theme:contrast-report": "tsx scripts/generate-contrast-report.mjs",
+    "theme:margins": "tsx scripts/audit-margins.mjs",
+    "theme:solve": "tsx scripts/solve-margin.mjs"
   },
   "dependencies": {
     "@nextlyhq/adapter-drizzle": "workspace:^",

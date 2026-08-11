@@ -15,16 +15,13 @@
  * and writes it as evidence: how heavy is too heavy is a design judgement, not
  * a line a test can draw.
  *
- * Run: node scripts/audit-themes.mjs
+ * Run: pnpm theme:audit  (tsx scripts/audit-themes.mjs)
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { register } from "node:module";
 import { dirname, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { contrastSourceStamp } from "./contrast-source-stamp.mjs";
-
-register("./ts-extension-loader.mjs", import.meta.url);
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolvePath(here, "../../..");

@@ -49,7 +49,7 @@
  * go stale the next time a theme is added or retired.
  *
  * Run with the playground already serving on :3000:
- *   node scripts/capture-themes.mjs [--all-tweakcn] [--only id1,id2] [--screens name1,name2]
+ *   pnpm theme:capture -- [--all-tweakcn] [--only id1,id2] [--screens name1,name2]
  *
  * `--only` and `--screens` restrict the run to specific theme ids / screen
  * names (both match against the values below) and exist for smoke-testing a
@@ -61,16 +61,10 @@ import {
   readdirSync,
   writeFileSync,
 } from "node:fs";
-import { register } from "node:module";
 import { dirname, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright";
-
-// Registered before the theme-lab modules are imported below, so their own
-// extensionless internal imports resolve. See ts-extension-loader.mjs; the
-// same hook is used by generate-contrast-report.mjs for the same reason.
-register("./ts-extension-loader.mjs", import.meta.url);
 
 const here = dirname(fileURLToPath(import.meta.url));
 const outRoot = resolvePath(here, "../.theme-captures");

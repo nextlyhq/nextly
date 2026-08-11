@@ -10,7 +10,7 @@
  * numbers the product had stopped producing.
  *
  * Comparing the two costs nothing and is exactly the disagreement that
- * happened. Regenerating the evidence is `node scripts/audit-themes.mjs` from
+ * happened. Regenerating the evidence is `pnpm theme:audit` from
  * `apps/playground`.
  */
 import { readFileSync } from "node:fs";
@@ -65,7 +65,7 @@ describe("the audit evidence matches the contrast report", () => {
       ),
       `The committed audit evidence and the contrast report disagree, so one ` +
         `of them describes a tree that no longer exists. Regenerate the ` +
-        `evidence with \`node scripts/audit-themes.mjs\` from apps/playground.`
+        `evidence with \`pnpm theme:audit\` from apps/playground.`
     ).toEqual([]);
   });
 });

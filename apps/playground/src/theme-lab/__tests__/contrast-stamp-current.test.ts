@@ -14,8 +14,8 @@
  * compared. The content hash can, which is what turns the stamp from a claim in
  * a banner into something that fails.
  *
- * Regenerate with `node scripts/generate-contrast-report.mjs` and
- * `node scripts/audit-themes.mjs` from `apps/playground`.
+ * Regenerate with `pnpm theme:contrast-report` and
+ * `pnpm theme:audit` from `apps/playground`.
  */
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -100,7 +100,7 @@ describe("generated artifacts are stamped with the current harness", () => {
       `contrast-report.generated.ts does not match what the current themes and ` +
         `theme.css actually measure, so the switcher is showing scores for a ` +
         `tree that no longer exists. Regenerate it with ` +
-        `\`node scripts/generate-contrast-report.mjs\`.`
+        `\`pnpm theme:contrast-report\`.`
     ).toEqual({ ...CONTRAST_REPORT });
   });
 });

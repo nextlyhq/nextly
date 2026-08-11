@@ -13,16 +13,13 @@
  * 2. Whether the "fragile" band should be 0.25. That was a guess; the
  *    empirical answer is how far the ruler actually moves when it moves.
  *
- * Run: node scripts/audit-margins.mjs
+ * Run: pnpm theme:margins  (tsx scripts/audit-margins.mjs)
  */
 import { readFileSync } from "node:fs";
-import { register } from "node:module";
 import { dirname, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { converter } from "culori";
-
-register("./ts-extension-loader.mjs", import.meta.url);
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolvePath(here, "../../..");

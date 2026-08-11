@@ -12,6 +12,13 @@
  * the data being compared -- swapping them for tokens would compare Nextly's
  * palette against itself.
  */
+// The gallery renders real admin primitives under each theme's tokens, and
+// both the token contract and the component rules scoped to the admin class
+// live in this stylesheet. The root playground stylesheet defines neither, so
+// without this import every Button, Badge, Checkbox and Input on the page
+// renders unstyled -- a comparison of themes that shows none of them.
+import "@nextlyhq/admin/style.css";
+
 import { NEXTLY_THEMES } from "../../theme-lab/themes";
 
 import { Gallery } from "./Gallery";
