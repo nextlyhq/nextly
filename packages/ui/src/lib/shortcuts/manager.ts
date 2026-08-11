@@ -120,8 +120,6 @@ interface RegisteredLayer {
   sequence: number;
   /** What this layer MATCHES, so a re-render that changed nothing can be told apart. */
   shape: string;
-  /** What this layer decides SUPPRESSION by, so a held key can tell that decision has moved. */
-  policy: string;
 }
 
 interface PreparedBinding {
@@ -219,18 +217,6 @@ const DEFAULT_SEQUENCE_TIMEOUT_MS = 1000;
  */
 function signature(event: KeyboardEvent): string {
   return event.code || event.key;
-}
-
-/**
- * The modifier state a permitted keystroke was permitted UNDER.
- *
- * A press is identified by its physical key, which does not move when the modifiers around it do.
- * Whether it was allowed through, however, depends entirely on them: hold `w`, then press Ctrl,
- * and the next repeat is a Ctrl+W the browser closes the tab on. So the decision is re-made when
- * the modifiers change, even though the press is the same one.
- */
-function modifierState(event: KeyboardEvent): string {
-  return `${event.ctrlKey}${event.metaKey}${event.altKey}${event.shiftKey}`;
 }
 
 /**
@@ -417,10 +403,7 @@ export function createShortcutManager(
    * the repeats of `s` matched nothing, so a binding that had made itself ineligible let the
    * browser take them. The map is bounded by the number of distinct physical keys on the keyboard.
    */
-  const consumedPresses = new Map<
-    string,
-    { prevented: boolean; modifiers: string; stack: string }
-  >();
+  const consumedPresses = new Map<string, { prevented: boolean }>();
 
   /**
    * The physical key that opened the pending sequence, so its own repeats can be told apart from
@@ -445,30 +428,6 @@ export function createShortcutManager(
   ): string {
     const keys = bindings.map(b => b.binding.keys).join("\u0000");
     return `${keys}\u0001${options.depth}\u0001${options.blocking === true}\u0001${options.enabled !== false}`;
-  }
-
-  /**
-   * What a layer decides SUPPRESSION by: the shape above, plus each binding's own policy.
-   *
-   * Kept apart from {@link layerShape} rather than folded into it, because the two answer
-   * different questions. `layerShape` decides whether a half-typed sequence is still valid, and a
-   * binding that changed only whether it calls `preventDefault` has broken no promise about what
-   * it MATCHES — cancelling the sequence there would make `g d` fail for an unrelated reason.
-   *
-   * `when` is absent by necessity: it is a function, so every render supplies a new identity while
-   * the condition is unchanged. It is re-read at press time instead.
-   */
-  function layerPolicy(
-    bindings: readonly PreparedBinding[],
-    options: ShortcutLayerOptions
-  ): string {
-    const policy = bindings
-      .map(
-        b =>
-          `${b.binding.keys}\u0003${b.binding.preventDefault !== false}\u0003${b.binding.whenTyping ?? "auto"}`
-      )
-      .join("\u0000");
-    return `${policy}\u0001${options.depth}\u0001${options.blocking === true}\u0001${options.enabled !== false}`;
   }
 
   /** Whether any enabled layer is currently holding the keyboard. */
@@ -744,17 +703,6 @@ export function createShortcutManager(
   }
 
   /**
-   * What the stack decides suppression by: its order, and each layer's depth, blocking, enabled
-   * and keys. Recorded with a consumed press so a repeat can tell that the answer it would
-   * inherit was decided against a stack that no longer exists.
-   */
-  function stackSignature(): string {
-    return ordered()
-      .map(layer => layer.policy)
-      .join("\u0002");
-  }
-
-  /**
    * Invalidate the snapshot and tell anyone watching that the stack changed.
    *
    * Watchers are notified only when what they can OBSERVE differs. `update()` runs after every
@@ -876,17 +824,33 @@ export function createShortcutManager(
         // text: add Ctrl to a held `w` and it becomes the accelerator that closes the tab, so the
         // decision is re-made rather than inherited.
         //
-        // The layer stack decides that too, not only the modifiers. A binding that sets
-        // `preventDefault: false` can open a blocking layer on its first keydown; the key is
-        // still held, its modifiers have not moved, and inheriting "permitted" left the browser
-        // scrolling the page underneath a modal that claims to hold the keyboard.
+        // A PERMITTED press is re-decided by ASKING the stack again, rather than by comparing a
+        // signature of the things that might have changed.
+        //
+        // Three independent inputs decide it — the modifiers, the layer stack, and each binding's
+        // own `when` — and the last cannot be signed at all: it is a function, so every render
+        // supplies a new identity while the condition is unchanged, and signing it would re-decide
+        // constantly. Re-offering reads all three at once, so a binding whose action falsified its
+        // own condition stops permitting the browser default on its next repeat, rather than
+        // leaving the page scrolling under a layer that claims to hold the keyboard.
+        //
+        // Offered with `invoke` false, so the matching binding's `preventDefault` policy applies
+        // without its action running a second time.
         if (held.prevented) {
           event.preventDefault();
-        } else if (
-          held.modifiers !== modifierState(event) ||
-          held.stack !== stackSignature()
-        ) {
-          if (!insertsText(event, typing)) event.preventDefault();
+        } else {
+          const still = offer([event], event, typing, false);
+          // "fired" means a binding matched and its own `preventDefault` policy has already been
+          // applied, so nothing more is decided here. Every other outcome leaves a press this
+          // manager still owns with no one applying a policy to it, and the browser must not act
+          // on a key we claim — unless it is text, which is the one thing a grab may never eat.
+          //
+          // The "none" case is not hypothetical: hold a plain `w` bound with
+          // `preventDefault: false`, then add Ctrl. No binding matches Ctrl+W, there may be no
+          // blocking layer to report it, and the browser closes the tab.
+          if (still !== "fired" && !insertsText(event, typing)) {
+            event.preventDefault();
+          }
         }
         return true;
       }
@@ -903,12 +867,6 @@ export function createShortcutManager(
     if (pendingAt !== null && now() - pendingAt > sequenceTimeoutMs) {
       abandonSequence();
     }
-
-    // Read BEFORE the handler runs, because the handler is one of the things that can change the
-    // stack: a binding whose action opens a blocking layer would otherwise record the stack it
-    // just created, and its own repeats would compare equal to it and inherit a decision made
-    // when no such layer existed.
-    const stackAtPress = stackSignature();
 
     pressedEvents.push(event);
     let outcome = runOffer(pressedEvents, event, typing);
@@ -933,8 +891,6 @@ export function createShortcutManager(
       pendingKey = signature(event);
       consumedPresses.set(signature(event), {
         prevented: event.defaultPrevented,
-        modifiers: modifierState(event),
-        stack: stackAtPress,
       });
       return true;
     }
@@ -952,8 +908,6 @@ export function createShortcutManager(
     if (consumed) {
       consumedPresses.set(signature(event), {
         prevented: event.defaultPrevented,
-        modifiers: modifierState(event),
-        stack: stackAtPress,
       });
     } else {
       consumedPresses.delete(signature(event));
@@ -969,7 +923,6 @@ export function createShortcutManager(
         bindings: prepared,
         sequence: nextSequence++,
         shape: layerShape(prepared, layerOptions),
-        policy: layerPolicy(prepared, layerOptions),
       };
       warnOnPrefixConflicts(layer.bindings, layerOptions.name);
       layers.add(layer);
@@ -984,7 +937,6 @@ export function createShortcutManager(
           const shape = layerShape(layer.bindings, nextOptions);
           const shapeChanged = shape !== layer.shape;
           layer.shape = shape;
-          layer.policy = layerPolicy(layer.bindings, nextOptions);
           // Only a change to what this layer MATCHES can invalidate a promise it made. `update`
           // runs after every render, so cancelling unconditionally made a sequence fail whenever
           // an unrelated re-render landed between its two keystrokes.
