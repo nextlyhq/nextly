@@ -26,6 +26,12 @@ paths:
   # test, lint and type-check counts and compares them against stored baselines,
   # which is a derived check in every sense except the language it is written in.
   - "**/*.sh"
+  # And the derived ARTEFACTS, not only the code that derives them:
+  # `apps/playground/src/plugins/style-fixture/admin.source.css` compiles into a
+  # derived `admin.css`, and `templates/blog/migrations/*.sql` say outright that
+  # their structure mirrors `UserExtSchemaService.generateMigrationSQL()`.
+  - "**/*.css"
+  - "**/*.sql"
   - ".changeset/**"
 ---
 

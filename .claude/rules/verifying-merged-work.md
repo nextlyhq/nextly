@@ -58,7 +58,18 @@ than trusting any single marker.
    - it only REMOVED content → same command; expect NO hit. Grepping for ADDED
      text here finds nothing whether or not the commit landed, which reads as
      failure either way and proves nothing.
+
+     **An absent marker is only evidence once you have shown the search CAN
+     find it.** `git grep` exits 1 for "no lines selected" and for "the
+     pathspec matched no files" alike, so a mistyped or since-renamed `<path>`
+     certifies the removal without ever reading the file. Run the same command
+     against the commit's PREIMAGE first — `<mergeCommit>^` or `<headRefOid>^`
+     — and require a hit there. That is the positive control, and without it
+     this branch is the one place in the procedure that passes by finding
+     nothing.
+
    - it changed a file mode, a binary, or a rename → text search cannot see it.
+
 3. When nothing is unique to the commit, or the change is a mode/binary/rename,
    compare the PR's **delta** — not the whole object. Diffing the merged path
    entry against the branch-head entry (`git ls-tree`, blob ids) is wrong as soon
