@@ -15,7 +15,9 @@ import {
   disallowedSpecifiers,
   domGlobalsPresent,
   floorGlobalsPresent,
+  bundledPackages,
   packageOf,
+  packageOfInput,
   reachedFrom,
   restrictToSupportedFloor,
   specifiersIn,
@@ -88,6 +90,18 @@ describe("reading an artifact's specifiers", () => {
         export const x = load("react");
       `)
     ).toEqual([]);
+  });
+
+  it("resolves an aliased createRequire import", () => {
+    // The build preserves the alias, so requiring the local name to be spelled `createRequire`
+    // misses it entirely.
+    expect(
+      read(`
+        import { createRequire as cr } from "node:module";
+        const load = cr(import.meta.url);
+        export const react = load("react");
+      `)
+    ).toEqual(["node:module", "react"]);
   });
 
   it("refuses a specifier it cannot read, rather than passing it", () => {
@@ -233,6 +247,48 @@ describe("comparing against the allow-list", () => {
         allowed
       )
     ).toEqual({ offending: [], missing: ["gone.mjs"] });
+  });
+});
+
+describe("reading what the build bundled", () => {
+  it("names the package an input belongs to", () => {
+    expect(packageOfInput("src/lib/utils.ts")).toBeNull();
+    expect(packageOfInput("../../node_modules/clsx/dist/clsx.mjs")).toBe(
+      "clsx"
+    );
+    expect(packageOfInput("node_modules/@scope/thing/dist/index.js")).toBe(
+      "@scope/thing"
+    );
+    // The LAST marker wins: a nested dependency lives under its parent's node_modules, and pnpm's
+    // store layout puts the real name after the last one too.
+    expect(
+      packageOfInput(
+        "node_modules/.pnpm/culori@4.0.2/node_modules/culori/src/index.js"
+      )
+    ).toBe("culori");
+  });
+
+  it("lists the packages inlined into one artifact", () => {
+    // A bundled package leaves no import to find, so the build's own record is the only place it
+    // is visible.
+    const metafile = {
+      outputs: {
+        "dist/utils.mjs": {
+          inputs: {
+            "src/lib/utils.ts": {},
+            "node_modules/.pnpm/culori@4.0.2/node_modules/culori/src/index.js":
+              {},
+          },
+        },
+      },
+    };
+    expect(bundledPackages(metafile, "dist/utils.mjs")).toEqual(["culori"]);
+  });
+
+  it("reports an artifact the metafile does not describe, rather than passing it", () => {
+    // An absent entry means the question was not answered. Returning an empty list would read as
+    // "nothing bundled", which is the failure this whole check exists to prevent.
+    expect(bundledPackages({ outputs: {} }, "dist/utils.mjs")).toBeNull();
   });
 });
 

@@ -28,6 +28,20 @@ export function reachedFrom(
   read: (file: string) => string | null
 ): Array<{ file: string; missing: boolean; specifiers: string[] }>;
 
+/** The package an input path belongs to, or `null` when it is first-party source. */
+export function packageOfInput(input: string): string | null;
+
+/**
+ * The packages BUNDLED into one artifact, read from the build's own record of its inputs.
+ *
+ * `null` when the metafile does not describe that artifact — a question left unanswered rather
+ * than an empty result, since a bundled package leaves no import for the specifier scan to find.
+ */
+export function bundledPackages(
+  metafile: { outputs?: Record<string, { inputs?: Record<string, unknown> }> },
+  outputName: string
+): string[] | null;
+
 /**
  * The distinct specifiers reachable from one artifact that name a package outside the allow-list,
  * plus any file the walk could not read.

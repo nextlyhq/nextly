@@ -105,6 +105,29 @@ export function specifiersIn(source, fileName) {
     found.push(`<unreadable specifier: ${node.getText()}>`);
   };
 
+  // The local names that MEAN `createRequire`, resolved from the import rather than assumed to be
+  // spelled that way: `import { createRequire as cr } from "node:module"` makes `cr` the factory,
+  // and the build preserves the alias.
+  const factories = new Set(["createRequire"]);
+  const collectFactories = node => {
+    if (
+      ts.isImportSpecifier(node) &&
+      (node.propertyName ?? node.name).text === "createRequire"
+    ) {
+      factories.add(node.name.text);
+    }
+    ts.forEachChild(node, collectFactories);
+  };
+  collectFactories(tree);
+
+  /** Whether an expression names the require factory, by local name or through a namespace. */
+  const namesFactory = node => {
+    if (ts.isIdentifier(node)) return factories.has(node.text);
+    return (
+      ts.isPropertyAccessExpression(node) && node.name.text === "createRequire"
+    );
+  };
+
   // Names bound to a loader before the walk, because the call that uses one can appear above the
   // declaration in the emitted file. `const load = createRequire(import.meta.url)` makes `load`
   // the module loader, and a bundler leaves that opaque exactly as it leaves `createRequire`.
@@ -115,7 +138,7 @@ export function specifiersIn(source, fileName) {
       ts.isIdentifier(node.name) &&
       node.initializer !== undefined &&
       ts.isCallExpression(node.initializer) &&
-      namesCreateRequire(node.initializer.expression)
+      namesFactory(node.initializer.expression)
     ) {
       loaders.add(node.name.text);
     }
@@ -142,8 +165,7 @@ export function specifiersIn(source, fileName) {
       // precisely because a bundler leaves it opaque.
       const isCreatedRequire =
         // `createRequire(import.meta.url)("react")`, invoked where it is made.
-        (ts.isCallExpression(callee) &&
-          namesCreateRequire(callee.expression)) ||
+        (ts.isCallExpression(callee) && namesFactory(callee.expression)) ||
         // `const load = createRequire(...); load("react")`, invoked through the name it was
         // stored under.
         (ts.isIdentifier(callee) && loaders.has(callee.text));
@@ -159,19 +181,6 @@ export function specifiersIn(source, fileName) {
 
   visit(tree);
   return found;
-}
-
-/**
- * Whether an expression names `createRequire`, in either the imported or the namespaced spelling.
- *
- * @param {ts.Node} node
- * @returns {boolean}
- */
-function namesCreateRequire(node) {
-  if (ts.isIdentifier(node)) return node.text === "createRequire";
-  return (
-    ts.isPropertyAccessExpression(node) && node.name.text === "createRequire"
-  );
 }
 
 /**
@@ -273,6 +282,52 @@ export function disallowedSpecifiers(entry, read, allowed) {
     }
   }
   return { offending: [...new Set(offending)], missing: [...new Set(missing)] };
+}
+
+/**
+ * The package an input path belongs to, or null when it is first-party source.
+ *
+ * Paths come from the build's own record, so the last `node_modules/` segment is the one that
+ * names the package — a nested dependency lives under its parent's `node_modules`, and the store
+ * layout pnpm uses puts the real name after the last marker too.
+ *
+ * @param {string} input
+ * @returns {string | null}
+ */
+export function packageOfInput(input) {
+  const marker = "node_modules/";
+  const last = input.lastIndexOf(marker);
+  if (last === -1) return null;
+  const rest = input.slice(last + marker.length);
+  const parts = rest.split("/");
+  if (rest.startsWith("@")) return parts.slice(0, 2).join("/");
+  return parts[0] ?? null;
+}
+
+/**
+ * The packages BUNDLED into one artifact, from the build's own record of what went into it.
+ *
+ * The specifier scan can only see what SURVIVES, and a bundled dependency leaves nothing to see:
+ * tsup treats `dependencies` as external but INLINES anything else, so a `devDependencies` package
+ * is copied into the artifact whole with no import naming it. Asking the bundler what it read is
+ * the only way to find that, and it is bounded — the list is finite and the build wrote it.
+ *
+ * Returns null when the artifact has no entry in the metafile, which is a failure to report rather
+ * than an empty result to pass.
+ *
+ * @param {{ outputs?: Record<string, { inputs?: Record<string, unknown> }> }} metafile
+ * @param {string} outputName
+ * @returns {string[] | null}
+ */
+export function bundledPackages(metafile, outputName) {
+  const output = metafile.outputs?.[outputName];
+  if (output === undefined) return null;
+  const packages = new Set();
+  for (const input of Object.keys(output.inputs ?? {})) {
+    const pkg = packageOfInput(input);
+    if (pkg !== null) packages.add(pkg);
+  }
+  return [...packages];
 }
 
 /**
@@ -420,6 +475,18 @@ async function main() {
   const require = createRequire(import.meta.url);
   const artifacts = serverSafeArtifacts();
 
+  // One read per format rather than per artifact; the build writes one file for each.
+  const metafiles = { esm: null, cjs: null };
+  for (const format of ["esm", "cjs"]) {
+    try {
+      metafiles[format] = JSON.parse(
+        readFileSync(join(DIST, `metafile-${format}.json`), "utf8")
+      );
+    } catch {
+      metafiles[format] = null;
+    }
+  }
+
   for (const file of artifacts) {
     const full = join(DIST, file);
 
@@ -447,6 +514,33 @@ async function main() {
           `could not be read.`
       );
     }
+    // What SURVIVED as a specifier is only half the question; the build's record says what was
+    // inlined. Read per artifact so the failure names the entry rather than the whole build.
+    const metafile = metafiles[file.endsWith(".cjs") ? "cjs" : "esm"];
+    if (metafile === null) {
+      problems.push(
+        `The build emitted no metafile for ${file}, so what was bundled into it could not be read.`
+      );
+    } else {
+      const bundled = bundledPackages(metafile, `dist/${file}`);
+      if (bundled === null) {
+        problems.push(
+          `${file} has no entry in the build's metafile, so what was bundled into it is unknown.`
+        );
+      } else {
+        const unlisted = bundled.filter(
+          name => !SERVER_SAFE_ALLOWED_PACKAGES.has(name)
+        );
+        if (unlisted.length > 0) {
+          problems.push(
+            `${file} has ${unlisted.join(", ")} bundled into it, which a server-safe entry point ` +
+              `may not reach. A bundled package leaves no import to find, so this comes from the ` +
+              `build's own record of what it read.`
+          );
+        }
+      }
+    }
+
     if (offending.length > 0) {
       problems.push(
         `${file} reaches ${offending.join(", ")}, which a server-safe entry point may not ` +

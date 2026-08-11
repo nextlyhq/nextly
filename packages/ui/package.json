@@ -65,7 +65,8 @@
   ],
   "files": [
     "dist",
-    "docs"
+    "docs",
+    "!dist/metafile-*.json"
   ],
   "scripts": {
     "build": "pnpm build:js && node scripts/build-css.mjs",
