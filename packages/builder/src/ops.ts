@@ -403,9 +403,14 @@ function assertNodeShape(node: BlockNode, verb: string): void {
     const slots: unknown = candidate.slots;
     if (isPlainRecord(slots)) {
       for (const [slot, children] of Object.entries(slots)) {
-        (children as unknown[]).forEach((child, index) => {
-          visit(child, `${path}.slots.${slot}[${index}]`);
-        });
+        const list = children as unknown[];
+        // An INDEX loop, for the same reason the string-array check uses one:
+        // `forEach` skips holes, so a sparse slot array would be walked as
+        // though the missing entries were not there. They serialize as `null`,
+        // and a `null` in a child list is not a node.
+        for (let index = 0; index < list.length; index += 1) {
+          visit(list[index], `${path}.slots.${slot}[${index}]`);
+        }
       }
     }
   };

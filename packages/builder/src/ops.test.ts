@@ -717,6 +717,17 @@ describe("an op whose own shape is wrong", () => {
     expect(updated.nodes).toBeDefined();
   });
 
+  it("refuses a hole in an inserted slot array", () => {
+    // `forEach` skips holes, so a sparse child list would be walked as though
+    // the missing entries were not there. They serialize as `null`, and a
+    // `null` in a child list is not a node.
+    const parent = node("holder");
+    parent.slots = { main: Array<BlockNode>(1) };
+    expect(() =>
+      applyOp(forest(), { kind: "insert", node: parent, at: { index: 0 } })
+    ).toThrow(OpError);
+  });
+
   it("refuses a subtree that contains itself", () => {
     // JSON cannot express this, but an in-process caller can, and the walk
     // would not return.
