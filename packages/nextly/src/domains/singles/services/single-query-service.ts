@@ -53,6 +53,7 @@ import {
 import { GENERIC_DEFAULT_OWNER_FIELD } from "../../../services/access/types";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { RelatedRowReadContext } from "../../../services/collections/related-row-read-context";
+import { applyMediaTrustBound } from "../../../services/collections/trust-bound";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
@@ -799,7 +800,14 @@ export class SingleQueryService extends BaseService {
 
     doc = this.deserializeJsonFields(doc, singleMeta.fields);
     params.captureReferences?.(doc);
-    doc = await this.expandUploadFields(doc, singleMeta.fields);
+    doc = await this.expandUploadFields(doc, singleMeta.fields, {
+      user: options.user,
+      overrideAccess: options.overrideAccess,
+      // Narrows that bypass per target, media included. Dropping it here would
+      // restore the full bypass for the one target this read expands directly.
+      trusted: options.trusted,
+      authenticatedScope: options.authenticatedScope,
+    });
     // The language this read resolved to, shared by both expansions below so a
     // related row and a related row inside a component are judged alike.
     const readLocale = this.resolveLocaleChain(
@@ -2466,10 +2474,17 @@ export class SingleQueryService extends BaseService {
   /**
    * Expand upload fields with full media data.
    * Recursively handles upload fields nested inside repeater and group fields.
+   *
+   * The caller travels with the fetch because media is a system table with no
+   * stored rules: a trusted read that bounded its bypass has refused this
+   * target like any other, and only the caller can say what it may still see.
+   * The default is an unbounded read, which is what every caller that has no
+   * bypass to narrow is.
    */
   async expandUploadFields(
     doc: SingleDocument,
-    fields: FieldConfig[]
+    fields: FieldConfig[],
+    access: RelatedRowReadContext = { trusted: undefined }
   ): Promise<SingleDocument> {
     const allMediaIds = collectAllMediaIds(doc, fields);
     if (allMediaIds.length === 0) {
@@ -2477,7 +2492,10 @@ export class SingleQueryService extends BaseService {
     }
 
     const uniqueMediaIds = [...new Set(allMediaIds)];
-    const mediaRecords = await this.fetchMediaByIds(uniqueMediaIds);
+    const mediaRecords = await applyMediaTrustBound(
+      await this.fetchMediaByIds(uniqueMediaIds),
+      access
+    );
 
     const mediaMap = new Map<string, Record<string, unknown>>();
     for (const media of mediaRecords) {

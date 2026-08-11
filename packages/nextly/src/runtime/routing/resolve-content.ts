@@ -418,22 +418,19 @@ export async function resolveContent(
       ? undefined
       : (name: string): boolean => trustedNames.includes(name);
 
-  // A bounded read's rejected targets are judged by stored policies, and a
-  // policy change writes no row — so no content tag busts and the entry keeps
-  // serving rows the policy now hides.
+  // A bounded read stays cacheable. Its refused targets are judged by stored
+  // policies and a policy change writes no row, so no content tag busts and an
+  // entry can outlive a tightening — but that staleness is not something the
+  // bound introduces. A pre-rendered page is a point-in-time copy of everything
+  // it read, and a policy tightening after the build leaves the whole page
+  // stale, bounded targets or not. The remedy is revalidation: the `tags`
+  // option names the related collections a populated read depends on.
   //
-  // That is NOT a reason to refuse the cache here, and treating it as one was
-  // wrong twice over. The escape from caching in this module is `markDynamic()`,
-  // which contradicts the one factory that would hit this path:
-  // `createPublicContentRoute` exports `generateStaticParams`, so marking its
-  // render dynamic is the same error the factory already refuses `draft` for.
-  //
-  // And the staleness is not introduced by the bound. A pre-rendered page is a
-  // point-in-time copy of everything it read; a policy tightening after the
-  // build leaves the whole page stale, bounded targets or not. The remedy is
-  // revalidation — the `tags` option exists to name the related collections a
-  // populated read depends on — not per-request rendering on a route that has
-  // told Next it is static.
+  // Per-request rendering is not available as an alternative here anyway. The
+  // only escape from caching in this module is `markDynamic()`, and the one
+  // factory that reaches this path, `createPublicContentRoute`, exports
+  // `generateStaticParams` — so marking its render dynamic would contradict
+  // what the route has already told Next, exactly as `draft` would.
   const cacheable = overrideAccess && !user && !draft;
   if (!cacheable) {
     // Bypassing `unstable_cache` alone does not opt out of Next's Full Route

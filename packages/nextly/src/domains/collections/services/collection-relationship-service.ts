@@ -4,6 +4,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
+import { canReadSystemResource } from "../../../auth/resource-readable";
 import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -38,6 +39,11 @@ import type {
   RelatedRowReadContext,
   TargetReadPolicy,
 } from "../../../services/collections/related-row-read-context";
+import {
+  applyMediaTrustBound,
+  boundRefuses,
+  callerId,
+} from "../../../services/collections/trust-bound";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { detachData } from "../../../shared/lib/detach";
@@ -1454,24 +1460,24 @@ export class CollectionRelationshipService extends BaseService {
     if (isSystemEntity(targetCollection)) {
       // A system entity carries no stored collection rules, so the enforced
       // path below has nothing to evaluate: its secrets are stripped by name
-      // during redaction and the row is returned.
+      // during redaction and the row is returned. That is what a direct read
+      // gives a caller holding no bypass, and an enforced read keeps it.
       //
-      // That is the right answer for a caller with no bypass — it is what a
-      // direct read would give. It is the WRONG answer for a caller that holds
-      // a bypass and REFUSED this target: the bound means "read this as the
-      // audience would", and this audience is anonymous, while a direct read of
-      // `users` requires the `read-users` permission. With no policy to fall
-      // back to there is nothing to enforce, so the only reading that honours
-      // the refusal is to withhold the rows.
-      //
-      // Gated on holding a bypass as well as on the refusal, because an
-      // enforced route supplies an empty bound and its ordinary reads must keep
-      // returning the rows a direct read would.
-      const refused =
-        access.overrideAccess === true &&
-        access.trusted !== undefined &&
-        !access.trusted(targetCollection);
-      return refused ? [] : rows;
+      // A caller that holds a bypass and REFUSED this target asked for the
+      // opposite. The bound means "read this as the caller would", and a direct
+      // read of `users` requires the `read-users` grant; with no stored policy
+      // to fall back on, that grant IS the whole rule. So the refusal is
+      // honoured by asking whether this caller holds it — the same question the
+      // refused DYNAMIC targets below are put to, rather than an assumption
+      // about who is asking. A route serving the public holds no grant and its
+      // refused rows stay withheld.
+      if (!boundRefuses(access, targetCollection)) return rows;
+      const readable = await canReadSystemResource(
+        targetCollection.toLowerCase(),
+        callerId(access),
+        access.authenticatedScope
+      );
+      return readable ? rows : [];
     }
 
     const accessService = this.resolveAccessService();
@@ -2266,7 +2272,10 @@ export class CollectionRelationshipService extends BaseService {
     // Batch fetch all media records at once
     if (allMediaIds.length > 0) {
       const uniqueMediaIds = [...new Set(allMediaIds)];
-      const mediaRecords = await this.fetchMediaByIds(uniqueMediaIds);
+      const mediaRecords = await applyMediaTrustBound(
+        await this.fetchMediaByIds(uniqueMediaIds),
+        access
+      );
 
       // Build lookup map for O(1) access
       for (const media of mediaRecords) {
@@ -3005,7 +3014,10 @@ export class CollectionRelationshipService extends BaseService {
       // images appeared to vanish. The batch path above does not swallow here
       // either, so both expansions in this service fail the same way.
       const uniqueMediaIds = [...new Set(allMediaIds)];
-      const mediaRecords = await this.fetchMediaByIds(uniqueMediaIds);
+      const mediaRecords = await applyMediaTrustBound(
+        await this.fetchMediaByIds(uniqueMediaIds),
+        access
+      );
 
       // Build lookup map for O(1) access
       const mediaMap = new Map<string, Record<string, unknown>>();

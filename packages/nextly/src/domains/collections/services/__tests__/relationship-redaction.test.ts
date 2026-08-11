@@ -94,6 +94,49 @@ describe("relationship expansion secret redaction", () => {
     expect(related).toBeNull();
   });
 
+  it("returns a refused system-entity row to a caller that holds the grant", async () => {
+    // A refused target is judged by the CALLER's own read grant, not by an
+    // assumption that the caller is anonymous. `trusted` is a public Direct API
+    // option, so a bounded read can carry a real audience — and a caller
+    // holding `read-users` is entitled to what a direct read would give it,
+    // which is how the same caller's refused DYNAMIC targets are judged too.
+    const service = new CollectionRelationshipService(
+      adapterReturning({ id: "u1", email: "a@b.co", name: "Ada" }),
+      silentLogger(),
+      {} as never,
+      {} as never
+    );
+
+    const related = await service.fetchRelatedEntry("users", "u1", {
+      enforceCollectionAccess: true,
+      overrideAccess: true,
+      trusted: () => false,
+      authenticatedScope: { actorType: "apiKey", permissions: ["read-users"] },
+    });
+
+    expect(related).toMatchObject({ id: "u1", email: "a@b.co" });
+  });
+
+  it("withholds it from a bounded caller whose scope lacks that grant", async () => {
+    // The other half: a scope is authoritative in BOTH directions, so a key
+    // without the grant is refused however privileged its owner.
+    const service = new CollectionRelationshipService(
+      adapterReturning({ id: "u1", email: "a@b.co" }),
+      silentLogger(),
+      {} as never,
+      {} as never
+    );
+
+    const related = await service.fetchRelatedEntry("users", "u1", {
+      enforceCollectionAccess: true,
+      overrideAccess: true,
+      trusted: () => false,
+      authenticatedScope: { actorType: "apiKey", permissions: ["read-posts"] },
+    });
+
+    expect(related).toBeNull();
+  });
+
   it("still returns a system-entity row for a caller with no bypass", async () => {
     // The positive control, and it is load-bearing: without it the check above
     // passes for a change that withholds system entities from EVERY enforced
