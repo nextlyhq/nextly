@@ -124,6 +124,14 @@ vi.mock("../../../domains/schema/pipeline/live-table-facts", () => ({
  * Both are needed because they leave the table in OPPOSITE states, and a double that can only
  * produce one of them cannot show that the recovery treats them alike.
  */
+/**
+ * How many times the REAL reconcile actually ran.
+ *
+ * Without this the two parameterized rows are indistinguishable from outside: both end in the same
+ * recovery, so both stay green even if one of them never reaches the state it names. This is the
+ * assertion that makes "before" mean before.
+ */
+const realReconcileCalls = { count: 0 };
 const companionFailure: { error: unknown; when: "before" | "after" } = {
   error: undefined,
   when: "after",
@@ -138,6 +146,16 @@ vi.mock(
       ...actual,
       reconcileSingleCompanion: vi.fn(
         async (args: Parameters<typeof actual.reconcileSingleCompanion>[0]) => {
+          // BEFORE the real call: the reconcile is rejected at its first statement, so nothing it
+          // owns has moved. AFTER: it completed its DDL and failed on the tail. The two leave the
+          // table in opposite states, which is the whole reason both are driven.
+          if (
+            companionFailure.error !== undefined &&
+            companionFailure.when === "before"
+          ) {
+            throw companionFailure.error;
+          }
+          realReconcileCalls.count += 1;
           const result = await actual.reconcileSingleCompanion(args);
           if (companionFailure.error !== undefined)
             throw companionFailure.error;
@@ -250,6 +268,7 @@ async function runUpdate(
   liveTableHasRows.value = tableHasRows;
   companionFailure.error = options.companionFailure;
   companionFailure.when = options.companionFailureWhen ?? "after";
+  realReconcileCalls.count = 0;
   adapter = makeAdapter(dialect, { mainTableExists, onStatement });
   const registry = wireRegistry(options.existing ?? existingSingle());
   const result = await dispatchSingles(
@@ -423,6 +442,9 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
       );
 
       expect(written?.migrationStatus).toBe("failed");
+      // The rows must reach DIFFERENT states, or the parameterization is decoration: "before" must
+      // not have run the reconcile at all, "after" must have run it to completion.
+      expect(realReconcileCalls.count).toBe(when === "before" ? 0 : 1);
       expect(retractedTables).toHaveBeenCalledWith("single_page");
       // Binding anything here would be adopted by the next reader instead of rebuilt.
       expect(registeredShapes).not.toHaveBeenCalled();
