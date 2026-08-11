@@ -121,11 +121,17 @@ describe("the published type surface", () => {
   // mean re-implementing turbo's input tracking, and every error in that
   // passes stale declarations.
   beforeAll(() => {
-    execFileSync("pnpm", ["run", "build"], {
-      cwd: join(DIST, ".."),
-      stdio: "ignore",
-    });
-  }, 180_000);
+    // Through turbo, not `pnpm run build` in this directory. The declaration
+    // build resolves `@nextlyhq/blocks-engine`, so invoking tsup directly on a
+    // tree where that package has not been built fails with TS2307 before any
+    // declarations exist. `turbo run build` carries the `^build` edge, so the
+    // dependency is built first and its result is cached.
+    execFileSync(
+      "pnpm",
+      ["exec", "turbo", "run", "build", "--filter=@nextlyhq/blocks-react"],
+      { cwd: join(DIST, "..", "..", ".."), stdio: "ignore" }
+    );
+  }, 300_000);
 
   it("exports every engine type its declarations import", () => {
     const entries = Object.keys(SENTINELS).map(name =>
