@@ -28,6 +28,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { getFilterRegistry, FilterSeams } from "../../../filters";
 import { toSnakeCase } from "../../../lib/case-conversion";
 import {
+  expansionStatusScope,
   resolveStatusFilter,
   type StatusOption,
 } from "../../../lib/status-filter";
@@ -1423,10 +1424,11 @@ export class CollectionQueryService extends BaseService {
             // actually asked for it. Deriving this from the parent having
             // resolved to no filter would unfilter every target behind a
             // status-less collection.
-            status:
-              params.status === "all" || params.overrideAccess === true
-                ? "all"
-                : undefined,
+            status: expansionStatusScope({
+              status: params.status,
+              overrideAccess: params.overrideAccess,
+              bounded: params.trusted !== undefined,
+            }),
           }
         );
 
@@ -1471,10 +1473,11 @@ export class CollectionQueryService extends BaseService {
               // actually asked for it. Deriving this from the parent having
               // resolved to no filter would unfilter every target behind a
               // status-less collection.
-              status:
-                params.status === "all" || params.overrideAccess === true
-                  ? "all"
-                  : undefined,
+              status: expansionStatusScope({
+                status: params.status,
+                overrideAccess: params.overrideAccess,
+                bounded: params.trusted !== undefined,
+              }),
             },
           });
       }
@@ -2559,10 +2562,11 @@ export class CollectionQueryService extends BaseService {
           // actually asked for it. Deriving this from the parent having
           // resolved to no filter would unfilter every target behind a
           // status-less collection.
-          status:
-            params.status === "all" || params.overrideAccess === true
-              ? "all"
-              : undefined,
+          status: expansionStatusScope({
+            status: params.status,
+            overrideAccess: params.overrideAccess,
+            bounded: params.trusted !== undefined,
+          }),
         }
       );
 
@@ -2599,10 +2603,11 @@ export class CollectionQueryService extends BaseService {
             // actually asked for it. Deriving this from the parent having
             // resolved to no filter would unfilter every target behind a
             // status-less collection.
-            status:
-              params.status === "all" || params.overrideAccess === true
-                ? "all"
-                : undefined,
+            status: expansionStatusScope({
+              status: params.status,
+              overrideAccess: params.overrideAccess,
+              bounded: params.trusted !== undefined,
+            }),
           },
         });
       }
@@ -2777,10 +2782,11 @@ export class CollectionQueryService extends BaseService {
               trusted: params.trusted,
               authenticatedScope: params.authenticatedScope,
               locale: localeChain?.[0],
-              status:
-                params.status === "all" || params.overrideAccess === true
-                  ? "all"
-                  : undefined,
+              status: expansionStatusScope({
+                status: params.status,
+                overrideAccess: params.overrideAccess,
+                bounded: params.trusted !== undefined,
+              }),
             };
             draftEntry = await this.relationshipService.expandRelationships(
               draftEntry,

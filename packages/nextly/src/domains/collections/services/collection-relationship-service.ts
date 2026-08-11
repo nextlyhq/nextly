@@ -288,6 +288,29 @@ function resolveNestedTarget(
 type RelatedRowAccess = RelatedRowReadContext;
 
 /**
+ * Whether this expansion may see a target's UNPUBLISHED rows.
+ *
+ * Deliberately not {@link trustsTarget}. Trust answers *who may read a row*;
+ * draft-ness answers *whether the row is ready to be read by anyone*, and a
+ * caller can be entitled to the first without the second.
+ *
+ * A caller that supplies `trusted` has declared it serves ONE FIXED AUDIENCE —
+ * that is the only reason to bound a bypass it already holds. Such a caller
+ * never inherits a widened lifecycle, even for a collection it explicitly
+ * trusts, because trusting a collection says its PUBLISHED content may be
+ * shown, not that its pending edits may. A public route is the case that makes
+ * this concrete: it pre-renders, so a draft pulled in through a relationship is
+ * written to a static artifact and outlives the row being unpublished.
+ *
+ * An unbounded trusted caller — the admin UI, a server task — keeps today's
+ * behaviour, because it has already decided who is asking.
+ */
+function widensLifecycle(access: RelatedRowAccess): boolean {
+  if (access.overrideAccess !== true) return false;
+  return access.trusted === undefined;
+}
+
+/**
  * Whether this expansion may read ONE target collection trusted.
  *
  * `overrideAccess` alone says the CALLER is trusted. It says nothing about the
@@ -1350,7 +1373,8 @@ export class CollectionRelationshipService extends BaseService {
 
     const statusFilter = resolveStatusFilter({
       collectionHasStatus: hasStatus,
-      overrideAccess: trustsTarget(access, targetCollection),
+      // The LIFECYCLE question, not the trust question — see widensLifecycle.
+      overrideAccess: widensLifecycle(access),
       explicit: access.status,
     });
     return statusFilter?.value;
@@ -1618,7 +1642,9 @@ export class CollectionRelationshipService extends BaseService {
       // satisfies the rule.
       const statusFilter = resolveStatusFilter({
         collectionHasStatus: policy.hasStatus,
-        overrideAccess: trustsTarget(access, targetCollection),
+        // Same lifecycle rule as the fetch, or a companion row admits a draft
+        // the row filter just excluded.
+        overrideAccess: widensLifecycle(access),
         // The same intent the fetch honoured. Re-resolving without it re-applies
         // the published-only default here, so a caller who asked to read
         // everything loses a draft row that the fetch above admitted.

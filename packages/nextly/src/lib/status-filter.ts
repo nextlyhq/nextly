@@ -41,3 +41,40 @@ export function resolveStatusFilter(
   if (args.overrideAccess) return null;
   return { value: "published" };
 }
+
+/**
+ * The lifecycle scope an expansion inherits from the read that triggered it.
+ *
+ * Relationship expansion reads a DIFFERENT collection from the one the caller
+ * named, so the scope it runs under is derived rather than stated. Two things
+ * can produce a widened scope, and only one of them survives a caller that has
+ * bounded itself:
+ *
+ * - **The caller asked for it.** `status: "all"` is an explicit statement about
+ *   what this read should see, and it propagates.
+ * - **The caller is trusted and said nothing.** `overrideAccess: true` widens
+ *   by implication — but only for a caller that has NOT supplied `trusted`.
+ *
+ * Supplying `trusted` declares one fixed audience; that is the only reason to
+ * bound a bypass you already hold. Such a caller must not inherit drafts,
+ * because {@link resolveStatusFilter} short-circuits on an explicit `"all"`
+ * BEFORE it consults the (now narrowed) override — so an inherited `"all"`
+ * would beat the bound rather than be checked against it, and the drafts would
+ * come back for every target including the ones the caller refused to trust.
+ *
+ * Kept here beside the rule it feeds, and pure, because the derivation is made
+ * at several call sites and a copy of it drifts silently: the two would then
+ * disagree about which reads see unpublished rows.
+ */
+export function expansionStatusScope(args: {
+  /** What the caller asked this read to see, if anything. */
+  status?: StatusOption;
+  /** Whether the caller bypassed access checks. */
+  overrideAccess?: boolean;
+  /** Whether the caller bounded that bypass to named collections. */
+  bounded: boolean;
+}): "all" | undefined {
+  if (args.status === "all") return "all";
+  if (args.bounded) return undefined;
+  return args.overrideAccess === true ? "all" : undefined;
+}
