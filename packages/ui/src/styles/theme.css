@@ -180,8 +180,9 @@
   --color-destructive-800: color-mix(in srgb, var(--nx-destructive), black 50%);
   --color-destructive-900: color-mix(in srgb, var(--nx-destructive), black 70%);
   --color-destructive-950: color-mix(in srgb, var(--nx-destructive), black 85%);
-  /* Saturated fill for solid buttons; distinct from the text-tuned base so
-   * white on-color text stays AA in both modes. */
+  /* Saturated fill for solid buttons, kept separate from the text-tuned base
+   * so each can be solved for its own job. The ink that lands on it is
+   * `-foreground`, which is white in light mode and black in dark. */
   --color-destructive-solid: var(--nx-destructive-solid);
   --color-destructive-foreground: var(--nx-destructive-foreground);
 
@@ -727,9 +728,11 @@
    * Each status has two roles kept as separate tokens, the industry-standard
    * split (Radix/Primer): the base token is the readable TEXT color used by
    * `text-destructive` and derived shades, and `-solid` is the saturated FILL
-   * used by buttons under white on-color text. One value cannot serve both in
-   * dark mode (a fill dark enough for white text is too dark to read as text
-   * on the page), so they diverge there. */
+   * used by buttons under the on-color ink. In light mode both roles can be
+   * the same value and the ink is white. In dark mode they cannot: a fill
+   * light enough to read as text on the page is too light for white text, so
+   * success splits the fill and destructive flips its ink to black instead.
+   * The on-color token is what varies, not just the fill. */
   /* Darkened from red-500; renders as #d92c32, ~4.8:1 as text on white. */
   --nx-destructive: oklch(0.5661 0.19 23.03);
   --nx-destructive-solid: oklch(0.5661 0.19 23.03);
@@ -910,14 +913,20 @@
 
   /* State colors - WCAG 2.2 AA Compliant (Dark Mode).
    * The base token is lightened from the fill color so it reads as text on the
-   * dark page at 4.5:1; `-solid` keeps the darker fill so white on-color text
-   * on buttons still clears 4.5:1. Warning is already light enough to read on
-   * dark, so its base is unchanged here. */
+   * dark page at 4.5:1. The two statuses then resolve the on-color problem
+   * differently, because a fill light enough to read as text on a dark page is
+   * too light for white text: destructive keeps ONE value for base and fill
+   * and flips its ink to black (6.90:1), while success keeps a darker separate
+   * fill and keeps its ink white (4.80:1). Warning is already light enough to
+   * read on dark, so its base is unchanged here. */
   /* Lightened red so it reads as text at WCAG 4.5:1 on the dark page and on the
    * lighter popover surface (was 4.17:1 on the page, 4.25:1 on a popover). */
   --nx-destructive: oklch(0.69 0.2 23.91);
-  /* Darker red fill so white on-color button text clears 4.5:1. */
+  /* Same value as the base: the button fill needs no darkening here because
+     its ink is black rather than white. */
   --nx-destructive-solid: oklch(0.69 0.2 23.91);
+  /* Black, not white. The dark-mode fill is light enough that black on-color
+     text reads at 6.90:1 where white would fall below the minimum. */
   --nx-destructive-foreground: oklch(0 0 0);
   /* Lightened green so it reads as text at WCAG 4.5:1 on the dark page and on
    * the lighter popover surface (was 4.17:1 on the page, 4.29:1 on a popover). */

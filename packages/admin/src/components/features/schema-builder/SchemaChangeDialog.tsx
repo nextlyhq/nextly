@@ -385,7 +385,7 @@ export function SchemaChangeDialog({
             }}
             disabled={isApplying || !canApply}
             className={
-              // Solid emphasis fill so white on-color text stays AA in dark mode.
+              // The `-solid` emphasis fill, paired with an on-color ink that flips: `text-destructive-foreground` is white on the light fill (5.00:1) and BLACK on the lighter dark-mode fill (6.90:1). One ink cannot clear 4.5:1 on both, which is why the token flips rather than the fill compensating.
               hasDestructiveChanges
                 ? "bg-destructive-solid text-destructive-foreground hover:bg-destructive-600"
                 : ""

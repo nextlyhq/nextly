@@ -172,8 +172,9 @@ const CODE_TEXT: Pairing[] = [
 ];
 
 // Status colors carry two roles (Radix/Primer split): the base token is the
-// readable TEXT color, and `-solid` is the button fill under white on-color
-// text. Both are asserted so neither role drifts below AA.
+// readable TEXT color, and `-solid` is the button fill under the status's
+// `-foreground` ink -- white in light mode, and black for destructive in dark.
+// Both are asserted so neither role drifts below AA.
 const STATUS_TEXT: Pairing[] = STATUSES.flatMap((s): Pairing[] => [
   {
     fg: `--color-${s}`,
