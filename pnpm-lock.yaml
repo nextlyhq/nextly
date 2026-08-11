@@ -111,6 +111,9 @@ importers:
       lint-staged:
         specifier: ^16.2.6
         version: 16.2.6
+      micromatch:
+        specifier: ^4.0.8
+        version: 4.0.8
       prettier:
         specifier: ^3.6.2
         version: 3.6.2

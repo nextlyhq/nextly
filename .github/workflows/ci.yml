@@ -104,10 +104,10 @@ jobs:
 
       # The published packages version in lockstep, so a changeset that names
       # only some of them still bumps them all — and the ones it left out get a
-      # version with no changelog entry beside it. Reviewers caught that twice in
-      # one afternoon, both times on frontmatter that HAD been generated from the
-      # config, just before a new package joined the group or before the branch
-      # merged the commit that added it.
+      # version with no changelog entry beside it. Generating the frontmatter from
+      # the config is not enough on its own, because the group grows: a list
+      # generated before a package joined it is complete against the config it was
+      # read from and short against the current one.
       #
       # Scoped to the changesets THIS pull request adds or edits. Several hundred
       # are pending on `main`, most written before the group grew; rewriting them

@@ -1,34 +1,35 @@
-// Refuses a changeset that does not cover every package in the lockstep group.
+// Refuses a changeset that does not cover every package in the lockstep group,
+// and a `fixed` group that no longer describes the workspace.
 //
 // The packages version together, so a release advances all of them whatever a
 // single changeset lists. What an incomplete one loses is the CHANGELOG: a
 // package left out of the frontmatter gets a version bump with no entry
 // explaining it, and the note that should have appeared under it is filed only
-// under the packages that were named. The release is still correct; the record
-// of it is not.
+// under the packages that were named. The release is correct; the record of it
+// is not.
 //
-// This existed as a review convention and was caught by a reviewer twice in one
-// afternoon, both times on a changeset that HAD been generated from the config —
-// once written before a new package joined the group, once written before the
-// branch merged the commit that added it. A convention that depends on
-// regenerating at the right moment is one a build should check instead.
+// Generating the frontmatter from `.changeset/config.json` is not by itself
+// enough, because the group grows: a list generated before a package joined it,
+// or before the branch merged the commit that added it, is complete against the
+// config it was read from and short against the current one. Only a check
+// against the config as it stands at build time closes that.
+//
+// The GROUP is checked too, and against the workspace rather than against
+// itself. A checker reading the config as the source of truth cannot see a
+// package added under `packages/` and never added to `fixed`, which is the drift
+// that makes every changeset written afterwards wrong while each of them passes.
 //
 // Scoped to the changesets a branch ADDS or EDITS, never the backlog. Several
 // hundred are pending on `main`, most written before the group grew, and
 // rewriting them to satisfy a rule they predate would put churn in front of
 // every reader of the eventual changelog for no gain.
-//
-// The GROUP is checked too, and against the workspace rather than against
-// itself. A checker that reads `.changeset/config.json` as the source of truth
-// cannot see a package added under `packages/` and never added to `fixed`, which
-// is the drift that makes every changeset written afterwards wrong while each of
-// them passes.
 
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import parseChangeset from "@changesets/parse";
+import micromatch from "micromatch";
 
 import { getWorkspacePackageNames } from "./lib.mjs";
 
@@ -44,62 +45,87 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const ALPHA_BUMP = "patch";
 
 /**
- * Whether `fixed` has the SHAPE Changesets requires, as a list of sentences.
+ * Whether `fixed` has the shape THIS repository requires, as a list of sentences.
  *
- * Flattening answers the same set for `[["a","b"]]` and for `["a","b"]`, so a
- * config hand-edited into the flat form produces exactly the expected names here
- * and is refused by the release tooling. Same for a package repeated across two
- * groups: flattening hides it, `@changesets/config` rejects it. Either way the
- * malformed config merges and surfaces only when a release is attempted.
+ * Changesets allows several disjoint groups; this repository has exactly one, and
+ * the difference is not cosmetic. Flattening answers the same set for one group
+ * and for two, so a config split into two groups reads as complete here while the
+ * packages no longer version together — the next release can advance one group
+ * and leave the other behind, which is precisely the outcome every check below
+ * exists to prevent.
+ *
+ * The other refusals are shape: a flat `["a", "b"]` flattens identically to
+ * `[["a", "b"]]` and is refused by the release tooling, and an entry that is not
+ * a non-empty string names nothing.
  *
  * Checked here rather than by handing the file to `@changesets/config`, whose
  * `parse` needs a resolved workspace from `@manypkg/get-packages` — a second
- * dependency, for a rule that is three sentences long and fully stated by them.
- * That is the opposite trade to the YAML reader, and for the opposite reason:
- * this rule cannot drift, and a frontmatter grammar can.
+ * dependency, for a rule that is three sentences long. That is the opposite trade
+ * to the YAML reader, and for the opposite reason: this rule cannot drift, and a
+ * frontmatter grammar can.
  */
 export function fixedGroupShape(config) {
   const groups = config.fixed;
   if (groups === undefined) return [];
   if (!Array.isArray(groups)) {
-    return ['.changeset/config.json: `fixed` must be an array of arrays.'];
+    return ["`.changeset/config.json`: `fixed` must be an array of arrays."];
   }
-  const problems = [];
   const flat = groups.filter(group => !Array.isArray(group));
   if (flat.length > 0) {
-    problems.push(
-      '.changeset/config.json: `fixed` must be an array of ARRAYS — a group per ' +
-        `line, not a flat list of names. Found ${JSON.stringify(flat[0])} where a group was expected.`
-    );
-    return problems;
+    return [
+      ".changeset/config.json: `fixed` must be an array of ARRAYS — a group per " +
+        `line, not a flat list of names. Found ${JSON.stringify(flat[0])} where a group was expected.`,
+    ];
   }
-  const seen = new Set();
-  const repeated = new Set();
+  if (groups.length > 1) {
+    return [
+      `.changeset/config.json: \`fixed\` declares ${groups.length} groups. This ` +
+        `repository versions every package as ONE group; split into two, a release ` +
+        `can advance one and leave the other behind while every changeset still passes.`,
+    ];
+  }
+  const problems = [];
   for (const group of groups) {
     for (const name of group) {
       if (typeof name !== "string" || name === "") {
         problems.push(
           `.changeset/config.json: \`fixed\` holds ${JSON.stringify(name)}, which is not a package name.`
         );
-        continue;
       }
-      if (seen.has(name)) repeated.add(name);
-      seen.add(name);
     }
-  }
-  if (repeated.size > 0) {
-    problems.push(
-      `.changeset/config.json: \`fixed\` lists ${[...repeated].join(", ")} in more than one ` +
-        `group. The groups must be disjoint; a package cannot version in lockstep with two sets.`
-    );
   }
   return problems;
 }
 
-/** Every package that must appear in a changeset, read from the Changesets config. */
-export function lockstepPackages(configText) {
-  const config = JSON.parse(configText);
-  return (config.fixed ?? []).flat();
+/**
+ * Every package that must appear in a changeset: the `fixed` group with any glob
+ * expanded against the workspace.
+ *
+ * `fixed` accepts patterns as well as names — `@nextlyhq/*` is a valid way to
+ * write this group — and `@changesets/config` expands each entry with
+ * `micromatch.isMatch(packageName, entry)` before it validates anything. A
+ * checker comparing the raw entries would report every matching package as
+ * missing and the pattern itself as unknown, which on a config written that way
+ * means rejecting every pull request.
+ *
+ * The same matcher the release tooling uses, for the same reason the frontmatter
+ * goes through the same parser: a second implementation of someone else's
+ * grammar is a second answer.
+ */
+export function lockstepPackages(configText, workspaceNames) {
+  const entries = (JSON.parse(configText).fixed ?? []).flat();
+  const expanded = new Set();
+  for (const entry of entries) {
+    if (typeof entry !== "string") continue;
+    const matched = workspaceNames.filter(name =>
+      micromatch.isMatch(name, entry)
+    );
+    // An entry matching nothing is kept as written, so the group check reports it
+    // by the name an author would search for rather than silently dropping it.
+    if (matched.length === 0) expanded.add(entry);
+    for (const name of matched) expanded.add(name);
+  }
+  return [...expanded];
 }
 
 /**
@@ -146,15 +172,14 @@ export function groupMatchesWorkspace(packages, workspaceNames) {
  * The `package: bump` pairs a changeset declares, or `undefined` when Changesets
  * itself would refuse the file.
  *
- * Handed to `@changesets/parse` rather than read here. A hand-rolled reader was
- * tried and corrected twice — once for being STRICTER than Changesets (single
- * quotes, quoted bumps and comments are valid YAML it was rejecting, which
- * blocks a compliant pull request) and once for being LOOSER (`---junk` as a
- * closing delimiter, and duplicate keys, which it accepted and the release
- * tooling does not). A third such correction would have been the third instance
- * of one shape, so the reading moved to the library that decides the real answer
- * instead. Anything this accepts, the release accepts, by construction rather
- * than by agreement.
+ * Handed to `@changesets/parse` rather than read here, so that anything this
+ * accepts the release accepts, by construction rather than by agreement. A
+ * frontmatter grammar has two ways to be wrong and both matter: reading it more
+ * STRICTLY than Changesets blocks a compliant pull request over a spelling the
+ * release tooling takes (single quotes, quoted bumps, comments), and reading it
+ * more LOOSELY lets malformed metadata merge and fail the CI-only release
+ * afterwards (`---junk` as a closing delimiter, duplicate keys, inconsistent
+ * indentation). Neither margin exists when the same parser decides both.
  *
  * `@changesets/parse` was already in the tree as a transitive dependency of
  * `@changesets/cli`; declaring it changes what resolves, not what is installed.
@@ -182,7 +207,7 @@ export function declaredReleases(fileText) {
  *
  * Returns every problem rather than the first, so one push answers all of them.
  * A guard that reports one missing package at a time turns a stale frontmatter
- * into as many CI rounds as it has gaps.
+ * into as many build attempts as it has gaps.
  */
 export function problemsWith(path, fileText, packages) {
   const releases = declaredReleases(fileText);
@@ -238,7 +263,7 @@ export function problemsWith(path, fileText, packages) {
  * group makes every later changeset wrong while each of them passes.
  */
 export function checkChangesets(paths, readFile, configText, workspaceNames) {
-  const packages = lockstepPackages(configText);
+  const packages = lockstepPackages(configText, workspaceNames);
   if (packages.length === 0) {
     // A config with no fixed group would make every check below vacuous, and a
     // guard that passes because it found nothing to check is worse than none.

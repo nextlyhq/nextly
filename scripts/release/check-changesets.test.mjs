@@ -14,7 +14,8 @@ import {
 const CONFIG = JSON.stringify({
   fixed: [["nextly", "@nextlyhq/ui", "@nextlyhq/builder"]],
 });
-const PACKAGES = lockstepPackages(CONFIG);
+const WORKSPACE = ["nextly", "@nextlyhq/ui", "@nextlyhq/builder"];
+const PACKAGES = lockstepPackages(CONFIG, WORKSPACE);
 
 /** A changeset naming the given `package: bump` pairs. */
 function changeset(pairs, body = "Something changed.") {
@@ -257,8 +258,8 @@ describe("a file this cannot read", () => {
 });
 
 describe("the shape of the fixed group itself", () => {
-  it("accepts the array of arrays Changesets requires", () => {
-    expect(fixedGroupShape({ fixed: [["a", "b"], ["c"]] })).toEqual([]);
+  it("accepts the one array of names this repository uses", () => {
+    expect(fixedGroupShape({ fixed: [["a", "b", "c"]] })).toEqual([]);
     // No `fixed` at all is not a shape error; the caller reports it separately.
     expect(fixedGroupShape({})).toEqual([]);
   });
@@ -271,11 +272,13 @@ describe("the shape of the fixed group itself", () => {
     expect(problems[0]).toContain("array of ARRAYS");
   });
 
-  it("refuses a package repeated across groups", () => {
-    const problems = fixedGroupShape({ fixed: [["a", "b"], ["b"]] });
+  it("refuses more than one group", () => {
+    // Changesets allows several disjoint groups; this repository has exactly one.
+    // Flattening answers the same set either way, so a split config reads as
+    // complete while a release can advance one group and leave the other behind.
+    const problems = fixedGroupShape({ fixed: [["a", "b"], ["c"]] });
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain("more than one");
-    expect(problems[0]).toContain("b");
+    expect(problems[0]).toContain("2 groups");
   });
 
   it("refuses a group holding something that is not a name", () => {
@@ -296,6 +299,31 @@ describe("the shape of the fixed group itself", () => {
     );
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain("array of ARRAYS");
+  });
+});
+
+describe("a group written with globs", () => {
+  it("expands a pattern against the workspace", () => {
+    // `fixed` accepts patterns, and `@changesets/config` expands each entry with
+    // `micromatch.isMatch` before validating. Comparing the raw entries would
+    // report every matching package as missing and the pattern as unknown, which
+    // on a config written this way rejects every pull request.
+    const globbed = JSON.stringify({ fixed: [["nextly", "@nextlyhq/*"]] });
+    expect(lockstepPackages(globbed, WORKSPACE).sort()).toEqual(
+      [...WORKSPACE].sort()
+    );
+  });
+
+  it("reports a pattern that matches nothing by the name it was written as", () => {
+    const globbed = JSON.stringify({ fixed: [["@nowhere/*"]] });
+    expect(lockstepPackages(globbed, WORKSPACE)).toEqual(["@nowhere/*"]);
+  });
+
+  it("does not report the workspace as missing when a glob covers it", () => {
+    const globbed = JSON.stringify({ fixed: [["nextly", "@nextlyhq/*"]] });
+    expect(
+      checkChangesets([], () => "", globbed, WORKSPACE)
+    ).toEqual([]);
   });
 });
 
