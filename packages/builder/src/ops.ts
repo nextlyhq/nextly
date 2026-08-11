@@ -146,27 +146,6 @@ function accepted(
 }
 
 /**
- * Refuses a structural edit to a node its author locked.
- *
- * The flag is deliberately invisible to the engine — `BlockNode.locked`
- * documents itself as "an author-facing policy flag, not a data-layer
- * guarantee", and the pure tree primitives do not read it — which makes this
- * module the boundary that has to enforce it. Nothing below here will.
- *
- * Structural edits only. A locked node may still be restyled and re-configured;
- * the lock is against moving and deleting, which is what an author sets it to
- * prevent.
- */
-function assertUnlocked(node: BlockNode, verb: string): void {
-  if (node.locked === true) {
-    throw new OpError(
-      `${verb}: node "${node.id}" is locked. An author locked it against being ` +
-        `moved or deleted; unlock it before editing its place in the tree.`
-    );
-  }
-}
-
-/**
  * Refuses an op whose field names or values cannot be honoured.
  *
  * The document is validated all through this module — does the node exist, did
@@ -232,6 +211,38 @@ function lockedWithin(node: BlockNode): string | undefined {
     if (found === undefined && candidate.locked === true) found = candidate.id;
   });
   return found;
+}
+
+/**
+ * Refuses a position whose fields cannot mean what they claim.
+ *
+ * A `TreePosition` from the compiler is well formed by construction. One from
+ * `JSON.parse` is not, and the engine's primitives do not re-check it: `{}`
+ * reaches `splice` with a `NaN` index and lands the node at the front, and a
+ * `null` slot creates a child region literally named `"null"`. Both produce a
+ * NEW forest, so the acceptance check reads them as edits that worked — the
+ * document is quietly reordered or grows a slot no block declared.
+ */
+function assertPosition(at: TreePosition, verb: string): void {
+  if (!Number.isInteger(at.index) || at.index < 0) {
+    throw new OpError(
+      `${verb}: an index of ${JSON.stringify(at.index)} names no position. ` +
+        `A missing or non-numeric index reaches the splice as NaN and puts the ` +
+        `node at the front of its parent, which reads as a deliberate move.`
+    );
+  }
+  if (at.parentId !== undefined && typeof at.parentId !== "string") {
+    throw new OpError(
+      `${verb}: a parent id of ${JSON.stringify(at.parentId)} addresses nothing.`
+    );
+  }
+  if (at.parentId !== undefined && typeof at.slot !== "string") {
+    throw new OpError(
+      `${verb}: a position inside "${at.parentId}" must name its slot as a ` +
+        `string; ${JSON.stringify(at.slot)} would create a child region no ` +
+        `block declared.`
+    );
+  }
 }
 
 /** Whether two locations name the same parent, slot and index. */
@@ -316,6 +327,7 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
       // an undo", and a flag is a claim any caller can make: an op arrives from
       // storage, so nothing distinguishes the store's own inverse from a
       // forged one. Refusing at the door needs no such distinction.
+      assertPosition(op.at, "insert");
       const lockedId = lockedWithin(op.node);
       if (lockedId !== undefined) {
         throw new OpError(
@@ -374,7 +386,16 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
       if (node === undefined || location === undefined) {
         throw new OpError(`move: no node with id "${op.id}" in the document.`);
       }
-      assertUnlocked(node, "move");
+      assertPosition(op.to, "move");
+      const lockedMoving = lockedWithin(node);
+      if (lockedMoving !== undefined) {
+        throw new OpError(
+          `move: "${lockedMoving}" is locked and sits inside what this would ` +
+            `relocate. A lock is easier to rely on when it means one thing — ` +
+            `this node does not move or disappear until you unlock it — than ` +
+            `when it holds for the node and not for the section around it.`
+        );
+      }
       const moved = accepted(
         nodes,
         moveNode(nodes, op.id, op.to),
@@ -429,10 +450,16 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
       // a history entry whose undo has no visible effect, which is the same
       // thing the move branch refuses one case earlier.
       const held = node as unknown as Record<string, unknown>;
+      // Compared by serialized content, not by reference. A persisted patch is
+      // freshly parsed, so `{ props: {} }` is never the same object as the
+      // node's `{}` and a reference test calls every replayed op a change —
+      // which is the invisible history entry this guard exists to refuse.
+      const same = (a: unknown, b: unknown): boolean =>
+        a === b || JSON.stringify(a) === JSON.stringify(b);
       const changesSomething = touched.some(key =>
         (op.unset ?? []).includes(key)
           ? held[key] !== undefined
-          : held[key] !== (op.patch as Record<string, unknown>)[key]
+          : !same(held[key], (op.patch as Record<string, unknown>)[key])
       );
       if (!changesSomething) {
         throw new OpError(

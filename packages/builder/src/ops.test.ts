@@ -393,6 +393,39 @@ describe("an op that came back from storage", () => {
     ).toThrow(OpError);
   });
 
+  it.each<[string, string]>([
+    [
+      "a position with no index at all",
+      '{"kind":"insert","node":{"id":"x","type":"core/box","version":1,"props":{}},"at":{}}',
+    ],
+    ["a non-numeric index", '{"kind":"move","id":"b","to":{"index":"first"}}'],
+    [
+      "a slot inside a parent that is not a string",
+      '{"kind":"move","id":"b","to":{"parentId":"outer","slot":null,"index":0}}',
+    ],
+  ])(
+    "refuses a position that cannot mean what it claims: %s",
+    (_label, text) => {
+      // The engine's primitives do not re-check a position, and each of these
+      // still produces a NEW forest — so the acceptance check reads them as edits
+      // that worked. `{}` splices at NaN and lands the node at the front; a null
+      // slot creates a child region literally named "null".
+      expect(() => applyOp(forest(), persisted(text))).toThrow(OpError);
+    }
+  );
+
+  it("refuses an update whose value only LOOKS new", () => {
+    // A persisted patch is freshly parsed, so `{ props: {} }` is never the same
+    // object as the node's `{}`. A reference test calls every replayed op a
+    // change and the no-op guard stops guarding anything.
+    expect(() =>
+      applyOp(
+        forest(),
+        persisted('{"kind":"update","id":"a","patch":{"props":{}}}')
+      )
+    ).toThrow(OpError);
+  });
+
   it("still accepts an ordinary persisted update", () => {
     // The control. Every refusal above is narrow, and a guard that rejected
     // real ops too would pass all of them while breaking the product.
@@ -457,6 +490,20 @@ describe("a node its author locked", () => {
         node: node("wrapper", { main: [{ ...node("inner"), locked: true }] }),
         at: { index: 0 },
       })
+    ).toThrow(OpError);
+  });
+
+  it("cannot be moved by moving the container it sits in", () => {
+    // The promise is easier to rely on when it means one thing: this node does
+    // not move or disappear until you unlock it. Holding for the node and not
+    // for the section around it is the version an author cannot predict.
+    const nested: BlockNode[] = [
+      node("outer", { main: [{ ...node("b"), locked: true }] }),
+      node("sibling"),
+    ];
+
+    expect(() =>
+      applyOp(nested, { kind: "move", id: "outer", to: { index: 1 } })
     ).toThrow(OpError);
   });
 
