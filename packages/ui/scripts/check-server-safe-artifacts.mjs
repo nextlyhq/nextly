@@ -36,6 +36,12 @@
  * running this gate under the oldest supported Node rather than approximating it here; see
  * `tasks/left-tasks/205-artifact-gate-on-the-floor-node.md`.
  *
+ * It answers IMPORT safety, not call safety. `export const cn = () => document.body` imports
+ * cleanly and throws when a Server Component calls it. Catching that means analysing browser
+ * globals in deferred code, which is the unbounded source-level problem this file exists to avoid
+ * having to solve — recorded under "scope" in
+ * `tasks/left-tasks/204-server-safe-source-scan-deferred-findings.md` rather than attempted here.
+ *
  * The other residual, stated rather than implied: an ALLOWED package could itself grow a React
  * dependency, and importing React under Node does not throw, so neither question would notice.
  * The allow-list is two pure string utilities and every addition to it is a deliberate decision,
@@ -58,6 +64,12 @@ import {
 } from "./published-entries.mjs";
 
 const DIST = join(pathDirname(fileURLToPath(import.meta.url)), "..", "dist");
+
+/** Cleared only by reaching the end of the run, so an artifact ending the process is not a pass. */
+let completed = false;
+
+/** The artifact being evaluated, for the message if one of them ends the process. */
+let importing = null;
 
 /**
  * Every module specifier the built artifact still names.
@@ -108,7 +120,16 @@ export function specifiersIn(source, fileName) {
       const callee = node.expression;
       const isDynamicImport = callee.kind === ts.SyntaxKind.ImportKeyword;
       const isRequire = ts.isIdentifier(callee) && callee.text === "require";
-      if ((isDynamicImport || isRequire) && node.arguments.length > 0) {
+      // `createRequire(import.meta.url)("react")` loads a module while naming only `node:module`
+      // as an import. The loader is the RESULT of a call, so the callee is not the `require`
+      // identifier and the direct check never sees it. This package uses `createRequire` itself,
+      // precisely because a bundler leaves it opaque.
+      const isCreatedRequire =
+        ts.isCallExpression(callee) && namesCreateRequire(callee.expression);
+      if (
+        (isDynamicImport || isRequire || isCreatedRequire) &&
+        node.arguments.length > 0
+      ) {
         record(node.arguments[0]);
       }
     }
@@ -117,6 +138,19 @@ export function specifiersIn(source, fileName) {
 
   visit(tree);
   return found;
+}
+
+/**
+ * Whether an expression names `createRequire`, in either the imported or the namespaced spelling.
+ *
+ * @param {ts.Node} node
+ * @returns {boolean}
+ */
+function namesCreateRequire(node) {
+  if (ts.isIdentifier(node)) return node.text === "createRequire";
+  return (
+    ts.isPropertyAccessExpression(node) && node.name.text === "createRequire"
+  );
 }
 
 /**
@@ -345,7 +379,8 @@ async function main() {
       `Server-safe artifact check cannot run: this environment defines ` +
         `${contaminated.join(", ")}, so importing an artifact proves nothing about a server.`
     );
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   // Down to the oldest supported Node BEFORE anything is imported, so the evaluation answers for
@@ -357,7 +392,8 @@ async function main() {
         `from this environment, so an artifact could evaluate against a capability the oldest ` +
         `supported Node does not have.`
     );
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   const require = createRequire(import.meta.url);
@@ -418,11 +454,13 @@ async function main() {
     // CJS artifacts go through `require` because `import()` of a `.cjs` file gives back its
     // exports without running it as CommonJS.
     try {
+      importing = file;
       if (file.endsWith(".cjs")) {
         require(full);
       } else {
         await import(pathToFileURL(full).href);
       }
+      importing = null;
     } catch (error) {
       problems.push(
         `${file} threw while being imported under Node: ${error instanceof Error ? error.message : String(error)}. ` +
@@ -442,7 +480,8 @@ async function main() {
   if (problems.length > 0) {
     console.error("Server-safe artifact check failed:");
     for (const problem of problems) console.error(`  - ${problem}`);
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   console.log(
@@ -456,5 +495,21 @@ if (
   process.argv[1] &&
   pathToFileURL(process.argv[1]).href === import.meta.url
 ) {
+  // An artifact is EVALUATED here, so it can call `process.exit` and take this process with it —
+  // before any verdict is printed, and with whatever status it chose, which the shell would read
+  // as a passing gate. Completion is asserted rather than assumed: reaching the end of `main` is
+  // what clears this, and anything else exits non-zero naming the artifact being imported.
+  process.on("exit", () => {
+    if (completed) return;
+    console.error(
+      `Server-safe artifact check did not finish${
+        importing === null ? "" : ` — it was importing ${importing}`
+      }. An artifact that ends the process during module initialization would end a consumer's server the same way.`
+    );
+    if (process.exitCode === 0 || process.exitCode === undefined) {
+      process.exitCode = 1;
+    }
+  });
   await main();
+  completed = true;
 }

@@ -41,6 +41,22 @@ describe("reading an artifact's specifiers", () => {
     expect(read("const lazy = import(`react`);")).toEqual(["react"]);
   });
 
+  it("sees a module loaded through createRequire", () => {
+    // The loader is the RESULT of a call, so the callee is not the `require` identifier and the
+    // direct check never sees it. This package uses `createRequire` itself, precisely because a
+    // bundler leaves it opaque — which is what makes it a way around the allow-list.
+    expect(
+      read(`
+        import { createRequire } from "node:module";
+        export const react = createRequire(import.meta.url)("react");
+      `)
+    ).toEqual(["node:module", "react"]);
+    // The namespaced spelling too.
+    expect(read(`const r = mod.createRequire(u)("react-dom");`)).toEqual([
+      "react-dom",
+    ]);
+  });
+
   it("refuses a specifier it cannot read, rather than passing it", () => {
     // A bundler folds `"re" + "act"` to React. This does not evaluate expressions, so the honest
     // outcome is a name no allow-list can hold — which fails — not a silent skip.
