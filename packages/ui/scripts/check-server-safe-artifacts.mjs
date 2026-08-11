@@ -143,6 +143,34 @@ export function specifiersIn(source, fileName) {
   };
   collectFactories(tree);
 
+  /**
+   * Whether an expression reads `<object>.<member>` off a binding the artifact does NOT declare,
+   * in either spelling.
+   *
+   * `a.b` and `a["b"]` are the same read, and a rule written for one of them is a rule the other
+   * walks around.
+   */
+  const namesAmbientMember = (node, object, member) => {
+    if (
+      !ts.isPropertyAccessExpression(node) &&
+      !ts.isElementAccessExpression(node)
+    ) {
+      return false;
+    }
+    const named = ts.isPropertyAccessExpression(node)
+      ? node.name.text === member
+      : node.argumentExpression !== undefined &&
+        (ts.isStringLiteral(node.argumentExpression) ||
+          ts.isNoSubstitutionTemplateLiteral(node.argumentExpression)) &&
+        node.argumentExpression.text === member;
+    return (
+      named &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === object &&
+      !declaredNames.has(object)
+    );
+  };
+
   /** Whether an expression names the require factory, by local name or through a namespace. */
   const namesFactory = node => {
     if (ts.isIdentifier(node)) return factories.has(node.text);
@@ -222,12 +250,10 @@ export function specifiersIn(source, fileName) {
       // `module.require("react")` is the CommonJS loader reached through the module object, which
       // survives a format guard into the CJS artifact and is opaque to the bundler, so it appears
       // in neither the specifier list nor the metafile. `module` must be the ambient one.
-      const isModuleRequire =
-        ts.isPropertyAccessExpression(callee) &&
-        callee.name.text === "require" &&
-        ts.isIdentifier(callee.expression) &&
-        callee.expression.text === "module" &&
-        !declaredNames.has("module");
+      //
+      // Both spellings go through one predicate. Handling the dot form and leaving the bracket
+      // form is how the two drift apart, and `module["require"]` is the same call.
+      const isModuleRequire = namesAmbientMember(callee, "module", "require");
       // `createRequire(import.meta.url)("react")` loads a module while naming only `node:module`
       // as an import. The loader is the RESULT of a call, so the callee is not the `require`
       // identifier and the direct check never sees it. This package uses `createRequire` itself,

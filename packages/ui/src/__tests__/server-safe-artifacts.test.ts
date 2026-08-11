@@ -110,11 +110,17 @@ describe("reading an artifact's specifiers", () => {
         `export const react = typeof module === "undefined" ? null : module.require("react");`
       )
     ).toEqual(["react"]);
-    // The control: a module binding its own `module` is not reaching the ambient loader.
+    // The computed spelling is the same call, so one rule covers both.
+    expect(read(`export const react = module["require"]("react");`)).toEqual([
+      "react",
+    ]);
+    // The control, in both spellings: a module binding its own `module` is not reaching the
+    // ambient loader.
     expect(
       read(`
         const module = { require: (n) => n };
         export const x = module.require("react");
+        export const y = module["require"]("react-dom");
       `)
     ).toEqual([]);
   });
