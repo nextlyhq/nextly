@@ -1500,6 +1500,66 @@ describe("a blankAs the descriptor spelled wrong", () => {
   });
 });
 
+describe("options metadata on a field that is not a select", () => {
+  const base = {
+    type: "fixture",
+    label: "Fixture",
+    parseConfig: (input: unknown) => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  };
+
+  function withField(field: unknown) {
+    return () =>
+      defineEmailProvider({
+        ...base,
+        configFields: [field],
+      } as unknown as Parameters<typeof defineEmailProvider>[0]);
+  }
+
+  it("is refused rather than published", () => {
+    // `toDescriptor` copies `options` off any field that carries one, so a
+    // text field declaring `options: null` registers happily and then throws a
+    // raw TypeError out of the catalog endpoint — taking every
+    // descriptor-driven form down, not just this provider's, because one
+    // response carries the whole catalog.
+    expect(
+      withField({ name: "token", label: "Token", kind: "text", options: null })
+    ).toThrow(/not an array/);
+
+    expect(
+      withField({
+        name: "token",
+        label: "Token",
+        kind: "text",
+        options: [{ value: 1, label: "One" }],
+      })
+    ).toThrow(/value: string; label: string/);
+  });
+
+  it("accepts a non-select field that declares none", () => {
+    // The control. The check must not start demanding options from every
+    // field — only a select needs choices, and almost no field is a select.
+    expect(
+      withField({ name: "token", label: "Token", kind: "text" })
+    ).not.toThrow();
+  });
+
+  it("still lets a select declare well-formed options", () => {
+    // The other control: moving the shape check out of the select path must
+    // not have taken the select's own validation with it.
+    expect(
+      withField({
+        name: "region",
+        label: "Region",
+        kind: "select",
+        options: [{ value: "eu", label: "Europe" }],
+      })
+    ).not.toThrow();
+  });
+});
+
 describe("a capability whose value is not a boolean", () => {
   const base = {
     type: "fixture",

@@ -274,7 +274,25 @@ function ProviderConfigField({
                     );
 
                   case "select": {
-                    const clearValue = clearSelectionValue(field.options);
+                    // Held as the VALUE rather than a flag, so the narrowing
+                    // the guard performs survives to both uses below.
+                    const legacyValue = isLegacyChoice(
+                      controller.value,
+                      field.options
+                    )
+                      ? controller.value
+                      : undefined;
+                    // Derived against the legacy choice as well as the
+                    // descriptor's own. A stored value that happens to BE the
+                    // sentinel is rendered as an item beside "None" carrying
+                    // the same value, and picking it is then read as clearing
+                    // the field — so the one option the operator cannot choose
+                    // is the value they already have.
+                    const clearValue = clearSelectionValue(
+                      legacyValue !== undefined
+                        ? [...(field.options ?? []), { value: legacyValue }]
+                        : field.options
+                    );
                     const optional = field.required !== true;
                     return (
                       <Select
@@ -317,9 +335,9 @@ function ProviderConfigField({
                               the provider without replacing it. Labelled as
                               itself, since the descriptor no longer has a name
                               for it. */}
-                          {isLegacyChoice(controller.value, field.options) && (
-                            <SelectItem value={String(controller.value)}>
-                              {String(controller.value)}
+                          {legacyValue !== undefined && (
+                            <SelectItem value={legacyValue}>
+                              {legacyValue}
                             </SelectItem>
                           )}
                         </SelectContent>

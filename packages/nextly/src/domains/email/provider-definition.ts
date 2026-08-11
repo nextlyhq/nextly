@@ -675,29 +675,36 @@ function assertNoOverlappingPaths(
  * would otherwise need the same two workarounds and a form is not the place to
  * discover that a provider is undeclarable.
  */
-function assertSelectIsChoosable(
+/**
+ * Refuse `options` metadata nothing can publish, whatever KIND declared it.
+ *
+ * Checked for every kind rather than for selects alone, because `toDescriptor`
+ * copies `options` off any field that carries one: a text field declaring
+ * `options: null` registers happily and then throws a raw `TypeError` out of
+ * the catalog endpoint. That takes every descriptor-driven form down, not just
+ * this provider's, since one response carries the whole catalog.
+ *
+ * `configFields` is a structural type, so a JavaScript plugin or a hand-built
+ * provider reaches here with whatever it wrote.
+ */
+function assertOptionsArePublishable(
   type: string,
   field: EmailProviderConfigField
 ): void {
-  if (field.kind !== "select") return;
+  if (field.options === undefined) return;
 
-  // Shape first, because everything below reads it. `configFields` is a
-  // structural type, so a JavaScript plugin or a hand-built provider reaches
-  // here with whatever it wrote: an object crashes registration on
-  // `options.some is not a function`, and `{ value: 1 }` passes silently and
-  // then cannot be selected -- the control renders strings and the generated
-  // schema validates strings, so the stored number matches no option.
-  if (field.options !== undefined && !Array.isArray(field.options)) {
+  if (!Array.isArray(field.options)) {
     throw new NextlyError({
       code: "BUSINESS_RULE_VIOLATION",
-      publicMessage: `Email provider "${type}" gives the select field "${field.name}" an \`options\` that is not an array.`,
-      logContext: { type, field: field.name },
+      publicMessage: `Email provider "${type}" gives the field "${field.name}" an \`options\` that is not an array.`,
+      logContext: { type, field: field.name, kind: field.kind },
     });
   }
 
-  const options = field.options ?? [];
-
-  const malformed = options.findIndex(
+  // `{ value: 1 }` would pass a looser check and then be unselectable -- the
+  // control renders strings and the generated schema validates strings, so a
+  // stored number matches no option.
+  const malformed = field.options.findIndex(
     option =>
       option === null ||
       typeof option !== "object" ||
@@ -707,10 +714,21 @@ function assertSelectIsChoosable(
   if (malformed !== -1) {
     throw new NextlyError({
       code: "BUSINESS_RULE_VIOLATION",
-      publicMessage: `Email provider "${type}" gives the select field "${field.name}" an option at index ${malformed} that is not \`{ value: string; label: string }\`. A non-string value cannot be selected: the control and the generated schema both work in strings.`,
+      publicMessage: `Email provider "${type}" gives the field "${field.name}" an option at index ${malformed} that is not \`{ value: string; label: string }\`. A non-string value cannot be selected: the control and the generated schema both work in strings.`,
       logContext: { type, field: field.name, index: malformed },
     });
   }
+}
+
+function assertSelectIsChoosable(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  if (field.kind !== "select") return;
+
+  // Shape is already settled by `assertOptionsArePublishable`, which runs for
+  // every kind; what follows is what a SELECT additionally needs to be usable.
+  const options = field.options ?? [];
 
   if (options.length === 0) {
     throw new NextlyError({
@@ -1039,6 +1057,7 @@ export function assertConfigFieldsAreUsable(
     assertDefaultSatisfiesConstraints(type, field);
     assertDeclarationsCanBeHonoured(type, field);
     assertOptionalBooleanHasDefault(type, field);
+    assertOptionsArePublishable(type, field);
     assertSelectIsChoosable(type, field);
     assertNumericBoundsAreSatisfiable(type, field);
   }

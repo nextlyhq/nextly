@@ -53,12 +53,6 @@ configuration change is recorded as the single field name `configuration`
 rather than by its inner paths. An update that moved nothing writes no entry
 at all.
 
-Promoting a provider to default is now one transaction, and the promotion is
-written before the demotion inside it. Previously the demotion committed first
-and separately, so a promotion that matched nothing — a row deleted between the
-read and the write, an insert the database refused — left the installation with
-no default provider at all and nothing in the trail to say why.
-
 The provider screens also tell a catalog that could not be loaded apart from
 one that merely could not be refreshed. A failed refresh keeps the descriptors
 already fetched, so the type filter, the row labels and the form all still work
@@ -66,10 +60,14 @@ from them; the pages now say so instead of reporting the catalog unavailable,
 and the edit page's Update button follows the form into read-only when the
 cached catalog no longer lists the stored type.
 
-The demotion of the previous default runs before the write that promotes, not
-after. PostgreSQL carries a partial unique index over `is_default = true` and
-checks it as each statement runs, so a row taking the default while the
-incumbent still holds it is rejected outright — which stopped every path that
-promotes a provider from working on that dialect. The promotion target is
-checked inside the transaction first, so a demotion is never spent on a
-promotion that then matches nothing.
+Promoting a provider to default is one transaction. The demotion of the previous
+default and the write that promotes previously committed separately, so a
+promotion that matched nothing — a row deleted between the read and the write, an
+insert the database refused — left the installation with no default provider at
+all and nothing in the trail to say why.
+
+Inside that transaction the demotion runs first. PostgreSQL carries a partial
+unique index over `is_default = true` and checks it as each statement runs, so a
+row taking the default while the incumbent still holds it is rejected outright.
+The promotion target is checked before either statement, so a demotion is never
+spent on a promotion that then matches nothing.
