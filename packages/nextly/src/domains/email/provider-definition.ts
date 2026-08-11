@@ -234,7 +234,23 @@ function hasUndeclaredLeaf(
 /** What containment knows about a provider's declared credentials. */
 interface DeclaredSecretValues {
   comparable: string[];
+  /** Anything at all that makes an identifier from this provider untrustworthy. */
   hasUnmatchable: boolean;
+  /**
+   * The part of that caused by a VALUE this configuration actually holds and
+   * which cannot serve as a needle: a boolean credential, or a scalar short
+   * enough that comparing against it would delete every legitimate id.
+   *
+   * Separated from the rest because the two travel differently between the
+   * stored configuration and the parsed one. A missing key or an undeclared
+   * leaf describes the SHAPE of a configuration, and a parser is entitled to
+   * change that -- filling a default, deriving a working field -- so reading
+   * it from the parsed form would withhold every id from every provider that
+   * has a default. A value too short or too ambiguous to compare is not about
+   * shape: whichever side holds it, something the adapter can interpolate
+   * cannot be recognised on the way out.
+   */
+  hasUncomparableValue: boolean;
 }
 
 function declaredSecretValues(
@@ -242,7 +258,11 @@ function declaredSecretValues(
   config: unknown
 ): DeclaredSecretValues {
   if (config === null || typeof config !== "object") {
-    return { comparable: [], hasUnmatchable: false };
+    return {
+      comparable: [],
+      hasUnmatchable: false,
+      hasUncomparableValue: false,
+    };
   }
 
   // No metadata and a configuration to protect: nothing here can say which
@@ -251,12 +271,17 @@ function declaredSecretValues(
   if (fields.length === 0) {
     return {
       comparable: [],
+      // Shape, not value: nothing here names a credential, so every id from
+      // this provider is untrustworthy — but a parser that adds keys to a
+      // configuration nobody described has not made it any worse.
       hasUnmatchable: Object.keys(config).length > 0,
+      hasUncomparableValue: false,
     };
   }
 
   const comparable: string[] = [];
   let hasUnmatchable = false;
+  let hasUncomparableValue = false;
 
   // A configuration leaf no field DECLARES is treated as secret by
   // `maskConfiguration`, on the reasoning that absence of information has to
@@ -292,6 +317,7 @@ function declaredSecretValues(
     // credential only by accident.
     if (typeof current === "boolean") {
       hasUnmatchable = true;
+      hasUncomparableValue = true;
       continue;
     }
 
@@ -332,12 +358,14 @@ function declaredSecretValues(
       // -- it is recorded as UNMATCHABLE, and the caller drops the id
       // outright. Applied per needle, so a credential that is long only
       // because of its whitespace is treated as the short one it really is.
-      if (needle.length < 4) hasUnmatchable = true;
-      else comparable.push(needle);
+      if (needle.length < 4) {
+        hasUnmatchable = true;
+        hasUncomparableValue = true;
+      } else comparable.push(needle);
     }
   }
 
-  return { comparable, hasUnmatchable };
+  return { comparable, hasUnmatchable, hasUncomparableValue };
 }
 
 /**
@@ -519,12 +547,21 @@ export function defineEmailProvider<TConfig>(
       const stored = declaredSecretValues(definition.configFields, input);
       const fromParsed: DeclaredSecretValues = {
         comparable: [...stored.comparable, ...effective.comparable],
-        // From the STORED side alone. A parser filling in defaults produces
-        // keys the descriptor never declared, and treating that as
-        // unmatchable would withhold every id from every provider that has a
-        // default; an undeclared leaf in what was STORED really is a
-        // credential nobody described.
-        hasUnmatchable: stored.hasUnmatchable,
+        // The stored side contributes every reason it has. A parser filling in
+        // defaults produces keys the descriptor never declared, and reading
+        // that from the parsed form would withhold every id from every
+        // provider that has a default; an undeclared leaf in what was STORED
+        // really is a credential nobody described.
+        //
+        // The parsed side contributes only a value it holds that cannot be
+        // compared. A parser is free to shorten a credential -- `"00007"`
+        // becomes `7` under a numeric coercion -- and the adapter then
+        // interpolates a value no needle here can recognise while the stored
+        // form still looks perfectly matchable. Dropping that reason with the
+        // rest let `id-7` through.
+        hasUnmatchable: stored.hasUnmatchable || effective.hasUncomparableValue,
+        hasUncomparableValue:
+          stored.hasUncomparableValue || effective.hasUncomparableValue,
       };
 
       return {

@@ -827,12 +827,14 @@ describe("a message id built to cost us something", () => {
   });
 
   it("does not let a separator-heavy id stall the send path", async () => {
-    // Candidate generation once produced every contiguous span of an id's
-    // segments, which is quadratic in their number — a 1,000-segment id took
-    // 426ms before the send could return, and nothing bounds a provider's
-    // identifier. Only the shortest qualifying span per starting segment is
-    // produced now, which detects the same texts: a longer span from the same
-    // start carries the short one as a prefix.
+    // Nothing bounds how many segments a provider puts in an identifier, and
+    // the send path waits on this. Candidate generation is therefore linear in
+    // that count: one shortest qualifying span per starting segment, which
+    // detects the same texts as every contiguous span would, since a longer
+    // span from the same start carries the short one as a prefix.
+    //
+    // The bound below separates that from work quadratic in the segment
+    // count, which is the shape this is here to refuse.
     const { service } = buildSend();
     const heavy = Array.from({ length: 300 }, (_, i) => `s${i}`).join("-");
     (service as unknown as { createAdapterFromRecord: unknown })[

@@ -679,3 +679,110 @@ describe("a test send that THREW, addressed with a display name", () => {
     sqlite.close();
   });
 });
+
+describe("a parser that changes what a credential looks like", () => {
+  afterEach(() => {
+    getEmailProviderRegistry().reset();
+  });
+
+  /**
+   * A provider whose adapter interpolates the credential it was BUILT with.
+   *
+   * `parseConfig` is what stands between the stored configuration and the
+   * adapter, so the value the adapter holds is the parser's output — and that
+   * is the only value it can put into an identifier.
+   */
+  function pinnedProvider(
+    parse: (input: unknown) => Record<string, unknown>,
+    render: (config: Record<string, unknown>) => string
+  ) {
+    return defineEmailProvider({
+      type: "pinned",
+      label: "Pinned",
+      configFields: [
+        {
+          name: "pin",
+          label: "PIN",
+          kind: "text",
+          required: true,
+          secret: true,
+        },
+      ],
+      parseConfig: parse,
+      createAdapter: config => ({
+        send: () =>
+          Promise.resolve({ success: true, messageId: render(config) }),
+      }),
+    });
+  }
+
+  it("withholds an id when parsing leaves the credential too short to compare", async () => {
+    // A numeric coercion turns `"00007"` into `7`. The stored form is five
+    // characters and compares perfectly well; the form the adapter actually
+    // holds is one character, which cannot be used as a needle without
+    // deleting every identifier that happens to contain a digit. Reading
+    // comparability from the stored side alone answers for a value nobody
+    // uses, and `id-7` goes back to the caller.
+    const provider = pinnedProvider(
+      input => ({ pin: Number((input as { pin: string }).pin) }),
+      config => `id-${String(config.pin)}`
+    );
+
+    const adapter = provider.createAdapterFrom({ pin: "00007" });
+    const result = await adapter.send({
+      to: "a@b.com",
+      from: "c@d.com",
+      subject: "s",
+      html: "<p>h</p>",
+    });
+
+    expect(result.messageId).toBeUndefined();
+  });
+
+  it("keeps an id from a provider whose parser only fills in defaults", async () => {
+    // The control, and the reason comparability is read from the parsed side
+    // while SHAPE is not. A parser adding keys the descriptor never declared
+    // is the ordinary way to write one, and treating that as unmatchable
+    // withholds every identifier from every provider that has a default.
+    const provider = pinnedProvider(
+      input => ({
+        pin: (input as { pin: string }).pin,
+        region: "us-east-1",
+        retries: 3,
+      }),
+      () => "message-id-from-the-provider"
+    );
+
+    const adapter = provider.createAdapterFrom({ pin: "8419573026" });
+    const result = await adapter.send({
+      to: "a@b.com",
+      from: "c@d.com",
+      subject: "s",
+      html: "<p>h</p>",
+    });
+
+    expect(result.messageId).toBe("message-id-from-the-provider");
+  });
+
+  it("still withholds an id that contains the parsed credential", async () => {
+    // The other control. A credential long enough to compare is compared in
+    // its EFFECTIVE form, so a parser that rewrites rather than shortens is
+    // still caught — the change above must not have replaced that check.
+    const provider = pinnedProvider(
+      input => ({
+        pin: `derived-${(input as { pin: string }).pin}`,
+      }),
+      config => `id-${String(config.pin)}`
+    );
+
+    const adapter = provider.createAdapterFrom({ pin: "8419573026" });
+    const result = await adapter.send({
+      to: "a@b.com",
+      from: "c@d.com",
+      subject: "s",
+      html: "<p>h</p>",
+    });
+
+    expect(result.messageId).toBeUndefined();
+  });
+});

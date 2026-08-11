@@ -1173,9 +1173,9 @@ describe("a diagnostic whose case folding changes its length", () => {
 
   it("does not scale with the number of occurrences", async () => {
     // A provider quoting a large remote error body back repeats the credential
-    // many times. Lowercasing the whole diagnostic once per match made the
-    // work grow with the count — 4,000 occurrences cost 98ms before, on a
-    // path a caller can provoke.
+    // many times, on a path a caller can provoke. Redaction therefore does no
+    // whole-diagnostic work per match: the cost tracks the length of the text
+    // rather than the number of occurrences in it.
     const many = Array.from({ length: 4000 }, () => KEY).join(" padding ");
 
     const started = Date.now();
