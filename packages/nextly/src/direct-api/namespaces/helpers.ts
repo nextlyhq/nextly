@@ -95,10 +95,15 @@ export function accessOptions(config: DirectAPIConfig): AccessOptions {
  */
 export function callerAccess(
   config: DirectAPIConfig
-): Pick<DirectAPIConfig, "user" | "overrideAccess" | "actor"> {
+): Pick<DirectAPIConfig, "user" | "overrideAccess" | "trusted" | "actor"> {
   return {
     user: config.user,
     overrideAccess: config.overrideAccess,
+    // The bound travels with the grant here for the same reason it does in
+    // `accessOptions`, and the stakes are higher: a nested call that omits it
+    // re-enters `mergeConfig` and takes the INSTANCE default, so the caller's
+    // bound is not merely lost — it is replaced by an unbounded override.
+    trusted: config.trusted,
     actor: config.actor,
   };
 }

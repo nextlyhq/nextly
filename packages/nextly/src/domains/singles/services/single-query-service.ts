@@ -39,7 +39,10 @@ import type { HookRegistry } from "../../../hooks/hook-registry";
 import type { HookContext } from "../../../hooks/types";
 import { keysToCamelCase, keysToSnakeCase } from "../../../lib/case-conversion";
 import { absolutizeMediaUrls } from "../../../lib/media-variant";
-import { resolveStatusFilter } from "../../../lib/status-filter";
+import {
+  expansionStatusScope,
+  resolveStatusFilter,
+} from "../../../lib/status-filter";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
 import type { CollectionAccessRules } from "../../../services/access";
@@ -828,10 +831,11 @@ export class SingleQueryService extends BaseService {
         locale: readLocale,
         // Only "read everything" propagates, and only when asked for: the
         // admin sends it on every read, a public caller never does.
-        status:
-          options.status === "all" || options.overrideAccess === true
-            ? "all"
-            : undefined,
+        status: expansionStatusScope({
+          status: options.status,
+          overrideAccess: options.overrideAccess,
+          bounded: options.trusted !== undefined,
+        }),
       },
       strict,
       // The read path threads a caller, so the target collection's field rules
@@ -894,10 +898,11 @@ export class SingleQueryService extends BaseService {
             targetCompanions: new Map(),
             authenticatedScope: options.authenticatedScope,
             locale: readLocale,
-            status:
-              options.status === "all" || options.overrideAccess === true
-                ? "all"
-                : undefined,
+            status: expansionStatusScope({
+              status: options.status,
+              overrideAccess: options.overrideAccess,
+              bounded: options.trusted !== undefined,
+            }),
           },
           // Read errors otherwise become empty component values, which reads to a
           // rule exactly like a component that holds nothing.

@@ -411,13 +411,17 @@ function buildRoute<TNode>(
   // Built once, at construction: the answer cannot vary per request, and a
   // predicate rebuilt per read is a place for the two to disagree.
   //
-  // `undefined` for an enforced route, deliberately. There the reads carry no
-  // bypass to bound, and supplying a predicate would imply one exists.
-  const trusted = ((): ((collection: string) => boolean) | undefined => {
-    if (!isPublic) return undefined;
-    const allowed = new Set(config.trustedCollections ?? collections);
-    return name => allowed.has(name);
-  })();
+  // Built for BOTH factories, not only the public one. An enforced route reads
+  // with the bypass off, where the predicate is inert — `trustsTarget` is
+  // `overrideAccess && trusted(target)`, so it decides nothing. But a draft
+  // grant turns the bypass ON for that request, and a grant scoped to ONE
+  // document would otherwise populate drafts and access-restricted rows from
+  // every collection the page happens to reach. The bound is what keeps a
+  // preview scoped to what it previews.
+  const trustedCollections = config.trustedCollections ?? collections;
+  const trustedSet = new Set(trustedCollections);
+  // The predicate form, for the reads this module issues directly.
+  const trusted = (name: string): boolean => trustedSet.has(name);
 
   const getInstance = (): NextlyContentReader => config.nextly ?? getNextly();
 
@@ -483,8 +487,9 @@ function buildRoute<TNode>(
         callerOverrideAccess: overrideAccess,
         // The bound travels with the grant. Every read `resolveContent` issues
         // carries it — including the by-id re-read a draft grant triggers,
-        // which is a separate entry point into the same expansion.
-        trusted,
+        // which is a separate entry point into the same expansion. Passed as
+        // the LIST, because that layer caches and a predicate has no identity.
+        trustedCollections,
       });
       if (!entry) continue;
       // No identity check here, deliberately. Both halves a grant has to

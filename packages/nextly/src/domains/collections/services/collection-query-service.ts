@@ -1409,6 +1409,11 @@ export class CollectionQueryService extends BaseService {
             // collection's field rules say nothing about another collection's
             // fields — so the caller has to reach the related row's own rules.
             enforceFieldAccess: true,
+            // The caller's bound, at the TOP-LEVEL expansion. Without it the
+            // relationship service sees no predicate and treats every target as
+            // fully trusted, so a rejected collection's rows are returned before
+            // the post-assembly pass ever runs.
+            trusted: params.trusted,
             // This path finishes with the post-assembly pass, so the target's
             // field rules run there, after its masking hooks have seen a whole
             // row.
@@ -2554,6 +2559,10 @@ export class CollectionQueryService extends BaseService {
           fieldAccessStage: "assembled" as const,
           user: params.user,
           overrideAccess: params.overrideAccess,
+          // The bound, at the by-id path's TOP-LEVEL expansion. Omitting it
+          // here leaves the relationship service with no predicate, so every
+          // target is read fully trusted before the post-assembly pass runs.
+          trusted: params.trusted,
           authenticatedScope: params.authenticatedScope,
           // As on the list path: the language a target collection's read rule is
           // evaluated in when its predicate names a localized field.

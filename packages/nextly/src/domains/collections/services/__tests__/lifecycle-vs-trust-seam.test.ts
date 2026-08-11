@@ -7,10 +7,9 @@
  * `widensLifecycle` answers *may it see the ones that are not published yet* —
  * true only for a trusted caller that has NOT bounded itself.
  *
- * They coincide for every caller except the one this task exists for: a public,
- * pre-rendering route that trusts a collection so its PUBLISHED content can be
- * shown, and must still never pull that collection's pending edits into a
- * static artifact.
+ * They coincide for every caller but one: a public, pre-rendering route that
+ * trusts a collection so its PUBLISHED content can be shown, and must still
+ * never pull that collection's pending edits into a static artifact.
  *
  * Asserted on the source because the behavioural difference is invisible to the
  * unit harness: the adapter double resolves at `where()` without exposing the

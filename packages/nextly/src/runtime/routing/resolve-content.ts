@@ -153,8 +153,16 @@ export interface ResolveContentOptions {
    *
    * Only ever narrows, and never admits a target's drafts — see
    * `ContentRouteConfig.trustedCollections`.
+   *
+   * **A list rather than the predicate the read layer takes, because this
+   * layer CACHES.** Two routes differing only in what they trust produce
+   * different rows, so the bound has to be part of the cache identity — and a
+   * function has none. Taking the data means the key and the predicate are
+   * derived from one value that cannot disagree with itself; taking a
+   * predicate plus a separate key would be two options a caller can get out of
+   * step.
    */
-  trusted?: (collection: string) => boolean;
+  trustedCollections?: readonly string[];
   /**
    * What the CALLER authorized, before a draft decision widened it.
    *
@@ -261,7 +269,7 @@ export async function resolveContent(
       sort: "id",
       depth,
       overrideAccess: callerOverrideAccess,
-      trusted: options.trusted,
+      trusted,
       user,
       ...(options.richTextFormat
         ? { richTextFormat: options.richTextFormat }
@@ -287,7 +295,7 @@ export async function resolveContent(
             draft: true,
             depth,
             overrideAccess,
-            trusted: options.trusted,
+            trusted,
             user,
             ...(options.richTextFormat
               ? { richTextFormat: options.richTextFormat }
@@ -321,7 +329,7 @@ export async function resolveContent(
         depth,
         // Enforce the collection's read policy unless the caller opts out.
         overrideAccess,
-        trusted: options.trusted,
+        trusted,
         // Pass the user explicitly (even `undefined`) so an anonymous read
         // CLEARS any default user configured on the reader instead of merging
         // over it — otherwise a reader booted with a default identity would make
@@ -361,7 +369,7 @@ export async function resolveContent(
           draft: true,
           depth,
           overrideAccess,
-          trusted: options.trusted,
+          trusted,
           user,
           ...(options.richTextFormat
             ? { richTextFormat: options.richTextFormat }
@@ -399,6 +407,17 @@ export async function resolveContent(
   // one thing a preview must not do, and per-request freshness is exactly what
   // a preview wants. It also removes any path by which a draft entry could be
   // handed to a request that never asked for one.
+  // Sorted and de-duplicated so the same set written two ways is one cache
+  // identity, and so the predicate and the key are built from one value.
+  const trustedNames =
+    options.trustedCollections === undefined
+      ? undefined
+      : [...new Set(options.trustedCollections)].sort();
+  const trusted =
+    trustedNames === undefined
+      ? undefined
+      : (name: string): boolean => trustedNames.includes(name);
+
   const cacheable = overrideAccess && !user && !draft;
   if (!cacheable) {
     // Bypassing `unstable_cache` alone does not opt out of Next's Full Route
@@ -430,6 +449,11 @@ export async function resolveContent(
       // not be "json"), so key it as "inherit" — never as a concrete format — so
       // an explicit-format call can't reuse an inherited-shape cache entry.
       options.richTextFormat ?? "inherit",
+      // The bound changes which related rows come back, so two routes that
+      // differ only in what they trust must not share an entry. "unbounded" is
+      // a distinct value from an empty set: one trusts everything it reaches,
+      // the other trusts nothing.
+      trustedNames === undefined ? "unbounded" : trustedNames.join(","),
     ],
     // Trusted reads don't depend on an access decision, so tag-only busting is
     // safe; an explicit positive `revalidate` adds a time-based safety net, and

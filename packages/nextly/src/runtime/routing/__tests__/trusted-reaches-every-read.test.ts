@@ -39,7 +39,8 @@ function reads(file: string): { issued: number; bounded: number } {
     issued: [...text.matchAll(/\.(find|findByID)\(\{/g)].length,
     // The pass-through form only. A `trusted?:` in a doc block or an
     // interface is a declaration, not a read carrying the bound.
-    bounded: [...text.matchAll(/^\s*trusted[,:][^?]*$/gm)].length,
+    bounded: [...text.matchAll(/^\s*(trusted|trustedCollections)[,:][^?]*$/gm)]
+      .length,
   };
 }
 
