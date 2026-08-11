@@ -76,7 +76,7 @@ than trusting any single marker.
 
      So for a removal, use the control to prove the search works, then prove
      the outcome with the DELTA in step 3: the removal hunk must appear in
-     `git diff <mergeBase>..<mergeCommit> -- <path>`. That is a positive
+     `git diff <mergeCommit>^..<mergeCommit> -- <path>`. That is a positive
      observation of the change landing rather than an inference from nothing
      being found.
 
@@ -89,8 +89,12 @@ than trusting any single marker.
    correct squash contains both changes, the blobs legitimately differ, and the
    check reports a loss that did not happen. Compare what the PR itself changed:
    `git diff <mergeBase>..<headRefOid> -- <path>` against
-   `git diff <mergeBase>..<mergeCommit> -- <path>`, expecting the PR's hunks in
-   the second. Whole-object equality is sound only when `main` never touched the
+   `git diff <mergeCommit>^..<mergeCommit> -- <path>`, expecting the PR's hunks
+   in the second. The squash side is diffed from its OWN parent: a squash
+   commit's parent IS `main` at the moment of the merge, so that range is
+   exactly the squash patch. Using `<mergeBase>` there sweeps in every commit
+   `main` gained after the branch point, and the PR's hunks disappear among
+   them. Whole-object equality is sound only when `main` never touched the
    path. `--stat` is never sound: it reports only that a path was touched, which
    any earlier commit in the same PR already guarantees.
 4. If the final commit is a pure revert of an earlier one in the same PR, check the
