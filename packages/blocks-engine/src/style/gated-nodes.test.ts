@@ -8,7 +8,7 @@
  * The alternative a reader is left with otherwise is withholding the whole sheet, which makes one
  * conditioned node render an entire page unstyled.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { BlockDocument, NodeStyles } from "../document";
 import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
@@ -421,5 +421,53 @@ describe("a node whose block says it draws nothing", () => {
 
     expect(css).toContain("color: red");
     expect(gated).toBeUndefined();
+  });
+});
+
+describe("a caller's drawless predicate that misbehaves", () => {
+  const compileWith = (drawsNothing: unknown) =>
+    compilePageCss(page([node({ styles: styles({ color: "red" }) })]), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      namedClasses: [],
+      blockBases: {},
+      drawsNothing,
+    } as never);
+
+  it("keeps the node's styling when the predicate throws", () => {
+    // `compilePageCss` is exported, so this is a consumer's function with
+    // nothing above it to catch a failure. A throw must cost the node its
+    // exemption, not abort the compile.
+    const { css, gated } = compileWith(() => {
+      throw new Error("host predicate is broken");
+    });
+
+    expect(css).toContain("color: red");
+    expect(gated).toBeUndefined();
+  });
+
+  it("contains a rejection from a predicate declared async", async () => {
+    // A promise compares unequal to `true`, so the answer is already right; the
+    // hazard is the rejection nobody handles, which Node reports and can end the
+    // process with.
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const { css } = compileWith(() => Promise.reject(new Error("late")));
+      expect(css).toContain("color: red");
+      // A rejection surfaces on a later turn, so this has to wait for one.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+  });
+
+  it("contains a throwing `then` getter on the answer", () => {
+    const hostile = {
+      get then(): never {
+        throw new Error("from the getter");
+      },
+    };
+    expect(compileWith(() => hostile).css).toContain("color: red");
   });
 });

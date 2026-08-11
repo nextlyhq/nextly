@@ -27,6 +27,7 @@ import {
 import { dedupeNodeIds, sanitizeDocument } from "./sanitize";
 import {
   UNIDENTIFIED_FETCH_POLICY,
+  drawlessTestFor,
   fetchPolicyLabel,
   isRecordedGatedEntry,
   readableGatedRules,
@@ -34,7 +35,7 @@ import {
   styleTextForInjection,
   type PageStyles,
 } from "./styles";
-import { pruneDrawlessNodes, pruneHiddenNodes, pruneNodes } from "./visibility";
+import { pruneHiddenNodes, pruneNodes } from "./visibility";
 
 export interface PageRendererProps {
   /** The stored document to render. */
@@ -95,8 +96,8 @@ export interface PageRendererProps {
  * comparisons.
  *
  * A block DECLARING that its props draw nothing (`rendersNothing`) is a separate
- * question, answered by `pruneDrawlessNodes` rather than here, because the two
- * are not equally safe to act on. A node this pass rejects resolves to a visible
+ * question, decided by the drawless test rather than here, because the two are
+ * not equally safe to act on. A node this pass rejects resolves to a visible
  * placeholder, which is already an exceptional state; a block that draws nothing
  * is an ordinary one — an image waiting for its picture — and dropping it costs
  * the page its stylesheet unless the stored sheet can account for it.
@@ -407,7 +408,12 @@ export function PageRenderer({
   // it would be a far larger regression than the bytes it saves. Republishing the
   // page compiles the entries and the drop starts working, with nothing to
   // invalidate by hand.
-  const drawlessDropped = pruneDrawlessNodes(visible, resolver);
+  // Asked through the SAME derivation `resolvePageStyles` will use, so a host's
+  // own `drawsNothing` decides both. Pruning on the resolver alone would remove
+  // a node the caller had deliberately kept, and the artifact would then be read
+  // as covering a removal the caller never asked for.
+  const drawsNothing = drawlessTestFor(resolver, styleContext?.drawsNothing);
+  const drawlessDropped = pruneNodes(visible, node => !drawsNothing(node));
   const drawlessCoveredByArtifact =
     drawlessDropped !== visible &&
     gatedRules !== undefined &&

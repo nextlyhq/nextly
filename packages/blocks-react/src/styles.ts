@@ -342,7 +342,7 @@ export function readableGatedRules(
  * exists only because the two signatures differ: a declaration is asked about
  * props, a caller's predicate about the node.
  */
-function drawlessTestFor(
+export function drawlessTestFor(
   blocks: BlockResolver,
   supplied: ((node: BlockNode) => boolean) | undefined
 ): (node: BlockNode) => boolean {

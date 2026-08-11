@@ -98,8 +98,15 @@ const SOURCE_MODULES: ReadonlyArray<{
     // surface — a caller that wants its sheets cached states its own id rather
     // than reaching for this one, and publishing a sentinel is how it would end
     // up stored in an artifact and then matched against itself.
+    // `drawlessTestFor` is the ONE derivation of "does this node draw nothing",
+    // resolving a caller's own `drawsNothing` against the block declarations.
+    // `page-renderer` prunes through it and `resolvePageStyles` compiles and
+    // reads through it, so a host's override cannot be honoured on one path and
+    // ignored on the other. It crosses a module boundary inside this package; a
+    // consumer states its answer through `styleContext.drawsNothing` instead.
     internal: [
       "UNIDENTIFIED_FETCH_POLICY",
+      "drawlessTestFor",
       "isRecordedGatedEntry",
       "isUsableGatedEntry",
       "readableGatedRules",
@@ -119,19 +126,7 @@ const SOURCE_MODULES: ReadonlyArray<{
     // `pruneNodes` is the shared walk the three passes share so their identity
     // behaviour cannot diverge. It is a shape, not a policy, and a consumer
     // reaching for it is writing a fourth pass this package cannot account for.
-    // `pruneDrawlessNodes` is deliberately NOT offered, and does not need to be.
-    // It is only safe where the stylesheet survives the drop, and that judgement
-    // lives in `PageRenderer`; a caller applying it before `resolvePageStyles`
-    // would make its own document read as repaired and lose the whole sheet —
-    // the outcome this pass exists to avoid. A consumer assembling styles by
-    // hand gets the behaviour without it, because `resolvePageStyles` declines to
-    // append a drawless node's gated rules itself.
-    internal: [
-      "drawsNothing",
-      "isUnconditional",
-      "pruneDrawlessNodes",
-      "pruneNodes",
-    ],
+    internal: ["drawsNothing", "isUnconditional", "pruneNodes"],
   },
   { name: "placeholder", module: placeholderModule, internal: [] },
   { name: "page-renderer", module: pageRendererModule, internal: [] },

@@ -122,26 +122,3 @@ export function drawsNothing(
 ): boolean {
   return declaresNoMarkup(node, type => resolver.get(type));
 }
-
-/**
- * Removes nodes whose blocks declare they draw nothing, for the STYLE input only.
- *
- * Such a node still belongs in the render — a block that returns nothing is not
- * a failure and has nothing to announce — but every rule compiled for the markup
- * it would have drawn matches no element, and ships anyway carrying whatever it
- * referenced. An image block waiting for its picture publishes the URL of a
- * background it never paints.
- *
- * Whether this is SAFE to act on is the caller's decision, not this function's:
- * dropping a node the stored sheet still describes is what makes a document read
- * as repaired, and a repaired document with nothing to recompile from loses its
- * whole stylesheet. Blanking a page because one image has no picture yet is far
- * worse than a few unused rules, so the caller drops these nodes only where the
- * sheet survives it.
- */
-export function pruneDrawlessNodes(
-  document: BlockDocument,
-  resolver: BlockResolver
-): BlockDocument {
-  return pruneNodes(document, node => !drawsNothing(node, resolver));
-}

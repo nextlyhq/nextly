@@ -4064,6 +4064,39 @@ describe("PageRenderer", () => {
       }
     });
 
+    it("honours a caller's override in the PRUNE, not only in the compile", async () => {
+      // A host that answers `false` for a node its block declares drawless is
+      // keeping that node deliberately. The prune runs before `resolvePageStyles`
+      // sees the context, so a resolver-only prune would remove it first and the
+      // artifact would then be read as covering a removal the caller never asked
+      // for — its rules dropped despite the override.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/drawless", { props: { draw: false } }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([
+            drawless as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+          styles={{
+            css: ".nx-b { color: teal }",
+            classes: { a: "nx-a", b: "nx-b" },
+            gated: { a: ".nx-a { background-image: url(/kept.png) }" },
+          }}
+          styleContext={{
+            breakpoints: { viewport: [], container: [] },
+            drawsNothing: () => false,
+          }}
+        />
+      );
+
+      // The caller said it draws, so its rules are appended rather than dropped.
+      expect(html).toContain("kept.png");
+      expect(html).toContain("public body");
+    });
+
     it("still gets the rules of a node that DOES draw", async () => {
       // The control. Without it the assertion above would pass on a resolver
       // that appends nothing at all, which would leave every gated node on every
