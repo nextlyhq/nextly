@@ -62,12 +62,16 @@ import { validate } from "./validation";
  * EVERY way of reaching the input is counted, not only value reads, because a
  * traversal does not have to read a value to be a traversal. `Object.keys`,
  * `Object.entries`, `for...in` and `in` reach an object through the enumeration
- * and descriptor traps and never call `get` at all — so a `get`-only tally
- * scores repeated enumeration of the input as free, and the engine enumerates
- * input keys in the validation and migration walks today. The four traps below
- * are the complete set by which an object's own shape or values can be reached,
- * which is what makes this a census rather than a sample: a walk cannot invent a
- * fifth way.
+ * and descriptor traps and never call `get`; `isPlainRecord` reaches it through
+ * `Object.getPrototypeOf`, which is neither. A tally watching a subset scores
+ * the rest as free, and the walks here use all three kinds today.
+ *
+ * So every trap through which a proxy can OBSERVE its target is handled, and
+ * the test below exercises them one at a time rather than leaving completeness
+ * as a claim in this comment — the previous version of this paragraph asserted
+ * a complete set and was wrong by one. The mutating traps are deliberately
+ * absent: the engine has no business writing to a document it was handed, and
+ * counting a write as traversal would hide that.
  *
  * `ownKeys` is weighted by the keys it hands back, because enumerating a record
  * costs its width — scoring one call as one touch would make a scan of a
@@ -101,6 +105,14 @@ function tallyingReads<T>(value: T, tally: { reads: number }): T {
       const keys = Reflect.ownKeys(target);
       tally.reads += keys.length;
       return keys;
+    },
+    getPrototypeOf(target) {
+      tally.reads += 1;
+      return Reflect.getPrototypeOf(target);
+    },
+    isExtensible(target) {
+      tally.reads += 1;
+      return Reflect.isExtensible(target);
     },
   };
 
@@ -206,23 +218,31 @@ const MEASUREMENT_TIMEOUT_MS = 120_000;
 describe("validation scales linearly with document size", () => {
   const ctx = { breakpoints: SCALE_BREAKPOINTS, mode: "strict" as const };
 
-  it("counts reaching the document by enumeration, not only by reading", () => {
-    // The coverage the ratio depends on, pinned directly. `Object.keys` and its
-    // relatives reach an object through the enumeration and descriptor traps and
-    // never call `get`, so a tally watching reads alone scores repeated
-    // enumeration of the input as free — and the walks here enumerate node slots
-    // and attributes. A regression that re-enumerated would then be invisible to
-    // every assertion below while costing real time.
+  it.each<[string, (doc: object) => unknown]>([
+    ["reading a property", doc => (doc as { nodes: unknown }).nodes],
+    ["testing for a key", doc => "nodes" in doc],
+    ["enumerating keys", doc => Object.keys(doc)],
+    [
+      "reading a descriptor",
+      doc => Object.getOwnPropertyDescriptor(doc, "nodes"),
+    ],
+    // The one that was missed. `isPlainRecord` asks this of every record, so it
+    // is not a hypothetical route into the document — it is the route two walks
+    // already take dozens of times.
+    ["inspecting the prototype", doc => Object.getPrototypeOf(doc)],
+    ["asking whether it is extensible", doc => Object.isExtensible(doc)],
+  ])("counts reaching the document by %s", (_label, reach) => {
+    // Completeness demonstrated one operation at a time rather than claimed in a
+    // comment. Each of these reaches the input without necessarily reading a
+    // value, and a tally blind to any one of them scores a walk that repeats it
+    // as free — which is how a quadratic sits at 4x and passes.
     const tally = { reads: 0 };
-    const doc = tallyingReads(scaleDocument({ nodes: 2 }), tally);
+    const doc = tallyingReads(scaleDocument({ nodes: 2 }), tally) as object;
 
     const before = tally.reads;
-    Object.keys(doc);
-    expect(tally.reads).toBeGreaterThan(before);
+    reach(doc);
 
-    const afterKeys = tally.reads;
-    "nodes" in doc;
-    expect(tally.reads).toBeGreaterThan(afterKeys);
+    expect(tally.reads).toBeGreaterThan(before);
   });
 
   it("reports the same issues through the counting document", () => {
