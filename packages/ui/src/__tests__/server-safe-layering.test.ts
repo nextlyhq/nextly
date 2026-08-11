@@ -259,6 +259,44 @@ function analyze(source: string, fileName: string): Analysis {
     return false;
   };
 
+  /**
+   * Whether the value of an access off `globalThis` is USED, rather than merely evaluated.
+   *
+   * `globalThis.document` on its own evaluates to `undefined` on a server rather than throwing;
+   * only dereferencing, calling, or constructing from that `undefined` throws. An optional token
+   * on the node that uses it short-circuits the whole chain, which is safe again. Both spellings
+   * of the access — `globalThis.document` and `globalThis["document"]` — pass through here, so
+   * they cannot drift apart.
+   */
+  const usedAsValue = (access: ts.Node): boolean => {
+    // Parentheses and the erased TypeScript wrappers sit between the access and whatever uses it,
+    // and every one of them disappears at runtime: `(globalThis.document!).body` dereferences
+    // exactly as the bare spelling does.
+    let value: ts.Node = access;
+    while (
+      value.parent &&
+      (ts.isParenthesizedExpression(value.parent) ||
+        ts.isNonNullExpression(value.parent) ||
+        ts.isAsExpression(value.parent) ||
+        ts.isSatisfiesExpression(value.parent))
+    ) {
+      value = value.parent;
+    }
+    const outer = value.parent;
+    if (outer === undefined) return false;
+    if (
+      (ts.isPropertyAccessExpression(outer) ||
+        ts.isElementAccessExpression(outer) ||
+        ts.isCallExpression(outer)) &&
+      outer.expression === value
+    ) {
+      return outer.questionDotToken === undefined;
+    }
+    // `new globalThis.Image()` throws for the same reason a call does, and `new` has no optional
+    // form that could short-circuit it.
+    return ts.isNewExpression(outer) && outer.expression === value;
+  };
+
   /** Whether this identifier reads the global, rather than naming something in another position. */
   const readsTheGlobal = (node: ts.Identifier): boolean => {
     if (declared.has(node.text)) return false;
@@ -280,32 +318,10 @@ function analyze(source: string, fileName: string): Analysis {
       if (parent.parent !== undefined && ts.isTypeOfExpression(parent.parent)) {
         return false;
       }
-      // `globalThis.document?.title` evaluates to undefined on a server rather than throwing,
-      // because the chain short-circuits. The `?.` sits on the OUTER access — the one reading
-      // `.title` off it — not on `globalThis.document` itself, so the token to check is the
-      // grandparent's.
-      const outer = parent.parent;
-      const shortCircuits =
-        outer !== undefined &&
-        ((ts.isPropertyAccessExpression(outer) &&
-          outer.expression === parent &&
-          outer.questionDotToken !== undefined) ||
-          (ts.isElementAccessExpression(outer) &&
-            outer.expression === parent &&
-            outer.questionDotToken !== undefined));
-      if (shortCircuits) return false;
       // A BARE read — `export const doc = globalThis.document` — evaluates to undefined on a
-      // server rather than throwing. Only DEREFERENCING the result does. So this reports the
-      // access only when its value is used further: another property, an index, or a call.
-      const outerUse = parent.parent;
-      const dereferenced =
-        outerUse !== undefined &&
-        ((ts.isPropertyAccessExpression(outerUse) &&
-          outerUse.expression === parent) ||
-          (ts.isElementAccessExpression(outerUse) &&
-            outerUse.expression === parent) ||
-          (ts.isCallExpression(outerUse) && outerUse.expression === parent));
-      if (!dereferenced) return false;
+      // server rather than throwing, and `globalThis.document?.title` short-circuits to the same
+      // place. Only using the value throws, so that is what decides.
+      if (!usedAsValue(parent)) return false;
       // And the guarded USE is as safe as the bare-identifier form, so the same guard excuses it.
       return !guardedByTypeof(node);
     }
@@ -443,7 +459,8 @@ function analyze(source: string, fileName: string): Analysis {
       node.argumentExpression !== undefined &&
       ts.isStringLiteral(node.argumentExpression) &&
       BROWSER_GLOBALS.has(node.argumentExpression.text) &&
-      node.questionDotToken === undefined
+      node.questionDotToken === undefined &&
+      usedAsValue(node)
     ) {
       globals.push(node.argumentExpression.text);
     }
@@ -853,6 +870,40 @@ describe("reading a module", () => {
     expect(read(`export const b = globalThis.document.body;`).globals).toEqual([
       "document",
     ]);
+  });
+
+  it("treats both spellings of a globalThis access by the same rule", () => {
+    // The bracket form is the same read as the dot form, so the same question decides it: a bare
+    // evaluation and a short-circuited chain are safe, an optional call short-circuits too.
+    expect(
+      read(`
+        export const doc = globalThis["document"];
+        export const title = globalThis["document"]?.title;
+        export const m = globalThis.matchMedia?.("(min-width: 0px)");
+      `).globals
+    ).toEqual([]);
+  });
+
+  it("reports constructing from a globalThis property", () => {
+    // `new` throws on undefined exactly as a call does, in either spelling.
+    expect(read(`export const i = new globalThis.Image();`).globals).toEqual([
+      "Image",
+    ]);
+    expect(read(`export const j = new globalThis["Image"]();`).globals).toEqual(
+      ["Image"]
+    );
+  });
+
+  it("sees through the erased wrappers between an access and its use", () => {
+    // `!`, `as`, and parentheses all vanish at runtime, so the dereference underneath them still
+    // throws on a server.
+    expect(
+      read(`export const b = (globalThis.document!).body;`).globals
+    ).toEqual(["document"]);
+    expect(
+      read(`export const c = (globalThis["document"] as Document).body;`)
+        .globals
+    ).toEqual(["document"]);
   });
 
   it("reports an IIFE invoked through .call", () => {
