@@ -43,7 +43,7 @@ export const emailDeliveriesSqlite = sqliteTable(
     attemptCount: integer("attempt_count").notNull().default(1),
 
     /** Reserved for a drain. Always NULL today — see the PostgreSQL module. */
-    nextAttemptAt: integer("next_attempt_at", { mode: "timestamp" }),
+    nextAttemptAt: integer("next_attempt_at", { mode: "timestamp_ms" }),
 
     /** Why it failed, with anything address-shaped removed. */
     error: text("error"),
@@ -53,7 +53,16 @@ export const emailDeliveriesSqlite = sqliteTable(
     /** Reserved and inert — no pass prunes this table. See the PostgreSQL module. */
     retentionClass: text("retention_class").notNull().default("email"),
 
-    createdAt: integer("created_at", { mode: "timestamp" })
+    /**
+     * `timestamp_ms`, not `timestamp`.
+     *
+     * Drizzle's `timestamp` mode stores whole seconds, so every send inside one
+     * second collapses to the same value — and this table appends a row per
+     * recipient per send. A newest-first read with a limit would then break
+     * ties on the id and return an arbitrary subset rather than the latest
+     * sends. The same reason MySQL declares `fsp: 3`.
+     */
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
       .notNull()
       .$defaultFn(() => new Date()),
   },

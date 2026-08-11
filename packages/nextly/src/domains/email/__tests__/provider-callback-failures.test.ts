@@ -379,3 +379,62 @@ describe("a provider that never passed through the authoring helper", () => {
     ).resolves.toEqual({ success: true, messageId: "<ok@mail.test>" });
   });
 });
+
+describe("a credential that is not a string", () => {
+  it("is contained too", async () => {
+    // `secret: true` is permitted on a `kind: "number"` field, so a numeric
+    // PIN is a legal declaration. Reading only string values hands back an
+    // empty secret list for exactly the provider about to interpolate one.
+    const registry = getEmailProviderRegistry();
+    registry.register(
+      defineEmailProvider<{ pin: number }>({
+        type: "numeric-secret",
+        label: "Numeric secret",
+        configFields: [
+          { name: "pin", label: "PIN", kind: "number", secret: true },
+        ],
+        parseConfig: input => input as { pin: number },
+        createAdapter: config => ({
+          send: () =>
+            Promise.resolve({ success: true, messageId: `msg-${config.pin}` }),
+        }),
+      })
+    );
+
+    const result = await registry
+      .create("numeric-secret", { pin: 483927 })
+      .send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" });
+
+    expect(result.messageId).toBeUndefined();
+  });
+
+  it("leaves a message id that merely contains digits alone", async () => {
+    // The control. A four-digit-or-longer secret is a substring risk, so the
+    // rule has to be checked against a provider whose id shares no value with
+    // its configuration — otherwise "contained" could mean "always dropped".
+    const registry = getEmailProviderRegistry();
+    registry.register(
+      defineEmailProvider<{ pin: number }>({
+        type: "numeric-secret-clean",
+        label: "Numeric secret clean",
+        configFields: [
+          { name: "pin", label: "PIN", kind: "number", secret: true },
+        ],
+        parseConfig: input => input as { pin: number },
+        createAdapter: () => ({
+          send: () =>
+            Promise.resolve({
+              success: true,
+              messageId: "<20260811@mail.test>",
+            }),
+        }),
+      })
+    );
+
+    await expect(
+      registry
+        .create("numeric-secret-clean", { pin: 483927 })
+        .send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" })
+    ).resolves.toEqual({ success: true, messageId: "<20260811@mail.test>" });
+  });
+});

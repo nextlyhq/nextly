@@ -1,10 +1,10 @@
 /**
  * The email delivery log's writer and reader.
  *
- * Records that a message was attempted and what happened to it. Before this, a
- * failed password-reset left no durable trace: the adapter threw, the service
- * returned `{ success: false }`, one line went to the process log, and the
- * operator learned from the user.
+ * Records that a message was attempted and what happened to it: which provider
+ * carried it, which template produced it, whether it was accepted, and a hash
+ * of each recipient. One row per RECIPIENT, so the question "did this person
+ * receive it" has an answer for someone who was copied.
  *
  * **This is a log, not a queue, and nothing prunes it yet.** Nothing drains it,
  * nothing retries, no retention pass reads its `retention_class`, and the

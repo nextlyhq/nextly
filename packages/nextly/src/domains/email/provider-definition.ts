@@ -194,9 +194,10 @@ export interface RegisteredEmailProvider {
  *
  * Declared rather than guessed, exactly as masking does: a heuristic over key
  * names calls `credential` public and a harmless `token` secret, and it can
- * only ever be right about names core has seen. Values shorter than four
- * characters are skipped — a one-character secret would match almost any
- * identifier and would turn containment into deletion.
+ * only ever be right about names core has seen.
+ *
+ * Values shorter than four characters are skipped — a one- or two-character
+ * secret matches almost any identifier, and containment would become deletion.
  */
 function declaredSecretValues(
   fields: ReadonlyArray<EmailProviderConfigField>,
@@ -215,8 +216,21 @@ function declaredSecretValues(
       }
       current = (current as Record<string, unknown>)[segment];
     }
-    if (typeof current === "string" && current.length >= 4)
-      values.push(current);
+    // Every SCALAR, not only strings. A declared credential may be a number --
+    // a numeric PIN on a `kind: "number"` field is a legal declaration -- and
+    // reading only strings hands back an empty list for exactly the provider
+    // whose credential is about to be interpolated into an identifier.
+    //
+    // An object or an array is skipped: its rendering is not what a provider
+    // would interpolate, and stringifying one produces a needle that matches
+    // nothing while looking like protection.
+    const scalar =
+      typeof current === "string"
+        ? current
+        : typeof current === "number" || typeof current === "bigint"
+          ? String(current)
+          : undefined;
+    if (scalar !== undefined && scalar.length >= 4) values.push(scalar);
   }
 
   return values;
