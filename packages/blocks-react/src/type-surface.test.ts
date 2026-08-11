@@ -26,6 +26,20 @@
  * by the root, which imports nothing but the engine and so resolves from
  * anywhere the package does.
  *
+ * **Freshness of that artifact is the BUILD SYSTEM's job, not this suite's.**
+ * `turbo.json` makes `test` depend on `build` and names `dist/**` among its
+ * inputs, so an edit anywhere in the declaration's own inputs — this package's
+ * sources, the engine's, the bundler config — rebuilds and re-runs. Global
+ * setup adds one build before collection so a direct `vitest run` on a tree
+ * with no `dist` works at all.
+ *
+ * Neither covers `vitest --watch`, and deliberately so. Vitest selects a suite
+ * from its MODULE GRAPH, which cannot see a `.d.ts` read off disk; making it
+ * see one would mean hand-listing every input of the build and keeping that
+ * list correct forever — the same defect this suite exists to catch, one level
+ * up. A watch session is a fast feedback loop, not the authority: `pnpm test`
+ * is.
+ *
  * @module type-surface.test
  */
 import { existsSync, readFileSync } from "node:fs";
@@ -33,9 +47,8 @@ import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { buildPackage } from "../vitest.global-setup";
 // Imported for two reasons, and the second is the load-bearing one.
 //
 // They supply the runtime half of the sentinel check below: a name present in
@@ -441,15 +454,6 @@ function reachableTypes(
 }
 
 describe("the published type surface", () => {
-  // Global setup builds once per process, which covers a cold start and not a
-  // watch session: the process outlives every edit, so a rerun after changing
-  // the public surface would read the artifact built before it. Rebuilding per
-  // run costs a Turbo cache hit and makes the assertions describe the source on
-  // disk rather than whenever the process happened to start.
-  beforeAll(() => {
-    buildPackage();
-  }, 300_000);
-
   // The parsers are the part of this test that can fail SILENTLY: a form they
   // miss reports an absence that is not there, or an obligation that is not
   // required. Each case below pins one form the bundler emits — a plain named

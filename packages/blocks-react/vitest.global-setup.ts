@@ -17,9 +17,11 @@ import { fileURLToPath } from "node:url";
  * stage that completes before collection starts covers them.
  *
  * It runs ONCE per process, which is the whole of what it guarantees: the
- * declarations are current when the run begins. Keeping them current across a
- * watch session's reruns is the job of {@link buildPackage} at the suite that
- * reads them.
+ * declarations are current when the run begins. Keeping them current as inputs
+ * change is Turbo's job — `test` depends on `build` and names `dist/**` among
+ * its inputs — and a `--watch` session is explicitly outside both, because
+ * Vitest selects suites from a module graph that cannot see a `.d.ts` read off
+ * disk.
  *
  * Unconditional, with no attempt to detect a build that already happened. The
  * signals available say a Turbo task is running, never that it was one
@@ -33,20 +35,6 @@ import { fileURLToPath } from "node:url";
  * run build` carries the `^build` edge, so the dependency is built first.
  */
 export default function setup(): void {
-  buildPackage();
-}
-
-/**
- * Rebuild this package's declarations, surfacing the compiler's own output.
- *
- * Exported so a suite asserting against `dist` can call it per run. Under
- * `vitest --watch` the process outlives every edit: global setup has already
- * finished and Turbo's build edge fires only before the process starts, so an
- * edit to the public surface would otherwise be checked against the artifact
- * built before it — reporting a pass or a failure that describes neither the
- * old code nor the new.
- */
-export function buildPackage(): void {
   const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
   try {
