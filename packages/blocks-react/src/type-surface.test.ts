@@ -36,6 +36,19 @@ import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { buildPackage } from "../vitest.global-setup";
+// Imported for two reasons, and the second is the load-bearing one.
+//
+// They supply the runtime half of the sentinel check below: a name present in
+// the declarations and absent from the module would be a surface a consumer
+// can typecheck against and not call.
+//
+// They are also this suite's DEPENDENCY DECLARATION. What it asserts on is the
+// build of these three modules, but it reads that build off disk, so without an
+// import the watcher sees no edge and never selects this suite when an entry
+// changes — leaving the guard silent for exactly the edit it exists to catch.
+import * as blocksEntry from "./blocks/index";
+import * as rootEntry from "./index";
+import * as nextEntry from "./next";
 
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -49,6 +62,13 @@ const SENTINELS: Readonly<Record<string, string>> = {
   ".": "PageRenderer",
   "./next": "createBlocksPage",
   "./blocks": "coreBlocks",
+};
+
+/** The same entries as modules, keyed the way the manifest spells them. */
+const ENTRY_MODULES: Readonly<Record<string, Record<string, unknown>>> = {
+  ".": rootEntry,
+  "./next": nextEntry,
+  "./blocks": blocksEntry,
 };
 
 /** The root entry, whose exports satisfy every other entry's obligation. */
@@ -507,6 +527,10 @@ describe("the published type surface", () => {
         exportsBySubpath.get(subpath)?.has(sentinel),
         `parser found no \`${sentinel}\` in the "${subpath}" entry`
       ).toBe(true);
+      expect(
+        ENTRY_MODULES[subpath]?.[sentinel],
+        `the "${subpath}" module does not export \`${sentinel}\` at runtime`
+      ).toBeDefined();
     }
 
     // Satisfaction is judged on RE-EXPORTS of the engine, not on the entry's

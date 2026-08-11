@@ -19,7 +19,16 @@
       // them; `dist/**` is appended because the artifact these suites assert
       // against is a real input to them, and a cached pass that ignored it
       // would survive a change to what the bundler emits.
-      "inputs": ["$TURBO_EXTENDS$", "dist/**", "tsup.config.ts"]
+      // `vitest.global-setup.ts` is named because it IS the build precondition
+      // these suites rely on: a change to it changes what they assert against,
+      // and the root inputs cover `vitest.config.ts` alone — so without it a
+      // cached pass survives an edit to the setup and the run never happens.
+      "inputs": [
+        "$TURBO_EXTENDS$",
+        "dist/**",
+        "tsup.config.ts",
+        "vitest.global-setup.ts"
+      ]
     },
     "test:watch": {
       // The same build edge as `test`. A watch run reads the same declarations,
