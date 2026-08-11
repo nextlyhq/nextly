@@ -6,11 +6,15 @@
  * concept of are derived here rather than defaulted silently, because a missing
  * value would render as an inherited leftover and read as a design choice.
  *
- * Run: node scripts/import-tweakcn.mjs
+ * Run: pnpm theme:import-presets  (tsx scripts/import-tweakcn.mjs)
  */
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+import { format, resolveConfig } from "prettier";
 
 import { describePreset } from "./tweakcn-description.mjs";
+import { TWEAKCN_SHORTLIST } from "./tweakcn-shortlist.mjs";
 
 const SOURCE =
   "https://raw.githubusercontent.com/jnsahaj/tweakcn/main/utils/theme-presets.ts";
@@ -50,44 +54,67 @@ const DIRECT = {
  * for dark) rather than invented for a third-party palette. `highlight` styles
  * a rich-text marker and the `code-*` group is a syntax palette; tweakcn's
  * preset shape has no field for either, so there is nothing to derive them
- * from. Kept in sync by hand if theme.css changes.
+ * from.
+ *
+ * READ from theme.css rather than copied into it. The copy below the fold was
+ * hand-maintained and had fallen behind: it still carried `0.541` for code
+ * comments and punctuation where the theme had moved to `0.5264`, and its
+ * status colours were older too. Regeneration therefore produced presets whose
+ * supposedly-shared palette differed from the shipped one, which quietly
+ * invalidated comparisons of exactly the parts meant to be identical.
+ *
+ * Deriving is what removes the class of defect. A test asserting the copy
+ * matched would only have told us the two had already diverged.
  */
+const themeCss = readFileSync(
+  new URL("../../../packages/ui/src/styles/theme.css", import.meta.url),
+  "utf8"
+);
+const { parseThemeTokens } = await import(
+  "../../../packages/ui/src/styles/contrast/parse-theme.ts"
+);
+const shippedTokens = parseThemeTokens(themeCss);
+
+/** The token roles a tweakcn preset cannot supply, taken from the theme. */
+const BORROWED_FROM_THEME = [
+  "highlight",
+  "highlight-foreground",
+  "code-bg",
+  "code-fg",
+  "code-comment",
+  "code-keyword",
+  "code-string",
+  "code-number",
+  "code-function",
+  "code-operator",
+  "code-punctuation",
+  "code-variable",
+  "code-tag",
+  "code-deleted",
+  "code-inserted",
+];
+
+function borrowedFor(mode) {
+  const tokens = shippedTokens[mode];
+  const out = {};
+  for (const name of BORROWED_FROM_THEME) {
+    const value = tokens.get(`--nx-${name}`);
+    if (!value) {
+      throw new Error(
+        `theme.css declares no --nx-${name} for ${mode}; a preset would ship ` +
+          `without it and inherit whatever the admin happens to define`
+      );
+    }
+    out[name] = value;
+  }
+  return out;
+}
+
 const SHIPPED = {
-  light: {
-    highlight: "oklch(0.9297 0.1638 101.06)",
-    "highlight-foreground": "oklch(0.2079 0.0399 265.73)",
-    "code-bg": "oklch(0.9761 0.0035 247.86)",
-    "code-fg": "oklch(0.2079 0.0399 265.73)",
-    "code-comment": "oklch(0.541 0.0407 257.44)",
-    "code-keyword": "oklch(0.4882 0.2172 303.9)",
-    "code-string": "oklch(0.4478 0.1189 152.1)",
-    "code-number": "oklch(0.5106 0.1518 44.2)",
-    "code-function": "oklch(0.4757 0.1444 254.6)",
-    "code-operator": "oklch(0.4936 0.1418 8.4)",
-    "code-punctuation": "oklch(0.541 0.0407 257.44)",
-    "code-variable": "oklch(0.4694 0.1173 62.3)",
-    "code-tag": "oklch(0.5054 0.1905 27.5)",
-    "code-deleted": "oklch(0.5054 0.1905 27.5)",
-    "code-inserted": "oklch(0.4478 0.1189 152.1)",
-  },
-  dark: {
-    highlight: "oklch(0.8 0.1425 101.06)",
-    "highlight-foreground": "oklch(0.2079 0.0399 265.73)",
-    "code-bg": "oklch(0.1916 0.0228 266.36)",
-    "code-fg": "oklch(0.9838 0.0035 247.86)",
-    "code-comment": "oklch(0.6626 0.0364 256.79)",
-    "code-keyword": "oklch(0.7482 0.1235 303.9)",
-    "code-string": "oklch(0.7654 0.1476 152.1)",
-    "code-number": "oklch(0.7807 0.1189 44.2)",
-    "code-function": "oklch(0.7365 0.1163 254.6)",
-    "code-operator": "oklch(0.7549 0.1234 8.4)",
-    "code-punctuation": "oklch(0.6626 0.0364 256.79)",
-    "code-variable": "oklch(0.7938 0.1052 62.3)",
-    "code-tag": "oklch(0.7118 0.1476 27.5)",
-    "code-deleted": "oklch(0.7118 0.1476 27.5)",
-    "code-inserted": "oklch(0.7654 0.1476 152.1)",
-  },
+  light: borrowedFor("light"),
+  dark: borrowedFor("dark"),
 };
+
 
 /** Nextly tokens shadcn has no equivalent for, derived from what it does have. */
 function derive(src, mode) {
@@ -212,20 +239,60 @@ if (presets.length !== blocks.length) {
   );
 }
 
+// The shortlist is applied HERE, not by editing the generated file. It used
+// to be applied by deleting entries after generation, so re-running this
+// script restored the full registry, failed the preset test and widened the
+// switcher with nothing recording what the shortlist had been.
+const shortlisted = presets.filter(preset =>
+  TWEAKCN_SHORTLIST.includes(preset.id)
+);
+
+// A shortlist naming an id the registry no longer publishes would silently
+// ship fewer presets than intended, which looks identical to a deliberate
+// narrowing. Name the missing ones instead.
+const absent = TWEAKCN_SHORTLIST.filter(
+  id => !presets.some(preset => preset.id === id)
+);
+if (absent.length > 0) {
+  throw new Error(
+    `shortlist names ${absent.length} preset(s) the registry does not ` +
+      `publish: ${absent.join(", ")}. Update TWEAKCN_SHORTLIST, or check ` +
+      `whether upstream renamed them.`
+  );
+}
+
 const header = `/**
  * tweakcn's published presets, mapped onto Nextly's token names.
  *
  * Generated by scripts/import-tweakcn.mjs — do not edit by hand. These are
  * third-party reference themes shown for comparison, not Nextly identity
  * candidates.
+ *
+ * This is the SHORTLIST, not the full registry. The importer parses every
+ * published preset and narrows to scripts/tweakcn-shortlist.mjs, so
+ * regenerating reproduces this file rather than replacing it with all of them.
  */
 import type { ThemeDefinition } from "../types";
 
-export const TWEAKCN_THEMES: ThemeDefinition[] = ${JSON.stringify(presets, null, 2)};
+export const TWEAKCN_THEMES: ThemeDefinition[] = ${JSON.stringify(shortlisted, null, 2)};
 `;
 
-writeFileSync(
-  new URL("../src/theme-lab/themes/tweakcn.generated.ts", import.meta.url),
-  header
+const outPath = new URL(
+  "../src/theme-lab/themes/tweakcn.generated.ts",
+  import.meta.url
 );
-console.log(`wrote ${presets.length} presets`);
+
+// Formatted the way the repository formats it, not the way JSON.stringify
+// writes it. The committed file is formatted on commit, so a raw run differed
+// from it in key quoting alone -- hundreds of lines of diff on every
+// regeneration, with any real palette change buried inside the noise.
+const formatted = await format(header, {
+  ...(await resolveConfig(fileURLToPath(outPath))),
+  filepath: fileURLToPath(outPath),
+});
+
+writeFileSync(outPath, formatted);
+console.log(
+  `wrote ${shortlisted.length} of ${presets.length} parsed presets ` +
+    `(shortlist: ${TWEAKCN_SHORTLIST.join(", ")})`
+);
