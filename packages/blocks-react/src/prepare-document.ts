@@ -70,18 +70,45 @@ export interface PrepareDocumentArgs {
  *
  * Only the outcomes knowable WITHOUT calling the block: an unregistered type, a
  * failed migration, and a node stored ahead of the definition that would render
- * it. Whether a block throws or returns nothing is settled by calling it, which
- * is the renderer's business and not a document-shape question.
+ * it.
+ *
+ * A block DECLARING that its props draw nothing (`rendersNothing`) is a separate
+ * question, decided by the drawless test rather than here, because the two are
+ * not equally safe to act on. A node this pass rejects resolves to a visible
+ * placeholder, which is already an exceptional state; a block that draws nothing
+ * is an ordinary one — an image waiting for its picture — and dropping it costs
+ * the page its stylesheet unless the stored sheet can account for it.
+ *
+ * It is consulted ELSEWHERE too, and the distinction is worth keeping straight:
+ * the block boundary reads it to decide whether a node's `cssId` and attributes
+ * may be refused, which is a question about one node's own output and costs
+ * nothing when the answer is wrong in the safe direction.
+ *
+ * The rest are NOT knowable here, and deliberately so: whether a block throws,
+ * returns something unrenderable, or renders a given slot at all is only
+ * settled by calling it, which happens inside the boundary further down. A node
+ * that ends in one of those placeholders can still reserve an address it never
+ * uses. Closing that would mean deciding addresses after render, which is a
+ * different design than compiling the document once up front.
  */
-function rendersOwnMarkup(node: BlockNode, resolver: BlockResolver): boolean {
+export function rendersOwnMarkup(
+  node: BlockNode,
+  resolver: BlockResolver
+): boolean {
   if (node.migrationFailed === true) return false;
   const definition = resolver.get(node.type);
   if (definition === undefined) return false;
   return node.version <= definition.version;
 }
 
-/** Drop the subtrees the renderer replaces with a placeholder. */
-function pruneKnownPlaceholders(
+/**
+ * Drop the subtrees the renderer replaces with a placeholder.
+ *
+ * Exported so the renderer removes them the same way rather than keeping its
+ * own copy: two implementations of one pass agree the day they are written and
+ * drift after, and this one decides what a stored stylesheet may still describe.
+ */
+export function pruneKnownPlaceholders(
   document: BlockDocument,
   resolver: BlockResolver
 ): BlockDocument {
@@ -170,10 +197,51 @@ function pruneKnownPlaceholders(
  * one has content that cannot be trusted to mean anything. A metadata reader
  * must not describe either, and only the second is worth a different message.
  */
-export function prepareDocumentForRead(
+/**
+ * Every state the read pipeline passed through, in order.
+ *
+ * 🔴 **A stage holds the SAME REFERENCE as the stage before it when its pass
+ * changed nothing.** That is the contract these fields exist to support, and it
+ * is invisible from the type: a caller decides whether a stored stylesheet still
+ * describes the tree that renders by comparing stages with `!==`.
+ *
+ * Break it — a defensive clone, a `structuredClone`, a `map` that always
+ * allocates — and every document reads as repaired. A repaired document with no
+ * compile context has its whole sheet withheld, so every page silently loses its
+ * stylesheet on the happy path with no error anywhere. `prepare-stages.test.ts`
+ * asserts the identity directly, by reference.
+ */
+export interface DocumentReadStages {
+  /** After the caps pass. */
+  sanitized: BlockDocument;
+  /** After migration to the current format. */
+  migrated: BlockDocument;
+  /** After condition-gated nodes are withheld. */
+  gated: BlockDocument;
+  /** After addresses are made unique over what will render. */
+  deduped: BlockDocument;
+  /** After known placeholders are dropped. The document to read. */
+  prepared: BlockDocument;
+}
+
+/**
+ * The read pipeline, reporting every state it passed through.
+ *
+ * `prepareDocumentForRead` is this function's `prepared` field and nothing else,
+ * so a reader that needs only the result cannot fall out of step with one that
+ * needs the intermediates.
+ *
+ * Returns `null` for ONE reason only: an unreadable envelope — a non-object, or
+ * a `formatVersion` this build does not speak. A document whose every node
+ * resolves to a placeholder comes back with stages whose `prepared` tree is
+ * empty, NOT as `null`, because that is a judgement about reading rather than a
+ * fact about the document: the renderer still walks it to draw the markers.
+ * `prepareDocumentForRead` applies that judgement; this function reports.
+ */
+export function prepareDocumentReadStages(
   document: BlockDocument,
   args: PrepareDocumentArgs
-): BlockDocument | null {
+): DocumentReadStages | null {
   if (
     typeof document !== "object" ||
     document === null ||
@@ -192,7 +260,10 @@ export function prepareDocumentForRead(
   // reuses it — and the placeholder prune then removes the reserving parent too,
   // leaving neither node. The renderer keeps the later node, so the two readers
   // would describe different pages.
-  const visible = dedupeNodeIds(pruneHiddenNodes(doc), node =>
+  // Held rather than inlined: the caller compares stages by REFERENCE, and
+  // running the pass twice would hand it a different object for the same state.
+  const gated = pruneHiddenNodes(doc);
+  const visible = dedupeNodeIds(gated, node =>
     rendersOwnMarkup(node, args.resolver)
   );
   const prepared = pruneKnownPlaceholders(visible, args.resolver);
@@ -210,6 +281,40 @@ export function prepareDocumentForRead(
   // reporting it as unreadable would show an unsupported-content fallback for a
   // page that is working exactly as configured. Only content that survived
   // gating and then turned out to be unrenderable is a placeholder-only page.
-  if (visible.nodes.length > 0 && prepared.nodes.length === 0) return null;
-  return prepared;
+  return {
+    sanitized,
+    migrated: doc,
+    gated,
+    deduped: visible,
+    prepared,
+  };
+}
+
+/**
+ * The prepared document, for readers that need no intermediate state.
+ *
+ * Derived from `prepareDocumentReadStages` rather than repeating its passes.
+ * Two implementations of one pipeline agree the day they are written and drift
+ * after, and the drift is silent because both look correct alone.
+ */
+export function prepareDocumentForRead(
+  document: BlockDocument,
+  args: PrepareDocumentArgs
+): BlockDocument | null {
+  const stages = prepareDocumentReadStages(document, args);
+  if (stages === null) return null;
+  // The all-placeholder rule belongs to READING, not to the pipeline. A page
+  // that presents nothing but placeholders is unreadable to a visitor who wanted
+  // its content, which is what `null` names here — but the RENDERER must still
+  // walk that document, because the placeholders are the markers it draws. A
+  // pipeline that answered `null` for it would take those markers away and show
+  // an unsupported-format box for a page whose blocks are merely unresolvable.
+  //
+  // Compared against the tree AFTER gating: a page whose blocks are all
+  // condition-gated is legitimately empty, nothing failed, and reporting it as
+  // unreadable would show a fallback for a page working exactly as configured.
+  if (stages.deduped.nodes.length > 0 && stages.prepared.nodes.length === 0) {
+    return null;
+  }
+  return stages.prepared;
 }

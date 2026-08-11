@@ -3,10 +3,8 @@ import {
   DOCUMENT_FORMAT_VERSION,
   PAGE_ROOT_CLASS,
   isFetchableUrl,
-  migrateDocument,
   walkNodes,
   type BlockDocument,
-  type BlockNode,
   type DocumentLimits,
   type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
@@ -20,11 +18,10 @@ import {
 } from "./context";
 import { BlockPlaceholder } from "./placeholder";
 import {
-  registeredBlocks,
-  migrationSourceFor,
-  type BlockResolver,
-} from "./resolver";
-import { dedupeNodeIds, sanitizeDocument } from "./sanitize";
+  prepareDocumentReadStages,
+  rendersOwnMarkup,
+} from "./prepare-document";
+import { registeredBlocks, type BlockResolver } from "./resolver";
 import {
   UNIDENTIFIED_FETCH_POLICY,
   drawlessTestFor,
@@ -35,7 +32,7 @@ import {
   styleTextForInjection,
   type PageStyles,
 } from "./styles";
-import { pruneHiddenNodes, pruneNodes } from "./visibility";
+import { pruneNodes } from "./visibility";
 
 export interface PageRendererProps {
   /** The stored document to render. */
@@ -81,44 +78,6 @@ export interface PageRendererProps {
    * omitting this does not deny remote fetches.
    */
   hostPolicy?: BlockHostPolicy;
-}
-
-/**
- * Whether a node will render its own host markup, decided BEFORE rendering.
- *
- * Two passes need this answer early: address repair, which must not let a node
- * that emits no `id` reserve one away from a healthy sibling, and the stylesheet
- * decision, which must not publish rules compiled for markup that never ships.
- *
- * Only the placeholder outcomes that are knowable from the document and the
- * resolver are covered — an unregistered type, a failed migration, and a node
- * stored ahead of the definition that would render it. All three are pure
- * comparisons.
- *
- * A block DECLARING that its props draw nothing (`rendersNothing`) is a separate
- * question, decided by the drawless test rather than here, because the two are
- * not equally safe to act on. A node this pass rejects resolves to a visible
- * placeholder, which is already an exceptional state; a block that draws nothing
- * is an ordinary one — an image waiting for its picture — and dropping it costs
- * the page its stylesheet unless the stored sheet can account for it.
- *
- * It is consulted ELSEWHERE too, and the distinction is worth keeping straight:
- * the block boundary reads it to decide whether a node's `cssId` and attributes
- * may be refused, which is a question about one node's own output and costs
- * nothing when the answer is wrong in the safe direction.
- *
- * The rest are NOT knowable here, and deliberately so: whether a block throws,
- * returns something unrenderable, or renders a given slot at all is only
- * settled by calling it, which happens inside the boundary further down. A node
- * that ends in one of those placeholders can still reserve an address it never
- * uses. Closing that would mean deciding addresses after render, which is a
- * different design than compiling the document once up front.
- */
-function rendersOwnMarkup(node: BlockNode, resolver: BlockResolver): boolean {
-  if (node.migrationFailed === true) return false;
-  const definition = resolver.get(node.type);
-  if (definition === undefined) return false;
-  return node.version <= definition.version;
 }
 
 /**
@@ -206,26 +165,21 @@ function hasDuplicateNodeIds(document: BlockDocument): boolean {
 }
 
 /**
- * The tree a stylesheet should be compiled from.
+ * Drop the subtrees the renderer replaces with a placeholder, over the slots the
+ * BOUNDARY renders.
  *
- * A node that resolves to a placeholder emits only a hidden marker, so every
- * rule compiled for the markup it WOULD have rendered matches nothing and ships
- * anyway, carrying whatever those rules referenced. Dropping the node from the
- * style input is what stops that.
+ * Deliberately NOT `prepare-document`'s pass of the same name, which walks only
+ * the slots a definition declares. That is right for the document a reader is
+ * handed: an undeclared slot is not on the page, and compiling its descendants'
+ * rules would publish markup nobody receives. It is wrong here, because
+ * `renderSlot(name: string)` lets a block render a stored slot its definition
+ * never declared — and those children DO reach the page, so a style input that
+ * dropped them would withhold rules for markup that is rendered.
  *
- * It has to be a SEPARATE tree from the one that renders. The render still
- * needs the node, because drawing its placeholder is how the failure becomes
- * visible; only the stylesheet should pretend it was never there. Marking the
- * document "repaired" is not enough on its own, because recompiling from a tree
- * that still contains the node produces the same rules again.
- *
- * The subtree goes with it: a placeholder replaces the node entirely, so its
- * children never reach the page either.
- *
- * Returns the ORIGINAL document when every node renders, so the common case
- * allocates nothing and the caller can compare by identity.
+ * Two questions, two passes. `pruneNodes` is the shared walk, so their identity
+ * behaviour cannot diverge even though what they keep does.
  */
-function pruneKnownPlaceholders(
+function pruneRenderedPlaceholders(
   document: BlockDocument,
   resolver: BlockResolver
 ): BlockDocument {
@@ -313,35 +267,34 @@ export function PageRenderer({
     );
   }
 
-  const sanitized = sanitizeDocument(
-    document,
-    limits ?? styleContext?.limits ?? DEFAULT_LIMITS
-  );
-  const { doc } = migrateDocument(sanitized, migrationSourceFor(resolver));
+  // The shared pipeline, reporting every state it passed through. The passes and
+  // their order live in one place now; what stays here is the artifact question
+  // this file alone can answer — whether a stored stylesheet still describes the
+  // tree that renders — which reads those states rather than recomputing them.
+  const stages = prepareDocumentReadStages(document, {
+    resolver,
+    limits,
+    styleContext,
+  });
+  // `null` here means only an unreadable ENVELOPE, which the two guards above
+  // already answered. Kept because unreachability is a property of the current
+  // call graph rather than of the code, and this guard costs a comparison over a
+  // value already in hand.
+  if (stages === null) {
+    return (
+      <div className={PAGE_ROOT_CLASS}>
+        <BlockPlaceholder reason="unsupported-format" type="document" />
+      </div>
+    );
+  }
+  const { sanitized, migrated: doc, gated: pruned, deduped: visible } = stages;
 
   // The scope comes from whichever input supplied the stylesheet, never from a
   // separate prop. Two inputs would have to agree, and when they did not the
-  // root would carry a class the selectors never mention, so every compiled
-  // rule would match nothing while both inputs looked correct on their own.
-  // Gated nodes leave the tree BEFORE styles are resolved, so the stylesheet
-  // and the markup are compiled from the same document. Filtering only the
-  // render would withhold a gated node's HTML while still publishing its
-  // scoped CSS, and with it whatever that CSS referenced.
-  const pruned = pruneHiddenNodes(doc);
-
-  // Addresses are made unique LAST, over what will actually render. A gated node
-  // never reaches the page, so letting it reserve a node id or a DOM id would
-  // take that address from a visible node for nothing: the visible one would be
-  // dropped or stripped of its anchor, and the node it collided with would then
-  // be pruned anyway.
-  //
-  // The children of a node that is already known to placeholder are in the same
-  // position. The node itself still renders its marker and still needs a key,
-  // but a placeholder replaces the node entirely, so nothing below it reaches
-  // the page and nothing below it should hold an address.
-  const visible = dedupeNodeIds(pruned, node =>
-    rendersOwnMarkup(node, resolver)
-  );
+  // root would carry a class the selectors never mention, so every compiled rule
+  // would match nothing while both inputs looked correct on their own. Gating
+  // runs before styles are resolved, so the stylesheet and the markup are
+  // compiled from the same document.
 
   // Whether the tree that renders is the tree the stored stylesheet was
   // compiled from. Each pass returns its input unchanged when it had nothing to
@@ -428,7 +381,7 @@ export function PageRenderer({
   const drawlessInput = drawlessCoveredByArtifact ? drawlessDropped : visible;
   // Compiled from a tree with the knowable placeholders removed, while the
   // render keeps them so their placeholders still appear.
-  const styleInput = pruneKnownPlaceholders(drawlessInput, resolver);
+  const styleInput = pruneRenderedPlaceholders(drawlessInput, resolver);
 
   // Whether a knowable placeholder was removed AT ALL, asked of `visible` rather
   // than of what the drawless drop left. The two passes can reject the SAME node
@@ -439,7 +392,7 @@ export function PageRenderer({
   // the drop is honest; what it cannot cover is the rest of what a placeholder
   // means for the sheet, and that answer must not depend on which pass reached
   // the node first.
-  const placeholderDropped = pruneKnownPlaceholders(visible, resolver);
+  const placeholderDropped = pruneRenderedPlaceholders(visible, resolver);
 
   // Each pass contributes against the SAME base for the same reason. Folding
   // them into one `styleInput !== visible` would let a covered drawless drop
