@@ -9,6 +9,7 @@ import { gotoAdmin } from "../support/admin";
 
 import {
   frameContentOrigin,
+  mapFramePointToHost,
   mapFrameRectToHost,
   type FrameInset,
 } from "./coordinate-mapping";
@@ -233,7 +234,15 @@ export function createPocDriver(page: Page): CanvasDriver {
       let best = -1;
       let bestDistance = Number.POSITIVE_INFINITY;
       rects.forEach((rect, index) => {
-        const centre = origin.y + (rect.y + rect.height / 2) * scale;
+        // Mapped by the shared helper rather than multiplied out here. Written
+        // inline this is two numbers scaled and added, which is exactly the
+        // shape no import scan can tell from ordinary arithmetic — so it is the
+        // one that drifts silently when the mapping is corrected.
+        const centre = mapFramePointToHost(
+          { x: 0, y: rect.y + rect.height / 2 },
+          origin,
+          scale
+        ).y;
         const distance = Math.abs(pointerY - centre);
         if (distance < bestDistance) {
           bestDistance = distance;
