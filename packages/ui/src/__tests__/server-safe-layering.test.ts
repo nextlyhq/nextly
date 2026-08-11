@@ -180,6 +180,9 @@ function analyze(source: string, fileName: string): Analysis {
         // An enum creates a real runtime binding, so `export enum Node { A }` means `Node` is the
         // module's own, not the DOM one.
         ts.isEnumDeclaration(node) ||
+        // `export namespace Node { export const A = 1 }` emits a real local `Node` value, so a
+        // later `Node.A` is the module's own binding rather than the DOM one.
+        ts.isModuleDeclaration(node) ||
         ts.isParameter(node) ||
         ts.isBindingElement(node) ||
         ts.isImportSpecifier(node) ||
@@ -291,6 +294,18 @@ function analyze(source: string, fileName: string): Analysis {
             outer.expression === parent &&
             outer.questionDotToken !== undefined));
       if (shortCircuits) return false;
+      // A BARE read — `export const doc = globalThis.document` — evaluates to undefined on a
+      // server rather than throwing. Only DEREFERENCING the result does. So this reports the
+      // access only when its value is used further: another property, an index, or a call.
+      const outerUse = parent.parent;
+      const dereferenced =
+        outerUse !== undefined &&
+        ((ts.isPropertyAccessExpression(outerUse) &&
+          outerUse.expression === parent) ||
+          (ts.isElementAccessExpression(outerUse) &&
+            outerUse.expression === parent) ||
+          (ts.isCallExpression(outerUse) && outerUse.expression === parent));
+      if (!dereferenced) return false;
       // And the guarded USE is as safe as the bare-identifier form, so the same guard excuses it.
       return !guardedByTypeof(node);
     }
@@ -316,6 +331,14 @@ function analyze(source: string, fileName: string): Analysis {
     // node kinds, because the list was three entries long and already missing the rest.
     if ("name" in parent && parent.name === node) return false;
     if (ts.isBindingElement(parent) && parent.propertyName === node) {
+      return false;
+    }
+    // `import { window as viewport } from "./safe"` puts `window` in `propertyName`, which the
+    // `name` rule above does not cover — it names the export being imported, not the global.
+    if (
+      (ts.isImportSpecifier(parent) || ts.isExportSpecifier(parent)) &&
+      parent.propertyName === node
+    ) {
       return false;
     }
 
@@ -456,11 +479,20 @@ function analyze(source: string, fileName: string): Analysis {
         invoked = invoked.parent;
       }
       const parent = invoked.parent;
-      return (
-        parent !== undefined &&
-        ts.isCallExpression(parent) &&
-        parent.expression === invoked
-      );
+      if (parent === undefined) return false;
+      // `(() => window.x).call(undefined)` runs the body now, but its callee is a property access
+      // rather than the function itself. `bind` is deliberately absent — it defers.
+      if (
+        ts.isPropertyAccessExpression(parent) &&
+        parent.expression === invoked &&
+        (parent.name.text === "call" || parent.name.text === "apply") &&
+        parent.parent !== undefined &&
+        ts.isCallExpression(parent.parent) &&
+        parent.parent.expression === parent
+      ) {
+        return true;
+      }
+      return ts.isCallExpression(parent) && parent.expression === invoked;
     })();
     const entersFunction = isFunction && !runsNow;
 
@@ -798,6 +830,41 @@ describe("reading a module", () => {
         import type * as dom from "./dom";
         export type Root = dom.HTMLElement;
       `).globals
+    ).toEqual([]);
+  });
+
+  it("does not report a namespace, an aliased import name, or a bare globalThis read", () => {
+    // A namespace emits a real runtime binding; an aliased import names the EXPORT rather than the
+    // global; and `globalThis.document` on its own evaluates to undefined on a server — only
+    // dereferencing the result throws. All three are valid server-safe code.
+    expect(
+      read(`
+        export namespace Node { export const A = 1; }
+        export const first = Node.A;
+        import { window as viewport } from "./safe";
+        export const w = viewport;
+        export const doc = globalThis.document;
+      `).globals
+    ).toEqual([]);
+  });
+
+  it("reports a globalThis read whose result is dereferenced", () => {
+    // The control for the case above: the bare read is safe, using it is not.
+    expect(read(`export const b = globalThis.document.body;`).globals).toEqual([
+      "document",
+    ]);
+  });
+
+  it("reports an IIFE invoked through .call", () => {
+    // `.call` and `.apply` run the body now; the callee is a property access rather than the
+    // function itself, so the direct-call check misses it. `.bind` defers and is excluded.
+    expect(
+      read(`export const w = (() => window.innerWidth).call(undefined);`)
+        .globals
+    ).toEqual(["window"]);
+    expect(
+      read(`export const later = (() => window.innerWidth).bind(undefined);`)
+        .globals
     ).toEqual([]);
   });
 
