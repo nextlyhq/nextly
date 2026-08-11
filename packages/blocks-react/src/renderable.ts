@@ -157,7 +157,7 @@ const PROVIDER_TAGS: ReadonlySet<symbol> = new Set([
 export function rendersChildrenTransparently(type: unknown): boolean {
   if (type === FRAGMENT_TYPE || type === STRICT_MODE_TYPE) return true;
   if (type === PROFILER_TYPE || type === SUSPENSE_TYPE) return true;
-  if (type === ACTIVITY_TYPE) return true;
+  if (type === ACTIVITY_TYPE || type === SUSPENSE_LIST_TYPE) return true;
   const tag = reactTag(type);
   return tag !== null && PROVIDER_TAGS.has(tag);
 }
@@ -167,6 +167,14 @@ const FRAGMENT_TYPE = Symbol.for("react.fragment");
 const STRICT_MODE_TYPE = Symbol.for("react.strict_mode");
 const PROFILER_TYPE = Symbol.for("react.profiler");
 const ACTIVITY_TYPE = Symbol.for("react.activity");
+/**
+ * `SuspenseList`, which renders its children directly and draws nothing when it
+ * has none. Named here because the list of types this module ACCEPTS already
+ * carries it: a type accepted as renderable but missing from this answer is a
+ * wrapper walked to validate its children in one place and reported as output in
+ * the other, which is the disagreement sharing this function exists to prevent.
+ */
+const SUSPENSE_LIST_TYPE = Symbol.for("react.suspense_list");
 
 /** The context consumer tag, whose single child must be a function. */
 const CONSUMER_TAG = Symbol.for("react.consumer");

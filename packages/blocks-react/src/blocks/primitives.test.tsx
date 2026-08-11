@@ -695,24 +695,9 @@ describe("through the boundary", () => {
     ["an empty list", []],
     ["a list of nothing", [false, null, undefined, ""]],
     ["a nested list of nothing", [[], [false]]],
-    // Any iterable, not only an array. React renders an empty Set as nothing,
-    // and a fragment's borrowed children are validated without being
-    // materialised, so a Set reaches this check as a Set.
+    // Any iterable a block RETURNS, because the normalizer materialises it into
+    // an array this renderer owns before anything here reads it.
     ["an empty set", new Set()],
-    ["a fragment of an empty set", <>{new Set()}</>],
-
-    // And the fragment spelling. `<>{items.map(...)}</>` over an empty
-    // collection is the same intent again, and a fragment is a valid element,
-    // so it reaches the wrapper-root branch rather than the list one.
-    ["an empty fragment", <></>],
-    ["a fragment of nothing", <>{[]}</>],
-    [
-      "a fragment wrapping falsy children",
-      <>
-        {false}
-        {null}
-      </>,
-    ],
   ])("does not placeholder a block returning %s", async (label, value) => {
     const html = await renderReturning(
       value,
@@ -724,57 +709,120 @@ describe("through the boundary", () => {
   });
 
   it.each([
-    ["StrictMode", "StrictMode"],
-    ["Profiler", "Profiler"],
-  ])("does not placeholder an empty %s wrapper", async (_label, kind) => {
-    const wrapper =
-      kind === "StrictMode" ? (
-        <StrictMode>{null}</StrictMode>
-      ) : (
-        <Profiler id="p" onRender={() => {}}>
-          {null}
-        </Profiler>
-      );
-    const html = await renderReturning(wrapper, `test/empty-${kind}`);
-
-    expect(html).not.toContain("data-nx-block-placeholder");
-    expect(withoutComments(html)).toBe("");
-  });
-
-  it.each([
-    ["Activity", <Activity mode="visible">{null}</Activity>],
+    ["an empty fragment", <></>],
+    ["a fragment of nothing", <>{[]}</>],
+    ["a fragment of an empty set", <>{new Set()}</>],
     [
-      "a context provider",
+      "a fragment wrapping falsy children",
+      <>
+        {false}
+        {null}
+      </>,
+    ],
+    [
+      "a hidden Activity with children",
+      <Activity mode="hidden">
+        <div>x</div>
+      </Activity>,
+    ],
+    ["an empty StrictMode", <StrictMode>{null}</StrictMode>],
+    [
+      "an empty Profiler",
+      <Profiler id="p" onRender={() => {}}>
+        {null}
+      </Profiler>,
+    ],
+    ["an empty Activity", <Activity mode="visible">{null}</Activity>],
+    [
+      "an empty context provider",
       <TestContext.Provider value="v">{null}</TestContext.Provider>,
     ],
-    // Empty children cannot suspend, so the fallback never runs and the output
-    // really is empty. The suspending case is the control below.
-    [
-      "Suspense with empty children",
-      <Suspense fallback={<b>wait</b>}>{null}</Suspense>,
-    ],
-  ])("does not placeholder an empty %s", async (label, wrapper) => {
-    const html = await renderReturning(
-      wrapper,
-      `test/empty-${label.replace(/[^a-z]+/gi, "-")}`
+    ["an empty Suspense", <Suspense fallback={<b>wait</b>}>{null}</Suspense>],
+  ])(
+    "keeps the diagnostic for %s, which only the block can vouch for",
+    async (label, value) => {
+      // Emptiness is judged ONLY from what this renderer owns. A wrapper the
+      // block built is not that: its children, its `value`, its `key` and `ref`,
+      // and any iterator inside it are all author-controlled, and React reads
+      // every one of them AGAIN after this check has returned. An exemption
+      // granted on a reading React need not repeat is an exemption that can be
+      // wrong, and it was wrong five separate ways — twice fatally, taking the
+      // page rather than the block.
+      //
+      // So a node asking for an anchor on a wrapper root keeps its diagnostic,
+      // and a block that genuinely draws nothing says so through
+      // `rendersNothing`, which is computed from props and cannot vary.
+      const html = await renderReturning(
+        value,
+        `test/wrapper-${label.replace(/[^a-z]+/gi, "-")}`
+      );
+
+      expect(html).toContain('data-nx-block-placeholder="invalid-output"');
+    }
+  );
+
+  it("takes the block's own word for it, whatever the output looks like", async () => {
+    // The sound channel, and the reason narrowing the inspection costs nothing a
+    // block cannot recover. `rendersNothing` is answered from the node's PROPS,
+    // which this renderer already holds and no author code can change between
+    // now and React's read.
+    const declared = defineBlock({
+      name: "test/declares-nothing",
+      version: 1,
+      description: "Returns a wrapper and declares it draws nothing.",
+      example: { props: {} },
+      rendersNothing: () => true,
+      render: () => <>{new Set()}</>,
+    });
+    const stream = await renderToReadableStream(
+      <BlockBoundary
+        node={{
+          id: "n1",
+          type: "test/declares-nothing",
+          version: 1,
+          props: {},
+          cssId: "anchor",
+        }}
+        context={context()}
+        blocks={createBlockResolver([declared as AnyBlockDefinition])}
+        classes={{ n1: "nx-node" }}
+      />
     );
+    const html = await new Response(stream).text();
 
     expect(html).not.toContain("data-nx-block-placeholder");
-    expect(withoutComments(html)).toBe("");
   });
 
-  it("does not placeholder a hidden Activity with children", async () => {
-    // A hidden Activity serialises as no output whatever it contains, so its
-    // children do not decide the answer — the mode does.
-    const html = await renderReturning(
-      <Activity mode="hidden">
-        <div>hidden</div>
-      </Activity>,
-      "test/hidden-activity"
+  it("ignores a declaration that throws rather than losing the page", async () => {
+    // It is plugin code, called outside the render's own try/catch. A throw here
+    // means no declaration, not an error.
+    const hostile = defineBlock({
+      name: "test/declaration-throws",
+      version: 1,
+      description: "Throws while declaring.",
+      example: { props: {} },
+      rendersNothing: () => {
+        throw new Error("hostile declaration");
+      },
+      render: () => <>{null}</>,
+    });
+    const stream = await renderToReadableStream(
+      <BlockBoundary
+        node={{
+          id: "n1",
+          type: "test/declaration-throws",
+          version: 1,
+          props: {},
+          cssId: "anchor",
+        }}
+        context={context()}
+        blocks={createBlockResolver([hostile as AnyBlockDefinition])}
+        classes={{ n1: "nx-node" }}
+      />
     );
+    const html = await new Response(stream).text();
 
-    expect(html).not.toContain("data-nx-block-placeholder");
-    expect(withoutComments(html)).toBe("");
+    expect(html).toContain('data-nx-block-placeholder="invalid-output"');
   });
 
   it("keeps the diagnostic for a list whose members are still pending", async () => {
@@ -975,24 +1023,21 @@ describe("through the boundary", () => {
   });
 
   it("does not let a hostile array method escape the boundary", async () => {
-    // `every` is author-controllable: an array can carry its own. Calling it to
-    // decide emptiness runs plugin code OUTSIDE the render's try/catch, where a
-    // throw takes the whole page rather than one block. React never calls it to
-    // render an array, so neither should this.
+    // `every` is author-controllable: an array can carry its own. Nothing here
+    // calls it — the owned-array walk goes by index, exactly as React does, and
+    // a wrapper root is never opened at all.
     const hostile = Object.assign([], {
       every() {
         throw new Error("hostile every");
       },
     });
 
-    // Inside a FRAGMENT: a returned iterable is materialised into a fresh
-    // array, which would discard the hostile method and make this pass for the
-    // wrong reason. Borrowed JSX children are validated where they lie.
+    // Inside a FRAGMENT, which is borrowed. The node carries an anchor, so it
+    // keeps its diagnostic — and the point is that it is a DIAGNOSTIC rather
+    // than the page dying, which is what calling `every` here would have cost.
     const html = await renderReturning(<>{hostile}</>, "test/hostile-every");
 
-    // It is an EMPTY array, so the contract's answer is "renders nothing".
-    expect(html).not.toContain("data-nx-block-placeholder");
-    expect(withoutComments(html)).toBe("");
+    expect(html).toContain('data-nx-block-placeholder="invalid-output"');
   });
 
   it.each([

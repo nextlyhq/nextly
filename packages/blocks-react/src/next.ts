@@ -455,18 +455,33 @@ async function firstUsableImage(
   // media record a person filled in, and a site with no `remotePatterns` would
   // then publish it as the link preview while the page correctly refuses to
   // render it. `url()` is the same scheme guard every block prop passes through.
-  const usable = (value: string): boolean => {
+  // Returns the value as the guard NORMALISED it, not merely whether it passed.
+  // `url()` trims, and the renderer publishes the trimmed form — so answering
+  // yes/no here and then emitting the original would put a different string in
+  // the link preview than in the page, which is the disagreement this filter was
+  // added to remove.
+  const usable = (value: string): string | undefined => {
     const safe = url(value);
-    if (safe === undefined) return false;
-    return remotePatterns === undefined || isFetchableUrl(safe, remotePatterns);
+    if (safe === undefined) return undefined;
+    return remotePatterns === undefined || isFetchableUrl(safe, remotePatterns)
+      ? safe
+      : undefined;
   };
   // A refused direct URL is removed from the LIST rather than rejected where it
   // is reached, so scanning simply continues to the next candidate in document
   // order. Rejecting it at the point of use would stop the search at a value
   // that was never going to be published.
-  const list = (candidates ?? []).filter(
-    candidate => candidate.kind !== "url" || usable(candidate.value)
-  );
+  const list: SeoImageCandidate[] = [];
+  for (const candidate of candidates ?? []) {
+    if (candidate.kind !== "url") {
+      list.push(candidate);
+      continue;
+    }
+    const safe = usable(candidate.value);
+    // Kept in its NORMALISED form, so the value that reaches the tag is the one
+    // the guard actually approved rather than the one it was handed.
+    if (safe !== undefined) list.push({ kind: "url", value: safe });
+  }
 
   for (let start = 0; start < list.length; start += MEDIA_LOOKUP_BATCH) {
     const batch = list.slice(start, start + MEDIA_LOOKUP_BATCH);
@@ -504,7 +519,9 @@ async function firstUsableImage(
       // The resolved URL cannot be filtered up front, because nothing knows it
       // until the record is read. A refused one falls through to the next
       // candidate exactly as an unresolvable one does.
-      if (media !== null && usable(media.url)) return media.url;
+      if (media === null) continue;
+      const safe = usable(media.url);
+      if (safe !== undefined) return safe;
     }
     if (direct !== -1) return batch[direct]?.value;
   }

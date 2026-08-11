@@ -3,12 +3,7 @@ import { Suspense, cloneElement, isValidElement, type ReactNode } from "react";
 
 import type { BlockHostPolicy, PageContext } from "./context";
 import { BlockPlaceholder } from "./placeholder";
-import {
-  describeThrown,
-  isThenable,
-  normalizeRenderable,
-  rendersChildrenTransparently,
-} from "./renderable";
+import { describeThrown, isThenable, normalizeRenderable } from "./renderable";
 import type { BlockResolver } from "./resolver";
 import { isUnconditional } from "./visibility";
 
@@ -187,89 +182,23 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
  * Takes `unknown` rather than `ReactNode` so a fragment's children can be read
  * off an element's props and passed straight back in without a cast.
  */
-function rendersNothing(
-  output: unknown,
-  budget = { left: 10_000 },
-  // Whether this value sits inside an element the block already built. What is
-  // reached that way is READ AGAIN by React from the same object; what arrives
-  // here directly was materialised by the normalizer into a fresh array this
-  // renderer owns, and React sees exactly what was measured.
-  borrowed = false
-): boolean {
-  if (isValidElement(output) && isTransparentWrapper(output.type)) {
-    let children: unknown;
-    // Every read below is a property access on an object the block built, and a
-    // getter or a proxy trap may make one throw. This runs after the block's own
-    // try/catch has returned, so an escape here costs the whole page rather than
-    // one block. A read that fails answers "it draws", which routes the element
-    // to the diagnostic instead of withholding one.
-    try {
-      const props: unknown = output.props;
-      // A hidden `Activity` serialises as nothing WHATEVER it contains, so its
-      // children do not decide the answer and must not be consulted. Checked
-      // before the recursion rather than inside it, because the question here is
-      // about the wrapper's own mode and not about what it wraps. Its own `mode`
-      // has just been read under this containment, and React reads nothing else
-      // of a subtree it draws as nothing.
-      if (isHiddenActivity(output.type, props)) return true;
-      // Unusable rather than empty. A forged element can pass `isValidElement`
-      // with null props, and calling it empty withholds the placeholder and
-      // hands it to React, which reads `props.ref` and throws — taking the page,
-      // not the block. Answering false sends it to the diagnostic below.
-      if (typeof props !== "object" || props === null) return false;
-      // Calling a wrapper empty hands it to React, which still renders the
-      // WRAPPER and reads props this check never looks at: a provider's `value`,
-      // a `Profiler`'s `onRender`. Performing those reads here moves a read
-      // React was going to make anyway inside this containment, so a getter that
-      // raises becomes this block's placeholder instead of the page's error.
-      //
-      // Read BY NAME rather than by enumerating. `Object.values` sees only
-      // enumerable OWN properties, and React does not care about either: a
-      // forged element can carry `value` as non-enumerable, or inherit it from a
-      // prototype, and be handed straight through while React still dereferences
-      // it. The names are the ones React itself reads off these wrappers.
-      for (const name of REACT_READS) {
-        void (props as Record<string, unknown>)[name];
-      }
-      // Enumerable extras as well, so a prop React learns to read later is
-      // covered before this list hears about it.
-      Object.values(props);
-      if (!("children" in props)) return true;
-      children = props.children;
-    } catch {
-      return false;
+function rendersNothing(output: unknown, budget = { left: 10_000 }): boolean {
+  // A LIST this renderer owns. `normalizeRenderable` materialises an iterable a
+  // block returns into a fresh array, so this walks the very object React will
+  // render and no author code runs to produce it.
+  //
+  // Arrays only, and only owned ones. The array's own `Symbol.iterator` is not
+  // used — React renders an array by its indexed contents, and following a
+  // custom iterator would answer a question React never asks.
+  if (Array.isArray(output)) {
+    for (let index = 0; index < output.length; index += 1) {
+      // Refusing when the budget runs out answers "it draws", which is the safe
+      // direction: it keeps the node's fields refused rather than silently
+      // accepting output nobody counted.
+      if (budget.left-- <= 0) return false;
+      if (!rendersNothing(output[index], budget)) return false;
     }
-    // Outside the try on purpose: the recursion contains its own reads, and
-    // catching them here would turn a deeper failure into this wrapper's answer.
-    return rendersNothing(children, budget, true);
-  }
-  // A string is iterable and must not be walked character by character: a
-  // non-empty one draws, and the empty one is answered below.
-  if (isWalkableIterable(output)) {
-    // Emptiness is only trusted when it is read the way React will read it.
-    //
-    // An array is indexed off the very object React indexes, and an untouched
-    // `Set` answers from an internal slot the iterator React uses reads too, so
-    // neither answer can drift from the one React acts on. Any OTHER borrowed
-    // iterable answers by running the block's own `Symbol.iterator` again — a
-    // third call, after the normalizer's and before React's — and an iterable
-    // that yields differently each time can read empty here and yield an element
-    // to React, which then reaches the DOM without the `cssId` the node asked
-    // for. Treating it as drawing keeps the diagnostic, which is the direction
-    // that fails where someone can see it.
-    if (borrowed && !Array.isArray(output)) return isEmptyBuiltinSet(output);
-    try {
-      for (const item of output) {
-        // Refusing when the budget runs out answers "it draws", which is the
-        // safe direction: it keeps the node's fields refused rather than
-        // silently accepting output nobody counted.
-        if (budget.left-- <= 0) return false;
-        if (!rendersNothing(item, budget, borrowed)) return false;
-      }
-      return true;
-    } catch {
-      return false;
-    }
+    return true;
   }
   return (
     output === null ||
@@ -277,105 +206,6 @@ function rendersNothing(
     typeof output === "boolean" ||
     output === ""
   );
-}
-
-/**
- * Wrappers React draws by drawing their children and nothing else.
- *
- * Taken from React's own exports rather than a symbol list, so it cannot drift
- * from what this React actually treats as transparent.
- *
- * Delegated to the normalizer, which already decides which wrappers it walks to
- * validate their children. Keeping one answer for "does React draw this by
- * drawing its children" is what stops a wrapper being inspected for safety in
- * one place and misreported as output in the other.
- */
-function isTransparentWrapper(type: unknown): boolean {
-  return rendersChildrenTransparently(type);
-}
-
-/**
- * Whether this is an `Activity` that is currently hidden.
- *
- * `mode="hidden"` is not a styling choice — React serialises the subtree as no
- * output at all, so a block returning one has drawn nothing however much markup
- * it handed over. Anything other than the literal `"hidden"` is treated as
- * visible, which is the direction that keeps a diagnostic rather than
- * withholding one on a malformed prop.
- */
-function isHiddenActivity(type: unknown, props: unknown): boolean {
-  if (type !== ACTIVITY_TYPE) return false;
-  if (typeof props !== "object" || props === null) return false;
-  return "mode" in props && props.mode === "hidden";
-}
-
-/**
- * The props React dereferences on the wrappers this contract opens.
- *
- * Named rather than enumerated, because enumeration answers a different question
- * than React asks: it reports enumerable own properties, while React simply
- * reads the property. A forged element carrying one of these as non-enumerable,
- * or inheriting it, is invisible to enumeration and not to React.
- *
- * `value` belongs to a context provider, `fallback` to `Suspense`, `id` and
- * `onRender` to `Profiler`, `mode` to `Activity`. Reading a name a given wrapper
- * does not have costs nothing and keeps this one list rather than a branch per
- * wrapper type.
- */
-const REACT_READS: readonly string[] = [
-  "value",
-  "fallback",
-  "id",
-  "onRender",
-  "mode",
-];
-
-/** React's `Activity`, by the symbol this React identifies it with. */
-const ACTIVITY_TYPE = Symbol.for("react.activity");
-
-/** The iterator React uses to read a `Set`, so a shadowed one can be told apart. */
-const SET_ITERATOR: unknown = Set.prototype[Symbol.iterator];
-
-/**
- * Whether this is an empty `Set` that React will read the way this check did.
- *
- * Both halves are load-bearing, and neither is sufficient alone.
- *
- * The size is read through `Set.prototype`'s own getter rather than as
- * `value.size`, so a subclass that shadows the property still answers from the
- * internal slot or not at all. But the slot only describes what React will draw
- * while React reaches the members the ordinary way: a `Set` may define its OWN
- * `Symbol.iterator`, and one that yields nothing now and an element when React
- * renders would be declared empty on a slot that never changed, dropping the
- * node's fields with no diagnostic. So the iterator must be the built-in one.
- *
- * Anything else — a look-alike without the slot, a customised iterator, a proxy
- * whose traps raise — answers false and keeps the diagnostic.
- */
-function isEmptyBuiltinSet(value: unknown): boolean {
-  try {
-    if (Reflect.get(Set.prototype, "size", value) !== 0) return false;
-    return Reflect.get(value as object, Symbol.iterator) === SET_ITERATOR;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Whether a value should be walked as a list of children.
- *
- * Reading `Symbol.iterator` is itself a property access that a getter may make
- * throw, so it is contained here rather than at the call site. A string is
- * excluded deliberately: it is iterable, and walking it would turn every word
- * into a list of characters.
- */
-function isWalkableIterable(value: unknown): value is Iterable<unknown> {
-  if (typeof value !== "object" || value === null) return false;
-  try {
-    return typeof (value as Iterable<unknown>)[Symbol.iterator] === "function";
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -392,7 +222,21 @@ function isWalkableIterable(value: unknown): value is Iterable<unknown> {
  * when the document actually asked for those fields, so an ordinary block
  * returning a fragment is untouched.
  */
-function nodeRootReason(output: ReactNode, node: BlockNode): string | null {
+function nodeRootReason(
+  output: ReactNode,
+  node: BlockNode,
+  /**
+   * Whether the block DECLARED that these props draw nothing.
+   *
+   * The sound channel, and now the only one that covers a wrapper. It is
+   * computed from the node's props — data this renderer already holds — rather
+   * than by inspecting a structure the block handed back and still controls.
+   * That distinction is the whole point: an inspected structure is re-read by
+   * React afterwards, and every accessor, proxy trap and custom iterator in it
+   * can answer differently the second time.
+   */
+  declaresNothing: boolean
+): string | null {
   const hasCssId = typeof node.cssId === "string";
   const attributes = node.attributes;
   // Counted by what would actually be WRITTEN, not by what is stored. The
@@ -425,7 +269,21 @@ function nodeRootReason(output: ReactNode, node: BlockNode): string | null {
   // a cleared text value. Verified against React 19: `null`, `undefined`,
   // `false`, `true` and `""` all render empty, while `0` renders "0" and is
   // therefore real output with a root.
-  if (rendersNothing(output)) return null;
+  // Two ways to be exempt, and neither reads anything the block can change
+  // between now and React's own read.
+  //
+  // The block SAYS so, from its props. Or the output is a value this renderer
+  // OWNS: a primitive React draws as nothing, or an array the normalizer
+  // materialised, walked by index exactly as React walks it.
+  //
+  // Deliberately NOT by opening what the block returned. A wrapper's children, a
+  // provider's `value`, an element's `key` and `ref`, an iterable's iterator —
+  // every one of them is author-controllable, and judging emptiness from them
+  // means granting an exemption on a reading React need not repeat. Five
+  // separate holes were found that way, two of which killed the page rather than
+  // the block. A block that legitimately draws nothing from a wrapper root says
+  // so through `rendersNothing`, which cannot vary.
+  if (declaresNothing || rendersNothing(output)) return null;
   const named = hasCssId ? "`cssId`" : "attributes";
   // A primitive or a list, on the other hand, is real output with no single
   // element to carry the fields, so it loses them anyway — silently, and with
@@ -454,7 +312,9 @@ function checkedOutput(
   // function is re-entered for each awaited child, and applying them again
   // there would put the node's id and attributes on a nested element while the
   // block's root, being a list, received none of them.
-  isBlockRoot: boolean
+  isBlockRoot: boolean,
+  /** What the block declared about these props, decided once by the caller. */
+  declaresNothing: boolean
 ): ReactNode {
   const result = normalizeRenderable(value, {
     // A promise the block returned inside a list is awaited under the same
@@ -469,6 +329,7 @@ function checkedOutput(
           node={node}
           fallback={fallback}
           isBlockRoot={false}
+          declaresNothing={declaresNothing}
         />
       </Suspense>
     ),
@@ -485,7 +346,9 @@ function checkedOutput(
     );
   }
 
-  const rootReason = isBlockRoot ? nodeRootReason(result.node, node) : null;
+  const rootReason = isBlockRoot
+    ? nodeRootReason(result.node, node, declaresNothing)
+    : null;
   if (rootReason !== null) {
     return (
       <BlockPlaceholder
@@ -522,14 +385,23 @@ async function AsyncBlockOutput({
   node,
   fallback,
   isBlockRoot,
+  declaresNothing,
 }: {
   pending: PromiseLike<unknown>;
   node: BlockNode;
   fallback: ReactNode;
   isBlockRoot: boolean;
+  /** Carried from the caller, which asked the definition once before rendering. */
+  declaresNothing: boolean;
 }): Promise<ReactNode> {
   try {
-    return checkedOutput(await pending, node, fallback, isBlockRoot);
+    return checkedOutput(
+      await pending,
+      node,
+      fallback,
+      isBlockRoot,
+      declaresNothing
+    );
   } catch (error) {
     return (
       <BlockPlaceholder
@@ -660,7 +532,19 @@ export function BlockBoundary({
   // not-a-promise and falls into the checked path, where it becomes this
   // block's placeholder. A predicate that could raise would do so out here,
   // past the try block above, and take the page with it.
-  if (!isThenable(output)) return checkedOutput(output, node, fallback, true);
+  // Asked of the DEFINITION and the node's props, before anything is rendered,
+  // and contained because it is plugin code: a declaration that throws is simply
+  // no declaration rather than the page's error.
+  let declaresNothing = false;
+  try {
+    declaresNothing = definition.rendersNothing?.(node.props) === true;
+  } catch {
+    declaresNothing = false;
+  }
+
+  if (!isThenable(output)) {
+    return checkedOutput(output, node, fallback, true, declaresNothing);
+  }
 
   return (
     <Suspense fallback={fallback}>
@@ -669,6 +553,7 @@ export function BlockBoundary({
         node={node}
         fallback={fallback}
         isBlockRoot
+        declaresNothing={declaresNothing}
       />
     </Suspense>
   );
