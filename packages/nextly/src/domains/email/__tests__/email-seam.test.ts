@@ -404,3 +404,113 @@ describe("EmailService — D63 filter/action seams", () => {
     }
   );
 });
+
+describe("a message id that carries a recipient", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetFilterRegistry();
+  });
+
+  afterEach(() => {
+    resetFilterRegistry();
+  });
+
+  /**
+   * A provider that builds its identifier out of the address it was handed,
+   * with a `beforeSend` filter supplying a BCC the caller never wrote.
+   *
+   * The hidden recipient is what makes this a disclosure rather than an
+   * echo: the caller cannot already know the address, so anything that hands
+   * the id back tells them.
+   */
+  function sendWithIdDerivedFromABccRecipient() {
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: Record<string, unknown>) => ({
+        ...payload,
+        bcc: ["hidden-auditor@b.com"],
+      })
+    );
+
+    const { service } = buildSend();
+    (service as unknown as { createAdapterFromRecord: unknown })[
+      "createAdapterFromRecord"
+    ] = () => ({
+      send: () =>
+        Promise.resolve({
+          success: true,
+          messageId: "delivery-hidden-auditor@b.com-42",
+        }),
+    });
+    return service;
+  }
+
+  it("is withheld from the value the caller gets back", async () => {
+    // Both send routes spread this straight into an HTTP response.
+    const service = sendWithIdDerivedFromABccRecipient();
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(result.messageId).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain("hidden-auditor@b.com");
+  });
+
+  it("is withheld from the after-send actions", async () => {
+    // A plugin action is code the install chose to run, but the address still
+    // did not come from it, and an action that forwards its argument turns
+    // this into the disclosure the response path was closed against.
+    const captured: Array<Record<string, unknown>> = [];
+    const service = sendWithIdDerivedFromABccRecipient();
+    getFilterRegistry().addAction(
+      FilterSeams.EmailAfterSend,
+      (value: Record<string, unknown>) => {
+        captured.push(value);
+      }
+    );
+
+    await service.send({ to: "a@b.com", subject: "Hi", html: "<p>x</p>" });
+
+    expect(JSON.stringify(captured)).not.toContain("hidden-auditor@b.com");
+  });
+
+  it("is withheld from the send log", async () => {
+    // A log line is durable and read by more people than the mailbox is.
+    const service = sendWithIdDerivedFromABccRecipient();
+
+    await service.send({ to: "a@b.com", subject: "Hi", html: "<p>x</p>" });
+
+    const sent = vi
+      .mocked(logger.info)
+      .mock.calls.filter(([message]) => message === "email.sent");
+    expect(sent).toHaveLength(1);
+    expect(JSON.stringify(sent)).not.toContain("hidden-auditor@b.com");
+  });
+
+  it("still returns an ordinary id untouched", async () => {
+    // The control. An RFC-form Message-ID contains an `@` and must survive:
+    // a rule that dropped every id with an address shape in it would pass the
+    // three cases above while destroying the field for every real provider.
+    const { service } = buildSend();
+    (service as unknown as { createAdapterFromRecord: unknown })[
+      "createAdapterFromRecord"
+    ] = () => ({
+      send: () =>
+        Promise.resolve({
+          success: true,
+          messageId: "<20260811.abc123@mail.provider.test>",
+        }),
+    });
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(result.messageId).toBe("<20260811.abc123@mail.provider.test>");
+  });
+});

@@ -492,14 +492,20 @@ export class EmailService extends BaseService {
       );
       const recipients = deliveryRecipients(filtered);
       // A provider is handed `options.to` and may build its identifier out of
-      // it. The error string is redacted for exactly that reason, and this
-      // column was not -- so an id like `delivery-user@example.com` would put
-      // the recipient in the table that otherwise stores only a hash of them.
+      // it. The error string is redacted for exactly that reason, and an id
+      // like `delivery-user@example.com` carries a recipient into every place
+      // this value goes: the delivery row, the response both send routes
+      // spread it into, the after-send actions, and the log. An
+      // `email.beforeSend` filter can add a BCC the caller never wrote, so the
+      // address is not always one the reader already knows.
+      //
+      // Computed once and used for all four. Sanitising only the one that
+      // prompted it leaves the same value disclosed by three other routes.
       //
       // Compared against the ACTUAL mailboxes rather than redacted by shape:
       // a Message-ID legitimately contains an `@`, so address-shaped redaction
       // would destroy every RFC-form id while catching nothing else.
-      const recordableMessageId = messageIdWithoutRecipients(
+      const safeMessageId = messageIdWithoutRecipients(
         result.messageId,
         recipients.map(recipient => recipient.to)
       );
@@ -513,7 +519,7 @@ export class EmailService extends BaseService {
             providerType,
             templateSlug: options.templateSlug ?? null,
             status: delivered ? ("sent" as const) : ("failed" as const),
-            messageId: recordableMessageId,
+            messageId: safeMessageId,
             error: delivered
               ? null
               : wasRefused
@@ -530,7 +536,7 @@ export class EmailService extends BaseService {
           to: filtered.to,
           subject: filtered.subject,
           success: result.success,
-          messageId: result.messageId,
+          messageId: safeMessageId ?? undefined,
         },
         { providerId: options.providerId }
       );
@@ -543,7 +549,7 @@ export class EmailService extends BaseService {
         this.logger.info("email.sent", {
           event: "email.sent",
           provider: providerType,
-          messageId: result.messageId,
+          messageId: safeMessageId,
           durationMs,
           ccCount: options.cc?.length ?? 0,
           bccCount: options.bcc?.length ?? 0,
@@ -567,9 +573,7 @@ export class EmailService extends BaseService {
       // configuration. What this method promises is what it returns.
       return {
         success: result.success,
-        ...(result.messageId !== undefined
-          ? { messageId: result.messageId }
-          : {}),
+        ...(safeMessageId !== null ? { messageId: safeMessageId } : {}),
       };
     } catch (error) {
       // Recorded before the action seam, for the reason given in the success
