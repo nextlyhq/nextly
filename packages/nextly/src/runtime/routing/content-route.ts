@@ -602,7 +602,31 @@ export function createPublicContentRoute<TNode>(
       },
     });
   }
-  return buildRoute(config, "public");
+  return buildRoute(
+    {
+      // Populated relations are NOT covered by the promise this factory makes.
+      //
+      // A trusted read propagates both its trust and a widened lifecycle into
+      // relationship expansion: a populated target is read with access rules
+      // bypassed AND `status: "all"`. So at the inherited default of `depth: 1`
+      // a page in a public collection can embed a DRAFT or access-restricted
+      // row from a collection that appears nowhere in this config — and this
+      // route pre-renders that into a static artifact, which publishing cannot
+      // be taken back from.
+      //
+      // Defaulting to no expansion makes the exposure something a site OPTS
+      // INTO rather than something it inherits. A site that populates relations
+      // sets `depth` itself, and by doing so states that those collections are
+      // public too.
+      //
+      // This bounds the blast radius; it does not fix the propagation. That
+      // still belongs where the trust is threaded, so a caller who sets `depth`
+      // gets the old behaviour in full.
+      depth: 0,
+      ...config,
+    },
+    "public"
+  );
 }
 
 /** Join the optional-catch-all segments into a slug path (no leading slash). */

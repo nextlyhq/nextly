@@ -304,6 +304,36 @@ describe("the content route's draft decision", () => {
     expect(() => publicRouteWith(reader, true)).toThrow(/cannot serve drafts/i);
   });
 
+  it("does not expand relations unless the site asks it to", async () => {
+    // A trusted read propagates its trust AND `status: "all"` into relationship
+    // expansion, so a populated target is read with access rules bypassed and
+    // drafts included. On a public route that page is then pre-rendered into a
+    // static artifact. Defaulting to no expansion makes that exposure something
+    // a site opts into rather than inherits.
+    const { reader, calls } = stubReader();
+
+    await publicRouteWith(reader).ContentPage({ params: { slug: ["a"] } });
+
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every(call => call.depth === 0)).toBe(true);
+  });
+
+  it("still expands relations when the site sets depth explicitly", async () => {
+    // The default is a safe starting point, not a ceiling. A site that
+    // populates relations says so, and by saying so states that those
+    // collections are public too.
+    const { reader, calls } = stubReader();
+
+    await createPublicContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      depth: 2,
+      render: (entry: ContentEntry) => entry,
+    }).ContentPage({ params: { slug: ["a"] } });
+
+    expect(calls.every(call => call.depth === 2)).toBe(true);
+  });
+
   it("cannot be asked to pre-render a route that builds no paths", () => {
     // `staticParamsLimit: 0` asks for a static route with nothing to build. The
     // generator returns `[]` — accepted by standard App Router builds, rejected

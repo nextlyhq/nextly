@@ -178,9 +178,12 @@ choose it per collection set, not per preference.**
 > artifact. Publishing it that way cannot be taken back by unpublishing the
 > source row.
 >
-> Until this is resolved, treat every collection a public route's pages
-> **populate** as being as exposed as the ones it lists. Use
-> `createContentRoute`, or set `depth: 0`, where that is not acceptable.
+> **`createPublicContentRoute` therefore defaults to `depth: 0`** — no relation
+> expansion — so the exposure is something a site opts into rather than
+> inherits. Setting `depth` yourself re-enables it, and by doing so you are
+> stating that the collections your pages populate are public too.
+>
+> That default bounds the blast radius; it does not fix the propagation.
 
 **The route factories take no `overrideAccess` option** — unlike
 `resolveContent`, which still does, because a page calling it directly knows who
