@@ -1,8 +1,19 @@
+// Type-checks what the package SHIPS. Test files are excluded here and checked
+// by `tsconfig.tests.json`, which is the only place Node types are in scope.
+//
+// `types: []` is load-bearing, not tidiness. TypeScript pulls in every package
+// under `node_modules/@types` automatically, so adding `@types/node` as a
+// devDependency — which the test config needs — puts `process`, `Buffer` and
+// the `node:*` modules in scope for `src/**` as well. This package publishes
+// browser components: a module reaching `process.env` would then type-check
+// cleanly and fail at runtime in the browser, and the gap would have been
+// widened by the change meant to close it.
 {
   "extends": "@nextlyhq/tsconfig/react-library-bundler.json",
   "compilerOptions": {
     "rootDir": "src",
-    "outDir": "dist"
+    "outDir": "dist",
+    "types": []
   },
   "include": ["src/**/*"],
   "exclude": [
