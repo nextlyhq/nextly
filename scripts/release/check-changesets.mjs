@@ -98,34 +98,31 @@ export function fixedGroupShape(config) {
 }
 
 /**
- * Every package that must appear in a changeset: the `fixed` group with any glob
- * expanded against the workspace.
+ * Every package that must appear in a changeset: the `fixed` group expanded
+ * against the workspace.
  *
- * `fixed` accepts patterns as well as names — `@nextlyhq/*` is a valid way to
- * write this group — and `@changesets/config` expands each entry with
- * `micromatch.isMatch(packageName, entry)` before it validates anything. A
- * checker comparing the raw entries would report every matching package as
- * missing and the pattern itself as unknown, which on a config written that way
- * means rejecting every pull request.
+ * `fixed` accepts patterns as well as names, and the whole group goes to
+ * `micromatch` in ONE call — `micromatch(packageNames, group)` — because that is
+ * what `@changesets/config` does and the list is not a union of independent
+ * patterns. A negated entry only means anything in company: `["**",
+ * "!@nextlyhq/builder"]` excludes builder, while evaluating each pattern alone
+ * and unioning the results lets `**` put it straight back.
  *
- * The same matcher the release tooling uses, for the same reason the frontmatter
- * goes through the same parser: a second implementation of someone else's
- * grammar is a second answer.
+ * A non-negated entry matching nothing is kept as written, so a typo or a
+ * departed package is reported by the string an author would search for.
  */
 export function lockstepPackages(configText, workspaceNames) {
-  const entries = (JSON.parse(configText).fixed ?? []).flat();
-  const expanded = new Set();
-  for (const entry of entries) {
-    if (typeof entry !== "string") continue;
-    const matched = workspaceNames.filter(name =>
-      micromatch.isMatch(name, entry)
-    );
-    // An entry matching nothing is kept as written, so the group check reports it
-    // by the name an author would search for rather than silently dropping it.
-    if (matched.length === 0) expanded.add(entry);
-    for (const name of matched) expanded.add(name);
-  }
-  return [...expanded];
+  const group = (JSON.parse(configText).fixed ?? [])
+    .flat()
+    .filter(entry => typeof entry === "string");
+  if (group.length === 0) return [];
+  const matched = micromatch(workspaceNames, group);
+  const unmatched = group.filter(
+    entry =>
+      !entry.startsWith("!") &&
+      !workspaceNames.some(name => micromatch.isMatch(name, entry))
+  );
+  return [...new Set([...matched, ...unmatched])];
 }
 
 /**

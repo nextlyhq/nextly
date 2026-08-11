@@ -314,6 +314,17 @@ describe("a group written with globs", () => {
     );
   });
 
+  it("honours a negated entry, which only means anything in company", () => {
+    // `micromatch` is given the WHOLE group in one call, the way
+    // `@changesets/config` does it. Evaluating each pattern alone and unioning
+    // the results would let `**` put back what `!…` excluded.
+    const negated = JSON.stringify({ fixed: [["**", "!@nextlyhq/builder"]] });
+    expect(lockstepPackages(negated, WORKSPACE).sort()).toEqual([
+      "@nextlyhq/ui",
+      "nextly",
+    ]);
+  });
+
   it("reports a pattern that matches nothing by the name it was written as", () => {
     const globbed = JSON.stringify({ fixed: [["@nowhere/*"]] });
     expect(lockstepPackages(globbed, WORKSPACE)).toEqual(["@nowhere/*"]);
