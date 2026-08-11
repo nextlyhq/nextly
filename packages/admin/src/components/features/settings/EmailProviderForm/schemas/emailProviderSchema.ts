@@ -812,6 +812,13 @@ function separateClearedOptionalFields(
     // before it ever becomes a string, so it arrives here as neither.
     if (current !== "" && current !== undefined) continue;
 
+    // Absent because the CONTROL could not show what is stored, not because
+    // anyone emptied it. Hydration leaves such a field out of the form, and
+    // reading that as a removal would delete the very value it was protecting
+    // — the operator never saw it, let alone cleared it. Left out of the patch
+    // entirely: no value to set, and nothing to unset.
+    if (hasUnrepresentableStoredValue(stored, field)) continue;
+
     // Removed from the values either way. What differs is whether the server
     // is also asked to delete what it holds — the field name is sent only
     // when there is something stored to remove.

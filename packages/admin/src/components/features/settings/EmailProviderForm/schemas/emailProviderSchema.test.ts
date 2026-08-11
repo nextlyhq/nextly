@@ -1134,3 +1134,86 @@ describe("a nested branch whose leaves are all optional", () => {
     expect(parsed.success).toBe(false);
   });
 });
+
+describe("a stored value the control could not show, on submit", () => {
+  const descriptor: EmailProviderDescriptor = {
+    type: "acme-mail",
+    label: "Acme Mail",
+    capabilities: {},
+    configFields: [
+      { name: "host", label: "Host", kind: "text", required: true },
+      { name: "retries", label: "Retries", kind: "number" },
+      { name: "secure", label: "Secure", kind: "boolean", default: false },
+    ],
+  };
+
+  const BLANK = {
+    name: "A",
+    type: "acme-mail",
+    fromEmail: "a@b.com",
+    fromName: "",
+    isDefault: false,
+    isActive: true,
+  };
+
+  function submit(stored: Record<string, unknown>) {
+    const values = providerToFormValues(
+      {
+        id: "1",
+        name: "A",
+        type: "acme-mail",
+        fromEmail: "a@b.com",
+        fromName: null,
+        configuration: stored,
+        isDefault: false,
+        isActive: true,
+        createdAt: "",
+        updatedAt: "",
+      },
+      descriptor
+    );
+    return formValuesToPayload({ ...BLANK, ...values }, descriptor, stored);
+  }
+
+  it("is not deleted as though the operator had cleared it", () => {
+    // Hydration leaves such a field out of the form, so it arrives here as
+    // absent — indistinguishable from an emptied optional field unless asked.
+    // Reading it as a removal deletes the value it was protecting, which the
+    // operator never even saw.
+    const payload = submit({ host: "h", retries: [3] });
+
+    expect(payload.unsetConfiguration ?? []).not.toContain("retries");
+    expect(payload.configuration).not.toHaveProperty("retries");
+  });
+
+  it("still deletes a field the operator really did empty", () => {
+    // The control. This is the whole point of `unsetConfiguration`, and the
+    // guard above must not swallow it: a representable stored value, blanked
+    // in the form, is a removal.
+    const stored = { host: "h", retries: 3 };
+    const values = providerToFormValues(
+      {
+        id: "1",
+        name: "A",
+        type: "acme-mail",
+        fromEmail: "a@b.com",
+        fromName: null,
+        configuration: stored,
+        isDefault: false,
+        isActive: true,
+        createdAt: "",
+        updatedAt: "",
+      },
+      descriptor
+    );
+    const emptied = {
+      ...BLANK,
+      ...values,
+      configuration: { ...values.configuration, retries: "" },
+    };
+
+    expect(
+      formValuesToPayload(emptied, descriptor, stored).unsetConfiguration
+    ).toContain("retries");
+  });
+});

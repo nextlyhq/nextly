@@ -205,7 +205,19 @@ export function EmailProviderForm({
   // the type still being empty, so it can never overwrite a real choice.
   useEffect(() => {
     if (isEdit || descriptors.length === 0) return;
-    if (form.getValues("type") !== "") return;
+
+    // A selection the catalog no longer offers is as unusable as no selection.
+    // The catalog refetches on mount and on focus, so a create form left open
+    // across a deployment that removed the chosen plugin keeps a type nothing
+    // can render: `selectedDescriptor` is undefined, the configuration section
+    // disappears, and submitting sends a type the server will refuse. Guarded
+    // on the CURRENT type being unusable rather than merely empty, so a real
+    // choice that is still registered is never overwritten.
+    const current = form.getValues("type");
+    if (current !== "" && !isUnregisteredProviderType(current, descriptors)) {
+      return;
+    }
+
     form.reset(defaultFormValues(descriptors[0]));
   }, [isEdit, descriptors, form]);
 

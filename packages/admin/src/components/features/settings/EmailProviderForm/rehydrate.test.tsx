@@ -183,3 +183,88 @@ describe("a catalog refetch that fails over one already loaded", () => {
     expect(screen.getByText(/cannot be shown/i)).toBeVisible();
   });
 });
+
+describe("a create form whose chosen type leaves the catalog", () => {
+  /**
+   * A second provider with a field of its OWN.
+   *
+   * `OTHER` declares no fields, so a form reselected onto it and a form stuck
+   * on a vanished type both render nothing — an assertion on absence cannot
+   * tell the fixed case from the broken one. This descriptor makes the
+   * reselection observable.
+   */
+  const FALLBACK: EmailProviderDescriptor = {
+    type: "fallback",
+    label: "Fallback",
+    capabilities: {},
+    configFields: [{ name: "endpoint", label: "Endpoint", kind: "text" }],
+  };
+
+  function endpointInput(): HTMLInputElement | null {
+    return document.querySelector<HTMLInputElement>(
+      'input[name="configuration.endpoint"]'
+    );
+  }
+
+  it("falls back to one that is still registered", async () => {
+    // The catalog refetches on mount and on focus, so a create form left open
+    // across a deployment that removed the chosen plugin keeps a type nothing
+    // can render — no configuration section, and a submit the server refuses.
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="create"
+        descriptors={[ACME, FALLBACK]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    // ACME is first, so it is the initial selection and its field renders.
+    expect(regionInput()).not.toBeNull();
+
+    rerender(
+      <EmailProviderForm
+        mode="create"
+        descriptors={[FALLBACK]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    // Reselected onto a type that exists: ACME's field is gone AND the
+    // fallback's has appeared. Asserting only the first would pass just as
+    // well on a form left stuck on a vanished type.
+    expect(regionInput()).toBeNull();
+    expect(endpointInput()).not.toBeNull();
+  });
+
+  it("leaves a still-registered choice alone", async () => {
+    // The control. A catalog refetch that merely ADDS a provider must not move
+    // a selection the operator made.
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="create"
+        descriptors={[ACME, FALLBACK]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    expect(regionInput()).not.toBeNull();
+
+    rerender(
+      <EmailProviderForm
+        mode="create"
+        descriptors={[
+          ACME,
+          FALLBACK,
+          { ...FALLBACK, type: "third", label: "Third" },
+        ]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    expect(regionInput()).not.toBeNull();
+  });
+});
