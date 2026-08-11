@@ -12,6 +12,7 @@
  * form beside it answers it and disables every field.
  */
 
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
@@ -163,6 +164,79 @@ describe("the providers table when a catalog refresh fails", () => {
     expect(
       screen.queryByText(/could not be refreshed/i)
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("row actions for an orphaned type when a refresh fails", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useEmailProviders.mockReturnValue({
+      data: {
+        data: [PROVIDER],
+        meta: { total: 1, page: 0, limit: 10, totalPages: 1 },
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+  });
+
+  async function rowActions(): Promise<string[]> {
+    const user = userEvent.setup();
+    const triggers = screen.getAllByRole("button", {
+      name: /open menu|actions/i,
+    });
+    await user.click(triggers[triggers.length - 1]);
+    return screen
+      .getAllByRole("menuitem")
+      .map(item => item.textContent ?? "")
+      .map(text => text.trim());
+  }
+
+  it("stay withheld when the cached catalog does not list the type", async () => {
+    // The cached descriptors answer this question perfectly well: the stored
+    // type is not among them, so its plugin is gone. Deciding from `isSuccess`
+    // instead reports every type as present the moment a refresh fails, and
+    // the row regains Set Default and Send Test — both of which reach the
+    // registry and fail.
+    useEmailProviderTypes.mockReturnValue(
+      CATALOG.staleAfterFailedRefetch([OTHER])
+    );
+    render(<EmailProviderTable />);
+
+    const actions = await rowActions();
+
+    expect(actions).not.toContain("Set Default");
+    expect(actions).not.toContain("Send Test");
+    // Deleting an orphaned row is the reason it is still listed.
+    expect(actions).toContain("Delete");
+  });
+
+  it("are offered when the cached catalog DOES list the type", async () => {
+    // The control. Withholding them whenever a refresh failed would pass the
+    // case above while taking both actions from every working provider on the
+    // page — the outcome the original guard existed to prevent.
+    useEmailProviderTypes.mockReturnValue(
+      CATALOG.staleAfterFailedRefetch([RESEND])
+    );
+    render(<EmailProviderTable />);
+
+    const actions = await rowActions();
+
+    expect(actions).toContain("Set Default");
+    expect(actions).toContain("Send Test");
+  });
+
+  it("are offered when there is NO catalog at all", async () => {
+    // The other control, and the distinction that matters: an absent catalog
+    // has not said the type is gone, so nothing may be withheld on its say-so.
+    useEmailProviderTypes.mockReturnValue(CATALOG.failedWithNothing());
+    render(<EmailProviderTable />);
+
+    const actions = await rowActions();
+
+    expect(actions).toContain("Set Default");
+    expect(actions).toContain("Send Test");
   });
 });
 

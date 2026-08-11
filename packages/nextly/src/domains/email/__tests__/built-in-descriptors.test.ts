@@ -1500,6 +1500,52 @@ describe("a blankAs the descriptor spelled wrong", () => {
   });
 });
 
+describe("a select whose options share a value", () => {
+  const base = {
+    type: "fixture",
+    label: "Fixture",
+    parseConfig: (input: unknown) => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  };
+
+  function withOptions(options: unknown) {
+    return () =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          { name: "region", label: "Region", kind: "select", options },
+        ],
+      } as unknown as Parameters<typeof defineEmailProvider>[0]);
+  }
+
+  it("is refused", () => {
+    // Two options with one value are two menu items nothing can tell apart:
+    // same React key, same select value, and both store the same
+    // configuration — so which label survives reconciliation is decided by
+    // neither the provider nor the operator.
+    expect(
+      withOptions([
+        { value: "eu", label: "Europe" },
+        { value: "eu", label: "European Union" },
+      ])
+    ).toThrow(/two options with the value/);
+  });
+
+  it("accepts distinct values that share a LABEL", () => {
+    // The control. Only the value identifies a choice; two regions may
+    // legitimately read the same in the menu, and refusing that would reject
+    // descriptors nothing is wrong with.
+    expect(
+      withOptions([
+        { value: "eu-west-1", label: "Europe" },
+        { value: "eu-west-2", label: "Europe" },
+      ])
+    ).not.toThrow();
+  });
+});
+
 describe("options metadata on a field that is not a select", () => {
   const base = {
     type: "fixture",

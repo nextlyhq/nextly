@@ -756,6 +756,27 @@ function assertSelectIsChoosable(
     });
   }
 
+  // Two options sharing a value are two menu items the form cannot tell apart:
+  // they render with the same React key and the same select value, so which
+  // label survives reconciliation is not decided by anything the provider
+  // wrote, and both choices store the same configuration.
+  const duplicate = options.findIndex(
+    (option, index) =>
+      options.findIndex(other => other.value === option.value) !== index
+  );
+  if (duplicate !== -1) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" gives the select field "${field.name}" two options with the value "${options[duplicate]?.value ?? ""}". A value identifies a choice, so two choices cannot share one.`,
+      logContext: {
+        type,
+        field: field.name,
+        value: options[duplicate]?.value,
+        index: duplicate,
+      },
+    });
+  }
+
   if (options.some(option => option.value === "")) {
     throw new NextlyError({
       code: "BUSINESS_RULE_VIOLATION",

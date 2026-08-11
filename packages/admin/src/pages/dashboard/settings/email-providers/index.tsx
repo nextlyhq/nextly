@@ -353,7 +353,6 @@ function EmailProviderTable() {
   // could only label the providers this admin was compiled against.
   const {
     data: descriptorList,
-    isSuccess: isCatalogLoaded,
     isError: isCatalogError,
     isLoading: isCatalogLoading,
     refetch: refetchCatalog,
@@ -390,11 +389,19 @@ function EmailProviderTable() {
    * withhold an action. Answering "unregistered" from an unanswered request
    * takes Set Default and Send Test away from every working provider on the
    * page, silently and with nothing to retry.
+   *
+   * The question is whether descriptors are in HAND, not whether the last
+   * request succeeded. A refresh that fails over a cache keeps every
+   * descriptor, so the cache can still say the type is gone — reading the
+   * request's own status instead reports every type as present the moment a
+   * refresh fails, and hands both actions back to a provider whose plugin has
+   * been removed.
    */
   const typeIsKnownMissing = useCallback(
     (providerType: string) =>
-      isCatalogLoaded && !descriptorsByType.has(providerType),
-    [isCatalogLoaded, descriptorsByType]
+      (catalog === "ready" || catalog === "stale") &&
+      !descriptorsByType.has(providerType),
+    [catalog, descriptorsByType]
   );
 
   const { mutate: doDelete, isPending: isDeleting } = useDeleteEmailProvider();

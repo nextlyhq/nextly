@@ -56,6 +56,112 @@ function regionInput(): HTMLInputElement | null {
   );
 }
 
+describe("the same provider, changed by someone else while the form is open", () => {
+  it("takes the newer values for fields nobody is editing", async () => {
+    // The detail query refetches on window focus, so a change made elsewhere
+    // arrives while this form sits open. Keying hydration on the id alone
+    // holds the old values and sends them back on the next save, reverting
+    // that change from an edit that never touched those fields.
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[ACME]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    expect(regionInput()?.value).toBe("eu-west-1");
+
+    rerender(
+      <EmailProviderForm
+        mode="edit"
+        provider={{
+          ...STORED,
+          configuration: { region: "us-east-1" },
+          updatedAt: "2026-02-02T00:00:00.000Z",
+        }}
+        descriptors={[ACME]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    expect(regionInput()?.value).toBe("us-east-1");
+  });
+
+  it("keeps what the operator has typed", async () => {
+    // The control, and the reason the identity guard existed. Reconciling must
+    // not discard work in progress — a plain reset here would pass the case
+    // above while wiping the field the moment the operator changed tabs.
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[ACME]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    const input = regionInput();
+    if (!input) throw new Error("expected the region field to render");
+    await user.clear(input);
+    await user.type(input, "typed-by-hand");
+
+    rerender(
+      <EmailProviderForm
+        mode="edit"
+        provider={{
+          ...STORED,
+          configuration: { region: "us-east-1" },
+          updatedAt: "2026-02-02T00:00:00.000Z",
+        }}
+        descriptors={[ACME]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    expect(regionInput()?.value).toBe("typed-by-hand");
+  });
+
+  it("does nothing when the record has not changed", async () => {
+    // The other control. Reconciling on every refetch — rather than on a NEW
+    // revision — reintroduces the reset this guard exists to prevent, and this
+    // is the case that catches it.
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[ACME]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    const input = regionInput();
+    if (!input) throw new Error("expected the region field to render");
+    await user.clear(input);
+    await user.type(input, "half-typed");
+
+    rerender(
+      <EmailProviderForm
+        mode="edit"
+        provider={{ ...STORED }}
+        descriptors={[ACME]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    expect(regionInput()?.value).toBe("half-typed");
+  });
+});
+
 describe("a catalog that starts without the stored provider's type", () => {
   it("fills the configuration once the type is registered again", () => {
     // Opened while the plugin is gone: the type is unregistered but the

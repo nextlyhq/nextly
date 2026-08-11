@@ -199,9 +199,12 @@ export function EmailProviderForm({
   // catalog had a descriptor for it at the time. Hydration happens ONCE per
   // provider, not on every change to its inputs — but a hydration that had no
   // descriptor filled in none of the configuration, so it is not finished.
-  const hydratedFor = useRef<{ id: string; hadDescriptor: boolean } | null>(
-    null
-  );
+  const hydratedFor = useRef<{
+    id: string;
+    hadDescriptor: boolean;
+    /** Which VERSION of the record filled the form, not merely which record. */
+    updatedAt: string;
+  } | null>(null);
 
   // Repopulate once the record and the catalog have both arrived: both are
   // fetched, and whichever lands second decides which fields can be filled in.
@@ -221,6 +224,27 @@ export function EmailProviderForm({
 
     const hydrated = hydratedFor.current;
     if (hydrated?.id === provider.id) {
+      // The same record, but a NEWER version of it: the detail query refetches
+      // on focus, so a change made elsewhere arrives while this form sits
+      // open. Holding the old values would send them back on the next save and
+      // revert that change, from an edit that never touched those fields.
+      //
+      // `keepDirtyValues` is what makes reconciling safe: fields the operator
+      // has touched keep what they typed, and everything else takes the
+      // server's newer value. A plain reset here would discard their work,
+      // which is what the identity guard exists to prevent.
+      if (hydrated.updatedAt !== provider.updatedAt) {
+        hydratedFor.current = {
+          id: provider.id,
+          hadDescriptor: descriptor !== undefined,
+          updatedAt: provider.updatedAt,
+        };
+        form.reset(providerToFormValues(provider, descriptor), {
+          keepDirtyValues: true,
+        });
+        return;
+      }
+
       // Already populated, and populated from a descriptor — nothing a later
       // catalog can add.
       if (hydrated.hadDescriptor || !descriptor) return;
@@ -231,7 +255,11 @@ export function EmailProviderForm({
       // not exist, so its fields are empty while the form is editable again —
       // a required credential reads as missing, and an optional blank submits
       // as a deliberate removal of what is stored.
-      hydratedFor.current = { id: provider.id, hadDescriptor: true };
+      hydratedFor.current = {
+        id: provider.id,
+        hadDescriptor: true,
+        updatedAt: provider.updatedAt,
+      };
       // Only the configuration is replaced. The identity fields were filled
       // from the record and belong to whoever has the form open.
       form.reset({
@@ -244,6 +272,7 @@ export function EmailProviderForm({
     hydratedFor.current = {
       id: provider.id,
       hadDescriptor: descriptor !== undefined,
+      updatedAt: provider.updatedAt,
     };
     form.reset(providerToFormValues(provider, descriptor));
   }, [provider, isEdit, descriptors, form]);
