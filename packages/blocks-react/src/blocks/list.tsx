@@ -16,6 +16,22 @@ import { number, oneOf, text } from "./props";
 
 export const LIST_KINDS = ["unordered", "ordered"] as const;
 
+/**
+ * How many items are rendered from one stored list.
+ *
+ * A stored array has no length of its own — the document's caps bound node count
+ * and depth, never a prop array — so `items` arrives at whatever length was
+ * written. Past the renderer's own inspection budget the normalizer refuses the
+ * whole output, and the block becomes a broken-block placeholder: an
+ * accidentally long list loses EVERY item rather than the ones past the end.
+ *
+ * Clamping trades the tail for the body, which is the better failure by a wide
+ * margin. The number sits far above any list a person writes and far below the
+ * budget, so the block still has room for its wrapper and nothing hand-authored
+ * ever reaches it.
+ */
+const MAX_ITEMS = 1_000;
+
 export interface ListProps {
   /** Whether the order of the items is meaningful. */
   kind?: "unordered" | "ordered";
@@ -33,7 +49,11 @@ export function renderList({
   // as a child it cannot render. Coerced rather than dropped, so an item typed
   // as a number still appears where its author put it.
   const stored: unknown = props.items;
-  const items = Array.isArray(stored) ? stored.map(item => text(item)) : [];
+  // Sliced BEFORE the map, so an oversized array is never walked in full: the
+  // work this bounds is the work of reading it, not just of rendering it.
+  const items = Array.isArray(stored)
+    ? stored.slice(0, MAX_ITEMS).map(item => text(item))
+    : [];
   const children = items.map((item, index) => (
     // The index is the key because the items have no identity of their own:
     // they are strings in an array, and two identical strings are the same
