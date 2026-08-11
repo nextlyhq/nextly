@@ -1499,3 +1499,44 @@ describe("a blankAs the descriptor spelled wrong", () => {
     expect(withBlankAs(undefined)).not.toThrow();
   });
 });
+
+describe("a capability whose value is not a boolean", () => {
+  const base = {
+    type: "fixture",
+    label: "Fixture",
+    parseConfig: (input: unknown) => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+    configFields: [],
+  };
+
+  function withCapabilities(capabilities: unknown) {
+    return () =>
+      defineEmailProvider({
+        ...base,
+        capabilities,
+      } as unknown as Parameters<typeof defineEmailProvider>[0]);
+  }
+
+  it('refuses the string "false", which every reader takes for true', () => {
+    // The dangerous case, because it looks like the author's intent. The admin
+    // would tell an operator a verified sender is required by a provider whose
+    // author wrote the opposite.
+    expect(withCapabilities({ requiresVerifiedSender: "false" })).toThrow(
+      /non-boolean value/
+    );
+  });
+
+  it("refuses a capabilities object that is not an object", () => {
+    expect(withCapabilities("all")).toThrow(/not an object/);
+  });
+
+  it("accepts real booleans, and no capabilities at all", () => {
+    // The control: the shape every real provider writes must still register.
+    expect(
+      withCapabilities({ attachments: true, requiresVerifiedSender: false })
+    ).not.toThrow();
+    expect(withCapabilities(undefined)).not.toThrow();
+  });
+});

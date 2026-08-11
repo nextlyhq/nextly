@@ -415,6 +415,7 @@ export function EmailProviderForm({
                 ? provider.configuration
                 : undefined
             }
+            recordId={provider?.id}
           />
         )}
 

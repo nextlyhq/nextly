@@ -53,12 +53,23 @@ export function mergeConfig<T extends DirectAPIConfig>(
  * being attributed to a placeholder. Per-operation config wins over the
  * instance default, matching `mergeConfig`, so a single call can act as
  * someone without reconfiguring the instance.
+ *
+ * An API key is recorded AS a key, never as its owner. A key carries the
+ * owner's `user` so the operation can be authorized, and reading that as the
+ * acting identity would put a person's name against a write they did not make
+ * -- which is worse than an absent entry, because it is a plausible one. The
+ * key's own id is not on this config, so the entry carries the type alone:
+ * `RequestActor.id` is optional precisely so an actor can be named less
+ * precisely rather than wrongly.
  */
 export function directApiActor(
   defaultConfig: DirectAPIConfig,
   args: DirectAPIConfig
 ): RequestActor | undefined {
-  const id = mergeConfig(defaultConfig, args).user?.id;
+  const config = mergeConfig(defaultConfig, args);
+  if (config.actor?.actorType === "apiKey") return { type: "apiKey" };
+
+  const id = config.user?.id;
   return id ? { type: "user", id } : undefined;
 }
 

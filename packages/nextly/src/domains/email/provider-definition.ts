@@ -452,6 +452,45 @@ export function assertProviderTextIsRenderable(provider: {
     ["docsUrl", provider.docsUrl, "optional"],
     ["senderGuidance", provider.senderGuidance, "optional"],
   ]);
+
+  assertCapabilitiesAreBoolean(provider);
+}
+
+/**
+ * Reject a capability whose value is not a boolean.
+ *
+ * Every reader tests a capability for truth, so `"false"` is TRUE and the admin
+ * then tells an operator that a verified sender is required by a provider whose
+ * author wrote the opposite. The same mistake on a field flag is already
+ * refused; a capability crosses to the browser the same way and is read the
+ * same way, so it cannot be left to chance because it sits one level up.
+ *
+ * `EmailProviderCapabilities` is a structural type on a structural definition,
+ * so a JavaScript plugin or a hand-built object arrives with whatever it wrote.
+ */
+function assertCapabilitiesAreBoolean(provider: {
+  type: string;
+  capabilities?: EmailProviderCapabilities;
+}): void {
+  const capabilities = provider.capabilities;
+  if (capabilities === undefined) return;
+
+  if (capabilities === null || typeof capabilities !== "object") {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${provider.type}" declares \`capabilities\` that is not an object (${capabilities === null ? "null" : typeof capabilities}).`,
+      logContext: { type: provider.type },
+    });
+  }
+
+  for (const [name, value] of Object.entries(capabilities)) {
+    if (value === undefined || typeof value === "boolean") continue;
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${provider.type}" gives the capability \`${name}\` a non-boolean value (${value === null ? "null" : typeof value}). Every reader tests it for truth, so anything else reads as \`true\` — including the string "false".`,
+      logContext: { type: provider.type, capability: name },
+    });
+  }
 }
 
 /**

@@ -80,6 +80,7 @@ export function ProviderConfigFields({
   control,
   disabled,
   storedConfiguration,
+  recordId,
 }: {
   descriptor: EmailProviderDescriptor;
   control: Control<ProviderFormValues>;
@@ -92,6 +93,17 @@ export function ProviderConfigFields({
    * nothing is stored for these fields.
    */
   storedConfiguration?: Record<string, unknown>;
+  /**
+   * Which stored record these fields belong to, if any.
+   *
+   * Part of each field's key. Two edit URLs for providers of the SAME type
+   * keep this component mounted when navigation moves between them — both
+   * routes are cached, so nothing unmounts — and a `SecretField` would carry
+   * its "the user has replaced this" state onto the second record. The mask it
+   * arrives with would then not be recognised as one: focusing would not blank
+   * it, and typing would append to the bullets.
+   */
+  recordId?: string;
 }) {
   if (descriptor.configFields.length === 0) return null;
 
@@ -99,14 +111,14 @@ export function ProviderConfigFields({
     <SettingsSection label={`${descriptor.label} Configuration`}>
       {descriptor.configFields.map(field => (
         <ProviderConfigField
-          // Keyed by TYPE as well as name, so switching provider remounts the
-          // field rather than reusing it. Two providers can declare the same
-          // path — the built-in Resend and SendLayer both use `apiKey` — and a
-          // reused `SecretField` would carry its "the user has replaced this"
-          // state across the switch, so returning to the original type would
-          // leave the restored mask no longer treated as one: focusing would
-          // not clear it and typing would append to it.
-          key={`${descriptor.type}:${field.name}`}
+          // Keyed by the RECORD and the TYPE as well as the name, so a field
+          // is never reused across a different secret. Two providers can
+          // declare the same path — the built-in Resend and SendLayer both use
+          // `apiKey` — and two records of one type share it by definition. A
+          // reused `SecretField` carries its "the user has replaced this"
+          // state, which leaves the next mask not recognised as one: focusing
+          // does not blank it, and typing appends to the bullets.
+          key={`${recordId ?? "new"}:${descriptor.type}:${field.name}`}
           field={field}
           control={control}
           disabled={disabled}
