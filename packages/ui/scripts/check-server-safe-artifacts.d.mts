@@ -39,7 +39,7 @@ export function packageOfInput(input: string): string | null;
  */
 export function bundledPackages(
   metafile: { outputs?: Record<string, { inputs?: Record<string, unknown> }> },
-  outputName: string
+  outputNames: string | string[]
 ): string[] | null;
 
 /**

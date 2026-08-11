@@ -132,19 +132,35 @@ export function specifiersIn(source, fileName) {
   // declaration in the emitted file. `const load = createRequire(import.meta.url)` makes `load`
   // the module loader, and a bundler leaves that opaque exactly as it leaves `createRequire`.
   const loaders = new Set();
+  const aliases = [];
   const collectLoaders = node => {
-    if (
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      node.initializer !== undefined &&
-      ts.isCallExpression(node.initializer) &&
-      namesFactory(node.initializer.expression)
-    ) {
-      loaders.add(node.name.text);
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+      const init = node.initializer;
+      if (
+        init !== undefined &&
+        ts.isCallExpression(init) &&
+        namesFactory(init.expression)
+      ) {
+        loaders.add(node.name.text);
+      } else if (init !== undefined && ts.isIdentifier(init)) {
+        // `const again = load` hands the loader on under another name. Recorded now and resolved
+        // below, because the assignment can appear in any order in emitted output.
+        aliases.push([node.name.text, init.text]);
+      }
     }
     ts.forEachChild(node, collectLoaders);
   };
   collectLoaders(tree);
+  // To a fixed point, so a chain of any length resolves rather than only the first link.
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const [alias, source] of aliases) {
+      if (loaders.has(source) && !loaders.has(alias)) {
+        loaders.add(alias);
+        changed = true;
+      }
+    }
+  }
 
   /** @param {ts.Node} node */
   const visit = node => {
@@ -194,7 +210,11 @@ export function specifiersIn(source, fileName) {
  * @returns {string | null}
  */
 export function packageOf(specifier) {
-  if (specifier.startsWith(".") || specifier.startsWith("/")) return null;
+  if (specifier.startsWith(".")) return null;
+  // An ABSOLUTE path is not part of the emitted output and is not traversed, so exempting it let
+  // a machine-specific path through — one that resolves on the build host and is absent for every
+  // consumer. Named rather than exempted, so it fails the allow-list.
+  if (specifier.startsWith("/")) return specifier;
   // Asked of Node rather than matched on the `node:` prefix. Both spellings resolve to the same
   // built-in and tsup preserves whichever the source used, so recognising only the prefixed form
   // rejects a server-safe entry for importing `path` or `fs/promises`.
@@ -297,11 +317,22 @@ export function disallowedSpecifiers(entry, read, allowed) {
 export function packageOfInput(input) {
   const marker = "node_modules/";
   const last = input.lastIndexOf(marker);
-  if (last === -1) return null;
-  const rest = input.slice(last + marker.length);
-  const parts = rest.split("/");
-  if (rest.startsWith("@")) return parts.slice(0, 2).join("/");
-  return parts[0] ?? null;
+  if (last !== -1) {
+    const rest = input.slice(last + marker.length);
+    const parts = rest.split("/");
+    if (rest.startsWith("@")) return parts.slice(0, 2).join("/");
+    return parts[0] ?? null;
+  }
+  // A WORKSPACE package has no `node_modules` in its path at all: pnpm links it, and the bundler
+  // records the real location, so `@nextlyhq/admin-css` arrives as `../admin-css/src/index.mjs`.
+  // Treating every non-`node_modules` path as first-party made a whole sibling package invisible.
+  // What separates them is not the spelling but the LOCATION — an input that climbs out of this
+  // package's own root belongs to something else.
+  if (input.startsWith("../")) {
+    const parts = input.split("/").filter(part => part !== "..");
+    return parts[0] ?? null;
+  }
+  return null;
 }
 
 /**
@@ -319,14 +350,22 @@ export function packageOfInput(input) {
  * @param {string} outputName
  * @returns {string[] | null}
  */
-export function bundledPackages(metafile, outputName) {
-  const output = metafile.outputs?.[outputName];
-  if (output === undefined) return null;
+export function bundledPackages(metafile, outputNames) {
+  const names = Array.isArray(outputNames) ? outputNames : [outputNames];
   const packages = new Set();
-  for (const input of Object.keys(output.inputs ?? {})) {
-    const pkg = packageOfInput(input);
-    if (pkg !== null) packages.add(pkg);
+  const missing = [];
+  for (const name of names) {
+    const output = metafile.outputs?.[name];
+    if (output === undefined) {
+      missing.push(name);
+      continue;
+    }
+    for (const input of Object.keys(output.inputs ?? {})) {
+      const pkg = packageOfInput(input);
+      if (pkg !== null) packages.add(pkg);
+    }
   }
+  if (missing.length === names.length) return null;
   return [...packages];
 }
 
@@ -497,15 +536,16 @@ async function main() {
 
     // Follows the relative specifiers between emitted files, because a split build puts an entry's
     // dependencies in a chunk beside it rather than in the entry.
+    const read = name => {
+      try {
+        return readFileSync(join(DIST, name), "utf8");
+      } catch {
+        return null;
+      }
+    };
     const { offending, missing } = disallowedSpecifiers(
       file,
-      name => {
-        try {
-          return readFileSync(join(DIST, name), "utf8");
-        } catch {
-          return null;
-        }
-      },
+      read,
       SERVER_SAFE_ALLOWED_PACKAGES
     );
     if (missing.length > 0) {
@@ -522,7 +562,14 @@ async function main() {
         `The build emitted no metafile for ${file}, so what was bundled into it could not be read.`
       );
     } else {
-      const bundled = bundledPackages(metafile, `dist/${file}`);
+      // EVERY output reached from the entry, not just the entry. Splitting can put the entry's
+      // source in one file and a bundled dependency in a chunk beside it, and checking only the
+      // named artifact leaves the chunk's inputs unread — the specifier walk already follows
+      // those chunks, so the two checks were covering different sets of files.
+      const reachedOutputs = reachedFrom(file, read).map(
+        entry => `dist/${entry.file}`
+      );
+      const bundled = bundledPackages(metafile, reachedOutputs);
       if (bundled === null) {
         problems.push(
           `${file} has no entry in the build's metafile, so what was bundled into it is unknown.`

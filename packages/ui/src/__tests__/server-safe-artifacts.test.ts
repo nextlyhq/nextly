@@ -81,6 +81,19 @@ describe("reading an artifact's specifiers", () => {
     ).toEqual(["react"]);
   });
 
+  it("follows a loader handed on under another name", () => {
+    // `const again = load` passes the loader along, and a chain of any length resolves.
+    expect(
+      read(`
+        import { createRequire } from "node:module";
+        const load = createRequire(import.meta.url);
+        const again = load;
+        const third = again;
+        export const react = third("react");
+      `)
+    ).toEqual(["node:module", "react"]);
+  });
+
   it("does not treat an unrelated function as a loader", () => {
     // The control: only a name assigned FROM `createRequire` counts, or every one-argument call
     // with a string would be read as a module load.
@@ -133,8 +146,16 @@ describe("classifying a specifier", () => {
 
   it("names no package for the things a server already has", () => {
     expect(packageOf("./chunk.mjs")).toBeNull();
-    expect(packageOf("/abs/path.mjs")).toBeNull();
     expect(packageOf("node:path")).toBeNull();
+  });
+
+  it("names an absolute specifier rather than exempting it", () => {
+    // An absolute path is not part of the emitted output and is never traversed. It resolves on
+    // the machine that built it and is absent for every consumer, so it has to fail the
+    // allow-list rather than pass as package-free.
+    expect(packageOf("/workspace/node_modules/react/index.js")).toBe(
+      "/workspace/node_modules/react/index.js"
+    );
   });
 
   it("recognises a built-in in either spelling", () => {
@@ -283,6 +304,35 @@ describe("reading what the build bundled", () => {
       },
     };
     expect(bundledPackages(metafile, "dist/utils.mjs")).toEqual(["culori"]);
+  });
+
+  it("aggregates the inputs of every output reached from the entry", () => {
+    // Splitting can leave the entry holding only its own source while a chunk beside it owns the
+    // bundled dependency. Reading the entry alone leaves the chunk's inputs unread, even though
+    // the specifier walk already follows the chunk.
+    const metafile = {
+      outputs: {
+        "dist/utils.mjs": { inputs: { "src/lib/utils.ts": {} } },
+        "dist/chunk-abc.mjs": {
+          inputs: {
+            "node_modules/.pnpm/culori@4.0.2/node_modules/culori/src/index.js":
+              {},
+          },
+        },
+      },
+    };
+    expect(
+      bundledPackages(metafile, ["dist/utils.mjs", "dist/chunk-abc.mjs"])
+    ).toEqual(["culori"]);
+    // The control: the entry on its own looks clean, which is the finding.
+    expect(bundledPackages(metafile, ["dist/utils.mjs"])).toEqual([]);
+  });
+
+  it("names a workspace package, which has no node_modules in its path", () => {
+    // pnpm links a workspace dependency, so the bundler records its real location. Treating every
+    // non-`node_modules` path as first-party made a whole sibling package invisible.
+    expect(packageOfInput("../admin-css/src/index.mjs")).toBe("admin-css");
+    expect(packageOfInput("src/lib/utils.ts")).toBeNull();
   });
 
   it("reports an artifact the metafile does not describe, rather than passing it", () => {
