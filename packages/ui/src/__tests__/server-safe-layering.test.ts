@@ -171,44 +171,147 @@ function analyze(source: string, fileName: string): Analysis {
 
   // Names the module declares itself. `const location = "home"` is not the browser global, and a
   // name-only check rejects ordinary server-safe code for using an ordinary word.
-  const declared = new Set<string>();
-  const collectDeclared = (node: ts.Node): void => {
-    if (
-      (ts.isVariableDeclaration(node) ||
-        ts.isFunctionDeclaration(node) ||
-        ts.isClassDeclaration(node) ||
-        // A NAMED class or function expression binds its own name inside itself, so the `Node` in
-        // `class Node { static self = Node }` is the class, not the DOM one. The binding is scoped
-        // to the expression while this set is file-wide, which is the same approximation the rest
-        // of this collector makes.
-        ts.isClassExpression(node) ||
-        ts.isFunctionExpression(node) ||
-        // An enum creates a real runtime binding, so `export enum Node { A }` means `Node` is the
-        // module's own, not the DOM one.
-        ts.isEnumDeclaration(node) ||
-        // `export namespace Node { export const A = 1 }` emits a real local `Node` value, so a
-        // later `Node.A` is the module's own binding rather than the DOM one.
-        ts.isModuleDeclaration(node) ||
-        ts.isParameter(node) ||
-        ts.isBindingElement(node) ||
-        ts.isImportSpecifier(node) ||
-        ts.isImportClause(node) ||
-        ts.isNamespaceImport(node)) &&
-      node.name !== undefined &&
-      ts.isIdentifier(node.name)
-    ) {
-      // `declare const require: ...` introduces no runtime binding — it describes something the
-      // environment already provides. Treating it as a local shadow would suppress the very call
-      // it is declaring.
-      const ambient = ts
-        .getCombinedModifierFlags(node as ts.Declaration)
-        .valueOf();
-      const isDeclare = (ambient & ts.ModifierFlags.Ambient) !== 0;
-      if (!isDeclare) declared.add(node.name.text);
+  //
+  // Resolved per OCCURRENCE against the enclosing scopes rather than collected into one file-wide
+  // set. The set was the cheaper approximation and it is wrong in both directions: a parameter
+  // named `window` in some unrelated helper suppressed a genuine top-level `window.innerWidth`,
+  // and a block-scoped binding excused reads outside its block.
+
+  /** Nodes a name can be bound in. Not every node with children opens a scope. */
+  const opensScope = (node: ts.Node): boolean =>
+    ts.isSourceFile(node) ||
+    ts.isBlock(node) ||
+    ts.isModuleBlock(node) ||
+    ts.isCaseBlock(node) ||
+    ts.isForStatement(node) ||
+    ts.isForInStatement(node) ||
+    ts.isForOfStatement(node) ||
+    ts.isCatchClause(node) ||
+    ts.isClassDeclaration(node) ||
+    ts.isClassExpression(node) ||
+    ts.isModuleDeclaration(node) ||
+    ts.isFunctionLike(node);
+
+  /** The scopes `var` hoists to, passing through blocks on the way. */
+  const holdsHoistedVars = (node: ts.Node): boolean =>
+    ts.isSourceFile(node) || ts.isFunctionLike(node) || ts.isModuleBlock(node);
+
+  /**
+   * The name a single node binds, or undefined.
+   *
+   * `declare const require: ...` binds nothing at runtime — it describes what the environment
+   * already provides — so treating it as a shadow would suppress the very call it is declaring.
+   */
+  const boundName = (node: ts.Node): string | undefined => {
+    const named =
+      ts.isVariableDeclaration(node) ||
+      ts.isFunctionDeclaration(node) ||
+      ts.isClassDeclaration(node) ||
+      ts.isClassExpression(node) ||
+      ts.isFunctionExpression(node) ||
+      ts.isEnumDeclaration(node) ||
+      ts.isModuleDeclaration(node) ||
+      ts.isParameter(node) ||
+      ts.isBindingElement(node) ||
+      ts.isImportSpecifier(node) ||
+      ts.isImportClause(node) ||
+      ts.isNamespaceImport(node) ||
+      // `import Node = require("./safe")` emits a real local binding, so a later `Node.value` is
+      // the module's own rather than the DOM one.
+      ts.isImportEqualsDeclaration(node);
+    if (!named || node.name === undefined || !ts.isIdentifier(node.name)) {
+      return undefined;
     }
-    ts.forEachChild(node, collectDeclared);
+    const flags = ts.getCombinedModifierFlags(node as ts.Declaration);
+    if ((flags & ts.ModifierFlags.Ambient) !== 0) return undefined;
+    return node.name.text;
   };
-  collectDeclared(tree);
+
+  /** Whether a variable declaration is a `var`, which hoists out of its block. */
+  const isHoisted = (node: ts.VariableDeclaration): boolean => {
+    const list = node.parent;
+    if (list === undefined || !ts.isVariableDeclarationList(list)) return false;
+    return (list.flags & (ts.NodeFlags.Let | ts.NodeFlags.Const)) === 0;
+  };
+
+  const scopeBindings = new Map<ts.Node, Set<string>>();
+
+  /** Every name bound directly in one scope, not counting the scopes nested inside it. */
+  const bindingsOf = (scope: ts.Node): Set<string> => {
+    const cached = scopeBindings.get(scope);
+    if (cached) return cached;
+    const names = new Set<string>();
+
+    // A function's parameters and a named function expression's own name belong to the function
+    // itself, not to the scope around it. The same is true of a class expression's name and a
+    // catch clause's variable.
+    if (ts.isFunctionLike(scope)) {
+      for (const parameter of scope.parameters) {
+        const name = boundName(parameter);
+        if (name !== undefined) names.add(name);
+        // A destructured parameter binds through its pattern rather than through `name`.
+        ts.forEachChild(parameter, function descend(child): void {
+          const bound = boundName(child);
+          if (bound !== undefined) names.add(bound);
+          ts.forEachChild(child, descend);
+        });
+      }
+    }
+    const own = boundName(scope);
+    if (
+      own !== undefined &&
+      (ts.isFunctionExpression(scope) || ts.isClassExpression(scope))
+    ) {
+      names.add(own);
+    }
+
+    // Declarations written directly in this scope. Nested scopes keep their own.
+    const collect = (node: ts.Node): void => {
+      ts.forEachChild(node, child => {
+        if (opensScope(child)) {
+          // A function declaration's NAME belongs here even though its body does not.
+          const declaredHere = boundName(child);
+          if (declaredHere !== undefined && !ts.isFunctionExpression(child)) {
+            names.add(declaredHere);
+          }
+          // `var` passes through a block on its way to the nearest function or module scope, so
+          // those declarations still belong to this one.
+          if (holdsHoistedVars(scope) && !ts.isFunctionLike(child)) {
+            const hoisted = (inner: ts.Node): void => {
+              ts.forEachChild(inner, grandchild => {
+                if (ts.isFunctionLike(grandchild)) return;
+                if (
+                  ts.isVariableDeclaration(grandchild) &&
+                  isHoisted(grandchild)
+                ) {
+                  const name = boundName(grandchild);
+                  if (name !== undefined) names.add(name);
+                }
+                hoisted(grandchild);
+              });
+            };
+            hoisted(child);
+          }
+          return;
+        }
+        const name = boundName(child);
+        if (name !== undefined) names.add(name);
+        collect(child);
+      });
+    };
+    collect(scope);
+
+    scopeBindings.set(scope, names);
+    return names;
+  };
+
+  /** Whether this occurrence of `name` resolves to a binding the module declares. */
+  const declaredAt = (node: ts.Node, name: string): boolean => {
+    for (let scope: ts.Node | undefined = node; scope; scope = scope.parent) {
+      if (opensScope(scope) && bindingsOf(scope).has(name)) return true;
+    }
+    return false;
+  };
 
   /**
    * Whether this expression is the AMBIENT `globalThis`, rather than something the module named
@@ -221,7 +324,7 @@ function analyze(source: string, fileName: string): Analysis {
   const isAmbientGlobalThis = (node: ts.Node): boolean =>
     ts.isIdentifier(node) &&
     node.text === "globalThis" &&
-    !declared.has("globalThis");
+    !declaredAt(node, "globalThis");
 
   /** Whether a condition subtree asks `typeof <name>`, which is the SSR guard. */
   const mentionsTypeof = (condition: ts.Node, name: string): boolean => {
@@ -316,15 +419,22 @@ function analyze(source: string, fileName: string): Analysis {
       return outer.questionDotToken === undefined;
     }
     // `new globalThis.Image()` throws for the same reason a call does, and `new` has no optional
-    // form that could short-circuit it.
+    // form that could short-circuit it. A tagged template invokes its tag, so ``globalThis.foo`x` ``
+    // throws as well, with no call parentheses to recognise.
     if (ts.isNewExpression(outer) && outer.expression === value) return true;
+    if (ts.isTaggedTemplateExpression(outer) && outer.tag === value)
+      return true;
     // Destructuring reads properties off the value, so `const { body } = globalThis.document`
     // throws on `undefined` exactly as `globalThis.document.body` does — in the declaration form
     // and in the assignment form, where the pattern parses as an object or array literal.
     if (
       ts.isVariableDeclaration(outer) &&
       outer.initializer === value &&
-      ts.isBindingPattern(outer.name)
+      // The two binding patterns are named individually because `ts.isBindingPattern` is one of
+      // TypeScript's internals: present at runtime, absent from the published types, and free to
+      // disappear in a minor release.
+      (ts.isObjectBindingPattern(outer.name) ||
+        ts.isArrayBindingPattern(outer.name))
     ) {
       return true;
     }
@@ -347,7 +457,7 @@ function analyze(source: string, fileName: string): Analysis {
 
   /** Whether this identifier reads the global, rather than naming something in another position. */
   const readsTheGlobal = (node: ts.Identifier): boolean => {
-    if (declared.has(node.text)) return false;
+    if (declaredAt(node, node.text)) return false;
     const parent = node.parent;
 
     // Checked BEFORE the naming rule below, which would otherwise swallow it: `document` here is
@@ -413,21 +523,24 @@ function analyze(source: string, fileName: string): Analysis {
     // A name inside ANY type subtree is erased with it — `dom.HTMLElement` in
     // `type Root = dom.HTMLElement` is a qualified name, not a value read. Walking up to the
     // nearest type node covers the qualified and nested cases the two checks above miss.
+    //
+    // `class C extends HTMLElement {}` is the exception, and it has to be recognised INSIDE this
+    // loop rather than after it. TypeScript parses a heritage clause's target as an
+    // `ExpressionWithTypeArguments`, for which `ts.isTypeNode` returns true — so a check placed
+    // after the loop never runs. The base of a class is evaluated when the class is defined, and
+    // extending `undefined` throws while the module body is still running.
+    const isClassBase = (n: ts.Node): boolean =>
+      ts.isExpressionWithTypeArguments(n) &&
+      n.parent !== undefined &&
+      ts.isHeritageClause(n.parent) &&
+      n.parent.token === ts.SyntaxKind.ExtendsKeyword &&
+      n.parent.parent !== undefined &&
+      (ts.isClassDeclaration(n.parent.parent) ||
+        ts.isClassExpression(n.parent.parent));
     for (let n: ts.Node | undefined = parent; n; n = n.parent) {
+      if (isClassBase(n)) break;
       if (ts.isTypeNode(n) || ts.isTypeAliasDeclaration(n)) return false;
       if (ts.isStatement(n) || ts.isSourceFile(n)) break;
-    }
-    // `interface Root extends HTMLElement` names a type in a heritage clause, erased with the
-    // interface. An `extends` on a CLASS is a value expression, so only the interface form is
-    // excused here.
-    if (
-      ts.isExpressionWithTypeArguments(parent) &&
-      parent.parent !== undefined &&
-      ts.isHeritageClause(parent.parent) &&
-      parent.parent.parent !== undefined &&
-      ts.isInterfaceDeclaration(parent.parent.parent)
-    ) {
-      return false;
     }
 
     // `typeof window === "undefined"` is the guard that MAKES a module server-safe: it evaluates
@@ -471,11 +584,21 @@ function analyze(source: string, fileName: string): Analysis {
       const isDynamicImport = callee.kind === ts.SyntaxKind.ImportKeyword;
       // A module that declares its own `require` is not calling the ambient loader, so its
       // argument is not a module specifier.
-      const isRequire =
-        ts.isIdentifier(callee) &&
-        callee.text === "require" &&
-        !declared.has("require");
+      const ambientRequire = (expression: ts.Expression): boolean =>
+        ts.isIdentifier(expression) &&
+        expression.text === "require" &&
+        !declaredAt(expression, "require");
+      const isRequire = ambientRequire(callee);
+      // `require.call(undefined, "react")` loads the module just as `require("react")` does, and
+      // the specifier moves to the second argument. `.bind` is absent because it defers.
+      const isIndirectRequire =
+        ts.isPropertyAccessExpression(callee) &&
+        (callee.name.text === "call" || callee.name.text === "apply") &&
+        ambientRequire(callee.expression);
       if (isDynamicImport || isRequire) record(node.arguments[0]);
+      // `.apply` takes its arguments as an array, which is not a literal this can read — recorded
+      // as unreadable rather than skipped, so it fails the allow-list.
+      if (isIndirectRequire) record(node.arguments[1]);
     }
 
     if (
@@ -828,6 +951,28 @@ describe("reading a module", () => {
     ).toEqual([]);
   });
 
+  it("reads the ambient require invoked indirectly", () => {
+    // `require.call(undefined, "react")` loads the module exactly as a direct call does, and the
+    // specifier moves to the second argument.
+    expect(
+      read(`export const react = require.call(undefined, "react");`).specifiers
+    ).toEqual(["react"]);
+    // `.apply` takes an array, which is not a literal this can read. Recorded as unreadable so it
+    // fails the allow-list, rather than skipped so it passes.
+    const applied = read(
+      `export const react = require.apply(undefined, ["react"]);`
+    ).specifiers;
+    expect(applied).toHaveLength(1);
+    expect(applied[0]).toContain("unreadable specifier");
+    // A module that binds its own `require` is not calling the loader, indirectly either.
+    expect(
+      read(`
+        const require = (value: string): string => value;
+        export const x = require.call(undefined, "react");
+      `).specifiers
+    ).toEqual([]);
+  });
+
   it("ignores a type-only import-equals declaration", () => {
     expect(read(`import type React = require("react");`).specifiers).toEqual(
       []
@@ -1026,6 +1171,80 @@ describe("reading a module", () => {
         "export const width = ((s: TemplateStringsArray) => window.innerWidth)``;"
       ).globals
     ).toEqual(["window"]);
+  });
+
+  it("resolves a shadowing name against the scopes that enclose the read", () => {
+    // A binding somewhere else in the file shadows nothing. The parameter below is the helper's,
+    // and the top-level read still reaches the ambient global.
+    expect(
+      read(`
+        function normalize(window: unknown) { return window; }
+        export const width = window.innerWidth;
+      `).globals
+    ).toEqual(["window"]);
+    // Nor does a binding confined to a block reach past it.
+    expect(
+      read(`
+        { const location = "home"; void location; }
+        export const href = location.href;
+      `).globals
+    ).toEqual(["location"]);
+  });
+
+  it("still excuses a read the enclosing scope really does bind", () => {
+    // The control for the case above. A module-level binding, a `var` reached from inside a block
+    // it hoists out of, and a parameter read inside its own function are all the module's own.
+    expect(
+      read(`
+        const location = "home";
+        export const href = location;
+      `).globals
+    ).toEqual([]);
+    expect(
+      read(`
+        { var history = "own"; }
+        export const h = history;
+      `).globals
+    ).toEqual([]);
+    expect(
+      read(`export const f = (document: { title: string }) => document.title;`)
+        .globals
+    ).toEqual([]);
+  });
+
+  it("reports a class whose base is a browser global", () => {
+    // A class base is evaluated when the class is DEFINED, so extending `undefined` throws while
+    // the module body is still running. TypeScript parses it as a node `ts.isTypeNode` accepts,
+    // which is why it is recognised inside the type walk rather than after it.
+    expect(read(`export class C extends HTMLElement {}`).globals).toEqual([
+      "HTMLElement",
+    ]);
+  });
+
+  it("does not report an interface extending the same name", () => {
+    // The control: a heritage clause on an INTERFACE is erased with it, so nothing reads the
+    // global at runtime.
+    expect(
+      read(`export interface Root extends HTMLElement {}`).globals
+    ).toEqual([]);
+  });
+
+  it("does not report a name bound by an import-equals", () => {
+    // `import Node = require("./safe")` emits a real local binding, so the later read is the
+    // module's own rather than the DOM one.
+    expect(
+      read(`
+        import Node = require("./safe");
+        export const n = Node.value;
+      `).globals
+    ).toEqual([]);
+  });
+
+  it("reports a globalThis property invoked as a template tag", () => {
+    // A tagged template invokes its tag, so this calls `undefined`.
+    expect(read("export const out = globalThis.document`x`;").globals).toEqual([
+      "document",
+    ]);
   });
 
   it("reports an IIFE invoked through .call", () => {
