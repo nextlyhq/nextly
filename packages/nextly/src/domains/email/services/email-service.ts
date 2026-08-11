@@ -461,6 +461,10 @@ export class EmailService extends BaseService {
     );
 
     const startedAt = Date.now();
+    // Set the moment the provider answers, so the catch below can tell a send
+    // that never happened from one whose bookkeeping failed afterwards.
+    let dispatched: { success: boolean; messageId?: string } | undefined;
+
     try {
       const result = await adapter.send({
         to: filtered.to,
@@ -542,6 +546,18 @@ export class EmailService extends BaseService {
             recipient.recipientKind === "to" &&
             refused.has(recipient.to.trim().toLowerCase())
         );
+
+      // The provider has answered. Everything below this line is bookkeeping
+      // about a message that was already handed over, and the catch beneath
+      // the whole block reports a PROVIDER failure -- so an installed logger
+      // that throws, or a recorder that does, would otherwise write a second
+      // set of failed rows, run the after-send actions again with
+      // `success: false`, and tell the caller a delivered message failed.
+      dispatched = {
+        success: deliveredToCaller,
+        ...(safeMessageId !== null ? { messageId: safeMessageId } : {}),
+      };
+
       await this.deliveries?.recordAll(
         recipients.map(recipient => {
           const wasRefused = refused.has(recipient.to.trim().toLowerCase());
@@ -614,6 +630,19 @@ export class EmailService extends BaseService {
         ...(safeMessageId !== null ? { messageId: safeMessageId } : {}),
       };
     } catch (error) {
+      // The message was already accepted, so this is not a provider failure
+      // however it reached here. Reporting one would contradict the rows and
+      // the action that have already gone out, and would tell an auth flow to
+      // withhold a token for a mail that was sent.
+      if (dispatched) {
+        this.logger.error("email.after_send_failed", {
+          event: "email.after_send_failed",
+          provider: providerType,
+          ...describeProviderFailure(error),
+        });
+        return dispatched;
+      }
+
       // Recorded before the action seam, for the reason given in the success
       // path: a plugin handler that blocks must not be able to cost us the
       // record of an attempt. A throw here is the case where the record

@@ -716,3 +716,73 @@ describe("a message id built out of the message body", () => {
     expect(result.messageId).toBe("01HQ8ZK5TM9WXYZP4R7N2VBCDE");
   });
 });
+
+describe("a failure AFTER the provider accepted the message", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetFilterRegistry();
+  });
+
+  afterEach(() => {
+    resetFilterRegistry();
+  });
+
+  it("is not reported as a provider failure", async () => {
+    // An installed logger that throws runs after the rows and the after-send
+    // action have already gone out. Treating it as a provider failure writes a
+    // SECOND set of failed rows, runs the action again with `success: false`,
+    // and tells an auth flow to withhold a token for a message that was sent.
+    const { service } = buildSend();
+    const captured: Array<Record<string, unknown>> = [];
+    getFilterRegistry().addAction(
+      FilterSeams.EmailAfterSend,
+      (value: Record<string, unknown>) => {
+        captured.push(value);
+      }
+    );
+
+    const recorded: Array<{ status: string }> = [];
+    (service as unknown as { deliveries: unknown })["deliveries"] = {
+      record: (input: { status: string }) => {
+        recorded.push(input);
+        return Promise.resolve();
+      },
+      recordAll: (inputs: Array<{ status: string }>) => {
+        recorded.push(...inputs);
+        return Promise.resolve();
+      },
+    };
+    // Throws only on the success line, which runs after everything above it.
+    vi.mocked(logger.info).mockImplementation((message: string) => {
+      if (message === "email.sent") throw new Error("log transport is down");
+    });
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(result).toEqual({ success: true, messageId: "msg-1" });
+    expect(recorded.map(row => row.status)).toEqual(["sent"]);
+    expect(captured.map(value => value.success)).toEqual([true]);
+  });
+
+  it("still reports a provider that never accepted the message", async () => {
+    // The control. The marker must not swallow a real send failure.
+    const { service } = buildSend();
+    (service as unknown as { createAdapterFromRecord: unknown })[
+      "createAdapterFromRecord"
+    ] = () => ({
+      send: () => Promise.reject(new Error("smtp down")),
+    });
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(result).toEqual({ success: false });
+  });
+});
