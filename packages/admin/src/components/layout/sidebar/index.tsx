@@ -286,12 +286,26 @@ const SidebarRail = React.forwardRef<
 });
 SidebarRail.displayName = "SidebarRail";
 
+/**
+ * The content panel beside the sidebar.
+ *
+ * A plain `div`, not a `main`. The admin shell already renders the page's one
+ * primary landmark in `DashboardLayout`, so a second `main` inside it would
+ * give the document two -- assistive technology loses "skip to the main
+ * content" as an unambiguous move, and any query for the main region has to
+ * choose between them.
+ *
+ * This is the only component in this module that would emit a landmark, which
+ * is why it is the only one whose element is pinned by a test. Upstream ships
+ * it as a `main` because it assumes the panel IS the page; here it is a region
+ * inside one.
+ */
 const SidebarInset = React.forwardRef<
   HTMLDivElement,
-  React.ComponentProps<"main">
+  React.ComponentProps<"div">
 >(({ className, ...props }, ref) => {
   return (
-    <main
+    <div
       ref={ref}
       className={cn(
         "relative flex w-full flex-1 flex-col bg-background",

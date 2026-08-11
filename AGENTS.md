@@ -65,9 +65,28 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   with self-import errors that look real but are not.
 - Integration tests self-skip when the dialect's URL is unset. Use the root
   scripts: `pnpm test:integration:postgres17` (localhost:5435),
-  `:postgres15` (:5434), `:mysql` (:3307), `:sqlite` (no URL needed). Start
-  the databases with `pnpm docker:test`. NEVER point a TEST\_\* URL at a
-  database you did not create for the test run.
+  `:postgres15` (:5434), `:mysql` (:3307), `:sqlite` (no URL needed). NEVER
+  point a TEST\_\* URL at a database you did not create for the test run.
+- The test databases are their own containers in `docker-compose.test.yml`,
+  separate from the dev stack. Neither `pnpm docker:test` nor `pnpm docker:up`
+  starts them: `docker:test` only PROBES a connection and exits 1 when it
+  fails, and `docker:up` brings up the DEV stack, which conflicts by container
+  name where one already exists. A `DBS DOWN` failure followed by a start
+  command that changes nothing reads like a broken environment; it is usually
+  just the wrong command.
+  - Already created but stopped, which is the usual case:
+    `docker start nextly-postgres17-test nextly-mysql-test` (add
+    `nextly-postgres15-test` for the 15 leg).
+  - Never created, on a fresh clone:
+    `docker compose -f docker-compose.test.yml up -d postgres17-test postgres15-test mysql-test`.
+    `postgres15-test` is the only service on 5434, so omitting it leaves the
+    documented `:postgres15` leg with nothing to connect to.
+  - Why not always the second: the services set a fixed `container_name`, so
+    exactly one compose project can own them, and the owner is whichever
+    directory first brought them up. In a repo worked through many worktrees
+    that is rarely the one you are standing in, and compose then tries to
+    CREATE containers whose names are taken and fails. `docker start` addresses
+    them by name and does not care which project owns them.
 - Integration files in `packages/nextly` run sequentially on purpose
   (`fileParallelism: false`, single fork): system-table suites share fixed
   table names. Do not "fix" slow integration runs by re-enabling parallelism.
@@ -76,6 +95,76 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 - Some unit suites have a known pre-existing failing baseline. NEVER add to
   it: run the tests for the area you touch before and after your change, and
   fix any new failure you introduce.
+- A test is only evidence once you have seen it FAIL for the intended reason.
+  Break the code, confirm the intended test fails, restore. After changing a
+  test, re-run its break: a fix to the test is a change to the experiment.
+  What counts as the intended failure depends on when the test runs:
+  - A RUNTIME test that stops COMPILING proves nothing — the assertion never
+    executed, so the red says only that the break was malformed.
+  - A COMPILE-TIME contract test is the opposite case: compilation IS the
+    mechanism. In `*.test-d.ts`, widening a type makes its `@ts-expect-error`
+    unused and `check-types` fails for exactly the intended reason. Red is not
+    the evidence though — the EXPECTED DIAGNOSTIC is. A typo, a bad import or
+    an unrelated type error in the same file all stop compilation too, and
+    prove nothing about the property.
+  - `@ts-expect-error` is the sharp edge here, because it suppresses ANY error
+    on the line that follows. A test asserting "this call is rejected" stays
+    green once the code starts erroring for a different reason, and stays green
+    after the original rejection stops happening. Two things that look like
+    mitigations and are not: a comment naming the expected code, which `tsc`
+    never reads; and a positive control asserting the ACCEPTED form still
+    compiles, which an unrelated error confined to the rejected line leaves
+    untouched. Only an assertion the checker EVALUATES distinguishes the cases —
+    `expectTypeOf(...)`, or a diagnostic-aware type test that names the error it
+    expects. If the property cannot be asserted that way, say in the file that
+    the directive is unverified rather than letting it read as coverage.
+  - The count must not drop by ACCIDENT: a suite that silently stopped being
+    discovered reads as a pass, which is what that guards. Removing a test on
+    purpose is a different act, sometimes correct (below), and the PR says
+    which test went and why.
+- Before you assert or measure, name the property that SEPARATES a correct
+  implementation from the plausible broken one you are worried about, and check
+  that it is the property you are about to test. A necessary-but-insufficient
+  property returns green from both, and it does so carrying the authority of
+  having been checked, which closes the question. Two worked examples, both real:
+  - measuring whether an old database constraint could be DROPPED, when what
+    decides the repair is whether the code can FIND it. Dropping succeeded, and
+    the repair would still have skipped every database silently.
+  - asserting a generated identifier is `length <= 63`, when a plain truncation
+    is also 63 characters. The one test guarding the naming passed on the broken
+    implementation; distinctness was the separating property.
+
+  The operational form is to ask what ELSE would produce the same green. If
+  anything other than the property under test does — a fixture that never
+  reaches the mechanism, an unregistered type falling through to a default, an
+  assertion satisfied by absence, a search whose glob missed the directory —
+  the property is not covered yet. Add the positive control that makes the
+  mechanism's presence observable, and run it.
+
+- Whatever you are currently judging WITH is not being judged. A probe, a
+  derived check, a test, a post-apply verifier and the baseline diff that reads
+  the suite all had the same defect in one week here, and every one of them
+  existed to catch the layer above it. They were hard to see not because the
+  defect was subtle but because each occupied the position auditing is done
+  from, so nothing stood further out to look at it. Periodically step out one
+  level and give the instrument the same treatment as its subject: a positive
+  control on an input where you know the answer, and where the answer is not
+  "nothing". Confirming an instrument against a case that did not move cannot
+  distinguish it from one that reports nothing under any circumstances.
+- A test that passes both with and without the fix is worse than no test: the
+  next reader takes the green as coverage. **Repair it first.** Usually the
+  fixture never reaches the mechanism or the assertion is satisfied by absence,
+  and both are fixable. Deleting the ONLY attempted coverage for a behaviour
+  trades a misleading green for no signal at all, which is not an improvement.
+  Deletion is right in two cases, and they need different notes:
+  - **redundant** — the behaviour is genuinely covered elsewhere. Say in the
+    file that remains WHERE, so the next reader can follow it.
+  - **obsolete** — the code no longer does the thing. There is no remaining
+    file, and demanding one would force a false coverage comment. Say what
+    behaviour was removed and in which change instead.
+
+  Either way this is the deliberate removal the count rule exempts, so state the
+  drop rather than letting it look like a suite that went missing.
 
 ## Conventions (enforced; violations will be rejected in review)
 
@@ -109,6 +198,33 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 - Admin styling is token-driven: use `--nx-*` custom properties (defined for
   light AND dark in `packages/ui/src/styles/theme.css`). Zero hardcoded
   colors, and every visual change must work in both modes.
+- One question has ONE implementation. When a narrower view of something is
+  needed, DERIVE it from the richer one; never compute it alongside. Two
+  functions that agree today drift, and the drift is silent because both look
+  correct. This has produced defects in five unrelated packages.
+- Unreachability is a property of the current call graph, not of the code, and
+  the call graph changes underneath you. "This cannot happen" is not a reason to
+  omit a guard — it is a reason the guard is CHEAP, provided it is cheap: an
+  assertion over values already in hand costs nothing when its rejection branch
+  never runs. A guard that queries, reads or recomputes still pays that cost on
+  every call whether or not it can ever reject, so a purely DEFENSIVE one can
+  move behind the work it protects. Never move a guard that is a PRECONDITION —
+  authorization, ownership, validity, quota. "Behind the work" there means the
+  mutation has already happened when the request is rejected, which turns a cost
+  saving into a security hole. Preconditions run first, whatever they cost.
+- Prefer a boundary the system cannot cross to a check that looks for crossings.
+  A scan over syntax has an unbounded surface and can only ever be patched; a
+  declared dependency graph, a type, or a manifest assertion is complete by
+  construction. But a manifest assertion is only a boundary if the RESOLVER
+  agrees with it: under pnpm a root dependency, or one hoisted for another
+  workspace package, stays importable from a package whose own manifest never
+  declares it, so "X is absent from this package.json" does not mean "this
+  package cannot reach X". Make the boundary real before trusting it — a
+  resolution test that imports the package's entry from an isolated context, or
+  a build that fails on an undeclared import — and only then drop the visitor.
+- A documented rule with nothing enforcing it is not a control, and filing a
+  task is not installing one. If the correct path and the easy path differ,
+  the rule will be broken by someone who knows it.
 
 ## Changesets and releases
 

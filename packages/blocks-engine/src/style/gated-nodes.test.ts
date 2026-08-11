@@ -8,7 +8,7 @@
  * The alternative a reader is left with otherwise is withholding the whole sheet, which makes one
  * conditioned node render an entire page unstyled.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { BlockDocument, NodeStyles } from "../document";
 import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
@@ -349,5 +349,125 @@ describe("the trace of a document that gates a node", () => {
     expect(traced_).toContain("blue");
     expect(css).toContain("color: blue");
     expect(traced_).not.toContain("red");
+  });
+});
+
+describe("a node whose block says it draws nothing", () => {
+  /** Compile with a caller that answers for a named node. */
+  const compileWithDrawless = (document: BlockDocument, drawless: string) =>
+    compilePageCss(document, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      namedClasses: [],
+      blockBases: {},
+      drawsNothing: (candidate: { id: string }) => candidate.id === drawless,
+    } as never);
+
+  it("keeps its own rules out of the sheet", () => {
+    // Same leak, reached a different way. A condition is decided by the reader;
+    // this is decided by the block from props the compiler already holds. Either
+    // way the markup never appears and the rules compiled for it would ship.
+    const { css, gated } = compileWithDrawless(
+      page([node({ styles: styles({ color: "red" }) })]),
+      "n1"
+    );
+
+    expect(css).not.toContain("color: red");
+    expect(gated?.n1).toContain("color: red");
+  });
+
+  it("takes its slot children with it", () => {
+    // A slot's children are placed by the markup the block returns, and a block
+    // returning nothing places none of them — so a child's rules would ship for
+    // an element with nowhere to appear.
+    const { css, gated } = compileWithDrawless(
+      page([
+        node({
+          slots: {
+            children: [node({ styles: styles({ color: "red" }) }, "n2")],
+          },
+        }),
+      ]),
+      "n1"
+    );
+
+    expect(css).not.toContain("color: red");
+    expect(gated?.n2).toContain("color: red");
+  });
+
+  it("leaves its block type's base rules in the sheet", () => {
+    // Those come from the block definition rather than from the document, and a
+    // sibling of the same type that DOES draw still needs them. Only a node's own
+    // rules can travel per node.
+    const { css, gated } = compilePageCss(
+      page([node({}, "n1"), node({}, "n2")]),
+      {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        namedClasses: [],
+        blockBases: { "core/box": styles({ color: "green" }) },
+        drawsNothing: (candidate: { id: string }) => candidate.id === "n1",
+      } as never
+    );
+
+    expect(css).toContain("color: green");
+    expect(gated?.n1).toBeDefined();
+  });
+
+  it("compiles unchanged when nothing answers the question", () => {
+    // The control, and the compatibility promise: a caller that supplies no
+    // predicate gets exactly the sheet it got before this existed.
+    const { css, gated } = compile(
+      page([node({ styles: styles({ color: "red" }) })])
+    );
+
+    expect(css).toContain("color: red");
+    expect(gated).toBeUndefined();
+  });
+});
+
+describe("a caller's drawless predicate that misbehaves", () => {
+  const compileWith = (drawsNothing: unknown) =>
+    compilePageCss(page([node({ styles: styles({ color: "red" }) })]), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      namedClasses: [],
+      blockBases: {},
+      drawsNothing,
+    } as never);
+
+  it("keeps the node's styling when the predicate throws", () => {
+    // `compilePageCss` is exported, so this is a consumer's function with
+    // nothing above it to catch a failure. A throw must cost the node its
+    // exemption, not abort the compile.
+    const { css, gated } = compileWith(() => {
+      throw new Error("host predicate is broken");
+    });
+
+    expect(css).toContain("color: red");
+    expect(gated).toBeUndefined();
+  });
+
+  it("contains a rejection from a predicate declared async", async () => {
+    // A promise compares unequal to `true`, so the answer is already right; the
+    // hazard is the rejection nobody handles, which Node reports and can end the
+    // process with.
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const { css } = compileWith(() => Promise.reject(new Error("late")));
+      expect(css).toContain("color: red");
+      // A rejection surfaces on a later turn, so this has to wait for one.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+  });
+
+  it("contains a throwing `then` getter on the answer", () => {
+    const hostile = {
+      get then(): never {
+        throw new Error("from the getter");
+      },
+    };
+    expect(compileWith(() => hostile).css).toContain("color: red");
   });
 });

@@ -31,7 +31,7 @@ import { fileURLToPath } from "node:url";
 import parseChangeset from "@changesets/parse";
 import micromatch from "micromatch";
 
-import { getWorkspacePackageNames } from "./lib.mjs";
+import { getWorkspacePackages } from "./lib.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -58,11 +58,13 @@ const ALPHA_BUMP = "patch";
  * `[["a", "b"]]` and is refused by the release tooling, and an entry that is not
  * a non-empty string names nothing.
  *
- * Checked here rather than by handing the file to `@changesets/config`, whose
- * `parse` needs a resolved workspace from `@manypkg/get-packages` — a second
- * dependency, for a rule that is three sentences long. That is the opposite trade
- * to the YAML reader, and for the opposite reason: this rule cannot drift, and a
- * frontmatter grammar can.
+ * Checked here rather than by handing the file to `@changesets/config`, and NOT
+ * because that would cost a dependency — the workspace its `parse` needs is
+ * resolved a few lines above. Because it would answer a different question.
+ * Changesets accepts any number of disjoint groups and objects only to a package
+ * appearing in two of them; "exactly one group" is this repository's rule, which
+ * upstream will never enforce on its behalf. Delegating the check would silently
+ * drop the part that matters most here.
  */
 export function fixedGroupShape(config) {
   const groups = config.fixed;
@@ -140,13 +142,21 @@ export function lockstepPackages(configText, workspaceNames) {
  * config packages. Measuring against "what we publish" would report those four as
  * errors on every run.
  *
- * Checked in BOTH directions. A name in the group that no package answers to is
- * a rename or a deletion that the config still believes in, and Changesets fails
- * a release on an unknown package in `fixed`.
+ * Checked in BOTH directions, and the second direction has two causes that are
+ * NOT the same fault. A name no workspace package answers to is a rename or a
+ * deletion the config still believes in, and Changesets refuses the release
+ * outright. A name that DOES resolve but sits outside `packages/` is the
+ * opposite: the release proceeds, quietly widened. It matters because the group
+ * moves every member to the highest version any of them carries, so one package
+ * versioned on its own line — an app, a harness — decides the number the whole
+ * train takes. Reporting both under one sentence would tell an author the release
+ * will fail when it is instead going to succeed at the wrong version.
  */
-export function groupMatchesWorkspace(packages, workspaceNames) {
+export function groupMatchesWorkspace(packages, workspace) {
   const problems = [];
-  const absent = workspaceNames.filter(name => !packages.includes(name));
+  const absent = workspace.underPackagesDir.filter(
+    name => !packages.includes(name)
+  );
   if (absent.length > 0) {
     problems.push(
       `.changeset/config.json: the \`fixed\` group is missing ${absent.join(", ")}. ` +
@@ -154,11 +164,23 @@ export function groupMatchesWorkspace(packages, workspaceNames) {
         `stranded at an older version by the next release.`
     );
   }
-  const unknown = packages.filter(name => !workspaceNames.includes(name));
+  const outside = packages.filter(
+    name =>
+      !workspace.underPackagesDir.includes(name) && workspace.all.includes(name)
+  );
+  if (outside.length > 0) {
+    problems.push(
+      `.changeset/config.json: the \`fixed\` group reaches ${outside.join(", ")}, ` +
+        `which is in the workspace but not under packages/. The group takes the ` +
+        `highest version any member carries, so a package versioned on its own ` +
+        `line decides the version of the entire release train.`
+    );
+  }
+  const unknown = packages.filter(name => !workspace.all.includes(name));
   if (unknown.length > 0) {
     problems.push(
       `.changeset/config.json: the \`fixed\` group names ${unknown.join(", ")}, ` +
-        `which no package under packages/ answers to. Changesets refuses a release ` +
+        `which no package in the workspace answers to. Changesets refuses a release ` +
         `on an unknown package in \`fixed\`.`
     );
   }
@@ -195,7 +217,8 @@ export function declaredReleases(fileText) {
     return undefined;
   }
   const releases = new Map();
-  for (const release of parsed.releases) releases.set(release.name, release.type);
+  for (const release of parsed.releases)
+    releases.set(release.name, release.type);
   return releases;
 }
 
@@ -259,8 +282,11 @@ export function problemsWith(path, fileText, packages) {
  * because the PR that adds a package is often exactly that one — and a stale
  * group makes every later changeset wrong while each of them passes.
  */
-export function checkChangesets(paths, readFile, configText, workspaceNames) {
-  const packages = lockstepPackages(configText, workspaceNames);
+export function checkChangesets(paths, readFile, configText, workspace) {
+  // Expanded against the WHOLE workspace, which is what Changesets expands
+  // against. Narrowing it here to the packages the group is supposed to contain
+  // would make a pattern reaching outside `packages/` look like exact coverage.
+  const packages = lockstepPackages(configText, workspace.all);
   if (packages.length === 0) {
     // A config with no fixed group would make every check below vacuous, and a
     // guard that passes because it found nothing to check is worse than none.
@@ -275,7 +301,7 @@ export function checkChangesets(paths, readFile, configText, workspaceNames) {
   // reading the release tooling does not share.
   if (shape.length > 0) return shape;
   return [
-    ...groupMatchesWorkspace(packages, workspaceNames),
+    ...groupMatchesWorkspace(packages, workspace),
     ...paths.flatMap(path => problemsWith(path, readFile(path), packages)),
   ];
 }
@@ -349,7 +375,7 @@ async function main(argv) {
     paths,
     path => readFileSync(resolve(REPO_ROOT, path), "utf8"),
     readFileSync(resolve(REPO_ROOT, ".changeset", "config.json"), "utf8"),
-    getWorkspacePackageNames()
+    getWorkspacePackages()
   );
   if (problems.length === 0) {
     console.log(
