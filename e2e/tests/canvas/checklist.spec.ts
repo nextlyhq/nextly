@@ -387,11 +387,11 @@ test("[acceptance] point 12b: Escape does not mutate the tree", async ({
   const driver = createPocDriver(page);
   await driver.mountTree(fixture);
 
-  // The STORED document is the subject, not the canvas. Escape currently
-  // navigates out of the editor, so a canvas read would be unavailable exactly
-  // on the path most likely to have persisted something — and skipping the
-  // check there would leave "navigated away AND saved a deletion" untested,
-  // which is the worst version of this defect.
+  // The STORED document is the subject, not the canvas. A canvas read depends on
+  // the editor still being mounted, so making it the only check would skip
+  // exactly the path most likely to have persisted something — leaving
+  // "navigated away AND saved a deletion" untested, the worst version of this
+  // defect. The stored read holds whatever the editor does.
   const before = await readStoredBlockIds(request, fixture.entryId);
   expect(before, "the seeded document must have blocks").not.toEqual([]);
 
@@ -422,11 +422,11 @@ test("[acceptance] point 12b: Escape does not mutate the tree", async ({
     before
   );
 
-  // The live tree is only readable while the editor is mounted, which is why
-  // the stored read above is unconditional rather than replaced. Escape
-  // currently navigates out, so this branch does not execute today; the
-  // annotation records that so a green result is not mistaken for one that
-  // exercised it.
+  // The live tree is only readable while the editor is mounted, which is why the
+  // stored read above is unconditional rather than replaced. Point 12a asserts
+  // the editor now survives Escape, so this branch is expected to run — the
+  // annotation records whether it actually did, so a green result that skipped
+  // it is still distinguishable from one that exercised it.
   test.info().annotations.push({
     type: "canvas-compared",
     description: String(hasEditor),
