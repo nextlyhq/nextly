@@ -1,0 +1,26 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "test": {
+      // The type-surface guard reads this package's OWN bundled declarations:
+      // the export forms it checks are produced by the declaration bundler, so
+      // there is nothing to assert against until the package is built. The root
+      // task depends on `^build`, which builds dependencies and not this
+      // package, and `dist/**` is not a root test input — so without this the
+      // suite either finds no `dist` at all or reads declarations produced
+      // before the source change.
+      //
+      // This makes turbo do that build, in order, and cache it. Runs turbo
+      // never sees — `pnpm --filter @nextlyhq/blocks-react test` and the watch
+      // and UI entry points — are covered instead by the suite's own
+      // `beforeAll`, which rebuilds the declarations itself.
+      "dependsOn": ["$TURBO_EXTENDS$", "build"],
+      // `$TURBO_EXTENDS$` keeps the root inputs in sync rather than restating
+      // them; `dist/**` is appended because the artifact this suite asserts
+      // against is a real input to it, and a cached pass that ignored it would
+      // survive a change to what the bundler emits.
+      "inputs": ["$TURBO_EXTENDS$", "dist/**", "tsup.config.ts"]
+    }
+  }
+}

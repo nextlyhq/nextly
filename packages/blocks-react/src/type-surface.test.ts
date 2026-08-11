@@ -3,14 +3,13 @@
  * IMPORTABLE from it, not merely mentioned by it.
  *
  * A package that names a type in a parameter or return position owes that type
- * to its callers. `blocks-react` did not: `StyleCompileContext`, `BlockDocument`
- * and `DocumentLimits` appeared in the built declarations in parameter
- * positions while being named in no export statement, and `BreakpointSet` — the
- * one field `StyleCompileContext` requires — was absent from the surface
- * entirely. A host could SEE the name it was required to pass and had no way to
- * write it down. The workaround was to leave the value unannotated, which keeps
- * the check at the call site and loses the ability to name the value, move it,
- * or type a module boundary around it.
+ * to its callers. A type mentioned but not exported leaves a host able to SEE
+ * the name it is required to pass with no way to write it down: the value must
+ * stay unannotated, which keeps the check at the call site and loses the
+ * ability to name the value, move it, or type a module boundary around it.
+ *
+ * `@nextlyhq/blocks-engine` is a DEPENDENCY of this package rather than a peer,
+ * so a host has no direct path to it and cannot import those types itself.
  *
  * **Asserted against the BUILT `.d.ts`, not the source, and that distinction is
  * the test.** A `.d.ts` can mention a type in three ways and only one of them
@@ -26,7 +25,9 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+
+import { beforeAll, describe, expect, it } from "vitest";
 
 const DIST = join(dirname(fileURLToPath(import.meta.url)), "..", "dist");
 
@@ -36,11 +37,11 @@ const DIST = join(dirname(fileURLToPath(import.meta.url)), "..", "dist");
  * **The alias form is the whole difficulty, and it is why this parser exists
  * rather than a grep.** A bundled declaration re-exports as
  * `export { a as BlockRenderArgs }`, so the exported NAME is on the right of
- * `as` while the local name on the left is a generated letter. A check reading
- * the left-hand side concludes the type is missing and is wrong — measured,
- * twice, while writing this file. `export type { ... }`, inline
- * `{ type X }` and direct `export interface X` all have to be read too, for the
- * same reason: any one of them missed reports an absence that is not there.
+ * `as` while the local name on the left is a generated letter; reading the
+ * left-hand side concludes the type is missing when it is not. `export type
+ * { ... }`, inline `{ type X }` and direct `export interface X` all have to be
+ * read for the same reason — any form missed reports an absence that is not
+ * there.
  */
 function exportedNames(declaration: string): Set<string> {
   const names = new Set<string>();
@@ -70,13 +71,12 @@ function exportedNames(declaration: string): Set<string> {
 /**
  * Every engine type the built declarations IMPORT, derived rather than listed.
  *
- * **A hand-written list has the defect it exists to catch.** The first version
- * of this test enumerated the types a reported gap had named, and passed while
- * `AnyBlockDefinition`, `MigrationSource`, `CompiledPageCss` and
- * `RemotePatternInput` were still unreachable — they sit in the signatures of
- * `createBlockResolver`, `migrationSourceFor`, `toPageStyles` and
- * `fetchPolicyLabel`, in bundler CHUNK declarations rather than in the entry
- * file, so neither the measurement nor the list saw them.
+ * **A hand-written list has the defect it exists to catch**: it can only hold
+ * what someone already knew was missing, so it grows with memory rather than
+ * with the API and certifies exactly the state it was written against. Types
+ * reached through bundler CHUNK declarations rather than the entry file — the
+ * signatures of `createBlockResolver`, `migrationSourceFor`, `toPageStyles` and
+ * `fetchPolicyLabel` among them — never appear in such a list at all.
  *
  * The declarations name their own dependency: every chunk carries an
  * `import { ... } from "@nextlyhq/blocks-engine"` listing exactly the engine
@@ -112,6 +112,21 @@ const SENTINELS: Readonly<Record<string, string>> = {
 };
 
 describe("the published type surface", () => {
+  // Rebuilt here, not merely checked for, because a `dist` that exists can
+  // still predate the source change and would certify a surface nobody has.
+  // Turbo orders this package's build before its tests, but the direct runs it
+  // never sees — `pnpm --filter @nextlyhq/blocks-react test`, watch, UI — have
+  // no such edge. Rebuilding unconditionally costs a second build on a cache
+  // miss and removes the question; deciding whether `dist` was current would
+  // mean re-implementing turbo's input tracking, and every error in that
+  // passes stale declarations.
+  beforeAll(() => {
+    execFileSync("pnpm", ["run", "build"], {
+      cwd: join(DIST, ".."),
+      stdio: "ignore",
+    });
+  }, 180_000);
+
   it("exports every engine type its declarations import", () => {
     const entries = Object.keys(SENTINELS).map(name =>
       join(DIST, `${name}.d.ts`)
@@ -125,9 +140,7 @@ describe("the published type surface", () => {
 
     const required = importedEngineTypes();
     // The positive control, and it is load-bearing. A derivation that found
-    // NOTHING would assert nothing at all and read as a clean pass — which is
-    // precisely how the previous version of this test passed over four
-    // unreachable types.
+    // NOTHING would assert nothing at all and read as a clean pass.
     expect(required.size).toBeGreaterThan(4);
 
     // Exported from EITHER entry: a type belonging to the Next-coupled surface
