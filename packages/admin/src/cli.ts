@@ -49,8 +49,7 @@ export default function AdminPage() {
 
   // Updated route.ts with auto-initialization
   const routeContent = `// Imported from \`nextly/runtime\` so the Next.js-coupled
-// handler factory doesn't leak into Node-only code paths. See task 24
-// stage 1.
+// handler factory doesn't leak into Node-only code paths.
 import { createDynamicHandlers } from "nextly/runtime";
 import { getOrInitializeDatabase } from "@admin/lib/db-init";
 

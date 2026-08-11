@@ -107,8 +107,15 @@ function StatusIcon({
     // ASCII-only marks keep the test/snapshot stable across icon-pack
     // upgrades; replace with a lucide-react Check if visual polish
     // becomes a blocker.
+    //
+    // The mark carries the status on its own, so it must meet the 4.5:1 text
+    // minimum rather than the 3:1 non-text one, and it pairs with the
+    // `text-destructive` failure mark below. Both are per-mode semantic inks:
+    // a fixed ramp step (`success-600`) darkens the brand green by a constant
+    // and reads at 4.38:1 on the dark row, while `--color-success` measures
+    // 5.30:1 light and 5.29:1 dark.
     return (
-      <span className="text-success-600 font-mono text-base leading-5">✓</span>
+      <span className="text-success font-mono text-base leading-5">✓</span>
     );
   }
   if (status === "failed") {

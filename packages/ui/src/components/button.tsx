@@ -32,12 +32,16 @@ const buttonVariants = cva(
           "bg-primary text-primary-foreground border border-transparent hover:opacity-90",
         primary:
           "bg-primary text-primary-foreground border border-transparent hover:opacity-90",
-        // Solid fill uses the emphasis token so white on-color text stays AA in
-        // dark mode (the base token is the readable text color, too light here).
-        // Hover darkens to a deeper shade instead of opacity-90, which would
-        // composite the fill toward the page and drop white text under 4.5:1.
+        // Solid fill uses the emphasis token so on-color text stays AA in dark
+        // mode (the base token is the readable text color, too light here).
+        // Hover darkens to a deeper shade rather than opacity-90, which would
+        // composite the fill toward the page and drop the label under 4.5:1.
+        // One step, not two: the label is white in light mode and black in
+        // dark, so mixing the fill toward black moves it away from the label in
+        // one mode and into it in the other. `-600` clears both (5.92:1 light,
+        // 5.67:1 dark); `-700` reads at 3.70:1 against the dark label.
         destructive:
-          "bg-destructive-solid text-destructive-foreground border border-transparent hover:bg-destructive-700",
+          "bg-destructive-solid text-destructive-foreground border border-transparent hover:bg-destructive-600",
         // border-border is the decorative separator token, and it is the right
         // one here: a button is identified by its label and fill, so its edge
         // carries no meaning on its own and is not held to the 3:1 minimum that

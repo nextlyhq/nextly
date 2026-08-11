@@ -123,7 +123,7 @@ export const PageContainer = React.forwardRef<
         "px-4 @sm/content:px-6 @2xl/content:px-8",
         // Vertical padding: 24px → 32px
         "py-6 @sm/content:py-8",
-        // Background (Use slate-100 as requested for full content bg)
+        // Background for the full content area
         "admin-page-container",
         // Custom overrides
         className

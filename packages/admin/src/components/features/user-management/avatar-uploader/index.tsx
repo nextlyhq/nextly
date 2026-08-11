@@ -71,7 +71,7 @@ export function AvatarUploader({
       </button>
 
       {value && (
-        // Solid emphasis fill so white on-color text stays AA in dark mode.
+        // The `-solid` emphasis fill, paired with an on-color ink that flips: `text-destructive-foreground` is white on the light fill (5.00:1) and BLACK on the lighter dark-mode fill (6.90:1). One ink cannot clear 4.5:1 on both, which is why the token flips rather than the fill compensating.
         <button
           type="button"
           onClick={() => onChange("")}
@@ -80,7 +80,7 @@ export function AvatarUploader({
           className={cn(
             "absolute -top-1 -right-1 inline-flex h-6 w-6 items-center justify-center rounded-md",
             "bg-destructive-solid text-destructive-foreground shadow-sm  border border-border border-background",
-            "hover:bg-destructive-700 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
+            "hover:bg-destructive-600 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
             "disabled:opacity-50 disabled:cursor-not-allowed"
           )}
         >
