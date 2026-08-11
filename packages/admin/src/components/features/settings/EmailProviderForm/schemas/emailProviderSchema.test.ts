@@ -19,6 +19,7 @@ import {
   defaultFormValues,
   emptyConfiguration,
   formValuesToPayload,
+  hasUnrepresentableStoredValue,
   isMaskedSecret,
   MASKED_SECRET,
   providerToFormValues,
@@ -859,5 +860,114 @@ describe("a stored value whose type the provider's parser coerced", () => {
     // into "[object Object]" and offer it back as a value to save.
     const nested = { a: 1 };
     expect(open({ host: nested })).toMatchObject({ host: nested });
+  });
+});
+
+describe("a boolean field whose stored value is not a boolean", () => {
+  const descriptor: EmailProviderDescriptor = {
+    type: "acme-mail",
+    label: "Acme Mail",
+    capabilities: {},
+    configFields: [
+      { name: "host", label: "Host", kind: "text", required: true },
+      { name: "secure", label: "Secure", kind: "boolean", default: false },
+    ],
+  };
+
+  function record(configuration: Record<string, unknown>) {
+    return {
+      id: "1",
+      name: "Acme",
+      type: "acme-mail",
+      fromEmail: "a@b.com",
+      fromName: null,
+      configuration,
+      isDefault: false,
+      isActive: true,
+      createdAt: "",
+      updatedAt: "",
+    };
+  }
+
+  it("does not block an edit to an unrelated field", () => {
+    // A switch reads `value === true`, so a stored `"false"` cannot be shown
+    // without deciding what it means. Carried into the form it fails
+    // `z.boolean()` and the whole form becomes unsubmittable, pointing at a
+    // field the operator never touched and cannot correct without changing it.
+    const values = providerToFormValues(record({ host: "h", secure: "false" }));
+    const withDescriptor = providerToFormValues(
+      record({ host: "h", secure: "false" }),
+      descriptor
+    );
+
+    expect(withDescriptor.configuration).not.toHaveProperty("secure");
+    expect(
+      buildProviderSchema(descriptor).safeParse(withDescriptor).success
+    ).toBe(true);
+    expect(values.name).toBe("Acme");
+  });
+
+  it("leaves the stored value alone when the switch is not touched", () => {
+    // The key is absent from the patch, which is how "leave this alone" is
+    // spelled — the one answer that is right whichever way the provider's
+    // parser reads the stored characters. `z.coerce.boolean()` makes `"false"`
+    // TRUE, so writing either literal could invert the setting.
+    const stored = { host: "h", secure: "false" };
+    const payload = formValuesToPayload(
+      providerToFormValues(record(stored), descriptor),
+      descriptor,
+      stored
+    );
+
+    expect(payload.configuration).not.toHaveProperty("secure");
+    expect(payload.unsetConfiguration).toBeUndefined();
+  });
+
+  it("sends what the operator chose when the switch IS touched", () => {
+    // The control. Dropping the field must not make the switch inoperable —
+    // an explicit choice is a real boolean and travels.
+    const stored = { host: "h", secure: "false" };
+    const values = providerToFormValues(record(stored), descriptor);
+    const payload = formValuesToPayload(
+      {
+        ...values,
+        configuration: { ...values.configuration, secure: true },
+      },
+      descriptor,
+      stored
+    );
+
+    expect(payload.configuration).toMatchObject({ secure: true });
+  });
+
+  it("carries an ordinary stored boolean straight through", () => {
+    // The second control: the rule must not swallow the case it exists beside.
+    const stored = { host: "h", secure: true };
+    const values = providerToFormValues(record(stored), descriptor);
+
+    expect(values.configuration).toMatchObject({ secure: true });
+    expect(
+      formValuesToPayload(values, descriptor, stored).configuration
+    ).toMatchObject({ secure: true });
+  });
+
+  it("says on the field that the switch is not showing the stored value", () => {
+    // The comment in `storedValueForControl` claims this is surfaced. It is a
+    // claim about another module, so it is asserted rather than trusted.
+    expect(
+      hasUnrepresentableStoredValue(
+        { secure: "false" },
+        descriptor.configFields[1]
+      )
+    ).toBe(true);
+    expect(
+      hasUnrepresentableStoredValue(
+        { secure: true },
+        descriptor.configFields[1]
+      )
+    ).toBe(false);
+    expect(
+      hasUnrepresentableStoredValue({ host: 5 }, descriptor.configFields[0])
+    ).toBe(false);
   });
 });

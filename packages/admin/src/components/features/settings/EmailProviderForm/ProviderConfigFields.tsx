@@ -27,6 +27,7 @@ import { SettingsSection } from "../SettingsSection";
 
 import {
   hasStoredSecret,
+  hasUnrepresentableStoredValue,
   type ProviderFormValues,
 } from "./schemas/emailProviderSchema";
 import { SecretField } from "./SecretField";
@@ -110,6 +111,10 @@ export function ProviderConfigFields({
           control={control}
           disabled={disabled}
           storedSecret={hasStoredSecret(storedConfiguration, field.name)}
+          unrepresentable={hasUnrepresentableStoredValue(
+            storedConfiguration,
+            field
+          )}
         />
       ))}
     </SettingsSection>
@@ -121,13 +126,23 @@ function ProviderConfigField({
   control,
   disabled,
   storedSecret,
+  unrepresentable,
 }: {
   field: EmailProviderConfigField;
   control: Control<ProviderFormValues>;
   disabled?: boolean;
   storedSecret: boolean;
+  /** The stored value cannot be shown by this control without guessing at it. */
+  unrepresentable: boolean;
 }) {
   const name = configFieldPath(field);
+
+  // A switch left out of the form renders off whatever is stored behind it, so
+  // the position is not evidence of the setting. Said on the field, because
+  // this is the only place the operator looks before deciding to touch it.
+  const description = unrepresentable
+    ? `${field.help ? `${field.help} ` : ""}The stored value is not a true/false and cannot be shown here. This switch is left out of the save unless you change it; changing it replaces what is stored.`
+    : field.help;
 
   if (field.secret === true) {
     return (
@@ -153,7 +168,7 @@ function ProviderConfigField({
       name={name}
       render={({ field: controller }) => (
         <FormItem className="m-0">
-          <SettingsRow label={field.label} description={field.help}>
+          <SettingsRow label={field.label} description={description}>
             <FormControl>
               {(() => {
                 switch (field.kind) {

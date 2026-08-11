@@ -417,11 +417,14 @@ const STRING_BACKED_KINDS: ReadonlyArray<EmailProviderConfigField["kind"]> = [
  * passed through untouched so the field shows what is actually stored rather
  * than silently becoming empty or "[object Object]".
  *
- * The boolean control is deliberately left out. It is read as `value === true`,
- * so a stored `"false"` renders as off — but `z.coerce.boolean()` is a
- * truthiness conversion under which that same `"false"` is TRUE, and any
- * mapping chosen here could contradict the provider's own parser. A guess is
- * worse than the disagreement it would hide.
+ * A boolean control gets neither treatment. `z.coerce.boolean()` is a
+ * truthiness conversion, under which a stored `"false"` is TRUE while every
+ * reading of the characters says otherwise, so no mapping here can be right
+ * for certain and a wrong one writes the opposite of what is stored. The value
+ * is dropped instead: an absent key is how a patch says "leave this alone",
+ * which is the one answer that is correct whichever way the provider's parser
+ * reads it. `ProviderConfigFields` says so on the field, so the switch's
+ * position is not mistaken for the stored setting.
  */
 function storedValueForControl(
   field: EmailProviderConfigField,
@@ -431,6 +434,10 @@ function storedValueForControl(
     if (typeof value !== "string") return value;
     const asNumber = Number(value);
     return value.trim() !== "" && Number.isFinite(asNumber) ? asNumber : value;
+  }
+
+  if (field.kind === "boolean") {
+    return typeof value === "boolean" ? value : undefined;
   }
 
   if (!STRING_BACKED_KINDS.includes(field.kind)) return value;
@@ -507,13 +514,18 @@ export function providerToFormValues(
     const path = splitFieldPath(field.name);
     if (path === null) continue;
     const value = readAtPath(stored, path);
-    writeAtPath(
-      configuration,
-      path,
-      value === undefined
-        ? hydratedFieldValue(field)
-        : storedValueForControl(field, value)
-    );
+    if (value === undefined) {
+      writeAtPath(configuration, path, hydratedFieldValue(field));
+      continue;
+    }
+
+    const forControl = storedValueForControl(field, value);
+    // A stored value the control cannot represent is left out of the form
+    // entirely rather than replaced by a stand-in. The key is then absent from
+    // the patch, which is how "leave this alone" is spelled — the same thing a
+    // masked credential achieves by round-tripping its mask.
+    if (forControl === undefined) continue;
+    writeAtPath(configuration, path, forControl);
   }
 
   return {
@@ -605,6 +617,25 @@ export function hasStoredSecret(
   const path = splitFieldPath(fieldName);
   if (path === null) return false;
   return isMaskedSecret(readAtPath(stored, path));
+}
+
+/**
+ * Whether a switch is showing a position its stored value did not choose.
+ *
+ * A boolean field holding something other than a boolean cannot be hydrated
+ * without guessing, so it is left out of the form — which means the switch
+ * renders off regardless of what is stored. Saying so is the difference
+ * between a control the operator can read and one that quietly misreports.
+ */
+export function hasUnrepresentableStoredValue(
+  stored: Record<string, unknown> | undefined,
+  field: EmailProviderConfigField
+): boolean {
+  if (stored === undefined || field.kind !== "boolean") return false;
+  const path = splitFieldPath(field.name);
+  if (path === null) return false;
+  const value = readAtPath(stored, path);
+  return value !== undefined && typeof value !== "boolean";
 }
 
 /** The create/update payload these form values produce. */
