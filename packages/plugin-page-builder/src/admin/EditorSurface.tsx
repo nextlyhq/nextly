@@ -15,6 +15,7 @@ import { defaultBlockRegistry } from "../core/registry";
 
 import { Canvas } from "./canvas/Canvas";
 import { Monitor, Smartphone, Tablet } from "./icons";
+import { InvalidSlotBanner } from "./InvalidSlotBanner";
 import { dragLabel } from "./logic/dragLabel";
 import { planDrop } from "./logic/dropPlan";
 import { BlockLibrary } from "./panels/BlockLibrary";
@@ -72,6 +73,12 @@ export function EditorSurface() {
             ))}
           </div>
         </div>
+        {/*
+         * Above the panes rather than inside the canvas column: the blocks it reports are not
+         * drawn on the canvas at all, so anchoring the notice to the canvas would put it beside
+         * the one place that cannot show what it is about.
+         */}
+        <InvalidSlotBanner />
         <div className="nx-pb-body">
           <aside className="nx-pb-pane nx-pb-pane--left">
             <BlockLibrary />
