@@ -300,6 +300,43 @@ describe("relationship expansion secret redaction", () => {
       expect(related).toMatchObject({ salary: 120000 });
     });
 
+    it("withholds the field when the caller does not trust this target", async () => {
+      // `overrideAccess` says the CALLER is trusted; it says nothing about a
+      // collection reached through a relationship, which the caller never named.
+      // A caller that can state its trusted set keeps the bypass for what it
+      // declared, and everything outside is read as its audience would read it.
+      const related = await serviceWithTarget().fetchRelatedEntry(
+        "members",
+        "m1",
+        {
+          enforceFieldAccess: true,
+          overrideAccess: true,
+          trusted: () => false,
+        }
+      );
+
+      expect(related).toMatchObject({ id: "m1", email: "a@b.co" });
+      expect(related).not.toHaveProperty("salary");
+    });
+
+    it("keeps the field when the caller names THIS target as trusted", async () => {
+      // The positive control, and it is what makes the case above evidence.
+      // Without it, a predicate ignored entirely and a predicate that denies
+      // everything produce the same result, and the check passes for a seam
+      // that was never wired to the target's identity at all.
+      const related = await serviceWithTarget().fetchRelatedEntry(
+        "members",
+        "m1",
+        {
+          enforceFieldAccess: true,
+          overrideAccess: true,
+          trusted: collection => collection === "members",
+        }
+      );
+
+      expect(related).toMatchObject({ salary: 120000 });
+    });
+
     it("still strips secrets on a trusted read", async () => {
       // overrideAccess waives the caller's field rules, not secret stripping: a
       // system reader has no more use for a password hash than anyone else.

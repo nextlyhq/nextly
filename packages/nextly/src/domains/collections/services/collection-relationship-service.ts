@@ -288,6 +288,27 @@ function resolveNestedTarget(
 type RelatedRowAccess = RelatedRowReadContext;
 
 /**
+ * Whether this expansion may read ONE target collection trusted.
+ *
+ * `overrideAccess` alone says the CALLER is trusted. It says nothing about the
+ * collection a relationship happens to point at, which the caller never named
+ * and may not serve to the same audience. Asking per target is what lets a
+ * caller that knows its audience — a public route, say — keep the bypass for
+ * what it declared and read everything else as that audience would.
+ *
+ * Absent predicate means unchanged behaviour, so a caller that has already
+ * decided who is asking keeps today's semantics rather than being narrowed by
+ * a default it never chose.
+ */
+function trustsTarget(
+  access: RelatedRowAccess,
+  targetCollection: string
+): boolean {
+  if (access.overrideAccess !== true) return false;
+  return access.trusted === undefined || access.trusted(targetCollection);
+}
+
+/**
  * Options for relationship expansion.
  */
 export interface RelationshipExpansionOptions {
@@ -325,6 +346,12 @@ export interface RelationshipExpansionOptions {
    * skipped — a system caller has no reason to receive a password hash.
    */
   overrideAccess?: boolean;
+
+  /**
+   * Narrows `overrideAccess` to the collections a caller names, judged per
+   * expansion TARGET. See {@link RelatedRowAccess.trusted}.
+   */
+  trusted?: (collection: string) => boolean;
 
   /**
    * Opt in to evaluating the target collection's field read rules. Set by the
@@ -1323,7 +1350,7 @@ export class CollectionRelationshipService extends BaseService {
 
     const statusFilter = resolveStatusFilter({
       collectionHasStatus: hasStatus,
-      overrideAccess: access.overrideAccess === true,
+      overrideAccess: trustsTarget(access, targetCollection),
       explicit: access.status,
     });
     return statusFilter?.value;
@@ -1398,7 +1425,7 @@ export class CollectionRelationshipService extends BaseService {
     if (!access.enforceCollectionAccess && !access.enforceFieldAccess) {
       return rows;
     }
-    if (access.overrideAccess) return rows;
+    if (trustsTarget(access, targetCollection)) return rows;
     if (rows.length === 0) return rows;
     // System entities carry no stored collection rules; their secrets are
     // stripped by name during redaction instead.
@@ -1591,7 +1618,7 @@ export class CollectionRelationshipService extends BaseService {
       // satisfies the rule.
       const statusFilter = resolveStatusFilter({
         collectionHasStatus: policy.hasStatus,
-        overrideAccess: access.overrideAccess === true,
+        overrideAccess: trustsTarget(access, targetCollection),
         // The same intent the fetch honoured. Re-resolving without it re-applies
         // the published-only default here, so a caller who asked to read
         // everything loses a draft row that the fetch above admitted.
@@ -2010,6 +2037,7 @@ export class CollectionRelationshipService extends BaseService {
       fieldAccessStage: options.fieldAccessStage,
       user: options.user,
       overrideAccess: options.overrideAccess,
+      trusted: options.trusted,
       authenticatedScope: options.authenticatedScope,
       locale: options.locale,
       status: options.status,
@@ -2602,6 +2630,7 @@ export class CollectionRelationshipService extends BaseService {
       fieldAccessStage: options.fieldAccessStage,
       user: options.user,
       overrideAccess: options.overrideAccess,
+      trusted: options.trusted,
       authenticatedScope: options.authenticatedScope,
       locale: options.locale,
       status: options.status,
@@ -3901,7 +3930,8 @@ export class CollectionRelationshipService extends BaseService {
     access: RelatedRowAccess,
     redactions?: ReadAccessRedactions
   ): Promise<void> {
-    if (!access.enforceFieldAccess || access.overrideAccess) return;
+    if (!access.enforceFieldAccess || trustsTarget(access, targetCollection))
+      return;
     // Share `redactions` across the passes the walk makes over one row: a later
     // one restores what an earlier removed as evidence and re-judges the current
     // content, so a denied field a hook reintroduced or a row it changed is
