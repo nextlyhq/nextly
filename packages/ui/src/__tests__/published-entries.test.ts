@@ -8,7 +8,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { derivePublishedEntries } from "../../scripts/published-entries.mjs";
+import {
+  clientBuildEntries,
+  derivePublishedEntries,
+  serverSafeBuildEntries,
+} from "../../scripts/published-entries.mjs";
 
 /** The four conditions a JavaScript entry point has to name. */
 function conditions(name: string): Record<string, Record<string, string>> {
@@ -48,6 +52,45 @@ describe("which side of the React boundary an entry point sits on", () => {
     // The control is `./utils` in the same map: a declared server-safe subpath is still one, so
     // this is not passing by calling everything client code.
     expect(serverSafe).toEqual(["./utils"]);
+  });
+});
+
+describe("which tsup config builds what", () => {
+  it("builds every client entry, not only the first", () => {
+    // Selecting one client entry left a second emitted by NEITHER config — the server-safe build
+    // excludes all client entries — while the directive guard still required its banner, so the
+    // build failed on a file nothing had been asked to produce.
+    const entries = derivePublishedEntries(
+      {
+        ".": conditions("index"),
+        "./charts": conditions("charts"),
+        "./utils": conditions("utils"),
+      },
+      {
+        ".": barrel("src/index.ts", true),
+        "./charts": barrel("src/charts/index.ts", true),
+        "./utils": barrel("src/lib/utils.ts", false),
+      }
+    );
+
+    expect(clientBuildEntries(entries)).toEqual({
+      index: "src/index.ts",
+      charts: "src/charts/index.ts",
+    });
+    // The control: the two builds partition the entries, so nothing is emitted twice either.
+    expect(serverSafeBuildEntries(entries)).toEqual({
+      utils: "src/lib/utils.ts",
+    });
+  });
+
+  it("refuses an export map with no client entry at all", () => {
+    const entries = derivePublishedEntries(
+      { "./utils": conditions("utils") },
+      { "./utils": barrel("src/lib/utils.ts", false) }
+    );
+    expect(() => clientBuildEntries(entries)).toThrow(
+      /No client entry point was found/
+    );
   });
 });
 

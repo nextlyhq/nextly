@@ -207,8 +207,8 @@ export function publishedEntries() {
  *
  * @returns {string[]}
  */
-export function declarationFiles() {
-  return publishedEntries().flatMap(entry => entry.declarations);
+export function declarationFiles(entries = publishedEntries()) {
+  return entries.flatMap(entry => entry.declarations);
 }
 
 /**
@@ -219,8 +219,8 @@ export function declarationFiles() {
  *
  * @returns {string[]}
  */
-export function clientArtifacts() {
-  return publishedEntries()
+export function clientArtifacts(entries = publishedEntries()) {
+  return entries
     .filter(entry => !entry.serverSafe)
     .flatMap(entry => entry.artifacts);
 }
@@ -230,8 +230,8 @@ export function clientArtifacts() {
  *
  * @returns {string[]}
  */
-export function serverSafeArtifacts() {
-  return publishedEntries()
+export function serverSafeArtifacts(entries = publishedEntries()) {
+  return entries
     .filter(entry => entry.serverSafe)
     .flatMap(entry => entry.artifacts);
 }
@@ -241,9 +241,9 @@ export function serverSafeArtifacts() {
  *
  * @returns {Record<string, string>}
  */
-export function serverSafeBuildEntries() {
+export function serverSafeBuildEntries(entries = publishedEntries()) {
   return Object.fromEntries(
-    publishedEntries()
+    entries
       .filter(entry => entry.serverSafe)
       .map(entry => [entry.name, entry.source])
   );
@@ -254,29 +254,33 @@ export function serverSafeBuildEntries() {
  *
  * @returns {Record<string, string>}
  */
-export function sourcesBySubpath() {
+export function sourcesBySubpath(entries = publishedEntries()) {
   return Object.fromEntries(
-    publishedEntries().map(entry => [entry.subpath, entry.source])
+    entries.map(entry => [entry.subpath, entry.source])
   );
 }
 
 /**
- * The build entry for the root barrel, KEYED by its published artifact name.
+ * The build entries for the client subpaths, as tsup expects them.
  *
- * Keyed rather than a bare path, because tsup names its output after the entry: an unnamed entry
- * pointed at a differently named barrel emits files called after that barrel, and the export map
- * still points at `dist/index.*`. The retarget this helper exists to support would then fail its
- * own artifact checks.
+ * EVERY client entry, not the first one found. Once a subpath can declare itself client code,
+ * selecting one means a second is emitted by neither config — the server-safe build excludes all
+ * client entries — while `clientArtifacts()` still requires its banner, so the build fails on a
+ * file nothing was asked to produce.
+ *
+ * Keyed by artifact name rather than given as bare paths, because tsup names its output after the
+ * entry: an unnamed entry pointed at a differently named barrel emits files called after that
+ * barrel, while the export map still points at `dist/index.*`.
  *
  * @returns {Record<string, string>}
  */
-export function rootBuildEntry() {
-  const root = publishedEntries().find(entry => !entry.serverSafe);
-  if (!root) {
+export function clientBuildEntries(entries = publishedEntries()) {
+  const client = entries.filter(entry => !entry.serverSafe);
+  if (client.length === 0) {
     throw new Error(
       "No client entry point was found. The root export has moved or changed shape, and the " +
         "component build would be reading a path nothing publishes."
     );
   }
-  return { [root.name]: root.source };
+  return Object.fromEntries(client.map(entry => [entry.name, entry.source]));
 }

@@ -1,6 +1,6 @@
 import { defineConfig } from "tsup";
 
-import { rootBuildEntry } from "./scripts/published-entries.mjs";
+import { clientBuildEntries } from "./scripts/published-entries.mjs";
 
 // Left to the consumer rather than bundled: React and Radix keep component
 // state and portals in module-level stores, so a second copy inside this
@@ -26,7 +26,7 @@ export default defineConfig({
   // Read from the same map the server-safe build and the surface snapshot use, so retargeting
   // the barrel moves all three together rather than leaving the snapshot describing a file the
   // build no longer produces.
-  entry: rootBuildEntry(),
+  entry: clientBuildEntries(),
   format: ["esm", "cjs"],
   dts: true,
   // Cleaning is done once by the build script, not per-config: the two configs
