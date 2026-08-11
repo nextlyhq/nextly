@@ -34,9 +34,22 @@ import { validate } from "./validation";
  * walk over four times the nodes performs four times the reads, and the two
  * operations here land within a thousandth of that.
  *
- * Absolute cost still matters to a human, and is still reported — by the
- * benchmark suite in `performance.bench.ts`, which is the right place for a
- * number that legitimately depends on the machine it ran on.
+ * WHAT THIS DOES NOT COVER, stated because the distinction is easy to lose.
+ * Reads of the INPUT are not the same as total work. A quadratic that operates
+ * on state the engine built itself — scanning an array of already-seen ids
+ * instead of keying a `Map`, or re-walking a freshly constructed result — costs
+ * `n^2` while still reading each input property a linear number of times, and
+ * these assertions would sit at 4x through it. The tests are named for what
+ * they measure so that gap is visible from the failure message rather than
+ * assumed away.
+ *
+ * A wall-clock ratio is NOT kept as a backstop for that class, and the reason is
+ * measured rather than preferred: at the bound its own noise forced it to
+ * (8, to clear readings of 8.89x and 9.87x on unchanged code) it scored a real
+ * quadratic in the id-tracking walk at 5.81x and passed it. It was not covering
+ * this class either — it only appeared to. What does cover it is the absolute
+ * cost reported by `performance.bench.ts`, which is the right home for a number
+ * that legitimately depends on the machine it ran on.
  */
 
 /**
@@ -179,22 +192,29 @@ describe("validation scales linearly with document size", () => {
     expect(tally.reads).toBeGreaterThan(0);
   });
 
-  it("does not do super-linear work when the document grows four times", () => {
-    const small = readsTaken(
-      scaleDocument({ nodes: SMALL_NODES }),
-      doc => void validate(doc, ctx)
-    );
-    const large = readsTaken(
-      scaleDocument({ nodes: LARGE_NODES }),
-      doc => void validate(doc, ctx)
-    );
-    const growth = large / small;
+  it(
+    "does not read the document super-linearly when it grows four times",
+    () => {
+      const small = readsTaken(
+        scaleDocument({ nodes: SMALL_NODES }),
+        doc => void validate(doc, ctx)
+      );
+      const large = readsTaken(
+        scaleDocument({ nodes: LARGE_NODES }),
+        doc => void validate(doc, ctx)
+      );
+      const growth = large / small;
 
-    expect(
-      growth,
-      `validating ${LARGE_NODES} nodes read ${growth.toFixed(3)}x as much of the document as ${SMALL_NODES} (${small} then ${large}); linear work reads about 4x`
-    ).toBeLessThan(MAX_GROWTH_FACTOR);
-  });
+      expect(
+        growth,
+        `validating ${LARGE_NODES} nodes read ${growth.toFixed(3)}x as much of the document as ${SMALL_NODES} (${small} then ${large}); a linear traversal reads about 4x`
+      ).toBeLessThan(MAX_GROWTH_FACTOR);
+    },
+    // Deterministic in what it ASSERTS, not in how long it takes: proxying four
+    // thousand styled nodes is slow, and the default five seconds would fail on
+    // a slower worker while the count it measures was identical.
+    MEASUREMENT_TIMEOUT_MS
+  );
 
   it(
     "stays far inside the ceiling on the thousand-node page",
@@ -244,20 +264,24 @@ describe("migration scales linearly with document size", () => {
     expect(tally.reads).toBeGreaterThan(0);
   });
 
-  it("does not do super-linear work when the document grows four times", () => {
-    const small = readsTaken(
-      staleVersionPage(SMALL_NODES, 1),
-      doc => void migrateDocument(doc, source)
-    );
-    const large = readsTaken(
-      staleVersionPage(LARGE_NODES, 1),
-      doc => void migrateDocument(doc, source)
-    );
-    const growth = large / small;
+  it(
+    "does not read the document super-linearly when it grows four times",
+    () => {
+      const small = readsTaken(
+        staleVersionPage(SMALL_NODES, 1),
+        doc => void migrateDocument(doc, source)
+      );
+      const large = readsTaken(
+        staleVersionPage(LARGE_NODES, 1),
+        doc => void migrateDocument(doc, source)
+      );
+      const growth = large / small;
 
-    expect(
-      growth,
-      `migrating ${LARGE_NODES} nodes read ${growth.toFixed(3)}x as much of the document as ${SMALL_NODES} (${small} then ${large}); linear work reads about 4x`
-    ).toBeLessThan(MAX_GROWTH_FACTOR);
-  });
+      expect(
+        growth,
+        `migrating ${LARGE_NODES} nodes read ${growth.toFixed(3)}x as much of the document as ${SMALL_NODES} (${small} then ${large}); a linear traversal reads about 4x`
+      ).toBeLessThan(MAX_GROWTH_FACTOR);
+    },
+    MEASUREMENT_TIMEOUT_MS
+  );
 });
