@@ -50,16 +50,25 @@ export interface MigrationStatementRunner {
  * Apply a generated migration, tolerating statements the schema already satisfies.
  *
  * Throws on anything else, so a caller can still record the change as failed.
+ *
+ * @returns how many statements were dispatched. A caller deciding what it may claim about the
+ * schema afterwards needs to know whether anything actually ran, and the SQL string cannot answer
+ * that: a diff with no operations still renders a header comment, so a non-empty string is not a
+ * non-empty migration. Counted here because this is where the splitting rule lives, and any caller
+ * re-deriving it from the text would be a second implementation of that rule.
  */
 export async function applyMigrationStatements(
   adapter: MigrationStatementRunner,
   migrationSQL: string
-): Promise<void> {
+): Promise<number> {
+  let dispatched = 0;
   for (const statement of splitStatements([migrationSQL])) {
+    dispatched += 1;
     try {
       await adapter.executeQuery(statement);
     } catch (error) {
       if (!isIdempotencyError(error)) throw error;
     }
   }
+  return dispatched;
 }

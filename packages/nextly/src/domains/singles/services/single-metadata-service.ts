@@ -561,11 +561,20 @@ export class SingleMetadataService {
       return plan.ownsMigrationStatus ? "pending" : undefined;
     }
 
+    // How many statements actually reached the database, which is NOT the same question as
+    // whether `migrationSQL` is a non-empty string: a diff with no operations still renders a
+    // header comment. What this apply may claim about the main table afterwards depends on the
+    // former.
+    let statementsRun = 0;
+
     try {
       if (plan.migrationSQL) {
         // The shared runner, not a private copy: it owns both the splitting rule and the tolerance
         // that makes re-running over half-applied schema the repair case rather than a dead end.
-        await applyMigrationStatements(adapter, plan.migrationSQL);
+        statementsRun = await applyMigrationStatements(
+          adapter,
+          plan.migrationSQL
+        );
       }
 
       // Observed, not assumed, and it covers the rebuild case as well as the alter: a plan that
@@ -615,7 +624,7 @@ export class SingleMetadataService {
       // a junction table leaves the table PRESENT but incomplete; re-saving unchanged fields takes
       // the alter branch, emits nothing, and finds the table there. Confirming existence is not
       // confirming the schema, so the durable verdict stands until something actually repairs it.
-      if (!plan.migrationSQL && input.existing.migrationStatus === "failed") {
+      if (statementsRun === 0 && input.existing.migrationStatus === "failed") {
         this.logger.warn(
           `[Singles] "${tableName}" is recorded as a failed migration and this save ran no ` +
             `statements against it, so its status is left as failed`

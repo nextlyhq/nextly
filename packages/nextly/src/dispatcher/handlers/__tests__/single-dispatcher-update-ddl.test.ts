@@ -30,6 +30,9 @@ vi.mock("../../helpers/di", () => ({
 
 const executed: string[] = [];
 
+/** Every main-table shape the apply bound, in order, so registration timing is observable. */
+const registeredShapes = vi.fn();
+
 /**
  * The adapter surface an update touches.
  *
@@ -56,6 +59,10 @@ function makeAdapter(
       name.includes("_locales") ? false : mainTableExists || created
     ),
     selectOne: vi.fn(async (): Promise<{ id: string } | null> => null),
+    // Present so runtime registration is OBSERVABLE. The create-side sibling omits it deliberately
+    // to skip re-registration; here the order of that call against the companion reconcile is the
+    // property under test, so it has to be visible.
+    tableResolver: { registerDynamicSchema: registeredShapes },
     // The companion reconcile reaches the database through Drizzle rather than `executeQuery`, so
     // its own statements are NOT visible in `executed`. That is why the flag-only assertion below
     // is phrased as "no statement naming the MAIN table" rather than "no statements at all": the
@@ -228,6 +235,7 @@ async function runUpdate(
     onStatement,
   } = options;
   executed.length = 0;
+  registeredShapes.mockClear();
   liveTableHasRows.value = tableHasRows;
   companionFailure.error = options.companionFailure;
   adapter = makeAdapter(dialect, { mainTableExists, onStatement });
@@ -374,6 +382,53 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
       }
     );
 
+    expect(written?.migrationStatus).toBe("failed");
+  });
+
+  it("does not bind the runtime shape when the companion reconcile fails", async () => {
+    // 🔴 The shape bound on a localization ENABLE omits the translatable columns, which are still
+    // physically on the main table until the companion has taken them. Binding it before the
+    // companion succeeds leaves the resolver describing a table that does not exist in that shape —
+    // and `ensure-runtime-table.ts` treats a registration it did not make as owned by whoever made
+    // it, so it ADOPTS this one rather than rebuilding. Reads would drop those fields until a
+    // restart.
+    const { written } = await runUpdate(
+      { localized: true },
+      {
+        existing: existingSingle({ localized: false }),
+        companionFailure: new Error("companion CREATE TABLE rejected"),
+      }
+    );
+
+    expect(written?.migrationStatus).toBe("failed");
+    expect(registeredShapes).not.toHaveBeenCalled();
+  });
+
+  it("binds the runtime shape once the companion has taken", async () => {
+    // The control. Without it, an apply that never registered at all would satisfy the case above
+    // while silently dropping the rebinding a successful save depends on.
+    const { written } = await runUpdate({
+      fields: [
+        { name: "heading", type: "text" },
+        { name: "subtitle", type: "text" },
+      ],
+    });
+
+    expect(written?.migrationStatus).toBe("applied");
+    expect(registeredShapes).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a failed single failed when the save ran no statements against it", async () => {
+    // A create that got its `CREATE TABLE` through and then failed on an index leaves the table
+    // PRESENT but incomplete. Re-saving unchanged fields takes the alter branch, emits nothing, and
+    // finds the table there — so confirming existence would report a schema this save never
+    // inspected, and would overwrite the one durable record that something is wrong.
+    const { sql, written } = await runUpdate(
+      { fields: [{ name: "heading", type: "text" }] },
+      { existing: existingSingle({ migrationStatus: "failed" }) }
+    );
+
+    expect(sql).not.toMatch(/ALTER TABLE/i);
     expect(written?.migrationStatus).toBe("failed");
   });
 
