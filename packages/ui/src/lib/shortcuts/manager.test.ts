@@ -2286,6 +2286,57 @@ describe("a permitted key held while the stack changes", () => {
   });
 });
 
+describe("a held key whose binding falsifies its own condition", () => {
+  it("re-decides its repeats", () => {
+    // The binding lives IN the blocking layer, which is already up before the key goes down, so
+    // the layer stack never changes and the modifiers never move. Its action falsifies its own
+    // `when`, and `when` is a function that cannot be signed — a render supplies a new identity
+    // while the condition is unchanged. A signature comparison therefore cannot see this at all:
+    // the repeats should fall through to the blocking layer and be suppressed, and instead the
+    // browser went on scrolling the page underneath a modal that claims to hold the keyboard.
+    const manager = managerFor();
+    let armed = true;
+    manager.register(
+      [
+        binding("Escape", vi.fn()),
+        binding(
+          "Space",
+          () => {
+            armed = false;
+          },
+          { preventDefault: false, when: () => armed }
+        ),
+      ],
+      { name: "modal", depth: 0, blocking: true }
+    );
+
+    const first = press(" ");
+    manager.handle(first);
+    // The control: while the binding is armed and permits it, the press really is left alone.
+    expect(first.defaultPrevented).toBe(false);
+
+    const repeat = press(" ", { repeat: true });
+    manager.handle(repeat);
+    expect(repeat.defaultPrevented).toBe(true);
+  });
+
+  it("keeps permitting a repeat while the binding still permits it", () => {
+    // The other control: re-deciding must not become "suppress every repeat". With no blocking
+    // layer above it, a binding that still matches and still sets `preventDefault: false` leaves
+    // its repeats to the browser, which is what makes a held key usable for panning or scrolling.
+    const manager = managerFor();
+    manager.register([binding("Space", vi.fn(), { preventDefault: false })], {
+      name: "canvas",
+      depth: 0,
+    });
+
+    manager.handle(press(" "));
+    const repeat = press(" ", { repeat: true });
+    manager.handle(repeat);
+    expect(repeat.defaultPrevented).toBe(false);
+  });
+});
+
 describe("a keyboard with a dedicated AltGraph key", () => {
   it("does not abandon a sequence when AltGraph is pressed", () => {
     // AltGraph reports its own keydown before the character-producing one, so treating it as a
