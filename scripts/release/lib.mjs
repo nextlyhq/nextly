@@ -191,6 +191,20 @@ export function findMissingPublishFields(pkg) {
  * only-pre and publishes to `alpha`. Approximating this with "no stable version"
  * would expect `latest` for such a package and reject a correct publish on every
  * retry, permanently blocking the consolidated tag.
+ *
+ * A CONSEQUENCE worth stating where it will be read, because it makes the
+ * bootstrap placeholder load-bearing long after it has stopped looking useful.
+ * `firstPrereleaseId("0.0.0")` is `undefined` rather than the active tag, so the
+ * stable `0.0.0` in a package's version list is exactly what makes it NOT
+ * only-pre:
+ *
+ *     ["0.0.0", "0.0.2-alpha.52"] -> alpha      (the placeholder decides this)
+ *     ["0.0.2-alpha.52"]          -> latest     (`latest` onto a prerelease)
+ *
+ * So removing a package's `0.0.0` once it has real versions — which reads as
+ * tidying away a thing that has done its job — reclassifies it as only-pre and
+ * points `latest` at an alpha build on the next publish. The placeholder claims
+ * the name AND holds the dist-tag; only the first of those is obvious.
  */
 export function getExpectedDistTag(registryState, preState) {
   if (!preState) return "latest";
