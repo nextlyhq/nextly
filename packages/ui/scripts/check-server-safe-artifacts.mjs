@@ -40,14 +40,18 @@
  * globals in deferred code — every way a name can be bound, shadowed or consumed — which is the
  * unbounded source-level problem reading the artifact exists to avoid.
  *
- * The loader recognition below — `require`, `createRequire`, `module.require` — is DEFENCE IN
- * DEPTH rather than a boundary, and it is best-effort by design. A runtime loader is outside both
- * questions by construction: the bundler never resolves it, so it is in no metafile record, and
- * importing the artifact succeeds because loading the package succeeds. Every spelling recognised
- * has another behind it. What limits the exposure is not this reading but the fact that
- * `node:module` cannot be imported from this package's `src` at all — Node types are scoped to the
- * test project, so the import is a type error that fails `check-types` and the build. A bundled
- * dependency that uses one is caught as a package by the metafile instead.
+ * The runtime-resolution recognition below — `require`, `createRequire`, `module.require`,
+ * `import.meta.resolve` — is DEFENCE IN DEPTH rather than a boundary, and it is best-effort by
+ * design. Naming a module without importing it is outside both questions by construction: the
+ * bundler never resolves it, so it is in no metafile record, and importing the artifact succeeds
+ * because loading the package succeeds. Every spelling recognised has another behind it.
+ *
+ * The two halves of that list are limited by different things, and only one of them has a boundary
+ * behind it. The CommonJS loader needs `node:module`, which cannot be imported from this package's
+ * `src` at all — Node types are scoped to the test project, so the import is a type error that
+ * fails `check-types` and the build. `import.meta.resolve` is syntax, needs no import, and
+ * type-checks here today, so for that spelling this reading IS the only control. A bundled
+ * dependency using either is caught as a package by the metafile instead.
  *
  * The other residual, stated rather than implied: an ALLOWED package could itself grow a React
  * dependency, and importing React under Node does not throw, so neither question would notice.
