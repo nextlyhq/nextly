@@ -259,6 +259,25 @@ if (onlyIds) {
   themes = themes.filter(t => wanted.has(t.id));
 }
 
+// Installing the `playwright` package does not install its browser, and the
+// repository's only `playwright install` instruction is scoped to the e2e
+// package. So on a fresh checkout the documented capture command died inside
+// Playwright with "Executable doesn't exist", which reads as a broken script
+// rather than a missing one-time setup step.
+//
+// Checked before launching so the message names the fix. `executablePath()`
+// resolves the path Playwright WOULD use without launching anything, so this
+// costs nothing when the browser is present.
+const chromiumPath = chromium.executablePath();
+if (!existsSync(chromiumPath)) {
+  throw new Error(
+    `capture-themes: Chromium is not installed. \`pnpm install\` fetches the ` +
+      `playwright package but not its browsers.\n\n` +
+      `  pnpm --filter playground exec playwright install chromium\n\n` +
+      `Expected it at: ${chromiumPath}`
+  );
+}
+
 const browser = await chromium.launch();
 const context = await browser.newContext({
   viewport: { width: 1440, height: 900 },

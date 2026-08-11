@@ -131,6 +131,49 @@ const SHIPPED = {
 };
 
 
+/**
+ * Families the playground loads with `next/font`, and the variable each one
+ * generates.
+ *
+ * A preset's stack is copied from upstream as a bare family name, and
+ * `next/font` does not resolve those: it self-hosts the face behind a
+ * generated variable, so "Plus Jakarta Sans, sans-serif" falls straight
+ * through to the system sans. Every preset therefore previewed in the same
+ * face regardless of what it declared, which made the typography axis of the
+ * comparison one font measured nine times.
+ *
+ * Keep this in step with `src/app/layout.tsx`: a family added here without
+ * being loaded there resolves to nothing, which is the bug this fixes wearing
+ * a different hat. `font-faces.test.ts` holds the two together.
+ */
+const LOADED_FACES = {
+  Inter: "--font-inter",
+  "Source Serif 4": "--font-source-serif",
+  "IBM Plex Mono": "--font-ibm-plex-mono",
+  "Plus Jakarta Sans": "--font-plus-jakarta-sans",
+  "Open Sans": "--font-open-sans",
+  Lora: "--font-lora",
+  "JetBrains Mono": "--font-jetbrains-mono",
+  Geist: "--font-geist",
+  "Geist Mono": "--font-geist-mono",
+};
+
+/**
+ * Put the loaded variable in front of a family the playground self-hosts.
+ *
+ * The bare name is KEPT behind it rather than replaced: it is the correct
+ * fallback if the variable is ever missing, and it keeps the stack readable
+ * as the thing upstream declared. A stack already written with a `var()` is
+ * left alone, and one naming a system face (Georgia, Menlo, ui-monospace) has
+ * nothing to load.
+ */
+function withLoadedFace(stack) {
+  if (!stack || stack.includes("var(--font-")) return stack;
+  const first = stack.split(",")[0].trim().replace(/^["']|["']$/g, "");
+  const variable = LOADED_FACES[first];
+  return variable ? `var(${variable}), ${stack}` : stack;
+}
+
 /** Nextly tokens shadcn has no equivalent for, derived from what it does have. */
 function derive(src, mode) {
   const mixToward = mode === "light" ? "black" : "white";
@@ -223,9 +266,11 @@ for (let i = 0; i < blocks.length; i++) {
     group: "tweakcn",
     recommendedDensity: "default",
     radius,
-    fontSans: light["font-sans"] ?? "var(--font-inter), Inter, sans-serif",
-    fontMono: light["font-mono"] ?? "ui-monospace, monospace",
-    fontSerif: light["font-serif"],
+    fontSans: withLoadedFace(
+      light["font-sans"] ?? "var(--font-inter), Inter, sans-serif"
+    ),
+    fontMono: withLoadedFace(light["font-mono"] ?? "ui-monospace, monospace"),
+    fontSerif: withLoadedFace(light["font-serif"]),
     light: mapMode(light, "light"),
     dark: mapMode(dark, "dark"),
   });
