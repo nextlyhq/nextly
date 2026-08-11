@@ -75,10 +75,20 @@ export type { PageStyles, ResolveStyleOptions } from "./styles";
  * replaces — and is the only thing that produces the tree the page actually presents. Gating alone
  * leaves a tree LARGER than the render's, so styles resolved against it still ship rules for nodes
  * the page drops.
+ *
+ * 🔴 Neither of them is the flow for serving a page's stored STYLESHEET, and preparing a document
+ * then resolving styles against the result is the pairing that looks like it. What the second call
+ * needs to know is whether the first REMOVED anything, and the prepared tree it receives no longer
+ * says: a node the placeholder pass dropped takes its markup off the page while the block-type
+ * defaults and named classes it pulled into the sheet stay, because those tiers are keyed by type
+ * and by class rather than by node. `preparePageForRead` does both halves and answers that question
+ * from the evidence, which is why it exists rather than a documented instruction to pass a flag.
  */
 export { pruneHiddenNodes } from "./visibility";
 export { prepareDocumentForRead } from "./prepare-document";
 export type { PrepareDocumentArgs } from "./prepare-document";
+export { preparePageForRead } from "./read-page";
+export type { PreparedPage, ReadPageArgs } from "./read-page";
 
 /**
  * The engine types this package's own options are written in terms of.
