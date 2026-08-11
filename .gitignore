@@ -104,3 +104,9 @@ docs/guides/testing-migrations.md
 # Generated dynamic migrations leaked when the package src is used as an app root in tests/playground
 packages/nextly/src/db/migrations/dynamic/*.sql
 .nextly-review/
+
+# fallow's analysis cache: the resolved module graph, per-file churn and
+# incremental state, rebuilt from the tree on demand. It self-ignores, so its
+# contents stay out of `git status` either way — named here so the directory
+# reads as build output rather than as something git merely happens to miss.
+.fallow/

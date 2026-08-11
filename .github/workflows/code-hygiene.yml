@@ -1,0 +1,87 @@
+name: Code hygiene
+
+# Per-PR check that a change does not leave dead code, a broken import or a
+# stray dependency behind.
+#
+# ESLint reads one file at a time, so nothing in CI could see an export with no
+# consumers, a `vi.mock` pointing at a module that no longer exists, or a
+# package listed in a manifest that no code imports. Fallow reads the whole
+# module graph, which is what makes those visible — and what makes it too slow
+# and too noisy to run as a whole-repo gate.
+#
+# Scoped to the diff for that reason. `fallow audit` analyses a snapshot of the
+# base commit as well as the head, and attributes every finding to one side or
+# the other. `--gate new-only` (its default) fails on what the pull request
+# introduced and reports the rest without failing, so the debt already in the
+# tree — 47 import cycles through the admin page registry, ~8.6% duplication —
+# never blocks an author who did not cause it. Nothing here is
+# `continue-on-error`: a red run means this pull request added something.
+#
+# Separate from ci.yml because of that base snapshot: it needs full history,
+# and ci.yml checks out with `fetch-depth: 2`. Widening that would slow every
+# job in CI to serve one step here.
+#
+# pull_request only. A push to main has no diff to attribute against, and a
+# whole-repo verdict would report the inherited debt above on every commit.
+
+on:
+  pull_request:
+    branches: [main]
+
+# Reports through its exit code. Nothing here comments, labels, or writes.
+permissions:
+  contents: read
+
+concurrency:
+  group: code-hygiene-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Audit changed files
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Full history: attributing a finding to the pull request means
+          # analysing the base commit's tree, not just the diff against it.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # Resolution needs the store: an import is only "unresolved" once its
+      # package is known to be absent, and workspace-to-workspace imports
+      # resolve through pnpm's virtual store rather than a path.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # No build step. The two specifier families that exist only after one —
+      # the `nextly/field-catalog` exports subpath and the `../dist/**` bin
+      # shims — are listed under `ignoreUnresolvedImports` in .fallowrc.jsonc,
+      # so the verdict is the same on a built and an unbuilt tree and this job
+      # costs seconds rather than the seven minutes a build would add.
+      #
+      # `pnpm fallow:audit` covers apps/playground, which `pnpm fallow`
+      # excludes: the harness carries a few permanent findings that would
+      # crowd a full report, but new-only files those as inherited, and the
+      # dev loop and the Playwright suite both boot that app — a broken import
+      # in it should fail a PR like any other.
+      #
+      # The base is pinned to the PR's base commit rather than inferred from
+      # merge-base, so the verdict does not move when main moves under a
+      # long-lived branch.
+      - name: Audit
+        run: pnpm fallow:audit
+        env:
+          FALLOW_AUDIT_BASE: ${{ github.event.pull_request.base.sha }}

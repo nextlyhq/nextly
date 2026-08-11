@@ -1,0 +1,121 @@
+{
+  // Fallow configuration for Nextly
+  //
+  // Fallow reads the whole module graph at once and reports what nothing
+  // reaches: unused files, exports and dependencies, unresolved imports,
+  // import cycles, duplication and complexity. It answers questions ESLint
+  // cannot, because ESLint sees one file at a time.
+  //
+  // Commands:
+  //   - pnpm fallow       = full-repo report. Excludes apps/playground, whose
+  //                         standing findings would otherwise dominate it.
+  //   - pnpm fallow:audit = changed-files gate, run by CI on every PR. Covers
+  //                         playground too; see .github/workflows/code-hygiene.yml
+  //
+  // The lists below exist because a static reader cannot see every way this
+  // repo reaches code: a path spelled inside a string, a package pulled in by
+  // a bundler rather than an import, a subpath resolved through an exports
+  // map. Each entry names one of those, and says which mechanism it is —
+  // an entry without a reason is indistinguishable from a silenced bug.
+  //
+  // Documentation: https://docs.fallow.tools
+
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+
+  // Trees that ship out of this repo rather than run inside it.
+  //
+  //   templates/ = source that create-nextly-app copies into a new user
+  //     project. `templates/blog` is an overlay onto `templates/base`, and
+  //     base holds the tsconfig that defines `@/*`, so a specifier like
+  //     `@/components/PostGrid` resolves only once the CLI has merged the
+  //     two. Read in place, every one of them is unresolvable.
+  //   docs/ = MDX for nextlyhq.com/docs, rendered by the site, not imported.
+  "ignorePatterns": ["templates/**", "docs/**"],
+
+  // Reachable only through a string, so the graph has no edge leading to
+  // them. Left out, each reports as unused, and an unused file takes whatever
+  // it imports down with it.
+  "entry": [
+    // admin-css ships no vitest config, so its suite runs on the default
+    // include, which covers .mjs. These execute on every `pnpm test`.
+    "**/*.test.mjs",
+    // Spawned by the webServer command in e2e/playwright.config.ts.
+    "e2e/scripts/*.mjs",
+    // Handed to the Tailwind CLI by packages/ui/scripts/build-css.mjs.
+    "packages/ui/src/styles/index.css",
+    // Passed as an argv path to the admin-css bin by its integration test.
+    "packages/admin-css/__fixtures__/**",
+  ],
+
+  // Specifiers tsc and Node both resolve, and fallow does not.
+  //
+  //   nextly/field-catalog = a declared exports subpath of the nextly
+  //     package. Its `types` and `import` conditions point at different
+  //     paths (dist/field-catalog.d.ts and
+  //     dist/collections/fields/catalog.mjs); fallow follows neither. Drop
+  //     this once its exports resolver handles that shape.
+  //   ../dist/** = bin shims and one page-builder spec that import build
+  //     output directly. Present after `pnpm build`, absent on a clean tree,
+  //     so gating on them would make the verdict depend on build order.
+  "ignoreUnresolvedImports": [
+    "nextly/field-catalog",
+    "nextly/field-catalog/**",
+    "../dist/**",
+  ],
+
+  // Declared and genuinely used, through a mechanism no import records.
+  // Adding a name here asserts that; anything whose usage cannot be pointed
+  // at belongs in the manifest's history instead.
+  "ignoreDependencies": [
+    // ---- packages/admin -------------------------------------------------
+    // Never imported by admin/src. They arrive through @nextlyhq/ui and are
+    // inlined into the admin bundle by the NO_EXTERNAL_DEPS list in
+    // packages/admin/tsup.config.ts, so a consumer installs @nextlyhq/admin
+    // instead of two dozen UI libraries. They are build inputs: remove one
+    // and the bundle loses the component that needed it.
+    "@lexical/history",
+    "@radix-ui/react-accordion",
+    "@radix-ui/react-alert-dialog",
+    "@radix-ui/react-avatar",
+    "@radix-ui/react-checkbox",
+    "@radix-ui/react-collapsible",
+    "@radix-ui/react-dialog",
+    "@radix-ui/react-dropdown-menu",
+    "@radix-ui/react-popover",
+    "@radix-ui/react-radio-group",
+    "@radix-ui/react-select",
+    "@radix-ui/react-separator",
+    "@radix-ui/react-switch",
+    "@radix-ui/react-tabs",
+    "@radix-ui/react-tooltip",
+    "cmdk",
+    "tailwind-variants",
+    "tailwindcss-animate",
+
+    // ---- packages/ui ----------------------------------------------------
+    // Run as a shell command by scripts/build-css.mjs
+    // (`npx @tailwindcss/cli -i … -o …`), which is how the theme is compiled.
+    "@tailwindcss/cli",
+
+    // ---- packages/telemetry ---------------------------------------------
+    // Its tsup config sets `noExternal: [/(.*)/]`, so every dependency is
+    // inlined into the published bundle. env-paths gets there through `conf`,
+    // which uses it to pick the OS-appropriate config directory.
+    "env-paths",
+
+    // ---- packages/plugin-page-builder -----------------------------------
+    // A peerDependency mirrored into devDependencies so the peer resolves
+    // for this package's own build and type-check.
+    "@tanstack/react-query",
+
+    // ---- e2e ------------------------------------------------------------
+    // No e2e source imports these. They are declared so that turbo's
+    // `dependsOn: ["^build"]` builds them before Playwright boots the
+    // playground, which does use them. Without the declaration the suite
+    // starts against a stale or missing dist.
+    "@nextlyhq/adapter-drizzle",
+    "@nextlyhq/adapter-sqlite",
+    "@nextlyhq/plugin-form-builder",
+    "@nextlyhq/plugin-page-builder",
+  ],
+}
