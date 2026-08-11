@@ -321,15 +321,25 @@ test("[informational] point 9: the library's Insert button adds a block", async 
 });
 
 /**
- * Marked failing because Escape does not cancel the drag: it leaves the editor.
+ * The editor survives Escape mid-drag. It did not always.
  *
- * Measured immediately after the keypress:
- *   {"url":".../admin/collections/pages","hasEditor":false}
+ * The admin shell used to treat Escape as "go back": its handler and the
+ * canvas's were independent `document` listeners, `stopPropagation` does not
+ * stop a sibling on the same node, so both ran and mount order decided the
+ * winner. Mid-drag that navigated out of the entry editor and unmounted the
+ * canvas, measured as `{"hasEditor":false}`. The admin's keydown owners now
+ * register through the shared shortcut manager, which holds one listener and
+ * takes precedence from the component tree, so Escape no longer leaves.
  *
- * The admin shell treats Escape as "go back", so mid-drag it navigates out of
- * the entry editor and unmounts the canvas entirely. Point 12 asks for a
- * cancelled drag and an unchanged tree; what happens is an abandoned editing
- * session. The v2 canvas must claim Escape while a drag is in flight.
+ * 🔴 WHAT THIS TEST DOES NOT COVER, and what nothing else covers either.
+ * Point 12 asks for a CANCELLED DRAG and an unchanged tree. This asserts the
+ * editor is still mounted; 12b asserts the tree is unmutated. Both pass while
+ * the drag itself is never cancelled, because `plugin-page-builder` registers
+ * no Escape handler at all — the admin merely stopped stealing the key, which
+ * is not the same as the canvas claiming it. The blocking layer a canvas needs
+ * exists (`useShortcuts([{ keys: "Escape" }], { blocking: true })`) and nothing
+ * in the page builder calls it. Do not read these two greens as point 12 being
+ * met.
  */
 test("[acceptance] point 12a: Escape keeps the editor mounted", async ({
   page,
@@ -349,11 +359,6 @@ test("[acceptance] point 12a: Escape keeps the editor mounted", async ({
     description: JSON.stringify(state),
   });
 
-  // The single known gap, isolated so nothing else rides on it.
-  test.fail(
-    true,
-    "the admin shell claims Escape and navigates out of the editor"
-  );
   expect(
     state.hasEditor,
     `Escape left the editor: ${JSON.stringify(state)}`
