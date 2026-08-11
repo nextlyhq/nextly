@@ -319,15 +319,32 @@ export function readableGatedRules(
 
 function withGatedRules(
   styles: PageStyles,
-  document: BlockDocument
+  document: BlockDocument,
+  blocks: BlockResolver
 ): PageStyles {
   const entries = readableGatedRules(styles);
   if (entries === undefined || styles.css === undefined) return styles;
   const appended: string[] = [];
-  for (const id of documentNodeIds(document)) {
-    const rules = entries[id];
+  walkNodes(document.nodes, node => {
+    // A node still in the tree can still be one that draws nothing, and this is
+    // the only place that can tell. Surviving the visibility prune is what earns
+    // a gated entry back; a block answering that these props draw nothing has
+    // not earned it, and appending its rules here would put back exactly what
+    // holding them per node was for.
+    //
+    // Asked HERE rather than left to the caller because this function is
+    // exported and the documented direct flow — `prepareDocumentForRead` then
+    // this — has no pass that removes such a node. A consumer following it would
+    // otherwise publish the rules while the block drew nothing, with no way to
+    // prevent it.
+    //
+    // The failure direction is the safe one: `declaresNoMarkup` answers "draws"
+    // for anything short of an explicit `true`, so a block that cannot be asked
+    // keeps its styling.
+    if (declaresNoMarkup(node, type => blocks.get(type))) return;
+    const rules = entries[node.id];
     if (isUsableGatedEntry(rules)) appended.push(rules);
-  }
+  });
   if (appended.length === 0) return styles;
   // An empty main sheet is joined without a leading newline. `css` is legitimately
   // empty whenever every styled node was gated — a page whose only styling lives
@@ -509,7 +526,7 @@ export function resolvePageStyles(
     // appended, which is the same answer the sheet itself got.
     return normalized.refused
       ? normalized.styles
-      : withGatedRules(normalized.styles, document);
+      : withGatedRules(normalized.styles, document, blocks);
   }
   if (
     styles &&

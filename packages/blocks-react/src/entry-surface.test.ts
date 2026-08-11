@@ -119,11 +119,13 @@ const SOURCE_MODULES: ReadonlyArray<{
     // `pruneNodes` is the shared walk the three passes share so their identity
     // behaviour cannot diverge. It is a shape, not a policy, and a consumer
     // reaching for it is writing a fourth pass this package cannot account for.
-    // `pruneDrawlessNodes` is deliberately NOT offered. It is only safe where
-    // the stylesheet survives the drop, and that judgement lives in
-    // `PageRenderer`; a caller applying it before `resolvePageStyles` would make
-    // its own document read as repaired and lose the whole sheet — which is the
-    // outcome this pass exists to avoid.
+    // `pruneDrawlessNodes` is deliberately NOT offered, and does not need to be.
+    // It is only safe where the stylesheet survives the drop, and that judgement
+    // lives in `PageRenderer`; a caller applying it before `resolvePageStyles`
+    // would make its own document read as repaired and lose the whole sheet —
+    // the outcome this pass exists to avoid. A consumer assembling styles by
+    // hand gets the behaviour without it, because `resolvePageStyles` declines to
+    // append a drawless node's gated rules itself.
     internal: [
       "drawsNothing",
       "isUnconditional",

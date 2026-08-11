@@ -3885,6 +3885,61 @@ describe("PageRenderer", () => {
     });
   });
 
+  describe("a consumer assembling styles by hand", () => {
+    it("does not get a drawless node's rules appended back", async () => {
+      // The documented direct flow is `prepareDocumentForRead` then
+      // `resolvePageStyles`, and it has no pass that removes a node whose block
+      // declares it draws nothing — the prepared tree keeps it, correctly, so it
+      // can still be rendered. Appending its gated entry here would put back
+      // exactly what holding those rules per node was for, and a consumer
+      // following the documented flow could not prevent it.
+      const artifact = resolvePageStyles(
+        doc(
+          node("a", "test/drawless", { props: { draw: false } }),
+          node("b", "test/text", { props: { value: "x" } })
+        ),
+        {
+          css: ".nx-b { color: teal }",
+          classes: { a: "nx-a", b: "nx-b" },
+          gated: { a: ".nx-a { background-image: url(/unpainted.png) }" },
+        },
+        undefined,
+        createBlockResolver([
+          drawless as AnyBlockDefinition,
+          text as AnyBlockDefinition,
+        ])
+      );
+
+      expect(artifact.css).not.toContain("unpainted.png");
+      expect(artifact.css).toContain("color: teal");
+    });
+
+    it("still gets the rules of a node that DOES draw", async () => {
+      // The control. Without it the assertion above would pass on a resolver
+      // that appends nothing at all, which would leave every gated node on every
+      // page unstyled.
+      const artifact = resolvePageStyles(
+        doc(
+          node("a", "test/drawless", { props: { draw: true } }),
+          node("b", "test/text", { props: { value: "x" } })
+        ),
+        {
+          css: ".nx-b { color: teal }",
+          classes: { a: "nx-a", b: "nx-b" },
+          gated: { a: ".nx-a { background-image: url(/painted.png) }" },
+        },
+        undefined,
+        createBlockResolver([
+          drawless as AnyBlockDefinition,
+          text as AnyBlockDefinition,
+        ])
+      );
+
+      expect(artifact.css).toContain("painted.png");
+      expect(artifact.css).toContain("color: teal");
+    });
+  });
+
   describe("a write path that compiles its own artifact", () => {
     it("gets the drawless split without asking for it", async () => {
       // `resolvePageStyles` is exported, and a write path uses it directly to
