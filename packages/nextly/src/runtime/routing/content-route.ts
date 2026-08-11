@@ -162,7 +162,19 @@ export interface ContentRouteConfig<TNode> {
    * `buildMetadata` as `context.locale`. Omit for the default locale.
    */
   locale?: string;
-  /** Relation depth for the resolved read (default `1`). */
+  /**
+   * Relation depth for the resolved read.
+   *
+   * **The default differs by factory, and the difference is a security one.**
+   * `createContentRoute` defaults to `1`, matching `resolveContent`.
+   * `createPublicContentRoute` defaults to `0` — a trusted read propagates both
+   * its trust and a widened lifecycle into relationship expansion, so a
+   * populated target would be read with access rules bypassed and drafts
+   * included, and a public route pre-renders that into a static artifact.
+   *
+   * Setting this on a public route restores expansion, and by setting it you
+   * state that the collections your pages populate are public too.
+   */
   depth?: number;
   /** A booted Nextly instance (defaults to `getNextly()`). */
   nextly?: NextlyContentReader;
