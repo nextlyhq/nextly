@@ -27,6 +27,7 @@ import * as contextModule from "./context";
 import * as pageRendererModule from "./page-renderer";
 import * as placeholderModule from "./placeholder";
 import * as prepareModule from "./prepare-document";
+import * as readPageModule from "./read-page";
 import * as resolverModule from "./resolver";
 import * as stylesModule from "./styles";
 import * as visibilityModule from "./visibility";
@@ -148,11 +149,25 @@ const SOURCE_MODULES: ReadonlyArray<{
     // prepared document already has `prepareDocumentForRead`; a consumer wanting
     // the intermediates is reasoning about artifact trust, which is this package's
     // job and not something to hand out before anyone has asked for it.
+    //
+    // `readingViewOf` is the all-placeholder rule, which both entry points that
+    // turn stages into something a reader presents must apply identically. It
+    // is exported to delete the second copy, not to be called on its own: it
+    // takes stages, and a consumer holding stages is already past this surface.
     internal: [
       "prepareDocumentReadStages",
       "pruneKnownPlaceholders",
+      "readingViewOf",
       "rendersOwnMarkup",
     ],
+  },
+  {
+    name: "read-page",
+    module: readPageModule,
+    // Nothing withheld: the module exists to offer one entry point, and the
+    // repair test it decides with is module-private because the whole point is
+    // that a caller never has to ask it.
+    internal: [],
   },
   {
     name: "block-boundary",
@@ -177,6 +192,7 @@ describe("the root entry", () => {
       "fetchPolicyLabel",
       "migrationSourceFor",
       "prepareDocumentForRead",
+      "preparePageForRead",
       "pruneHiddenNodes",
       "registeredBlocks",
       "resolvePageStyles",

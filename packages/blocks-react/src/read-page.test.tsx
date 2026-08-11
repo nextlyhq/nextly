@@ -78,6 +78,10 @@ const document: BlockDocument = {
 };
 
 const context: StyleCompileContext = {
+  // Only the base breakpoint. Every declaration in this file is written at
+  // `base`, so a wider set would emit the same rules again inside media queries
+  // and make the assertions read a sheet whose size says nothing about them.
+  breakpoints: { viewport: [{ id: "base", label: "Desktop" }], container: [] },
   blockBases: {
     "plugin/drawless": { base: { base: { letterSpacing: "3px" } } },
     "test/text": { base: { base: { fontSize: "16px" } } },
@@ -174,7 +178,12 @@ describe("what must NOT count as a repair", () => {
           version: 1,
           props: { value: "hidden" },
           styles: { base: { base: { color: "crimson" } } },
-          visibility: { conditions: [{ kind: "never" }] },
+          // No visitor context reaches the gating pass here, so any condition
+          // at all withholds the node. The field named is immaterial; that it
+          // is a condition is the whole fixture.
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+          },
         },
         ...document.nodes,
       ],
