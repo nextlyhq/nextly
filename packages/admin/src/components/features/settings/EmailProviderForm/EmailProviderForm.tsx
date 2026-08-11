@@ -99,6 +99,31 @@ export function emailCatalogState({
   return descriptors.length > 0 ? "stale" : "unavailable";
 }
 
+/**
+ * What a record HELD, as the key for "has this form already got it".
+ *
+ * The fields hydration reads, serialised. A timestamp would be the obvious
+ * key and is not a sound one: MySQL stores `updated_at` as `datetime` with no
+ * fractional seconds, so two writes inside the same second come back
+ * indistinguishable — and the second would be taken for the version already on
+ * screen, leaving stale values that the next save writes back.
+ *
+ * Comparing what the record contains has no precision to lose, and answers the
+ * question actually being asked: is anything here different from what this
+ * form was built from?
+ */
+function recordRevision(provider: EmailProviderRecord): string {
+  return JSON.stringify([
+    provider.name,
+    provider.type,
+    provider.fromEmail,
+    provider.fromName,
+    provider.isDefault,
+    provider.isActive,
+    provider.configuration,
+  ]);
+}
+
 // ============================================================
 // EmailProviderForm Component
 // ============================================================
@@ -202,8 +227,8 @@ export function EmailProviderForm({
   const hydratedFor = useRef<{
     id: string;
     hadDescriptor: boolean;
-    /** Which VERSION of the record filled the form, not merely which record. */
-    updatedAt: string;
+    /** What the record HELD when it filled the form, not when it was written. */
+    revision: string;
     /** Which PROVIDER the configuration on screen was built for. */
     type: string;
   } | null>(null);
@@ -235,12 +260,13 @@ export function EmailProviderForm({
       // has touched keep what they typed, and everything else takes the
       // server's newer value. A plain reset here would discard their work,
       // which is what the identity guard exists to prevent.
-      if (hydrated.updatedAt !== provider.updatedAt) {
+      const revision = recordRevision(provider);
+      if (hydrated.revision !== revision) {
         const typeChanged = hydrated.type !== provider.type;
         hydratedFor.current = {
           id: provider.id,
           hadDescriptor: descriptor !== undefined,
-          updatedAt: provider.updatedAt,
+          revision,
           type: provider.type,
         };
 
@@ -254,9 +280,13 @@ export function EmailProviderForm({
         // permissive parser, or refused outright by a stricter one, on every
         // save from then on. The identity fields are type-independent and keep
         // whatever was typed.
+        // `resetField`, not `setValue`: the field has to stop being DIRTY as
+        // well as change value. `shouldDirty: false` leaves an existing dirty
+        // mark standing, and the next refetch's `keepDirtyValues` would then
+        // preserve this now-stale value in place of the server's newer one.
         if (typeChanged) {
-          form.setValue("configuration", next.configuration, {
-            shouldDirty: false,
+          form.resetField("configuration", {
+            defaultValue: next.configuration,
           });
         }
         return;
@@ -275,7 +305,7 @@ export function EmailProviderForm({
       hydratedFor.current = {
         id: provider.id,
         hadDescriptor: true,
-        updatedAt: provider.updatedAt,
+        revision: recordRevision(provider),
         type: provider.type,
       };
       // Only the configuration is replaced. The identity fields were filled
@@ -290,7 +320,7 @@ export function EmailProviderForm({
     hydratedFor.current = {
       id: provider.id,
       hadDescriptor: descriptor !== undefined,
-      updatedAt: provider.updatedAt,
+      revision: recordRevision(provider),
       type: provider.type,
     };
     form.reset(providerToFormValues(provider, descriptor));

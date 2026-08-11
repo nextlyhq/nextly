@@ -241,6 +241,98 @@ describe("the same provider, changed by someone else while the form is open", ()
     ).toBe("Renaming In Progress");
   });
 
+  it("reconciles a change that carries the SAME timestamp", async () => {
+    // MySQL stores `updated_at` as `datetime` with no fractional seconds, so
+    // two writes inside one second come back indistinguishable. Keying on the
+    // timestamp takes the second for the version already on screen and leaves
+    // stale values that the next save writes back over the newer ones.
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[ACME]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    expect(regionInput()?.value).toBe("eu-west-1");
+
+    rerender(
+      <EmailProviderForm
+        mode="edit"
+        provider={{
+          ...STORED,
+          configuration: { region: "written-in-the-same-second" },
+          // Deliberately unchanged.
+          updatedAt: STORED.updatedAt,
+        }}
+        descriptors={[ACME]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    expect(regionInput()?.value).toBe("written-in-the-same-second");
+  });
+
+  it("accepts the server's newer value after a type change reverts", async () => {
+    // Rebuilding the configuration after a remote type change has to clear its
+    // DIRTY mark as well as its value. Left dirty, the next refetch's
+    // `keepDirtyValues` preserves this now-stale value in place of the
+    // server's newer one — so the field the operator last touched silently
+    // stops accepting updates.
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[ACME, OTHER_WITH_FIELD]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    const input = regionInput();
+    if (!input) throw new Error("expected the region field to render");
+    await user.clear(input);
+    await user.type(input, "typed-for-acme");
+
+    // A remote type change rebuilds the configuration.
+    rerender(
+      <EmailProviderForm
+        mode="edit"
+        provider={{
+          ...STORED,
+          type: "other",
+          configuration: { region: "first-server-value" },
+          updatedAt: "2026-02-02T00:00:00.000Z",
+        }}
+        descriptors={[ACME, OTHER_WITH_FIELD]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    // A later refetch of the SAME type brings a newer value.
+    rerender(
+      <EmailProviderForm
+        mode="edit"
+        provider={{
+          ...STORED,
+          type: "other",
+          configuration: { region: "second-server-value" },
+          updatedAt: "2026-02-03T00:00:00.000Z",
+        }}
+        descriptors={[ACME, OTHER_WITH_FIELD]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    expect(regionInput()?.value).toBe("second-server-value");
+  });
+
   it("does nothing when the record has not changed", async () => {
     // The other control. Reconciling on every refetch — rather than on a NEW
     // revision — reintroduces the reset this guard exists to prevent, and this
