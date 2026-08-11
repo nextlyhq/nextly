@@ -631,13 +631,23 @@ describe("a test recipient the caller wrote with a display name", () => {
 });
 
 describe("a test send that THREW, addressed with a display name", () => {
+  let sqlite: Database.Database;
+
+  // The registry is process-wide and the handle is not released on its own, so
+  // both go back whatever the assertions do. Left at the end of the test body,
+  // one failing expectation skips them: the registration reaches every later
+  // suite in this worker, and one failure becomes a cascade.
+  afterEach(() => {
+    getEmailProviderRegistry().reset();
+    sqlite.close();
+  });
+
   it("records the mailbox, as the resolved path does", async () => {
-    // Both paths record a delivery for one destination, and the normalisation
-    // reached only the resolved one — so a thrown test stored the hash of
-    // `Jane <jane@example.com>` while every reader hashes the bare address,
-    // and the row could never be found again.
+    // Both paths record a delivery for one destination, and both record the
+    // MAILBOX: every reader hashes the bare address, so a row stored under the
+    // hash of `Jane <jane@example.com>` could never be found again.
     const recorded: Array<{ to: string }> = [];
-    const sqlite = new Database(":memory:");
+    sqlite = new Database(":memory:");
     createEmailProvidersTable(sqlite);
     const service = new EmailProviderService(
       makeAdapter(drizzle({ client: sqlite })),
@@ -674,9 +684,6 @@ describe("a test send that THREW, addressed with a display name", () => {
 
     expect(recorded).toHaveLength(1);
     expect(recorded[0]?.to).toBe("jane@example.com");
-
-    getEmailProviderRegistry().reset();
-    sqlite.close();
   });
 });
 
@@ -762,6 +769,140 @@ describe("a parser that changes what a credential looks like", () => {
     });
 
     expect(result.messageId).toBe("message-id-from-the-provider");
+  });
+
+  /** What the log line for a failed stage actually carries. */
+  function diagnosticOf(error: unknown): string {
+    const held = error as { message?: string; cause?: unknown };
+    return JSON.stringify({
+      message: held.message,
+      cause: held.cause instanceof Error ? held.cause.message : held.cause,
+    });
+  }
+
+  it("contains a derived credential thrown while BUILDING the adapter", async () => {
+    // `createAdapter` receives the parsed configuration and objects to a
+    // credential it cannot use — the likeliest moment for a provider to quote
+    // one back. The stored needle cannot match the derived form, so the value
+    // reaches `email.failed` unless the parsed form is compared here.
+    const derived = Buffer.from("8419573026").toString("base64");
+    const provider = defineEmailProvider({
+      type: "builder",
+      label: "Builder",
+      configFields: [
+        {
+          name: "pin",
+          label: "PIN",
+          kind: "text",
+          required: true,
+          secret: true,
+        },
+      ],
+      parseConfig: input => ({
+        token: Buffer.from((input as { pin: string }).pin).toString("base64"),
+      }),
+      createAdapter: (config: { token: string }) => {
+        throw new Error(`unusable key ${config.token}`);
+      },
+    });
+
+    let diagnostic = "";
+    try {
+      provider.createAdapterFrom({ pin: "8419573026" });
+    } catch (error) {
+      diagnostic = diagnosticOf(error);
+    }
+
+    expect(diagnostic).not.toContain(derived);
+    // The control: the failure still has to be reported, and still has to say
+    // which provider and which stage. Containment that swallowed the whole
+    // diagnostic would pass the assertion above and leave nothing to debug.
+    expect(diagnostic).toContain("builder");
+  });
+
+  it("contains a derived credential a PROBE rejects with", async () => {
+    const derived = Buffer.from("8419573026").toString("base64");
+    const provider = defineEmailProvider({
+      type: "prober",
+      label: "Prober",
+      configFields: [
+        {
+          name: "pin",
+          label: "PIN",
+          kind: "text",
+          required: true,
+          secret: true,
+        },
+      ],
+      parseConfig: input => ({
+        token: Buffer.from((input as { pin: string }).pin).toString("base64"),
+      }),
+      createAdapter: () => ({
+        send: () => Promise.resolve({ success: true, messageId: "x" }),
+      }),
+      testConnection: (config: { token: string }) =>
+        Promise.reject(new Error(`probe refused ${config.token}`)),
+    });
+
+    let diagnostic = "";
+    try {
+      await provider.testConnectionFrom?.({ pin: "8419573026" });
+    } catch (error) {
+      diagnostic = diagnosticOf(error);
+    }
+
+    expect(diagnostic).not.toContain(derived);
+    expect(diagnostic).toContain("prober");
+  });
+
+  it("still lets a probe that SUCCEEDS answer", async () => {
+    // The control for both stages: containment must not turn every probe into
+    // a failure, which would pass the two assertions above.
+    const provider = defineEmailProvider({
+      type: "healthy",
+      label: "Healthy",
+      configFields: [
+        {
+          name: "pin",
+          label: "PIN",
+          kind: "text",
+          required: true,
+          secret: true,
+        },
+      ],
+      parseConfig: input => input as Record<string, unknown>,
+      createAdapter: () => ({
+        send: () => Promise.resolve({ success: true, messageId: "x" }),
+      }),
+      testConnection: () => Promise.resolve({ ok: true, detail: "reachable" }),
+    });
+
+    await expect(
+      provider.testConnectionFrom?.({ pin: "8419573026" })
+    ).resolves.toMatchObject({ ok: true, detail: "reachable" });
+  });
+
+  it("withholds an id when the parser RENAMES the credential", async () => {
+    // `{ apiKey }` becomes `{ token: base64(apiKey) }`. The declared path is
+    // empty in what the adapter holds, so nothing here produced a needle for
+    // the value it actually interpolates, while the stored form still looks
+    // perfectly matchable and cannot match the encoding.
+    const provider = pinnedProvider(
+      input => ({
+        token: Buffer.from((input as { pin: string }).pin).toString("base64"),
+      }),
+      config => `id-${String(config.token)}`
+    );
+
+    const adapter = provider.createAdapterFrom({ pin: "8419573026" });
+    const result = await adapter.send({
+      to: "a@b.com",
+      from: "c@d.com",
+      subject: "s",
+      html: "<p>h</p>",
+    });
+
+    expect(result.messageId).toBeUndefined();
   });
 
   it("still withholds an id that contains the parsed credential", async () => {

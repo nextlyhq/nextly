@@ -8,7 +8,20 @@
  * at you when it rejects them.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// The recipient digest is keyed with the install secret, so this module reads
+// the environment where it previously read nothing.
+vi.mock("../../../lib/env", () => ({
+  env: {
+    NEXTLY_SECRET: "test-secret-that-is-long-enough-for-derivation",
+    DB_DIALECT: "sqlite",
+    DATABASE_URL: undefined,
+    NODE_ENV: "test",
+  },
+}));
+
+import { createHash } from "crypto";
 
 import {
   MAX_ERROR_LENGTH,
@@ -26,6 +39,19 @@ describe("hashing a recipient", () => {
     const canonical = hashRecipient("someone@example.com");
     expect(hashRecipient("Someone@Example.com")).toBe(canonical);
     expect(hashRecipient("  someone@example.com  ")).toBe(canonical);
+  });
+
+  it("is not a bare digest of the address", () => {
+    // An email address has too little entropy to resist an offline dictionary,
+    // so an unkeyed hash still identifies a person to anyone holding the
+    // table — pseudonymised, not anonymised, and carrying every identity
+    // obligation the hash was meant to remove. The key is the thing the holder
+    // of a stolen table does not have.
+    const bare = createHash("sha256")
+      .update("someone@example.com")
+      .digest("hex");
+
+    expect(hashRecipient("someone@example.com")).not.toBe(bare);
   });
 
   it("differs for different mailboxes", () => {

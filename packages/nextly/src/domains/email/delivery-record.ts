@@ -10,7 +10,9 @@
  * @module domains/email/delivery-record
  */
 
-import { createHash } from "crypto";
+import { createHmac, createHash } from "crypto";
+
+import { env } from "../../lib/env";
 
 /** How a delivery ended. A drain would add `pending` and `retrying`. */
 export type EmailDeliveryStatus = "sent" | "failed";
@@ -37,16 +39,32 @@ export type EmailDeliveryRecipientKind = "to" | "cc" | "bcc";
  * `a@x.com` as different mailboxes, and matching what operators believe is
  * worth more here than matching what the RFC permits.
  *
- * Not salted, deliberately. A salt would make the hash unmatchable by the one
- * query it exists to serve — hash the address you were given, look for it —
- * and the threat it would defend against, an attacker enumerating addresses
- * against a stolen table, requires the database to be lost already, at which
- * point the same attacker has the users table with the addresses in it.
+ * KEYED rather than salted. The distinction is the whole point: a per-row salt
+ * would make the column unmatchable by the one query it exists to serve — hash
+ * the address you were given, look for it — while a per-install key leaves
+ * that query working exactly as before, because the same address under the
+ * same key is the same digest.
+ *
+ * A bare digest does not make this column anonymous. An email address carries
+ * far too little entropy to resist an offline dictionary, so anyone holding
+ * the table can confirm whether a given person was written to, and can
+ * enumerate common addresses at leisure. That is pseudonymised data, not
+ * anonymised data, and it keeps every identity obligation the hash was
+ * supposed to remove. The key is what the holder of a stolen table does not
+ * have.
+ *
+ * `NEXTLY_SECRET` is required in production and validated at env parse, so the
+ * unkeyed branch below is reachable only in development and test — where there
+ * is no stolen-table threat, and where refusing would leave a contributor
+ * unable to record anything.
  */
 export function hashRecipient(address: string): string {
-  return createHash("sha256")
-    .update(address.trim().toLowerCase())
-    .digest("hex");
+  const mailbox = address.trim().toLowerCase();
+  const key = env.NEXTLY_SECRET;
+
+  return key === undefined
+    ? createHash("sha256").update(mailbox).digest("hex")
+    : createHmac("sha256", key).update(mailbox).digest("hex");
 }
 
 /**

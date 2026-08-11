@@ -1313,7 +1313,7 @@ export class UserMutationService extends BaseService {
             if (!result.success) {
               this.logger.warn("Welcome email was not delivered", {
                 event: "user.welcome_email_failed",
-                reason: "the message did not reach the recipient",
+                reason: "not-delivered-to-recipient",
               });
             }
           })

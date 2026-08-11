@@ -9,12 +9,19 @@
  *
  * ## What this table deliberately does not contain
  *
- * **The recipient's address.** Only a hash of it. That answers "did this send"
- * and "how many failed" without answering "to whom", keeps the table outside
- * the identity-erasure obligations that govern anything holding a person's
- * address, and matches what the send path already does — it logs counts, never
- * addresses. Support confirms a delivery by hashing the address they were
- * given, which is the question they are actually asked.
+ * **The recipient's address.** Only a keyed hash of it, under the install's
+ * own secret. That answers "did this send" and "how many failed" without
+ * answering "to whom", and matches what the send path already does — it logs
+ * counts, never addresses. Support confirms a delivery by hashing the address
+ * they were given, which is the question they are actually asked, and the key
+ * is what leaves that query working while a stolen copy of the table cannot be
+ * enumerated: an email address has too little entropy for a bare digest to
+ * resist a dictionary.
+ *
+ * This reduces what the table discloses. It does not put the table outside
+ * identity-erasure obligations — a keyed hash of a person's address is
+ * pseudonymised data, and a request to erase a person still reaches these
+ * rows.
  *
  * **The rendered subject.** The template SLUG is recorded instead. A slug says
  * which kind of message this was, is stable across copy edits, and cannot carry
@@ -83,7 +90,7 @@ export const emailDeliveriesPg = pgTable(
     templateSlug: varchar("template_slug", { length: 255 }),
 
     /**
-     * SHA-256 of the lowercased, trimmed recipient address, hex encoded.
+     * Keyed SHA-256 of the lowercased, trimmed recipient address, hex encoded.
      *
      * Fixed width, so `char`-like sizing is honest; `varchar(64)` keeps the
      * three dialects aligned without a dialect-specific type.
@@ -164,13 +171,13 @@ export const emailDeliveriesPg = pgTable(
       .defaultNow(),
   },
   t => [
-    // "Did this address receive anything, and when" — the support question,
-    // answered by hashing the address the operator was given.
     // The unfiltered read — "what happened recently", and the default this
     // service serves. Every other index below leads with a different column,
     // so none of them can order the whole table; without this one the default
     // list degrades to a full scan and sort as the log grows.
     index("email_deliveries_created_idx").on(t.createdAt),
+    // "Did this address receive anything, and when" — the support question,
+    // answered by hashing the address the operator was given.
     index("email_deliveries_recipient_idx").on(t.recipientHash, t.createdAt),
     // "What is failing right now", and the retention scan, which walks one
     // status oldest-first.

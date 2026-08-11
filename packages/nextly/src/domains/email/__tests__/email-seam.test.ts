@@ -826,15 +826,17 @@ describe("a message id built to cost us something", () => {
     resetFilterRegistry();
   });
 
-  it("does not let a separator-heavy id stall the send path", async () => {
-    // Nothing bounds how many segments a provider puts in an identifier, and
-    // the send path waits on this. Candidate generation is therefore linear in
-    // that count: one shortest qualifying span per starting segment, which
-    // detects the same texts as every contiguous span would, since a longer
-    // span from the same start carries the short one as a prefix.
+  it("withholds a separator-heavy id", async () => {
+    // Nothing bounds how many separators a provider puts in an identifier, and
+    // the send path waits on whatever containment does with it. Containment
+    // asks a shape question and then a fixed set of exact comparisons, so the
+    // separator count does not decide how much work happens — there is no
+    // per-segment enumeration for it to drive.
     //
-    // The bound below separates that from work quadratic in the segment
-    // count, which is the shape this is here to refuse.
+    // Asserted as the observable contract rather than as elapsed time: an
+    // identifier of this length is none of the recognised shapes, so it is
+    // withheld without anything inspecting its parts. A wall-clock bound here
+    // would fail on a loaded runner while proving nothing about the algorithm.
     const { service } = buildSend();
     const heavy = Array.from({ length: 300 }, (_, i) => `s${i}`).join("-");
     (service as unknown as { createAdapterFromRecord: unknown })[
@@ -843,12 +845,14 @@ describe("a message id built to cost us something", () => {
       send: () => Promise.resolve({ success: true, messageId: heavy }),
     });
 
-    const started = Date.now();
-    await service.send({ to: "a@b.com", subject: "Hi", html: "<p>x</p>" });
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
 
-    // Generous by three orders of magnitude against the quadratic form, so
-    // this fails on the shape of the algorithm rather than on a slow machine.
-    expect(Date.now() - started).toBeLessThan(250);
+    expect(result.success).toBe(true);
+    expect(result.messageId).toBeUndefined();
   });
 
   it("withholds an id longer than a header line may be", async () => {
@@ -1118,5 +1122,63 @@ describe("a provider that reports its refusals as a bare string", () => {
     });
 
     expect(result).toEqual({ success: true, messageId: "msg-1" });
+  });
+});
+
+describe("bookkeeping that fails after the provider accepted the message", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetFilterRegistry();
+  });
+
+  afterEach(() => {
+    resetFilterRegistry();
+  });
+
+  it("still reports the send as having happened", async () => {
+    // `email.beforeSend` hands the payload to plugin code, so what comes back
+    // is whatever a handler returned. Building the delivery rows reads `to`
+    // off it, and a handler that drops the key makes that read throw — after
+    // the provider has already taken the message.
+    //
+    // Reported as a provider failure, that writes `failed` rows for a
+    // delivered message, runs the after-send action with `success: false`, and
+    // has an auth flow withhold a token for mail the recipient received.
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: Record<string, unknown>) => {
+        const { to: _dropped, ...rest } = payload;
+        return rest;
+      }
+    );
+    const { service, adapterSend } = buildSend();
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    // The control is the provider call itself: without it, a `success: true`
+    // here would prove nothing, since a send that never reached the provider
+    // must NOT be reported as delivered.
+    expect(adapterSend).toHaveBeenCalledTimes(1);
+    expect(result.success).toBe(true);
+  });
+
+  it("still reports a genuine provider failure as one", async () => {
+    // The other control. A marker set too eagerly — before the provider
+    // answers rather than after — would pass the case above while reporting
+    // every refused message as sent.
+    const { service, adapterSend } = buildSend();
+    adapterSend.mockRejectedValueOnce(new Error("relay refused"));
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(result.success).toBe(false);
   });
 });

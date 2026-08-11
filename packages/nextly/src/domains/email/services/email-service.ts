@@ -444,8 +444,19 @@ export class EmailService extends BaseService {
     );
 
     const startedAt = Date.now();
-    // Set the moment the provider answers, so the catch below can tell a send
-    // that never happened from one whose bookkeeping failed afterwards.
+    // Two variables rather than one, because they answer different questions
+    // and only one of them can be answered immediately. `accepted` is the fact
+    // that the provider took the message; `dispatched` is the response, which
+    // needs values derived after the answer -- the refused set, the recipient
+    // list, a message id that has been checked for leaked credentials.
+    //
+    // Deriving any of those can throw, and while the fact lived in the
+    // response it could not be recorded until they had all succeeded. A
+    // failure in between then reached the catch as though the provider had
+    // refused: a full set of `failed` rows, an after-send action told the send
+    // failed, and an auth flow withholding a token for a message that was
+    // delivered.
+    let accepted = false;
     let dispatched: { success: boolean; messageId?: string } | undefined;
 
     try {
@@ -460,6 +471,10 @@ export class EmailService extends BaseService {
         bcc: filtered.bcc,
         attachments: resolvedAttachments,
       });
+
+      // The provider has answered. Nothing below may report this as a send
+      // that never happened, and this is the first statement that can say so.
+      accepted = true;
 
       // Recorded inline rather than through the after-send action seam, and
       // BEFORE it. That seam exists for PLUGIN side-effects -- ordered,
@@ -618,7 +633,7 @@ export class EmailService extends BaseService {
       // however it reached here. Reporting one would contradict the rows and
       // the action that have already gone out, and would tell an auth flow to
       // withhold a token for a mail that was sent.
-      if (dispatched) {
+      if (accepted) {
         // The diagnostic is isolated because the thing it is describing may be
         // the logger itself: a transport that threw once will throw again, and
         // letting it do so here would reject an accepted send for the second
@@ -634,7 +649,12 @@ export class EmailService extends BaseService {
           // Nowhere left to report it: the reporter is what failed. The send
           // stands, which is the fact that matters to the caller.
         }
-        return dispatched;
+        // Absent when the throw landed between the provider's answer and the
+        // point the response was built. The message still went out; the only
+        // thing not known is its identifier, and reporting a failure because
+        // an id could not be assembled is the outcome this branch exists to
+        // prevent.
+        return dispatched ?? { success: true };
       }
 
       // Recorded before the action seam, for the reason given in the success

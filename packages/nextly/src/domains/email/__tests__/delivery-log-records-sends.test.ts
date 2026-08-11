@@ -381,20 +381,60 @@ describe("a provider deleted while its send is in flight", () => {
     );
   });
 
-  it("reports the original failure when the retry fails too", async () => {
-    // A retry that also fails means the cause was never the key, and the
-    // message worth logging is the first one.
-    const broken = drizzle({ client: sqlite });
-    sqlite.exec("drop table email_deliveries");
-    const service = new EmailDeliveryService(makeAdapter(broken), logger);
+  it("reports BOTH failures when the retry fails too", async () => {
+    // The recovery only runs for a foreign-key violation, so the first insert
+    // has to fail as one and the second for something else. A fixture that
+    // fails both times for an unrelated reason — dropping the table, say —
+    // takes the early return instead and never reaches the recovery at all,
+    // leaving the two-error report with no coverage while the test reads as
+    // though it had some.
+    //
+    // Both messages have to survive: the first says the row was refused for
+    // its provider reference, the second says what stopped the recovery, and
+    // they send an operator to different problems.
+    let attempts = 0;
+    const failsTwice = new Proxy(drizzle({ client: sqlite }), {
+      get(target, property, receiver) {
+        if (property !== "insert") {
+          return Reflect.get(target, property, receiver) as unknown;
+        }
+        return () => ({
+          values: () => {
+            attempts += 1;
+            return Promise.reject(
+              attempts === 1
+                ? Object.assign(
+                    new Error(
+                      "FOREIGN KEY constraint failed: email_deliveries.provider_id"
+                    ),
+                    { code: "SQLITE_CONSTRAINT_FOREIGNKEY" }
+                  )
+                : Object.assign(new Error("connection lost"), {
+                    code: "SQLITE_IOERR",
+                  })
+            );
+          },
+        });
+      },
+    }) as ReturnType<typeof drizzle>;
+    const service = new EmailDeliveryService(makeAdapter(failsTwice), logger);
 
     await expect(
       service.record({ to: RECIPIENT, providerType: "smtp", status: "sent" })
     ).resolves.toBeUndefined();
+
+    // The precondition, asserted rather than assumed: without a second
+    // attempt, everything below is describing the early return.
+    expect(attempts).toBe(2);
     expect(logger.error).toHaveBeenCalledWith(
       "Failed to record an email delivery",
-      expect.objectContaining({ providerType: "smtp" })
+      expect.objectContaining({
+        message: expect.stringContaining("FOREIGN KEY"),
+        retryMessage: expect.stringContaining("connection lost"),
+      })
     );
+    // The recovery did not succeed, so nothing may claim a row was written
+    // without its provider reference.
     expect(logger.warn).not.toHaveBeenCalled();
   });
 });

@@ -40,3 +40,24 @@ the recipient back at you.
 This is a log, not a queue: nothing drains it, and the retry columns it carries
 are reserved and inert so that adding a drain later is not a migration on a
 table already holding history.
+
+The recipient column is a KEYED hash rather than a bare digest. An email address
+carries too little entropy for a plain SHA-256 to resist an offline dictionary,
+so anyone holding the table could confirm whether a given person was written to.
+Keying it with the install secret leaves the support lookup working unchanged
+while making the column unreadable without that secret. The schema no longer
+claims the table sits outside identity-erasure obligations, because a keyed hash
+of an address is pseudonymised data rather than anonymised data.
+
+A send whose bookkeeping fails after the provider accepted the message is no
+longer reported as a provider failure. Acceptance is recorded the instant the
+provider answers, so deriving the response cannot turn a delivered message into
+a full set of failed rows, an after-send action told the send failed, and an
+auth flow withholding a token.
+
+Provider containment now covers the stages that run with parsed configuration:
+building an adapter and probing a connection. A parser that derives a credential
+left both quoting the derived value into a diagnostic that reached the failure
+log, because the needles were computed from the stored form alone. A parser that
+renames one is refused outright, for the same reason a parser that shortens one
+already was.

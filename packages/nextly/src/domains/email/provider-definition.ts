@@ -237,20 +237,68 @@ interface DeclaredSecretValues {
   /** Anything at all that makes an identifier from this provider untrustworthy. */
   hasUnmatchable: boolean;
   /**
-   * The part of that caused by a VALUE this configuration actually holds and
-   * which cannot serve as a needle: a boolean credential, or a scalar short
-   * enough that comparing against it would delete every legitimate id.
+   * Whether a DECLARED credential is one this configuration cannot supply a
+   * usable needle for: a boolean, a scalar too short to compare without
+   * deleting every legitimate id, or one the configuration does not hold at
+   * all.
    *
    * Separated from the rest because the two travel differently between the
-   * stored configuration and the parsed one. A missing key or an undeclared
-   * leaf describes the SHAPE of a configuration, and a parser is entitled to
-   * change that -- filling a default, deriving a working field -- so reading
-   * it from the parsed form would withhold every id from every provider that
-   * has a default. A value too short or too ambiguous to compare is not about
-   * shape: whichever side holds it, something the adapter can interpolate
-   * cannot be recognised on the way out.
+   * stored configuration and the parsed one. An UNDECLARED leaf describes the
+   * shape of a configuration, and a parser is entitled to change that --
+   * filling a default, deriving a working field it alone uses -- so reading it
+   * from the parsed form would withhold every id from every provider that has
+   * a default.
+   *
+   * A declared credential is different, in both directions. Missing from the
+   * STORED configuration, it is one a parser default supplied and nothing here
+   * ever saw. Missing from the PARSED configuration, the parser has moved it:
+   * `{ apiKey }` becomes `{ token: base64(apiKey) }`, and the adapter now
+   * interpolates a value the stored needle cannot match. Neither side can be
+   * trusted to have produced a comparable form of it, so both count.
    */
-  hasUncomparableValue: boolean;
+  hasUnusableSecret: boolean;
+}
+
+/**
+ * Needles covering a credential in BOTH the form it was stored in and the form
+ * the provider's own code holds.
+ *
+ * `containProviderCallbacks` wraps a registered provider from the outside and
+ * can only see the stored input, so a parser that derives a credential --
+ * Base64-encoding a key, deriving a token -- leaves it comparing a value the
+ * provider never used. Every callback that runs AFTER `parseConfig` therefore
+ * builds its needles here, where both forms are in scope.
+ *
+ * The stored side contributes every reason it has, including an UNDECLARED
+ * leaf: a value in the stored configuration that no field describes really is
+ * a credential nobody accounted for.
+ *
+ * The parsed side contributes only what it says about DECLARED credentials,
+ * because a parser is entitled to add keys of its own and counting those would
+ * withhold every identifier from every provider that fills in a default.
+ *
+ * Both ways a parser can move a declared credential out of reach are covered
+ * by that. It may shorten one -- `"00007"` becomes `7` under a numeric
+ * coercion -- leaving the provider interpolating a value too ambiguous to use
+ * as a needle while the stored form still looks matchable. Or it may rename
+ * one -- `{ apiKey }` becomes `{ token: base64(apiKey) }` -- leaving the
+ * declared path empty in what the provider holds, and the stored needle unable
+ * to match what it interpolates.
+ */
+function secretsFromBothForms(
+  fields: ReadonlyArray<EmailProviderConfigField>,
+  stored: unknown,
+  parsed: unknown
+): DeclaredSecretValues {
+  const fromStored = declaredSecretValues(fields, stored);
+  const fromParsed = declaredSecretValues(fields, parsed);
+
+  return {
+    comparable: [...fromStored.comparable, ...fromParsed.comparable],
+    hasUnmatchable: fromStored.hasUnmatchable || fromParsed.hasUnusableSecret,
+    hasUnusableSecret:
+      fromStored.hasUnusableSecret || fromParsed.hasUnusableSecret,
+  };
 }
 
 function declaredSecretValues(
@@ -261,7 +309,7 @@ function declaredSecretValues(
     return {
       comparable: [],
       hasUnmatchable: false,
-      hasUncomparableValue: false,
+      hasUnusableSecret: false,
     };
   }
 
@@ -275,13 +323,13 @@ function declaredSecretValues(
       // this provider is untrustworthy — but a parser that adds keys to a
       // configuration nobody described has not made it any worse.
       hasUnmatchable: Object.keys(config).length > 0,
-      hasUncomparableValue: false,
+      hasUnusableSecret: false,
     };
   }
 
   const comparable: string[] = [];
   let hasUnmatchable = false;
-  let hasUncomparableValue = false;
+  let hasUnusableSecret = false;
 
   // A configuration leaf no field DECLARES is treated as secret by
   // `maskConfiguration`, on the reasoning that absence of information has to
@@ -317,7 +365,7 @@ function declaredSecretValues(
     // credential only by accident.
     if (typeof current === "boolean") {
       hasUnmatchable = true;
-      hasUncomparableValue = true;
+      hasUnusableSecret = true;
       continue;
     }
 
@@ -331,6 +379,7 @@ function declaredSecretValues(
     // keeps its message ids because of that distinction.
     if (current === undefined) {
       hasUnmatchable = true;
+      hasUnusableSecret = true;
       continue;
     }
 
@@ -360,12 +409,12 @@ function declaredSecretValues(
       // because of its whitespace is treated as the short one it really is.
       if (needle.length < 4) {
         hasUnmatchable = true;
-        hasUncomparableValue = true;
+        hasUnusableSecret = true;
       } else comparable.push(needle);
     }
   }
 
-  return { comparable, hasUnmatchable, hasUncomparableValue };
+  return { comparable, hasUnmatchable, hasUnusableSecret };
 }
 
 /**
@@ -528,41 +577,29 @@ export function defineEmailProvider<TConfig>(
     // knows its type. Nothing here catches: the containment above does it.
     createAdapterFrom: (input: unknown): EmailProviderAdapter => {
       const config = parse(input);
-      const adapter = definition.createAdapter(config);
+      const fromParsed = secretsFromBothForms(
+        definition.configFields,
+        input,
+        config
+      );
 
-      // Needles from the configuration the ADAPTER actually holds, which is
-      // the only place they exist. `containProviderCallbacks` wraps this from
-      // the outside and can only see the STORED input, so a parser that
-      // derives a credential -- Base64-encoding a key, deriving a token --
-      // leaves it comparing a value the adapter never used. Here the parsed
-      // form is in scope, so the effective credential is compared too.
-      //
-      //
-      // The stored side is read too, and BOTH sets of needles are compared.
-      // The outer wrapper passes a `NextlyError` through untouched, so once
-      // this one normalises a failure the outer policy no longer runs -- and
-      // an inner containment carrying only half the needles would quietly
-      // become the whole of it.
-      const effective = declaredSecretValues(definition.configFields, config);
-      const stored = declaredSecretValues(definition.configFields, input);
-      const fromParsed: DeclaredSecretValues = {
-        comparable: [...stored.comparable, ...effective.comparable],
-        // The stored side contributes every reason it has. A parser filling in
-        // defaults produces keys the descriptor never declared, and reading
-        // that from the parsed form would withhold every id from every
-        // provider that has a default; an undeclared leaf in what was STORED
-        // really is a credential nobody described.
-        //
-        // The parsed side contributes only a value it holds that cannot be
-        // compared. A parser is free to shorten a credential -- `"00007"`
-        // becomes `7` under a numeric coercion -- and the adapter then
-        // interpolates a value no needle here can recognise while the stored
-        // form still looks perfectly matchable. Dropping that reason with the
-        // rest let `id-7` through.
-        hasUnmatchable: stored.hasUnmatchable || effective.hasUncomparableValue,
-        hasUncomparableValue:
-          stored.hasUncomparableValue || effective.hasUncomparableValue,
-      };
+      // Built inside the containment, not before it. `createAdapter` receives
+      // the PARSED configuration and is as free as any other callback to write
+      // it into a message -- `throw new Error(\`bad key ${config.token}\`)\` is
+      // an easy thing to write, and construction is where a provider is most
+      // likely to object to a credential. Left outside, that throw travelled
+      // to the caller and into `email.failed` with the value intact.
+      let adapter: EmailProviderAdapter;
+      try {
+        adapter = definition.createAdapter(config);
+      } catch (error) {
+        throw normalizeProviderFailure(
+          definition.type,
+          error,
+          "createAdapter",
+          fromParsed
+        );
+      }
 
       return {
         ...adapter,
@@ -589,7 +626,26 @@ export function defineEmailProvider<TConfig>(
       };
     },
     testConnectionFrom: probe
-      ? (input: unknown) => probe(parse(input))
+      ? async (input: unknown) => {
+          const config = parse(input);
+          try {
+            return await probe(config);
+          } catch (error) {
+            // Contained here, where the parsed configuration is in scope. The
+            // outer wrapper contains this callback too, but only against the
+            // stored form -- and a probe is handed the parsed one, so a
+            // rejection quoting a derived credential passed that pass
+            // untouched. Running first also means the outer pass sees a
+            // `NextlyError` and leaves it alone, which is what keeps the two
+            // from disagreeing about what a probe may say.
+            throw normalizeProviderFailure(
+              definition.type,
+              error,
+              "testConnection",
+              secretsFromBothForms(definition.configFields, input, config)
+            );
+          }
+        }
       : undefined,
     hasConnectionTest: typeof probe === "function",
   });
@@ -626,7 +682,7 @@ export interface EmailProviderDescriptor {
  * the log reads.
  */
 /** What a declared credential is replaced with when it appears in a diagnostic. */
-const REDACTED_SECRET = "[secret]";
+export const REDACTED_SECRET = "[secret]";
 
 /**
  * Every occurrence of one literal, whatever its case.
@@ -697,8 +753,9 @@ function containedFailure(
   // Case-insensitively, for the same reason the message id is compared that
   // way: a parser that lowercases a key leaves the adapter holding a spelling
   // this never saw, and a provider quoting it back would slip past an exact
-  // match. Rebuilt by index rather than by regular expression, because a
-  // credential may contain characters a pattern would read as syntax.
+  // match. The literal is escaped before it becomes a pattern, so a credential
+  // containing characters a regular expression would read as syntax matches
+  // itself rather than whatever they would have meant.
   let text = texts.join(": ");
   // LONGEST first. A provider may declare one credential that is a prefix of
   // another -- `sk_live` beside `sk_live_REAL_SECRET` -- and redacting the

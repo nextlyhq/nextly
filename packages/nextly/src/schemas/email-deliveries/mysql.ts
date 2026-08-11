@@ -39,7 +39,7 @@ export const emailDeliveriesMysql = mysqlTable(
     providerType: varchar("provider_type", { length: 50 }).notNull(),
     templateSlug: varchar("template_slug", { length: 255 }),
 
-    /** SHA-256 of the lowercased, trimmed recipient address, hex encoded. */
+    /** Keyed SHA-256 of the lowercased, trimmed recipient address, hex encoded. */
     recipientHash: varchar("recipient_hash", { length: 64 }).notNull(),
 
     /** `to`, `cc` or `bcc` — see the PostgreSQL module for why each gets a row. */

@@ -397,6 +397,14 @@ export interface EmailProviderAdapter {
      * Optional, because most API providers report a single outcome for the
      * message and have nothing per-recipient to say. Absent means "no
      * per-recipient detail", not "none rejected".
+     *
+     * Each entry must be a BARE MAILBOX — `user@example.com`, never
+     * `Name <user@example.com>`. The consumer matches these against the
+     * message's own recipients exactly, after trimming and lowercasing, so a
+     * display-name form matches nothing and every recipient is recorded as
+     * delivered. That failure is silent, which is why the shape is stated here
+     * rather than left to the reader: this interface is what an adapter author
+     * writes against.
      */
     rejected?: string[];
   }>;

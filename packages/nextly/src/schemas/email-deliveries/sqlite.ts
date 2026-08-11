@@ -31,7 +31,7 @@ export const emailDeliveriesSqlite = sqliteTable(
     providerType: text("provider_type").notNull(),
     templateSlug: text("template_slug"),
 
-    /** SHA-256 of the lowercased, trimmed recipient address, hex encoded. */
+    /** Keyed SHA-256 of the lowercased, trimmed recipient address, hex encoded. */
     recipientHash: text("recipient_hash").notNull(),
 
     /** `to`, `cc` or `bcc` — see the PostgreSQL module for why each gets a row. */
