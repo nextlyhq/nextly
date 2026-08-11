@@ -2,6 +2,12 @@
 paths:
   - "packages/**/*.ts"
   - "packages/**/*.tsx"
+  # admin-css ships its product code and its tests as .mjs, and several package
+  # build scripts are .js/.cjs. They implement checks like any other package, so
+  # a TypeScript-only filter would exempt exactly the code this rule is about.
+  - "packages/**/*.mjs"
+  - "packages/**/*.js"
+  - "packages/**/*.cjs"
   # The changeset package list versus the release group is one of this rule's own
   # examples, so it has to load when those inputs are edited too.
   - ".changeset/**"
@@ -61,8 +67,16 @@ implying one policy fits all.
 
 ## A bare `catch` is only a defect when its fallback makes a CLAIM
 
-`catch { return conservative }` that degrades to caution is sound, and this
-repo has several that are deliberately so. `catch { return verdict }` that
+`catch { return conservative }` that degrades to caution is sound for the
+failures it was written for, and this repo has several that are deliberately
+so. It stops being sound when the same `catch` also swallows a failure that is
+not about the data at all — a bad credential, a missing config, a dropped
+connection, a `TypeError` in the handler. Those come back as "be cautious",
+which blocks valid work while naming no cause, and the wider the catch the
+longer that takes to find. Catch the errors you mean, and let an unexpected one
+be seen: rethrow it, or log it with its code before degrading.
+
+`catch { return verdict }` that
 asserts something about the user's data manufactures a confident wrong
 diagnosis — and it poisons every test asserting the negative outcome, because
 those tests go green on the strength of _some_ error rather than the right one.

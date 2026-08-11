@@ -17,15 +17,23 @@ head — so you lose the end of the branch, never the middle. A marker taken fro
 an early or middle commit passes cleanly on a PR that dropped its last three.
 
 1. Confirm what was actually merged: `gh pr view N --json headRefOid,mergeCommit`.
-2. Take the check from the **final** commit, in whichever direction it changed things:
-   - it ADDED content → grep `main` for a string it added; expect a hit.
-   - it only REMOVED content → grep `main` for a string it removed; expect NO hit.
-     Grepping for added text here finds nothing whether or not the commit landed,
-     which reads as failure either way and proves nothing.
+2. Take the check from the **final** commit, in whichever direction it changed
+   things. A marker only proves anything if it is UNIQUE to that commit and the
+   search is SCOPED to the path it changed — a string that also occurs elsewhere
+   answers the same way whether or not the commit landed:
+   - it ADDED content → `git grep <marker> origin/main -- <path>`; expect a hit.
+   - it only REMOVED content → same command; expect NO hit. Grepping for ADDED
+     text here finds nothing whether or not the commit landed, which reads as
+     failure either way and proves nothing.
    - it changed a file mode, a binary, or a rename → text search cannot see it.
-     Compare the tree instead: `git show <mergeCommit> --stat -- <path>`, or
-     `git diff <mergeBase>..<headRefOid> -- <path>` against the same path on `main`.
-3. If the final commit is a pure revert of an earlier one in the same PR, check the
+3. Strongest, and the only option when the change is a mode/binary/rename or has
+   no marker unique to it: compare the OBJECT. `git ls-tree <mergeCommit> -- <path>`
+   against `git ls-tree <headRefOid> -- <path>` matches mode, type and blob id, so
+   identical output IS byte-identical content. Prefer this to `--stat`, which
+   reports only that a path was touched: when an earlier commit in the same PR
+   also touched that path, it prints a line that looks like success while the
+   final update is exactly what went missing.
+4. If the final commit is a pure revert of an earlier one in the same PR, check the
    NET effect, not the last hunk.
 
 The danger window is push-a-fix-then-merge-immediately, which is what everyone
@@ -51,8 +59,18 @@ does not depend on a second run:
 ## Environment states wear the costume of code defects
 
 After a rebase onto a moved `main`, a package you never touched failing to
-resolve (`Cannot find module ...`) is a stale install. Run
-`pnpm install --frozen-lockfile` in that worktree before diagnosing anything.
+resolve (`Cannot find module ...`) is an environment state, not a code defect.
+Which state it is decides the remedy, and the two look alike:
+
+- **Missing build output** — the import names a workspace package (`nextly/...`,
+  `@nextlyhq/...`) and dozens of files fail at once. Its `dist` was never built.
+  Run integration tests from the ROOT so turbo builds first; `pnpm install` does
+  not produce `dist` and will leave this exactly as it was.
+- **Stale install** — the import names an external dependency, or one package
+  resolves while its sibling does not, after `pnpm-lock.yaml` moved underneath
+  you. `pnpm install --frozen-lockfile` in that worktree.
+
+Check whether the package's `dist` exists before choosing.
 
 Related, and cheap to get wrong:
 

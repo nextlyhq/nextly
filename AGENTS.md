@@ -67,9 +67,19 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   it: run the tests for the area you touch before and after your change, and
   fix any new failure you introduce.
 - A test is only evidence once you have seen it FAIL for the intended reason.
-  Break the code, confirm the intended test fails, restore. A break that stops
-  compilation proves nothing, and the test count must not drop. After changing
-  a test, re-run its break: a fix to the test is a change to the experiment.
+  Break the code, confirm the intended test fails, restore. After changing a
+  test, re-run its break: a fix to the test is a change to the experiment.
+  What counts as the intended failure depends on when the test runs:
+  - A RUNTIME test that stops COMPILING proves nothing — the assertion never
+    executed, so the red says only that the break was malformed.
+  - A COMPILE-TIME contract test is the opposite case: compilation IS the
+    mechanism. In `*.test-d.ts`, widening a type makes its `@ts-expect-error`
+    unused and `check-types` fails for exactly the intended reason. Name the
+    diagnostic you expect, and confirm THAT one appeared.
+- The test count must not drop by ACCIDENT. A suite that silently stopped being
+  discovered reads as a pass, which is what this guards. Removing a test on
+  purpose is a different act: it is sometimes correct (below), and the PR says
+  which test went and why.
 - Ask what ELSE would make a test pass. If anything other than the property
   under test produces the same green, it is not covering that property yet —
   a fixture that never reaches the mechanism, an unregistered type that falls
@@ -77,7 +87,9 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   control that makes the mechanism's presence observable.
 - A test that passes both with and without the fix is worse than no test:
   the next reader takes the green as coverage. Delete it, and say in the file
-  that remains where the behaviour IS covered.
+  that remains where the behaviour IS covered. This is the deliberate removal
+  the count rule above exempts, so state the drop rather than letting it look
+  like a suite that went missing.
 
 ## Conventions (enforced; violations will be rejected in review)
 
