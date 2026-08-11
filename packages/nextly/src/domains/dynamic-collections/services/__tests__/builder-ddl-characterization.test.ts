@@ -172,12 +172,23 @@ describe("field group DDL — pinned as it is today", () => {
     // discriminator — rather than a collection's, and a separate generator renders them. Its output
     // is recorded for the same reason and to the same depth.
     it("emits the same CREATE for a field group", () => {
-      const sql = new FieldGroupSchemaService(dialect).generateMigrationSQL(
-        "comp_pinned",
-        FIELD_GROUP_FIELDS as unknown as FieldConfig[]
-      );
+      const generate = () =>
+        new FieldGroupSchemaService(dialect).generateMigrationSQL(
+          "comp_pinned",
+          FIELD_GROUP_FIELDS as unknown as FieldConfig[]
+        );
 
-      expect(sql.trim()).toMatchSnapshot();
+      // The fixture carries a unique unbounded text field. A component's uniqueness is a
+      // SEPARATE `CREATE UNIQUE INDEX`, not an inline constraint, so on MySQL — which can key
+      // neither spelling of TEXT — the table would be created and then the index rejected,
+      // leaving a component without the guarantee it declared. There is no DDL to pin for that
+      // combination; the honest output is a refusal, so that is what is recorded.
+      if (dialect === "mysql") {
+        expect(generate).toThrow(/Validation failed/);
+        return;
+      }
+
+      expect(generate().trim()).toMatchSnapshot();
     });
 
     it("emits the same CREATE for a localized field group", () => {

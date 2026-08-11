@@ -10,15 +10,27 @@
  */
 import { converter, parse } from "culori";
 
+import type { Rgba } from "../../lib/color/hex";
+
 const toRgb = converter("rgb");
 
-/** An sRGB color with gamma-encoded channels in [0, 1] and an alpha in [0, 1]. */
-export interface Rgb {
-  r: number;
-  g: number;
-  b: number;
-  alpha: number;
-}
+/**
+ * An sRGB color with gamma-encoded channels in [0, 1] and an alpha in [0, 1].
+ *
+ * Re-exported from `lib/color` rather than declared again. Two structurally
+ * identical definitions of one concept in one package is a drift waiting to
+ * happen, and the drift that matters would be silent: the two agree on
+ * channels in [0, 1] today, so a future edit moving either to 0-255 would
+ * typecheck, produce wrong ratios in every pairing, and leave this suite green
+ * because both sides of each comparison shift together.
+ *
+ * The direction is deliberate. `lib/color` is the published surface and this
+ * module is not, so importing from there consumes existing public API rather
+ * than creating any. The reverse -- moving the WCAG maths out to `lib/color`
+ * -- would publish which formula, which compositing rule and which gamut-edge
+ * behaviour this harness uses, freezing decisions it may need to revise.
+ */
+export type Rgb = Rgba;
 
 const clamp01 = (n: number): number => Math.min(1, Math.max(0, n));
 

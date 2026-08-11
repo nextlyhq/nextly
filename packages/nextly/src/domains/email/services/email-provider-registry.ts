@@ -18,6 +18,7 @@ import {
   MAX_EMAIL_PROVIDER_TYPE_LENGTH,
   assertConfigFieldsAreUsable,
   assertProviderTextIsRenderable,
+  containProviderCallbacks,
   emailProviderTypeTooLong,
   type RegisteredEmailProvider,
 } from "../provider-definition";
@@ -34,7 +35,12 @@ class EmailProviderRegistry {
 
   private seedBuiltIns(): void {
     for (const provider of BUILT_IN_EMAIL_PROVIDERS) {
-      this.providers.set(provider.type, provider);
+      // Callbacks are contained HERE as well as in the authoring helper, for the
+      // reason stated above: this is the boundary every provider crosses, and a
+      // hand-built one arrives with its own `createAdapterFrom`. Without this, a
+      // provider that throws `Error(config.apiKey)` or returns it as a
+      // `messageId` puts a credential in a log line and a database column.
+      this.providers.set(provider.type, containProviderCallbacks(provider));
     }
   }
 
@@ -74,7 +80,12 @@ class EmailProviderRegistry {
         `NEXTLY_EMAIL_PROVIDER_COLLISION: email provider type "${provider.type}" is already registered (built-in or another plugin).`
       );
     }
-    this.providers.set(provider.type, provider);
+    // Callbacks are contained HERE as well as in the authoring helper, for the
+    // reason stated above: this is the boundary every provider crosses, and a
+    // hand-built one arrives with its own `createAdapterFrom`. Without this, a
+    // provider that throws `Error(config.apiKey)` or returns it as a
+    // `messageId` puts a credential in a log line and a database column.
+    this.providers.set(provider.type, containProviderCallbacks(provider));
   }
 
   has(type: string): boolean {

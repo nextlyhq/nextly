@@ -98,8 +98,15 @@ const SOURCE_MODULES: ReadonlyArray<{
     // surface — a caller that wants its sheets cached states its own id rather
     // than reaching for this one, and publishing a sentinel is how it would end
     // up stored in an artifact and then matched against itself.
+    // `drawlessTestFor` is the ONE derivation of "does this node draw nothing",
+    // resolving a caller's own `drawsNothing` against the block declarations.
+    // `page-renderer` prunes through it and `resolvePageStyles` compiles and
+    // reads through it, so a host's override cannot be honoured on one path and
+    // ignored on the other. It crosses a module boundary inside this package; a
+    // consumer states its answer through `styleContext.drawsNothing` instead.
     internal: [
       "UNIDENTIFIED_FETCH_POLICY",
+      "drawlessTestFor",
       "isRecordedGatedEntry",
       "isUsableGatedEntry",
       "readableGatedRules",
@@ -113,7 +120,13 @@ const SOURCE_MODULES: ReadonlyArray<{
     // question from a second package is how the compiler and this renderer came to
     // disagree about gating three separate times; the entry offers the PASS a caller
     // actually needs and leaves the predicate with its single owner.
-    internal: ["isUnconditional"],
+    // `drawsNothing` is the same case one question over: the engine owns
+    // `declaresNoMarkup`, and this is the spelling that reads it through a
+    // resolver.
+    // `pruneNodes` is the shared walk the three passes share so their identity
+    // behaviour cannot diverge. It is a shape, not a policy, and a consumer
+    // reaching for it is writing a fourth pass this package cannot account for.
+    internal: ["drawsNothing", "isUnconditional", "pruneNodes"],
   },
   { name: "placeholder", module: placeholderModule, internal: [] },
   { name: "page-renderer", module: pageRendererModule, internal: [] },

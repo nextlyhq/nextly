@@ -71,3 +71,27 @@ export function columnTypeIsIndexable(
   if (dialect !== "mysql") return true;
   return !/\bjson\b/i.test(columnType);
 }
+
+/**
+ * Whether a column's uniqueness can be carried as a NAMED index on this dialect.
+ *
+ * Strictly narrower than `columnTypeIsIndexable`: a type the dialect cannot index at all cannot
+ * carry uniqueness as an index either, and MySQL additionally refuses to key a `TEXT`/`BLOB`
+ * column without a length — in both spellings alike, the inline constraint and the index. Such a
+ * column keeps the inline form, which fails the CREATE atomically rather than creating the table
+ * and then failing on a separate index statement MySQL has already auto-committed past.
+ *
+ * Asked by all three places that have an opinion about a unique column: the statements that CREATE
+ * a table, the statements that ADD a column to one, and the desired schema the diff compares a
+ * live table against. When only the generators knew, the desired schema went on declaring
+ * `uq_<table>_<column>` for columns no generator would ever index, so every reconcile proposed a
+ * `CREATE UNIQUE INDEX` the server rejects — the same failure, once per attempt, indefinitely.
+ */
+export function uniquenessCanBeAnIndex(
+  columnType: string,
+  dialect: string
+): boolean {
+  if (!columnTypeIsIndexable(columnType, dialect)) return false;
+  if (dialect !== "mysql") return true;
+  return !/\b(text|blob|longtext|mediumtext|tinytext)\b/i.test(columnType);
+}

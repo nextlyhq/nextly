@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   classifyPreflight,
+  getExpectedDistTag,
   isBootstrapPlaceholderOnly,
   PLACEHOLDER_VERSION,
 } from "./lib.mjs";
@@ -202,5 +203,52 @@ describe("classifyPreflight", () => {
         field.startsWith("publishConfig.access")
       )
     ).toBe(true);
+  });
+});
+
+describe("which dist-tag a package publishes to", () => {
+  const PRE = { mode: "pre", tag: "alpha" };
+
+  it("uses the active prerelease tag for a package with a stable version", () => {
+    expect(
+      getExpectedDistTag({ versions: ["0.0.0", VERSION], distTags: {} }, PRE)
+    ).toBe("alpha");
+  });
+
+  it("moves `latest` when nothing but prereleases of the active tag exist", () => {
+    // Changesets' own `only-pre` rule: a package with no regular release yet
+    // publishes to `latest`. Asserted rather than assumed, because it is the
+    // reason the case below matters.
+    expect(getExpectedDistTag({ versions: [VERSION], distTags: {} }, PRE)).toBe(
+      "latest"
+    );
+  });
+
+  it("treats the bootstrap placeholder as the stable version that holds the tag", () => {
+    // The placeholder does two jobs and only one is obvious. `0.0.0` carries no
+    // prerelease identifier, so its presence is what makes a package NOT
+    // only-pre — and therefore what keeps `latest` off the alpha channel. The
+    // two assertions differ by the placeholder alone.
+    const withPlaceholder = { versions: [PLACEHOLDER_VERSION, VERSION] };
+    const withoutPlaceholder = { versions: [VERSION] };
+
+    expect(getExpectedDistTag(withPlaceholder, PRE)).toBe("alpha");
+    expect(getExpectedDistTag(withoutPlaceholder, PRE)).toBe("latest");
+  });
+
+  it("uses `latest` outside prerelease mode whatever the registry holds", () => {
+    expect(
+      getExpectedDistTag({ versions: [VERSION], distTags: {} }, null)
+    ).toBe("latest");
+  });
+
+  it("does not classify a package whose prereleases are of ANOTHER tag", () => {
+    // `only-pre` is narrower than "has no stable version": every published
+    // version must be a prerelease of the ACTIVE tag. A beta-only package under
+    // an alpha train publishes to alpha, and expecting `latest` here would
+    // reject a correct publish on every retry.
+    expect(
+      getExpectedDistTag({ versions: ["0.0.2-beta.1"], distTags: {} }, PRE)
+    ).toBe("alpha");
   });
 });

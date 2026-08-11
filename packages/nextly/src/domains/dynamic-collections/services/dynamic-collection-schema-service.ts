@@ -47,6 +47,7 @@ import {
   columnTypeIsIndexable,
   indexNameForColumn,
   uniqueIndexNameForColumn,
+  uniquenessCanBeAnIndex,
 } from "../../schema/services/index-name";
 import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
 
@@ -162,25 +163,18 @@ export class DynamicCollectionSchemaService {
   /**
    * Whether this dialect can carry the uniqueness as a NAMED index on this column.
    *
-   * MySQL cannot key a `TEXT`/`BLOB` column without a length, and refuses both spellings alike —
-   * the inline constraint and the index. Such a column keeps the inline form, which fails the
-   * CREATE atomically exactly as it always has, rather than creating the table and then failing on
-   * a separate index statement MySQL has already auto-committed past.
+   * Delegates to the shared rule rather than restating it. This class, the add-column path and the
+   * desired schema all decide the same thing about the same column, and a copy here that agreed on
+   * the day it was written would drift silently — both spellings look correct in isolation, and
+   * the disagreement only shows up as a diff proposing an index the generator never writes.
    *
-   * Bounding the column would make it work, and is the right answer, but it belongs in the shared
-   * column descriptor: bounding it HERE alone makes the created column disagree with the type the
-   * desired schema derives, and the next reconciliation tries to convert it back — which MySQL
-   * cannot do while a full-value unique index stands on it.
+   * Bounding a MySQL text column would make it keyable, and is the right end state, but it belongs
+   * in the shared column descriptor: bounding it HERE alone makes the created column disagree with
+   * the type the desired schema derives, and the next reconciliation tries to convert it back —
+   * which MySQL cannot do while a full-value unique index stands on it.
    */
   private uniquenessCanBeAnIndex(rendered: string): boolean {
-    // Asked through the shared indexability rule before anything local: a type the dialect cannot
-    // index AT ALL cannot carry the uniqueness as an index either. MySQL rejects an index on a
-    // JSON column, so a `json`-backed unique field belongs with the inline form for the same
-    // reason TEXT does — and answering that here rather than restating the rule keeps this from
-    // being a second opinion about which columns MySQL can key.
-    if (!columnTypeIsIndexable(rendered, this.dialect)) return false;
-    if (this.dialect !== "mysql") return true;
-    return !/\b(text|blob|longtext|mediumtext|tinytext)\b/i.test(rendered);
+    return uniquenessCanBeAnIndex(rendered, this.dialect);
   }
 
   /**
@@ -934,6 +928,35 @@ ${allColumnDefs.join(",\n")}
               logContext: { tableName, field: field.name, type: field.type },
             });
           }
+        }
+        // Uniqueness this dialect cannot enforce is refused BEFORE any statement is generated,
+        // not attempted and left half-done. MySQL commits each DDL statement on its own, so
+        // emitting the column and then a constraint it rejects leaves the column in place
+        // WITHOUT the guarantee — and a bare column matches what the desired schema declares for
+        // an unkeyable type, so the next reconcile sees nothing wrong and the uniqueness is
+        // silently gone. There is no spelling that works here: MySQL refuses to key an unbounded
+        // TEXT/BLOB either way, and cannot index JSON at all. Saying so is the only honest
+        // outcome, and saying it first is what keeps the table untouched.
+        if (field.unique && !this.uniquenessCanBeAnIndex(type)) {
+          throw NextlyError.validation({
+            errors: [
+              {
+                path: `fields.${field.name}`,
+                code: "UNIQUE_NOT_ENFORCEABLE_ON_DIALECT",
+                message:
+                  `"${field.name}" is marked unique, but ${this.dialect} cannot enforce ` +
+                  `uniqueness on a ${field.type} column. Store the value in a short-variant ` +
+                  `text field, which becomes a bounded VARCHAR the server can key, or remove ` +
+                  `the unique flag.`,
+              },
+            ],
+            logContext: {
+              tableName,
+              field: field.name,
+              type: field.type,
+              dialect: this.dialect,
+            },
+          });
         }
         statements.push(
           `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${this.quoteIdentifier(addColName)} ${type} ${nullable} ${defaultVal};`.trim()

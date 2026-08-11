@@ -8,10 +8,11 @@
  * radius, and the primitives went on rendering the default face and
  * `rounded-none`. The tokens were right and unread.
  *
- * That is the second half of a fix whose first half looked complete. The
- * stylesheet was imported, the route was guarded, and the axes still did not
- * reach the screen -- which is why this checks the ACTIVATION rather than the
- * import.
+ * So loading a stylesheet and matching its selectors are two separate
+ * conditions, and only the second one puts pixels on screen. This checks
+ * ACTIVATION: that the panel carries every attribute the harness scopes its
+ * rules to. A guard on the import alone passes while the panel renders the
+ * default face.
  */
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";

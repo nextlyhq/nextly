@@ -19,13 +19,17 @@
 
 import { z } from "zod";
 
+import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { signPreviewToken } from "../auth/preview/preview-token";
+import { buildUserContext } from "../auth/user-context";
 import { container } from "../di";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { env } from "../lib/env";
 import type { GeneralSettingsService } from "../services/general-settings/general-settings-service";
+import { resolveRoleSlugs } from "../services/lib/permissions";
 
+import { assertEntryPreviewable } from "./preview-access";
 import { respondMutation } from "./response-shapes";
 import {
   requireRouteCollectionAccess,
@@ -92,7 +96,47 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
 
   // The gate is per COLLECTION, so a caller who may edit posts cannot mint a
   // link into a collection they have no access to by naming it here.
-  await requireRouteCollectionAccess(req, "update", collection);
+  const auth = await requireRouteCollectionAccess(req, "update", collection);
+
+  // That gate is one granularity coarser than what it hands out: it answers
+  // "may this caller edit this COLLECTION", while the token names one ENTRY
+  // and confers a read of it. Where a collection carries a row-level rule the
+  // two diverge, and the coarse answer alone would let a caller bounded to
+  // their own documents mint a working credential for someone else's.
+  //
+  // So the entry is authorized here too, against the gate that serves the real
+  // read. Booted first because that gate resolves services from the container,
+  // and on a cold process the permission lookup itself needs them registered.
+  await getCachedNextly();
+  const roles = await resolveRoleSlugs(auth);
+
+  // An API key is authorized on the grants stamped on the KEY, never on its
+  // owner's roles. Without this the probe resolves the owner's RBAC — including
+  // a super-admin bypass — so a key holding `update-*` but not `read-*` would
+  // mint a link on the strength of an account that can read, handing out a
+  // bearer credential for a document the key itself may not fetch.
+  const actor: AuthenticatedScope | undefined =
+    auth.authMethod === "api-key"
+      ? { actorType: "apiKey", permissions: auth.permissions }
+      : undefined;
+  // Authorized through the gate that serves collection reads and writes, so the
+  // verdict here is the verdict the bearer's own read will reach. It asks two
+  // questions the previous by-id probe could not express: whether the entry is
+  // visible at all INCLUDING one never published, and whether this caller may
+  // edit it — which is what the draft overlay requires before surfacing the
+  // working draft the token hands out.
+  await assertEntryPreviewable(
+    collection,
+    entryId,
+    buildUserContext({
+      claims: auth.claims,
+      id: auth.userId,
+      name: auth.userName,
+      email: auth.userEmail,
+      roles,
+    }),
+    actor
+  );
 
   const generation = await (
     await settingsService()

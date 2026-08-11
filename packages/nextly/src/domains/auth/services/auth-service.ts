@@ -488,7 +488,7 @@ export class AuthService extends BaseService {
           if (!delivered) {
             this.logger.error("Password reset email was not delivered", {
               event: "auth.password_reset.email_failed",
-              reason: "provider reported an unsuccessful send",
+              reason: "not-delivered-to-recipient",
             });
           }
         } catch (emailError) {
@@ -717,7 +717,7 @@ export class AuthService extends BaseService {
           if (!delivered) {
             this.logger.error("Email verification message was not delivered", {
               event: "auth.email_verification.email_failed",
-              reason: "provider reported an unsuccessful send",
+              reason: "not-delivered-to-recipient",
             });
           }
         } catch (emailError) {

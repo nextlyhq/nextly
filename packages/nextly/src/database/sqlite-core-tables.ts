@@ -214,5 +214,35 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_versions" ("scope_kind", "scope_slug", "entry_id", "version_no")`,
     `CREATE INDEX IF NOT EXISTS "nextly_versions_doc_recent_idx"
       ON "nextly_versions" ("scope_kind", "scope_slug", "entry_id", "created_at")`,
+    // No REFERENCES to "email_providers": that table is not bootstrapped here,
+    // and SQLite resolves a foreign key at insert time rather than at CREATE,
+    // so declaring one would turn every recorded delivery into a failure on a
+    // database built from this fallback. The column is nullable and the
+    // service already tolerates a provider it cannot point at.
+    `CREATE TABLE IF NOT EXISTS "email_deliveries" (
+      "id" TEXT PRIMARY KEY,
+      "provider_id" TEXT,
+      "provider_type" TEXT NOT NULL,
+      "template_slug" TEXT,
+      "recipient_hash" TEXT NOT NULL,
+      "recipient_kind" TEXT NOT NULL,
+      "status" TEXT NOT NULL,
+      "attempt_count" INTEGER NOT NULL DEFAULT 1,
+      "next_attempt_at" INTEGER,
+      "error" TEXT,
+      "message_id" TEXT,
+      "retention_class" TEXT NOT NULL,
+      "created_at" INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_created_idx"
+      ON "email_deliveries" ("created_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_recipient_idx"
+      ON "email_deliveries" ("recipient_hash", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_status_created_idx"
+      ON "email_deliveries" ("status", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_provider_idx"
+      ON "email_deliveries" ("provider_id", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_retention_idx"
+      ON "email_deliveries" ("retention_class", "created_at")`,
   ];
 }

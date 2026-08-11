@@ -7,17 +7,29 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { NextlyError } from "../errors/nextly-error";
+
 vi.mock("./route-auth", () => ({
   requireRouteCollectionAccess: vi.fn(),
   requireRoutePermission: vi.fn(),
 }));
 
+const { getEntry, canUpdateEntry } = vi.hoisted(() => ({
+  getEntry: vi.fn(),
+  canUpdateEntry: vi.fn(),
+}));
+
 vi.mock("../init", () => ({
-  getCachedNextly: vi.fn().mockResolvedValue(undefined),
+  getCachedNextly: vi.fn().mockResolvedValue({}),
+}));
+
+vi.mock("../services/lib/permissions", () => ({
+  resolveRoleSlugs: vi.fn().mockResolvedValue(["editor"]),
 }));
 
 vi.mock("../di", () => ({
   container: { get: vi.fn(), has: vi.fn().mockReturnValue(false) },
+  getService: vi.fn(() => ({ getEntry, canUpdateEntry })),
 }));
 
 vi.mock("../lib/env", () => ({
@@ -57,6 +69,25 @@ async function json(response: Response): Promise<Record<string, unknown>> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The default: the caller can see the entry they named AND may edit it, so
+  // the draft the token hands out is one they could already open. Tests about
+  // the entry gate override whichever half they are about.
+  getEntry.mockResolvedValue({
+    success: true,
+    statusCode: 200,
+    data: { id: "7" },
+  });
+  canUpdateEntry.mockResolvedValue(true);
+  (requireRouteCollectionAccess as ReturnType<typeof vi.fn>).mockResolvedValue({
+    userId: "u1",
+    permissions: [],
+    roles: [],
+    authMethod: "session",
+    // A stored `custom` read rule may decide on a claim this framework knows
+    // nothing about, so the probe has to carry them or it answers a different
+    // question than the caller's own read would.
+    claims: { tenant: "acme", tier: "restricted" },
+  });
   getGeneration.mockResolvedValue(0);
   revokeAll.mockResolvedValue(1);
   (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -66,6 +97,180 @@ beforeEach(() => {
 });
 
 describe("mintPreviewLink", () => {
+  it("refuses an entry the caller cannot read, even inside a collection it may edit", async () => {
+    // The collection gate answers a coarser question than the token asks. A
+    // caller bounded by a row-level rule to their own documents passes it, so
+    // without a check on the ENTRY they could mint a working credential for
+    // someone else's draft — a read they cannot perform themselves.
+    getEntry.mockResolvedValue({ success: false, statusCode: 403 });
+
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "someone-elses-draft" })
+    );
+
+    expect(response.status).toBe(403);
+    // No token is minted for a refused entry.
+    const body = await json(response);
+    expect(body.item).toBeUndefined();
+  });
+
+  it("answers a missing entry the same way as a hidden one", async () => {
+    // 403 for both, deliberately. Answering 404 for an id that matches nothing
+    // would let an unauthorized caller enumerate which entry ids exist by
+    // reading the status code.
+    getEntry.mockResolvedValue({ success: false, statusCode: 404 });
+
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "no-such-entry" })
+    );
+
+    expect(response.status).toBe(403);
+  });
+
+  it("lets a genuine failure keep its own status instead of reading as a denial", async () => {
+    // 429, deliberately NOT 500. A test using 500 as both the input and the
+    // expected output cannot tell "the status was preserved" from "every
+    // failure is flattened to 500" — it passes under both, which is how the
+    // flattening survived the first version of this test.
+    getEntry.mockResolvedValue({
+      success: false,
+      statusCode: 429,
+      code: "RATE_LIMITED",
+      message: "Too many requests",
+    });
+
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "7" })
+    );
+
+    // Not 403 (an unreadable row) and not 500 (a flattened one): the caller
+    // needs the retry semantics the service actually reported.
+    expect(response.status).toBe(429);
+  });
+
+  it("judges the entry as the CALLER and keeps a never-published one visible", async () => {
+    await mintPreviewLink(post({ collection: "pages", entryId: "7" }));
+
+    expect(getEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collectionName: "pages",
+        entryId: "7",
+        // Enforced, not a trusted read: an `overrideAccess: true` probe would
+        // answer a different question than the bearer's read will face.
+        overrideAccess: false,
+        // Without this a status-enabled collection filters to published only,
+        // so an entry that has never been published reports as missing — which
+        // is exactly the entry an editor wants to share for review.
+        status: "all",
+        // The whole identity, not an id: `roles` drives role-based rules and
+        // the claims drive `custom` ones. A probe missing either decides a
+        // different question than the read it stands in for — an
+        // absence-tolerant rule would admit a caller it was written to refuse.
+        user: expect.objectContaining({
+          id: "u1",
+          roles: ["editor"],
+          role: "editor",
+          tenant: "acme",
+          tier: "restricted",
+        }),
+      })
+    );
+  });
+
+  it("refuses a readable entry the caller may NOT edit", async () => {
+    // The defect this gate exists for. Where a collection allows broad reads but
+    // restricts updates per row, the caller passes both the collection gate and
+    // the read — and the token they would receive is consumed with `draft: true`
+    // and `overrideAccess: true`, exposing another author's unpublished edits.
+    //
+    // 🔴 Enabling `draft` on the read instead would NOT catch this: the overlay
+    // falls back to the published row for a caller who cannot edit rather than
+    // denying, so the read succeeds either way and the mint proceeds.
+    canUpdateEntry.mockResolvedValue(false);
+
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "someone-elses-draft" })
+    );
+
+    expect(response.status).toBe(403);
+    const body = await json(response);
+    expect(body.item).toBeUndefined();
+  });
+
+  it("asks the edit question about the id the token will sign", async () => {
+    // Two earlier tests here pinned a derived subject — the id read back from
+    // the returned document, and a refusal when that id was absent. Both were
+    // removed deliberately, not lost: `read.data` is presentation data and
+    // `afterRead` may remove `id` OR rewrite it to another row's, so no value in
+    // it identifies what was fetched. Deriving the subject from it authorized a
+    // row the bearer would not receive.
+    //
+    // The token signs the requested id, so that is what is asserted editable.
+    // The remaining gap — a `beforeOperation` hook resolving that id differently
+    // in the bearer's context, where `user` is undefined — is not closeable at
+    // this boundary and is tracked as a known limitation.
+    getEntry.mockResolvedValue({
+      success: true,
+      statusCode: 200,
+      data: { id: "reshaped-by-afterRead" },
+    });
+
+    await mintPreviewLink(post({ collection: "pages", entryId: "7" }));
+
+    expect(canUpdateEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collectionName: "pages",
+        // The requested id, NOT the one the returned document carries.
+        entryId: "7",
+        // The route already ran the coarse `update` gate for this collection and
+        // this flag skips only that; stored owner-only/role/custom rules still
+        // evaluate against the loaded document.
+        routeAuthorized: true,
+      })
+    );
+  });
+
+  it("judges an API key on the key's own grants, not its owner's", async () => {
+    // The leak direction, which is the one a naive test gets backwards. Asserting
+    // that a key is DENIED something it should not have passes against the broken
+    // code too, because the OWNER's grants happen to allow it. What is wrong is
+    // that the key is still GRANTED something only the owner had — so both gates
+    // have to carry the key's own scope for the services to judge it on.
+    (
+      requireRouteCollectionAccess as ReturnType<typeof vi.fn>
+    ).mockResolvedValue({
+      userId: "owner-who-can-read",
+      // Update but NOT read. The owner is a super-admin who can read everything;
+      // without the scope below the gates resolve the OWNER's RBAC and mint.
+      permissions: ["update-pages"],
+      roles: [],
+      authMethod: "api-key",
+      apiKeyId: "key-1",
+      claims: {},
+    });
+
+    await mintPreviewLink(post({ collection: "pages", entryId: "7" }));
+
+    const scope = { actorType: "apiKey", permissions: ["update-pages"] };
+    expect(getEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ authenticatedScope: scope })
+    );
+    // Both gates, not just the read. A scope carried into one and dropped from
+    // the other judges a single request as two different callers.
+    expect(canUpdateEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ authenticatedScope: scope })
+    );
+  });
+
+  it("sends no scope for a session caller, so it resolves grants the normal way", async () => {
+    // Not merely absent: an empty scope would read as an API key holding nothing
+    // and deny a legitimate session caller everything.
+    await mintPreviewLink(post({ collection: "pages", entryId: "7" }));
+
+    expect(getEntry.mock.calls[0][0].authenticatedScope).toBeUndefined();
+    expect(canUpdateEntry.mock.calls[0][0].authenticatedScope).toBeUndefined();
+  });
+
   it("gates on update for the collection that was named", async () => {
     // Per collection, not a blanket permission: otherwise a caller who may
     // edit posts could mint a link into a collection they cannot read.
@@ -79,15 +284,20 @@ describe("mintPreviewLink", () => {
   });
 
   it("does not mint when the gate refuses", async () => {
+    // The error the real gate throws, not a stand-in. `throwAuthError` raises
+    // `NextlyError.forbidden`, which the handler renders as 403; a bare `Error`
+    // is an unrecognised failure and renders as 500. Both are >= 400, so a
+    // range assertion over a stand-in passes whether the refusal is reported
+    // as a refusal or as a crash.
     (
       requireRouteCollectionAccess as ReturnType<typeof vi.fn>
-    ).mockRejectedValueOnce(new Error("forbidden"));
+    ).mockRejectedValueOnce(NextlyError.forbidden());
 
     const response = await mintPreviewLink(
       post({ collection: "pages", entryId: "7" })
     );
 
-    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(response.status).toBe(403);
     // The gate has to run BEFORE the token exists, not merely before it is
     // returned: a token that was signed and then discarded is still a token.
     expect(getGeneration).not.toHaveBeenCalled();
@@ -191,14 +401,14 @@ describe("revokePreviewLinks", () => {
 
   it("does not revoke when the gate refuses", async () => {
     (requireRoutePermission as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      new Error("forbidden")
+      NextlyError.forbidden()
     );
 
     const response = await revokePreviewLinks(
       post({}, "http://x/api/nextly/preview-links/revoke")
     );
 
-    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(response.status).toBe(403);
     expect(revokeAll).not.toHaveBeenCalled();
   });
 

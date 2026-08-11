@@ -61,6 +61,7 @@ import type {
   DataFieldConfig,
   NumberFieldConfig,
 } from "../../../collections/fields/types";
+import { NextlyError } from "../../../errors";
 import { env } from "../../../lib/env";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { pluginEmptyColumnDefault } from "../../../shared/lib/plugin-storage";
@@ -69,6 +70,7 @@ import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
 } from "../../schema/services/field-column-descriptor";
+import { uniquenessCanBeAnIndex } from "../../schema/services/index-name";
 import {
   isPluginDataField,
   pluginStorageFieldType,
@@ -327,6 +329,12 @@ export class FieldGroupSchemaService {
       const columnName = this.toSnakeCase(field.name);
       const indexName = `uq_${tableName}_${columnName}`;
 
+      // Asked through the same rule the collection generators and the desired schema use. A
+      // dialect that cannot key the column cannot carry the uniqueness as an index, and emitting
+      // one anyway installs the table and then fails on a statement it has already committed
+      // past — leaving a component without the guarantee it declared.
+      this.assertUniquenessEnforceable(field, tableName);
+
       if (this.dialect === "mysql") {
         indexStatements.push(
           `CREATE UNIQUE INDEX ${this.q}${indexName}${this.q} ON ${this.q}${tableName}${this.q}(${this.q}${columnName}${this.q});`
@@ -392,6 +400,14 @@ export class FieldGroupSchemaService {
         // its own name, and `mapped` has already replaced that with the storage
         // primitive.
         defaultVal = `DEFAULT ${this.getDefaultValueForType(mapped.type, field)}`;
+      }
+
+      // Refused BEFORE the column statement, not after it. MySQL commits each DDL statement on
+      // its own, so adding the column and then failing on its constraint leaves the column in
+      // place without the guarantee — and a bare column is what the desired schema declares for
+      // an unkeyable type, so the next reconcile sees nothing to fix.
+      if ("unique" in field && field.unique) {
+        this.assertUniquenessEnforceable(field, tableName);
       }
 
       statements.push(
@@ -685,6 +701,42 @@ export class FieldGroupSchemaService {
    * `getColumnDescriptor` makes for collections and singles, so a component
    * column matches what the schema pipeline creates for it.
    */
+  /**
+   * Refuse a `unique` field the dialect cannot enforce, before any DDL is generated for it.
+   *
+   * Asks the shared rule rather than restating it, so a component, a collection and the desired
+   * schema cannot hold different opinions about the same column. MySQL refuses to key an
+   * unbounded TEXT/BLOB in either spelling and cannot index JSON at all, and because it commits
+   * each DDL statement separately there is no way to attempt the constraint without risking a
+   * table that exists WITHOUT it. A bare column is also exactly what the desired schema declares
+   * for an unkeyable type, so a half-applied add would read as converged and the guarantee would
+   * disappear silently.
+   */
+  private assertUniquenessEnforceable(
+    field: DataFieldConfig,
+    tableName: string
+  ): void {
+    const columnType = this.getColumnType(this.asMappableField(field));
+    if (columnType === null) return;
+    if (uniquenessCanBeAnIndex(columnType, this.dialect)) return;
+
+    const name = "name" in field && field.name ? String(field.name) : "";
+    const type = "type" in field ? String(field.type) : "unknown";
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `fields.${name}`,
+          code: "UNIQUE_NOT_ENFORCEABLE_ON_DIALECT",
+          message:
+            `"${name}" is marked unique, but ${this.dialect} cannot enforce uniqueness on a ` +
+            `${type} column. Store the value in a short-variant text field, which becomes a ` +
+            `bounded VARCHAR the server can key, or remove the unique flag.`,
+        },
+      ],
+      logContext: { tableName, field: name, type, dialect: this.dialect },
+    });
+  }
+
   private asMappableField(field: DataFieldConfig): DataFieldConfig {
     const storageType = pluginStorageFieldType(field);
     if (storageType === undefined) return field;

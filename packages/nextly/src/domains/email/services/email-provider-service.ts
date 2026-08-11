@@ -37,6 +37,13 @@ import { encrypt, decrypt } from "../../../utils/encryption";
 // signature on createAdapterFromProvider satisfies consistent-type-imports.
 import { affectedRowCount } from "../../auth/services/auth-service";
 import {
+  isRecognisedMessageId,
+  mailboxOf,
+  messageIdWithoutRecipients,
+  refusedMailboxes,
+  type EmailDeliveryInput,
+} from "../delivery-record";
+import {
   changedProviderFields,
   recordProviderActivity,
   type EmailProviderActivityInput,
@@ -44,9 +51,28 @@ import {
 import { describeProviderFailure } from "../provider-definition";
 import type { EmailProviderAdapter } from "../types";
 
+import type { EmailDeliveryService } from "./email-delivery-service";
 import { getEmailProviderRegistry } from "./email-provider-registry";
 
 const MASKED_VALUE = "••••••••";
+
+/**
+ * What a provider means when it returns `{ success: false }` without throwing.
+ *
+ * One constant because the sentence is both returned to the caller and stored
+ * in the delivery row, and a row whose reason disagrees with what the operator
+ * was shown is worse than one with no reason at all.
+ */
+const SEND_RETURNED_UNSUCCESSFUL = "Send returned unsuccessful";
+
+/**
+ * What a provider means when it accepts the message and refuses the address.
+ *
+ * Distinct from the sentence above because the two send an operator to
+ * different places: one is the provider or its credentials, the other is the
+ * address typed into the test dialog.
+ */
+const TEST_RECIPIENT_REFUSED = "The provider refused the test recipient";
 
 // ============================================================
 // Input Types
@@ -152,7 +178,19 @@ export class EmailProviderService extends BaseService {
   private emailProviders: EmailProvidersTable;
   private encryptionSecret: string | undefined;
 
-  constructor(adapter: DrizzleAdapter, logger: Logger) {
+  constructor(
+    adapter: DrizzleAdapter,
+    logger: Logger,
+    /**
+     * Where a test send is recorded.
+     *
+     * The Test button dispatches a REAL message, so it belongs in the delivery
+     * log for the same reason every other send does: an operator asking "did
+     * anything go out" should not have to know which button produced it.
+     * Optional, so a missing recorder never prevents a send.
+     */
+    private readonly deliveries?: EmailDeliveryService
+  ) {
     super(adapter, logger);
 
     this.encryptionSecret = env.NEXTLY_SECRET;
@@ -1250,6 +1288,21 @@ export class EmailProviderService extends BaseService {
       });
     }
 
+    // Whether a message was actually handed to the provider. The catch below
+    // is shared with the connection probe AND with everything that happens
+    // before dispatch -- building the adapter can throw on its own, when a
+    // plugin has been removed or stored configuration no longer constructs
+    // one. A delivery recorded for either is a phantom send: a row in the
+    // history for a message that was never composed.
+    let dispatched = false;
+
+    // Resolved ONCE, outside the try, because both the resolved path and the
+    // catch record a delivery for this destination and they have to record the
+    // same one. Every reader hashes the bare address, so a row stored under
+    // the hash of `Jane <jane@example.com>` could never be found again --
+    // which is why the normalisation has to be shared rather than repeated.
+    const testMailbox = mailboxOf(testEmail || provider.fromEmail);
+
     try {
       // Only when the caller explicitly asked to probe. Substituting a probe
       // for the send would have been silent and wrong: `api/email-providers-test.ts`
@@ -1292,39 +1345,107 @@ export class EmailProviderService extends BaseService {
         ? `${provider.fromName} <${provider.fromEmail}>`
         : provider.fromEmail;
 
-      // Fall back to the provider's own fromEmail when no test address is given
+      // Fall back to the provider's own fromEmail when no test address is
+      // given. Dispatched in the form the caller wrote it, which may carry a
+      // display name; `testMailbox` is what is RECORDED and compared.
       const to = testEmail || provider.fromEmail;
 
-      const result = await adapter.send({
-        to,
-        from,
-        subject: "Nextly — Test Email",
-        html: `<p>This is a test email from your <strong>${provider.name}</strong> email provider.</p><p>If you received this, your provider is configured correctly.</p>`,
+      dispatched = true;
+      // Named rather than inlined, so the containment below checks the text
+      // that was actually dispatched rather than a second copy of it.
+      const subject = "Nextly — Test Email";
+      const html = `<p>This is a test email from your <strong>${provider.name}</strong> email provider.</p><p>If you received this, your provider is configured correctly.</p>`;
+
+      const result = await adapter.send({ to, from, subject, html });
+
+      // A test has exactly one destination, so a provider that accepted the
+      // message and refused THAT address delivered nothing -- the same reading
+      // the ordinary send path applies to its primary recipient. Reporting the
+      // message-level result would let the Test button say a provider works
+      // when the one address it tried was rejected.
+      //
+      // Compared as MAILBOXES. A caller may write `Jane <jane@example.com>`,
+      // and SMTP reports its refusal as the bare address -- so comparing the
+      // strings as written never matches, and the Test button reports success
+      // for the one recipient the provider refused.
+      const accepted = !refusedMailboxes(result.rejected).has(
+        testMailbox.toLowerCase()
+      );
+      const delivered = result.success && accepted;
+
+      // The whole result, not a boolean. A failed test whose row carries no
+      // reason is a row that says only "something went wrong", and a
+      // successful one without the provider's message id cannot be matched
+      // against the provider's own record of it.
+      await this.recordTestDelivery(testMailbox, provider, {
+        status: delivered ? "sent" : "failed",
+        // The same two questions the ordinary send path asks, in the same
+        // order: a shape core recognises, then none of this message's
+        // recipients. A provider may build its identifier out of the address
+        // it was handed, and the test destination is a recipient like any
+        // other -- storing it verbatim would put the address beside the hash
+        // that exists to avoid holding it.
+        messageId: isRecognisedMessageId(result.messageId)
+          ? messageIdWithoutRecipients(result.messageId, [testMailbox])
+          : null,
+        error: delivered
+          ? null
+          : accepted
+            ? SEND_RETURNED_UNSUCCESSFUL
+            : TEST_RECIPIENT_REFUSED,
       });
 
       return {
-        success: result.success,
-        error: result.success ? undefined : "Send returned unsuccessful",
+        success: delivered,
+        error: delivered
+          ? undefined
+          : accepted
+            ? SEND_RETURNED_UNSUCCESSFUL
+            : TEST_RECIPIENT_REFUSED,
       };
     } catch (error) {
+      // Only a send that actually reached the provider. `mode === "send"` is
+      // not enough on its own: the adapter is built inside this try, so a
+      // removed plugin or unusable stored configuration lands here having
+      // dispatched nothing.
+      //
+      // A NextlyError's publicMessage is a decision about what may be shown.
+      // Anything else is a message the throw site happened to interpolate, and
+      // a contributed adapter throws with decrypted configuration in scope.
+      if (dispatched) {
+        await this.recordTestDelivery(testMailbox, provider, {
+          status: "failed",
+          messageId: null,
+          // The NORMALISED message. `cause` is the provider's own error,
+          // thrown with decrypted configuration in scope, and storing it would
+          // put a credential in a database column.
+          error: describeProviderFailure(error).message,
+        });
+      }
+
       // Logged HERE, with the cause. Attaching an original error to a
       // NextlyError does not record it anywhere: this catch converts the error
       // into a result and the request ends, so a provider's actual diagnostic
       // was retained and then dropped — while the message told the operator to
       // go and read it. A promise about a log entry has to be made true by
       // something writing one.
-      this.logger.error("Email provider test failed", {
-        providerId: id,
-        providerType: provider.type,
-        mode,
-        // Shared with the ordinary send path so the two cannot come to
-        // disagree about how far down a `cause` chain to look.
-        ...describeProviderFailure(error),
-      });
+      // Wrapped, and AFTER the record above. An install's logger throwing
+      // from `error()` would otherwise leave the catch before the delivery row
+      // is written, so a real send that reached the provider and failed would
+      // leave no trace of having happened at all.
+      try {
+        this.logger.error("Email provider test failed", {
+          providerId: id,
+          providerType: provider.type,
+          mode,
+          // Shared with the ordinary send path so the two cannot come to
+          // disagree about how far down a `cause` chain to look.
+          ...describeProviderFailure(error),
+        });
+      } catch {
+        // Nowhere left to report to: the reporting mechanism is what failed.
+      }
 
-      // A NextlyError's publicMessage is a decision about what may be shown.
-      // Anything else is a message the throw site happened to interpolate, and
-      // a contributed adapter throws with decrypted configuration in scope.
       return {
         success: false,
         error: NextlyError.is(error)
@@ -1332,6 +1453,30 @@ export class EmailProviderService extends BaseService {
           : "The test failed. The reason is in the server log.",
       };
     }
+  }
+
+  /**
+   * Record a test send, and never let recording change its outcome.
+   *
+   * The message has already gone out (or already failed) by the time this
+   * runs, so a recording failure must not turn a delivered test into a
+   * reported failure. `record` swallows its own errors; this wrapper exists so
+   * the call site reads as one thing.
+   */
+  private async recordTestDelivery(
+    to: string,
+    provider: EmailProviderRecord,
+    outcome: Pick<EmailDeliveryInput, "status" | "messageId" | "error">
+  ): Promise<void> {
+    await this.deliveries?.record({
+      to,
+      providerId: provider.id,
+      providerType: provider.type,
+      // A test carries no template. Recording one would name a message the
+      // operator never chose to send.
+      templateSlug: null,
+      ...outcome,
+    });
   }
 
   /**

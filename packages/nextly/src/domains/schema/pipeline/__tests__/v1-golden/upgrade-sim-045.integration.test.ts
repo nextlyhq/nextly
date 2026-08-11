@@ -101,6 +101,10 @@ const POST_045_TABLES = [
   // assertion below is what proves it then round-trips to silence rather than
   // being re-proposed forever.
   "nextly_i18n_archive",
+  // A post-0.45 table like the others: the upgrade emits its CREATE TABLE, its
+  // indexes and (on PostgreSQL) its foreign key, and this list is what marks
+  // those statements legitimate rather than phantom diffs.
+  "email_deliveries",
 ];
 
 // The post-045 names are static identifiers, but escape defensively so the

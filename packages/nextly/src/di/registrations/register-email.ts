@@ -1,12 +1,14 @@
 /**
  * Email domain DI registrations.
  *
- * Registers the three email services (provider, template, orchestration)
- * so that both direct API callers and the dispatcher can resolve them.
+ * Registers the four email services (delivery, provider, template,
+ * orchestration) so that both direct API callers and the dispatcher can
+ * resolve them.
  */
 
 import { EmailErrorCode } from "../../domains/email/errors";
 import { getAttachmentLimits } from "../../domains/email/services/attachment-limits";
+import { EmailDeliveryService } from "../../domains/email/services/email-delivery-service";
 import type { EmailAttachmentSource } from "../../domains/email/services/email-service";
 import { NextlyError } from "../../errors";
 import { EmailProviderService } from "../../services/email/email-provider-service";
@@ -22,10 +24,24 @@ import type { RegistrationContext } from "./types";
 export function registerEmailServices(ctx: RegistrationContext): void {
   const { adapter, logger, config, storage } = ctx;
 
+  // EmailDeliveryService — the durable record of what was sent. Registered
+  // first because the provider service resolves it for test sends.
+  container.registerSingleton<EmailDeliveryService>(
+    "emailDeliveryService",
+    () => new EmailDeliveryService(adapter, logger)
+  );
+
   // EmailProviderService — CRUD for email provider configurations
   container.registerSingleton<EmailProviderService>(
     "emailProviderService",
-    () => new EmailProviderService(adapter, logger)
+    () =>
+      new EmailProviderService(
+        adapter,
+        logger,
+        // The Test button dispatches a real message, so it belongs in the
+        // delivery log like any other send.
+        container.get<EmailDeliveryService>("emailDeliveryService")
+      )
   );
 
   // EmailTemplateService — CRUD for email templates
@@ -44,6 +60,9 @@ export function registerEmailServices(ctx: RegistrationContext): void {
     );
     const templateService = container.get<EmailTemplateService>(
       "emailTemplateService"
+    );
+    const deliveryService = container.get<EmailDeliveryService>(
+      "emailDeliveryService"
     );
 
     // Build the attachment source when storage is available. The
@@ -137,7 +156,8 @@ export function registerEmailServices(ctx: RegistrationContext): void {
       providerService,
       templateService,
       config.email,
-      attachmentSource
+      attachmentSource,
+      deliveryService
     );
   });
 }

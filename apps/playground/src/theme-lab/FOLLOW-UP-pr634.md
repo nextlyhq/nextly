@@ -227,12 +227,26 @@ code carries each finding.
   `**/*.test.ts`. A green `check-types` there says nothing about test
   correctness. Owned by task 167.
 
-## Carried in from another lane
+## Carried in from another lane — WITHDRAWN
 
-`--nx-font-mono` is declared nowhere. `packages/ui/src/styles/theme.css` has
-only the Tailwind `--font-mono` (line ~524), so the API playground's CodeMirror
-editor silently falls back to generic monospace and its typography cannot
-follow the theme. The fix is to declare `--nx-font-mono` alongside the other
-shell tokens and map `--font-mono` to it in `@theme inline`, then consume the
-`--nx-` token at the call site. Reaching past the token to the global is the
-bypass the admin styling contract exists to prevent.
+`--nx-font-mono` was carried in here as an open defect: declared nowhere, the
+CodeMirror editor falling back to generic monospace, to be fixed by declaring
+`--nx-font-mono` and mapping `--font-mono` onto it.
+
+Every part of that is wrong, measured before acting on it.
+
+`--font-mono` is declared at `theme.css:524` and the built stylesheet publishes
+it on `:root,:host` (`packages/ui/dist/styles.css`). `plugin-safelist.css`
+emits `font-{sans,serif,mono}` for exactly that reason — Tailwind only outputs
+a theme variable something references. `CodeBlock.tsx:82` consumes
+`var(--font-mono, …)` and #634 lists this among the defects it closed, so the
+item was already fixed when it was carried in.
+
+The prescribed fix would also have introduced a defect: `--font-*` belongs to
+Tailwind and `--nx-*` to the palette, and reaching for the palette namespace
+for a Tailwind-namespace role is the mistake the reachability guard was written
+against.
+
+Left here rather than deleted, because the failure is worth keeping: an item
+can be accurate the day it is filed, fixed the following week, and still read
+as open to anyone who re-files it from the document instead of the tree.
