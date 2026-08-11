@@ -34,6 +34,7 @@ import type { NextlyContext } from "./context";
 import {
   accessOptions,
   buildMutationMessage,
+  callerAccess,
   createErrorFromResult,
   isNotFoundError,
   mergeConfig,
@@ -269,6 +270,11 @@ export async function update<TSlug extends CollectionSlug>(
     const updated = await findByID<TSlug>(ctx, {
       collection: args.collection,
       id: (bulkResult.successes[0] as { id: string }).id,
+      // The read-back is the caller's read, not the system's. Without these it
+      // re-enters `mergeConfig` and picks up the instance default of
+      // `overrideAccess: true`, handing an update-scoped caller a row it has no
+      // read grant for, with every field-level restriction skipped.
+      ...callerAccess(config),
     });
 
     if (!updated) {

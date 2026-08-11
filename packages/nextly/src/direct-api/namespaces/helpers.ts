@@ -71,6 +71,30 @@ export function accessOptions(config: DirectAPIConfig): AccessOptions {
 }
 
 /**
+ * The same three fields, for one namespace operation calling another.
+ *
+ * A nested Direct API call re-enters `mergeConfig`, so anything the caller
+ * leaves out is filled from the instance defaults — and `overrideAccess`
+ * defaults to `true`. An operation that omits these does not inherit the
+ * caller's restrictions, it discards them: a key scoped to update a row could
+ * update it under its own grants and then read the result back with access
+ * checks off entirely, past field redaction it was never allowed to see.
+ *
+ * Distinct from `accessOptions` because the boundary is different. A service
+ * takes the caller's scope as `authenticatedScope`; a Direct API operation
+ * takes it as `actor` and translates it itself.
+ */
+export function callerAccess(
+  config: DirectAPIConfig
+): Pick<DirectAPIConfig, "user" | "overrideAccess" | "actor"> {
+  return {
+    user: config.user,
+    overrideAccess: config.overrideAccess,
+    actor: config.actor,
+  };
+}
+
+/**
  * Build a RequestContext for downstream services from a Direct API call.
  *
  * Maps the narrow `DirectAPIConfig.user` shape to the richer `RequestContext`

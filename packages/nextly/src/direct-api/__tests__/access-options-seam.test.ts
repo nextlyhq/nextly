@@ -61,6 +61,23 @@ describe("the Direct API access seam", () => {
     ).toEqual([]);
   });
 
+  it("is the only way a namespace forwards the caller's scope onward", () => {
+    // The nested-call direction. One namespace operation calling another must
+    // hand over `actor` through `callerAccess`, because a nested call that omits
+    // it re-enters `mergeConfig` and inherits `overrideAccess: true` from the
+    // instance defaults — discarding the caller's restrictions rather than
+    // keeping them.
+    const offenders = namespaceSources()
+      .filter(({ text }) => /\bactor:\s*config\.actor\b/.test(text))
+      .map(({ name }) => name);
+
+    expect(
+      offenders,
+      "these namespaces forward `actor` inline to a nested Direct API call; " +
+        "spread `callerAccess(config)` so the whole caller identity travels."
+    ).toEqual([]);
+  });
+
   it("is the only way a namespace forwards the access override", () => {
     const offenders = namespaceSources()
       .filter(({ text }) =>

@@ -115,6 +115,39 @@ describe("Direct API access-options forwarding", () => {
     );
   });
 
+  it("keeps the caller's access on the read-back after a where-clause update", async () => {
+    mocks.collectionsHandler.bulkUpdateByQuery.mockResolvedValue({
+      successCount: 1,
+      successes: [{ id: "1" }],
+      failures: [],
+    });
+    mocks.collectionsHandler.getEntry.mockResolvedValue({
+      success: true,
+      statusCode: 200,
+      message: "OK",
+      data: { id: "1" },
+    });
+
+    await nextly.update({
+      collection: "posts",
+      where: { title: { equals: "t" } },
+      data: { title: "u" },
+      actor: UPDATE_ONLY_KEY,
+      overrideAccess: false,
+    });
+
+    // The write is correctly scoped, then the result is read back through a
+    // nested Direct API call. That nested call re-enters `mergeConfig`, so
+    // omitting the caller's access silently restores `overrideAccess: true` and
+    // hands an update-scoped key a row it has no read grant for.
+    expect(mocks.collectionsHandler.getEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authenticatedScope: UPDATE_ONLY_KEY,
+        overrideAccess: false,
+      })
+    );
+  });
+
   it("leaves the scope undefined for a session caller", async () => {
     mocks.collectionsHandler.listEntries.mockResolvedValue({
       success: true,
