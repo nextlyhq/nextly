@@ -474,8 +474,12 @@ export function createPocDriver(page: Page): CanvasDriver {
       );
       if (!inFrame) return null;
 
-      const frameOrigin = await page.locator("iframe").boundingBox();
-      if (!frameOrigin) return null;
+      // The driver's own content origin, not a second reading of the frame's
+      // box. `boundingBox()` reports the BORDER box, so building the origin
+      // here would place every indicator rectangle `inset * scale` out on any
+      // bordered canvas — the same fault, in a third place, which is the sign
+      // that no caller should be assembling this at all.
+      const origin = await driver.frameOrigin();
 
       // Read the live transform rather than assume 1. Without this the rect
       // reported under a scaled canvas is wrong by the scale factor, and a
@@ -483,11 +487,7 @@ export function createPocDriver(page: Page): CanvasDriver {
       // wrong, not because the canvas is.
       const scale = await frameScale();
 
-      return mapFrameRectToHost(
-        inFrame,
-        { x: frameOrigin.x, y: frameOrigin.y },
-        scale
-      );
+      return mapFrameRectToHost(inFrame, origin, scale);
     },
 
     async readTreeShape() {
