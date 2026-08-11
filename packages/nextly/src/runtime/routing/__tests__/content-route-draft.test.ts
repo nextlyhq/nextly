@@ -304,6 +304,67 @@ describe("the content route's draft decision", () => {
     expect(() => publicRouteWith(reader, true)).toThrow(/cannot serve drafts/i);
   });
 
+  it("does not expand relations unless the site asks it to", async () => {
+    // A trusted read propagates its trust AND `status: "all"` into relationship
+    // expansion, so a populated target is read with access rules bypassed and
+    // drafts included. On a public route that page is then pre-rendered into a
+    // static artifact. Defaulting to no expansion makes that exposure something
+    // a site opts into rather than inherits.
+    const { reader, calls } = stubReader();
+
+    await publicRouteWith(reader).ContentPage({ params: { slug: ["a"] } });
+
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every(call => call.depth === 0)).toBe(true);
+  });
+
+  it("keeps the safe default when depth is explicitly undefined", async () => {
+    // An optional property permits an explicit `undefined`, and forwarding a
+    // config object produces one routinely. A spread overwrites with it, so a
+    // default placed BEFORE the spread is silently discarded — restoring
+    // trusted relation expansion for the caller least likely to have chosen it.
+    const { reader, calls } = stubReader();
+
+    await createPublicContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      depth: undefined,
+      render: (entry: ContentEntry) => entry,
+    }).ContentPage({ params: { slug: ["a"] } });
+
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every(call => call.depth === 0)).toBe(true);
+  });
+
+  it("applies the route's depth to the static-params scan too", async () => {
+    // The scan is a TRUSTED read on a public route. Omitting `depth` let it
+    // inherit the Direct API's default, so the one read that runs at BUILD time
+    // — for a query that wants a single column — was the only read on the route
+    // not honouring its own no-expansion posture.
+    const { reader, calls } = stubReader();
+
+    await publicRouteWith(reader).generateStaticParams();
+
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every(call => call.depth === 0)).toBe(true);
+  });
+
+  it("still expands relations when the site sets depth explicitly", async () => {
+    // The default is a safe starting point, not a ceiling. A site that
+    // populates relations says so, and by saying so states that those
+    // collections are public too.
+    const { reader, calls } = stubReader();
+
+    await createPublicContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      depth: 2,
+      render: (entry: ContentEntry) => entry,
+    }).ContentPage({ params: { slug: ["a"] } });
+
+    expect(calls.every(call => call.depth === 2)).toBe(true);
+  });
+
   it("cannot be asked to pre-render a route that builds no paths", () => {
     // `staticParamsLimit: 0` asks for a static route with nothing to build. The
     // generator returns `[]` — accepted by standard App Router builds, rejected

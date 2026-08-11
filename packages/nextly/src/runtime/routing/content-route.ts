@@ -162,7 +162,19 @@ export interface ContentRouteConfig<TNode> {
    * `buildMetadata` as `context.locale`. Omit for the default locale.
    */
   locale?: string;
-  /** Relation depth for the resolved read (default `1`). */
+  /**
+   * Relation depth for the resolved read.
+   *
+   * **The default differs by factory, and the difference is a security one.**
+   * `createContentRoute` defaults to `1`, matching `resolveContent`.
+   * `createPublicContentRoute` defaults to `0` — a trusted read propagates both
+   * its trust and a widened lifecycle into relationship expansion, so a
+   * populated target would be read with access rules bypassed and drafts
+   * included, and a public route pre-renders that into a static artifact.
+   *
+   * Setting this on a public route restores expansion, and by setting it you
+   * state that the collections your pages populate are public too.
+   */
   depth?: number;
   /** A booted Nextly instance (defaults to `getNextly()`). */
   nextly?: NextlyContentReader;
@@ -458,6 +470,13 @@ function buildRoute<TNode>(
         try {
           result = await nextly.find({
             collection,
+            // The route's own depth, not the Direct API's default. This scan is
+            // a TRUSTED read on a public route, so an inherited expansion depth
+            // pulls related rows — draft ones included — through their nested
+            // hooks at build time, for a query that wants one column. It is the
+            // same posture the render and metadata reads carry; a scan that
+            // opted out of it would be the one read on the route that did not.
+            depth,
             // Lifecycle-aware publish scope — a no-op on status-less collections.
             status,
             // The same locale `resolve()` reads in. Without it a localized
@@ -607,7 +626,36 @@ export function createPublicContentRoute<TNode>(
       },
     });
   }
-  return buildRoute(config, "public");
+  return buildRoute(
+    {
+      // Populated relations are NOT covered by the promise this factory makes.
+      //
+      // A trusted read propagates both its trust and a widened lifecycle into
+      // relationship expansion: a populated target is read with access rules
+      // bypassed AND `status: "all"`. So at the inherited default of `depth: 1`
+      // a page in a public collection can embed a DRAFT or access-restricted
+      // row from a collection that appears nowhere in this config — and this
+      // route pre-renders that into a static artifact, which publishing cannot
+      // be taken back from.
+      //
+      // Defaulting to no expansion makes the exposure something a site OPTS
+      // INTO rather than something it inherits. A site that populates relations
+      // sets `depth` itself, and by doing so states that those collections are
+      // public too.
+      //
+      // This bounds the blast radius; it does not fix the propagation. That
+      // still belongs where the trust is threaded, so a caller who sets `depth`
+      // gets the old behaviour in full.
+      // Normalized AFTER the spread, not defaulted before it. An optional
+      // property permits an EXPLICIT `undefined` — which forwarding a config
+      // object produces routinely — and a spread overwrites with it, so
+      // `{ depth: 0, ...config }` restores `?? 1` for exactly the caller least
+      // likely to have thought about relation expansion.
+      ...config,
+      depth: config.depth ?? 0,
+    },
+    "public"
+  );
 }
 
 /** Join the optional-catch-all segments into a slug path (no leading slash). */
