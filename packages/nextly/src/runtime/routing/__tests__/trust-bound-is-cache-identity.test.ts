@@ -18,14 +18,29 @@ import { describe, expect, it } from "vitest";
 
 const RESOLVE_CONTENT = join(__dirname, "..", "resolve-content.ts");
 
-/** The `keyParts` array as written. */
+/**
+ * The `keyParts` array as written.
+ *
+ * Bracket-matched rather than sliced to the first `]`: the entries carry
+ * explanatory comments, and a comment containing a bracket would otherwise
+ * truncate the region this reads — reporting a key part missing because the
+ * search stopped before reaching it.
+ */
 function cacheKeyParts(): string {
   const text = readFileSync(RESOLVE_CONTENT, "utf8");
   const start = text.indexOf("keyParts: [");
   expect(start, "resolve-content no longer builds a cache key").toBeGreaterThan(
     -1
   );
-  return text.slice(start, text.indexOf("]", start));
+  let depth = 0;
+  for (let i = text.indexOf("[", start); i < text.length; i++) {
+    if (text[i] === "[") depth++;
+    else if (text[i] === "]") {
+      depth--;
+      if (depth === 0) return text.slice(start, i);
+    }
+  }
+  throw new Error("keyParts array is unterminated");
 }
 
 describe("the trust bound is part of the cache identity", () => {
@@ -44,16 +59,24 @@ describe("the trust bound is part of the cache identity", () => {
     ).toBe(true);
   });
 
-  it("distinguishes an unbounded read from one that trusts nothing", () => {
-    // An empty set and no set are opposite postures — one trusts everything it
-    // reaches, the other trusts nothing — and `[].join(",")` is `""`, which is
-    // also what a missing key part contributes. Without a distinct token they
-    // collide on the same entry.
+  it("encodes the set injectively", () => {
+    // The encoding has to distinguish every distinct set, over an UNVALIDATED
+    // string array. A join does not: `["a", "b"]` and `["a,b"]` produce the
+    // same text while trusting different collections, and any sentinel string
+    // is itself a legal slug that a one-element array can collide with.
     const text = readFileSync(RESOLVE_CONTENT, "utf8");
     expect(
-      /trustedNames === undefined \? "unbounded"/.test(text),
-      "an unbounded read and a trust-nothing read must not produce the same " +
-        "key fragment"
+      /JSON\.stringify\(trustedNames \?\? null\)/.test(text),
+      "the trusted set must be encoded injectively — a join collides on " +
+        "separator-containing slugs, and a sentinel collides with a real one"
     ).toBe(true);
+
+    // The property itself, not just the call: three cases that a join or a
+    // sentinel would conflate.
+    const key = (v: readonly string[] | undefined): string =>
+      JSON.stringify(v ?? null);
+    expect(key(["authors", "media"])).not.toBe(key(["authors,media"]));
+    expect(key(undefined)).not.toBe(key(["unbounded"]));
+    expect(key(undefined)).not.toBe(key([]));
   });
 });
