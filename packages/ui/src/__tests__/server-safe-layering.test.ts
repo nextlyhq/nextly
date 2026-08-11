@@ -151,7 +151,6 @@ function analyze(source: string, fileName: string): Analysis {
   ): boolean =>
     bindings !== undefined &&
     (ts.isNamedImports(bindings) || ts.isNamedExports(bindings)) &&
-    bindings.elements.length > 0 &&
     bindings.elements.every(element => element.isTypeOnly);
 
   // A directive prologue is the leading run of string-expression statements. Taken from the tree,
@@ -178,6 +177,9 @@ function analyze(source: string, fileName: string): Analysis {
       (ts.isVariableDeclaration(node) ||
         ts.isFunctionDeclaration(node) ||
         ts.isClassDeclaration(node) ||
+        // An enum creates a real runtime binding, so `export enum Node { A }` means `Node` is the
+        // module's own, not the DOM one.
+        ts.isEnumDeclaration(node) ||
         ts.isParameter(node) ||
         ts.isBindingElement(node) ||
         ts.isImportSpecifier(node) ||
@@ -186,7 +188,14 @@ function analyze(source: string, fileName: string): Analysis {
       node.name !== undefined &&
       ts.isIdentifier(node.name)
     ) {
-      declared.add(node.name.text);
+      // `declare const require: ...` introduces no runtime binding — it describes something the
+      // environment already provides. Treating it as a local shadow would suppress the very call
+      // it is declaring.
+      const ambient = ts
+        .getCombinedModifierFlags(node as ts.Declaration)
+        .valueOf();
+      const isDeclare = (ambient & ts.ModifierFlags.Ambient) !== 0;
+      if (!isDeclare) declared.add(node.name.text);
     }
     ts.forEachChild(node, collectDeclared);
   };
@@ -268,6 +277,20 @@ function analyze(source: string, fileName: string): Analysis {
       if (parent.parent !== undefined && ts.isTypeOfExpression(parent.parent)) {
         return false;
       }
+      // `globalThis.document?.title` evaluates to undefined on a server rather than throwing,
+      // because the chain short-circuits. The `?.` sits on the OUTER access — the one reading
+      // `.title` off it — not on `globalThis.document` itself, so the token to check is the
+      // grandparent's.
+      const outer = parent.parent;
+      const shortCircuits =
+        outer !== undefined &&
+        ((ts.isPropertyAccessExpression(outer) &&
+          outer.expression === parent &&
+          outer.questionDotToken !== undefined) ||
+          (ts.isElementAccessExpression(outer) &&
+            outer.expression === parent &&
+            outer.questionDotToken !== undefined));
+      if (shortCircuits) return false;
       // And the guarded USE is as safe as the bare-identifier form, so the same guard excuses it.
       return !guardedByTypeof(node);
     }
@@ -275,6 +298,16 @@ function analyze(source: string, fileName: string): Analysis {
     // `export const globals = { window }` READS the global — the shorthand is both the name and
     // the value, so the general naming rule below would wrongly excuse it.
     if (ts.isShorthandPropertyAssignment(parent)) return !guardedByTypeof(node);
+
+    // `globalThis["document"]` is the same read spelled with brackets — the name is a string
+    // literal in an element access rather than an identifier, so it is caught where the string is
+    // rather than where an identifier would be.
+    if (
+      ts.isElementAccessExpression(parent) &&
+      parent.argumentExpression === node
+    ) {
+      return true;
+    }
 
     // An identifier that IS a declaration's name is not a read of anything. This covers the
     // members these globals share a spelling with — `interface Options { history }`, `type Point =
@@ -290,6 +323,13 @@ function analyze(source: string, fileName: string): Analysis {
     // reads the global at runtime and reporting it would reject declaration-only code.
     if (ts.isTypeReferenceNode(parent) || ts.isTypeQueryNode(parent))
       return false;
+    // A name inside ANY type subtree is erased with it — `dom.HTMLElement` in
+    // `type Root = dom.HTMLElement` is a qualified name, not a value read. Walking up to the
+    // nearest type node covers the qualified and nested cases the two checks above miss.
+    for (let n: ts.Node | undefined = parent; n; n = n.parent) {
+      if (ts.isTypeNode(n) || ts.isTypeAliasDeclaration(n)) return false;
+      if (ts.isStatement(n) || ts.isSourceFile(n)) break;
+    }
     // `interface Root extends HTMLElement` names a type in a heritage clause, erased with the
     // interface. An `extends` on a CLASS is a value expression, so only the interface form is
     // excused here.
@@ -370,6 +410,21 @@ function analyze(source: string, fileName: string): Analysis {
       globals.push(node.text);
     }
 
+    // `globalThis["document"]` names the global as a STRING, not an identifier, so the check above
+    // never sees it. Node evaluates the computed property and the read throws just the same.
+    if (
+      !insideFunction &&
+      ts.isElementAccessExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "globalThis" &&
+      node.argumentExpression !== undefined &&
+      ts.isStringLiteral(node.argumentExpression) &&
+      BROWSER_GLOBALS.has(node.argumentExpression.text) &&
+      node.questionDotToken === undefined
+    ) {
+      globals.push(node.argumentExpression.text);
+    }
+
     const isFunction =
       ts.isFunctionDeclaration(node) ||
       ts.isFunctionExpression(node) ||
@@ -389,7 +444,15 @@ function analyze(source: string, fileName: string): Analysis {
         return false;
       }
       let invoked: ts.Node = node;
-      while (invoked.parent && ts.isParenthesizedExpression(invoked.parent)) {
+      // Parentheses AND the erased TypeScript wrappers — `!`, `as T`, `satisfies T` — all sit
+      // between a function expression and the call that invokes it, and all disappear at runtime.
+      while (
+        invoked.parent &&
+        (ts.isParenthesizedExpression(invoked.parent) ||
+          ts.isNonNullExpression(invoked.parent) ||
+          ts.isAsExpression(invoked.parent) ||
+          ts.isSatisfiesExpression(invoked.parent))
+      ) {
         invoked = invoked.parent;
       }
       const parent = invoked.parent;
@@ -405,6 +468,9 @@ function analyze(source: string, fileName: string): Analysis {
       // A computed member name is evaluated when the class body runs, even though the member it
       // names is deferred: `class C { [window.location.href]() {} }` throws on import.
       if (ts.isComputedPropertyName(child)) return visit(child, insideFunction);
+      // A decorator expression is evaluated when the class body runs, like a computed name — the
+      // member it decorates is deferred, the decorator itself is not.
+      if (ts.isDecorator(child)) return visit(child, insideFunction);
       // An INSTANCE field initializer runs at construction, not at definition, so a server that
       // imports the class without building one never reaches it. A static field does run.
       const deferredField =
@@ -717,6 +783,52 @@ describe("reading a module", () => {
         export type W = typeof window;
       `).globals
     ).toEqual([]);
+  });
+
+  it("does not report the erased and short-circuiting forms", () => {
+    // Each of these is safe on a server, and reporting any of them rejects valid code:
+    // an enum declares its own `Node`; `declare` introduces no runtime binding to shadow;
+    // an optional chain evaluates to undefined rather than throwing; and a qualified name inside
+    // a type is erased with it.
+    expect(
+      read(`
+        export enum Node { A }
+        export const first = Node.A;
+        export const title = globalThis.document?.title;
+        import type * as dom from "./dom";
+        export type Root = dom.HTMLElement;
+      `).globals
+    ).toEqual([]);
+  });
+
+  it("reports the spellings that still reach a global", () => {
+    // Bracket access names the global as a STRING; an erased `!` wrapper still leaves the function
+    // immediately invoked; a decorator runs when the class body does.
+    expect(
+      read(`export const b = globalThis["document"].body;`).globals
+    ).toEqual(["document"]);
+    expect(
+      read(`export const w = (() => window.innerWidth)!();`).globals
+    ).toEqual(["window"]);
+    expect(
+      read(
+        `export class C { @factory(window.location.href) method() {} }`,
+        "probe.ts"
+      ).globals
+    ).toEqual(["window"]);
+  });
+
+  it("treats an empty named import as erased, and an ambient declare as not a binding", () => {
+    // `import {} from "react"` binds nothing, so the import is erased. `declare const require`
+    // describes what the environment provides — treating it as a local shadow would suppress the
+    // very call it declares.
+    expect(read(`import {} from "react";`).specifiers).toEqual([]);
+    expect(
+      read(`
+        declare const require: (id: string) => unknown;
+        export const react = require("react");
+      `).specifiers
+    ).toEqual(["react"]);
   });
 
   it("reports a browser global reached through globalThis", () => {
