@@ -69,6 +69,22 @@ const SUPPORTED_CONDITIONS = new Set(["import", "require"]);
 const SUPPORTED_TARGETS = new Set(["types", "default"]);
 
 /**
+ * The file extension each condition's target must carry.
+ *
+ * A condition names the module system a consumer arrives through, and the extension decides what
+ * Node actually parses the file as. Pointing `require.default` at an `.mjs` builds cleanly, passes
+ * the client-directive check, and draws only a warning from publint — while `require()` of the
+ * package throws `ERR_REQUIRE_ESM` at the first consumer to try it, because CI ignores attw's
+ * `cjs-resolves-to-esm` rule. Checking the extension here is what makes that unshippable.
+ */
+const REQUIRED_EXTENSION = {
+  importTypes: ".d.ts",
+  requireTypes: ".d.cts",
+  importDefault: ".mjs",
+  requireDefault: ".cjs",
+};
+
+/**
  * One published entry point.
  *
  * @typedef {object} PublishedEntry
@@ -157,6 +173,33 @@ export function derivePublishedEntries(exportMap, sources) {
     }
 
     const file = value => value.replace(/^\.\//, "").replace(/^dist\//, "");
+
+    // Every target must carry the extension its condition requires, and all four must be the SAME
+    // build entry under those extensions. tsup names its output after the entry, so that is the
+    // only shape it can produce — and requiring it is what makes the collision check below
+    // complete. Derived from `import.default` alone, a map whose `require` targets borrowed
+    // ANOTHER entry's basename passed every guard while `require("./a")` resolved to `./b`'s API
+    // and `import "./a"` resolved to its own.
+    const buildNames = new Set();
+    for (const [condition, value] of Object.entries(paths)) {
+      const extension = REQUIRED_EXTENSION[condition];
+      if (!value.endsWith(extension)) {
+        throw new Error(
+          `The export "${subpath}" points ${condition} at "${value}", which does not end in ` +
+            `"${extension}". A consumer arriving through that condition would be handed a file ` +
+            "the wrong module system parses."
+        );
+      }
+      buildNames.add(file(value).slice(0, -extension.length));
+    }
+    if (buildNames.size !== 1) {
+      throw new Error(
+        `The export "${subpath}" resolves to more than one build entry ` +
+          `(${[...buildNames].sort().join(", ")}). Its four targets have to be one entry's ` +
+          "output, or the files a consumer receives depend on how they imported it."
+      );
+    }
+
     const declared = sources[subpath];
     if (declared === undefined) {
       throw new Error(
@@ -169,7 +212,7 @@ export function derivePublishedEntries(exportMap, sources) {
     entries.push({
       subpath,
       source,
-      name: artifacts[0].replace(/\.[^.]+$/, ""),
+      name: [...buildNames][0],
       declarations: [file(paths.importTypes), file(paths.requireTypes)],
       artifacts,
       serverSafe: !client,

@@ -213,6 +213,53 @@ describe("export conditions the guards do not follow", () => {
   });
 });
 
+describe("a condition pointing at the wrong module format", () => {
+  it("refuses require resolving to ESM", () => {
+    // This builds cleanly, passes the client-directive check and draws only a publint warning,
+    // while `require()` of the package throws ERR_REQUIRE_ESM at the first consumer — CI ignores
+    // attw's `cjs-resolves-to-esm` rule, so the extension check here is what stops it shipping.
+    const target = conditions("index");
+    target.require = { ...target.require, default: "./dist/index.mjs" };
+    expect(() =>
+      derivePublishedEntries(
+        { ".": target },
+        { ".": barrel("src/index.ts", true) }
+      )
+    ).toThrow(/points requireDefault at ".\/dist\/index.mjs"/);
+  });
+
+  it("refuses a declaration whose extension does not match its condition", () => {
+    const target = conditions("index");
+    target.require = { ...target.require, types: "./dist/index.d.ts" };
+    expect(() =>
+      derivePublishedEntries(
+        { ".": target },
+        { ".": barrel("src/index.ts", true) }
+      )
+    ).toThrow(/points requireTypes at/);
+  });
+});
+
+describe("targets that belong to more than one build entry", () => {
+  it("refuses a subpath whose require targets borrow another entry's name", () => {
+    // Ownership used to be checked through the name derived from `import.default` alone, so this
+    // map passed: `./a` and `./b` had distinct import names, but `./a`'s require targets carried
+    // `./b`'s. The builds then emitted `shared.cjs` from `./b`, and `require("./a")` received
+    // `./b`'s API while `import "./a"` received its own.
+    const a = conditions("a");
+    a.require = { types: "./dist/shared.d.cts", default: "./dist/shared.cjs" };
+    expect(() =>
+      derivePublishedEntries(
+        { "./a": a, "./b": conditions("shared") },
+        {
+          "./a": barrel("src/a.ts", false),
+          "./b": barrel("src/shared.ts", false),
+        }
+      )
+    ).toThrow(/resolves to more than one build entry \(a, shared\)/);
+  });
+});
+
 describe("the barrel declaration and the export map", () => {
   it("refuses a published subpath with no declared barrel", () => {
     expect(() =>
