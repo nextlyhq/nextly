@@ -186,6 +186,12 @@ export function createEmailProvidersNamespace(
           fromName: args.data.fromName,
           configuration: args.data.configuration,
           isDefault: args.data.isDefault,
+          // Named explicitly, like every property above it. This object is
+          // built key by key rather than spread from `data`, so a property the
+          // argument type offers and this list omits is dropped in silence:
+          // `createProvider` reads `isActive ?? true`, and a provider someone
+          // asked to create deactivated would begin sending.
+          isActive: args.data.isActive,
         },
         directApiActor(ctx.defaultConfig, args)
       );

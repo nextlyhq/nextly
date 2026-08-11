@@ -1466,3 +1466,142 @@ describe("a descriptor whose declared paths claim the same name", () => {
     ).toBe(true);
   });
 });
+
+describe("a form open across a change to what the descriptor says", () => {
+  const secretly: EmailProviderDescriptor = {
+    type: "acme",
+    label: "Acme",
+    capabilities: {},
+    configFields: [
+      { name: "apiKey", label: "API Key", kind: "password", secret: true },
+    ],
+  };
+
+  /** The same field, described as public by a later deployment. */
+  const publicly: EmailProviderDescriptor = {
+    type: "acme",
+    label: "Acme",
+    capabilities: {},
+    configFields: [{ name: "apiKey", label: "API Key", kind: "text" }],
+  };
+
+  const values: ProviderFormValues = {
+    name: "Acme",
+    type: "acme",
+    fromEmail: "a@b.com",
+    fromName: "",
+    isDefault: false,
+    isActive: true,
+    configuration: { apiKey: MASKED_SECRET },
+  };
+
+  it("does not write the mask back as a credential", () => {
+    // The values were hydrated while the field was secret, so the form holds
+    // the server's mask. Read under a descriptor that no longer calls the
+    // field secret, the mask stops being recognised as one and is sent as the
+    // value — replacing the stored credential with eight bullet characters,
+    // on a save that was only meant to rename the provider.
+    const payload = formValuesToPayload(values, publicly, {
+      apiKey: MASKED_SECRET,
+    });
+
+    expect(payload.configuration).not.toHaveProperty("apiKey");
+  });
+
+  it("still drops it under the descriptor that calls the field secret", () => {
+    // The control for the ordinary path, which must be unaffected.
+    const payload = formValuesToPayload(values, secretly, {
+      apiKey: MASKED_SECRET,
+    });
+
+    expect(payload.configuration).not.toHaveProperty("apiKey");
+  });
+
+  it("still sends a public field whose value the user CHANGED to bullets", () => {
+    // The control that stops this becoming "never send anything mask-shaped".
+    // Only a value identical to what the server sent is dropped; one the
+    // operator typed is a real edit, whatever it looks like.
+    const typed: ProviderFormValues = {
+      ...values,
+      configuration: { apiKey: MASKED_SECRET },
+    };
+
+    const payload = formValuesToPayload(typed, publicly, { apiKey: "sk-real" });
+
+    expect(payload.configuration).toMatchObject({ apiKey: MASKED_SECRET });
+  });
+});
+
+describe("a REQUIRED field whose stored value the control cannot show", () => {
+  const descriptor: EmailProviderDescriptor = {
+    type: "acme",
+    label: "Acme",
+    capabilities: {},
+    configFields: [
+      { name: "retries", label: "Retries", kind: "number", required: true },
+    ],
+  };
+
+  function recordWith(configuration: Record<string, unknown>) {
+    return {
+      id: "p1",
+      name: "Acme",
+      type: "acme",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration,
+      isDefault: false,
+      isActive: true,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+  }
+
+  it("does not block a rename", () => {
+    // `z.coerce.number()` accepts `true`, so a provider's parser can have
+    // stored one, and a number input cannot render it. Hydration leaves the
+    // field out — which is how the patch says "leave this alone" — and a
+    // schema still demanding it refuses a save over a field the operator
+    // cannot see, cannot correct, and never asked to change.
+    const stored = { retries: true };
+    const values = providerToFormValues(recordWith(stored), descriptor);
+
+    expect(values.configuration).not.toHaveProperty("retries");
+    expect(
+      buildProviderSchema(descriptor, stored).safeParse({
+        ...values,
+        name: "Renamed",
+      }).success
+    ).toBe(true);
+  });
+
+  it("still requires it when the stored value IS showable", () => {
+    // The control. Relaxing the field for an unrepresentable stored value must
+    // not relax it generally — a required field emptied by the operator is
+    // still reported, which is the whole reason the schema names it.
+    const stored = { retries: 3 };
+    const values = providerToFormValues(recordWith(stored), descriptor);
+
+    expect(
+      buildProviderSchema(descriptor, stored).safeParse({
+        ...values,
+        configuration: { retries: "" },
+      }).success
+    ).toBe(false);
+  });
+
+  it("still requires it on a CREATE, where nothing is stored", () => {
+    // The other control: no stored value means nothing to grandfather.
+    expect(
+      buildProviderSchema(descriptor).safeParse({
+        name: "Acme",
+        type: "acme",
+        fromEmail: "a@b.com",
+        fromName: "",
+        isDefault: false,
+        isActive: true,
+        configuration: {},
+      }).success
+    ).toBe(false);
+  });
+});

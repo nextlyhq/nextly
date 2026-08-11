@@ -378,15 +378,27 @@ function configurationSchema(
     // stored value is `1`, and an identity comparison between them says the
     // legacy choice is a different value than the one on screen — which
     // rejects a field nobody touched and makes the whole form unsubmittable.
+    const leaf = fieldSchema(
+      field,
+      stored === undefined
+        ? undefined
+        : storedValueForControl(field, readAtPath(stored, path))
+    );
+
+    // A stored value the control cannot show is left out of the form, and the
+    // patch then says "leave this alone" by omitting it. A required field
+    // would otherwise be demanded of a form that deliberately does not hold
+    // it, so an operator who opened the page to rename the provider is
+    // refused over a field they cannot see, cannot correct, and were never
+    // asked to change.
+    //
+    // Asked of the same predicate the fields render their notice from, so the
+    // form, the payload and the schema cannot come to disagree about which
+    // values are showable.
     assignAtPath(
       tree,
       path,
-      fieldSchema(
-        field,
-        stored === undefined
-          ? undefined
-          : storedValueForControl(field, readAtPath(stored, path))
-      )
+      hasUnrepresentableStoredValue(stored, field) ? leaf.optional() : leaf
     );
   }
 
@@ -682,15 +694,27 @@ function withoutUntouchedSecrets(
   if (!descriptor || !stored) return cleaned;
 
   for (const field of descriptor.configFields) {
-    if (field.secret !== true) continue;
     const path = splitFieldPath(field.name);
     if (path === null) continue;
     const current = readAtPath(cleaned, path);
     const asStored = readAtPath(stored, path);
+    if (typeof current !== "string" || current !== asStored) continue;
+
     // Identical to what the server sent for this credential, which is its
     // mask. Indistinguishable from a user who retyped that exact string, and
     // that is fine: for a masked field the two mean the same thing.
-    if (typeof current === "string" && current === asStored) {
+    //
+    // Also dropped when the value merely LOOKS like a mask, whatever the
+    // descriptor says the field is. A form stays open across a deployment,
+    // and a field that was `secret` when the values were hydrated can be
+    // described as public by the time they are submitted — the mask is then
+    // no longer recognised as one and is written back as though it were the
+    // credential, replacing the stored one with eight bullet characters.
+    // Deciding from the value that is actually in hand cannot be overtaken
+    // that way, and it costs nothing where the field really does hold
+    // bullets: the value is unchanged, so omitting it and sending it leave
+    // the same thing stored.
+    if (field.secret === true || isMaskedSecret(asStored)) {
       deleteAtPath(cleaned, path);
     }
   }
