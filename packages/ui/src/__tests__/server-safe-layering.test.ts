@@ -11,8 +11,14 @@
  * dependency: `react` is a declared peer dependency of this package and resolves fine. What makes
  * an entry server-safe is that nothing it REACHES pulls in a client runtime, which is a property of
  * the import graph and has to be walked.
+ *
+ * Everything below reads the PARSED module rather than its text, because a module can cross the
+ * boundary in four ways and no single pattern catches them: importing a client package, carrying a
+ * client directive, containing JSX (which the `react-jsx` transform turns into a
+ * `react/jsx-runtime` import appearing nowhere in the source), or reading a browser global where
+ * the module body runs.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -30,8 +36,8 @@ const PKG_ROOT = path.join(
 /**
  * The packages a server-safe entry point is allowed to reach.
  *
- * An ALLOW-list, not a list of client-only packages to refuse. A deny-list has to name every way
- * of pulling in a client runtime, and it cannot name the ones that do not exist yet: a workspace
+ * An ALLOW-list, not a list of client-only packages to refuse. A deny-list has to name every way of
+ * pulling in a client runtime, and it cannot name the ones that do not exist yet: a workspace
  * package added later, or a sibling that itself imports React, is not "react" by name and would
  * pass. Listing what is permitted fails closed instead, and makes each addition a decision someone
  * takes deliberately.
@@ -41,31 +47,98 @@ const PKG_ROOT = path.join(
 const ALLOWED_PACKAGES = new Set(["clsx", "tailwind-merge"]);
 
 /**
- * Every module specifier a source names, read from the PARSED syntax tree.
+ * Globals that exist only in a browser.
  *
- * Parsed rather than matched, because the regex version had to strip comments first and that
- * stripping fails OPEN: an unclosed comment marker inside a template literal swallows everything
- * up to the next terminator, removing real imports rather than adding noise. It also reported a
- * usage example inside a doc comment as a genuine reach. The tree carries no comments to confuse,
- * and covers every form without one pattern per syntax — static, type-only, re-export, side-effect,
- * dynamic import, require, and import-equals.
+ * Reading one where the module body runs throws on a server before any of this package's own code
+ * is reached, and it involves no import and no directive, so nothing else here would notice.
  */
-function specifiers(source: string, fileName: string): string[] {
+const BROWSER_GLOBALS = new Set([
+  "window",
+  "document",
+  "navigator",
+  "localStorage",
+  "sessionStorage",
+  "history",
+  "location",
+]);
+
+/** What one module does that could put it on the client side of the boundary. */
+interface Analysis {
+  /** Module specifiers whose import survives to runtime. */
+  specifiers: string[];
+  /** Whether its directive prologue contains `"use client"`. */
+  clientDirective: boolean;
+  /** Whether it contains JSX, which compiles to a `react/jsx-runtime` import. */
+  jsx: boolean;
+  /** Browser globals it reads where the module body runs. */
+  globals: string[];
+}
+
+/**
+ * Read one module.
+ *
+ * Parsed rather than matched. The text-matching version needed comments stripped first, and that
+ * stripping fails OPEN: an unclosed comment marker inside a template literal swallows everything up
+ * to the next terminator, removing real imports rather than adding noise. It also reported a usage
+ * example inside a doc comment as a genuine reach, and could not see a directive that a doc comment
+ * preceded — which is how every client module in this package is written.
+ */
+function analyze(source: string, fileName: string): Analysis {
   const tree = ts.createSourceFile(
     fileName,
     source,
     ts.ScriptTarget.Latest,
-    true
+    true,
+    fileName.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
   );
-  const found: string[] = [];
+  const specifiers: string[] = [];
+  const globals: string[] = [];
+  let jsx = false;
 
   const record = (node: ts.Node | undefined): void => {
-    if (node && ts.isStringLiteral(node)) found.push(node.text);
+    if (node && ts.isStringLiteral(node)) specifiers.push(node.text);
   };
 
-  const visit = (node: ts.Node): void => {
-    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
-      record(node.moduleSpecifier);
+  // A directive prologue is the leading run of string-expression statements. Taken from the tree,
+  // so comments before it are irrelevant: `"use client"` sits under a module doc comment in every
+  // client module here, and a start-anchored text match saw none of them.
+  const clientDirective = ((): boolean => {
+    for (const statement of tree.statements) {
+      if (
+        !ts.isExpressionStatement(statement) ||
+        !ts.isStringLiteral(statement.expression)
+      ) {
+        return false;
+      }
+      if (statement.expression.text === "use client") return true;
+    }
+    return false;
+  })();
+
+  /** Whether this identifier reads the global, rather than naming something in another position. */
+  const readsTheGlobal = (node: ts.Identifier): boolean => {
+    const parent = node.parent;
+    // `shape.window` and `{ window: 1 }` name a property, not the global.
+    if (ts.isPropertyAccessExpression(parent) && parent.name === node) {
+      return false;
+    }
+    if (ts.isPropertyAssignment(parent) && parent.name === node) return false;
+    if (ts.isBindingElement(parent) && parent.propertyName === node) {
+      return false;
+    }
+    // `typeof window === "undefined"` is the guard that MAKES a module server-safe: it evaluates to
+    // a string rather than throwing, so reporting it would punish the correct pattern.
+    if (ts.isTypeOfExpression(parent)) return false;
+    return true;
+  };
+
+  const visit = (node: ts.Node, insideFunction: boolean): void => {
+    if (ts.isImportDeclaration(node)) {
+      // `import type` is erased before the emitted JavaScript exists, so it cannot pull in a
+      // runtime. Reporting it would fail a change that only affects declarations.
+      if (!node.importClause?.isTypeOnly) record(node.moduleSpecifier);
+    } else if (ts.isExportDeclaration(node)) {
+      if (!node.isTypeOnly) record(node.moduleSpecifier);
     } else if (
       ts.isImportEqualsDeclaration(node) &&
       ts.isExternalModuleReference(node.moduleReference)
@@ -77,11 +150,42 @@ function specifiers(source: string, fileName: string): string[] {
       const isRequire = ts.isIdentifier(callee) && callee.text === "require";
       if (isDynamicImport || isRequire) record(node.arguments[0]);
     }
-    ts.forEachChild(node, visit);
+
+    if (
+      ts.isJsxElement(node) ||
+      ts.isJsxSelfClosingElement(node) ||
+      ts.isJsxFragment(node)
+    ) {
+      jsx = true;
+    }
+
+    // Only where the module BODY runs. A browser global inside a function is reached when that
+    // function is called, which a server importing the module never does.
+    if (
+      !insideFunction &&
+      ts.isIdentifier(node) &&
+      BROWSER_GLOBALS.has(node.text) &&
+      readsTheGlobal(node)
+    ) {
+      globals.push(node.text);
+    }
+
+    const entersFunction =
+      ts.isFunctionDeclaration(node) ||
+      ts.isFunctionExpression(node) ||
+      ts.isArrowFunction(node) ||
+      ts.isMethodDeclaration(node) ||
+      ts.isGetAccessor(node) ||
+      ts.isSetAccessor(node) ||
+      ts.isConstructorDeclaration(node);
+
+    ts.forEachChild(node, child =>
+      visit(child, insideFunction || entersFunction)
+    );
   };
 
-  visit(tree);
-  return found;
+  visit(tree, false);
+  return { specifiers, clientDirective, jsx, globals: [...new Set(globals)] };
 }
 
 /** Resolve a relative specifier the way the bundler does, or `null` if it names a package. */
@@ -95,23 +199,17 @@ function resolveLocal(fromFile: string, specifier: string): string | null {
     path.join(base, "index.ts"),
     path.join(base, "index.tsx"),
   ]) {
-    if (existsSync(candidate) && !candidate.endsWith(path.sep)) {
-      try {
-        if (readFileSync(candidate, "utf8")) return candidate;
-      } catch {
-        // A directory matched the bare path; keep trying the suffixed candidates.
-      }
-    }
+    if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
   }
   return null;
 }
 
-/** Every local module reachable from an entry, and every package specifier they name. */
+/** Every local module reachable from an entry, analysed, plus the packages they name. */
 function reach(entry: string): {
-  files: string[];
+  files: { file: string; analysis: Analysis }[];
   packages: Map<string, string>;
 } {
-  const files: string[] = [];
+  const files: { file: string; analysis: Analysis }[] = [];
   const packages = new Map<string, string>();
   const queue = [entry];
   const seen = new Set<string>();
@@ -120,10 +218,11 @@ function reach(entry: string): {
     const file = queue.pop()!;
     if (seen.has(file)) continue;
     seen.add(file);
-    files.push(file);
 
-    const source = readFileSync(file, "utf8");
-    for (const specifier of specifiers(source, file)) {
+    const analysis = analyze(readFileSync(file, "utf8"), file);
+    files.push({ file, analysis });
+
+    for (const specifier of analysis.specifiers) {
       const local = resolveLocal(file, specifier);
       if (local) {
         queue.push(local);
@@ -139,21 +238,23 @@ const SERVER_SAFE = publishedEntries()
   .filter(entry => entry.serverSafe)
   .map(entry => [entry.subpath, path.join(PKG_ROOT, entry.source)] as const);
 
-describe("reading the specifiers a module names", () => {
-  const read = (source: string): string[] => specifiers(source, "probe.ts");
+const relative = (file: string): string => path.relative(PKG_ROOT, file);
+
+describe("reading a module", () => {
+  const read = (source: string, name = "probe.ts"): Analysis =>
+    analyze(source, name);
 
   it("covers every import form, including the ones no single pattern catches", () => {
     expect(
       read(`
         import a from "static";
-        import type { B } from "type-only";
         import "side-effect";
         export { c } from "re-export";
         export * from "star";
         const d = await import("dynamic");
         const e = require("required");
         import f = require("equals");
-      `).sort()
+      `).specifiers.sort()
     ).toEqual([
       "dynamic",
       "equals",
@@ -162,13 +263,22 @@ describe("reading the specifiers a module names", () => {
       "side-effect",
       "star",
       "static",
-      "type-only",
     ]);
   });
 
+  it("ignores a type-only import, which is erased before runtime", () => {
+    // Reporting one would fail a change that affects declarations only, and no declaration can
+    // pull a client runtime into the emitted JavaScript.
+    expect(
+      read(`
+        import type { A } from "type-only";
+        export type { B } from "type-only-export";
+        import { real } from "value-import";
+      `).specifiers
+    ).toEqual(["value-import"]);
+  });
+
   it("does not report an example inside a doc comment", () => {
-    // The first version of this check did, because it matched raw text: the usage example in
-    // `tailwind-preset.ts` was reported as a package that entry reaches.
     expect(
       read(`
         /**
@@ -176,16 +286,15 @@ describe("reading the specifiers a module names", () => {
          * import uiPreset from "@nextlyhq/ui/tailwind-preset";
          */
         import { real } from "actually-imported";
-      `)
+      `).specifiers
     ).toEqual(["actually-imported"]);
   });
 
   it("still sees an import after a template holding an unclosed comment marker", () => {
-    // The reason this is parsed rather than matched, and the shape that matters. A non-greedy
-    // comment regex handles a CLOSED marker pair inside a template correctly, so that case proves
-    // nothing. An UNCLOSED one runs on to the next terminator anywhere in the file — the doc
-    // comment below — and deletes the import between them. That failure REMOVES evidence rather
-    // than adding noise, so the guard would pass while blind to everything the module imports.
+    // The reason this is parsed rather than matched. A non-greedy comment regex handles a CLOSED
+    // marker pair inside a template correctly, so that case proves nothing. An UNCLOSED one runs
+    // on to the next terminator anywhere in the file — the doc comment below — and deletes the
+    // import between them. That failure REMOVES evidence rather than adding noise.
     expect(
       read(
         [
@@ -193,19 +302,61 @@ describe("reading the specifiers a module names", () => {
           'import { real } from "after-template";',
           "/** A doc comment, whose terminator a regex would pair with the template's. */",
         ].join("\n")
-      )
+      ).specifiers
     ).toEqual(["after-template"]);
   });
 
-  it("is not confused by comment markers inside a string", () => {
+  it("sees a client directive that a doc comment precedes", () => {
+    // How every client module in this package is written: the module doc comes first. A
+    // start-anchored text match found none of them.
     expect(
-      read(
-        [
-          'const url = "//cdn.example.com/x";',
-          'import { real } from "after-string";',
-        ].join("\n")
-      )
-    ).toEqual(["after-string"]);
+      read(`
+        /**
+         * A module with documentation above its directive.
+         */
+        "use client";
+        export const x = 1;
+      `).clientDirective
+    ).toBe(true);
+  });
+
+  it("does not mistake a later string statement for a directive", () => {
+    // The control: a string expression after real code is not a prologue.
+    expect(
+      read(`
+        export const x = 1;
+        "use client";
+      `).clientDirective
+    ).toBe(false);
+  });
+
+  it("sees JSX, which compiles to an import appearing nowhere in the source", () => {
+    const analysis = read(`export const A = () => <div />;`, "probe.tsx");
+    expect(analysis.jsx).toBe(true);
+    // The point: nothing here names React, yet the emitted module imports `react/jsx-runtime`.
+    expect(analysis.specifiers).toEqual([]);
+  });
+
+  it("reports a browser global read where the module body runs", () => {
+    expect(read(`export const w = window.innerWidth;`).globals).toEqual([
+      "window",
+    ]);
+  });
+
+  it("does not report one inside a function, or behind a typeof guard", () => {
+    // The controls. A global inside a function is reached when that function is CALLED, which a
+    // server importing the module never does; `typeof window` is the guard that makes a module
+    // server-safe; and a property named `window` is not the global at all.
+    expect(
+      read(`
+        export function measure() {
+          return document.body.clientWidth;
+        }
+        export const isBrowser = typeof window !== "undefined";
+        const shape = { window: 1 };
+        export const w = shape.window;
+      `).globals
+    ).toEqual([]);
   });
 });
 
@@ -219,17 +370,16 @@ describe("what a server-safe entry point reaches", () => {
   it.each(SERVER_SAFE)(
     "%s reaches only packages that are allowed",
     (_subpath, entry) => {
-      const { packages } = reach(entry);
-      const unlisted = [...packages.entries()]
+      const unlisted = [...reach(entry).packages.entries()]
         .filter(([specifier]) => !ALLOWED_PACKAGES.has(specifier))
         .map(([specifier, importer]) => `${specifier} (from ${importer})`);
 
       expect(
         unlisted,
-        "a server-safe entry point reached a package that is not on the allow-list. If it is genuinely " +
-          "free of React and the DOM — including everything IT reaches — add it to ALLOWED_PACKAGES; " +
-          "otherwise a server component importing this subpath will fail at runtime while the build " +
-          "and the client-directive guard both pass"
+        "a server-safe entry point reached a package that is not on the allow-list. If it is " +
+          "genuinely free of React and the DOM — including everything IT reaches — add it to " +
+          "ALLOWED_PACKAGES; otherwise a server component importing this subpath will fail at " +
+          "runtime while the build and the client-directive guard both pass"
       ).toEqual([]);
     }
   );
@@ -237,13 +387,38 @@ describe("what a server-safe entry point reaches", () => {
   it.each(SERVER_SAFE)(
     "%s reaches no module marked client",
     (_subpath, entry) => {
-      const marked = reach(entry)
-        .files.filter(file =>
-          /^\s*["']use client["']/.test(readFileSync(file, "utf8"))
-        )
-        .map(file => path.relative(PKG_ROOT, file));
+      expect(
+        reach(entry)
+          .files.filter(({ analysis }) => analysis.clientDirective)
+          .map(({ file }) => relative(file))
+      ).toEqual([]);
+    }
+  );
 
-      expect(marked).toEqual([]);
+  it.each(SERVER_SAFE)("%s reaches no JSX", (_subpath, entry) => {
+    expect(
+      reach(entry)
+        .files.filter(({ analysis }) => analysis.jsx)
+        .map(({ file }) => relative(file)),
+      "JSX compiles to a `react/jsx-runtime` import under this package's `react-jsx` transform, so " +
+        "a reached module containing any would put React in the emitted artifact while naming it " +
+        "nowhere in the source"
+    ).toEqual([]);
+  });
+
+  it.each(SERVER_SAFE)(
+    "%s touches no browser global at module scope",
+    (_subpath, entry) => {
+      expect(
+        reach(entry)
+          .files.filter(({ analysis }) => analysis.globals.length > 0)
+          .map(
+            ({ file, analysis }) =>
+              `${relative(file)}: ${analysis.globals.join(", ")}`
+          ),
+        "reading a browser global where the module body runs throws on a server, and involves no " +
+          "import and no directive for the other checks to notice"
+      ).toEqual([]);
     }
   );
 });
