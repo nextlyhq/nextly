@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createTestDb } from "../../__tests__/fixtures/db";
-import type { TestDatabase } from "../../__tests__/fixtures/types";
+import { createTestDb, type TestDb } from "../../__tests__/fixtures/db";
 import { MediaService } from "../media";
 
 const mockStorageUpload = vi.fn().mockResolvedValue({
@@ -48,7 +47,7 @@ vi.mock("@nextly/storage", () => ({
 }));
 
 describe("MediaService", () => {
-  let testDb: TestDatabase;
+  let testDb: TestDb;
   let mediaService: MediaService;
   let testUserId: string;
 

@@ -12,7 +12,7 @@ import {
 
 // Mock listRoleSlugsForUser — it uses a global db singleton (not the test DB).
 // We must mock it so tests do not depend on the runtime database connection.
-vi.mock("../lib/permissions", () => ({
+vi.mock("../../../services/lib/permissions", () => ({
   listRoleSlugsForUser: vi.fn(),
 }));
 
@@ -37,7 +37,7 @@ function createTestAdapter(db: unknown) {
   return {
     getDrizzle: () => db,
     getCapabilities: () => ({ dialect: "sqlite" as const }),
-  } as any;  
+  } as any;
 }
 
 // Key IDs used across tests — kept as constants so afterEach can evict them

@@ -15,7 +15,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
-import type { SingleEntryService } from "../services/single-entry-service";
+import type { SingleEntryService } from "../../singles/services/single-entry-service";
 
 let current: TestNextly | undefined;
 

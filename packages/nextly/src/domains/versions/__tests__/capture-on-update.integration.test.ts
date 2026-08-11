@@ -25,7 +25,7 @@ import type { HookContext } from "../../../hooks/types";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
-import type { SingleEntryService } from "../services/single-entry-service";
+import type { SingleEntryService } from "../../singles/services/single-entry-service";
 
 let current: TestNextly | undefined;
 
