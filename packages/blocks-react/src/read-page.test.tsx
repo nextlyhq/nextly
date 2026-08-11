@@ -35,6 +35,18 @@ const drawless = defineBlock<{ draw: boolean }>({
     props.draw ? <p className={className}>drawn</p> : null,
 });
 
+const box = defineBlock<{ label: string }>({
+  name: "test/box",
+  version: 1,
+  description: "A container.",
+  example: { props: { label: "b" } },
+  defaultProps: { label: "" },
+  slots: { children: {} },
+  render: ({ className, renderSlot }) => (
+    <div className={className}>{renderSlot("children")}</div>
+  ),
+});
+
 const text = defineBlock<{ value: string }>({
   name: "test/text",
   version: 1,
@@ -47,6 +59,7 @@ const text = defineBlock<{ value: string }>({
 /** What the site had installed when the page was saved. */
 const withPlugin = createBlockResolver([
   drawless as AnyBlockDefinition,
+  box as AnyBlockDefinition,
   text as AnyBlockDefinition,
 ]);
 /** What the site has installed when the page is read: the plugin is gone. */
@@ -454,12 +467,19 @@ describe("gating is trusted only as far as the artifact accounts for it", () => 
     expect(read.styles.css).not.toContain("crimson");
   });
 
-  it("refuses when gating hid a duplicate id before the address pass saw it", () => {
-    // The compiler writes no node-local rules for either twin. If gating removes
-    // one, the collision never reaches the address pass, the two stages compare
-    // equal, and the survivor is still missing its rules — so the evidence only
-    // exists in the pre-gating tree.
-    const hiddenCollision: BlockDocument = {
+  it("refuses when a duplicate hid inside a subtree gating removed", () => {
+    // The case only the PRE-GATING tree can see, and the reason this is read
+    // from the migrated document rather than inferred by comparing stages.
+    //
+    // The twin sits inside a conditioned container. Gating removes the whole
+    // subtree, so the collision never reaches the address pass and those two
+    // stages compare equal. Coverage still passes: the container has its own
+    // entry, its type survives elsewhere, and the hidden twin is not even looked
+    // for because a node with that id DID survive at the top level. Every other
+    // clause is therefore satisfied — while the compiler, having seen both nodes
+    // carry one id, wrote node-local rules for neither, so the survivor ships
+    // with a class nothing targets.
+    const hidden: BlockDocument = {
       formatVersion: DOCUMENT_FORMAT_VERSION,
       kind: "page",
       nodes: [
@@ -467,30 +487,43 @@ describe("gating is trusted only as far as the artifact accounts for it", () => 
           id: "twin",
           type: "test/text",
           version: 1,
-          props: { value: "conditioned" },
-          styles: { base: { base: { color: "crimson" } } },
-          visibility: {
-            conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
-          },
-        },
-        {
-          id: "twin",
-          type: "test/text",
-          version: 1,
           props: { value: "survivor" },
           styles: { base: { base: { color: "olive" } } },
         },
+        {
+          id: "shell",
+          type: "test/box",
+          version: 1,
+          props: { label: "b" },
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+          },
+          slots: {
+            children: [
+              {
+                id: "twin",
+                type: "test/text",
+                version: 1,
+                props: { value: "hidden" },
+                styles: { base: { base: { color: "crimson" } } },
+              },
+            ],
+          },
+        },
+        {
+          id: "keeps-the-type",
+          type: "test/box",
+          version: 1,
+          props: { label: "c" },
+        },
       ],
     };
-    const stored = resolvePageStyles(
-      hiddenCollision,
-      undefined,
-      context,
-      withPlugin
-    );
+
+    const stored = resolvePageStyles(hidden, undefined, context, withPlugin);
+    // The compiler refused BOTH twins, so the survivor's rule is absent.
     expect(stored.css).not.toContain("olive");
 
-    const read = preparePageForRead(hiddenCollision, {
+    const read = preparePageForRead(hidden, {
       resolver: withPlugin,
       styles: stored,
       styleContext: context,
