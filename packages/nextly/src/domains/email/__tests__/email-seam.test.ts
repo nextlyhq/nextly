@@ -209,6 +209,72 @@ describe("EmailService — D63 filter/action seams", () => {
     expect(captured).toEqual([expect.objectContaining({ success: false })]);
   });
 
+  it("returns only what it promises, never the provider's extra fields", async () => {
+    // Both send routes spread this straight into an HTTP response, and
+    // `rejected` carries addresses — including BCC recipients a beforeSend
+    // filter added. A contributed provider holding decrypted configuration can
+    // put anything else on the object too.
+    const { service } = buildSend();
+    (service as unknown as { createAdapterFromRecord: unknown })[
+      "createAdapterFromRecord"
+    ] = () => ({
+      send: () =>
+        Promise.resolve({
+          success: true,
+          messageId: "msg-1",
+          rejected: ["secret-bcc@b.com"],
+          somethingElse: "should not travel",
+        }),
+    });
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    // toEqual, not toMatchObject: the point is what is ABSENT.
+    expect(result).toEqual({ success: true, messageId: "msg-1" });
+  });
+
+  it("records the mailbox when the caller wrote a display name", async () => {
+    // A provider dispatches `Display Name <user@example.com>` to the mailbox,
+    // and so does the person asking support whether a message arrived — a hash
+    // of the display form answers "no record" for a message that was sent.
+    // Nodemailer reports refusals as bare mailboxes too, which is why the
+    // refused CC below matches at all.
+    const recorded: Array<{ to: string; status: string }> = [];
+    const { service } = buildSend();
+    (service as unknown as { createAdapterFromRecord: unknown })[
+      "createAdapterFromRecord"
+    ] = () => ({
+      send: () =>
+        Promise.resolve({
+          success: true,
+          messageId: "msg-1",
+          rejected: ["refused@b.com"],
+        }),
+    });
+    (service as unknown as { deliveries: unknown })["deliveries"] = {
+      recordAll: (inputs: Array<{ to: string; status: string }>) => {
+        recorded.push(...inputs);
+        return Promise.resolve();
+      },
+    };
+
+    await service.send({
+      to: "Primary Person <a@b.com>",
+      cc: ["Refused Person <refused@b.com>"],
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(recorded).toEqual([
+      expect.objectContaining({ to: "a@b.com", status: "sent" }),
+      expect.objectContaining({ to: "refused@b.com", status: "failed" }),
+    ]);
+  });
+
   it("records a refused recipient as failed while the others succeed", async () => {
     // SMTP answers `RCPT TO` one address at a time, so a server can accept the
     // message for some recipients and refuse it for others while the send as a

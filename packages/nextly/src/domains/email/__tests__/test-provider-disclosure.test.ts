@@ -226,3 +226,93 @@ describe("an adapter that rejects while sending", () => {
     expect(logged).toContain(SECRET);
   });
 });
+
+describe("a test that never reached the provider", () => {
+  let sqlite: Database.Database;
+  let service: EmailProviderService;
+  let providerId: string;
+
+  beforeEach(async () => {
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(chattyProvider);
+    const created = await service.createProvider({
+      name: "Chatty",
+      type: "chatty-probe",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { apiKey: SECRET },
+      isDefault: false,
+      isActive: true,
+    });
+    providerId = created.id;
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    getEmailProviderRegistry().reset();
+  });
+
+  it("records no delivery when the adapter cannot be built", async () => {
+    // The catch around a test send also covers BUILDING the adapter, which
+    // throws on its own when a plugin has been removed or stored configuration
+    // no longer constructs one. A row for either is a phantom send: history
+    // for a message that was never composed.
+    const recorded: unknown[] = [];
+    // Both methods: a test send goes through `record`, an ordinary send
+    // through `recordAll`, and a double carrying only one would make this pass
+    // for want of a method rather than for want of a row.
+    (service as unknown as { deliveries: unknown })["deliveries"] = {
+      record: (input: unknown) => {
+        recorded.push(input);
+        return Promise.resolve();
+      },
+      recordAll: (inputs: unknown[]) => {
+        recorded.push(...inputs);
+        return Promise.resolve();
+      },
+    };
+    (service as unknown as { createAdapterFromProvider: unknown })[
+      "createAdapterFromProvider"
+    ] = () => {
+      throw new Error("the plugin that provided this type is gone");
+    };
+
+    const outcome = await service.testProvider(providerId);
+
+    expect(outcome.success).toBe(false);
+    expect(recorded).toHaveLength(0);
+  });
+
+  it("records one when the send itself fails", async () => {
+    // The control. Without it the case above would pass on a service that had
+    // stopped recording test sends altogether, which is the gap the recorder
+    // was added to close.
+    const recorded: unknown[] = [];
+    (service as unknown as { deliveries: unknown })["deliveries"] = {
+      record: (input: unknown) => {
+        recorded.push(input);
+        return Promise.resolve();
+      },
+      recordAll: (inputs: unknown[]) => {
+        recorded.push(...inputs);
+        return Promise.resolve();
+      },
+    };
+    (service as unknown as { createAdapterFromProvider: unknown })[
+      "createAdapterFromProvider"
+    ] = () => ({
+      send: () => Promise.reject(new Error("the relay refused the connection")),
+    });
+
+    const outcome = await service.testProvider(providerId);
+
+    expect(outcome.success).toBe(false);
+    expect(recorded).toHaveLength(1);
+  });
+});

@@ -84,6 +84,25 @@ const SLUG_TO_TEMPLATE_KEY: Record<
 // ============================================================
 
 /**
+ * The mailbox out of an address a caller may have written with a display name.
+ *
+ * `Display Name <user@example.com>` is dispatched to `user@example.com`, which
+ * is also the form a provider reports a refusal in and the form support is
+ * given when asked whether a message arrived. Everything downstream -- the
+ * hash, the deduplication and the refusal match -- has to agree on one
+ * spelling, and this is the one the outside world uses.
+ *
+ * The LAST angle-bracketed group is taken, which is where RFC 5322 puts the
+ * address; a display name containing brackets is pathological and falls back to
+ * the whole string rather than guessing.
+ */
+function mailboxOf(address: string): string {
+  const trimmed = address.trim();
+  const angled = /<([^<>]*)>\s*$/.exec(trimmed);
+  return (angled?.[1] ?? trimmed).trim();
+}
+
+/**
  * Every address a message actually went to, with the line it was on.
  *
  * The delivery log answers questions about a PERSON, and a person copied on a
@@ -103,6 +122,12 @@ function deliveryRecipients(payload: {
   cc?: string[];
   bcc?: string[];
 }): Array<{ to: string; recipientKind: EmailDeliveryRecipientKind }> {
+  // Recorded as the MAILBOX, not the string the caller wrote. A provider
+  // dispatches `Display Name <user@example.com>` to `user@example.com`, and so
+  // does the person asking support whether a message arrived -- a hash of the
+  // display form answers "no record" for a message that was sent. Nodemailer
+  // reports refusals as bare mailboxes too, so the same normalisation is what
+  // lets a refused recipient be matched at all.
   const seen = new Set<string>();
   const recipients: Array<{
     to: string;
@@ -110,10 +135,11 @@ function deliveryRecipients(payload: {
   }> = [];
 
   const add = (address: string, recipientKind: EmailDeliveryRecipientKind) => {
-    const key = address.trim().toLowerCase();
+    const mailbox = mailboxOf(address);
+    const key = mailbox.toLowerCase();
     if (key === "" || seen.has(key)) return;
     seen.add(key);
-    recipients.push({ to: address, recipientKind });
+    recipients.push({ to: mailbox, recipientKind });
   };
 
   add(payload.to, "to");
@@ -459,7 +485,7 @@ export class EmailService extends BaseService {
       // saying `sent` for a refused address is a wrong answer to the one
       // question this table exists to answer.
       const refused = new Set(
-        (result.rejected ?? []).map(address => address.trim().toLowerCase())
+        (result.rejected ?? []).map(address => mailboxOf(address).toLowerCase())
       );
       await this.deliveries?.recordAll(
         deliveryRecipients(filtered).map(recipient => {
@@ -516,7 +542,19 @@ export class EmailService extends BaseService {
         });
       }
 
-      return result;
+      // Constructed, never the adapter's object. `send`'s declared return type
+      // has only these two fields, but returning `result` hands back whatever
+      // the provider put on it -- and both send routes spread that straight
+      // into an HTTP response. `rejected` carries addresses, including BCC
+      // recipients an `email.beforeSend` filter added, and a contributed
+      // provider can put anything else there while holding decrypted
+      // configuration. What this method promises is what it returns.
+      return {
+        success: result.success,
+        ...(result.messageId !== undefined
+          ? { messageId: result.messageId }
+          : {}),
+      };
     } catch (error) {
       // Recorded before the action seam, for the reason given in the success
       // path: a plugin handler that blocks must not be able to cost us the

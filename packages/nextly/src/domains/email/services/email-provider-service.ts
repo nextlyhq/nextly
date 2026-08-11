@@ -674,6 +674,14 @@ export class EmailProviderService extends BaseService {
       });
     }
 
+    // Whether a message was actually handed to the provider. The catch below
+    // is shared with the connection probe AND with everything that happens
+    // before dispatch -- building the adapter can throw on its own, when a
+    // plugin has been removed or stored configuration no longer constructs
+    // one. A delivery recorded for either is a phantom send: a row in the
+    // history for a message that was never composed.
+    let dispatched = false;
+
     try {
       // Only when the caller explicitly asked to probe. Substituting a probe
       // for the send would have been silent and wrong: `api/email-providers-test.ts`
@@ -719,6 +727,7 @@ export class EmailProviderService extends BaseService {
       // Fall back to the provider's own fromEmail when no test address is given
       const to = testEmail || provider.fromEmail;
 
+      dispatched = true;
       const result = await adapter.send({
         to,
         from,
@@ -756,16 +765,15 @@ export class EmailProviderService extends BaseService {
         ...describeProviderFailure(error),
       });
 
-      // Only the send path. This catch is shared with the connection probe,
-      // which dispatches nothing, so recording its failure here would put a
-      // delivery in the log for a message that was never composed -- against a
-      // recipient the probe never had, since `testEmail` is optional and the
-      // row would hash an empty string.
+      // Only a send that actually reached the provider. `mode === "send"` is
+      // not enough on its own: the adapter is built inside this try, so a
+      // removed plugin or unusable stored configuration lands here having
+      // dispatched nothing.
       //
       // A NextlyError's publicMessage is a decision about what may be shown.
       // Anything else is a message the throw site happened to interpolate, and
       // a contributed adapter throws with decrypted configuration in scope.
-      if (mode === "send") {
+      if (dispatched) {
         await this.recordTestDelivery(
           testEmail || provider.fromEmail,
           provider,
