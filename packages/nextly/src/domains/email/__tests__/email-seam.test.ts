@@ -461,8 +461,9 @@ describe("a message id that carries a recipient", () => {
 
   it("is withheld from the after-send actions", async () => {
     // A plugin action is code the install chose to run, but the address still
-    // did not come from it, and an action that forwards its argument turns
-    // this into the disclosure the response path was closed against.
+    // did not come from it. An action that forwards or persists its argument
+    // — a webhook, an analytics call — carries the hidden BCC to wherever it
+    // sends, which is a disclosure by a route the caller never sees.
     const captured: Array<Record<string, unknown>> = [];
     const service = sendWithIdDerivedFromABccRecipient();
     getFilterRegistry().addAction(

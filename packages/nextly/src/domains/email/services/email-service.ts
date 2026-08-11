@@ -499,8 +499,9 @@ export class EmailService extends BaseService {
       // `email.beforeSend` filter can add a BCC the caller never wrote, so the
       // address is not always one the reader already knows.
       //
-      // Computed once and used for all four. Sanitising only the one that
-      // prompted it leaves the same value disclosed by three other routes.
+      // Computed once and used for all four, so the value the caller reads,
+      // the value an action receives, the value in the log and the value in
+      // the delivery row cannot diverge. Four sanitisations could.
       //
       // Compared against the ACTUAL mailboxes rather than redacted by shape:
       // a Message-ID legitimately contains an `@`, so address-shaped redaction
