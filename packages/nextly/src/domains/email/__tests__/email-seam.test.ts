@@ -845,3 +845,79 @@ describe("a failure AFTER the provider accepted the message", () => {
     expect(result).toEqual({ success: false });
   });
 });
+
+describe("a message id built to cost us something", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetFilterRegistry();
+  });
+
+  afterEach(() => {
+    resetFilterRegistry();
+  });
+
+  it("does not let a separator-heavy id stall the send path", async () => {
+    // Candidate generation once produced every contiguous span of an id's
+    // segments, which is quadratic in their number — a 1,000-segment id took
+    // 426ms before the send could return, and nothing bounds a provider's
+    // identifier. Only the shortest qualifying span per starting segment is
+    // produced now, which detects the same texts: a longer span from the same
+    // start carries the short one as a prefix.
+    const { service } = buildSend();
+    const heavy = Array.from({ length: 300 }, (_, i) => `s${i}`).join("-");
+    (service as unknown as { createAdapterFromRecord: unknown })[
+      "createAdapterFromRecord"
+    ] = () => ({
+      send: () => Promise.resolve({ success: true, messageId: heavy }),
+    });
+
+    const started = Date.now();
+    await service.send({ to: "a@b.com", subject: "Hi", html: "<p>x</p>" });
+
+    // Generous by three orders of magnitude against the quadratic form, so
+    // this fails on the shape of the algorithm rather than on a slow machine.
+    expect(Date.now() - started).toBeLessThan(250);
+  });
+
+  it("withholds an id longer than a header line may be", async () => {
+    // RFC 5322 caps a header line at 998 octets, so this is not a Message-ID.
+    // Refused rather than inspected: it is already outside the contract.
+    const { service } = buildSend();
+    (service as unknown as { createAdapterFromRecord: unknown })[
+      "createAdapterFromRecord"
+    ] = () => ({
+      send: () =>
+        Promise.resolve({ success: true, messageId: "x".repeat(1200) }),
+    });
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(result.messageId).toBeUndefined();
+  });
+
+  it("still returns an id of ordinary length", async () => {
+    // The control for the bound.
+    const { service } = buildSend();
+    (service as unknown as { createAdapterFromRecord: unknown })[
+      "createAdapterFromRecord"
+    ] = () => ({
+      send: () =>
+        Promise.resolve({
+          success: true,
+          messageId: `<${"a".repeat(300)}@m.test>`,
+        }),
+    });
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(result.messageId).toBe(`<${"a".repeat(300)}@m.test>`);
+  });
+});

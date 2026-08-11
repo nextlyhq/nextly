@@ -136,24 +136,41 @@ export function storableError(message: string): string {
 const MIN_ECHOED_LENGTH = 16;
 
 /**
+ * Longest identifier this will inspect.
+ *
+ * RFC 5322 caps a header line at 998 octets, so a Message-ID longer than that
+ * is not one. An identifier past this bound is withheld rather than examined:
+ * it is already outside the contract, and refusing it costs a correlation
+ * convenience while examining it invites a provider to hand us work to do.
+ */
+const MAX_INSPECTABLE_LENGTH = 998;
+
+/**
  * Every distinctive piece of an identifier, as it is written.
  *
  * A token is not always one unbroken run: a UUID is five short groups, and a
  * segmented licence key is worse. Requiring a single long alphanumeric run
  * therefore missed exactly the values most likely to be sensitive.
  *
- * Candidates are runs of ORIGINAL text — every contiguous span of segments,
- * separators included — rather than the identifier with its punctuation
- * stripped out. Stripping makes unrelated neighbours adjacent, so an id ending
+ * Candidates are runs of ORIGINAL text — spans of whole segments, separators
+ * included — rather than the identifier with its punctuation stripped out.
+ * Stripping makes unrelated neighbours adjacent, so an id ending
  * `@mail.example.test` would match any body containing `mail.example.test` in
  * any other punctuation, and ordinary ids would start disappearing. Comparing
  * spans as written keeps a match meaning "this exact text appears in both".
+ *
+ * Only the SHORTEST qualifying span per starting segment is produced, which is
+ * what keeps this linear in the number of segments. Nothing is lost: a longer
+ * span beginning at the same segment contains the shortest one as a prefix, so
+ * if the long span appears in the message then the short one does too. Every
+ * span is a substring of some candidate here, and every candidate is a
+ * substring of the identifier -- the set of texts this can detect is
+ * unchanged.
  */
 function echoCandidates(messageId: string): string[] {
   const segments = messageId.split(/[^A-Za-z0-9]+/).filter(part => part !== "");
   if (segments.length === 0) return [];
 
-  const candidates: string[] = [];
   let cursor = 0;
   const offsets = segments.map(segment => {
     const at = messageId.indexOf(segment, cursor);
@@ -161,13 +178,15 @@ function echoCandidates(messageId: string): string[] {
     return at;
   });
 
+  const candidates: string[] = [];
   for (let first = 0; first < segments.length; first += 1) {
     for (let last = first; last < segments.length; last += 1) {
-      const span = messageId.slice(
-        offsets[first],
-        offsets[last] + segments[last].length
-      );
-      if (span.length >= MIN_ECHOED_LENGTH) candidates.push(span);
+      const end = offsets[last] + segments[last].length;
+      if (end - offsets[first] < MIN_ECHOED_LENGTH) continue;
+      candidates.push(messageId.slice(offsets[first], end));
+      // The shortest span from this start is enough; a longer one from here
+      // carries it as a prefix.
+      break;
     }
   }
   return candidates;
@@ -198,6 +217,9 @@ export function messageIdEchoesPayload(
   texts: ReadonlyArray<string | undefined>
 ): boolean {
   if (messageId === undefined) return false;
+  // Past the bound this is not an identifier to be checked, it is a payload to
+  // be refused. Fail closed, as everywhere else containment cannot answer.
+  if (messageId.length > MAX_INSPECTABLE_LENGTH) return true;
 
   const candidates = echoCandidates(messageId);
   if (candidates.length === 0) return false;
