@@ -9,6 +9,7 @@ import {
   CommandList,
   CommandSeparator,
   CommandShortcut,
+  ShortcutProvider,
   useShortcuts,
 } from "@nextlyhq/ui";
 import { useCallback, useState } from "react";
@@ -111,7 +112,23 @@ const navigationCommands: NavigationCommand[] = [
   },
 ];
 
+/**
+ * The command palette, with the shortcut owner it needs.
+ *
+ * It carries its own provider because it is exported for embedding and is routinely rendered
+ * OUTSIDE the admin shell — the playground mounts it as a sibling of the routed children, where no
+ * shell provider is an ancestor, and registering a shortcut there would throw. Nesting is free:
+ * providers share one manager per target, so inside the shell this reuses the shell's.
+ */
 export function CommandPalette() {
+  return (
+    <ShortcutProvider>
+      <CommandPaletteContent />
+    </ShortcutProvider>
+  );
+}
+
+function CommandPaletteContent() {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
 

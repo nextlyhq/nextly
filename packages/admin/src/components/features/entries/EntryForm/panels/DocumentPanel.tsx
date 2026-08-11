@@ -238,7 +238,7 @@ function IdRow({ id }: { id?: string | null }) {
             aria-label={copied ? "ID copied" : "Copy ID to clipboard"}
           >
             {copied ? (
-              <Check className="h-3 w-3 text-success" />
+              <Check className="h-3 w-3 text-success-600" />
             ) : (
               <Copy className="h-3 w-3 text-muted-foreground" />
             )}

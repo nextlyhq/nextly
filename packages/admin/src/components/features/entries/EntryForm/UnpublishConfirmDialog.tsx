@@ -66,7 +66,7 @@ export function UnpublishConfirmDialog({
           <AlertDialogAction
             onClick={onConfirm}
             disabled={isLoading}
-            className="bg-destructive-solid text-destructive-foreground hover:bg-destructive-600"
+            className="bg-destructive-solid text-destructive-foreground hover:bg-destructive-700"
           >
             {isLoading ? (
               <>

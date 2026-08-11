@@ -76,7 +76,7 @@ export function CodeBlock({
           backgroundColor: "transparent !important",
         },
         ".cm-scroller": {
-          fontFamily: "var(--font-mono, ui-monospace, monospace)",
+          fontFamily: "var(--nx-font-mono, ui-monospace, monospace)",
           padding: showGutter ? "16px 12px" : "16px 24px",
         },
         ".cm-gutters": {
