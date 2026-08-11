@@ -1,5 +1,7 @@
 import { defineConfig } from "vitest/config";
 
+import { TEST_GLOBS } from "./src/source-modules";
+
 /**
  * The suite is static analysis over source files, not rendering.
  *
@@ -9,13 +11,16 @@ import { defineConfig } from "vitest/config";
  * renderer tests arrive they will need `jsdom`, and switching then is a
  * deliberate change rather than an inherited default.
  *
- * `.tsx` is included alongside `.ts` because blocks are React components and
- * their tests will live beside them.
+ * The include list is DERIVED rather than written here. The layering guard
+ * relaxes its import allowlist for anything it considers a test, so the runner
+ * and the guard have to mean the same thing by the word: a hand-written glob
+ * that omitted an extension the guard accepted would let a file import `vitest`
+ * and never be run. Both now come from one list in `src/source-modules.ts`.
  */
 
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    include: TEST_GLOBS,
   },
 });

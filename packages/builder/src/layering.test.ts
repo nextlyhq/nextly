@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { BUNDLED_MODULE } from "./source-modules";
+import { BUNDLED_MODULE, TEST_MODULE } from "./source-modules";
 
 /**
  * The package's layering contract, enforced rather than documented.
@@ -493,7 +493,7 @@ describe("the builder's layering contract", () => {
   it("imports only what the contract allows", () => {
     const violations: string[] = [];
     for (const file of files) {
-      const inTest = /\.test\.tsx?$/.test(file);
+      const inTest = TEST_MODULE.test(file);
       for (const specifier of importsOf(file).filter(isBare)) {
         if (!isAllowed(specifier, inTest)) {
           violations.push(`${file}: ${specifier}`);
@@ -502,5 +502,56 @@ describe("the builder's layering contract", () => {
     }
 
     expect(violations).toEqual([]);
+  });
+
+  it("relaxes its allowlist only for files the runner actually runs", () => {
+    // The test above trusts `TEST_MODULE` to say which files may import
+    // `vitest` and `node:fs`. That trust is only sound while vitest RUNS
+    // everything `TEST_MODULE` matches: a config listing narrower globs would
+    // leave a file classified as a test, exempt from the allowlist, and never
+    // executed — so a shipped module could reach anything it liked by choosing
+    // its filename.
+    //
+    // Both now derive from one list, and this checks the config still asks for
+    // it rather than restating it. The assertion is syntactic because the
+    // question is syntactic: whether this file derives its globs or spells them
+    // out again. Importing the config to compare values is not available —
+    // `rootDir` is `src`, and reaching outside it fails `check-types` (TS6059).
+    const configPath = join(SRC_DIR, "..", "vitest.config.ts");
+    const config = ts.createSourceFile(
+      "vitest.config.ts",
+      readFileSync(configPath, "utf8"),
+      ts.ScriptTarget.ESNext,
+      true
+    );
+
+    let includeInitialiser: ts.Expression | undefined;
+    const visit = (node: ts.Node): void => {
+      if (
+        ts.isPropertyAssignment(node) &&
+        ts.isIdentifier(node.name) &&
+        node.name.text === "include"
+      ) {
+        includeInitialiser = node.initializer;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(config);
+
+    // Positive control: an `include` that stopped being found would make the
+    // assertion below vacuous, and this guard exists because a check that
+    // passes on nothing is the failure mode the package keeps paying for.
+    expect(
+      includeInitialiser,
+      "vitest.config.ts must set `include`"
+    ).toBeDefined();
+    expect(
+      includeInitialiser && ts.isIdentifier(includeInitialiser)
+        ? includeInitialiser.text
+        : config.text.slice(
+            includeInitialiser!.getStart(config),
+            includeInitialiser!.getEnd()
+          )
+    ).toBe("TEST_GLOBS");
   });
 });
