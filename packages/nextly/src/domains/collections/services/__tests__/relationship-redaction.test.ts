@@ -261,7 +261,11 @@ describe("relationship expansion secret redaction", () => {
       const related = await serviceWithTarget().fetchRelatedEntry(
         "members",
         "m1",
-        { enforceFieldAccess: true, user: { id: "u1", roles: ["editor"] } }
+        {
+          trusted: undefined,
+          enforceFieldAccess: true,
+          user: { id: "u1", roles: ["editor"] },
+        }
       );
 
       expect(related).toMatchObject({ id: "m1", email: "a@b.co" });
@@ -272,7 +276,11 @@ describe("relationship expansion secret redaction", () => {
       const related = await serviceWithTarget().fetchRelatedEntry(
         "members",
         "m1",
-        { enforceFieldAccess: true, user: { id: "u2", roles: ["finance"] } }
+        {
+          trusted: undefined,
+          enforceFieldAccess: true,
+          user: { id: "u2", roles: ["finance"] },
+        }
       );
 
       expect(related).toMatchObject({ salary: 120000 });
@@ -284,7 +292,7 @@ describe("relationship expansion secret redaction", () => {
       const related = await serviceWithTarget().fetchRelatedEntry(
         "members",
         "m1",
-        { enforceFieldAccess: true }
+        { trusted: undefined, enforceFieldAccess: true }
       );
 
       expect(related).not.toHaveProperty("salary");
@@ -294,7 +302,7 @@ describe("relationship expansion secret redaction", () => {
       const related = await serviceWithTarget().fetchRelatedEntry(
         "members",
         "m1",
-        { enforceFieldAccess: true, overrideAccess: true }
+        { trusted: undefined, enforceFieldAccess: true, overrideAccess: true }
       );
 
       expect(related).toMatchObject({ salary: 120000 });
@@ -353,6 +361,7 @@ describe("relationship expansion secret redaction", () => {
       );
 
       const related = await service.fetchRelatedEntry("members", "m1", {
+        trusted: undefined,
         enforceFieldAccess: true,
         overrideAccess: true,
       });
@@ -404,6 +413,7 @@ describe("relationship expansion secret redaction", () => {
       );
 
       const related = await service.fetchRelatedEntry("members", "m1", {
+        trusted: undefined,
         enforceFieldAccess: true,
         user: { id: "u1" },
       });
@@ -455,7 +465,7 @@ describe("relationship expansion secret redaction", () => {
           type: "relationship",
           options: { targetLabelField: "codename" },
         } as never,
-        { enforceFieldAccess: true, user: { id: "u1" } }
+        { trusted: undefined, enforceFieldAccess: true, user: { id: "u1" } }
       );
 
       const related = map.get("m1");
@@ -472,7 +482,11 @@ describe("relationship expansion secret redaction", () => {
       const related = await serviceWithTarget().fetchRelatedEntry(
         "members",
         "m1",
-        { enforceFieldAccess: true, user: { id: "u1", roles: ["editor"] } }
+        {
+          trusted: undefined,
+          enforceFieldAccess: true,
+          user: { id: "u1", roles: ["editor"] },
+        }
       );
 
       expect(related).not.toHaveProperty("salary");
@@ -576,7 +590,11 @@ describe("related-row re-derivation keeps per-field presentation", () => {
       author: { id: "a1", name: "Ada", handle: "adah", label: "Ada" },
       reviewer: { id: "a1", name: "Ada", handle: "adah", label: "adah" },
     };
-    const access = { enforceFieldAccess: true, user: { id: "u1" } };
+    const access = {
+      enforceFieldAccess: true,
+      user: { id: "u1" },
+      trusted: undefined,
+    };
     const state = service.createNestedHookState();
 
     await service.applyNestedFieldHooks(entry, "posts", access, state);
