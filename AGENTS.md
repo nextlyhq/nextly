@@ -20,8 +20,12 @@ for all published packages. Status: alpha, all packages version in lockstep.
   it is usable standalone (enforced by `src/layering.test.ts`). Next-coupled
   helpers live at the `/next` subpath.
 - `packages/builder` - the visual page-builder editor (shell, canvas, op store).
-  It draws with `blocks-react` rather than a renderer of its own, and reaches
-  admin only through `plugin-sdk/admin` (enforced by `src/layering.test.ts`).
+  It reaches admin only through `plugin-sdk/admin`, and imports nothing outside a
+  short allowlist of exact specifiers - both enforced by `src/layering.test.ts`.
+  That it draws with `blocks-react` rather than a renderer of its own is a
+  review-time convention, NOT a checked one: reimplementing rendering on React
+  and `blocks-engine` imports exactly the same packages, so no import guard can
+  tell the two apart.
 - `packages/plugin-sdk` - the ONLY stable import surface for plugin authors.
 - `packages/plugin-{form-builder,page-builder}` - first-party plugins.
 - `packages/storage-{s3,vercel-blob,uploadthing}` - media storage adapters.

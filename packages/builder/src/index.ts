@@ -11,6 +11,11 @@
  * preparation, condition gating and slot pruning are consumed from the engine's
  * own entry points, never reproduced here.
  *
+ * It is held by review rather than by a test. Reimplementing rendering on React
+ * and the engine imports exactly the same packages as delegating to the
+ * renderer, so the layering guard cannot tell the two apart; it narrows what may
+ * be imported, which makes the shortcut inconvenient rather than impossible.
+ *
  * That rule is not stylistic. `plugin-page-builder` carries a second renderer of
  * its own, and the two disagree about condition gating in OPPOSITE directions —
  * one failing closed, the other not evaluating conditions at all. Sharing a
