@@ -69,14 +69,15 @@ const ALLOWED_IN_TESTS = [
 ];
 
 /**
- * Stands in for `import(expr)` where `expr` is not a literal.
+ * Stands in for a module call whose target is not a literal, such as
+ * `import(base + name)` or `require(name)`.
  *
  * Such a target cannot be resolved by reading the file, so the honest report is
  * "unknown", and unknown has to be a violation: the alternative is a guard that
  * approves whatever it could not read. It is deliberately not a legal package
  * specifier, so it can never be satisfied by an allowlist entry.
  */
-const UNRESOLVED_DYNAMIC_IMPORT = "import(<non-literal>)";
+const UNRESOLVABLE_SPECIFIER = "<unresolvable-specifier>";
 
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
@@ -92,12 +93,24 @@ function sourceFiles(dir: string): string[] {
  * Every module specifier a source text imports, read from the AST rather than by
  * regex.
  *
- * Three shapes reach a module, not one. `import ... from` and `export ... from`
- * are declarations carrying a module specifier; `import("pkg")` is a call
- * expression, and a visitor that reads only declarations walks straight past it
- * — approving a file that pulls the forbidden package in at runtime. Template
- * literals with no substitutions are as statically known as quoted strings, so
- * they count as literals here.
+ * Several shapes reach a module, not one, and a visitor that reads only
+ * declarations walks straight past most of them — approving a file that pulls
+ * the forbidden package in anyway:
+ *
+ * - `import ... from` and `export ... from`, which carry a module specifier.
+ * - `import("pkg")` and `require("pkg")`, which are call expressions. A bare
+ *   `require` identifier only: `loader.require("x")` is a method on some object,
+ *   not a module resolve.
+ * - `import x = require("pkg")`, the documented CommonJS-interop spelling, which
+ *   is neither of the above.
+ *
+ * Template literals with no substitutions are as statically known as quoted
+ * strings, so they count as literals here.
+ *
+ * Type-only imports are collected too, which is stricter than a purely runtime
+ * guard would be. The admin prohibition is not only about what reaches a bundle:
+ * importing admin's types is the same dependency on internals nobody promised to
+ * keep, and it is one rename away from becoming a value import.
  *
  * Separated from the file reading so the shapes above can be asserted against
  * source text directly: the contract tests below scan real files, and a file
@@ -119,15 +132,26 @@ function importsOfSource(text: string, fileName = "module.ts"): string[] {
     ) {
       found.push(node.moduleSpecifier.text);
     } else if (
-      ts.isCallExpression(node) &&
-      node.expression.kind === ts.SyntaxKind.ImportKeyword
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference)
     ) {
-      const target = node.arguments[0];
+      const target = node.moduleReference.expression;
       found.push(
-        target && ts.isStringLiteralLike(target)
-          ? target.text
-          : UNRESOLVED_DYNAMIC_IMPORT
+        ts.isStringLiteralLike(target) ? target.text : UNRESOLVABLE_SPECIFIER
       );
+    } else if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const resolvesAModule =
+        callee.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(callee) && callee.text === "require");
+      if (resolvesAModule) {
+        const target = node.arguments[0];
+        found.push(
+          target && ts.isStringLiteralLike(target)
+            ? target.text
+            : UNRESOLVABLE_SPECIFIER
+        );
+      }
     }
     ts.forEachChild(node, visit);
   };
@@ -171,23 +195,47 @@ describe("reading a module's imports", () => {
     ).toEqual(["@nextlyhq/admin"]);
   });
 
+  it("sees a bare require, which reaches a module exactly as an import does", () => {
+    expect(importsOfSource(`const a = require("@nextlyhq/admin");`)).toEqual([
+      "@nextlyhq/admin",
+    ]);
+  });
+
+  it("sees the CommonJS-interop import-equals spelling", () => {
+    expect(
+      importsOfSource(`import admin = require("@nextlyhq/admin");`)
+    ).toEqual(["@nextlyhq/admin"]);
+  });
+
+  it("does not count a method that merely happens to be named require", () => {
+    // `loader.require("x")` resolves nothing; treating it as an import would make the guard
+    // fail CLOSED on innocent code, which gets guards deleted rather than obeyed.
+    expect(importsOfSource(`loader.require("@nextlyhq/admin");`)).toEqual([]);
+  });
+
+  it("reports a require it cannot resolve rather than dropping it", () => {
+    expect(importsOfSource(`const a = require(name);`)).toEqual([
+      UNRESOLVABLE_SPECIFIER,
+    ]);
+  });
+
   it("reports a dynamic import it cannot resolve rather than dropping it", () => {
     // The failure this replaces is silent: an unreadable target that produced no
     // entry left the allowlist with nothing to reject.
     expect(importsOfSource(`const m = await import(name);`)).toEqual([
-      UNRESOLVED_DYNAMIC_IMPORT,
+      UNRESOLVABLE_SPECIFIER,
     ]);
     expect(
       importsOfSource("const m = await import(`@nextlyhq/${pkg}`);")
-    ).toEqual([UNRESOLVED_DYNAMIC_IMPORT]);
+    ).toEqual([UNRESOLVABLE_SPECIFIER]);
   });
 
   it("rejects an unresolved dynamic import through the same allowlist as a named one", () => {
     // The sentinel is only useful if it survives the two filters between the
     // reader and the verdict: it must look bare, and must match no entry.
-    expect(isBare(UNRESOLVED_DYNAMIC_IMPORT)).toBe(true);
-    expect(ALLOWED_RUNTIME_IMPORTS).not.toContain(UNRESOLVED_DYNAMIC_IMPORT);
-    expect(ALLOWED_IN_TESTS).not.toContain(UNRESOLVED_DYNAMIC_IMPORT);
+    expect(isBare(UNRESOLVABLE_SPECIFIER)).toBe(true);
+    expect(ALLOWED_RUNTIME_IMPORTS).not.toContain(UNRESOLVABLE_SPECIFIER);
+    expect(ALLOWED_IN_TESTS).not.toContain(UNRESOLVABLE_SPECIFIER);
   });
 
   it("ignores relative imports of the package's own code", () => {
