@@ -135,9 +135,18 @@ export const emailDeliveriesPg = pgTable(
     messageId: text("message_id"),
 
     /**
-     * Which retention window governs this row. Present from the first
-     * migration for the same reason the retry columns are: adding it later
-     * would be a migration on a table already holding history.
+     * Which retention window WOULD govern this row.
+     *
+     * Reserved and inert, like `next_attempt_at` above it: **no pass prunes
+     * this table today.** `domains/retention/passes.ts` builds one pass per
+     * domain that has retention configured, and email is not among them, so
+     * this value is written and never read.
+     *
+     * Present from the first migration anyway, for the reason the retry
+     * columns are: adding it later would be a migration on a table already
+     * holding production history. Saying so here rather than letting the
+     * column imply otherwise — an operator reading a labelled retention class
+     * would reasonably conclude something enforces it, and nothing does.
      */
     retentionClass: varchar("retention_class", { length: 50 })
       .notNull()
@@ -161,7 +170,8 @@ export const emailDeliveriesPg = pgTable(
     index("email_deliveries_status_created_idx").on(t.status, t.createdAt),
     // One provider's history, newest first.
     index("email_deliveries_provider_idx").on(t.providerId, t.createdAt),
-    // Retention prunes one class at a time, oldest first.
+    // The shape a retention pass needs: one class at a time, oldest first.
+    // Present with the column and unused for the same reason.
     index("email_deliveries_retention_idx").on(t.retentionClass, t.createdAt),
   ]
 );

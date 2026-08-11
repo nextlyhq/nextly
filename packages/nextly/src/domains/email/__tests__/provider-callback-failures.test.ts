@@ -236,3 +236,56 @@ describe("describing a provider failure for a log", () => {
     });
   });
 });
+
+describe("a message id built out of a credential", () => {
+  const API_KEY = "sk-live-do-not-store-this";
+
+  function leakyProvider(messageId: (key: string) => string) {
+    return defineEmailProvider<{ apiKey: string }>({
+      type: "leaky",
+      label: "Leaky",
+      configFields: [
+        { name: "apiKey", label: "API Key", kind: "password", secret: true },
+      ],
+      parseConfig: input => input as { apiKey: string },
+      createAdapter: config => ({
+        send: () =>
+          Promise.resolve({
+            success: true,
+            messageId: messageId(config.apiKey),
+          }),
+      }),
+    });
+  }
+
+  it("does not reach the caller", () => {
+    // A rejection is normalised and a success was not, so this is the
+    // disclosure that survives a restart: `messageId` is stored verbatim in
+    // the delivery log. The repository's own contribution fixture returns
+    // `fake-${config.apiKey}`, so this is the shape a provider author
+    // actually writes.
+    const adapter = leakyProvider(key => `fake-${key}`).createAdapterFrom({
+      apiKey: API_KEY,
+    });
+
+    return expect(
+      adapter.send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" })
+    ).resolves.toEqual({ success: true, messageId: undefined });
+  });
+
+  it("leaves an ordinary message id alone", async () => {
+    // The control. Without it the assertion above would pass on a wrapper that
+    // had simply stopped returning message ids, which would cost every
+    // provider its correlation with its own dashboard.
+    const adapter = leakyProvider(
+      () => "<abc123@mail.example.com>"
+    ).createAdapterFrom({ apiKey: API_KEY });
+
+    await expect(
+      adapter.send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" })
+    ).resolves.toEqual({
+      success: true,
+      messageId: "<abc123@mail.example.com>",
+    });
+  });
+});

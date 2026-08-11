@@ -6,10 +6,11 @@
  * returned `{ success: false }`, one line went to the process log, and the
  * operator learned from the user.
  *
- * **This is a log, not a queue.** Nothing drains it, nothing retries, and the
+ * **This is a log, not a queue, and nothing prunes it yet.** Nothing drains it,
+ * nothing retries, no retention pass reads its `retention_class`, and the
  * reserved columns stay inert — see `schemas/email-deliveries/postgres.ts` for
  * why that distinction is written into the schema rather than only decided
- * here.
+ * here. An install sending at volume will grow this table until a pass exists.
  *
  * @module domains/email/services/email-delivery-service
  */
@@ -141,27 +142,33 @@ export class EmailDeliveryService extends BaseService {
 
     const now = new Date();
     try {
-      await this.db.insert(this.deliveries).values(
-        inputs.map(input => ({
-          id: randomUUID(),
-          providerId: input.providerId ?? null,
-          providerType: input.providerType,
-          templateSlug: input.templateSlug ?? null,
-          // The address is hashed here and nowhere retained. Callers hand over
-          // the real one because they are sending to it; this is the boundary
-          // where it stops travelling.
-          recipientHash: hashRecipient(input.to),
-          recipientKind: input.recipientKind ?? "to",
-          status: input.status,
-          attemptCount: 1,
-          error: input.error ? storableError(input.error) : null,
-          messageId: input.messageId ?? null,
-          // One timestamp for the whole message: the rows describe a single
-          // send, and staggering them by microseconds would suggest otherwise.
-          createdAt: now,
-        }))
-      );
+      await this.insertRows(inputs, now, true);
     } catch (error) {
+      // The one recoverable failure: PostgreSQL and SQLite carry a foreign key
+      // to `email_providers`, and an administrator deleting a provider while
+      // its send is in flight leaves `providerId` pointing at a row that is
+      // gone by the time this runs. `ON DELETE SET NULL` only protects rows
+      // that already existed.
+      //
+      // The message WAS sent, so losing its row to the provider's absence
+      // would make the log's completeness depend on nobody editing settings
+      // during a send. Retried once without the reference: `provider_type`
+      // beside it keeps every row meaningful without the join, which is the
+      // same reason MySQL carries no key here at all.
+      try {
+        await this.insertRows(inputs, now, false);
+        this.logger.warn(
+          "Recorded an email delivery without its provider reference",
+          {
+            providerType: inputs[0]?.providerType,
+            providerId: inputs[0]?.providerId,
+          }
+        );
+        return;
+      } catch {
+        // Fall through to the original failure, which is the one worth
+        // reporting: the retry failing too means the cause was never the key.
+      }
       this.logger.error("Failed to record an email delivery", {
         providerType: inputs[0]?.providerType,
         status: inputs[0]?.status,
@@ -169,6 +176,40 @@ export class EmailDeliveryService extends BaseService {
         message: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  /**
+   * The insert itself, with or without the provider reference.
+   *
+   * Split out so the retry above writes exactly the same rows rather than a
+   * second, subtly different statement — which is how a fallback path comes to
+   * store something the primary one never would.
+   */
+  private async insertRows(
+    inputs: EmailDeliveryInput[],
+    now: Date,
+    withProvider: boolean
+  ): Promise<void> {
+    await this.db.insert(this.deliveries).values(
+      inputs.map(input => ({
+        id: randomUUID(),
+        providerId: withProvider ? (input.providerId ?? null) : null,
+        providerType: input.providerType,
+        templateSlug: input.templateSlug ?? null,
+        // The address is hashed here and nowhere retained. Callers hand over
+        // the real one because they are sending to it; this is the boundary
+        // where it stops travelling.
+        recipientHash: hashRecipient(input.to),
+        recipientKind: input.recipientKind ?? "to",
+        status: input.status,
+        attemptCount: 1,
+        error: input.error ? storableError(input.error) : null,
+        messageId: input.messageId ?? null,
+        // One timestamp for the whole message: the rows describe a single
+        // send, and staggering them by microseconds would suggest otherwise.
+        createdAt: now,
+      }))
+    );
   }
 
   /**

@@ -235,3 +235,116 @@ describe("the delivery log", () => {
     );
   });
 });
+
+describe("a provider deleted while its send is in flight", () => {
+  let sqlite: Database.Database;
+
+  /**
+   * A database whose first insert rejects the way a foreign key does.
+   *
+   * The real constraint lives in the dialect schemas, and `createTableBody`
+   * renders columns only — no REFERENCES clause — so a fixture built from it
+   * accepts a dangling id and never reaches this path at all. Driving the
+   * rejection directly is what actually exercises the recovery.
+   */
+  function dbThatRejectsTheFirstInsert(
+    db: ReturnType<typeof drizzle>
+  ): ReturnType<typeof drizzle> {
+    let failed = false;
+    return new Proxy(db, {
+      get(target, property, receiver) {
+        if (property !== "insert") {
+          return Reflect.get(target, property, receiver) as unknown;
+        }
+        return (table: unknown) => {
+          if (failed) return target.insert(table as never);
+          failed = true;
+          return {
+            values: () =>
+              Promise.reject(
+                new Error(
+                  "FOREIGN KEY constraint failed: email_deliveries.provider_id"
+                )
+              ),
+          };
+        };
+      },
+    }) as ReturnType<typeof drizzle>;
+  }
+
+  beforeEach(() => {
+    sqlite = new Database(":memory:");
+    createDeliveriesTable(sqlite);
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    vi.clearAllMocks();
+  });
+
+  it("still records the send, without the reference", async () => {
+    // The message was accepted by the provider. Losing its row because someone
+    // edited settings mid-send would make the log's completeness depend on
+    // nobody touching the admin.
+    const db = drizzle({ client: sqlite });
+    const service = new EmailDeliveryService(
+      makeAdapter(dbThatRejectsTheFirstInsert(db)),
+      logger
+    );
+
+    await service.record({
+      to: RECIPIENT,
+      providerId: "11111111-1111-1111-1111-111111111111",
+      providerType: "smtp",
+      status: "sent",
+    });
+
+    const rows = await new EmailDeliveryService(makeAdapter(db), logger).list();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ providerType: "smtp", status: "sent" });
+    // Null rather than the dangling id: the row is honest about not resolving.
+    expect(rows[0]?.providerId).toBeNull();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "Recorded an email delivery without its provider reference",
+      expect.objectContaining({ providerType: "smtp" })
+    );
+  });
+
+  it("keeps the reference when the insert succeeds", async () => {
+    // The control. Without it the case above would pass on a recorder that had
+    // simply stopped storing provider ids at all, which would cost every row
+    // its link to the provider that sent it.
+    const service = new EmailDeliveryService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+
+    await service.record({
+      to: RECIPIENT,
+      providerId: "22222222-2222-2222-2222-222222222222",
+      providerType: "smtp",
+      status: "sent",
+    });
+
+    const [row] = await service.list();
+    expect(row?.providerId).toBe("22222222-2222-2222-2222-222222222222");
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("reports the original failure when the retry fails too", async () => {
+    // A retry that also fails means the cause was never the key, and the
+    // message worth logging is the first one.
+    const broken = drizzle({ client: sqlite });
+    sqlite.exec("drop table email_deliveries");
+    const service = new EmailDeliveryService(makeAdapter(broken), logger);
+
+    await expect(
+      service.record({ to: RECIPIENT, providerType: "smtp", status: "sent" })
+    ).resolves.toBeUndefined();
+    expect(logger.error).toHaveBeenCalledWith(
+      "Failed to record an email delivery",
+      expect.objectContaining({ providerType: "smtp" })
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+});

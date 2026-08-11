@@ -18,6 +18,15 @@ import { NextlyError } from "../../errors";
 import type { EmailProviderAdapter } from "./types";
 
 /**
+ * What an adapter's `send` resolves to.
+ *
+ * Derived from the adapter contract rather than restated, so a change to what
+ * a provider may return cannot leave the containment below checking a shape
+ * nothing produces any more.
+ */
+type EmailSendResult = Awaited<ReturnType<EmailProviderAdapter["send"]>>;
+
+/**
  * Longest provider type id that every dialect can store.
  *
  * Postgres and MySQL declare `email_providers.type` as `varchar(50)` while
@@ -181,6 +190,58 @@ export interface RegisteredEmailProvider {
 }
 
 /**
+ * The values a provider DECLARED as credentials, read out of its configuration.
+ *
+ * Declared rather than guessed, exactly as masking does: a heuristic over key
+ * names calls `credential` public and a harmless `token` secret, and it can
+ * only ever be right about names core has seen. Values shorter than four
+ * characters are skipped — a one-character secret would match almost any
+ * identifier and would turn containment into deletion.
+ */
+function declaredSecretValues(
+  fields: ReadonlyArray<EmailProviderConfigField>,
+  config: unknown
+): string[] {
+  if (config === null || typeof config !== "object") return [];
+  const values: string[] = [];
+
+  for (const field of fields) {
+    if (field.secret !== true) continue;
+    let current: unknown = config;
+    for (const segment of field.name.split(".")) {
+      if (current === null || typeof current !== "object") {
+        current = undefined;
+        break;
+      }
+      current = (current as Record<string, unknown>)[segment];
+    }
+    if (typeof current === "string" && current.length >= 4)
+      values.push(current);
+  }
+
+  return values;
+}
+
+/**
+ * Drop a `messageId` that carries one of this provider's credentials.
+ *
+ * Dropped rather than redacted. A message id exists to be matched against the
+ * provider's own record of the send, and a partially rewritten one matches
+ * nothing while still looking like an identifier — so the honest outcome is
+ * that this send has no id. The row is still written, and still says the
+ * message was sent.
+ */
+function withoutLeakedSecrets(
+  result: EmailSendResult,
+  secrets: readonly string[]
+): EmailSendResult {
+  const messageId = result.messageId;
+  if (typeof messageId !== "string" || secrets.length === 0) return result;
+  if (!secrets.some(secret => messageId.includes(secret))) return result;
+  return { ...result, messageId: undefined };
+}
+
+/**
  * A provider failure, split into what may be shown and what must be logged.
  *
  * Normalising a provider's own error moves the useful half onto `cause`, where
@@ -327,16 +388,30 @@ export function defineEmailProvider<TConfig>(
       // succeeds and the disclosure happens later, on a rejection nothing here
       // would otherwise see. Wrapping the factory alone left that open.
       //
+      // The RESOLVED result is the other half of that route, and the one that
+      // persists: `messageId` is stored verbatim in the delivery log, and a
+      // provider is free to derive it from its own configuration -- this
+      // repository's own contribution fixture returns `fake-${config.apiKey}`.
+      // A rejection is normalised and a success was not, so the disclosure that
+      // survives a restart went out through the path nobody was watching.
+      //
+      // This is the only place both the configuration and the result are in
+      // scope, which is why the containment lives here rather than at each
+      // recorder.
+      //
       // `adapter.send(...)` is called through the adapter rather than a
       // detached reference, so a class-based implementation keeps its `this`.
+      const secrets = declaredSecretValues(definition.configFields, config);
       return {
         ...adapter,
         send: async options => {
+          let result: EmailSendResult;
           try {
-            return await adapter.send(options);
+            result = await adapter.send(options);
           } catch (error) {
             throw normalizeCallbackFailure(error, "send");
           }
+          return withoutLeakedSecrets(result, secrets);
         },
       };
     },
