@@ -2,6 +2,10 @@
 paths:
   - "packages/**/*.ts"
   - "packages/**/*.tsx"
+  # The changeset package list versus the release group is one of this rule's own
+  # examples, so it has to load when those inputs are edited too.
+  - ".changeset/**"
+  - "scripts/**"
 ---
 
 When one piece of code checks, mirrors or summarises what another produces:
@@ -31,10 +35,20 @@ Asking "does it compute the same thing" is not enough:
 
 1. **Computation** — the same expression.
 2. **Domain** — the same rows, records or inputs. A probe using the identical
-   expression over a different row set is still a divergence. **An existential
-   search may short-circuit; a universal claim may not.** `LIMIT 1` is sound
-   when hunting a counterexample and unsound when hunting a witness, and the
-   two look identical in the source.
+   expression over a different row set is still a divergence.
+
+   **`LIMIT 1` is sound exactly when ONE row settles the claim.** Which rows
+   those are depends on what is being claimed, not on the clause:
+   - claiming _something exists_ → one match settles it. `LIMIT 1` on the match
+     is sound.
+   - claiming _everything satisfies P_ → one match of P settles nothing, but one
+     match of NOT-P refutes it. So search for the counterexample and `LIMIT 1`
+     is sound; search for a witness of P and it is not.
+
+   The two queries look nearly identical in the source, which is why the claim
+   has to be written down next to them. A universal check phrased as a witness
+   hunt passes on the first agreeable row and never reads the rest.
+
 3. **Failure semantics** — "the answer is no" and "I could not ask" are
    different outcomes. A check that reports a lock timeout as a data verdict
    blocks valid work while naming the wrong cause. Pin the error you mean, and

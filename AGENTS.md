@@ -115,10 +115,18 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   needed, DERIVE it from the richer one; never compute it alongside. Two
   functions that agree today drift, and the drift is silent because both look
   correct. This has produced defects in five unrelated packages.
-- A guard that cannot fire is still cheap; a guard added later is not.
-  Unreachability is a property of the current call graph, not of the code, and
-  the call graph changes underneath you. "This cannot happen" is a reason the
-  guard costs nothing, never a reason to omit it.
+- Unreachability is a property of the current call graph, not of the code, and
+  the call graph changes underneath you. "This cannot happen" is not a reason to
+  omit a guard — it is a reason the guard is CHEAP, provided it is cheap: an
+  assertion over values already in hand costs nothing when its rejection branch
+  never runs. A guard that queries, reads or recomputes still pays that cost on
+  every call whether or not it can ever reject, so put those behind the work
+  they protect rather than in front of a hot path.
+- Prefer a boundary the system cannot cross to a check that looks for crossings.
+  A scan over syntax has an unbounded surface and can only ever be patched; a
+  declared dependency graph, a type, or a manifest assertion is complete by
+  construction. If a "must not reach X" rule can be expressed as "X is not a
+  dependency", that is strictly stronger than any visitor.
 - A documented rule with nothing enforcing it is not a control, and filing a
   task is not installing one. If the correct path and the easy path differ,
   the rule will be broken by someone who knows it.

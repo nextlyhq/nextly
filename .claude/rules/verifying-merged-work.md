@@ -16,10 +16,17 @@ branch after GitHub computed the merge, or when the merge runs from a stale
 head — so you lose the end of the branch, never the middle. A marker taken from
 an early or middle commit passes cleanly on a PR that dropped its last three.
 
-1. Take a marker string from the **final** commit on the branch.
-2. Confirm what was actually merged:
-   `gh pr view N --json headRefOid,mergeCommit`
-3. Grep `main` for that marker.
+1. Confirm what was actually merged: `gh pr view N --json headRefOid,mergeCommit`.
+2. Take the check from the **final** commit, in whichever direction it changed things:
+   - it ADDED content → grep `main` for a string it added; expect a hit.
+   - it only REMOVED content → grep `main` for a string it removed; expect NO hit.
+     Grepping for added text here finds nothing whether or not the commit landed,
+     which reads as failure either way and proves nothing.
+   - it changed a file mode, a binary, or a rename → text search cannot see it.
+     Compare the tree instead: `git show <mergeCommit> --stat -- <path>`, or
+     `git diff <mergeBase>..<headRefOid> -- <path>` against the same path on `main`.
+3. If the final commit is a pure revert of an earlier one in the same PR, check the
+   NET effect, not the last hunk.
 
 The danger window is push-a-fix-then-merge-immediately, which is what everyone
 does once CI is green and threads are cleared. A PR has already merged here
@@ -51,9 +58,14 @@ Related, and cheap to get wrong:
 
 - **Run gates from the worktree ROOT.** From a package directory,
   `pnpm check-types --force` becomes a bare `tsc --force` and fails on the flag.
-- **`pnpm lint` fails on a WARNING** (`--max-warnings 0`), and the pre-push hook
-  runs it, so the failure arrives after the commit exists. Check by exit code;
-  the log says "0 errors, 1 warning" and still fails.
+- **Most packages fail lint on a WARNING**, because their script is
+  `eslint . --max-warnings 0`. Check by exit code, not by grepping output for
+  "error": the log reads "0 errors, 1 warning" and still exits 1.
+  Two qualifications worth knowing before you trust a green:
+  - The pre-push hook runs `pnpm turbo lint --continue --filter='./packages/*'`,
+    not the root `pnpm lint`. It does not cover `apps/*` or `e2e/`.
+  - Not every package opts in. `packages/admin-css` runs a bare `eslint .`, so a
+    warning there exits 0 and the hook stays green.
 - **Never run a unit suite while an integration leg is in flight.** Unrelated
   files time out and read like a broad regression.
 - **Never work a PR branch in the shared checkout.** Use `git worktree add`;
