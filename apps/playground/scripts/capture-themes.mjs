@@ -151,7 +151,22 @@ const SEEDED_FIRST_NAME = "Dev";
  * from the dashboard stats, which is the request whose failure shows
  * "Connection Error" in the captured frame.
  */
-const DASHBOARD_EVIDENCE = [`Welcome, ${SEEDED_FIRST_NAME}`, "Posts"];
+const DASHBOARD_EVIDENCE = [
+  // The current-user request. `WelcomeHeader` says "Welcome, there" when it
+  // fails, so the NAME is what separates loaded from failed.
+  `Welcome, ${SEEDED_FIRST_NAME}`,
+  // The dashboard stats. `CollectionQuickLinks` shows "Connection Error"
+  // instead; a seeded collection name can only render on success.
+  "Posts",
+  // The singles request, which is separate again. `SinglesQuickLinks` shows
+  // "Couldn't load singles." on failure, and the playground registers three,
+  // so a configured single's label proves that request resolved.
+  //
+  // Verified unique on the page: "Homepage" renders once, inside this
+  // widget's card and in no navigation, so satisfying it cannot come from
+  // somewhere the widget's failure would not affect.
+  "Homepage",
+];
 
 const SCREEN_READY = {
   dashboard: async page => {

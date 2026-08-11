@@ -147,6 +147,16 @@ const META_REFERENCES: Array<[RegExp, string]> = [
   [/\ba round (later|after|earlier|ago)\b/i, "a review round"],
   [/\bcorrection round\b/i, "a review round"],
   [/\bthe earlier (finding|review|comment|round)\b/i, "a review"],
+  // Narrating the edit as a sequence of attempts. Distinct from the patterns
+  // above, which name the review's units: this names the CHANGE's own
+  // instalments, and reads as helpful because it explains why the code looks
+  // partial -- to anyone who did not watch it being written, it explains
+  // nothing and dates the file.
+  //
+  // Kept narrow on purpose. "the fix is" and "fixes" are ordinary and stay
+  // legal; only a fix described as arriving in parts is caught.
+  [/\b(first|second|third) half of (a|the) fix\b/i, "an edit sequence"],
+  [/\b(first|second) attempt (at|to)\b/i, "an edit sequence"],
 ];
 
 function walk(dir: string, found: string[] = []): string[] {
