@@ -24,4 +24,4 @@
 "@nextlyhq/builder": patch
 ---
 
-A Single schema change now applies its table change and writes its registry row in one place, so a failure before any statement runs is reported as a refusal instead of being recorded as a failed migration that saved a field list the table never received.
+A Single's schema change now applies its table change and writes its registry row in one place, and the row records the outcome the apply actually reached. Saving a Single that only toggles Internationalization or Draft/Published now records that its companion table was provisioned, and re-saving a Single whose table failed to create can rebuild it and report success instead of staying stuck on "failed" however many times it is retried.
