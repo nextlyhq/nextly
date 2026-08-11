@@ -81,6 +81,7 @@ const BROWSER_GLOBALS = new Set([
   "history",
   "location",
   "matchMedia",
+  "screen",
   "getComputedStyle",
   "requestAnimationFrame",
   "cancelAnimationFrame",
@@ -853,8 +854,12 @@ function resolveLocal(fromFile: string, specifier: string): string | null {
     // `./helper.mjs` to the `.mts`. Probing the collapsed form first would follow a different file
     // than the bundler does.
     moduleForm,
-    `${swapped}.tsx`,
+    // The `.js`-substituted form goes the OTHER way: `.ts` before `.tsx`. Measured against
+    // esbuild 0.25.12 with both siblings present — `./helper.js` resolves to `helper.ts` while the
+    // extensionless `./helper` resolves to `helper.tsx`. The `.tsx,.ts,...` default describes
+    // implicit-extension resolution only, and does not govern this substitution.
     `${swapped}.ts`,
+    `${swapped}.tsx`,
     path.join(base, "index.tsx"),
     path.join(base, "index.ts"),
   ]) {
@@ -1458,6 +1463,12 @@ describe("reading a module", () => {
     ).toEqual(["window"]);
   });
 
+  it("reports the viewport globals a server does not have", () => {
+    // `screen` is browser-only in every supported Node, needs no import, no JSX and no directive,
+    // so nothing else in this file would notice a module reading it at load time.
+    expect(read(`export const w = screen.width;`).globals).toEqual(["screen"]);
+  });
+
   it("accepts a truthiness guard on a globalThis property", () => {
     // Reading a property off `globalThis` yields undefined rather than throwing, so the chain
     // short-circuits and the module is safe.
@@ -1641,6 +1652,28 @@ describe("resolving a local import", () => {
       "entry.ts",
       "helper.ts",
     ]);
+  });
+
+  it("keeps `.ts` first for an explicit `.js` specifier", () => {
+    // The two resolutions differ and both are measured against esbuild 0.25.12 with BOTH siblings
+    // present: `./helper.js` resolves to `helper.ts`, while the extensionless `./helper` in the
+    // case below resolves to `helper.tsx`. The `.tsx,.ts,...` default governs implicit-extension
+    // resolution only; it does not describe `.js`-to-TypeScript substitution.
+    const dir = mkdtempSync(path.join(os.tmpdir(), "nx-layering-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    writeFileSync(path.join(dir, "helper.ts"), "export const helper = 1;\n");
+    writeFileSync(
+      path.join(dir, "helper.tsx"),
+      "export const helper = <div />;\n"
+    );
+    const entry = path.join(dir, "entry.ts");
+    writeFileSync(entry, 'export { helper } from "./helper.js";\n');
+
+    expect(
+      reach(entry)
+        .files.map(({ file }) => path.basename(file))
+        .sort()
+    ).toEqual(["entry.ts", "helper.ts"]);
   });
 
   it("prefers `.tsx` over `.ts`, as esbuild's implicit-extension order does", () => {
