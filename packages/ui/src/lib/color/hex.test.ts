@@ -78,6 +78,34 @@ describe("writing a hex colour", () => {
   });
 });
 
+describe("a channel that is not a number at all", () => {
+  it("still produces a valid hex string", () => {
+    // `clamp01(NaN)` is NaN — both of its comparisons are false — and formatting that yields the
+    // three characters "NaN", producing `#NaN0000`. That is precisely the string this module
+    // documents itself as never returning, so the guarantee was false rather than merely untested.
+    expect(toHex({ r: NaN, g: 0, b: 0 })).toBe("#000000");
+    expect(toHex({ r: 0, g: Infinity, b: -Infinity })).toBe("#000000");
+    expect(toHex({ r: 1, g: 1, b: 1 }, NaN)).toBe("#ffffff");
+  });
+
+  it("treats a non-finite alpha as opaque, not as invisible", () => {
+    // A channel's neutral value is 0 and an alpha's is 1 — this parameter's own default. Falling
+    // back to 0 would turn a colour invisible on a stray NaN, silently, with nothing in the output
+    // to say why.
+    expect(toHex({ r: 0, g: 0, b: 0 }, NaN)).toBe("#000000");
+    expect(toHex({ r: 0, g: 0, b: 0 }, 0)).toBe("#00000000");
+  });
+
+  it("never emits a string a parser would reject", () => {
+    // The property the individual cases are examples of: whatever goes in, what comes out is a
+    // hex colour this module can read back.
+    for (const value of [NaN, Infinity, -Infinity, 1e9, -1e9]) {
+      const written = toHex({ r: value, g: value, b: value }, value);
+      expect(parseHex(written), `${value} produced ${written}`).not.toBeNull();
+    }
+  });
+});
+
 describe("hex against the conversions it sits beside", () => {
   it("survives a round trip through the picker's own geometry", () => {
     // The pairing that matters in practice: a colour typed as hex, dragged on the saturation

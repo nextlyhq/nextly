@@ -30,7 +30,12 @@ const clamp01 = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n);
 
 /** A channel byte as a two-digit lowercase pair. */
 function pair(channel: number): string {
-  return Math.round(clamp01(channel) * 255)
+  // A non-finite channel becomes 0 rather than passing through. `clamp01(NaN)` is NaN, because
+  // both of its comparisons are false, and formatting that yields the three characters "NaN" —
+  // producing `#NaN0000`, which is exactly the string this module documents itself as never
+  // returning.
+  const value = Number.isFinite(channel) ? clamp01(channel) : 0;
+  return Math.round(value * 255)
     .toString(16)
     .padStart(2, "0");
 }
@@ -85,6 +90,10 @@ export function parseHex(input: string): Rgba | null {
  * @experimental
  */
 export function toHex(color: Rgb, alpha = 1): string {
+  // A non-finite alpha falls back to 1, not to 0 as a channel does. Both are "nothing was
+  // specified", and for alpha that is this parameter's own default — where treating it as 0 would
+  // turn a colour invisible on a stray NaN, silently and with no way to tell from the output.
+  const opacity = Number.isFinite(alpha) ? clamp01(alpha) : 1;
   const opaque = `#${pair(color.r)}${pair(color.g)}${pair(color.b)}`;
-  return clamp01(alpha) === 1 ? opaque : `${opaque}${pair(alpha)}`;
+  return opacity === 1 ? opaque : `${opaque}${pair(opacity)}`;
 }
