@@ -110,12 +110,19 @@ export async function assertEntryPreviewable(
   // published entry and would otherwise mint a credential exposing that
   // author's unpublished edits.
   //
-  // The id the READ settled on, not the one the request named. A collection's
-  // `beforeOperation` hook may rewrite the id, and the read resolves it before
-  // fetching; the bearer's own read will run that hook and land on the same row.
-  // Authorizing the raw id would judge a different row than the token delivers —
-  // editable row A mapped to readable-but-uneditable row B passes read(B) plus
-  // update(A) while the token hands out B.
+  // Which row was actually read, taken from the returned document — and refused
+  // when it cannot be established.
+  //
+  // `read.data` is PRESENTATION data: it has been through `afterRead`, which the
+  // service explicitly allows to reshape the row, `id` included. So a missing or
+  // non-scalar `id` does not mean "the request id was used" — it means the row
+  // that was read is unknown here.
+  //
+  // Falling back to the requested id would authorize a row that was never read:
+  // a `beforeOperation` hook mapping A to B, plus an `afterRead` hook dropping
+  // `id`, yields read(B) with update(A) while the token delivers B. Refusing is
+  // the only answer available that cannot be wrong, so an unidentifiable row
+  // yields no link rather than a link checked against the wrong row.
   const readRow: unknown = read.data;
   const resolvedId =
     readRow !== null &&
@@ -123,15 +130,18 @@ export async function assertEntryPreviewable(
     "id" in readRow &&
     (typeof readRow.id === "string" || typeof readRow.id === "number")
       ? String(readRow.id)
-      : entryId;
+      : null;
 
-  // `routeAuthorized: true`: the mint route already ran
-  // `requireRouteCollectionAccess(req, "update", collection)`, and this flag
-  // skips ONLY that coarse RBAC/code-access gate. The stored owner-only,
-  // role-based and custom rules still evaluate against the loaded document with
-  // the real user, which is the part that answers this question. Passing `false`
-  // would repeat a lookup the route just performed and, for a scoped key, resolve
-  // it a second way for no gain.
+  if (resolvedId === null) {
+    throw NextlyError.forbidden({
+      logContext: {
+        reason: "preview-link-row-unidentifiable",
+        collection,
+        entryId,
+      },
+    });
+  }
+
   const mayEdit = await collections.canUpdateEntry({
     collectionName: collection,
     entryId: resolvedId,

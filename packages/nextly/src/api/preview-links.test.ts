@@ -225,6 +225,30 @@ describe("mintPreviewLink", () => {
     );
   });
 
+  it("refuses when the row that was read cannot be identified", async () => {
+    // `read.data` is presentation data — it has been through `afterRead`, which
+    // the service allows to reshape the row, `id` included. A missing `id` does
+    // NOT mean the request id was used; it means the row that was read is
+    // unknown here.
+    //
+    // Falling back to the requested id would authorize a row that was never
+    // read: a `beforeOperation` hook mapping A to B plus an `afterRead` hook
+    // dropping `id` yields read(B) with update(A), while the token delivers B.
+    getEntry.mockResolvedValue({
+      success: true,
+      statusCode: 200,
+      data: { title: "afterRead stripped the id" },
+    });
+
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "7" })
+    );
+
+    expect(response.status).toBe(403);
+    // And crucially the edit gate was never asked about the WRONG row.
+    expect(canUpdateEntry).not.toHaveBeenCalled();
+  });
+
   it("judges an API key on the key's own grants, not its owner's", async () => {
     // The leak direction, which is the one a naive test gets backwards. Asserting
     // that a key is DENIED something it should not have passes against the broken
