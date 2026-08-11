@@ -65,7 +65,7 @@ export interface RelatedRowReadContext {
    * target collection at four separate points, and a caller may derive
    * membership rather than enumerate it.
    */
-  trusted?: (collection: string) => boolean;
+  trusted: ((collection: string) => boolean) | undefined;
 
   /**
    * The caller's authenticated scope. A scoped API key is judged on its OWN

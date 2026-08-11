@@ -465,6 +465,13 @@ export async function checkSingleAccess(params: {
   operation: "read" | "update" | "publish" | "unpublish";
   user?: UserContext;
   overrideAccess?: boolean;
+  /**
+   * Which collections a trusted read may reach as relationships are expanded,
+   * asked per RELATED collection. Absent means every populated target inherits
+   * the caller's trust. Evaluated as `overrideAccess && trusted(target)`, so it
+   * can only ever narrow. See {@link RelatedRowReadContext.trusted}.
+   */
+  trusted?: (collection: string) => boolean;
   routeAuthorized?: boolean;
   rbacAccessControlService?: RBACAccessControlService;
   // The caller's authenticated scope. A scoped API key is judged on its OWN
@@ -809,6 +816,9 @@ export class SingleQueryService extends BaseService {
         enforceCollectionAccess: true,
         user: options.user,
         overrideAccess: options.overrideAccess,
+        // Narrows that bypass per RELATED collection. Absent means unchanged;
+        // dropping it here would silently restore the full bypass.
+        trusted: options.trusted,
         authenticatedScope: options.authenticatedScope,
         // Collects the references a target collection refused, so the
         // completeness check below reads them as absent on purpose.
@@ -873,6 +883,9 @@ export class SingleQueryService extends BaseService {
             enforceCollectionAccess: true,
             user: options.user as Record<string, unknown> | undefined,
             overrideAccess: options.overrideAccess,
+            // Narrows that bypass per RELATED collection. Absent means unchanged;
+            // dropping it here would silently restore the full bypass.
+            trusted: options.trusted,
             // A relationship inside a component is populated by the same
             // service, so a refusal there has to reach the completeness check
             // too, and the rows of one population share a policy cache.
@@ -2487,7 +2500,7 @@ export class SingleQueryService extends BaseService {
     // collection's fields. Enforcement is opt-in because a caller that has not
     // supplied a user is indistinguishable from an anonymous one here, and
     // enforcing for the former strips protected fields from everybody.
-    access: RelatedRowReadContext = {},
+    access: RelatedRowReadContext = { trusted: undefined },
     /**
      * Propagate expansion failures instead of returning the document
      * unexpanded. A response is better served incomplete than not at all, but a
@@ -2540,6 +2553,9 @@ export class SingleQueryService extends BaseService {
           enforceCollectionAccess: access.enforceCollectionAccess,
           user: access.user,
           overrideAccess: access.overrideAccess,
+          // Narrows that bypass per RELATED collection. Absent means unchanged;
+          // dropping it here would silently restore the full bypass.
+          trusted: access.trusted,
           authenticatedScope: access.authenticatedScope,
           withheldByAccess: access.withheldByAccess,
           locale: access.locale,

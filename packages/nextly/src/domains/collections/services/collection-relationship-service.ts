@@ -2413,7 +2413,7 @@ export class CollectionRelationshipService extends BaseService {
     targetCollection: string,
     relatedIds: string[],
     field: FieldDefinition,
-    access: RelatedRowAccess = {}
+    access: RelatedRowAccess = { trusted: undefined }
   ): Promise<Map<string, Record<string, unknown>>> {
     const resultMap = new Map<string, Record<string, unknown>>();
 
@@ -2491,7 +2491,7 @@ export class CollectionRelationshipService extends BaseService {
     sourceCollectionName: string,
     sourceEntryIds: string[],
     field: FieldDefinition,
-    access: RelatedRowAccess = {}
+    access: RelatedRowAccess = { trusted: undefined }
   ): Promise<Map<string, Record<string, unknown>[]>> {
     const resultMap = new Map<string, Record<string, unknown>[]>();
 
@@ -3094,7 +3094,7 @@ export class CollectionRelationshipService extends BaseService {
   private async redactRelatedRows(
     targetCollection: string,
     rows: Record<string, unknown>[],
-    access: RelatedRowAccess = {}
+    access: RelatedRowAccess = { trusted: undefined }
   ): Promise<void> {
     if (rows.length === 0) return;
     // The system owner column must never ride along a populated relationship:
@@ -3987,7 +3987,7 @@ export class CollectionRelationshipService extends BaseService {
   async fetchRelatedEntry(
     collectionName: string,
     entryId: string,
-    access: RelatedRowAccess = {}
+    access: RelatedRowAccess = { trusted: undefined }
   ): Promise<Record<string, unknown> | null> {
     try {
       const [readable] = await this.readTargetRows(
@@ -4071,7 +4071,7 @@ export class CollectionRelationshipService extends BaseService {
     // written in it. The target-entry fetch stays on the pool: related rows live
     // in another (already-committed) collection, so they need no tx visibility.
     executor?: RelationshipDbExecutor,
-    access: RelatedRowAccess = {}
+    access: RelatedRowAccess = { trusted: undefined }
   ): Promise<Record<string, unknown>[]> {
     // Same dual-aware target lookup as fetchManyToManyRelationsBatch above.
     // See that comment for the code-first vs UI-built shape rationale.

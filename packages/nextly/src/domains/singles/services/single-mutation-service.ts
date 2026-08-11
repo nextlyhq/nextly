@@ -810,6 +810,9 @@ export class SingleMutationService extends BaseService {
           operation: transitionOp,
           user: options.user,
           overrideAccess: options.overrideAccess,
+          // Narrows that bypass per RELATED collection. Absent means unchanged;
+          // dropping it here would silently restore the full bypass.
+          trusted: options.trusted,
           // NOT route-authorized: the route authorizes a Single write as
           // `update`, never as `publish`/`unpublish`, so the RBAC check for the
           // transition permission must actually run.
@@ -2314,6 +2317,9 @@ export class SingleMutationService extends BaseService {
           enforceFieldAccess: true,
           user: options.user,
           overrideAccess: options.overrideAccess,
+          // Narrows that bypass per RELATED collection. Absent means unchanged;
+          // dropping it here would silently restore the full bypass.
+          trusted: options.trusted,
           authenticatedScope: options.authenticatedScope,
           // The language just written: a target collection's read rule may
           // scope reads by one of its own localized fields, and that filter
