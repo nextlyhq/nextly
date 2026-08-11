@@ -4028,6 +4028,42 @@ describe("PageRenderer", () => {
       expect(artifact.css).toContain("host-gated.png");
     });
 
+    it("contains a rejection from a caller's async predicate", async () => {
+      // A mistakenly `async drawsNothing` returns a promise, so the call itself
+      // never throws and the comparison against `true` is simply false. The
+      // REJECTION is the hazard: Node reports it as unhandled and can end the
+      // process, during style resolution, outside any block boundary.
+      const unhandled = vi.fn();
+      process.on("unhandledRejection", unhandled);
+      try {
+        const artifact = resolvePageStyles(
+          doc(node("a", "test/text", { props: { value: "x" } })),
+          {
+            css: ".nx-a { color: teal }",
+            classes: { a: "nx-a" },
+            gated: { a: ".nx-a { background-image: url(/host-gated.png) }" },
+          },
+          {
+            breakpoints: { viewport: [], container: [] },
+            drawsNothing: (() =>
+              Promise.reject(new Error("late"))) as unknown as (
+              node: BlockNode
+            ) => boolean,
+          },
+          createBlockResolver([text as AnyBlockDefinition])
+        );
+
+        // Answered "draws", so the node keeps its styling.
+        expect(artifact.css).toContain("host-gated.png");
+        // A rejection surfaces on a later turn, so this has to wait for one;
+        // asserting synchronously would pass whether or not it was contained.
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(unhandled).not.toHaveBeenCalled();
+      } finally {
+        process.off("unhandledRejection", unhandled);
+      }
+    });
+
     it("still gets the rules of a node that DOES draw", async () => {
       // The control. Without it the assertion above would pass on a resolver
       // that appends nothing at all, which would leave every gated node on every

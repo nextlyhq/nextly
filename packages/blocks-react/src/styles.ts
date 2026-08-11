@@ -329,11 +329,18 @@ export function readableGatedRules(
  * the stored-artifact branch never looks at the compile context, so a caller
  * could not correct it by supplying the same one again.
  *
- * A caller's function is wrapped rather than called directly. It is host code
+ * A caller's function is contained rather than called directly. It is host code
  * running with no block boundary above it, on the path that decides a page's
- * stylesheet, so a throw would lose the page rather than the node. Anything but
- * an explicit `true` counts as drawing, which keeps a node that IS on the page
- * styled.
+ * stylesheet, so a throw would lose the page rather than the node — and a
+ * mistakenly `async` one returns a promise that this cannot catch, whose
+ * rejection Node reports as unhandled and can end the process with.
+ *
+ * Contained by routing it THROUGH `declaresNoMarkup` rather than by repeating
+ * what that already does. A block's declaration reaches the same three hazards —
+ * a throwing call, a throwing `then` getter, a deferred rejection — and two
+ * implementations of one containment are two answers that can drift. The adapter
+ * exists only because the two signatures differ: a declaration is asked about
+ * props, a caller's predicate about the node.
  */
 function drawlessTestFor(
   blocks: BlockResolver,
@@ -342,13 +349,8 @@ function drawlessTestFor(
   if (supplied === undefined) {
     return node => declaresNoMarkup(node, type => blocks.get(type));
   }
-  return node => {
-    try {
-      return supplied(node) === true;
-    } catch {
-      return false;
-    }
-  };
+  return node =>
+    declaresNoMarkup(node, () => ({ rendersNothing: () => supplied(node) }));
 }
 
 function withGatedRules(
