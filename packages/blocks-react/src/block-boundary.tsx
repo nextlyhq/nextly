@@ -143,6 +143,55 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
 }
 
 /**
+ * Whether this value is one this renderer can see draws nothing.
+ *
+ * Answers ONLY for output this renderer owns, and that limit is the design
+ * rather than an omission. `normalizeRenderable` materialises an iterable a
+ * block returns into a fresh array, so what arrives here is the very object
+ * React will render and no author code runs to produce it.
+ *
+ * The set of primitives is exact rather than a nullish check: `false` is what
+ * the ordinary conditional form `enabled && <div />` yields when disabled, and
+ * an empty string is what a cleared text value becomes. `0` is deliberately
+ * absent — React renders it as the character zero, which is real output with no
+ * element to carry the node's fields.
+ *
+ * An array is walked BY INDEX, which is how React reads one. Following an
+ * array's own `Symbol.iterator` would answer a question React never asks, and a
+ * custom one can disagree with the indexed contents.
+ *
+ * Anything reached through an element the block built is NOT judged here. Its
+ * children, its props and any iterator inside it belong to the author and are
+ * read again by React after this returns, so nothing read from them can be
+ * relied on. A block that draws nothing from such a root declares it instead.
+ */
+function rendersNothing(output: unknown, budget = { left: 10_000 }): boolean {
+  // A LIST this renderer owns. `normalizeRenderable` materialises an iterable a
+  // block returns into a fresh array, so this walks the very object React will
+  // render and no author code runs to produce it.
+  //
+  // Arrays only, and only owned ones. The array's own `Symbol.iterator` is not
+  // used — React renders an array by its indexed contents, and following a
+  // custom iterator would answer a question React never asks.
+  if (Array.isArray(output)) {
+    for (let index = 0; index < output.length; index += 1) {
+      // Refusing when the budget runs out answers "it draws", which is the safe
+      // direction: it keeps the node's fields refused rather than silently
+      // accepting output nobody counted.
+      if (budget.left-- <= 0) return false;
+      if (!rendersNothing(output[index], budget)) return false;
+    }
+    return true;
+  }
+  return (
+    output === null ||
+    output === undefined ||
+    typeof output === "boolean" ||
+    output === ""
+  );
+}
+
+/**
  * Why a node's root-level fields cannot reach the element the block returned.
  *
  * `cssId` and `attributes` are DOM props and only a host element has a DOM root
@@ -156,7 +205,21 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
  * when the document actually asked for those fields, so an ordinary block
  * returning a fragment is untouched.
  */
-function nodeRootReason(output: ReactNode, node: BlockNode): string | null {
+function nodeRootReason(
+  output: ReactNode,
+  node: BlockNode,
+  /**
+   * Whether the block DECLARED that these props draw nothing.
+   *
+   * The sound channel, and now the only one that covers a wrapper. It is
+   * computed from the node's props — data this renderer already holds — rather
+   * than by inspecting a structure the block handed back and still controls.
+   * That distinction is the whole point: an inspected structure is re-read by
+   * React afterwards, and every accessor, proxy trap and custom iterator in it
+   * can answer differently the second time.
+   */
+  declaresNothing: boolean
+): string | null {
   const hasCssId = typeof node.cssId === "string";
   const attributes = node.attributes;
   // Counted by what would actually be WRITTEN, not by what is stored. The
@@ -172,10 +235,43 @@ function nodeRootReason(output: ReactNode, node: BlockNode): string | null {
       ([name, value]) => isAllowedAttribute(name) && typeof value === "string"
     );
   if (!hasCssId && !hasAttributes) return null;
+  // Rendering NOTHING is a decision, not a failure, and the two must not share
+  // an answer. `core/image` with no usable source returns null on purpose —
+  // an `<img>` with no `src` re-requests the current page in some browsers —
+  // and an author who set an anchor on it has lost the anchor either way. The
+  // difference is that a placeholder ALSO reports a working block as broken,
+  // and in production that is an invisible marker nobody ever sees.
+  //
+  // So a block may legitimately render nothing. That is a contract for every
+  // block, including ones written outside this package, rather than a special
+  // case for the two here that need it today.
+  //
+  // Every value React draws as nothing counts, not just the nullish pair.
+  // `render: () => enabled && <div />` yields `false` when disabled and is the
+  // ordinary way to write a conditional block; `""` reaches the same place from
+  // a cleared text value. Verified against React 19: `null`, `undefined`,
+  // `false`, `true` and `""` all render empty, while `0` renders "0" and is
+  // therefore real output with a root.
+  // Two ways to be exempt, and neither reads anything the block can change
+  // between now and React's own read.
+  //
+  // The block SAYS so, from its props. Or the output is a value this renderer
+  // OWNS: a primitive React draws as nothing, or an array the normalizer
+  // materialised, walked by index exactly as React walks it.
+  //
+  // Deliberately NOT by opening what the block returned. A wrapper's children, a
+  // provider's `value`, an element's `key` and `ref`, an iterable's iterator —
+  // every one of them is author-controllable, and React reads them AGAIN after
+  // this returns. An exemption granted on a reading React need not repeat is one
+  // the author can invalidate afterwards, so it is not granted at all. A block
+  // that legitimately draws nothing from a wrapper root says so through
+  // `rendersNothing`, which is computed from props and cannot vary.
+  if (declaresNothing || rendersNothing(output)) return null;
   const named = hasCssId ? "`cssId`" : "attributes";
-  // A primitive or a list has no root at all, which loses the fields exactly as
-  // a wrapper root does — silently, and with the same broken anchors. The
-  // format says a block renders a single element for these to target.
+  // A primitive or a list, on the other hand, is real output with no single
+  // element to carry the fields, so it loses them anyway — silently, and with
+  // the same broken anchors as a wrapper root. The format says a block renders
+  // a single element for these to target.
   if (!isValidElement(output)) {
     return `a node carrying ${named} whose block returned no element, so there is no DOM root to put them on`;
   }
@@ -199,7 +295,9 @@ function checkedOutput(
   // function is re-entered for each awaited child, and applying them again
   // there would put the node's id and attributes on a nested element while the
   // block's root, being a list, received none of them.
-  isBlockRoot: boolean
+  isBlockRoot: boolean,
+  /** What the block declared about these props, decided once by the caller. */
+  declaresNothing: boolean
 ): ReactNode {
   const result = normalizeRenderable(value, {
     // A promise the block returned inside a list is awaited under the same
@@ -214,6 +312,7 @@ function checkedOutput(
           node={node}
           fallback={fallback}
           isBlockRoot={false}
+          declaresNothing={declaresNothing}
         />
       </Suspense>
     ),
@@ -230,7 +329,9 @@ function checkedOutput(
     );
   }
 
-  const rootReason = isBlockRoot ? nodeRootReason(result.node, node) : null;
+  const rootReason = isBlockRoot
+    ? nodeRootReason(result.node, node, declaresNothing)
+    : null;
   if (rootReason !== null) {
     return (
       <BlockPlaceholder
@@ -267,14 +368,23 @@ async function AsyncBlockOutput({
   node,
   fallback,
   isBlockRoot,
+  declaresNothing,
 }: {
   pending: PromiseLike<unknown>;
   node: BlockNode;
   fallback: ReactNode;
   isBlockRoot: boolean;
+  /** Carried from the caller, which asked the definition once before rendering. */
+  declaresNothing: boolean;
 }): Promise<ReactNode> {
   try {
-    return checkedOutput(await pending, node, fallback, isBlockRoot);
+    return checkedOutput(
+      await pending,
+      node,
+      fallback,
+      isBlockRoot,
+      declaresNothing
+    );
   } catch (error) {
     return (
       <BlockPlaceholder
@@ -360,6 +470,28 @@ export function BlockBoundary({
 
   const className = classNameFor(node, classes);
 
+  // Asked BEFORE the block renders, of the STORED props, which is what the
+  // contract in `blocks-engine` says this answer is about. Asking afterwards
+  // reads whatever the render left behind: a block that mutates its own props
+  // while building its output would be judged on the mutated object and could
+  // declare itself empty while holding elements.
+  //
+  // Contained, because it is plugin code running outside the render's own
+  // try/catch. A declaration that throws is no declaration rather than the
+  // page's error. A non-boolean answer is likewise no declaration — and a
+  // THENABLE one gets a handler attached, because a rejection nobody is
+  // listening for takes down the process under Node's default
+  // `--unhandled-rejections=throw`.
+  let declaresNothing = false;
+  try {
+    const declared: unknown = definition.rendersNothing?.(node.props);
+    declaresNothing = declared === true;
+    if (isThenable(declared))
+      void Promise.resolve(declared).catch(() => undefined);
+  } catch {
+    declaresNothing = false;
+  }
+
   let output: unknown;
   try {
     output = definition.render({
@@ -405,7 +537,9 @@ export function BlockBoundary({
   // not-a-promise and falls into the checked path, where it becomes this
   // block's placeholder. A predicate that could raise would do so out here,
   // past the try block above, and take the page with it.
-  if (!isThenable(output)) return checkedOutput(output, node, fallback, true);
+  if (!isThenable(output)) {
+    return checkedOutput(output, node, fallback, true, declaresNothing);
+  }
 
   return (
     <Suspense fallback={fallback}>
@@ -414,6 +548,7 @@ export function BlockBoundary({
         node={node}
         fallback={fallback}
         isBlockRoot
+        declaresNothing={declaresNothing}
       />
     </Suspense>
   );
