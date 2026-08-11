@@ -496,8 +496,16 @@ describe("restricting to the oldest supported Node", () => {
         navigator: {},
         WebSocket: class {},
         Iterator: class {},
+        Float16Array: class {},
+        SuppressedError: class {},
       })
-    ).toEqual(["navigator", "WebSocket", "Iterator"]);
+    ).toEqual([
+      "navigator",
+      "WebSocket",
+      "Iterator",
+      "Float16Array",
+      "SuppressedError",
+    ]);
     expect(floorGlobalsPresent({ clean: 1 })).toEqual([]);
   });
 
