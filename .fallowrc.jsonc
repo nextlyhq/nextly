@@ -57,11 +57,10 @@
   //   ../dist/** = bin shims and one page-builder spec that import build
   //     output directly. Present after `pnpm build`, absent on a clean tree,
   //     so gating on them would make the verdict depend on build order.
-  "ignoreUnresolvedImports": [
-    "nextly/field-catalog",
-    "nextly/field-catalog/**",
-    "../dist/**",
-  ],
+  // The exact subpath only. `nextly` exports `./field-catalog` and nothing
+  // beneath it, so a pattern covering that prefix would hide a deep import
+  // that genuinely does not resolve — the class of typo this check exists for.
+  "ignoreUnresolvedImports": ["nextly/field-catalog", "../dist/**"],
 
   // Declared and genuinely used, through a mechanism no import records.
   // Adding a name here asserts that; anything whose usage cannot be pointed

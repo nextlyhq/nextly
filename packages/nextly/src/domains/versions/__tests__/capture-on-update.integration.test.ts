@@ -25,6 +25,9 @@ import type { HookContext } from "../../../hooks/types";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
+// `SingleEntryService` belongs to the singles domain; versions only consumes
+// it. `services/singles` re-exports the same class for legacy import paths,
+// so this names the definition rather than the alias.
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 
 let current: TestNextly | undefined;

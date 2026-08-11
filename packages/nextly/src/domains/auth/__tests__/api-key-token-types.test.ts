@@ -12,6 +12,9 @@ import {
 
 // Mock listRoleSlugsForUser — it uses a global db singleton (not the test DB).
 // We must mock it so tests do not depend on the runtime database connection.
+// The path the subject imports: `api-key-service` reads
+// `listRoleSlugsForUser` from `services/lib/permissions`, and a factory
+// registered against any other specifier leaves the real one in place.
 vi.mock("../../../services/lib/permissions", () => ({
   listRoleSlugsForUser: vi.fn(),
 }));

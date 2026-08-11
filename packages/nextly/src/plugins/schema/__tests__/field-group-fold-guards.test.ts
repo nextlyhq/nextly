@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors";
 import type { NextlyServiceConfig } from "../../../di/register";
+// `plugin-context` declares `PluginDefinition`; the sibling plugin suites
+// import it from there too.
 import type { PluginDefinition } from "../../plugin-context";
 import { applyPluginSchemaContributions } from "../apply-contributions";
 

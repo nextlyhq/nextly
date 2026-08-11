@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// `TestDb` is the fixture's own return type (`Awaited<ReturnType<typeof
+// createTestDb>>`), so this annotation tracks the helper instead of
+// restating its shape.
 import { createTestDb, type TestDb } from "../../__tests__/fixtures/db";
 import { MediaService } from "../media";
 
