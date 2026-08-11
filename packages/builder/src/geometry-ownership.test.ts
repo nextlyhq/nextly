@@ -104,6 +104,23 @@ function crossFrameReads(text: string, file: string): string[] {
     ) {
       found.push(node.argumentExpression.text);
     }
+    // `const { getBoundingClientRect: read } = el` — the method taken off the
+    // element and called later through a name of the caller's choosing. Neither
+    // branch above sees it: the access is a binding pattern, and the call site
+    // is a bare identifier that could be anything.
+    //
+    // Both spellings count. A renamed binding carries `propertyName`, a
+    // shorthand one carries only `name`, and the shorthand is the form someone
+    // reaches for first.
+    if (ts.isBindingElement(node)) {
+      const read = node.propertyName ?? node.name;
+      if (ts.isIdentifier(read) && CROSS_FRAME_READS.has(read.text)) {
+        found.push(read.text);
+      }
+      if (ts.isStringLiteralLike(read) && CROSS_FRAME_READS.has(read.text)) {
+        found.push(read.text);
+      }
+    }
     ts.forEachChild(node, visit);
   };
 
@@ -164,5 +181,46 @@ describe("rectangles are read across the frame in one place", () => {
 
     expect(dotted).toEqual(["getBoundingClientRect"]);
     expect(bracketed).toEqual(["getBoundingClientRect"]);
+  });
+
+  it("sees the method taken off the element and called through a new name", () => {
+    // The spelling that walked past the two above: the access is a binding
+    // pattern rather than a property access, and the call site is a bare
+    // identifier indistinguishable from any other function.
+    const renamed = crossFrameReads(
+      "const { getBoundingClientRect: read } = el; read.call(el);",
+      "probe.ts"
+    );
+    const shorthand = crossFrameReads(
+      "const { getBoundingClientRect } = el; getBoundingClientRect.call(el);",
+      "probe.ts"
+    );
+
+    expect(renamed).toEqual(["getBoundingClientRect"]);
+    expect(shorthand).toEqual(["getBoundingClientRect"]);
+  });
+
+  it("does not claim to see a read routed through a computed name", () => {
+    // Recorded as a LIMIT rather than left for the next reader to discover.
+    //
+    // Three narrowings of this guard have each been followed by a finding of
+    // the same shape — another spelling it did not recognise — and that is the
+    // signal that the design is the problem, not the coverage. A scan over
+    // syntax has an unbounded surface: a name assembled at runtime, a
+    // `Reflect.get`, a property descriptor, an `eval`. Adding a fourth case
+    // would move the boundary without closing it.
+    //
+    // So the claim is narrowed to what is true. This is a REVIEW AID over a
+    // bounded set of spellings, NOT a boundary the code cannot cross. The
+    // enforceable half is elsewhere: `geometry.ts` owns the arithmetic and
+    // every caller is expected to ask it, which review checks. This assertion
+    // exists so that fact is written down as a passing test rather than as a
+    // sentence someone may stop believing.
+    const computed = crossFrameReads(
+      'const name = "getBounding" + "ClientRect"; const r = el[name]();',
+      "probe.ts"
+    );
+
+    expect(computed).toEqual([]);
   });
 });
