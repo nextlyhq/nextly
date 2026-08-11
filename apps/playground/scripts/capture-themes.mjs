@@ -134,6 +134,16 @@ const READY_TIMEOUT = 20_000;
 const SCREEN_READY = {
   dashboard: async page => {
     await waitForNoSkeletons(page);
+    // A skeleton count of zero is not evidence of a loaded dashboard. When a
+    // request fails, widgets REPLACE their skeletons with an error state, so
+    // the count reaches zero either way and a failed dashboard is captured as
+    // though it were a good one. Every other screen here asserts something
+    // positive; this one did not, which made it the only route where a red
+    // screen could pass as evidence.
+    //
+    // The greeting carries the signed-in user's name from the API, so it can
+    // only render after that request succeeded.
+    await waitForVisibleText(page, /Welcome, \w/);
   },
   collections: async page => {
     await waitForNoSkeletons(page);
@@ -244,6 +254,43 @@ const page = await context.newPage();
 // every subsequent capture -- there is no login form to drive.
 await page.goto(`${BASE}/admin`);
 await page.waitForLoadState("load");
+
+// Hide the theme-lab switcher for the whole run. The admin layout mounts it
+// unconditionally and it is fixed at the maximum z-index, so every
+// full-viewport screenshot had it burned into the bottom-right corner --
+// covering the UI these captures exist to compare, in every artifact.
+//
+// `addInitScript` rather than a one-off style tag: the script drives client
+// navigations and reloads between themes, and a tag added to one document
+// does not survive them, which would leave the switcher back in later shots
+// while the early ones looked clean.
+await context.addInitScript(() => {
+  const hide = () => {
+    const style = document.createElement("style");
+    style.textContent = "[data-theme-lab-switcher]{display:none !important}";
+    document.head.appendChild(style);
+  };
+  if (document.head) hide();
+  else document.addEventListener("DOMContentLoaded", hide, { once: true });
+});
+await page.reload();
+await page.waitForLoadState("load");
+
+// A hidden control and an absent one look identical in a screenshot, and only
+// one of them means the rule landed. Fail loudly here rather than produce a
+// run of artifacts that silently kept the overlay.
+const switcherHidden = await page.evaluate(() => {
+  const el = document.querySelector("[data-theme-lab-switcher]");
+  if (!el) return "absent";
+  return getComputedStyle(el).display === "none" ? "hidden" : "visible";
+});
+if (switcherHidden !== "hidden") {
+  throw new Error(
+    `capture-themes: expected the theme-lab switcher to be hidden before ` +
+      `capturing, but it is "${switcherHidden}". An "absent" result means the ` +
+      `marker attribute moved and the overlay would return unnoticed.`
+  );
+}
 
 let shotCount = 0;
 /** Paths this run wrote, relative to the output root, for the manifest. */
