@@ -955,3 +955,36 @@ describe("a message id built out of something the caller did not publish", () =>
     expect(result.messageId).toBe("bobsled-42");
   });
 });
+
+describe("a provider that returns no identifier at all", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetFilterRegistry();
+  });
+
+  it("treats a null message id as absent rather than throwing", async () => {
+    // A JavaScript plugin or a hand-built provider is not bound by the
+    // adapter's declared return type, and `null` is the natural way to say
+    // "accepted, no identifier". Reading `.length` off it threw on the send
+    // path, which the catch above then reported as a provider failure — an
+    // accepted message turned into a failed one.
+    const { service } = buildSend();
+    (service as unknown as { createAdapterFromRecord: unknown })[
+      "createAdapterFromRecord"
+    ] = () => ({
+      send: () =>
+        Promise.resolve({ success: true, messageId: null } as unknown as {
+          success: boolean;
+          messageId?: string;
+        }),
+    });
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(result).toEqual({ success: true });
+  });
+});

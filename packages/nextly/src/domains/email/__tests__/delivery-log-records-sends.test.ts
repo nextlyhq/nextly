@@ -544,3 +544,42 @@ describe("a logger that throws while reporting a lost row", () => {
     bare.close();
   });
 });
+
+describe("looking a delivery up by the address as it was written", () => {
+  it("finds a message sent to a display-name address", async () => {
+    // `deliveryRecipients` stores the hash of the MAILBOX, so a reader handing
+    // back what the caller typed has to be hashed the same way or the lookup
+    // answers "no record" for a message that was sent.
+    const sqlite = new Database(":memory:");
+    createDeliveriesTable(sqlite);
+    const service = new EmailDeliveryService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+
+    await service.record({
+      to: "jane@example.com",
+      providerId: null,
+      providerType: "smtp",
+      templateSlug: null,
+      status: "sent",
+      messageId: null,
+      error: null,
+    });
+
+    const found = await service.list({
+      recipient: "Jane <jane@example.com>",
+    });
+    expect(found).toHaveLength(1);
+
+    // The control: the bare form still works, so this did not simply stop
+    // filtering.
+    expect(await service.list({ recipient: "jane@example.com" })).toHaveLength(
+      1
+    );
+    expect(await service.list({ recipient: "someone@else.test" })).toHaveLength(
+      0
+    );
+    sqlite.close();
+  });
+});

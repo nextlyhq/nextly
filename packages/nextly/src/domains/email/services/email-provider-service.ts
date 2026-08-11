@@ -794,21 +794,6 @@ export class EmailProviderService extends BaseService {
             : TEST_RECIPIENT_REFUSED,
       };
     } catch (error) {
-      // Logged HERE, with the cause. Attaching an original error to a
-      // NextlyError does not record it anywhere: this catch converts the error
-      // into a result and the request ends, so a provider's actual diagnostic
-      // was retained and then dropped — while the message told the operator to
-      // go and read it. A promise about a log entry has to be made true by
-      // something writing one.
-      this.logger.error("Email provider test failed", {
-        providerId: id,
-        providerType: provider.type,
-        mode,
-        // Shared with the ordinary send path so the two cannot come to
-        // disagree about how far down a `cause` chain to look.
-        ...describeProviderFailure(error),
-      });
-
       // Only a send that actually reached the provider. `mode === "send"` is
       // not enough on its own: the adapter is built inside this try, so a
       // removed plugin or unusable stored configuration lands here having
@@ -830,6 +815,29 @@ export class EmailProviderService extends BaseService {
             error: describeProviderFailure(error).message,
           }
         );
+      }
+
+      // Logged HERE, with the cause. Attaching an original error to a
+      // NextlyError does not record it anywhere: this catch converts the error
+      // into a result and the request ends, so a provider's actual diagnostic
+      // was retained and then dropped — while the message told the operator to
+      // go and read it. A promise about a log entry has to be made true by
+      // something writing one.
+      // Wrapped, and AFTER the record above. An install's logger throwing
+      // from `error()` would otherwise leave the catch before the delivery row
+      // is written, so a real send that reached the provider and failed would
+      // leave no trace of having happened at all.
+      try {
+        this.logger.error("Email provider test failed", {
+          providerId: id,
+          providerType: provider.type,
+          mode,
+          // Shared with the ordinary send path so the two cannot come to
+          // disagree about how far down a `cause` chain to look.
+          ...describeProviderFailure(error),
+        });
+      } catch {
+        // Nowhere left to report to: the reporting mechanism is what failed.
       }
 
       return {

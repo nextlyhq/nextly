@@ -30,6 +30,7 @@ import { BaseService } from "../../../shared/base-service";
 import {
   EMAIL_RETENTION_CLASS,
   hashRecipient,
+  mailboxOf,
   storableError,
   type EmailDeliveryInput,
   type EmailDeliveryRecipientKind,
@@ -340,7 +341,14 @@ export class EmailDeliveryService extends BaseService {
   ): Promise<EmailDeliveryRecord[]> {
     const filters = [
       options.recipient !== undefined
-        ? eq(this.deliveries.recipientHash, hashRecipient(options.recipient))
+        ? eq(
+            this.deliveries.recipientHash,
+            // The MAILBOX, as the writer stored it. A caller asking about
+            // `Jane <jane@example.com>` is asking about `jane@example.com`,
+            // and hashing what they typed answers "no record" for a message
+            // that was sent.
+            hashRecipient(mailboxOf(options.recipient))
+          )
         : undefined,
       options.status !== undefined
         ? eq(this.deliveries.status, options.status)

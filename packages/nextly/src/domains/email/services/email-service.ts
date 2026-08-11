@@ -27,6 +27,7 @@ import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import {
   isRecognisedMessageId,
+  mailboxOf,
   messageIdWithoutRecipients,
   type EmailDeliveryRecipientKind,
 } from "../delivery-record";
@@ -86,25 +87,6 @@ const SLUG_TO_TEMPLATE_KEY: Record<
 // ============================================================
 // Email Service
 // ============================================================
-
-/**
- * The mailbox out of an address a caller may have written with a display name.
- *
- * `Display Name <user@example.com>` is dispatched to `user@example.com`, which
- * is also the form a provider reports a refusal in and the form support is
- * given when asked whether a message arrived. Everything downstream -- the
- * hash, the deduplication and the refusal match -- has to agree on one
- * spelling, and this is the one the outside world uses.
- *
- * The LAST angle-bracketed group is taken, which is where RFC 5322 puts the
- * address; a display name containing brackets is pathological and falls back to
- * the whole string rather than guessing.
- */
-function mailboxOf(address: string): string {
-  const trimmed = address.trim();
-  const angled = /<([^<>]*)>\s*$/.exec(trimmed);
-  return (angled?.[1] ?? trimmed).trim();
-}
 
 /**
  * Every address a message actually went to, with the line it was on.

@@ -177,15 +177,37 @@ const SHORT_OPAQUE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,23}$/;
 const MAX_MESSAGE_ID_LENGTH = 998;
 
 /**
+ * The mailbox out of an address a caller may have written with a display name.
+ *
+ * `Display Name <user@example.com>` is dispatched to `user@example.com`, and
+ * that is the form this table hashes. A reader handing back the address as
+ * they wrote it must be hashed the same way or the lookup answers "no record"
+ * for a message that was sent.
+ *
+ * The LAST angle-bracketed group is taken, which is where RFC 5322 puts the
+ * address; a display name containing brackets is pathological and falls back
+ * to the whole string rather than guessing.
+ */
+export function mailboxOf(address: string): string {
+  const trimmed = address.trim();
+  const angled = /<([^<>]*)>\s*$/.exec(trimmed);
+  return (angled?.[1] ?? trimmed).trim();
+}
+
+/**
  * Whether a provider's identifier is one of the shapes core recognises.
  *
  * Exported so both send paths ask the same question; a shape rule enforced in
  * one of them is a shape rule the other does not have.
  */
-export function isRecognisedMessageId(messageId: string | undefined): boolean {
-  if (messageId === undefined || messageId.length > MAX_MESSAGE_ID_LENGTH) {
-    return false;
-  }
+export function isRecognisedMessageId(messageId: unknown): boolean {
+  // `unknown`, not `string | undefined`. A JavaScript plugin or a hand-built
+  // provider is not bound by the adapter's declared return type, and `null` is
+  // the natural way to say "accepted, no identifier" -- which reached
+  // `null.length` and threw on the send path, turning an accepted message into
+  // a provider failure.
+  if (typeof messageId !== "string") return false;
+  if (messageId.length > MAX_MESSAGE_ID_LENGTH) return false;
   return (
     RFC5322_MESSAGE_ID.test(messageId) ||
     UUID.test(messageId) ||

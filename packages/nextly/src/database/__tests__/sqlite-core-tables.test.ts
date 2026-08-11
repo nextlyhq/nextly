@@ -92,11 +92,10 @@ describe("the SQLite bootstrap DDL", () => {
    * `pushSchema` could not run, which is where nobody is watching.
    *
    * Listed rather than left implicit for two reasons: the list can only
-   * shrink, and a NEW core table added without its DDL fails here rather than
-   * at someone's first insert. That is not hypothetical — `email_deliveries`
-   * was added by a feature PR and every guard in this file stayed green,
-   * because the comparison below iterates the DDL's own tables and could only
-   * ever catch a column that drifted, never a table that was never written.
+   * shrink, and a core table with no DDL and no entry here fails this guard
+   * rather than someone's first insert. The comparison further down iterates
+   * the DDL's own tables, so on its own it catches a column that drifted and
+   * never a table that was never written; that is the gap this list closes.
    */
   const NOT_BOOTSTRAPPED = new Set([
     "activity_log",
@@ -117,10 +116,9 @@ describe("the SQLite bootstrap DDL", () => {
   ]);
 
   it("creates every core table, or names the ones it does not", () => {
-    // The comparison below iterates the DDL's OWN tables, so a core table
-    // absent from it was invisible: the guard could only catch a column that
-    // drifted, never a table that was never written. `email_deliveries` was
-    // added by a feature PR and this test stayed green.
+    // Asked in the direction the per-table comparison cannot: that one
+    // iterates the DDL's own tables, so a core table absent from the DDL is
+    // invisible to it however far its columns drift.
     const missing = [...schemas.keys()].filter(
       table => !ddl.has(table) && !NOT_BOOTSTRAPPED.has(table)
     );
