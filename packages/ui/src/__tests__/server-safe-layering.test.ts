@@ -32,6 +32,7 @@
  */
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -144,6 +145,30 @@ function analyze(source: string, fileName: string): Analysis {
     // no allow-list can contain reports it as unreadable instead of passing it in silence, which
     // is the behaviour that would hide exactly the dependency this guard exists to find.
     if (node) specifiers.push(`<unreadable specifier: ${node.getText()}>`);
+  };
+
+  /**
+   * Whether a node sits inside a `declare` context, which emits no JavaScript at all.
+   *
+   * `declare namespace Types { import React = require("react") }` describes a shape; TypeScript
+   * erases the whole namespace, so the emitted module imports nothing. The declaration's own
+   * `isTypeOnly` is false, which is why it has to be asked of the surroundings instead.
+   *
+   * Read from the modifier flags of the enclosing declarations rather than `NodeFlags.Ambient`,
+   * which is not part of TypeScript's published API.
+   */
+  const inAmbientContext = (node: ts.Node): boolean => {
+    for (let n: ts.Node | undefined = node.parent; n; n = n.parent) {
+      if (
+        ts.isModuleDeclaration(n) ||
+        ts.isInterfaceDeclaration(n) ||
+        ts.isTypeAliasDeclaration(n)
+      ) {
+        const flags = ts.getCombinedModifierFlags(n);
+        if ((flags & ts.ModifierFlags.Ambient) !== 0) return true;
+      }
+    }
+    return false;
   };
 
   /** Whether every name a declaration binds is type-only, so the whole import is erased. */
@@ -482,7 +507,9 @@ function analyze(source: string, fileName: string): Analysis {
       (ts.isParenthesizedExpression(value.parent) ||
         ts.isNonNullExpression(value.parent) ||
         ts.isAsExpression(value.parent) ||
-        ts.isSatisfiesExpression(value.parent))
+        ts.isSatisfiesExpression(value.parent) ||
+        // The angle-bracket assertion `<T>expr`, erased exactly as `as T` is.
+        ts.isTypeAssertionExpression(value.parent))
     ) {
       value = value.parent;
     }
@@ -684,8 +711,11 @@ function analyze(source: string, fileName: string): Analysis {
       ts.isImportEqualsDeclaration(node) &&
       ts.isExternalModuleReference(node.moduleReference)
     ) {
-      // `import type React = require("react")` is erased like any other type-only import.
-      if (!node.isTypeOnly) record(node.moduleReference.expression);
+      // `import type React = require("react")` is erased like any other type-only import, and so
+      // is any import inside a `declare` context, whose enclosing declaration emits nothing.
+      if (!node.isTypeOnly && !inAmbientContext(node)) {
+        record(node.moduleReference.expression);
+      }
     } else if (ts.isCallExpression(node)) {
       const callee = node.expression;
       const isDynamicImport = callee.kind === ts.SyntaxKind.ImportKeyword;
@@ -848,8 +878,13 @@ function resolveLocal(fromFile: string, specifier: string): string | null {
   // wrong module.
   for (const candidate of [
     base,
+    // esbuild's implicit-extension order, in full. Probing only the TypeScript pair left a plain
+    // `helper.js` sibling unresolved, and an unresolved relative specifier is recorded as an
+    // external PACKAGE — so an ordinary local import failed the allow-list.
     `${base}.tsx`,
     `${base}.ts`,
+    `${base}.jsx`,
+    `${base}.js`,
     // BEFORE the `.ts` collapse: with both `helper.ts` and `helper.mts` present, esbuild resolves
     // `./helper.mjs` to the `.mts`. Probing the collapsed form first would follow a different file
     // than the bundler does.
@@ -862,6 +897,8 @@ function resolveLocal(fromFile: string, specifier: string): string | null {
     `${swapped}.tsx`,
     path.join(base, "index.tsx"),
     path.join(base, "index.ts"),
+    path.join(base, "index.jsx"),
+    path.join(base, "index.js"),
   ]) {
     if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
   }
@@ -1463,6 +1500,35 @@ describe("reading a module", () => {
     ).toEqual(["window"]);
   });
 
+  it("does not record an import inside a declare context", () => {
+    // A `declare namespace` emits nothing, so the module it names is never imported at runtime.
+    // The declaration's own `isTypeOnly` is false, which is why the surroundings decide it.
+    expect(
+      read(`
+        declare namespace Types { import React = require("react"); }
+        export const x = 1;
+      `).specifiers
+    ).toEqual([]);
+  });
+
+  it("still records the same import outside one", () => {
+    // The control: an ordinary namespace DOES emit, so the import is real.
+    expect(
+      read(`
+        namespace Types { import React = require("react"); export const y = React; }
+        export const x = 1;
+      `).specifiers
+    ).toEqual(["react"]);
+  });
+
+  it("sees through an angle-bracket type assertion", () => {
+    // `<T>expr` is erased exactly as `as T` is, so the dereference underneath it still throws.
+    expect(
+      read(`export const b = (<{ body: unknown }>globalThis.document).body;`)
+        .globals
+    ).toEqual(["document"]);
+  });
+
   it("reports the viewport globals a server does not have", () => {
     // `screen` is browser-only in every supported Node, needs no import, no JSX and no directive,
     // so nothing else in this file would notice a module reading it at load time.
@@ -1652,6 +1718,38 @@ describe("resolving a local import", () => {
       "entry.ts",
       "helper.ts",
     ]);
+  });
+
+  it("resolves a plain JavaScript sibling", () => {
+    // esbuild probes `.jsx` and `.js` after the TypeScript pair. Missing them left an ordinary
+    // local import unresolved, and an unresolved RELATIVE specifier is recorded as an external
+    // package — so `./helper` failed the allow-list for existing as JavaScript.
+    const dir = mkdtempSync(path.join(os.tmpdir(), "nx-layering-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    writeFileSync(path.join(dir, "helper.js"), "export const helper = 1;\n");
+    const entry = path.join(dir, "entry.ts");
+    writeFileSync(entry, 'export { helper } from "./helper";\n');
+
+    const { files, packages } = reach(entry);
+    expect([...packages.keys()]).toEqual([]);
+    expect(files.map(({ file }) => path.basename(file)).sort()).toEqual([
+      "entry.ts",
+      "helper.js",
+    ]);
+  });
+
+  it("resolves a directory index written as JavaScript", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "nx-layering-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    mkdirSync(path.join(dir, "helper"));
+    writeFileSync(
+      path.join(dir, "helper", "index.js"),
+      "export const helper = 1;\n"
+    );
+    const entry = path.join(dir, "entry.ts");
+    writeFileSync(entry, 'export { helper } from "./helper";\n');
+
+    expect([...reach(entry).packages.keys()]).toEqual([]);
   });
 
   it("keeps `.ts` first for an explicit `.js` specifier", () => {
