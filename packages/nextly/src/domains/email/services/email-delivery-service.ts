@@ -45,6 +45,21 @@ import {
  */
 const INSERT_CHUNK_SIZE = 50;
 
+/**
+ * A thrown value as one log-safe line.
+ *
+ * `String(value)` on a plain object yields `[object Object]`, which reads like
+ * a message and says nothing — so a non-Error rejection is serialised instead.
+ */
+function describeUnknownError(value: unknown): string {
+  if (value instanceof Error) return value.message;
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return Object.prototype.toString.call(value);
+  }
+}
+
 type EmailDeliveriesTable =
   | typeof emailDeliveriesPg
   | typeof emailDeliveriesMysql
@@ -142,8 +157,13 @@ export class EmailDeliveryService extends BaseService {
    *
    * A message with copied recipients produces one row per address, because the
    * question the table answers is asked about a PERSON and a person copied on
-   * a message received it. One insert rather than one per address, so a
-   * copied-in message costs the same round trip as any other.
+   * a message received it.
+   *
+   * Written in bounded chunks: an ordinary send is one statement, and a large
+   * recipient list becomes several rather than one that would exceed a
+   * dialect's bind-parameter limit. Each chunk succeeds or fails on its own,
+   * so a batch can end up partially recorded -- which is the deliberate trade
+   * against losing all of it.
    *
    * Never throws, for the reason `record` gives.
    */
@@ -151,9 +171,9 @@ export class EmailDeliveryService extends BaseService {
     if (inputs.length === 0) return;
 
     const now = new Date();
-    // Generated ONCE, outside the retry. Regenerating them would let a
-    // connection lost after the first statement committed write the whole
-    // batch a second time under new keys -- one send, two sets of rows.
+    // Generated ONCE, outside the retry below. The provider-reference retry
+    // rewrites the rows it was given, and reusing the ids is what makes it a
+    // REPLACEMENT of the refused rows rather than a second set of them.
     const ids = inputs.map(() => randomUUID());
 
     // Written in bounded chunks. One `values()` over an unbounded recipient
@@ -219,9 +239,14 @@ export class EmailDeliveryService extends BaseService {
           }
         );
         return;
-      } catch {
-        // Fall through to the original failure, which is the one worth
-        // reporting: the retry failing too means the cause was never the key.
+      } catch (retryError) {
+        // BOTH errors. The original says the row was refused for its provider
+        // reference; the retry's says what stopped the recovery -- a lost
+        // connection or a timeout is a different problem with a different fix,
+        // and reporting only the foreign-key violation would send an operator
+        // looking for a provider-deletion race that is not what went wrong.
+        this.reportInsertFailure(inputs, error, retryError);
+        return;
       }
       this.reportInsertFailure(inputs, error);
     }
@@ -230,13 +255,17 @@ export class EmailDeliveryService extends BaseService {
   /** One shape for a lost chunk, so the two report sites cannot diverge. */
   private reportInsertFailure(
     inputs: EmailDeliveryInput[],
-    error: unknown
+    error: unknown,
+    retryError?: unknown
   ): void {
     this.logger.error("Failed to record an email delivery", {
       providerType: inputs[0]?.providerType,
       status: inputs[0]?.status,
       recipientCount: inputs.length,
-      message: error instanceof Error ? error.message : String(error),
+      message: describeUnknownError(error),
+      ...(retryError !== undefined
+        ? { retryMessage: describeUnknownError(retryError) }
+        : {}),
     });
   }
 

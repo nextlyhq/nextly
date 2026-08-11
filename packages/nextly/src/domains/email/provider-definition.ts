@@ -242,6 +242,16 @@ function declaredSecretValues(
     // reading only strings hands back an empty list for exactly the provider
     // whose credential is about to be interpolated into an identifier.
     //
+    // A BOOLEAN credential is unmatchable rather than compared. `secret: true`
+    // is permitted on a boolean field, and its two renderings -- "true" and
+    // "false" -- appear inside ordinary identifiers often enough that using
+    // them as needles would delete legitimate message ids while catching the
+    // credential only by accident.
+    if (typeof current === "boolean") {
+      hasUnmatchable = true;
+      continue;
+    }
+
     // An object or an array is skipped: its rendering is not what a provider
     // would interpolate, and stringifying one produces a needle that matches
     // nothing while looking like protection.
@@ -480,8 +490,7 @@ function normalizeProviderFailure(
  * `RegisteredEmailProvider` is a STRUCTURAL type: a JavaScript plugin or a
  * hand-built object reaches `register()` with its own `createAdapterFrom`, and
  * containment that lived only in the authoring helper would protect exactly the
- * authors least likely to need it. `assertConfigFieldsAreUsable` is enforced at
- * both ends for the same reason.
+ * authors least likely to need it.
  *
  * Applying it twice is harmless: `normalizeProviderFailure` passes a
  * `NextlyError` through unchanged, and a message id with no credential in it is

@@ -95,9 +95,14 @@ export const emailDeliveriesPg = pgTable(
      *
      * One row per recipient, because the table's whole purpose is to answer
      * "did this person receive it", and a copied recipient received it just as
-     * much as the primary one. Rows for a single message share a `message_id`
-     * and a `status`, which is honest rather than lossy: the provider returns
-     * one result for the message, not one per address.
+     * much as the primary one.
+     *
+     * Rows for one message share a `message_id` but NOT necessarily a
+     * `status`. SMTP answers `RCPT TO` per address, so a server can accept the
+     * message for some recipients and refuse it for others; a refused address
+     * is recorded `failed` beside the accepted ones. A provider that reports a
+     * single outcome for the whole message gives every row the same status,
+     * which is the ordinary case rather than the guaranteed one.
      *
      * No column default. The recorder always supplies this, so a default would
      * only describe rows nothing writes — and the DDL renderer emits a string
@@ -106,7 +111,10 @@ export const emailDeliveriesPg = pgTable(
      */
     recipientKind: varchar("recipient_kind", { length: 3 }).notNull(),
 
-    /** `sent` or `failed`. A drain would add `pending` and `retrying`. */
+    /**
+     * `sent` or `failed`, PER RECIPIENT. A drain would add `pending` and
+     * `retrying`.
+     */
     status: varchar("status", { length: 20 }).notNull(),
 
     /** Attempts actually made. Always 1 until something retries. */

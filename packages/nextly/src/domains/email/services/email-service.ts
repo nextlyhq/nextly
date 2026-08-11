@@ -84,6 +84,36 @@ const SLUG_TO_TEMPLATE_KEY: Record<
 // ============================================================
 
 /**
+ * A provider's message id, unless it carries a recipient.
+ *
+ * The delivery table stores a hash of the recipient and never the address, and
+ * that decision is only worth anything if EVERY column beside the hash
+ * respects it. `messageId` is written by the provider, which was handed the
+ * real address, so `delivery-user@example.com` is an id a provider could
+ * plausibly return.
+ *
+ * Matched against the actual mailboxes rather than redacted by shape. An
+ * RFC 5322 Message-ID is `<local@domain>`, so a rule built on "anything with
+ * an @" would discard almost every legitimate id and protect nothing extra.
+ *
+ * Dropped rather than rewritten, for the reason the credential containment
+ * gives: a partially rewritten identifier matches nothing while still looking
+ * like one.
+ */
+function messageIdWithoutRecipients(
+  messageId: string | undefined,
+  mailboxes: readonly string[]
+): string | null {
+  if (messageId === undefined) return null;
+  const haystack = messageId.toLowerCase();
+  const carriesOne = mailboxes.some(mailbox => {
+    const needle = mailbox.trim().toLowerCase();
+    return needle !== "" && haystack.includes(needle);
+  });
+  return carriesOne ? null : messageId;
+}
+
+/**
  * The mailbox out of an address a caller may have written with a display name.
  *
  * `Display Name <user@example.com>` is dispatched to `user@example.com`, which
@@ -487,8 +517,21 @@ export class EmailService extends BaseService {
       const refused = new Set(
         (result.rejected ?? []).map(address => mailboxOf(address).toLowerCase())
       );
+      const recipients = deliveryRecipients(filtered);
+      // A provider is handed `options.to` and may build its identifier out of
+      // it. The error string is redacted for exactly that reason, and this
+      // column was not -- so an id like `delivery-user@example.com` would put
+      // the recipient in the table that otherwise stores only a hash of them.
+      //
+      // Compared against the ACTUAL mailboxes rather than redacted by shape:
+      // a Message-ID legitimately contains an `@`, so address-shaped redaction
+      // would destroy every RFC-form id while catching nothing else.
+      const recordableMessageId = messageIdWithoutRecipients(
+        result.messageId,
+        recipients.map(recipient => recipient.to)
+      );
       await this.deliveries?.recordAll(
-        deliveryRecipients(filtered).map(recipient => {
+        recipients.map(recipient => {
           const wasRefused = refused.has(recipient.to.trim().toLowerCase());
           const delivered = result.success && !wasRefused;
           return {
@@ -497,7 +540,7 @@ export class EmailService extends BaseService {
             providerType,
             templateSlug: options.templateSlug ?? null,
             status: delivered ? ("sent" as const) : ("failed" as const),
-            messageId: result.messageId ?? null,
+            messageId: recordableMessageId,
             error: delivered
               ? null
               : wasRefused

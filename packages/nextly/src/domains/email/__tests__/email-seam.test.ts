@@ -275,6 +275,58 @@ describe("EmailService — D63 filter/action seams", () => {
     ]);
   });
 
+  it("does not store a message id that carries the recipient", async () => {
+    // The adapter is handed `options.to` and may build its identifier from it.
+    // The error string is redacted for that reason; this column was not, so an
+    // id like `delivery-user@example.com` would put the recipient in the table
+    // that otherwise stores only a hash of them.
+    const recorded: Array<{ messageId: string | null }> = [];
+    const { service } = buildSend();
+    (service as unknown as { createAdapterFromRecord: unknown })[
+      "createAdapterFromRecord"
+    ] = () => ({
+      send: () =>
+        Promise.resolve({
+          success: true,
+          messageId: "delivery-a@b.com-20260811",
+        }),
+    });
+    (service as unknown as { deliveries: unknown })["deliveries"] = {
+      recordAll: (inputs: Array<{ messageId: string | null }>) => {
+        recorded.push(...inputs);
+        return Promise.resolve();
+      },
+    };
+
+    await service.send({ to: "a@b.com", subject: "Hi", html: "<p>x</p>" });
+
+    expect(recorded[0]?.messageId).toBeNull();
+  });
+
+  it("keeps an ordinary RFC-form message id", async () => {
+    // The control, and the reason this is a comparison rather than
+    // address-shaped redaction: a Message-ID legitimately contains an `@`, so
+    // a shape rule would discard nearly every real id.
+    const recorded: Array<{ messageId: string | null }> = [];
+    const { service } = buildSend();
+    (service as unknown as { createAdapterFromRecord: unknown })[
+      "createAdapterFromRecord"
+    ] = () => ({
+      send: () =>
+        Promise.resolve({ success: true, messageId: "<abc@mail.example.com>" }),
+    });
+    (service as unknown as { deliveries: unknown })["deliveries"] = {
+      recordAll: (inputs: Array<{ messageId: string | null }>) => {
+        recorded.push(...inputs);
+        return Promise.resolve();
+      },
+    };
+
+    await service.send({ to: "a@b.com", subject: "Hi", html: "<p>x</p>" });
+
+    expect(recorded[0]?.messageId).toBe("<abc@mail.example.com>");
+  });
+
   it("records a refused recipient as failed while the others succeed", async () => {
     // SMTP answers `RCPT TO` one address at a time, so a server can accept the
     // message for some recipients and refuse it for others while the send as a

@@ -556,3 +556,70 @@ describe("a provider that declares no field metadata", () => {
     ).resolves.toEqual({ success: true, messageId: "<ok@mail.test>" });
   });
 });
+
+describe("a credential declared on a switch", () => {
+  afterEach(() => {
+    getEmailProviderRegistry().reset();
+  });
+
+  it("costs the provider its message ids", async () => {
+    // `secret: true` is permitted on a boolean field. Its two renderings —
+    // "true" and "false" — appear inside ordinary identifiers often enough
+    // that comparing against them would delete legitimate ids while catching
+    // the credential only by accident, so it is unmatchable instead.
+    const registry = getEmailProviderRegistry();
+    registry.register(
+      defineEmailProvider<{ privateFlag: boolean }>({
+        type: "bool-secret",
+        label: "Boolean secret",
+        configFields: [
+          { name: "privateFlag", label: "Flag", kind: "boolean", secret: true },
+        ],
+        parseConfig: input => input as { privateFlag: boolean },
+        createAdapter: config => ({
+          send: () =>
+            Promise.resolve({
+              success: true,
+              messageId: `id-${config.privateFlag}`,
+            }),
+        }),
+      })
+    );
+
+    const result = await registry
+      .create("bool-secret", { privateFlag: true })
+      .send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" });
+
+    expect(result.messageId).toBeUndefined();
+  });
+
+  it("leaves a NON-secret boolean alone", async () => {
+    // The control: the rule keys on `secret: true`, not on the field's kind.
+    const registry = getEmailProviderRegistry();
+    registry.register(
+      defineEmailProvider<{ sandbox: boolean }>({
+        type: "bool-public",
+        label: "Boolean public",
+        configFields: [
+          {
+            name: "sandbox",
+            label: "Sandbox",
+            kind: "boolean",
+            default: false,
+          },
+        ],
+        parseConfig: input => input as { sandbox: boolean },
+        createAdapter: () => ({
+          send: () =>
+            Promise.resolve({ success: true, messageId: "<ok@mail.test>" }),
+        }),
+      })
+    );
+
+    await expect(
+      registry
+        .create("bool-public", { sandbox: true })
+        .send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" })
+    ).resolves.toEqual({ success: true, messageId: "<ok@mail.test>" });
+  });
+});
