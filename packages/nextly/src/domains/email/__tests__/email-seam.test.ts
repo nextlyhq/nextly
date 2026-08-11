@@ -1053,3 +1053,68 @@ describe("a provider that reports refusals the way its transport does", () => {
     expect(result).toEqual({ success: true, messageId: "msg-1" });
   });
 });
+
+describe("a provider that reports its refusals as a bare string", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetFilterRegistry();
+  });
+
+  afterEach(() => {
+    resetFilterRegistry();
+  });
+
+  function reporting(rejected: unknown) {
+    const { service } = buildSend();
+    (service as unknown as { createAdapterFromRecord: unknown })[
+      "createAdapterFromRecord"
+    ] = () => ({
+      send: () =>
+        Promise.resolve({
+          success: true,
+          messageId: "msg-1",
+          rejected,
+        } as never),
+    });
+    return service;
+  }
+
+  it("does not turn a delivered message into a failure", async () => {
+    // `rejected` is provider-supplied and its declared type is a promise
+    // rather than a fact. Mapping over a bare string threw AFTER the send had
+    // returned and BEFORE the dispatched marker was set, so the catch recorded
+    // every recipient as failed and answered `{ success: false }` for a
+    // message that reached its primary destination.
+    const result = await reporting("cc@example.com").send({
+      to: "a@b.com",
+      cc: ["cc@example.com"],
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(result).toEqual({ success: true, messageId: "msg-1" });
+  });
+
+  it("still reads that string as a refusal", async () => {
+    // Dropping the value would be the other failure: a provider writing a bare
+    // string MEANS a refusal, and reporting that recipient as delivered is a
+    // wrong answer to the question this table exists to answer.
+    const result = await reporting("a@b.com").send({
+      to: "a@b.com",
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("ignores a shape carrying no address at all", async () => {
+    const result = await reporting(42).send({
+      to: "a@b.com",
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(result).toEqual({ success: true, messageId: "msg-1" });
+  });
+});

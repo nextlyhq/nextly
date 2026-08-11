@@ -133,7 +133,9 @@ describe("testProvider disclosure", () => {
   it("keeps the detail for the operator, in the log", async () => {
     await service.testProvider(providerId, undefined, "connection");
 
-    // The control that stops the fix from being "delete the diagnostic".
+    // Withholding the detail from the CALLER must not withhold it from the
+    // operator: the message tells them to read the server log, so something
+    // has to have written one.
     const logged = vi
       .mocked(logger.warn)
       .mock.calls.map(call => JSON.stringify(call))

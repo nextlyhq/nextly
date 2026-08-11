@@ -610,10 +610,11 @@ describe("a credential the parser DERIVED from the stored one", () => {
   });
 
   it("still returns an ordinary id from a parser that adds keys", async () => {
-    // The control that decides the shape of this fix. A parser filling in
-    // defaults produces a configuration carrying keys the descriptor does not
-    // declare, and treating that as unmatchable would withhold every id from
-    // every provider that has a default.
+    // A parser filling in defaults produces a configuration carrying keys the
+    // descriptor never declared. Those undeclared keys must not make the
+    // provider's credentials uncheckable, because every provider with a
+    // default has them — treating them so would withhold an ordinary message
+    // id from all of them.
     const provider = defineEmailProvider<{ apiKey: string; region: string }>({
       type: "defaulting-shape",
       label: "Defaulting",

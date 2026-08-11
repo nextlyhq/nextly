@@ -28,7 +28,7 @@ import { BaseService } from "../../../shared/base-service";
 import {
   isRecognisedMessageId,
   mailboxOf,
-  refusedMailbox,
+  refusedMailboxes,
   messageIdWithoutRecipients,
   type EmailDeliveryRecipientKind,
 } from "../delivery-record";
@@ -475,11 +475,7 @@ export class EmailService extends BaseService {
       // refuse it for others while the send as a whole succeeds -- and a row
       // saying `sent` for a refused address is a wrong answer to the one
       // question this table exists to answer.
-      const refused = new Set(
-        (result.rejected ?? [])
-          .map(entry => refusedMailbox(entry).toLowerCase())
-          .filter(mailbox => mailbox !== "")
-      );
+      const refused = refusedMailboxes(result.rejected);
       const recipients = deliveryRecipients(filtered);
       // A provider is handed `options.to` and may build its identifier out of
       // it. The error string is redacted for exactly that reason, and an id

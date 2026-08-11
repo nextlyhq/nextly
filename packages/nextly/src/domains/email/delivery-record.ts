@@ -219,6 +219,37 @@ export function refusedMailbox(entry: unknown): string {
 }
 
 /**
+ * Every mailbox a provider says it refused, lowercased.
+ *
+ * The COLLECTION is narrowed here as well as its entries. `rejected` is
+ * provider-supplied and its declared type is a promise rather than a fact: a
+ * hand-built provider reporting a single refusal as `rejected: "cc@x.test"`
+ * made `.map` throw — after `adapter.send()` had already returned, and before
+ * the marker that says a message was dispatched. The catch above then recorded
+ * every recipient as failed and answered `{ success: false }` for a message
+ * that reached its primary destination.
+ *
+ * A bare string is read as ONE refusal rather than discarded: a provider
+ * writing it means a refusal, and dropping the signal would report a refused
+ * recipient as delivered. Anything else yields nothing, because there is no
+ * address in it to act on.
+ */
+export function refusedMailboxes(rejected: unknown): ReadonlySet<string> {
+  const entries = Array.isArray(rejected)
+    ? rejected
+    : typeof rejected === "string"
+      ? [rejected]
+      : [];
+
+  const mailboxes = new Set<string>();
+  for (const entry of entries) {
+    const mailbox = refusedMailbox(entry).toLowerCase();
+    if (mailbox !== "") mailboxes.add(mailbox);
+  }
+  return mailboxes;
+}
+
+/**
  * Whether a provider's identifier is one of the shapes core recognises.
  *
  * Exported so both send paths ask the same question; a shape rule enforced in
