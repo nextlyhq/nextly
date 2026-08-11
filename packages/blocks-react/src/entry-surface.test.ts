@@ -130,7 +130,30 @@ const SOURCE_MODULES: ReadonlyArray<{
   },
   { name: "placeholder", module: placeholderModule, internal: [] },
   { name: "page-renderer", module: pageRendererModule, internal: [] },
-  { name: "prepare-document", module: prepareModule, internal: [] },
+  {
+    name: "prepare-document",
+    module: prepareModule,
+    // All three cross a module boundary inside this package; none is a consumer
+    // surface, and each was exported to DELETE a copy rather than to offer an
+    // API.
+    //
+    // `rendersOwnMarkup` and `pruneKnownPlaceholders` were defined a second time
+    // in `page-renderer`. Two implementations of one pass agree the day they are
+    // written and drift after, and this pair decides what a stored stylesheet may
+    // still describe — so the drift ships rules for markup that is gone.
+    //
+    // `prepareDocumentReadStages` is the pipeline reporting the states it passed
+    // through, which one caller needs because it compares them by reference to
+    // decide whether a stored artifact still fits the tree. A consumer wanting the
+    // prepared document already has `prepareDocumentForRead`; a consumer wanting
+    // the intermediates is reasoning about artifact trust, which is this package's
+    // job and not something to hand out before anyone has asked for it.
+    internal: [
+      "prepareDocumentReadStages",
+      "pruneKnownPlaceholders",
+      "rendersOwnMarkup",
+    ],
+  },
   {
     name: "block-boundary",
     module: boundaryModule,

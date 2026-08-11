@@ -70,8 +70,26 @@ export interface PrepareDocumentArgs {
  *
  * Only the outcomes knowable WITHOUT calling the block: an unregistered type, a
  * failed migration, and a node stored ahead of the definition that would render
- * it. Whether a block throws or returns nothing is settled by calling it, which
- * is the renderer's business and not a document-shape question.
+ * it.
+ *
+ * A block DECLARING that its props draw nothing (`rendersNothing`) is a separate
+ * question, decided by the drawless test rather than here, because the two are
+ * not equally safe to act on. A node this pass rejects resolves to a visible
+ * placeholder, which is already an exceptional state; a block that draws nothing
+ * is an ordinary one — an image waiting for its picture — and dropping it costs
+ * the page its stylesheet unless the stored sheet can account for it.
+ *
+ * It is consulted ELSEWHERE too, and the distinction is worth keeping straight:
+ * the block boundary reads it to decide whether a node's `cssId` and attributes
+ * may be refused, which is a question about one node's own output and costs
+ * nothing when the answer is wrong in the safe direction.
+ *
+ * The rest are NOT knowable here, and deliberately so: whether a block throws,
+ * returns something unrenderable, or renders a given slot at all is only
+ * settled by calling it, which happens inside the boundary further down. A node
+ * that ends in one of those placeholders can still reserve an address it never
+ * uses. Closing that would mean deciding addresses after render, which is a
+ * different design than compiling the document once up front.
  */
 export function rendersOwnMarkup(
   node: BlockNode,
@@ -259,7 +277,6 @@ export function prepareDocumentReadStages(
   // reporting it as unreadable would show an unsupported-content fallback for a
   // page that is working exactly as configured. Only content that survived
   // gating and then turned out to be unrenderable is a placeholder-only page.
-  if (visible.nodes.length > 0 && prepared.nodes.length === 0) return null;
   return {
     sanitized,
     migrated: doc,
@@ -281,5 +298,20 @@ export function prepareDocumentForRead(
   document: BlockDocument,
   args: PrepareDocumentArgs
 ): BlockDocument | null {
-  return prepareDocumentReadStages(document, args)?.prepared ?? null;
+  const stages = prepareDocumentReadStages(document, args);
+  if (stages === null) return null;
+  // The all-placeholder rule belongs to READING, not to the pipeline. A page
+  // that presents nothing but placeholders is unreadable to a visitor who wanted
+  // its content, which is what `null` names here — but the RENDERER must still
+  // walk that document, because the placeholders are the markers it draws. A
+  // pipeline that answered `null` for it would take those markers away and show
+  // an unsupported-format box for a page whose blocks are merely unresolvable.
+  //
+  // Compared against the tree AFTER gating: a page whose blocks are all
+  // condition-gated is legitimately empty, nothing failed, and reporting it as
+  // unreadable would show a fallback for a page working exactly as configured.
+  if (stages.deduped.nodes.length > 0 && stages.prepared.nodes.length === 0) {
+    return null;
+  }
+  return stages.prepared;
 }
