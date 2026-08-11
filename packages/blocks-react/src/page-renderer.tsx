@@ -19,7 +19,7 @@ import {
 import { BlockPlaceholder } from "./placeholder";
 import {
   prepareDocumentReadStages,
-  pruneKnownPlaceholders,
+  rendersOwnMarkup,
 } from "./prepare-document";
 import { registeredBlocks, type BlockResolver } from "./resolver";
 import {
@@ -162,6 +162,28 @@ function hasDuplicateNodeIds(document: BlockDocument): boolean {
     seen.add(node.id);
   });
   return duplicate;
+}
+
+/**
+ * Drop the subtrees the renderer replaces with a placeholder, over the slots the
+ * BOUNDARY renders.
+ *
+ * Deliberately NOT `prepare-document`'s pass of the same name, which walks only
+ * the slots a definition declares. That is right for the document a reader is
+ * handed: an undeclared slot is not on the page, and compiling its descendants'
+ * rules would publish markup nobody receives. It is wrong here, because
+ * `renderSlot(name: string)` lets a block render a stored slot its definition
+ * never declared — and those children DO reach the page, so a style input that
+ * dropped them would withhold rules for markup that is rendered.
+ *
+ * Two questions, two passes. `pruneNodes` is the shared walk, so their identity
+ * behaviour cannot diverge even though what they keep does.
+ */
+function pruneRenderedPlaceholders(
+  document: BlockDocument,
+  resolver: BlockResolver
+): BlockDocument {
+  return pruneNodes(document, node => rendersOwnMarkup(node, resolver));
 }
 
 /**
@@ -359,7 +381,7 @@ export function PageRenderer({
   const drawlessInput = drawlessCoveredByArtifact ? drawlessDropped : visible;
   // Compiled from a tree with the knowable placeholders removed, while the
   // render keeps them so their placeholders still appear.
-  const styleInput = pruneKnownPlaceholders(drawlessInput, resolver);
+  const styleInput = pruneRenderedPlaceholders(drawlessInput, resolver);
 
   // Whether a knowable placeholder was removed AT ALL, asked of `visible` rather
   // than of what the drawless drop left. The two passes can reject the SAME node
@@ -370,7 +392,7 @@ export function PageRenderer({
   // the drop is honest; what it cannot cover is the rest of what a placeholder
   // means for the sheet, and that answer must not depend on which pass reached
   // the node first.
-  const placeholderDropped = pruneKnownPlaceholders(visible, resolver);
+  const placeholderDropped = pruneRenderedPlaceholders(visible, resolver);
 
   // Each pass contributes against the SAME base for the same reason. Folding
   // them into one `styleInput !== visible` would let a covered drawless drop

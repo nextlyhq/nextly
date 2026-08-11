@@ -89,26 +89,43 @@ describe("read stages keep reference identity when a pass changes nothing", () =
 });
 
 describe("the narrow view is derived, not recomputed", () => {
-  it("returns exactly the prepared stage, by reference", () => {
+  it("returns the prepared stage for a document that survives", () => {
     const document = untouchedDocument();
 
-    const prepared = prepareDocumentForRead(document, { resolver });
-    const stages = prepareDocumentReadStages(document, { resolver });
-
-    expect(stages).not.toBeNull();
-    if (stages === null) return;
-    // `toEqual`, not `toBe`, and the reason is worth stating: these are two
-    // separate invocations, and `migrateDocument` allocates on every run, so
-    // nothing about a correct derivation would make the two results the same
-    // object. Identity is unobservable across calls here.
-    //
-    // What keeps the two in step is structural rather than asserted: the narrow
-    // view is one line reading `.prepared` off this function. A future edit that
-    // reimplemented it would be caught by the passes' own suites, not by this.
-    expect(prepared).toEqual(stages.prepared);
+    // Value equality is all two separate invocations can show — `migrateDocument`
+    // allocates on every run — so this does NOT prove the narrow view is derived
+    // rather than hand-copied. It is here to catch the two disagreeing, which a
+    // copy would eventually do; the derivation itself is enforced structurally,
+    // by `prepareDocumentForRead` being one line that reads `.prepared`.
+    expect(prepareDocumentForRead(document, { resolver })).toEqual(
+      prepareDocumentReadStages(document, { resolver })?.prepared
+    );
   });
 
-  it("agrees with the stages view on unreadable input", () => {
+  it("differs from the stages view exactly where the reading policy differs", () => {
+    // The one behaviour that separates them, and the reason the narrow view is
+    // not simply `.prepared`: a document whose every node resolves to a
+    // placeholder is UNREADABLE to a visitor who wanted its content, but the
+    // renderer must still walk it to draw the markers. So the pipeline reports
+    // stages with an empty `prepared` tree and the reading view answers `null`.
+    const allPlaceholders: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        { id: "a", type: "plugin/unregistered", version: 1, props: {} },
+        { id: "b", type: "plugin/also-unknown", version: 1, props: {} },
+      ],
+    };
+
+    const stages = prepareDocumentReadStages(allPlaceholders, { resolver });
+    expect(stages).not.toBeNull();
+    expect(stages?.prepared.nodes).toEqual([]);
+    expect(stages?.deduped.nodes).toHaveLength(2);
+
+    expect(prepareDocumentForRead(allPlaceholders, { resolver })).toBeNull();
+  });
+
+  it("agrees with the stages view on an unreadable envelope", () => {
     const wrongVersion = {
       formatVersion: 99,
       kind: "page",

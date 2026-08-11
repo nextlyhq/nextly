@@ -231,8 +231,12 @@ export interface DocumentReadStages {
  * so a reader that needs only the result cannot fall out of step with one that
  * needs the intermediates.
  *
- * Returns `null` for the same two reasons the narrow view does: an unreadable
- * envelope, and a document that presented nothing but placeholders.
+ * Returns `null` for ONE reason only: an unreadable envelope — a non-object, or
+ * a `formatVersion` this build does not speak. A document whose every node
+ * resolves to a placeholder comes back with stages whose `prepared` tree is
+ * empty, NOT as `null`, because that is a judgement about reading rather than a
+ * fact about the document: the renderer still walks it to draw the markers.
+ * `prepareDocumentForRead` applies that judgement; this function reports.
  */
 export function prepareDocumentReadStages(
   document: BlockDocument,
@@ -289,10 +293,9 @@ export function prepareDocumentReadStages(
 /**
  * The prepared document, for readers that need no intermediate state.
  *
- * Derived from `prepareDocumentReadStages` rather than repeating its passes:
- * two implementations of one pipeline agree when written and drift after, and
- * six review findings on the change that introduced this file had exactly that
- * cause.
+ * Derived from `prepareDocumentReadStages` rather than repeating its passes.
+ * Two implementations of one pipeline agree the day they are written and drift
+ * after, and the drift is silent because both look correct alone.
  */
 export function prepareDocumentForRead(
   document: BlockDocument,
