@@ -107,6 +107,16 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   the property is not covered yet. Add the positive control that makes the
   mechanism's presence observable, and run it.
 
+- Whatever you are currently judging WITH is not being judged. A probe, a
+  derived check, a test, a post-apply verifier and the baseline diff that reads
+  the suite all had the same defect in one week here, and every one of them
+  existed to catch the layer above it. They were hard to see not because the
+  defect was subtle but because each occupied the position auditing is done
+  from, so nothing stood further out to look at it. Periodically step out one
+  level and give the instrument the same treatment as its subject: a positive
+  control on an input where you know the answer, and where the answer is not
+  "nothing". Confirming an instrument against a case that did not move cannot
+  distinguish it from one that reports nothing under any circumstances.
 - A test that passes both with and without the fix is worse than no test:
   the next reader takes the green as coverage. Delete it, and say in the file
   that remains where the behaviour IS covered. This is the deliberate removal
