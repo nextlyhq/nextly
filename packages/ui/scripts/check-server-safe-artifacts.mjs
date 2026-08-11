@@ -408,6 +408,7 @@ const ADDED_AFTER_SUPPORTED_FLOOR = [
   "Storage",
   // v24.
   "CloseEvent",
+  "EventSource",
   // Not in any release the floor covers; listed ahead of the Node that ships it.
   "URLPattern",
 ];
