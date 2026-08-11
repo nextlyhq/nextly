@@ -384,6 +384,23 @@ function initialFieldValue(field: EmailProviderConfigField): unknown {
   return field.kind === "boolean" ? false : "";
 }
 
+/**
+ * What an EDIT shows for a field the stored configuration does not have.
+ *
+ * Blank, not the descriptor's default. A default is what to PRE-FILL when
+ * adding a provider; on an edit it would put a value the operator never chose
+ * into a form they opened to rename something, and the save would persist it —
+ * replacing an absence the provider's own parser may have been handling with
+ * its own fallback.
+ *
+ * A boolean is the exception, and only because it has no blank: a switch has to
+ * render in one position, so it takes the declared default, which registration
+ * now requires for every optional boolean precisely so this is never a guess.
+ */
+function hydratedFieldValue(field: EmailProviderConfigField): unknown {
+  return field.kind === "boolean" ? initialFieldValue(field) : "";
+}
+
 /** A blank configuration for a provider type, from its descriptor. */
 export function emptyConfiguration(
   descriptor?: EmailProviderDescriptor
@@ -435,7 +452,7 @@ export function providerToFormValues(
     writeAtPath(
       configuration,
       path,
-      value === undefined ? initialFieldValue(field) : value
+      value === undefined ? hydratedFieldValue(field) : value
     );
   }
 

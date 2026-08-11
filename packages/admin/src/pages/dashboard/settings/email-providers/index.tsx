@@ -561,7 +561,12 @@ function EmailProviderTable() {
           onSelect: () => handleEdit(provider),
         },
       ];
-      if (!provider.isDefault) {
+      // Not offered for a stored provider whose plugin is gone. Promoting one
+      // points every unrouted message at a type nothing can build an adapter
+      // for, AND clears the working default on the way — so the damage outlives
+      // the click. The service refuses it too; this is the affordance, not the
+      // rule.
+      if (!provider.isDefault && descriptorsByType.has(provider.type)) {
         actions.push({
           id: "set-default",
           label: "Set Default",
@@ -585,7 +590,17 @@ function EmailProviderTable() {
       });
       return actions;
     },
-    [handleEdit, handleSetDefault, handleTest, handleDelete, isTesting]
+    [
+      handleEdit,
+      handleSetDefault,
+      handleTest,
+      handleDelete,
+      isTesting,
+      // Read to decide whether Set Default is offered, so the actions have to
+      // be rebuilt when the catalog arrives — otherwise the action stays
+      // hidden for every row until something else invalidates them.
+      descriptorsByType,
+    ]
   );
 
   if (isError) {

@@ -734,3 +734,52 @@ describe("a blank field the provider wants sent as an empty string", () => {
     });
   });
 });
+
+describe("opening an existing provider whose optional field was never set", () => {
+  const descriptor: EmailProviderDescriptor = {
+    type: "acme-mail",
+    label: "Acme Mail",
+    capabilities: {},
+    configFields: [
+      { name: "host", label: "Host", kind: "text", required: true },
+      { name: "region", label: "Region", kind: "text", default: "eu-west-1" },
+      { name: "sandbox", label: "Sandbox", kind: "boolean", default: false },
+    ],
+  };
+
+  it("shows the field blank rather than the create-time default", () => {
+    // A default is what to PRE-FILL when adding a provider. On an edit it puts
+    // a value nobody chose into a form opened to rename something, and the
+    // save persists it — replacing an absence the provider's own parser may
+    // have been handling with its own fallback.
+    const values = providerToFormValues(
+      {
+        id: "1",
+        name: "Acme",
+        type: "acme-mail",
+        fromEmail: "a@b.com",
+        fromName: null,
+        configuration: { host: "smtp.acme.test" },
+        isDefault: false,
+        isActive: true,
+        createdAt: "",
+        updatedAt: "",
+      },
+      descriptor
+    );
+
+    expect(values.configuration).toMatchObject({ region: "" });
+    // A switch has no blank, so it still takes the declared default — which
+    // registration requires for every optional boolean precisely so this is
+    // not a guess.
+    expect(values.configuration).toMatchObject({ sandbox: false });
+  });
+
+  it("still pre-fills the default when ADDING a provider", () => {
+    // The control: keeping defaults out of the edit path must not remove them
+    // from the path they exist for.
+    expect(defaultFormValues(descriptor).configuration).toMatchObject({
+      region: "eu-west-1",
+    });
+  });
+});

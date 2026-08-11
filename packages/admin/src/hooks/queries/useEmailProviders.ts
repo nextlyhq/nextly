@@ -132,7 +132,17 @@ export function useEmailProviderTypes(
   return useQuery<EmailProviderDescriptor[], Error>({
     queryKey: emailProviderKeys.types(),
     queryFn: () => listProviderTypes(),
-    staleTime: Infinity,
+    // Finite, and refetched on mount and focus. The catalog is decided by which
+    // plugins the SERVER has loaded, so it changes on a deploy or a restart —
+    // events a browser tab left open overnight knows nothing about. Cached
+    // forever, a newly installed provider stays invisible and a removed one
+    // keeps rendering an editable form whose submission the server now
+    // rejects. Five minutes is short enough that a deploy is picked up without
+    // asking anyone to reload, and long enough that navigating between
+    // provider screens costs no requests.
+    staleTime: 5 * 60 * 1000,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
     ...options,
   });
 }

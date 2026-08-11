@@ -895,6 +895,27 @@ export class EmailProviderService extends BaseService {
   ): Promise<EmailProviderRecord> {
     const row = await this.getRawProvider(id);
 
+    // A provider whose type is no longer registered cannot build an adapter,
+    // so promoting it points every unrouted message at something that fails at
+    // send time -- and the promotion clears the working default on its way, so
+    // the damage outlives the request that caused it.
+    //
+    // Refused BEFORE the audit entry below, because there is nothing to
+    // attribute: this leaves the stored default exactly as it was.
+    //
+    // Enforced here rather than only in the admin: the REST route and the
+    // Direct API reach this method without passing the list page, and a rule
+    // that lives in one caller is a rule the others do not have.
+    if (!getEmailProviderRegistry().has(row.type)) {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage:
+          "This provider's type is not registered on this server, so it cannot be made the default. Install the package that provides it first.",
+        statusCode: 422,
+        logContext: { id, type: row.type },
+      });
+    }
+
     const now = new Date();
 
     // Unset any existing default first, then set the new one

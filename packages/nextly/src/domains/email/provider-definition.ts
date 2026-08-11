@@ -422,6 +422,11 @@ function assertOptionalBooleanHasDefault(
 ): void {
   if (field.kind !== "boolean") return;
   if (field.default !== undefined) return;
+  // A REQUIRED boolean has no absence to represent: the form initialises the
+  // switch to `false`, the generated schema accepts it, and both positions are
+  // a value the provider asked for. Only an optional one has three states to
+  // squeeze onto two positions.
+  if (field.required === true) return;
 
   throw new NextlyError({
     code: "BUSINESS_RULE_VIOLATION",

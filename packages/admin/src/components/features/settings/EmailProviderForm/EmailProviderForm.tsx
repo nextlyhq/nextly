@@ -356,45 +356,48 @@ export function EmailProviderForm({
                 <SettingsRow
                   label="From Email"
                   description={
-                    // Driven by the provider's own declaration, not by whether
-                    // it happens to publish a docs link: the two coincide for
-                    // the built-ins and mean nothing to each other, and a
-                    // provider that documents itself elsewhere would lose the
-                    // warning. The sentence stays here so the descriptor
-                    // carries the fact rather than the copy.
-                    selectedDescriptor?.capabilities?.requiresVerifiedSender ? (
-                      <span className="flex items-start gap-1.5">
+                    // Three independent parts, composed rather than nested.
+                    // A provider can require a verified sender without
+                    // publishing documentation, and it can publish
+                    // documentation without requiring one — a self-hosted relay
+                    // is the second. Nesting the link inside the warning made
+                    // it unreachable for exactly those providers, which is the
+                    // case the descriptor-driven form exists to serve.
+                    <span className="flex items-start gap-1.5">
+                      {selectedDescriptor?.capabilities
+                        ?.requiresVerifiedSender && (
                         <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-warning-600 dark:text-warning-500" />
-                        <span>
-                          Must be an address on a{" "}
-                          <strong>verified domain</strong> in your{" "}
-                          {selectedDescriptor.label} account.{" "}
-                          {/* The provider's own exception to that rule, when it
-                              has one. Resend's shared testing address works
-                              before any domain is verified, and omitting it
-                              makes a usable configuration look impossible. */}
-                          {selectedDescriptor.senderGuidance && (
-                            <>{selectedDescriptor.senderGuidance} </>
-                          )}
-                          {/* The link is separate from the warning: a provider
-                              can require a verified sender without publishing
-                              documentation, and the warning is the part that
-                              prevents an unusable configuration. */}
-                          {selectedDescriptor.docsUrl && (
-                            <a
-                              href={selectedDescriptor.docsUrl}
-                              target="_blank"
-                              rel="noreferrer noopener"
-                              className="underline underline-offset-2"
-                            >
-                              Provider documentation
-                            </a>
-                          )}
-                        </span>
+                      )}
+                      <span>
+                        {selectedDescriptor?.capabilities
+                          ?.requiresVerifiedSender ? (
+                          <>
+                            Must be an address on a{" "}
+                            <strong>verified domain</strong> in your{" "}
+                            {selectedDescriptor.label} account.{" "}
+                          </>
+                        ) : (
+                          <>Default sender email address. </>
+                        )}
+                        {/* The provider's own exception to that rule, when it
+                            has one. Resend's shared testing address works
+                            before any domain is verified, and omitting it makes
+                            a usable configuration look impossible. */}
+                        {selectedDescriptor?.senderGuidance && (
+                          <>{selectedDescriptor.senderGuidance} </>
+                        )}
+                        {selectedDescriptor?.docsUrl && (
+                          <a
+                            href={selectedDescriptor.docsUrl}
+                            target="_blank"
+                            rel="noreferrer noopener"
+                            className="underline underline-offset-2"
+                          >
+                            Provider documentation
+                          </a>
+                        )}
                       </span>
-                    ) : (
-                      "Default sender email address."
-                    )
+                    </span>
                   }
                 >
                   <FormControl>

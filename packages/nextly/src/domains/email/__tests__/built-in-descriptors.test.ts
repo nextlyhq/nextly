@@ -882,3 +882,25 @@ describe("a declaration the form could not carry out", () => {
     ).not.toThrow();
   });
 });
+
+describe("a boolean field that is required", () => {
+  it("registers without a default", () => {
+    // The absence ambiguity is an OPTIONAL boolean's problem: it has three
+    // states and a switch has two. A required one has no absence to represent
+    // — the form initialises to `false`, the schema accepts it, and both
+    // positions are a value the provider asked for.
+    expect(() =>
+      defineEmailProvider({
+        type: "fixture",
+        label: "Fixture",
+        parseConfig: (input: unknown) => input as Record<string, unknown>,
+        createAdapter: () => ({
+          send: () => Promise.resolve({ success: true, messageId: "x" }),
+        }),
+        configFields: [
+          { name: "agree", label: "Agree", kind: "boolean", required: true },
+        ],
+      })
+    ).not.toThrow();
+  });
+});
