@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { BUNDLED_MODULE } from "./source-modules";
 
 /**
  * The package's layering contract, enforced rather than documented.
@@ -103,7 +104,6 @@ const UNRESOLVABLE_SPECIFIER = "<unresolvable-specifier>";
  * bundles it; a scan restricted to TypeScript would walk past the one file free to import
  * anything, with the typecheck none the wiser because `allowJs` is off.
  */
-const BUNDLED_MODULE = /\.(?:tsx?|jsx?|mjs|cjs)$/;
 
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];

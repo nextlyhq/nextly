@@ -156,9 +156,24 @@ export function createPocDriver(page: Page): CanvasDriver {
     },
 
     async frameOrigin() {
-      const box = await page.locator("iframe").boundingBox();
+      const frame = page.locator("iframe");
+      const box = await frame.boundingBox();
       if (!box) throw new Error("canvas iframe has no box");
-      return { x: box.x, y: box.y };
+      // The CONTENT origin, not the border-box corner. `boundingBox()` reports
+      // the border box, while every rectangle read inside the frame is relative
+      // to the content viewport — so on a frame with any border the two differ
+      // by `clientLeft`/`clientTop` and every mapped point lands a couple of
+      // pixels out. A canvas that does not reset the browser's default iframe
+      // border has that gap from the first render, and it reads as "the
+      // indicator feels slightly off" rather than as a fault.
+      const inset = await frame.evaluate<
+        { left: number; top: number },
+        HTMLIFrameElement
+      >(el => ({
+        left: el.clientLeft,
+        top: el.clientTop,
+      }));
+      return { x: box.x + inset.left, y: box.y + inset.top };
     },
 
     async readBlockBoxes() {

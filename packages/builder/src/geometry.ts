@@ -44,10 +44,23 @@ export interface Rect {
 /**
  * How the canvas frame sits inside the host page.
  *
- * `origin` is where the frame's own viewport origin lands in host coordinates —
- * the frame element's position, already including any host scrolling, because
- * that is what `getBoundingClientRect` reports. `scale` is the visual scale the
- * host applies to the frame: a zoomed-out canvas at 50% has `scale: 0.5`.
+ * `origin` is where the frame's CONTENT viewport lands in host coordinates, and
+ * the word content is load-bearing. `getBoundingClientRect` on an iframe reports
+ * its BORDER box, while every rectangle read inside the frame is relative to the
+ * content viewport — so on a frame with any border the two differ by
+ * `clientLeft`/`clientTop`, and an overlay built from the border box sits a
+ * couple of scaled pixels out at every point. A canvas that never sets
+ * `border: none` gets the browser default and the fault is present from the
+ * first render, which is exactly the sort of near-miss that reads as "the
+ * indicator feels slightly off" rather than as a bug.
+ *
+ * That correction belongs to whoever reads the DOM, not here: this module takes
+ * numbers so it can be exercised without a browser, and the caller that measured
+ * the frame is the only one holding `clientLeft`. See the e2e helper for the
+ * measurement that satisfies this contract.
+ *
+ * `scale` is the visual scale the host applies to the frame: a zoomed-out canvas
+ * at 50% has `scale: 0.5`.
  *
  * Scroll INSIDE the frame is deliberately not a field. A rectangle read from
  * inside the frame is already relative to the frame's viewport, so subtracting

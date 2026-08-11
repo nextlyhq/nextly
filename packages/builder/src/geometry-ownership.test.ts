@@ -36,11 +36,9 @@ import { fileURLToPath } from "node:url";
 
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { BUNDLED_MODULE } from "./source-modules";
 
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
-
-/** Extensions the bundler follows, and therefore the ones this guard must read. */
-const BUNDLED_MODULE = /\.(?:tsx?|jsx?|mjs|cjs)$/;
 
 /**
  * The one module allowed to convert between the frame and the host, matched by

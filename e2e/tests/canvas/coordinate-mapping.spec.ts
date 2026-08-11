@@ -50,10 +50,23 @@ async function mapped(page: import("@playwright/test").Page, scale: number) {
   }, PROBE_ID);
   expect(frameRect).not.toBeNull();
 
-  const origin = await page.locator("iframe").boundingBox();
+  const frameElement = page.locator("iframe");
+  const origin = await frameElement.boundingBox();
   expect(origin).not.toBeNull();
+  // The content origin: `boundingBox()` gives the border box, and rectangles
+  // read inside the frame are relative to the content viewport. The two agree
+  // only while the fixture keeps `border: none`, which is why measuring against
+  // the border box passed here and would drift on any bordered canvas.
+  const inset = await frameElement.evaluate(el => ({
+    left: (el as HTMLIFrameElement).clientLeft,
+    top: (el as HTMLIFrameElement).clientTop,
+  }));
 
-  return mapFrameRectToHost(frameRect!, { x: origin!.x, y: origin!.y }, scale);
+  return mapFrameRectToHost(
+    frameRect!,
+    { x: origin!.x + inset.left, y: origin!.y + inset.top },
+    scale
+  );
 }
 
 /** Largest absolute difference across all four rect components. */
