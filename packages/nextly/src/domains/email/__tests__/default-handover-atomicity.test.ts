@@ -7,9 +7,14 @@
  * demotion committed — and the installation is left with no default provider
  * at all, which is the one state it cannot send from.
  *
- * The promoting write therefore lands FIRST, and the demotion follows it
- * inside the same transaction. A promotion that matched nothing never reaches
- * the demotion, and a failure after it rolls both back.
+ * The two therefore run inside one transaction, with the demotion FIRST --
+ * PostgreSQL rejects a second row holding the default as each statement runs,
+ * so the incumbent has to give it up before anything can take it. A promotion
+ * that then matches nothing throws, which takes the demotion back with it.
+ *
+ * A write that hands nothing over gets no transaction at all: on SQLite that
+ * would be `BEGIN IMMEDIATE` on the one shared connection, and a second
+ * ordinary write arriving mid-window could not begin.
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -152,9 +157,122 @@ describe("a promotion whose row disappears first", () => {
       })
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
 
-    // The promotion matched nothing, so nothing should have moved. Demoting
-    // before promoting takes the default off `holder` and gives it to no one,
-    // and the installation can no longer send an unrouted message at all.
+    // The promotion matched nothing, so nothing may have moved. A demotion
+    // left committed here takes the default off `holder` and gives it to no
+    // one, and the installation can no longer send an unrouted message at all.
+    expect(defaultIds()).toEqual([holder.id]);
+  });
+
+  it("lets two ordinary writes overlap", async () => {
+    // Neither of these hands the default over, so neither has anything to make
+    // atomic WITH. Opening a transaction anyway is not free on SQLite:
+    // `withTransaction` issues `BEGIN IMMEDIATE` on the one shared connection,
+    // so a second write arriving between the first BEGIN and its COMMIT cannot
+    // begin at all and is refused — on the most ordinary path there is.
+    const outcomes = await Promise.allSettled([
+      service.createProvider({
+        name: "A",
+        type: "vanishing",
+        fromEmail: "noreply@example.com",
+        fromName: null,
+        configuration: {},
+        isDefault: false,
+        isActive: true,
+      }),
+      service.createProvider({
+        name: "B",
+        type: "vanishing",
+        fromEmail: "noreply@example.com",
+        fromName: null,
+        configuration: {},
+        isDefault: false,
+        isActive: true,
+      }),
+    ]);
+
+    expect(outcomes.map(outcome => outcome.status)).toEqual([
+      "fulfilled",
+      "fulfilled",
+    ]);
+  });
+
+  it("keeps the standing default when setDefault's target disappears", async () => {
+    // The delete has to land INSIDE the window, not before it: `setDefault`
+    // reads the row first, so a row deleted beforehand fails at that read and
+    // never reaches the transaction at all.
+    //
+    // Placed by intercepting the demotion — the statement immediately before
+    // the promotion — so the row is gone by the time the promoting update
+    // runs. Nothing locks it, so this is exactly what a concurrent delete
+    // committed on another connection does.
+    const holder = await service.createProvider({
+      name: "Holder",
+      type: "vanishing",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: {},
+      isDefault: true,
+      isActive: true,
+    });
+    const challenger = await service.createProvider({
+      name: "Challenger",
+      type: "vanishing",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: {},
+      isDefault: false,
+      isActive: true,
+    });
+
+    const db = drizzle({ client: sqlite });
+    let updates = 0;
+    const deletingBetween = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property !== "update") {
+          return Reflect.get(target, property, receiver) as unknown;
+        }
+        return (table: unknown) => {
+          const builder = (
+            target as unknown as {
+              update: (t: unknown) => { set: (v: unknown) => unknown };
+            }
+          ).update(table);
+          return {
+            set: (values: unknown) => {
+              const step = builder.set(values) as {
+                where: (c: unknown) => Promise<unknown>;
+              };
+              return {
+                where: async (condition: unknown) => {
+                  const result = await step.where(condition);
+                  updates += 1;
+                  // After the demotion, before the promotion.
+                  if (updates === 1) {
+                    sqlite
+                      .prepare(`DELETE FROM "email_providers" WHERE "id" = ?`)
+                      .run(challenger.id);
+                  }
+                  return result;
+                },
+              };
+            },
+          };
+        };
+      },
+    }) as ReturnType<typeof drizzle>;
+
+    const racing = new EmailProviderService(
+      makeAdapter(deletingBetween),
+      logger
+    );
+
+    await expect(racing.setDefault(challenger.id)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+
+    // The precondition, asserted rather than assumed: without a second
+    // statement the promotion never ran and this describes the wrong path.
+    expect(updates).toBe(2);
     expect(defaultIds()).toEqual([holder.id]);
   });
 

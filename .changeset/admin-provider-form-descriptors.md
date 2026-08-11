@@ -71,3 +71,15 @@ unique index over `is_default = true` and checks it as each statement runs, so a
 row taking the default while the incumbent still holds it is rejected outright.
 The promotion target is checked before either statement, so a demotion is never
 spent on a promotion that then matches nothing.
+
+A masked value is no longer written back over what it stood for. The read masks
+a configuration path the provider does not describe — a credential left behind
+by an upgrade, say — while the write stripped masks only from paths declared
+secret, so a client echoing the configuration it was given replaced the real
+stored value with eight bullet characters during an unrelated edit. Masking and
+unmasking now ask one question.
+
+Only a handover opens a transaction. Wrapping every provider write in one cost
+correctness on SQLite, where the transaction is `BEGIN IMMEDIATE` on a single
+shared connection: a second ordinary write arriving while the first was open
+could not begin at all.

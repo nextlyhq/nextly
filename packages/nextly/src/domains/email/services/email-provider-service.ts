@@ -336,6 +336,31 @@ export class EmailProviderService extends BaseService {
    * Absence of information has to mask more, not less; an over-masked read is
    * recoverable by reinstalling the package, a leaked credential is not.
    */
+  /**
+   * Whether a configuration path is one this read withholds.
+   *
+   * Three states, not two. `null` means no usable definition, so nothing is
+   * known and everything is secret. Otherwise a path is public ONLY if the
+   * provider declared it and did not mark it secret: a key the definition does
+   * not mention at all -- a credential left behind by a plugin upgrade, say --
+   * is unknown rather than public, and the parsers strip unknown keys for
+   * adapter construction without removing them from storage.
+   *
+   * Asked by the mask AND by the strip that undoes it. Masking one set of
+   * paths and unmasking a smaller one is not a mismatch that shows up as a
+   * failure: a client echoing back what it was given writes the literal mask
+   * over a real stored value, and the update reports success.
+   */
+  private pathIsSecret(
+    path: string,
+    secretPaths: ReadonlySet<string> | null,
+    declaredPaths: ReadonlySet<string>
+  ): boolean {
+    if (secretPaths === null) return true;
+    if (!declaredPaths.has(path)) return true;
+    return secretPaths.has(path);
+  }
+
   private maskConfiguration(
     config: Record<string, unknown>,
     secretPaths: ReadonlySet<string> | null,
@@ -361,16 +386,9 @@ export class EmailProviderService extends BaseService {
         continue;
       }
 
-      // Three states, not two. `null` means no usable definition, so nothing is
-      // known and everything is masked. Otherwise a path is revealed ONLY if the
-      // provider declared it and did not mark it secret: a key the definition
-      // does not mention at all -- a credential left behind by a plugin upgrade,
-      // say -- is unknown rather than public, and the parsers strip unknown keys
-      // for adapter construction without removing them from storage.
-      const declared = secretPaths !== null && declaredPaths.has(path);
-      const isSecret =
-        secretPaths === null || !declared || secretPaths.has(path);
-      masked[key] = isSecret ? MASKED_VALUE : value;
+      masked[key] = this.pathIsSecret(path, secretPaths, declaredPaths)
+        ? MASKED_VALUE
+        : value;
     }
     return masked;
   }
@@ -396,6 +414,7 @@ export class EmailProviderService extends BaseService {
   private stripMaskedConfigValues(
     config: Record<string, unknown>,
     secretPaths: ReadonlySet<string> | null,
+    declaredPaths: ReadonlySet<string>,
     pathPrefix = ""
   ): Record<string, unknown> {
     const cleaned: Record<string, unknown> = {};
@@ -403,12 +422,24 @@ export class EmailProviderService extends BaseService {
     for (const [key, value] of Object.entries(config)) {
       const path = pathPrefix ? `${pathPrefix}.${key}` : key;
 
-      if (value === MASKED_VALUE && secretPaths?.has(path)) {
+      // Dropped for every path the READ would have masked, not only the
+      // declared secrets. A path the read withholds comes back as the mask
+      // whatever the reason, so keeping it here writes eight bullet characters
+      // over whatever was really stored there.
+      if (
+        value === MASKED_VALUE &&
+        this.pathIsSecret(path, secretPaths, declaredPaths)
+      ) {
         continue;
       }
 
       if (this.isPlainObject(value)) {
-        cleaned[key] = this.stripMaskedConfigValues(value, secretPaths, path);
+        cleaned[key] = this.stripMaskedConfigValues(
+          value,
+          secretPaths,
+          declaredPaths,
+          path
+        );
       } else {
         cleaned[key] = value;
       }
@@ -644,13 +675,21 @@ export class EmailProviderService extends BaseService {
       // `is_default = true`, checked per row as each statement runs, so a
       // second row inserted as the default while the incumbent still holds it
       // is rejected outright.
-      await this.withTransaction(async txRaw => {
-        const tx = txRaw as ProviderTransaction;
-        if (values.isDefault) {
+      if (values.isDefault) {
+        await this.withTransaction(async txRaw => {
+          const tx = txRaw as ProviderTransaction;
           displaced = await this.demoteOtherDefaults(tx, now, id);
-        }
-        await tx.insert(this.emailProviders).values(values);
-      });
+          await tx.insert(this.emailProviders).values(values);
+        });
+      } else {
+        // No handover, so nothing to make atomic WITH. Opening a transaction
+        // anyway costs correctness on SQLite, where `withTransaction` issues
+        // `BEGIN IMMEDIATE` on the one shared connection: a second write that
+        // arrives while the first is between its BEGIN and COMMIT cannot
+        // begin, and is refused outright. A single statement has no such
+        // window.
+        await this.db.insert(this.emailProviders).values(values);
+      }
     } catch (error) {
       // Drizzle surfaces the driver's raw error here, so normalise it through
       // toDbError(dialect) first; otherwise NextlyError.fromDatabaseError would
@@ -888,7 +927,8 @@ export class EmailProviderService extends BaseService {
         data.configuration !== undefined
           ? this.stripMaskedConfigValues(
               data.configuration,
-              this.declaredSecretPaths(data.type as string)
+              this.declaredSecretPaths(data.type as string),
+              this.declaredConfigPaths(data.type as string)
             )
           : {};
       getEmailProviderRegistry()
@@ -938,7 +978,8 @@ export class EmailProviderService extends BaseService {
       const existingConfig = existing.config;
       const incomingConfig = this.stripMaskedConfigValues(
         data.configuration ?? {},
-        this.declaredSecretPaths(effectiveType)
+        this.declaredSecretPaths(effectiveType),
+        this.declaredConfigPaths(effectiveType)
       );
       // Across a type change the stored configuration belongs to the previous
       // provider, so it is discarded rather than merged into the new shape.
@@ -1001,23 +1042,45 @@ export class EmailProviderService extends BaseService {
       // statement runs, so the incumbent has to give it up first -- and the
       // transaction is what makes that safe, since a failure anywhere after it
       // rolls the demotion back.
-      await this.withTransaction(async txRaw => {
-        const tx = txRaw as ProviderTransaction;
-        if (data.isDefault === true) {
-          // Nothing is written for a row that is no longer there, so the
-          // standing default keeps its place rather than being stripped for a
-          // promotion that then matches nothing.
-          if (!(await this.promotionTargetExists(tx, id))) return;
+      if (data.isDefault === true) {
+        await this.withTransaction(async txRaw => {
+          const tx = txRaw as ProviderTransaction;
           displaced = await this.demoteOtherDefaults(tx, now, id);
-        }
 
-        const result = await tx
+          const result = await tx
+            .update(this.emailProviders)
+            .set(updateData)
+            .where(eq(this.emailProviders.id, id));
+          updatedRows = affectedRowCount(result, this.dialect);
+
+          // The row can be deleted between the read this update was built
+          // from and this statement. The demotion has already run, so
+          // committing here would leave the installation with no default at
+          // all -- throwing takes the demotion back with it, and the caller is
+          // told the truth, which is that the provider is gone.
+          if (updatedRows === 0) {
+            throw NextlyError.notFound({ logContext: { id } });
+          }
+        });
+      } else {
+        // No handover, so nothing to make atomic WITH -- and a transaction
+        // here costs correctness on SQLite, where `withTransaction` issues
+        // `BEGIN IMMEDIATE` on the one shared connection and a second write
+        // arriving mid-window cannot begin at all.
+        const result = await this.db
           .update(this.emailProviders)
           .set(updateData)
           .where(eq(this.emailProviders.id, id));
         updatedRows = affectedRowCount(result, this.dialect);
-      });
+      }
     } catch (error) {
+      // A `NextlyError` from inside the transaction was thrown deliberately --
+      // the handover raises one to roll its own demotion back -- so it carries
+      // a decision about what this failure IS. Normalising it as a driver
+      // error would relabel a chosen NOT_FOUND as an internal one and tell the
+      // caller nothing they can act on.
+      if (NextlyError.is(error)) throw error;
+
       // DbError → NextlyError; spec §13.8 keeps the public message generic and
       // tucks the dialect-specific code into logContext via fromDatabaseError.
       // Normalise raw driver errors via toDbError(dialect) first so the kind
@@ -1178,19 +1241,15 @@ export class EmailProviderService extends BaseService {
     // forced -- and the transaction is what keeps it safe, because a failure
     // after the demotion takes the demotion back with it.
     //
-    // The provider can be deleted between the read above and this block, which
-    // is why the target is checked once more inside the transaction: a
-    // demotion for a promotion that then matches nothing would leave the
-    // installation with no default at all.
-    let promoted = false;
+    // The provider can be deleted between the read above and this block. A
+    // check before the demotion cannot close that: nothing here locks the row,
+    // so a delete committed by another transaction lands between the check and
+    // the statement on Postgres and MySQL alike. The promotion's own row count
+    // is what actually knows, and it is only known afterwards -- so the
+    // decision is made there, and throwing is what takes the demotion back.
     let displaced: DisplacedDefault[] = [];
     await this.withTransaction(async txRaw => {
       const tx = txRaw as ProviderTransaction;
-      // Asked before anything is written. A row deleted since the read above
-      // has nothing to promote, and answering that here leaves the standing
-      // default untouched -- there is no demotion to undo.
-      if (!(await this.promotionTargetExists(tx, id))) return;
-
       displaced = await this.demoteOtherDefaults(tx, now, id);
 
       const promotion = await tx
@@ -1198,15 +1257,14 @@ export class EmailProviderService extends BaseService {
         .set({ isDefault: true, updatedAt: now })
         .where(eq(this.emailProviders.id, id));
 
-      promoted = affectedRowCount(promotion, this.dialect) > 0;
+      if (affectedRowCount(promotion, this.dialect) === 0) {
+        // Rolls the demotion back with it. Committing instead would leave the
+        // installation with no default at all and answer the caller with a
+        // provider that no longer exists, which is two wrong things rather
+        // than the one true one.
+        throw NextlyError.notFound({ logContext: { id } });
+      }
     });
-
-    // Recording a promotion that matched no row would put a claim in the trail
-    // for a provider that never became the default -- the one claim this entry
-    // exists to make.
-    if (!promoted) {
-      return this.getProvider(id);
-    }
 
     await this.recordDemotions(displaced, actor);
 

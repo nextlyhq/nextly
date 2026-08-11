@@ -314,6 +314,114 @@ describe("clearing the last value under a nested branch", () => {
   });
 });
 
+describe("a masked value at a path the descriptor does not declare", () => {
+  let sqlite: Database.Database;
+  let service: EmailProviderService;
+
+  /**
+   * A provider whose parser keeps more than its descriptor describes.
+   *
+   * The ordinary way to arrive here is an upgrade that drops a field while its
+   * parser still accepts the stored key — the row keeps a value nothing
+   * describes any more.
+   */
+  const narrow = defineEmailProvider({
+    type: "narrow",
+    label: "Narrow",
+    configFields: [
+      { name: "apiKey", label: "Key", kind: "password", secret: true },
+    ],
+    parseConfig: input => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  });
+
+  beforeEach(() => {
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(narrow);
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    getEmailProviderRegistry().reset();
+  });
+
+  it("is not written back over the real value", async () => {
+    // The read masks an undeclared leaf, on the reasoning that absence of
+    // information has to mask more rather than less. A client echoing that
+    // configuration back during an unrelated edit then sends the mask as if it
+    // were the value — so the strip has to drop everything the mask covered,
+    // not only the paths declared secret.
+    const created = await service.createProvider({
+      name: "Narrow",
+      type: "narrow",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { apiKey: "sk-real", legacyToken: "tok-real-value" },
+      isDefault: false,
+      isActive: true,
+    });
+
+    const read = await service.getProvider(created.id);
+    // The precondition: the read really does withhold this path. Without it
+    // the round trip below would be carrying a real value and prove nothing.
+    expect(read.configuration).toMatchObject({ legacyToken: "••••••••" });
+
+    await service.updateProvider(created.id, {
+      name: "Renamed",
+      configuration: read.configuration as Record<string, unknown>,
+    });
+
+    const stored = await service.getProviderDecrypted(created.id);
+    expect(stored.configuration).toMatchObject({
+      apiKey: "sk-real",
+      legacyToken: "tok-real-value",
+    });
+  });
+
+  it("still stores a mask-shaped value at a DECLARED public path", async () => {
+    // The control. Dropping every mask-shaped value regardless of path would
+    // pass the case above while discarding a real edit to a public field whose
+    // value happens to be bullets.
+    const withPublic = defineEmailProvider({
+      type: "withpublic",
+      label: "With public",
+      configFields: [
+        { name: "apiKey", label: "Key", kind: "password", secret: true },
+        { name: "label", label: "Label", kind: "text" },
+      ],
+      parseConfig: input => input as Record<string, unknown>,
+      createAdapter: () => ({
+        send: () => Promise.resolve({ success: true, messageId: "x" }),
+      }),
+    });
+    getEmailProviderRegistry().register(withPublic);
+
+    const created = await service.createProvider({
+      name: "Public",
+      type: "withpublic",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { apiKey: "sk-real", label: "before" },
+      isDefault: false,
+      isActive: true,
+    });
+
+    await service.updateProvider(created.id, {
+      configuration: { label: "••••••••" },
+    });
+
+    const stored = await service.getProviderDecrypted(created.id);
+    expect(stored.configuration).toMatchObject({ label: "••••••••" });
+  });
+});
+
 describe("a non-secret field whose value looks like the mask", () => {
   let sqlite: Database.Database;
   let service: EmailProviderService;
