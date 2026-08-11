@@ -57,6 +57,18 @@ const SOURCES = {
 const ASSET_TARGET = /\.css$/;
 
 /**
+ * The export conditions this module knows how to follow, and the targets it reads inside each.
+ *
+ * Anything else is refused rather than ignored. A resolver picks the FIRST condition it matches,
+ * so a `react-server`, `browser` or top-level `default` key would be selected in the environment
+ * that matches it, ahead of the four targets below — and the artifact those consumers actually
+ * receive would have had neither its surface nor its client directive checked, while all three
+ * guards passed on the files nobody in that environment resolves to.
+ */
+const SUPPORTED_CONDITIONS = new Set(["import", "require"]);
+const SUPPORTED_TARGETS = new Set(["types", "default"]);
+
+/**
  * One published entry point.
  *
  * @typedef {object} PublishedEntry
@@ -104,6 +116,24 @@ export function derivePublishedEntries(exportMap, sources) {
         `The export "${subpath}" is neither a conditions object nor a file path, so there is ` +
           "nothing for the guards to check."
       );
+    }
+
+    for (const [condition, nested] of Object.entries(target)) {
+      if (!SUPPORTED_CONDITIONS.has(condition)) {
+        throw new Error(
+          `The export "${subpath}" has a "${condition}" condition, which these guards do not ` +
+            "follow. A resolver matching it would select a file whose surface and client " +
+            "directive were never checked. Add support for it here, or remove it."
+        );
+      }
+      for (const key of Object.keys(nested ?? {})) {
+        if (!SUPPORTED_TARGETS.has(key)) {
+          throw new Error(
+            `The export "${subpath}" has a "${condition}.${key}" target, which these guards do ` +
+              "not follow. Add support for it here, or remove it."
+          );
+        }
+      }
     }
 
     // Every condition's OWN target is kept. Synthesising the other three from one basename

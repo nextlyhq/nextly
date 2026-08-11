@@ -6,12 +6,17 @@
  * JavaScript target, two subpaths sharing one artifact — and a check exercised only against the
  * real map would be asserting that today's map is acceptable, which is a different claim.
  */
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import {
   clientBuildEntries,
   derivePublishedEntries,
   serverSafeBuildEntries,
+  type DeclaredBarrel,
 } from "../../scripts/published-entries.mjs";
 
 /** The four conditions a JavaScript entry point has to name. */
@@ -22,7 +27,7 @@ function conditions(name: string): Record<string, Record<string, string>> {
   };
 }
 
-const barrel = (source: string, client: boolean): object => ({
+const barrel = (source: string, client: boolean): DeclaredBarrel => ({
   source,
   client,
 });
@@ -168,6 +173,46 @@ describe("targets the guards cannot read", () => {
   });
 });
 
+describe("export conditions the guards do not follow", () => {
+  it("refuses a runtime condition it cannot traverse", () => {
+    // A resolver picks the FIRST condition it matches, so `react-server` would be selected ahead
+    // of `import`/`require` in that environment — and the file those consumers receive would have
+    // had neither its surface nor its client directive checked.
+    const target = {
+      "react-server": { types: "./dist/rsc.d.ts", default: "./dist/rsc.mjs" },
+      ...conditions("index"),
+    };
+    expect(() =>
+      derivePublishedEntries(
+        { ".": target },
+        { ".": barrel("src/index.ts", true) }
+      )
+    ).toThrow(/has a "react-server" condition/);
+  });
+
+  it("refuses an unfollowed target inside a condition it does follow", () => {
+    const target = conditions("index");
+    target.import = { ...target.import, browser: "./dist/index.browser.mjs" };
+    expect(() =>
+      derivePublishedEntries(
+        { ".": target },
+        { ".": barrel("src/index.ts", true) }
+      )
+    ).toThrow(/has a "import.browser" target/);
+  });
+
+  it("still accepts the four it does follow", () => {
+    // The control: the refusal is scoped to keys the guards cannot read, not to conditions in
+    // general — the ordinary dual-format entry must keep working.
+    expect(
+      derivePublishedEntries(
+        { ".": conditions("index") },
+        { ".": barrel("src/index.ts", true) }
+      )
+    ).toHaveLength(1);
+  });
+});
+
 describe("the barrel declaration and the export map", () => {
   it("refuses a published subpath with no declared barrel", () => {
     expect(() =>
@@ -193,5 +238,34 @@ describe("the barrel declaration and the export map", () => {
     expect(() =>
       derivePublishedEntries({ "./theme.css": "./dist/theme.css" }, {})
     ).toThrow(/passing vacuously/);
+  });
+});
+
+describe("the hand-written declaration beside the module", () => {
+  // A `.d.mts` maintained alongside a `.mjs` is a second list of the same facts, which is the
+  // shape this module exists to remove everywhere else. Nothing typechecks these tests today, so
+  // a declaration naming a function that no longer exists stayed green through a rename.
+  const scripts = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "scripts"
+  );
+  const names = (file: string): string[] =>
+    [
+      ...readFileSync(path.join(scripts, file), "utf8").matchAll(
+        /^export function (\w+)/gm
+      ),
+    ]
+      .map(match => match[1]!)
+      .sort();
+
+  it("declares exactly the functions the module exports", () => {
+    const runtime = names("published-entries.mjs");
+    expect(
+      runtime.length,
+      "no exported functions were found to compare"
+    ).toBeGreaterThan(0);
+    expect(names("published-entries.d.mts")).toEqual(runtime);
   });
 });
