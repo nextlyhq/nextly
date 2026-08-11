@@ -96,7 +96,15 @@ function analyze(source: string, fileName: string): Analysis {
   let jsx = false;
 
   const record = (node: ts.Node | undefined): void => {
-    if (node && ts.isStringLiteral(node)) specifiers.push(node.text);
+    // A backtick specifier — `import(`react`)` — parses as a no-substitution template, NOT a string
+    // literal, while bundlers treat both as an ordinary static dependency. Reading only the string
+    // form leaves that spelling invisible.
+    if (
+      node &&
+      (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
+    ) {
+      specifiers.push(node.text);
+    }
   };
 
   // A directive prologue is the leading run of string-expression statements. Taken from the tree,
@@ -264,6 +272,16 @@ describe("reading a module", () => {
       "star",
       "static",
     ]);
+  });
+
+  it("reads a specifier written with backticks", () => {
+    // `import(`x`)` parses as a no-substitution template rather than a string literal, and a
+    // bundler resolves it exactly like the quoted form.
+    expect(
+      read(
+        "const a = await import(`back-tick`);\nconst b = require(`tick-required`);"
+      ).specifiers.sort()
+    ).toEqual(["back-tick", "tick-required"]);
   });
 
   it("ignores a type-only import, which is erased before runtime", () => {
