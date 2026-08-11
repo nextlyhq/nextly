@@ -742,6 +742,68 @@ function analyze(source: string, fileName: string): Analysis {
     return !guardedByTypeof(node, node.text);
   };
 
+  /**
+   * Functions whose bodies run while the module loads, because something calls them by NAME.
+   *
+   * `function f() { return window.innerWidth } export const width = f()` is ordinary code, not an
+   * exotic spelling, and the immediate-invocation checks never saw it: they ask whether the
+   * function node itself is the callee, which is true for an IIFE and false for every named
+   * function. Closed transitively, so a call chain reached from module scope is covered too.
+   */
+  const eager = new Set<ts.Node>();
+  {
+    /** Every function bound to a name, wherever it was declared. */
+    const byName = new Map<string, ts.Node>();
+    const collectNamed = (node: ts.Node): void => {
+      if (ts.isFunctionDeclaration(node) && node.name !== undefined) {
+        byName.set(node.name.text, node);
+      }
+      if (
+        ts.isVariableDeclaration(node) &&
+        ts.isIdentifier(node.name) &&
+        node.initializer !== undefined &&
+        (ts.isArrowFunction(node.initializer) ||
+          ts.isFunctionExpression(node.initializer))
+      ) {
+        byName.set(node.name.text, node.initializer);
+      }
+      ts.forEachChild(node, collectNamed);
+    };
+    collectNamed(tree);
+
+    /** The names called in a subtree, without descending into deferred function bodies. */
+    const calledIn = (node: ts.Node, into: Set<string>): void => {
+      ts.forEachChild(node, child => {
+        if (ts.isCallExpression(child) && ts.isIdentifier(child.expression)) {
+          into.add(child.expression.text);
+        }
+        // A nested function's body is deferred unless it too is reached, which the worklist
+        // decides; descending here would mark everything the module merely defines.
+        if (ts.isFunctionLike(child)) {
+          if (ts.isCallExpression(child.parent)) calledIn(child, into);
+          return;
+        }
+        calledIn(child, into);
+      });
+    };
+
+    const pending = new Set<string>();
+    calledIn(tree, pending);
+    const seen = new Set<string>();
+    while (pending.size > 0) {
+      const name: string = pending.values().next().value as string;
+      pending.delete(name);
+      if (seen.has(name)) continue;
+      seen.add(name);
+      const fn = byName.get(name);
+      if (fn === undefined) continue;
+      eager.add(fn);
+      const next = new Set<string>();
+      calledIn(fn, next);
+      for (const called of next) if (!seen.has(called)) pending.add(called);
+    }
+  }
+
   const visit = (node: ts.Node, insideFunction: boolean): void => {
     if (ts.isImportDeclaration(node)) {
       // `import type` is erased before the emitted JavaScript exists, so it cannot pull in a
@@ -879,7 +941,7 @@ function analyze(source: string, fileName: string): Analysis {
       }
       return ts.isCallExpression(parent) && parent.expression === invoked;
     })();
-    const entersFunction = isFunction && !runsNow;
+    const entersFunction = isFunction && !runsNow && !eager.has(node);
 
     ts.forEachChild(node, child => {
       // A computed member name is evaluated when the class body runs, even though the member it
@@ -905,12 +967,16 @@ function analyze(source: string, fileName: string): Analysis {
 }
 
 /**
- * Files this reads as JavaScript or TypeScript.
+ * Files whose contents are DATA, carrying no imports, no directive and no globals.
  *
- * An ALLOW-list of source extensions rather than a list of asset ones to skip, so an unrecognised
- * extension is treated as an asset and left unparsed instead of being read as a module.
+ * Named explicitly, with everything else analysed. The inverse — allow-listing the SOURCE
+ * extensions — reads as failing closed and does the opposite: an unrecognised extension would get
+ * an empty analysis, which is the most permissive result available. The bundler loads a file
+ * literally named `helper`, with no extension at all, as JavaScript, and that spelling would have
+ * shipped unread. Anything this build cannot load is not a valid import in the first place, so
+ * analysing it costs nothing.
  */
-const ANALYSABLE = /\.(?:[cm]?tsx?|[cm]?jsx?)$/;
+const ASSET = /\.(?:css|json)$/;
 
 /** Resolve a relative specifier the way the bundler does, or `null` if it names a package. */
 function resolveLocal(fromFile: string, specifier: string): string | null {
@@ -983,9 +1049,9 @@ function reach(entry: string): {
     // identifiers from its contents: a stylesheet with a `.window` selector would be reported as
     // reading the browser global. It still counts as reached, and it can import nothing, so it is
     // recorded with an empty analysis rather than parsed.
-    const analysis = ANALYSABLE.test(file)
-      ? analyze(readFileSync(file, "utf8"), file)
-      : { specifiers: [], clientDirective: false, jsx: false, globals: [] };
+    const analysis = ASSET.test(file)
+      ? { specifiers: [], clientDirective: false, jsx: false, globals: [] }
+      : analyze(readFileSync(file, "utf8"), file);
     files.push({ file, analysis });
 
     for (const specifier of analysis.specifiers) {
@@ -1605,6 +1671,37 @@ describe("reading a module", () => {
     ).toEqual([]);
   });
 
+  it("reports a function the module calls while it loads", () => {
+    // Ordinary code, not an exotic spelling: the immediate-invocation checks ask whether the
+    // function node IS the callee, which is true for an IIFE and false for every named function.
+    expect(
+      read(`
+        function f() { return window.innerWidth; }
+        export const width = f();
+      `).globals
+    ).toEqual(["window"]);
+    // Through a chain, and through a const-bound arrow.
+    expect(
+      read(`
+        const inner = () => document.title;
+        function outer() { return inner(); }
+        export const t = outer();
+      `).globals
+    ).toEqual(["document"]);
+  });
+
+  it("still defers a function the module only defines", () => {
+    // The control, and the reason this is not simply "look inside every function": a module may
+    // export something that touches the DOM when a browser eventually calls it.
+    expect(
+      read(`
+        export function later() { return window.innerWidth; }
+        const unused = () => document.title;
+        export { unused };
+      `).globals
+    ).toEqual([]);
+  });
+
   it("reports the browser's alias for the global scope", () => {
     expect(read(`export const scope = self;`).globals).toEqual(["self"]);
   });
@@ -1885,6 +1982,29 @@ describe("resolving a local import", () => {
     expect(files.map(({ file }) => path.basename(file)).sort()).toEqual([
       "entry.ts",
       "helper.ts",
+    ]);
+  });
+
+  it("analyses a file with no extension, which the bundler loads as JavaScript", () => {
+    // The reason the asset rule names DATA extensions rather than allow-listing source ones:
+    // an unrecognised extension given an empty analysis is the most permissive result available,
+    // and a file literally named `helper` is loaded as JavaScript.
+    const dir = mkdtempSync(path.join(os.tmpdir(), "nx-layering-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    writeFileSync(
+      path.join(dir, "helper"),
+      "export const w = window.innerWidth;\n"
+    );
+    const entry = path.join(dir, "entry.ts");
+    writeFileSync(entry, 'export { w } from "./helper";\n');
+
+    const { files } = reach(entry);
+    expect(files.map(({ file }) => path.basename(file)).sort()).toEqual([
+      "entry.ts",
+      "helper",
+    ]);
+    expect(files.flatMap(({ analysis }) => analysis.globals)).toEqual([
+      "window",
     ]);
   });
 
