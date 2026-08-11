@@ -2330,6 +2330,62 @@ describe("a binding that names the modifiers AltGraph reports", () => {
   });
 });
 
+describe("Tab with a modifier under a grab", () => {
+  it("suppresses the browser's tab switcher while leaving focus navigation alone", () => {
+    // The Tab exemption exists for a focus trap, which cancels only the WRAP and relies on the
+    // browser default in between. Ctrl+Tab is not a move inside the modal, it is a way out of it
+    // — and exempting it reported the key consumed, silencing other listeners, while still
+    // letting the browser change tab.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 0,
+      blocking: true,
+    });
+
+    const switcher = press("Tab", { ctrlKey: true });
+    manager.handle(switcher);
+    expect(switcher.defaultPrevented).toBe(true);
+
+    // The controls: both focus-navigation spellings still reach the browser.
+    const forward = press("Tab");
+    manager.handle(forward);
+    expect(forward.defaultPrevented).toBe(false);
+
+    const backward = press("Tab", { shiftKey: true });
+    manager.handle(backward);
+    expect(backward.defaultPrevented).toBe(false);
+  });
+});
+
+describe("a held key whose binding starts preventing mid-hold", () => {
+  it("re-decides its repeats", () => {
+    // `useShortcuts` reinstalls the latest binding after every render, so a component switching
+    // into a mode where it suppresses the key changes nothing about what the layer MATCHES. The
+    // held key inherited the old permitted decision and the browser kept scrolling.
+    const manager = managerFor();
+    const options = { name: "shell", depth: 0 };
+    const registration = manager.register(
+      [binding("Space", vi.fn(), { preventDefault: false })],
+      options
+    );
+
+    const first = press(" ");
+    manager.handle(first);
+    // The control: while the binding permits it, the press really is left alone.
+    expect(first.defaultPrevented).toBe(false);
+
+    registration.update(
+      [binding("Space", vi.fn(), { preventDefault: true })],
+      options
+    );
+
+    const repeat = press(" ", { repeat: true });
+    manager.handle(repeat);
+    expect(repeat.defaultPrevented).toBe(true);
+  });
+});
+
 describe("a prefix conflict hidden behind a shift glyph", () => {
   it("reports `?` against `shift+? x`", () => {
     // The matcher ignores the shift flag for punctuation whose glyph already encodes it, so both

@@ -120,6 +120,8 @@ interface RegisteredLayer {
   sequence: number;
   /** What this layer MATCHES, so a re-render that changed nothing can be told apart. */
   shape: string;
+  /** What this layer decides SUPPRESSION by, so a held key can tell that decision has moved. */
+  policy: string;
 }
 
 interface PreparedBinding {
@@ -445,6 +447,30 @@ export function createShortcutManager(
     return `${keys}\u0001${options.depth}\u0001${options.blocking === true}\u0001${options.enabled !== false}`;
   }
 
+  /**
+   * What a layer decides SUPPRESSION by: the shape above, plus each binding's own policy.
+   *
+   * Kept apart from {@link layerShape} rather than folded into it, because the two answer
+   * different questions. `layerShape` decides whether a half-typed sequence is still valid, and a
+   * binding that changed only whether it calls `preventDefault` has broken no promise about what
+   * it MATCHES — cancelling the sequence there would make `g d` fail for an unrelated reason.
+   *
+   * `when` is absent by necessity: it is a function, so every render supplies a new identity while
+   * the condition is unchanged. It is re-read at press time instead.
+   */
+  function layerPolicy(
+    bindings: readonly PreparedBinding[],
+    options: ShortcutLayerOptions
+  ): string {
+    const policy = bindings
+      .map(
+        b =>
+          `${b.binding.keys}\u0003${b.binding.preventDefault !== false}\u0003${b.binding.whenTyping ?? "auto"}`
+      )
+      .join("\u0000");
+    return `${policy}\u0001${options.depth}\u0001${options.blocking === true}\u0001${options.enabled !== false}`;
+  }
+
   /** Whether any enabled layer is currently holding the keyboard. */
   function blocking(): boolean {
     return ordered().some(layer => layer.options.blocking === true);
@@ -523,7 +549,15 @@ export function createShortcutManager(
     // Tab first, and regardless of what has focus. A modal's focus trap only cancels the WRAP at
     // its first and last tabbable element and relies on the browser default in between, so every
     // control inside it needs Tab to pass — a button and a checkbox just as much as a field.
-    if (event.key === "Tab") return true;
+    //
+    // Only the focus-navigation spellings, though. Shift+Tab is the backwards move and belongs
+    // here; Ctrl+Tab and its Shift variant change BROWSER TAB, which is a way out of the grab
+    // rather than a move inside it. Exempting those reported the keystroke consumed while leaving
+    // its default in place, so the layer both silenced other listeners and let the user leave.
+    // A layer that genuinely wants a modified Tab can still bind it: an explicit binding matches
+    // before this fallback is consulted.
+    if (event.key === "Tab")
+      return !event.ctrlKey && !event.metaKey && !event.altKey;
     if (!typing) return false;
     // AltGraph arrives as ctrl+alt on the layouts that use it, so it must be unwrapped before
     // either modifier is read as a chord.
@@ -716,8 +750,8 @@ export function createShortcutManager(
    */
   function stackSignature(): string {
     return ordered()
-      .map(layer => layer.shape)
-      .join("");
+      .map(layer => layer.policy)
+      .join("\u0002");
   }
 
   /**
@@ -935,6 +969,7 @@ export function createShortcutManager(
         bindings: prepared,
         sequence: nextSequence++,
         shape: layerShape(prepared, layerOptions),
+        policy: layerPolicy(prepared, layerOptions),
       };
       warnOnPrefixConflicts(layer.bindings, layerOptions.name);
       layers.add(layer);
@@ -949,6 +984,7 @@ export function createShortcutManager(
           const shape = layerShape(layer.bindings, nextOptions);
           const shapeChanged = shape !== layer.shape;
           layer.shape = shape;
+          layer.policy = layerPolicy(layer.bindings, nextOptions);
           // Only a change to what this layer MATCHES can invalidate a promise it made. `update`
           // runs after every render, so cancelling unconditionally made a sequence fail whenever
           // an unrelated re-render landed between its two keystrokes.

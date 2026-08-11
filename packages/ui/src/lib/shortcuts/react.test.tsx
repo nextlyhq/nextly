@@ -689,6 +689,31 @@ describe("sibling providers mounted in one render", () => {
   });
 });
 
+describe("the first interactive frame", () => {
+  it("is already listening when a child effect dispatches a key", () => {
+    // Layers register in layout effects; the listener was installed in a PASSIVE one. A child's
+    // effects run before its parent's, so a keystroke dispatched from a child effect arrived
+    // while the provider was mounted and its layers registered, but nothing was listening yet.
+    const run = vi.fn();
+
+    function DispatchOnMount(): null {
+      React.useEffect(() => {
+        press("Escape");
+      }, []);
+      return null;
+    }
+
+    render(
+      <ShortcutProvider isApple={false}>
+        <Bind keys="Escape" run={run} options={{ name: "shell" }} />
+        <DispatchOnMount />
+      </ShortcutProvider>
+    );
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("a component that both registers shortcuts and lists them", () => {
   it("settles instead of re-rendering without end", () => {
     // `useShortcuts` updates its layer after EVERY render, because the bindings close over

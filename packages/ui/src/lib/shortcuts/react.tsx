@@ -248,7 +248,11 @@ export function ShortcutProvider({
       "key. Render one provider at the root, and use ShortcutScope to raise precedence inside it."
   );
 
-  React.useEffect(() => {
+  // Layout timing, matching the effects that register the layers. A passive effect installs the
+  // listener AFTER paint, so a keydown delivered between the commit and the passive flush reaches
+  // no manager at all — the provider is on screen, its layers are registered, and a focused
+  // control or a legacy listener still answers the first keystroke.
+  useIsomorphicLayoutEffect(() => {
     // `null` is an explicit "attach nothing", for tests and for a host that drives `handle`
     // itself.
     if (resolvedTarget === null) return;
