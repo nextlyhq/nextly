@@ -502,3 +502,45 @@ describe("a message with more recipients than one statement can carry", () => {
     expect(distinct).toHaveLength(1);
   });
 });
+
+describe("a logger that throws while reporting a lost row", () => {
+  it("does not let the recorder break its never-throws contract", async () => {
+    // `recordAll` is called from a send that has ALREADY been dispatched, and
+    // the path above it reads a throw as a provider failure. An install's
+    // logger throwing from `error()` would therefore turn "the trail could not
+    // be written" into "the message failed" — a different and wronger claim,
+    // and one an auth flow acts on by withholding a token.
+    const throwing: Logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      debug: vi.fn(),
+      error: vi.fn(() => {
+        throw new Error("log transport is down");
+      }),
+    };
+
+    // No table, so the insert fails and the reporting path is reached.
+    const bare = new Database(":memory:");
+    const service = new EmailDeliveryService(
+      makeAdapter(drizzle({ client: bare })),
+      throwing
+    );
+
+    await expect(
+      service.record({
+        to: "a@b.com",
+        providerId: null,
+        providerType: "smtp",
+        templateSlug: null,
+        status: "sent",
+        messageId: null,
+        error: null,
+      })
+    ).resolves.toBeUndefined();
+
+    // The control: the reporting path really ran, so this is not passing
+    // because the insert quietly succeeded.
+    expect(throwing.error).toHaveBeenCalled();
+    bare.close();
+  });
+});

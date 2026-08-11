@@ -83,6 +83,63 @@ describe("the SQLite bootstrap DDL", () => {
     expect(schemas.size).toBeGreaterThan(10);
   });
 
+  /**
+   * Core tables this bootstrap does not create, as measured.
+   *
+   * Every entry is a GAP, not a decision. A fresh SQLite database built from
+   * this fallback has none of them, so anything touching them fails against
+   * it — and the fallback exists precisely for the non-TTY case where
+   * `pushSchema` could not run, which is where nobody is watching.
+   *
+   * Listed rather than left implicit for two reasons: the list can only
+   * shrink, and a NEW core table added without its DDL fails here rather than
+   * at someone's first insert. That is not hypothetical — `email_deliveries`
+   * was added by a feature PR and every guard in this file stayed green,
+   * because the comparison below iterates the DDL's own tables and could only
+   * ever catch a column that drifted, never a table that was never written.
+   */
+  const NOT_BOOTSTRAPPED = new Set([
+    "activity_log",
+    "api_keys",
+    "audit_log",
+    "dynamic_collections",
+    "dynamic_singles",
+    "email_providers",
+    "email_templates",
+    "image_sizes",
+    "nextly_events",
+    "nextly_meta",
+    "nextly_schema_events",
+    "nextly_webhook_deliveries",
+    "nextly_webhooks",
+    "user_field_definitions",
+    "user_invite_tokens",
+  ]);
+
+  it("creates every core table, or names the ones it does not", () => {
+    // The comparison below iterates the DDL's OWN tables, so a core table
+    // absent from it was invisible: the guard could only catch a column that
+    // drifted, never a table that was never written. `email_deliveries` was
+    // added by a feature PR and this test stayed green.
+    const missing = [...schemas.keys()].filter(
+      table => !ddl.has(table) && !NOT_BOOTSTRAPPED.has(table)
+    );
+
+    expect(
+      missing,
+      `these core tables have no bootstrap DDL: ${missing.join(", ")}. A ` +
+        "database created from this fallback will not have them, and every " +
+        "query against them fails. Add the DDL, or add the table to " +
+        "NOT_BOOTSTRAPPED with the reason."
+    ).toEqual([]);
+  });
+
+  it("does not carry exclusions for tables that no longer exist", () => {
+    // An exclusion outliving its table turns the list above into folklore.
+    const stale = [...NOT_BOOTSTRAPPED].filter(table => !schemas.has(table));
+    expect(stale).toEqual([]);
+  });
+
   it.each([...ddlColumns().keys()])(
     "declares every column the schema defines for %s",
     table => {

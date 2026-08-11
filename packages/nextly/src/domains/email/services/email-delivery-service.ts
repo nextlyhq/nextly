@@ -253,8 +253,29 @@ export class EmailDeliveryService extends BaseService {
     }
   }
 
-  /** One shape for a lost chunk, so the two report sites cannot diverge. */
+  /**
+   * One shape for a lost chunk, so the two report sites cannot diverge.
+   *
+   * The log call is isolated. `recordAll` promises never to throw, and it is
+   * called from a send that has already been dispatched -- so a logger an
+   * install supplied, throwing from `error()`, would otherwise escape a
+   * recorder whose whole contract is that it cannot affect the send, and be
+   * caught as a provider failure by the path above it. A trail that cannot be
+   * written is a trail that cannot be written; it is not a failed message.
+   */
   private reportInsertFailure(
+    inputs: EmailDeliveryInput[],
+    error: unknown,
+    retryError?: unknown
+  ): void {
+    try {
+      this.logInsertFailure(inputs, error, retryError);
+    } catch {
+      // Nowhere left to report to: the reporting mechanism is what failed.
+    }
+  }
+
+  private logInsertFailure(
     inputs: EmailDeliveryInput[],
     error: unknown,
     retryError?: unknown
