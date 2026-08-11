@@ -214,7 +214,7 @@ CREATE TABLE IF NOT EXISTS "dc_pinned" (
   "updated_at" timestamp DEFAULT now(),
   "created_by" text,
 "title" text NOT NULL,
-"slug_key" text  UNIQUE,
+"slug_key" text,
 "short_code" varchar(120),
 "summary" text,
 "views" integer,
@@ -237,6 +237,8 @@ CREATE INDEX IF NOT EXISTS "idx_dc_pinned_lookup_code" ON "dc_pinned"("lookup_co
 CREATE INDEX IF NOT EXISTS "idx_dc_pinned_author" ON "dc_pinned"("author");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_dc_pinned_editors" ON "dc_pinned"("editors");
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_dc_pinned_slug_key" ON "dc_pinned"("slug_key");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_dc_pinned_created_at" ON "dc_pinned"("created_at" DESC);
 --> statement-breakpoint
@@ -312,7 +314,7 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
   "created_at" timestamp DEFAULT now(),
   "updated_at" timestamp DEFAULT now(),
 "title" text NOT NULL,
-"slug_key" text  UNIQUE,
+"slug_key" text,
 "short_code" varchar(120),
 "summary" text,
 "views" integer,
@@ -335,6 +337,8 @@ CREATE INDEX IF NOT EXISTS "idx_single_pinned_lookup_code" ON "single_pinned"("l
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_author" ON "single_pinned"("author");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_editors" ON "single_pinned"("editors");
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_single_pinned_slug_key" ON "single_pinned"("slug_key");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at" DESC);
 --> statement-breakpoint
@@ -366,7 +370,7 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
   "status" varchar(20) DEFAULT 'draft' NOT NULL,
   "first_published_at" timestamp,
 "title" text NOT NULL,
-"slug_key" text  UNIQUE,
+"slug_key" text,
 "short_code" varchar(120),
 "summary" text,
 "views" integer,
@@ -389,6 +393,8 @@ CREATE INDEX IF NOT EXISTS "idx_single_pinned_lookup_code" ON "single_pinned"("l
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_author" ON "single_pinned"("author");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_editors" ON "single_pinned"("editors");
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_single_pinned_slug_key" ON "single_pinned"("slug_key");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at" DESC);
 --> statement-breakpoint
@@ -419,7 +425,7 @@ CREATE TABLE IF NOT EXISTS "dc_pinned" (
   "updated_at" integer DEFAULT (strftime('%s', 'now')),
   "created_by" text,
 "title" text NOT NULL,
-"slug_key" text  UNIQUE,
+"slug_key" text,
 "short_code" text,
 "summary" text,
 "views" integer,
@@ -442,6 +448,8 @@ CREATE INDEX IF NOT EXISTS "idx_dc_pinned_lookup_code" ON "dc_pinned"("lookup_co
 CREATE INDEX IF NOT EXISTS "idx_dc_pinned_author" ON "dc_pinned"("author");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_dc_pinned_editors" ON "dc_pinned"("editors");
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_dc_pinned_slug_key" ON "dc_pinned"("slug_key");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_dc_pinned_created_at" ON "dc_pinned"("created_at");
 --> statement-breakpoint
@@ -517,7 +525,7 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
   "created_at" integer DEFAULT (strftime('%s', 'now')),
   "updated_at" integer DEFAULT (strftime('%s', 'now')),
 "title" text NOT NULL,
-"slug_key" text  UNIQUE,
+"slug_key" text,
 "short_code" text,
 "summary" text,
 "views" integer,
@@ -540,6 +548,8 @@ CREATE INDEX IF NOT EXISTS "idx_single_pinned_lookup_code" ON "single_pinned"("l
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_author" ON "single_pinned"("author");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_editors" ON "single_pinned"("editors");
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_single_pinned_slug_key" ON "single_pinned"("slug_key");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at");
 --> statement-breakpoint
@@ -571,7 +581,7 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
   "status" text DEFAULT 'draft' NOT NULL,
   "first_published_at" integer,
 "title" text NOT NULL,
-"slug_key" text  UNIQUE,
+"slug_key" text,
 "short_code" text,
 "summary" text,
 "views" integer,
@@ -594,6 +604,8 @@ CREATE INDEX IF NOT EXISTS "idx_single_pinned_lookup_code" ON "single_pinned"("l
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_author" ON "single_pinned"("author");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_editors" ON "single_pinned"("editors");
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_single_pinned_slug_key" ON "single_pinned"("slug_key");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at");
 --> statement-breakpoint

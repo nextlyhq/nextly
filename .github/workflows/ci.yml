@@ -40,13 +40,35 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
-      - name: Cache Turbo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # Scoped to the JOB, which is the part that matters. Six jobs across four
+      # workflows cache `.turbo`, they run concurrently on the same commit, and
+      # they build different filter sets — this one builds every package and app,
+      # `preview` builds only packages, `integration` builds five of them. Keyed on
+      # the commit alone they all wrote one entry, so whichever finished first
+      # decided what every later reader got.
+      #
+      # A reader then restores a `.turbo` shaped by someone else's build, reports
+      # `cache hit, replaying logs`, and lays down a `dist/` that does not contain
+      # what its own tests import. The symptom is `Cannot find module
+      # '.../dist/chunk-<hash>.mjs'` in a package the pull request never touched.
+      # Re-running cannot clear it: the key is the commit, so a second attempt
+      # scores an exact hit on the same foreign entry.
+      #
+      # `github.job` gives each job its own lineage. Nothing is lost — a job's own
+      # previous runs are what its cache was ever useful for, and turbo entries are
+      # content-addressed, so a narrower cache is a slower run and never a wrong
+      # one.
+      #
+      # The `v2-` prefix retires every entry written under the shared scheme in one
+      # step. Cache keys are immutable and `restore-keys` prefers the newest match,
+      # so the entries already written would otherwise keep being selected.
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .turbo
-          key: turbo-${{ runner.os }}-${{ github.sha }}
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
           restore-keys: |
-            turbo-${{ runner.os }}-
+            turbo-v2-${{ runner.os }}-${{ github.job }}-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -231,6 +253,17 @@ jobs:
         env:
           TURBO_CACHE_DIR: .turbo
 
+      # Only a job that finished its work publishes what it learned. A cancelled or
+      # failed run leaves the cache as it found it — `actions/cache` saves in a post
+      # step that runs however the job ended, and splitting restore from save is the
+      # supported way to make that conditional (`save-always` was deprecated for it).
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
   # The admin, in a real browser, against a real server and a real database.
   # Covers the class of failure the unit and integration suites structurally
   # cannot: jsdom has no layout engine, so a column that grew to 1024px or a
@@ -264,13 +297,35 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
 
-      - name: Cache Turbo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # Scoped to the JOB, which is the part that matters. Six jobs across four
+      # workflows cache `.turbo`, they run concurrently on the same commit, and
+      # they build different filter sets — this one builds every package and app,
+      # `preview` builds only packages, `integration` builds five of them. Keyed on
+      # the commit alone they all wrote one entry, so whichever finished first
+      # decided what every later reader got.
+      #
+      # A reader then restores a `.turbo` shaped by someone else's build, reports
+      # `cache hit, replaying logs`, and lays down a `dist/` that does not contain
+      # what its own tests import. The symptom is `Cannot find module
+      # '.../dist/chunk-<hash>.mjs'` in a package the pull request never touched.
+      # Re-running cannot clear it: the key is the commit, so a second attempt
+      # scores an exact hit on the same foreign entry.
+      #
+      # `github.job` gives each job its own lineage. Nothing is lost — a job's own
+      # previous runs are what its cache was ever useful for, and turbo entries are
+      # content-addressed, so a narrower cache is a slower run and never a wrong
+      # one.
+      #
+      # The `v2-` prefix retires every entry written under the shared scheme in one
+      # step. Cache keys are immutable and `restore-keys` prefers the newest match,
+      # so the entries already written would otherwise keep being selected.
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .turbo
-          key: turbo-${{ runner.os }}-${{ github.sha }}
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
           restore-keys: |
-            turbo-${{ runner.os }}-
+            turbo-v2-${{ runner.os }}-${{ github.job }}-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -304,6 +359,17 @@ jobs:
           name: playwright-report
           path: e2e/.playwright/report
           retention-days: 7
+
+      # Only a job that finished its work publishes what it learned. A cancelled or
+      # failed run leaves the cache as it found it — `actions/cache` saves in a post
+      # step that runs however the job ended, and splitting restore from save is the
+      # supported way to make that conditional (`save-always` was deprecated for it).
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
 
   # Cross-platform smoke test for the scaffolder. Catches Windows path
   # separator bugs and macOS-specific issues that only surface in fresh
