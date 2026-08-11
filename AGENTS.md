@@ -143,6 +143,14 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   needed, DERIVE it from the richer one; never compute it alongside. Two
   functions that agree today drift, and the drift is silent because both look
   correct. This has produced defects in five unrelated packages.
+- When you cite a known defect, PROPAGATE it through the same document. A
+  defect invoked for one purpose — arguing severity, justifying a workaround —
+  invalidates every other claim that assumes its absence, and the two sit on
+  the page together with neither looking wrong alone. The check is mechanical
+  rather than a matter of care: after citing it, re-read every statement about
+  the population it affects. A known "schema changes may not reach existing
+  databases" was cited for severity in one paragraph while the next asserted a
+  property of all existing databases derived from their schema.
 - Unreachability is a property of the current call graph, not of the code, and
   the call graph changes underneath you. "This cannot happen" is not a reason to
   omit a guard — it is a reason the guard is CHEAP, provided it is cheap: an
