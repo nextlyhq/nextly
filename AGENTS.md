@@ -74,8 +74,16 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
     executed, so the red says only that the break was malformed.
   - A COMPILE-TIME contract test is the opposite case: compilation IS the
     mechanism. In `*.test-d.ts`, widening a type makes its `@ts-expect-error`
-    unused and `check-types` fails for exactly the intended reason. Name the
-    diagnostic you expect, and confirm THAT one appeared.
+    unused and `check-types` fails for exactly the intended reason. Red is not
+    the evidence though — the EXPECTED DIAGNOSTIC is. A typo, a bad import or
+    an unrelated type error in the same file all stop compilation too, and
+    prove nothing about the property.
+  - `@ts-expect-error` is the sharp edge here, because it suppresses ANY error
+    on the line that follows. A test asserting "this call is rejected" stays
+    green once the code starts erroring for a different reason, and stays green
+    after the original rejection stops happening. Assert the diagnostic where
+    the tooling allows it; otherwise put the expected error code in a comment
+    on the directive, so a drift is visible in review rather than silent.
 - The test count must not drop by ACCIDENT. A suite that silently stopped being
   discovered reads as a pass, which is what this guards. Removing a test on
   purpose is a different act: it is sometimes correct (below), and the PR says
