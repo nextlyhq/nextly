@@ -19,6 +19,7 @@
 
 import { z } from "zod";
 
+import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { signPreviewToken } from "../auth/preview/preview-token";
 import { buildUserContext } from "../auth/user-context";
 import { container } from "../di";
@@ -130,6 +131,16 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
   // either, rather than a token for nothing.
   const nextly = await getCachedNextly();
   const roles = await resolveRoleSlugs(auth);
+
+  // An API key is authorized on the grants stamped on the KEY, never on its
+  // owner's roles. Without this the probe resolves the owner's RBAC — including
+  // a super-admin bypass — so a key holding `update-*` but not `read-*` would
+  // mint a link on the strength of an account that can read, handing out a
+  // bearer credential for a document the key itself may not fetch.
+  const actor: AuthenticatedScope | undefined =
+    auth.authMethod === "api-key"
+      ? { actorType: "apiKey", permissions: auth.permissions }
+      : undefined;
   // `findByID` reports an unreadable row by THROWING `NOT_FOUND`, not by
   // returning null: null comes back only under `disableErrors`, which would also
   // swallow a genuine internal failure and report it here as an ordinary denial.
@@ -143,6 +154,7 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
       id: entryId,
       depth: 0,
       overrideAccess: false,
+      ...(actor ? { actor } : {}),
       // Built the one way a caller is built, so this probe reaches the verdict
       // the caller's own read would. Claims matter here specifically: a stored
       // `custom` rule that decides on one is absence-tolerant, so a probe that

@@ -160,6 +160,43 @@ describe("mintPreviewLink", () => {
     expect(body.item).toBeUndefined();
   });
 
+  it("judges an API key on the key's own grants, not its owner's", async () => {
+    // The leak direction, which is the one a naive test gets backwards. Asserting
+    // that a key is DENIED something it should not have passes against the broken
+    // code too, because the OWNER's grants happen to allow it. What is wrong is
+    // that the key is still GRANTED something only the owner had — so the probe
+    // has to carry the key's own scope for the service to judge it on.
+    (
+      requireRouteCollectionAccess as ReturnType<typeof vi.fn>
+    ).mockResolvedValue({
+      userId: "owner-who-can-read",
+      // Update but NOT read. The owner is a super-admin who can read everything;
+      // without the scope below the probe resolves the OWNER's RBAC and mints.
+      permissions: ["update-pages"],
+      roles: [],
+      authMethod: "api-key",
+      apiKeyId: "key-1",
+      claims: {},
+    });
+
+    await mintPreviewLink(post({ collection: "pages", entryId: "7" }));
+
+    expect(findByID).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: { actorType: "apiKey", permissions: ["update-pages"] },
+      })
+    );
+  });
+
+  it("sends no actor for a session caller, so it resolves grants the normal way", async () => {
+    // Not merely absent: an empty scope would read as an API key holding nothing
+    // and deny a legitimate session caller everything.
+    await mintPreviewLink(post({ collection: "pages", entryId: "7" }));
+
+    const [call] = findByID.mock.calls;
+    expect(call[0].actor).toBeUndefined();
+  });
+
   it("gates on update for the collection that was named", async () => {
     // Per collection, not a blanket permission: otherwise a caller who may
     // edit posts could mint a link into a collection they cannot read.
