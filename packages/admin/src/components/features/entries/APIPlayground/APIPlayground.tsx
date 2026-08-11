@@ -29,6 +29,7 @@ import {
   TabsList,
   TabsTrigger,
   toast,
+  useShortcuts,
 } from "@nextlyhq/ui";
 import {
   useState,
@@ -505,20 +506,29 @@ export function APIPlayground({
    * parameter field. Escape is not prevented — an open menu should still close
    * on the same press.
    */
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-        e.preventDefault();
-        void executeRequest();
-        return;
-      }
-      if (e.key === "Escape" && isLoading) {
-        cancelRequest();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [executeRequest, cancelRequest, isLoading]);
+  useShortcuts(
+    [
+      {
+        keys: "mod+Enter",
+        description: "Send the request",
+        run: () => void executeRequest(),
+        // Sending is the whole point of the panel and the cursor is normally still in a parameter
+        // field when the user reaches for it, so this one fires while typing.
+        whenTyping: true,
+      },
+      {
+        keys: "Escape",
+        description: "Cancel the in-flight request",
+        run: () => cancelRequest(),
+        when: () => isLoading,
+        // Left unprevented so the same press still closes an open menu or popover: Escape means
+        // "back out of the nearest thing", and cancelling the request is only what it means when
+        // nothing nearer has claimed it.
+        preventDefault: false,
+      },
+    ],
+    { name: "api-playground" }
+  );
 
   /**
    * Reset the playground to initial state
