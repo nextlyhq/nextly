@@ -24,13 +24,25 @@
  *    allow-list. First-party code is bundled in, so what remains is exactly the external packages,
  *    and JSX has already become a `react/jsx-runtime` import by the time it gets here.
  *
- * The residual gap, stated rather than implied: an ALLOWED package could itself grow a React
+ * ## What this proves, and what it does not
+ *
+ * The evaluation runs on the Node that runs the BUILD, with the web globals Node has added since
+ * the supported floor removed first. That is enough to answer the browser-global question for the
+ * whole `engines` range, because those globals are the only difference that a deletion can model.
+ *
+ * It is NOT enough for built-in MODULES. An artifact importing something added after the floor —
+ * `node:sqlite`, say — resolves on a current build machine and fails on the floor with
+ * `ERR_UNKNOWN_BUILTIN_MODULE`, and no amount of deleting globals emulates that. Closing it means
+ * running this gate under the oldest supported Node rather than approximating it here; see
+ * `tasks/left-tasks/205-artifact-gate-on-the-floor-node.md`.
+ *
+ * The other residual, stated rather than implied: an ALLOWED package could itself grow a React
  * dependency, and importing React under Node does not throw, so neither question would notice.
  * The allow-list is two pure string utilities and every addition to it is a deliberate decision,
  * which is the control on that.
  */
 import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { createRequire, isBuiltin } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -115,7 +127,10 @@ export function specifiersIn(source, fileName) {
  */
 export function packageOf(specifier) {
   if (specifier.startsWith(".") || specifier.startsWith("/")) return null;
-  if (specifier.startsWith("node:")) return null;
+  // Asked of Node rather than matched on the `node:` prefix. Both spellings resolve to the same
+  // built-in and tsup preserves whichever the source used, so recognising only the prefixed form
+  // rejects a server-safe entry for importing `path` or `fs/promises`.
+  if (isBuiltin(specifier)) return null;
   const parts = specifier.split("/");
   if (specifier.startsWith("@")) return parts.slice(0, 2).join("/");
   return parts[0];
@@ -166,8 +181,10 @@ const DOM_ONLY_GLOBALS = ["window", "document"];
  * wired into the build, where a false alarm blocks work that is actually fine.
  */
 const ADDED_AFTER_SUPPORTED_FLOOR = [
-  // v21.
+  // v21. Node exposes the instance AND the constructor, and removing one leaves the other
+  // reachable, so both names are needed for the emulation to hold.
   "navigator",
+  "Navigator",
   // Unflagged in v22; behind --experimental-websocket on the floor.
   "WebSocket",
   // Web storage, arriving across v22 and still flag-gated on the floor.
@@ -230,7 +247,11 @@ export function restrictToSupportedFloor(scope = globalThis) {
  * @returns {string[]} the DOM globals that should not be here
  */
 export function domGlobalsPresent(scope = globalThis) {
-  return DOM_ONLY_GLOBALS.filter(name => scope[name] !== undefined);
+  // Presence of the BINDING, not of a value. A preload or instrumentation hook that defines
+  // `globalThis.document` as `undefined` leaves `document?.title` evaluating happily here while
+  // throwing `ReferenceError` in ordinary Node, and a value comparison reads that as a bare
+  // server.
+  return DOM_ONLY_GLOBALS.filter(name => name in scope);
 }
 
 async function main() {

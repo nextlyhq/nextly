@@ -71,6 +71,16 @@ describe("classifying a specifier", () => {
     expect(packageOf("/abs/path.mjs")).toBeNull();
     expect(packageOf("node:path")).toBeNull();
   });
+
+  it("recognises a built-in in either spelling", () => {
+    // Both resolve to the same module and the build preserves whichever the source used, so
+    // matching on the `node:` prefix alone would reject a server-safe entry for importing `path`.
+    expect(packageOf("path")).toBeNull();
+    expect(packageOf("fs/promises")).toBeNull();
+    // The control: a real package that merely looks like one must still be named.
+    expect(packageOf("react")).toBe("react");
+    expect(packageOf("path-browserify")).toBe("path-browserify");
+  });
 });
 
 describe("comparing against the allow-list", () => {
@@ -119,6 +129,13 @@ describe("the vacuity guard", () => {
     ).toEqual([]);
   });
 
+  it("reads the binding, not its value", () => {
+    // A preload that defines `globalThis.document` as `undefined` leaves `document?.title`
+    // evaluating happily while ordinary Node throws `ReferenceError`. Comparing the VALUE against
+    // undefined reports that environment as a bare server.
+    expect(domGlobalsPresent({ document: undefined })).toEqual(["document"]);
+  });
+
   it("passes on a real server, so the gate is reachable here", () => {
     // The positive control for the two above: this suite runs in Node, and the gate's precondition
     // has to actually hold there or it would never assert anything in the build either.
@@ -148,6 +165,18 @@ describe("restricting to the oldest supported Node", () => {
       configurable: false,
     });
     expect(restrictToSupportedFloor(scope).stubborn).toEqual(["navigator"]);
+  });
+
+  it("removes the constructor as well as the instance", () => {
+    // Node exposes `navigator` AND `Navigator`; removing one leaves the other reachable, so a
+    // module-scope `Navigator.prototype` would still evaluate here and throw on the floor.
+    const scope: Record<string, unknown> = {
+      navigator: {},
+      Navigator: () => {},
+    };
+    restrictToSupportedFloor(scope);
+    expect("navigator" in scope).toBe(false);
+    expect("Navigator" in scope).toBe(false);
   });
 
   it("leaves a scope that never had them untouched", () => {
