@@ -1540,3 +1540,110 @@ describe("a capability whose value is not a boolean", () => {
     expect(withCapabilities(undefined)).not.toThrow();
   });
 });
+
+describe("what a descriptor publishes about a field", () => {
+  it("carries only the properties a descriptor declares", () => {
+    // `EmailProviderConfigField` is structural on a structural definition, so
+    // a hand-built provider can hang anything off a field. Registration
+    // ignores an undeclared property — which is exactly why nothing else would
+    // notice it being served to every client holding read or create.
+    const provider: RegisteredEmailProvider = {
+      type: "hand-built",
+      label: "Hand Built",
+      configFields: [
+        {
+          name: "apiKey",
+          label: "API Key",
+          kind: "password",
+          secret: true,
+          // What a provider carrying its own operational state looks like.
+          value: "sk-live-the-actual-credential",
+          credentials: { user: "postmaster", pass: "hunter2" },
+        } as unknown as EmailProviderConfigField,
+      ],
+      validateConfig: () => {},
+      createAdapterFrom: () => ({
+        send: () => Promise.resolve({ success: true, messageId: "x" }),
+      }),
+      hasConnectionTest: false,
+    };
+
+    const published = JSON.stringify(toDescriptor(provider));
+
+    expect(published).not.toContain("sk-live-the-actual-credential");
+    expect(published).not.toContain("hunter2");
+    expect(published).not.toContain("credentials");
+  });
+
+  it("still describes the field completely", () => {
+    // The control. Withholding is only correct if what remains is enough to
+    // render and validate the field — a descriptor that drops `constraints` or
+    // `options` breaks the form it exists to describe.
+    const provider: RegisteredEmailProvider = {
+      type: "hand-built",
+      label: "Hand Built",
+      configFields: [
+        {
+          name: "region",
+          label: "Region",
+          kind: "select",
+          required: true,
+          help: "Where to send from.",
+          placeholder: "Pick one",
+          options: [{ value: "eu", label: "Europe" }],
+          constraints: { maxLength: 8 },
+          blankAs: "empty",
+        },
+      ],
+      validateConfig: () => {},
+      createAdapterFrom: () => ({
+        send: () => Promise.resolve({ success: true, messageId: "x" }),
+      }),
+      hasConnectionTest: false,
+    };
+
+    expect(toDescriptor(provider).configFields[0]).toEqual({
+      name: "region",
+      label: "Region",
+      kind: "select",
+      required: true,
+      help: "Where to send from.",
+      placeholder: "Pick one",
+      options: [{ value: "eu", label: "Europe" }],
+      constraints: { maxLength: 8 },
+      blankAs: "empty",
+    });
+  });
+});
+
+describe("a select option nobody can read", () => {
+  const base = {
+    type: "fixture",
+    label: "Fixture",
+    parseConfig: (input: unknown) => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  };
+
+  function withOptions(options: Array<{ value: string; label: string }>) {
+    return () =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          { name: "region", label: "Region", kind: "select", options },
+        ],
+      });
+  }
+
+  it("refuses a blank label", () => {
+    // The label is the only thing an operator sees in the menu, so a blank one
+    // is a choice nobody can tell from its neighbours — and once picked, the
+    // control shows nothing.
+    expect(withOptions([{ value: "eu", label: "   " }])).toThrow(/blank label/);
+  });
+
+  it("accepts an ordinary label", () => {
+    expect(withOptions([{ value: "eu", label: "Europe" }])).not.toThrow();
+  });
+});

@@ -176,10 +176,20 @@ export default function EditEmailProviderPage() {
   //
   // Gated on the catalog having settled, because an empty list mid-fetch makes
   // every type look unregistered.
+  //
+  // A failed catalog with NOTHING cached is its own reason: the form renders a
+  // fatal alert instead of itself, so there is no form for this button to
+  // submit and an enabled Update would do nothing at all.
+  const noCatalogAtAll =
+    descriptorsError !== null &&
+    descriptorsError !== undefined &&
+    (descriptors ?? []).length === 0;
+
   const cannotEdit =
-    !descriptorsLoading &&
-    !descriptorsError &&
-    isUnregisteredProviderType(provider?.type, descriptors ?? []);
+    noCatalogAtAll ||
+    (!descriptorsLoading &&
+      !descriptorsError &&
+      isUnregisteredProviderType(provider?.type, descriptors ?? []));
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>

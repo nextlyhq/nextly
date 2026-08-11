@@ -218,7 +218,16 @@ export function EmailProviderForm({
       return;
     }
 
-    form.reset(defaultFormValues(descriptors[0]));
+    // The IDENTITY half is kept. Only the type and its configuration are
+    // unusable; the name, sender address and switches are the operator's own
+    // work and have nothing to do with which plugin is installed. Discarding
+    // them turns a catalog refresh into lost typing.
+    const next = defaultFormValues(descriptors[0]);
+    form.reset({
+      ...form.getValues(),
+      type: next.type,
+      configuration: next.configuration,
+    });
   }, [isEdit, descriptors, form]);
 
   // Replace the configuration when the provider type changes. The two

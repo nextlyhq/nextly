@@ -133,6 +133,28 @@ export function ProviderConfigFields({
   );
 }
 
+/**
+ * What to tell an operator about a stored value this control cannot show.
+ *
+ * Written per control, because the reason differs and so does what they are
+ * looking at. A switch renders off; a text or select control renders blank.
+ * Telling someone their empty text box "is not a true/false" describes a
+ * different field and reads as a bug in the page.
+ */
+function unrepresentableNotice(kind: EmailProviderConfigField["kind"]): string {
+  const shown =
+    kind === "boolean"
+      ? "This switch shows off, which is not what is stored."
+      : "This field shows empty, which is not what is stored.";
+
+  const change =
+    kind === "boolean"
+      ? "changing it replaces what is stored"
+      : "typing a value replaces what is stored";
+
+  return `The stored value cannot be shown by this control. ${shown} It is left out of the save unless you change it; ${change}.`;
+}
+
 function ProviderConfigField({
   field,
   control,
@@ -153,7 +175,7 @@ function ProviderConfigField({
   // the position is not evidence of the setting. Said on the field, because
   // this is the only place the operator looks before deciding to touch it.
   const description = unrepresentable
-    ? `${field.help ? `${field.help} ` : ""}The stored value is not a true/false and cannot be shown here. This switch is left out of the save unless you change it; changing it replaces what is stored.`
+    ? `${field.help ? `${field.help} ` : ""}${unrepresentableNotice(field.kind)}`
     : field.help;
 
   if (field.secret === true) {

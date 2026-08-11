@@ -711,6 +711,15 @@ function assertSelectIsChoosable(
     });
   }
 
+  const blankLabel = options.findIndex(option => option.label.trim() === "");
+  if (blankLabel !== -1) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" gives the select field "${field.name}" an option at index ${blankLabel} with a blank label. The label is the only thing an operator sees in the menu, so a blank one is a choice nobody can tell from its neighbours -- and once picked, the control shows nothing.`,
+      logContext: { type, field: field.name, index: blankLabel },
+    });
+  }
+
   if (options.some(option => option.value === "")) {
     throw new NextlyError({
       code: "BUSINESS_RULE_VIOLATION",
@@ -1258,17 +1267,69 @@ export function toDescriptor(
         provider.capabilities?.connectionTest === true &&
         typeof provider.testConnectionFrom === "function",
     },
-    // A default on a secret field is stripped, even though registration
-    // refuses one: `RegisteredEmailProvider` is structural, so a hand-built
-    // provider can reach a descriptor build without having been registered.
-    // The descriptor is served to anyone holding read or create, and
-    // forwarding a credential there would hand out the value stored
-    // configuration is masked to protect. The field is still described; only
-    // its value is withheld.
-    configFields: provider.configFields.map(field =>
-      field.secret === true && field.default !== undefined
-        ? { ...field, default: undefined }
-        : field
-    ),
+    configFields: provider.configFields.map(publishableField),
+  };
+}
+
+/**
+ * One config field, rebuilt from the properties a descriptor declares.
+ *
+ * Copied key by key rather than spread. `EmailProviderConfigField` is a
+ * structural type on a structural definition, so a JavaScript plugin or a
+ * hand-built provider can hang anything it likes off a field -- an operational
+ * `value`, a `credentials` blob -- and a spread publishes all of it to every
+ * client holding read or create. Registration ignores the extra property,
+ * which is exactly why nothing else would notice it leaving.
+ *
+ * An allowlist rather than a list of things to strip: a denylist is wrong the
+ * moment someone invents a key nobody thought of, and the set of keys a
+ * descriptor MEANS is already written down as this interface.
+ *
+ * A default on a secret field is withheld even though registration refuses
+ * one, for the same structural reason. The field is still described; only its
+ * value is withheld.
+ */
+function publishableField(
+  field: EmailProviderConfigField
+): EmailProviderConfigField {
+  const withheldDefault = field.secret === true;
+
+  return {
+    name: field.name,
+    label: field.label,
+    kind: field.kind,
+    ...(field.required !== undefined ? { required: field.required } : {}),
+    ...(field.default !== undefined && !withheldDefault
+      ? { default: field.default }
+      : {}),
+    ...(field.help !== undefined ? { help: field.help } : {}),
+    ...(field.placeholder !== undefined
+      ? { placeholder: field.placeholder }
+      : {}),
+    ...(field.options !== undefined
+      ? {
+          options: field.options.map(option => ({
+            value: option.value,
+            label: option.label,
+          })),
+        }
+      : {}),
+    ...(field.secret !== undefined ? { secret: field.secret } : {}),
+    ...(field.constraints !== undefined
+      ? {
+          constraints: {
+            ...(field.constraints.min !== undefined
+              ? { min: field.constraints.min }
+              : {}),
+            ...(field.constraints.max !== undefined
+              ? { max: field.constraints.max }
+              : {}),
+            ...(field.constraints.maxLength !== undefined
+              ? { maxLength: field.constraints.maxLength }
+              : {}),
+          },
+        }
+      : {}),
+    ...(field.blankAs !== undefined ? { blankAs: field.blankAs } : {}),
   };
 }

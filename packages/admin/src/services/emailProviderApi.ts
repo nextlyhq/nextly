@@ -179,8 +179,12 @@ export async function listProviders(params: {
   if (params.search) {
     queryParts.push(`search=${encodeURIComponent(params.search)}`);
   }
-  if (params.type && params.type !== "all") {
-    queryParts.push(`type=${params.type}`);
+  // No sentinel to filter out. "No filter" is `undefined`, and every string
+  // that arrives here is a provider type a plugin is entitled to register --
+  // including `"all"`, which this once suppressed, so that provider could
+  // never be filtered for.
+  if (params.type) {
+    queryParts.push(`type=${encodeURIComponent(params.type)}`);
   }
   const query = queryParts.join("&");
 

@@ -21,6 +21,7 @@
 "@nextlyhq/prettier-config": patch
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
+"@nextlyhq/builder": patch
 ---
 
 admin: render the email provider form from the server's provider descriptors

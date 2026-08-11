@@ -1217,3 +1217,73 @@ describe("a stored value the control could not show, on submit", () => {
     ).toContain("retries");
   });
 });
+
+describe("a blank the operator produced over an omitted value", () => {
+  const descriptor: EmailProviderDescriptor = {
+    type: "acme-mail",
+    label: "Acme Mail",
+    capabilities: {},
+    configFields: [
+      { name: "host", label: "Host", kind: "text", required: true },
+      { name: "note", label: "Note", kind: "text" },
+    ],
+  };
+
+  const BLANK = {
+    name: "A",
+    type: "acme-mail",
+    fromEmail: "a@b.com",
+    fromName: "",
+    isDefault: false,
+    isActive: true,
+  };
+
+  function open(configuration: Record<string, unknown>) {
+    return providerToFormValues(
+      {
+        id: "1",
+        name: "A",
+        type: "acme-mail",
+        fromEmail: "a@b.com",
+        fromName: null,
+        configuration,
+        isDefault: false,
+        isActive: true,
+        createdAt: "",
+        updatedAt: "",
+      },
+      descriptor
+    ).configuration;
+  }
+
+  it("is honoured as a removal, unlike the omission it started as", () => {
+    // Hydration leaves an unrepresentable value out, so the field arrives
+    // absent. Typing into the blank control and deleting it produces an
+    // explicit "" — a value the operator made. Treating that as the original
+    // omission would leave the field permanently unclearable, which is the
+    // opposite failure and just as silent.
+    const stored = { host: "h", note: { a: 1 } };
+    const hydrated = open(stored);
+    expect(hydrated).not.toHaveProperty("note");
+
+    const payload = formValuesToPayload(
+      { ...BLANK, configuration: { ...hydrated, note: "" } },
+      descriptor,
+      stored
+    );
+
+    expect(payload.unsetConfiguration).toContain("note");
+  });
+
+  it("still protects the untouched omission", () => {
+    // The control, and the case the guard exists for: absent stays absent.
+    const stored = { host: "h", note: { a: 1 } };
+    const payload = formValuesToPayload(
+      { ...BLANK, configuration: open(stored) },
+      descriptor,
+      stored
+    );
+
+    expect(payload.unsetConfiguration ?? []).not.toContain("note");
+  });
+});
