@@ -1,8 +1,10 @@
 import {
   compilePageCss,
+  declaresNoMarkup,
   nodeClassNames,
   walkNodes,
   type BlockDocument,
+  type BlockNode,
   type CompiledPageCss,
   type RemotePatternInput,
   type NodeStyles,
@@ -519,10 +521,29 @@ export function resolvePageStyles(
     return { ...normalizeStoredStyles(styles, document).styles, css: "" };
   }
   if (styleContext) {
-    const context: StyleCompileContext =
-      styleContext.blockBases === undefined
-        ? { ...styleContext, blockBases: blockBasesFor(document, blocks) }
-        : styleContext;
+    // Both derivations happen HERE rather than at the one call site that knows
+    // about them, because this function is exported and a write path uses it
+    // directly to produce the artifact it stores. A predicate injected only by
+    // `PageRenderer` would mean every sheet written through this entry keeps its
+    // drawless nodes' rules in `css` and carries no `gated` entry for them — so
+    // republishing a page would never enable the drop, and the behaviour would
+    // depend on which door the compile came through.
+    //
+    // An explicit value on the caller's context outranks either, on the same
+    // terms: a host that answered the question deliberately should not have its
+    // answer replaced by one derived from a resolver it did not choose.
+    const context: StyleCompileContext = {
+      ...styleContext,
+      ...(styleContext.blockBases === undefined
+        ? { blockBases: blockBasesFor(document, blocks) }
+        : {}),
+      ...(styleContext.drawsNothing === undefined
+        ? {
+            drawsNothing: (node: BlockNode) =>
+              declaresNoMarkup(node, type => blocks.get(type)),
+          }
+        : {}),
+    };
     return toPageStyles(
       compilePageCss(document, context),
       context.scope,

@@ -88,11 +88,18 @@ export function declaresNoMarkup(
   node: BlockNode,
   definitions: NoMarkupDefinitionSource
 ): boolean {
-  const predicate = definitions(node.type)?.rendersNothing;
-  if (typeof predicate !== "function") return false;
   let answer: unknown;
   let deferred = false;
   try {
+    // The LOOKUP is inside the guard, not just the call. `definitions` is a
+    // caller's function and `rendersNothing` is a property read on an object a
+    // plugin author wrote, so either can throw — an accessor, a proxy, a getter
+    // that assumes a field that is missing. This runs while the page decides its
+    // stylesheet, before any block boundary exists to contain a failure, so one
+    // malformed definition throwing here would lose the whole page rather than
+    // the block that owns it.
+    const predicate = definitions(node.type)?.rendersNothing;
+    if (typeof predicate !== "function") return false;
     answer = predicate(node.props as never);
     // Read inside the guard: a throwing `then` getter would otherwise escape
     // the containment on its way to being caught.

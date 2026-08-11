@@ -34,12 +34,7 @@ import {
   styleTextForInjection,
   type PageStyles,
 } from "./styles";
-import {
-  drawsNothing,
-  pruneDrawlessNodes,
-  pruneHiddenNodes,
-  pruneNodes,
-} from "./visibility";
+import { pruneDrawlessNodes, pruneHiddenNodes, pruneNodes } from "./visibility";
 
 export interface PageRendererProps {
   /** The stored document to render. */
@@ -423,16 +418,27 @@ export function PageRenderer({
   // render keeps them so their placeholders still appear.
   const styleInput = pruneKnownPlaceholders(drawlessInput, resolver);
 
-  // Each pass is compared against ITS OWN input rather than folding two removals
-  // into one identity test. A single `styleInput !== visible` would let a covered
-  // drawless drop excuse a placeholder removal that happened in the same step,
-  // and that removal is one only a recompile can answer for.
+  // Whether a knowable placeholder was removed AT ALL, asked of `visible` rather
+  // than of what the drawless drop left. The two passes can reject the SAME node
+  // — a migration-failed node whose last stored props also make its block declare
+  // it draws nothing — and then the drawless drop takes it first, the placeholder
+  // pass finds nothing to do, and comparing that pass against its own input reads
+  // as "no placeholder was removed". The artifact covers the node's own rules, so
+  // the drop is honest; what it cannot cover is the rest of what a placeholder
+  // means for the sheet, and that answer must not depend on which pass reached
+  // the node first.
+  const placeholderDropped = pruneKnownPlaceholders(visible, resolver);
+
+  // Each pass contributes against the SAME base for the same reason. Folding
+  // them into one `styleInput !== visible` would let a covered drawless drop
+  // excuse a placeholder removal in the same step, and only a recompile can
+  // answer for that one.
   const repairedDocument =
     sanitized !== document ||
     (pruned !== doc && !gatingCoveredByArtifact) ||
     visible !== pruned ||
     (drawlessInput !== visible && !drawlessCoveredByArtifact) ||
-    styleInput !== drawlessInput;
+    placeholderDropped !== visible;
 
   // Recompiling after pruning must not lose what the stored artifact and the
   // renderer knew. `scope` lives on the artifact rather than in the compile
@@ -473,18 +479,6 @@ export function PageRenderer({
       : {
           ...styleContext,
           limits: effectiveLimits,
-          // The compiler is told which nodes draw nothing through the same rule
-          // this render used to decide it, so a node's markup and its rules
-          // cannot disagree about whether it is on the page. This is what makes
-          // the drop above self-healing: a sheet compiled here holds each
-          // drawless node's rules per node, so the NEXT render can drop them
-          // from a stored artifact instead of needing a compile context.
-          //
-          // Passed even though the drawless nodes are already out of the tree
-          // being compiled. The tree is only one input: `blockBases` still
-          // reaches the compile, and a caller can hand `resolvePageStyles` a
-          // document this pass never pruned.
-          drawsNothing: (node: BlockNode) => drawsNothing(node, resolver),
           ...(patterns === undefined || styleContext.mayFetchUrl !== undefined
             ? {}
             : { mayFetchUrl: (url: string) => isFetchableUrl(url, patterns) }),

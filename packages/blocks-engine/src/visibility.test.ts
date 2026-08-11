@@ -113,6 +113,28 @@ describe("a block asked whether its props draw nothing", () => {
     }
   });
 
+  it("contains a definition source that throws when it is asked", () => {
+    // The LOOKUP can fail before the predicate is ever reached, and this runs
+    // while the page decides its stylesheet — before any block boundary exists —
+    // so a throw here loses the whole page rather than one block.
+    expect(
+      declaresNoMarkup(node(), () => {
+        throw new Error("registry is mid-rebuild");
+      })
+    ).toBe(false);
+  });
+
+  it("contains a `rendersNothing` accessor that throws on read", () => {
+    // A definition is an object a plugin author wrote, so the property read is
+    // as much their code as the call is.
+    const definition = {
+      get rendersNothing(): (props: never) => boolean {
+        throw new Error("from the accessor");
+      },
+    };
+    expect(declaresNoMarkup(node(), () => definition)).toBe(false);
+  });
+
   it("contains a throwing `then` getter", () => {
     // The read of `.then` is what decides whether an answer is deferred, and it
     // happens on a value the block returned — so it has to sit inside the same

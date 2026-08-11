@@ -26,6 +26,7 @@ import type { PageContext } from "./context";
 import { createStandaloneContext, defineBlock } from "./context";
 import { PageRenderer } from "./page-renderer";
 import { createBlockResolver } from "./resolver";
+import { resolvePageStyles } from "./styles";
 
 /**
  * Render to HTML the way a server actually would.
@@ -3811,6 +3812,43 @@ describe("PageRenderer", () => {
       expect(html).toContain("public body");
     });
 
+    it("still repairs when it is ALSO a known placeholder", async () => {
+      // The two passes can reject the SAME node. `a` has `migrationFailed`, so it
+      // draws a placeholder, and its stored props also make its block declare it
+      // draws nothing — so the drawless drop removes it first and the placeholder
+      // pass finds nothing left to do.
+      //
+      // The artifact covers the node's own rules, which is what makes the drop
+      // honest. What it cannot cover is the rest of what a placeholder means for
+      // the sheet, and that answer must not turn on which pass reached the node
+      // first: `c`'s rules are in the stored `css` under a class the map never
+      // mentioned, and only a recompile can drop them.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/drawless", {
+              props: { draw: false },
+              migrationFailed: true,
+            }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([
+            drawless as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+          styles={{
+            css: ".nx-a { background-image: url(/unpainted.png) } .nx-b { color: teal }",
+            classes: { b: "nx-b" },
+            gated: { a: ".nx-a { background-image: url(/gated-a.png) }" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("unpainted.png");
+      expect(html).not.toContain("gated-a.png");
+      expect(html).toContain("public body");
+    });
+
     it("still repairs when a placeholder is removed in the same render", async () => {
       // Each prune is compared against its OWN input rather than folded into one
       // identity test, so a drop the artifact covers cannot excuse one it does
@@ -3844,6 +3882,61 @@ describe("PageRenderer", () => {
       expect(html).not.toContain("unpainted.png");
       // The page still renders; only its stale sheet is withheld.
       expect(html).toContain("public body");
+    });
+  });
+
+  describe("a write path that compiles its own artifact", () => {
+    it("gets the drawless split without asking for it", async () => {
+      // `resolvePageStyles` is exported, and a write path uses it directly to
+      // produce the artifact it stores. A predicate injected only by the
+      // renderer would mean every sheet written that way keeps its drawless
+      // nodes' rules in `css` and carries no entry for them — so republishing
+      // would never enable the drop this change describes.
+      const artifact = resolvePageStyles(
+        doc(
+          node("a", "test/drawless", {
+            props: { draw: false },
+            styles: { base: { base: { color: "rebeccapurple" } } },
+          }),
+          node("b", "test/text", {
+            props: { value: "x" },
+            styles: { base: { base: { color: "teal" } } },
+          })
+        ),
+        undefined,
+        { breakpoints: { viewport: [], container: [] } },
+        createBlockResolver([
+          drawless as AnyBlockDefinition,
+          text as AnyBlockDefinition,
+        ])
+      );
+
+      expect(artifact.css).not.toContain("rebeccapurple");
+      expect(artifact.gated?.a).toContain("rebeccapurple");
+      // The control: the node that DOES draw keeps its rules in the main sheet.
+      expect(artifact.css).toContain("teal");
+    });
+
+    it("leaves a caller's own answer alone", async () => {
+      // A host that answered the question deliberately should not have it
+      // replaced by one derived from a resolver it did not choose.
+      const artifact = resolvePageStyles(
+        doc(
+          node("a", "test/drawless", {
+            props: { draw: false },
+            styles: { base: { base: { color: "rebeccapurple" } } },
+          })
+        ),
+        undefined,
+        {
+          breakpoints: { viewport: [], container: [] },
+          drawsNothing: () => false,
+        },
+        createBlockResolver([drawless as AnyBlockDefinition])
+      );
+
+      expect(artifact.css).toContain("rebeccapurple");
+      expect(artifact.gated).toBeUndefined();
     });
   });
 
