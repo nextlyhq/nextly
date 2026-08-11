@@ -42,6 +42,28 @@ interface Attachments {
   indexed: boolean;
 }
 
+/**
+ * Uniqueness on this column, in ANY spelling a generator may use.
+ *
+ * Asked once and used by both readers below. Reading only the column line for one path and only the
+ * named forms for the other made the two detectors disagree whenever the paths agreed in a spelling
+ * one of them could not see — which is a property of the readers, not of the DDL, and would report a
+ * genuine convergence as a regression.
+ */
+function hasUniqueness(
+  sql: string,
+  column: string,
+  columnLine: string
+): boolean {
+  return (
+    /\bUNIQUE\b/.test(columnLine) ||
+    new RegExp(`ADD CONSTRAINT \\S+ UNIQUE \\(${column}\\)`).test(sql) ||
+    new RegExp(
+      `CREATE UNIQUE INDEX (?:IF NOT EXISTS )?\\S+ ON ${TABLE}\\(${column}\\)`
+    ).test(sql)
+  );
+}
+
 /** A plain (non-unique) index on this column, in either generator's spelling. */
 function hasPlainIndex(sql: string, column: string): boolean {
   return new RegExp(
@@ -86,7 +108,7 @@ function createAttachments(rawSql: string, column: string): Attachments {
       .find(part => part.startsWith(`${column} `)) ?? "";
   return {
     notNull: /\bNOT NULL\b/.test(line),
-    unique: /\bUNIQUE\b/.test(line),
+    unique: hasUniqueness(sql, column, line),
     referencesTable: referencedTable(sql, column),
     indexed: hasPlainIndex(sql, column),
   };
@@ -98,11 +120,7 @@ function alterAttachments(rawSql: string, column: string): Attachments {
     sql.split("\n").find(line => line.includes(`ADD COLUMN ${column} `)) ?? "";
   return {
     notNull: /\bNOT NULL\b/.test(addLine),
-    unique:
-      new RegExp(`ADD CONSTRAINT \\S+ UNIQUE \\(${column}\\)`).test(sql) ||
-      new RegExp(
-        `CREATE UNIQUE INDEX (?:IF NOT EXISTS )?\\S+ ON ${TABLE}\\(${column}\\)`
-      ).test(sql),
+    unique: hasUniqueness(sql, column, addLine),
     referencesTable: referencedTable(sql, column),
     indexed: hasPlainIndex(sql, column),
   };
