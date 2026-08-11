@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`ui public export surface > index.ts surface is unchanged 1`] = `
+exports[`ui public export surface > . surface is unchanged 1`] = `
 [
   "Accordion (value)",
   "AccordionContent (value)",
@@ -277,7 +277,7 @@ exports[`ui public export surface > index.ts surface is unchanged 1`] = `
 ]
 `;
 
-exports[`ui public export surface > lib/color/index.ts surface is unchanged 1`] = `
+exports[`ui public export surface > ./color surface is unchanged 1`] = `
 [
   "Hsv (type)",
   "Oklch (type)",
@@ -290,15 +290,15 @@ exports[`ui public export surface > lib/color/index.ts surface is unchanged 1`] 
 ]
 `;
 
-exports[`ui public export surface > lib/utils.ts surface is unchanged 1`] = `
-[
-  "cn (value)",
-]
-`;
-
-exports[`ui public export surface > tailwind-preset.ts surface is unchanged 1`] = `
+exports[`ui public export surface > ./tailwind-preset surface is unchanged 1`] = `
 [
   "default (value)",
   "uiPreset (value)",
+]
+`;
+
+exports[`ui public export surface > ./utils surface is unchanged 1`] = `
+[
+  "cn (value)",
 ]
 `;
