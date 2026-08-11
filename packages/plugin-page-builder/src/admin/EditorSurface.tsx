@@ -83,9 +83,16 @@ export function EditorSurface() {
           <aside className="nx-pb-pane nx-pb-pane--left">
             <BlockLibrary />
           </aside>
-          <main className="nx-pb-pane--center">
+          {/*
+           * A region, not a second `main`. HTML allows one non-hidden `main` per
+           * document and the admin already renders it, so a nested one is invalid
+           * markup, gives assistive technology two competing primary landmarks,
+           * and makes every strict `main` locator in the e2e suite ambiguous. The
+           * label is what keeps it a useful landmark rather than a bare wrapper.
+           */}
+          <section className="nx-pb-pane--center" aria-label="Canvas">
             <Canvas />
-          </main>
+          </section>
           <aside className="nx-pb-pane nx-pb-pane--right">
             <Inspector />
           </aside>
