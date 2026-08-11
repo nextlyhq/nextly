@@ -79,3 +79,37 @@ export type { PageStyles, ResolveStyleOptions } from "./styles";
 export { pruneHiddenNodes } from "./visibility";
 export { prepareDocumentForRead } from "./prepare-document";
 export type { PrepareDocumentArgs } from "./prepare-document";
+
+/**
+ * The engine types this package's own options are written in terms of.
+ *
+ * **A package that names a type in its public API owes that type to its
+ * callers.** These originate in `@nextlyhq/blocks-engine`, which is a
+ * DEPENDENCY of this package rather than a peer — so a host installing
+ * `@nextlyhq/blocks-react` does not have it as a direct dependency and cannot
+ * import from it. Before this, `StyleCompileContext`, `BlockDocument` and
+ * `DocumentLimits` appeared in the built `.d.ts` in parameter positions while
+ * naming none of them in an export statement: a host could SEE the name it was
+ * required to pass and had no way to write it down.
+ *
+ * `nextly`'s own types are deliberately NOT re-exported here. `nextly` is a
+ * PEER dependency, so a host has installed it directly and should name
+ * `ContentEntry`, `RenderContext` and the route shapes from `nextly/runtime`
+ * where they live. Two import paths for one type is a worse cost than one
+ * import a host already has the package for.
+ */
+export type {
+  Binding,
+  BlockDocument,
+  BlockNode,
+  BreakpointDef,
+  BreakpointId,
+  BreakpointSet,
+  Condition,
+  DocumentKind,
+  DocumentLimits,
+  NodeStyles,
+  NodeVisibility,
+  StyleCompileContext,
+  StyleState,
+} from "@nextlyhq/blocks-engine";
