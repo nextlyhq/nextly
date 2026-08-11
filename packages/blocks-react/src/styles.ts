@@ -756,7 +756,17 @@ export function resolvePageStyles(
     return toPageStyles(
       compilePageCss(document, context),
       context.scope,
-      options.fetchPolicyId
+      // The sentinel is a COMPARISON value, never a stamp. It says "this policy
+      // has no identity", and an artifact carrying it would answer that question
+      // with a stable string — so a later read under a DIFFERENT anonymous
+      // predicate would find its own sentinel on the stored sheet, compare equal,
+      // and reuse CSS that predicate never judged. Stamped as absent instead,
+      // which reads as "compiled under no policy" and cannot match any policy in
+      // force. That makes a sheet compiled under an anonymous predicate
+      // permanently uncacheable, which is exactly what having no identity means.
+      options.fetchPolicyId === UNIDENTIFIED_FETCH_POLICY
+        ? undefined
+        : options.fetchPolicyId
     );
   }
   return {

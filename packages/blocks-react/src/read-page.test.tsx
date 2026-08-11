@@ -292,20 +292,66 @@ describe("what a page is compiled WITH", () => {
     expect(read.styles.css).toContain("olive");
   });
 
-  it("refuses a sheet with no policy stamp when a predicate is in force", () => {
-    // An unstamped sheet compares equal to "no policy at all", so a caller with
-    // its own `mayFetchUrl` and no stated identity would reuse a sheet that
-    // predicate never judged. The safe answer is an identity no artifact carries.
+  it("refuses a sheet with no policy stamp when a policy is in force", () => {
+    // An unstamped sheet means "compiled under no policy". With one now in
+    // force it cannot be reused, and with nothing to recompile from the CSS is
+    // withheld rather than served under rules that never judged it.
     const unstamped = storedSheet();
     expect(unstamped.fetchPolicyId).toBeUndefined();
 
     const read = preparePageForRead(document, {
       resolver: withPlugin,
       styles: unstamped,
-      styleContext: { ...context, mayFetchUrl: () => true },
+      remotePatterns: [{ protocol: "https", hostname: "cdn.example.com" }],
     });
 
-    expect(read.styles.fetchPolicyId).toBe(UNIDENTIFIED_FETCH_POLICY);
+    expect(read.styles.css).toBe("");
+  });
+
+  it("never stamps a sheet with the anonymous-policy sentinel", () => {
+    // The sentinel is a comparison value, not a stamp. Stamped, it would answer
+    // "which policy compiled this?" with a stable string, so a later read under
+    // a DIFFERENT anonymous predicate would find its own sentinel on the stored
+    // sheet, compare equal, and reuse CSS that predicate never judged.
+    //
+    // Asserted through a `url(...)` the two predicates disagree about, because
+    // bytes alone cannot separate reuse from a recompile that happens to produce
+    // the same sheet. The URL is the thing a fetch policy exists to decide, and
+    // it is what would actually be published.
+    const fetching: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "img",
+          type: "test/text",
+          version: 1,
+          props: { value: "y" },
+          styles: {
+            base: {
+              base: { background: { url: "https://cdn.example.com/x.png" } },
+            },
+          },
+        },
+      ],
+    };
+
+    const permissive = preparePageForRead(fetching, {
+      resolver: withPlugin,
+      styleContext: { ...context, mayFetchUrl: () => true },
+    });
+    expect(permissive.styles.css).toContain("cdn.example.com");
+    // Nothing may carry the sentinel into storage.
+    expect(permissive.styles.fetchPolicyId).toBeUndefined();
+
+    // A different anonymous predicate, which refuses that host.
+    const strict = preparePageForRead(fetching, {
+      resolver: withPlugin,
+      styles: permissive.styles,
+      styleContext: { ...context, mayFetchUrl: () => false },
+    });
+
+    expect(strict.styles.css).not.toContain("cdn.example.com");
   });
 
   it("CONTROL: reuses the sheet when the caller states its policy identity", () => {
