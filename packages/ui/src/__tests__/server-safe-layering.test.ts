@@ -196,12 +196,16 @@ function analyze(source: string, fileName: string): Analysis {
   const mentionsTypeof = (condition: ts.Node, name: string): boolean => {
     let found = false;
     const look = (node: ts.Node): void => {
-      if (
-        ts.isTypeOfExpression(node) &&
-        ts.isIdentifier(node.expression) &&
-        node.expression.text === name
-      ) {
-        found = true;
+      if (ts.isTypeOfExpression(node)) {
+        const operand = node.expression;
+        // Both spellings of the same guard: `typeof document` and `typeof globalThis.document`.
+        const namesIt =
+          (ts.isIdentifier(operand) && operand.text === name) ||
+          (ts.isPropertyAccessExpression(operand) &&
+            operand.name.text === name &&
+            ts.isIdentifier(operand.expression) &&
+            operand.expression.text === "globalThis");
+        if (namesIt) found = true;
       }
       ts.forEachChild(node, look);
     };
@@ -257,7 +261,15 @@ function analyze(source: string, fileName: string): Analysis {
       ts.isIdentifier(parent.expression) &&
       parent.expression.text === "globalThis"
     ) {
-      return true;
+      // The occurrence INSIDE the guard is not a read either: `typeof globalThis.document`
+      // evaluates to a string rather than throwing, exactly as `typeof document` does. Here the
+      // identifier's parent is the property access, whose parent is the `typeof`, so the check a
+      // few lines down on `parent` alone does not see it.
+      if (parent.parent !== undefined && ts.isTypeOfExpression(parent.parent)) {
+        return false;
+      }
+      // And the guarded USE is as safe as the bare-identifier form, so the same guard excuses it.
+      return !guardedByTypeof(node);
     }
 
     // `export const globals = { window }` READS the global — the shorthand is both the name and
@@ -278,6 +290,18 @@ function analyze(source: string, fileName: string): Analysis {
     // reads the global at runtime and reporting it would reject declaration-only code.
     if (ts.isTypeReferenceNode(parent) || ts.isTypeQueryNode(parent))
       return false;
+    // `interface Root extends HTMLElement` names a type in a heritage clause, erased with the
+    // interface. An `extends` on a CLASS is a value expression, so only the interface form is
+    // excused here.
+    if (
+      ts.isExpressionWithTypeArguments(parent) &&
+      parent.parent !== undefined &&
+      ts.isHeritageClause(parent.parent) &&
+      parent.parent.parent !== undefined &&
+      ts.isInterfaceDeclaration(parent.parent.parent)
+    ) {
+      return false;
+    }
 
     // `typeof window === "undefined"` is the guard that MAKES a module server-safe: it evaluates
     // to a string rather than throwing, so reporting it would punish the correct pattern.
@@ -313,11 +337,17 @@ function analyze(source: string, fileName: string): Analysis {
       ts.isImportEqualsDeclaration(node) &&
       ts.isExternalModuleReference(node.moduleReference)
     ) {
-      record(node.moduleReference.expression);
+      // `import type React = require("react")` is erased like any other type-only import.
+      if (!node.isTypeOnly) record(node.moduleReference.expression);
     } else if (ts.isCallExpression(node)) {
       const callee = node.expression;
       const isDynamicImport = callee.kind === ts.SyntaxKind.ImportKeyword;
-      const isRequire = ts.isIdentifier(callee) && callee.text === "require";
+      // A module that declares its own `require` is not calling the ambient loader, so its
+      // argument is not a module specifier.
+      const isRequire =
+        ts.isIdentifier(callee) &&
+        callee.text === "require" &&
+        !declared.has("require");
       if (isDynamicImport || isRequire) record(node.arguments[0]);
     }
 
@@ -353,7 +383,11 @@ function analyze(source: string, fileName: string): Analysis {
     // imported, so a browser global inside one throws on a server exactly as a bare read would.
     // Treating every function body as deferred suppressed it.
     const runsNow = ((): boolean => {
-      if (!isFunction) return false;
+      // Calling a generator returns an iterator; its body does not run until something pulls from
+      // it. So an immediately invoked generator is still deferred, unlike an ordinary IIFE.
+      if (!isFunction || ("asteriskToken" in node && node.asteriskToken)) {
+        return false;
+      }
       let invoked: ts.Node = node;
       while (invoked.parent && ts.isParenthesizedExpression(invoked.parent)) {
         invoked = invoked.parent;
@@ -601,6 +635,44 @@ describe("reading a module", () => {
         export const width = typeof window === "undefined" ? 0 : window.innerWidth;
         export const has = typeof document !== "undefined" && document.title;
       `).globals
+    ).toEqual([]);
+  });
+
+  it("does not report the erased contexts a global name can sit in", () => {
+    // Each of these is removed before the emitted JavaScript exists, so none reads anything at
+    // runtime — and reporting them rejects declaration-only code.
+    expect(
+      read(`
+        export interface Root extends HTMLElement { extra: number }
+        export const ok = typeof globalThis.document !== "undefined" && globalThis.document.title;
+      `).globals
+    ).toEqual([]);
+  });
+
+  it("does not read a locally declared require as the module loader", () => {
+    // A module that declares its own `require` is not calling the ambient loader, so its argument
+    // is not a module specifier.
+    expect(
+      read(`
+        const require = (value: string): string => value;
+        export const x = require("react");
+      `).specifiers
+    ).toEqual([]);
+  });
+
+  it("ignores a type-only import-equals declaration", () => {
+    expect(read(`import type React = require("react");`).specifiers).toEqual(
+      []
+    );
+  });
+
+  it("keeps an invoked generator body deferred", () => {
+    // Calling a generator returns an iterator; the body does not run until something pulls from
+    // it, so this is safe to import on a server.
+    expect(
+      read(
+        `export const values = (function* () { yield window.innerWidth; })();`
+      ).globals
     ).toEqual([]);
   });
 
