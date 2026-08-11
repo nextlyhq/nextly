@@ -202,6 +202,10 @@ describe("a credential can only be declared on a control that can hold one", () 
               // rather than for having nothing to choose from -- otherwise the
               // test passes on a rule it is not about.
               options: [{ value: "one", label: "One" }],
+              // And a default, for the same reason one kind further along: a
+              // boolean without one is refused by the rule about switches
+              // having two positions, which is not the rule under test.
+              ...(kind === "boolean" ? { default: false } : {}),
             },
           ],
         })
@@ -274,7 +278,12 @@ describe("a credential can only be declared on a control that can hold one", () 
       defineEmailProvider({
         ...base,
         configFields: [
-          { name: "sandbox", label: "Sandbox", kind: "boolean" },
+          {
+            name: "sandbox",
+            label: "Sandbox",
+            kind: "boolean",
+            default: false,
+          },
           { name: "retries", label: "Retries", kind: "number" },
           {
             name: "region",
@@ -321,7 +330,16 @@ describe("the field rules hold at the registry boundary too", () => {
     expect(() =>
       registry.register(
         registered([
-          { name: "flag", label: "Flag", kind: "boolean", secret: true },
+          // Defaulted, because a boolean without one is refused by a
+          // different rule — and this case is about the SECRET flag, so it
+          // has to reach that check rather than stopping short of it.
+          {
+            name: "flag",
+            label: "Flag",
+            kind: "boolean",
+            default: false,
+            secret: true,
+          },
         ])
       )
     ).toThrow(/text or password field/);
@@ -700,6 +718,102 @@ describe("declarations a form could never satisfy", () => {
         configFields: [
           { name: "headers.x-api-key", label: "X", kind: "text" },
           { name: "auth.access_token", label: "Y", kind: "text" },
+        ],
+      })
+    ).not.toThrow();
+  });
+});
+
+describe("a descriptor that would open the form already broken", () => {
+  const base = {
+    type: "fixture",
+    label: "Fixture",
+    parseConfig: (input: unknown) => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  };
+
+  it("refuses a numeric default outside its own bounds", () => {
+    // The form initialises from the default and validates against the same
+    // constraints, so this opens invalid and cannot be submitted without
+    // changing a value nobody chose.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          {
+            name: "retries",
+            label: "Retries",
+            kind: "number",
+            default: 10,
+            constraints: { max: 5 },
+          },
+        ],
+      })
+    ).toThrow(/above its maximum of 5/);
+  });
+
+  it("refuses a text default longer than its own maxLength", () => {
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          {
+            name: "tag",
+            label: "Tag",
+            kind: "text",
+            default: "much too long",
+            constraints: { maxLength: 4 },
+          },
+        ],
+      })
+    ).toThrow(/longer than its maximum length of 4/);
+  });
+
+  it("accepts a default that its bounds allow", () => {
+    // The control. Without it the two above would pass on a rule that had
+    // started rejecting every default.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          {
+            name: "retries",
+            label: "Retries",
+            kind: "number",
+            default: 3,
+            constraints: { min: 1, max: 5 },
+          },
+        ],
+      })
+    ).not.toThrow();
+  });
+
+  it("refuses a boolean with no default", () => {
+    // A switch has two positions. Without a declared default an absent stored
+    // key renders as off and every save writes `false`, overwriting a provider
+    // default nobody changed — and no clearing path can help, because a switch
+    // cannot be emptied back to absence.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [{ name: "sandbox", label: "Sandbox", kind: "boolean" }],
+      })
+    ).toThrow(/A switch has two positions/);
+  });
+
+  it("accepts a boolean that declares one", () => {
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          {
+            name: "sandbox",
+            label: "Sandbox",
+            kind: "boolean",
+            default: false,
+          },
         ],
       })
     ).not.toThrow();

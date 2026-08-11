@@ -316,6 +316,77 @@ function assertDefaultMatchesKind(
 }
 
 /**
+ * Reject a default that its own field would refuse.
+ *
+ * A form initialises from the default and validates against the same
+ * constraints, so a default outside them opens the form already invalid and
+ * the operator has to change a value they never chose in order to submit. The
+ * descriptor is the only place both halves are visible, so it is where they
+ * are checked against each other.
+ */
+function assertDefaultSatisfiesConstraints(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  const value = field.default;
+  if (value === undefined) return;
+  const { min, max, maxLength } = field.constraints ?? {};
+
+  const violation =
+    typeof value === "number" && min !== undefined && value < min
+      ? `is below its minimum of ${min}`
+      : typeof value === "number" && max !== undefined && value > max
+        ? `is above its maximum of ${max}`
+        : typeof value === "string" &&
+            maxLength !== undefined &&
+            value.length > maxLength
+          ? `is longer than its maximum length of ${maxLength}`
+          : undefined;
+
+  if (violation === undefined) return;
+
+  throw new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider "${type}" gives the field "${field.name}" a default of ${JSON.stringify(value)}, which ${violation}. A form starting on a value it must reject cannot be submitted without changing something nobody chose.`,
+    logContext: {
+      type,
+      field: field.name,
+      default: value,
+      min,
+      max,
+      maxLength,
+    },
+  });
+}
+
+/**
+ * Reject an optional boolean that does not say what "unset" looks like.
+ *
+ * A switch has two positions and no third. Without a default, an absent stored
+ * key renders as OFF and every subsequent save writes `false` — so a parser
+ * that distinguishes absence from false (an optional flag defaulting to true
+ * server-side, say) is silently overwritten, and the clearing path cannot help
+ * because a switch can never be "emptied" back to absence.
+ *
+ * Declaring the default removes the ambiguity at the source: the form starts
+ * where the provider says, and the value it sends is always one the provider
+ * chose. A field that genuinely needs three states is a select, not a switch.
+ */
+function assertOptionalBooleanHasDefault(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  if (field.kind !== "boolean") return;
+  if (field.default !== undefined) return;
+
+  throw new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider "${type}" declares the boolean field "${field.name}" without a default. A switch has two positions, so an absent value would render as off and be saved as false — overwriting a provider default nobody changed. Declare \`default\`, or use a select if the field genuinely has three states.`,
+    logContext: { type, field: field.name },
+  });
+}
+
+/**
  * Reject two fields that claim the same place in the configuration.
  *
  * A declaration and one of its own descendants — `auth` beside `auth.pass` —
@@ -540,6 +611,8 @@ export function assertConfigFieldsAreUsable(
     assertNumericMetadataIsFinite(type, field);
     assertTextLengthIsSatisfiable(type, field);
     assertDefaultMatchesKind(type, field);
+    assertDefaultSatisfiesConstraints(type, field);
+    assertOptionalBooleanHasDefault(type, field);
     assertSelectIsChoosable(type, field);
     assertNumericBoundsAreSatisfiable(type, field);
     if (field.secret === true && !SECRET_CAPABLE_KINDS.includes(field.kind)) {
