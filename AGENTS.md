@@ -81,9 +81,13 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   - `@ts-expect-error` is the sharp edge here, because it suppresses ANY error
     on the line that follows. A test asserting "this call is rejected" stays
     green once the code starts erroring for a different reason, and stays green
-    after the original rejection stops happening. Assert the diagnostic where
-    the tooling allows it; otherwise put the expected error code in a comment
-    on the directive, so a drift is visible in review rather than silent.
+    after the original rejection stops happening. A comment naming the expected
+    code does NOT help: `tsc` never reads it, so the directive is still
+    satisfied by an unrelated error and the test still passes. Prefer an
+    assertion the checker actually evaluates — `expectTypeOf(...)`, or a
+    positive control asserting the ACCEPTED form still compiles alongside the
+    rejected one, so "everything on this line errors" and "the right thing
+    errors" stop looking alike.
   - The count must not drop by ACCIDENT: a suite that silently stopped being
     discovered reads as a pass, which is what that guards. Removing a test on
     purpose is a different act, sometimes correct (below), and the PR says
@@ -117,10 +121,15 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   control on an input where you know the answer, and where the answer is not
   "nothing". Confirming an instrument against a case that did not move cannot
   distinguish it from one that reports nothing under any circumstances.
-- A test that passes both with and without the fix is worse than no test:
-  the next reader takes the green as coverage. Delete it, and say in the file
-  that remains where the behaviour IS covered. This is the deliberate removal
-  the count rule above exempts, so state the drop rather than letting it look
+- A test that passes both with and without the fix is worse than no test: the
+  next reader takes the green as coverage. **Repair it first.** Usually the
+  fixture never reaches the mechanism or the assertion is satisfied by absence,
+  and both are fixable — deleting is right only when the behaviour is genuinely
+  covered elsewhere, or the test asserts something the code no longer does.
+  Deleting the ONLY attempted coverage for a behaviour trades a misleading green
+  for no signal at all, which is not an improvement. When you do delete, say in
+  the file that remains where the behaviour IS covered; this is the deliberate
+  removal the count rule exempts, so state the drop rather than letting it look
   like a suite that went missing.
 
 ## Conventions (enforced; violations will be rejected in review)
@@ -164,13 +173,21 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   omit a guard — it is a reason the guard is CHEAP, provided it is cheap: an
   assertion over values already in hand costs nothing when its rejection branch
   never runs. A guard that queries, reads or recomputes still pays that cost on
-  every call whether or not it can ever reject, so put those behind the work
-  they protect rather than in front of a hot path.
+  every call whether or not it can ever reject, so a purely DEFENSIVE one can
+  move behind the work it protects. Never move a guard that is a PRECONDITION —
+  authorization, ownership, validity, quota. "Behind the work" there means the
+  mutation has already happened when the request is rejected, which turns a cost
+  saving into a security hole. Preconditions run first, whatever they cost.
 - Prefer a boundary the system cannot cross to a check that looks for crossings.
   A scan over syntax has an unbounded surface and can only ever be patched; a
   declared dependency graph, a type, or a manifest assertion is complete by
-  construction. If a "must not reach X" rule can be expressed as "X is not a
-  dependency", that is strictly stronger than any visitor.
+  construction. But a manifest assertion is only a boundary if the RESOLVER
+  agrees with it: under pnpm a root dependency, or one hoisted for another
+  workspace package, stays importable from a package whose own manifest never
+  declares it, so "X is absent from this package.json" does not mean "this
+  package cannot reach X". Make the boundary real before trusting it — a
+  resolution test that imports the package's entry from an isolated context, or
+  a build that fails on an undeclared import — and only then drop the visitor.
 - A documented rule with nothing enforcing it is not a control, and filing a
   task is not installing one. If the correct path and the easy path differ,
   the rule will be broken by someone who knows it.

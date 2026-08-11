@@ -1,17 +1,21 @@
 ---
+# Derived checks are not a packages/ phenomenon. Enumerating directories is how
+# this rule kept missing the code it is about — admin-css ships product code and
+# tests as .mjs, playground scripts assert agreement between a declaration and an
+# import, e2e specs recompute coordinates the app already derives, and the prose
+# section below applies squarely to docs and READMEs. Match by extension across
+# the repo rather than by location.
 paths:
-  - "packages/**/*.ts"
-  - "packages/**/*.tsx"
-  # admin-css ships its product code and its tests as .mjs, and several package
-  # build scripts are .js/.cjs. They implement checks like any other package, so
-  # a TypeScript-only filter would exempt exactly the code this rule is about.
-  - "packages/**/*.mjs"
-  - "packages/**/*.js"
-  - "packages/**/*.cjs"
+  - "**/*.ts"
+  - "**/*.tsx"
+  - "**/*.mjs"
+  - "**/*.js"
+  - "**/*.cjs"
+  - "**/*.md"
+  - "**/*.mdx"
   # The changeset package list versus the release group is one of this rule's own
-  # examples, so it has to load when those inputs are edited too.
+  # examples, so it loads when those inputs are edited too.
   - ".changeset/**"
-  - "scripts/**"
 ---
 
 When one piece of code checks, mirrors or summarises what another produces:
@@ -114,20 +118,44 @@ assigned by something outside your control do.
 Five instances in one area, each found only after the name-based version had
 been written:
 
-- classify a driver failure by SQLSTATE **class**, not a list of codes;
-- find a database object by the **column set it covers**, not by its name — an
-  engine appends `_2` on collision and truncates at its identifier limit, so
+- classify a driver failure by SQLSTATE at the specificity YOUR claim needs, not
+  by a hand-kept list of codes;
+- identify a database object by its **structural signature**, not by its name —
+  an engine appends `_2` on collision and truncates at its identifier limit, so
   there is no single string to match;
 - decide a capability by **probing it on a scratch object**, not by reading the
   server's version — the platforms worth detecting are the ones that misreport;
 - decide indexability by asking the **shared rule**, not by restating which
   types a dialect can key;
-- confirm a merge by **comparing the object**, not by grepping for a marker
+- confirm a merge by **comparing the PR's delta**, not by grepping for a marker
   that may occur elsewhere.
 
 The tell is a check whose correctness depends on how some other system chose to
 spell something. Ask instead what property makes the answer true, and query
 that. It is usually available and it usually costs the same.
+
+**"Structural" is not automatically "coarse", and the first two above are where
+that bites.** Replacing a name with a broader property is only correct when the
+broader property still separates the cases you must tell apart:
+
+- SQLSTATE **class** `23` is right for "is this an integrity failure at all". It
+  is wrong the moment the caller must distinguish one from another — this repo's
+  `packages/nextly/src/database/errors.ts` maps `23505`, `23503` and `23502` to
+  unique, foreign-key and not-null respectively, and collapsing them to the class
+  would report a missing NOT NULL as a duplicate. Match at the specificity the
+  claim requires: class when the claim is about the family, code when it is about
+  the member.
+- A **column set** is right for "is any object covering these columns present".
+  It is wrong for "which object implements this guarantee", because one table can
+  carry several objects over the same columns — and this repo already treats
+  `{ columns: ["code"], unique: false }` and `{ columns: ["code"], unique: true }`
+  as different indexes during an index-to-unique transition. Match the full
+  signature: columns AND uniqueness AND whether a constraint owns it.
+
+So the rule is not "prefer the broadest structural property". It is: identify by
+structure rather than by someone else's spelling, at the granularity your claim
+actually needs — which is the separating-property test applied to the identifier
+itself.
 
 ## A bare `catch` is only a defect when its fallback makes a CLAIM
 

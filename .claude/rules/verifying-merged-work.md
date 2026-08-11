@@ -10,29 +10,46 @@ an ancestor of `main`. `git branch --merged`, `git log | grep <sha>` and "is
 this commit in main" therefore answer confidently and wrongly. Verify by
 CONTENT.
 
-**Which marker you grep for is load-bearing, because this failure has a shape:
-the lost commits are always at the TAIL.** It happens when commits land on the
-branch after GitHub computed the merge, or when the merge runs from a stale
-head — so you lose the end of the branch, never the middle. A marker taken from
-an early or middle commit passes cleanly on a PR that dropped its last three.
+**Which marker you grep for is load-bearing.** The commonest shape is a lost
+TAIL: commits land on the branch after GitHub computed the merge, or the merge
+runs from a stale head, so the END of the branch goes missing and a marker taken
+from an early commit passes cleanly on a PR that dropped its last three.
+
+That heuristic says where to look FIRST; it is not what makes a check
+sufficient. A branch that was rebased, amended or force-pushed after the merge
+was computed diverges differently — rewriting an EARLIER commit while leaving
+the final patch text unchanged means the stale merge still contains your
+final-commit marker, and the check passes over content that was rewritten
+underneath it. When history was rewritten, compare the delta (step 3) rather
+than trusting any single marker.
 
 1. Confirm what was actually merged: `gh pr view N --json headRefOid,mergeCommit`.
+   Probe the recorded **merge commit**, never `origin/main`. Run before a fetch
+   and `origin/main` is still the pre-merge ref, so every check reports loss
+   falsely; run after `main` advances and a later commit can make omitted
+   content look present.
 2. Take the check from the **final** commit, in whichever direction it changed
    things. A marker only proves anything if it is UNIQUE to that commit and the
    search is SCOPED to the path it changed — a string that also occurs elsewhere
-   answers the same way whether or not the commit landed:
-   - it ADDED content → `git grep <marker> origin/main -- <path>`; expect a hit.
+   answers the same way whether or not the commit landed. Match it as a FIXED
+   string: a marker containing `.`, `[` or `*` is otherwise a pattern, and can
+   match text it was never taken from.
+   - it ADDED content → `git grep -F <marker> <mergeCommit> -- <path>`; expect a hit.
    - it only REMOVED content → same command; expect NO hit. Grepping for ADDED
      text here finds nothing whether or not the commit landed, which reads as
      failure either way and proves nothing.
    - it changed a file mode, a binary, or a rename → text search cannot see it.
-3. Strongest, and the only option when the change is a mode/binary/rename or has
-   no marker unique to it: compare the OBJECT. `git ls-tree <mergeCommit> -- <path>`
-   against `git ls-tree <headRefOid> -- <path>` matches mode, type and blob id, so
-   identical output IS byte-identical content. Prefer this to `--stat`, which
-   reports only that a path was touched: when an earlier commit in the same PR
-   also touched that path, it prints a line that looks like success while the
-   final update is exactly what went missing.
+3. When nothing is unique to the commit, or the change is a mode/binary/rename,
+   compare the PR's **delta** — not the whole object. Diffing the merged path
+   entry against the branch-head entry (`git ls-tree`, blob ids) is wrong as soon
+   as `main` changed ANOTHER hunk of the same file after the branch point: a
+   correct squash contains both changes, the blobs legitimately differ, and the
+   check reports a loss that did not happen. Compare what the PR itself changed:
+   `git diff <mergeBase>..<headRefOid> -- <path>` against
+   `git diff <mergeBase>..<mergeCommit> -- <path>`, expecting the PR's hunks in
+   the second. Whole-object equality is sound only when `main` never touched the
+   path. `--stat` is never sound: it reports only that a path was touched, which
+   any earlier commit in the same PR already guarantees.
 4. If the final commit is a pure revert of an earlier one in the same PR, check the
    NET effect, not the last hunk.
 
@@ -59,18 +76,28 @@ does not depend on a second run:
 ## Environment states wear the costume of code defects
 
 After a rebase onto a moved `main`, a package you never touched failing to
-resolve (`Cannot find module ...`) is an environment state, not a code defect.
-Which state it is decides the remedy, and the two look alike:
+resolve (`Cannot find module ...`) is USUALLY an environment state. Three
+candidates, and the remedies differ:
 
 - **Missing build output** — the import names a workspace package (`nextly/...`,
   `@nextlyhq/...`) and dozens of files fail at once. Its `dist` was never built.
   Run integration tests from the ROOT so turbo builds first; `pnpm install` does
   not produce `dist` and will leave this exactly as it was.
+- **Stale build output** — `dist` EXISTS but predates a source or export-map
+  change the rebase brought in, so it lacks the subpath now being imported. An
+  existence check on the directory says "built" and is wrong. Rebuild from the
+  root rather than trusting that `dist` is there.
 - **Stale install** — the import names an external dependency, or one package
   resolves while its sibling does not, after `pnpm-lock.yaml` moved underneath
   you. `pnpm install --frozen-lockfile` in that worktree.
 
-Check whether the package's `dist` exists before choosing.
+**Do not label it environmental without looking at what `main` changed.** If the
+moved `main` altered a workspace export map, a package manifest, a tsconfig path
+mapping or a shared build config, an untouched package failing to resolve is a
+real regression wearing the same costume. `git diff <mergeBase>..origin/main --
+'**/package.json' '**/tsconfig*.json' 'turbo.jsonc'` before reaching for a
+rebuild: a rebuild that "fixes" it silently absorbs a breaking change into your
+branch, and a rebuild that does not fix it has told you something.
 
 Related, and cheap to get wrong:
 
