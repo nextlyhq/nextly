@@ -101,6 +101,37 @@ vi.mock("../../../domains/schema/pipeline/live-table-facts", () => ({
   readIndexNames: vi.fn(async () => new Set<string>()),
 }));
 
+/**
+ * A failure raised by the companion reconcile, injected per test.
+ *
+ * The real module runs unless a test sets this, so every other case still exercises it. What this
+ * stands in for is the tail of a localization DISABLE: the reconcile restores the translations,
+ * archives them and DROPS the companion table, and only then clears the transition marker — which
+ * refuses a slug containing a dot and raises a `NextlyError`. By that point the schema has already
+ * changed, which is the property under test; reproducing the dotted slug end to end would pin the
+ * one path that reaches it rather than the rule that governs all of them.
+ */
+const companionFailure: { error: unknown } = { error: undefined };
+vi.mock(
+  "../../../domains/singles/services/reconcile-single-companion",
+  async () => {
+    const actual = await vi.importActual<
+      typeof import("../../../domains/singles/services/reconcile-single-companion")
+    >("../../../domains/singles/services/reconcile-single-companion");
+    return {
+      ...actual,
+      reconcileSingleCompanion: vi.fn(
+        async (args: Parameters<typeof actual.reconcileSingleCompanion>[0]) => {
+          const result = await actual.reconcileSingleCompanion(args);
+          if (companionFailure.error !== undefined)
+            throw companionFailure.error;
+          return result;
+        }
+      ),
+    };
+  }
+);
+
 import { NextlyError } from "../../../errors";
 import { SingleMetadataService } from "../../../domains/singles/services/single-metadata-service";
 import type { SingleRegistryService } from "../../../domains/singles/services/single-registry-service";
@@ -186,6 +217,7 @@ async function runUpdate(
     existing?: Record<string, unknown>;
     mainTableExists?: boolean;
     tableHasRows?: boolean;
+    companionFailure?: unknown;
     onStatement?: (sql: string) => void;
   } = {}
 ) {
@@ -197,6 +229,7 @@ async function runUpdate(
   } = options;
   executed.length = 0;
   liveTableHasRows.value = tableHasRows;
+  companionFailure.error = options.companionFailure;
   adapter = makeAdapter(dialect, { mainTableExists, onStatement });
   const registry = wireRegistry(options.existing ?? existingSingle());
   const result = await dispatchSingles(
@@ -320,47 +353,28 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
     expect(executed, "nothing ran against the database").toEqual([]);
   });
 
-  it("raises a refusal that reaches it from the apply phase too", async () => {
-    // 🔴 A separate rule from the phase split, not a consequence of it. The split decides that a
-    // DATABASE failure after the first statement is RECORDED rather than raised, because a
-    // statement may already have run. A refusal is not that: it is a guard rejecting the edit, and
-    // it propagates whatever phase it arrives from. Without this, a future apply-phase refusal is
-    // silently recorded as `failed` and the field list is saved against a table that never took it.
+  it("records a refusal raised after the schema has already changed, rather than raising it", async () => {
+    // 🔴 The phase decides this, NOT the error type, and the distinction is the whole point of the
+    // split. Before anything runs, a refusal means the request was rejected and nothing was
+    // touched, so it is raised. Once a statement has run, raising SKIPS the registry write — and a
+    // row that never learns what happened leaves the registry describing storage that no longer
+    // matches it.
     //
-    // Injected at the statement seam because no adapter raises one today — they raise
-    // `DatabaseError`, which extends `Error` and not `NextlyError`. That is what makes the rule
-    // cheap rather than unnecessary: the call graph is what makes it unreachable, and call graphs
-    // change.
-    let threw: unknown;
-    let out;
-    try {
-      out = await runUpdate(
-        {
-          fields: [
-            { name: "heading", type: "text" },
-            { name: "subtitle", type: "text" },
-          ],
-        },
-        {
-          onStatement: () => {
-            throw NextlyError.validation({
-              errors: [
-                {
-                  path: "fields.subtitle",
-                  code: "REFUSED_DURING_APPLY",
-                  message: "refused while applying",
-                },
-              ],
-            });
-          },
-        }
-      );
-    } catch (error) {
-      threw = error;
-    }
+    // The reachable case is a localization disable: the companion is restored, archived and
+    // DROPPED, and only then does clearing the transition marker refuse a dotted slug. Raise there
+    // and the companion is gone while the row still says the single is localized, so every later
+    // read targets a table that is not there — with nothing recording the state.
+    const { written } = await runUpdate(
+      { localized: false },
+      {
+        existing: existingSingle({ localized: true }),
+        companionFailure: NextlyError.internal({
+          logContext: { reason: "raised after the companion was dropped" },
+        }),
+      }
+    );
 
-    expect(threw).toBeInstanceOf(NextlyError);
-    expect(out, "the update did not reach its registry write").toBeUndefined();
+    expect(written?.migrationStatus).toBe("failed");
   });
 
   it("records a database failure rather than raising it, once a statement has run", async () => {

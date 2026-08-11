@@ -493,6 +493,23 @@ export class SingleRegistryService extends BaseRegistryService<
       }
     }
 
+    // An outcome the caller OBSERVED is recorded whatever else the save changed, and that is a
+    // different question from the gate above.
+    //
+    // That gate exists to stop a metadata-only sync flagging a migration nobody asked for, so what
+    // it is really guarding is the DEFAULT — `"pending"` is a guess about work still to do. A
+    // status the caller passes explicitly is not a guess: `SingleMetadataService` has just run the
+    // statements and confirmed the table, and this is the only place that answer can be kept.
+    //
+    // Suppressing it left two saves unable to record what they had already done. A flag-only save
+    // carries no `fields`, so it never reached the gate at all and its companion provisioning went
+    // unrecorded. And a re-save of UNCHANGED fields against a single whose create failed is exactly
+    // the rebuild path — same schema hash, so `fieldsActuallyChanged` is false — which meant the
+    // one save able to repair a `failed` single could never record that it had.
+    if (data.migrationStatus !== undefined) {
+      updateData.migration_status = data.migrationStatus;
+    }
+
     if (data.admin !== undefined) {
       updateData.admin = data.admin ? JSON.stringify(data.admin) : null;
     }

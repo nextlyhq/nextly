@@ -542,12 +542,10 @@ export class SingleMetadataService {
    * asked nothing of the main table's schema, so overwriting the previous verdict with one about a
    * migration that was never requested would be a claim this apply cannot make.
    *
-   * 🔴 A refusal propagates, whatever phase it reaches this catch from. That is a separate rule
-   * from the phase split, not a consequence of it: the split decides that a DATABASE failure after
-   * the first statement is recorded rather than raised, while a `NextlyError` is the generator or
-   * a guard refusing the edit outright. Recording a refusal as `failed` would save the field list
-   * anyway and report the single as having a schema its table does not have. No adapter raises one
-   * today, so this costs nothing and holds the moment one does.
+   * 🔴 Never throws once it has begun. The PHASE decides that, not the error type: from here on a
+   * statement may already have run, and raising would skip the row write and leave the registry
+   * describing storage that no longer matches it. Refusals are the plan's job, which is where
+   * raising is free because nothing has been touched yet.
    */
   private async applyUpdateDdl(
     input: UpdateSingleSchemaInput,
@@ -602,7 +600,23 @@ export class SingleMetadataService {
 
       return "applied";
     } catch (error) {
-      if (error instanceof NextlyError) throw error;
+      // 🔴 Everything inside this block is recorded, including a `NextlyError`, and the error TYPE
+      // is deliberately not consulted.
+      //
+      // The tempting rule is "a refusal propagates whatever phase it arrives from", on the grounds
+      // that recording one as `failed` would save a field list the table never took. It is the
+      // wrong rule here, because by this point the schema may already have changed and raising
+      // skips the row write entirely — which leaves the registry describing storage that no longer
+      // matches it. Disabling localization is the reachable case: `reconcileSingleCompanion`
+      // restores the translations, archives them and DROPS the companion, and only then clears the
+      // transition marker, which refuses a slug containing a dot. Raise there and the companion is
+      // gone while the row still says the single is localized, so every later read targets a table
+      // that no longer exists — silently, and with nothing left to describe the state.
+      //
+      // Recording is strictly better once a statement has run: `failed` is visible, accurate and
+      // retryable, where a raise leaves an inconsistency nothing reports. Refusals belong in the
+      // PLAN, which runs before any of this and raises exactly as before; that is what the phase
+      // split is for, and it is the only place where raising costs nothing.
       this.logger.error(
         `[Singles] Migration execution failed for "${tableName}": ${
           error instanceof Error ? error.message : String(error)
