@@ -42,9 +42,32 @@ describe("ListShell", () => {
 
     // Without the border this is just a div and the pagination's own `border-t`
     // becomes a stray line rather than the card's internal divider.
-    expect(card?.className).toContain("border-border");
-    expect(card?.className).toContain("rounded-md");
-    expect(card?.className).toContain("bg-card");
+    //
+    // The width utility is asserted as an exact token, not as a substring:
+    // `toContain("border")` also matches `border-border`, so a shell that set a
+    // border COLOUR and no border at all would satisfy it while rendering
+    // nothing. Colour without width is the borderless card this test exists to
+    // rule out.
+    const classes = [...(card?.classList ?? [])];
+    expect(classes).toContain("@md/list:border");
+    expect(classes).toContain("@md/list:border-border");
+    expect(classes).toContain("@md/list:rounded-md");
+    expect(classes).toContain("@md/list:bg-card");
+  });
+
+  it("applies the card only where the table is a table", () => {
+    const { table } = renderShell();
+
+    // Below the breakpoint `DataTableView` hides the table and renders each row
+    // as its own bordered Card, so an unconditional card here would enclose a
+    // stack of cards in another card and clip their corners. Every card utility
+    // must therefore be gated, and gated on a CONTAINER query so it turns on
+    // with the same box that component measures rather than with the viewport.
+    const carded = [...(table.parentElement?.classList ?? [])];
+    expect(carded.length).toBeGreaterThan(0);
+    for (const cls of carded) {
+      expect(cls.startsWith("@md/list:")).toBe(true);
+    }
   });
 
   it("puts no vertical rhythm between the table and its pagination", () => {
@@ -57,10 +80,14 @@ describe("ListShell", () => {
 
   it("keeps the toolbar outside the card", () => {
     const { toolbar, table } = renderShell();
+    const card = table.parentElement;
 
-    // The toolbar is page furniture, not part of the table surface. Inside the
-    // card it would inherit the card background and read as a table header.
-    expect(toolbar.parentElement).not.toBe(table.parentElement);
+    // Containment, not parent inequality. A toolbar nested one level deeper
+    // INSIDE the card already has a different immediate parent, so comparing
+    // parents passes for the arrangement this rules out -- the toolbar sitting
+    // on the card surface, inheriting its background and reading as a header.
+    expect(card).not.toBeNull();
+    expect(card?.contains(toolbar)).toBe(false);
   });
 
   it("renders without pagination for lists that do not paginate", () => {

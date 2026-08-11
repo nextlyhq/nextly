@@ -48,9 +48,15 @@ export function ListShell({
   className,
 }: ListShellProps) {
   return (
-    <div className={cn("w-full space-y-4", className)}>
+    <div className={cn("@container/list w-full space-y-4", className)}>
       {toolbar}
-      <div className="overflow-hidden rounded-md border border-border bg-card text-card-foreground">
+      {/* The card treatment is desktop-only, and the breakpoint is a container
+          query rather than a viewport one so it turns on with the same box
+          `DataTableView` measures. Below it, that component hides the table and
+          renders every row as its own bordered Card; an enclosing card there
+          would wrap a stack of cards in a second card and clip their corners
+          against its `overflow-hidden`. */}
+      <div className="@md/list:overflow-hidden @md/list:rounded-md @md/list:border @md/list:border-border @md/list:bg-card @md/list:text-card-foreground">
         {children}
         {pagination}
       </div>

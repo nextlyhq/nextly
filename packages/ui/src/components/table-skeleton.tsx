@@ -98,6 +98,9 @@ export const TableSkeleton: React.FC<TableSkeletonProps> = ({
       {/* Footer Skeleton */}
       {!hideFooter && (
         <div className="table-footer  border-t border-border">
+          {/* One padding utility: the footer sits inside the card, so its inset is
+             uniform. An axis-specific pair alongside `p-4` is inert -- `p-4` sets
+             both axes and wins on equal specificity. */}
           <div className="flex items-center justify-between p-4">
             <div className="flex items-center gap-2 text-sm">
               <GrayBar className="h-4 w-[120px]" />
