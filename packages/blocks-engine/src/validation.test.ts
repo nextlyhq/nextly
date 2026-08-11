@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { DOCUMENT_KINDS } from "./document";
-import type { BlockDocument, BreakpointSet } from "./document";
+import type { BlockDocument, BlockNode, BreakpointSet } from "./document";
 import { DEFAULT_LIMITS, documentBytes } from "./limits";
 import {
   MAX_SITE_LOOKUPS,
@@ -363,7 +363,7 @@ describe("validation never throws on adversarial input", () => {
   it("returns a depth issue for a document nested far beyond any stack limit", () => {
     // Build a chain ~20k deep — enough to overflow a recursive walk or
     // JSON.stringify. Validation must return issues, not throw.
-    let node: Record<string, unknown> = {
+    let node: BlockNode = {
       id: "leaf",
       type: "core/text",
       version: 1,
@@ -378,11 +378,11 @@ describe("validation never throws on adversarial input", () => {
         slots: { children: [node] },
       };
     }
-    const doc = {
+    const doc: BlockDocument = {
       formatVersion: 1,
       kind: "page",
       nodes: [node],
-    } as BlockDocument;
+    };
     let issues: ReturnType<typeof validate> = [];
     expect(() => {
       issues = validate(doc, {
@@ -1665,7 +1665,7 @@ describe("what the budget stops, and what it lets through", () => {
 });
 
 describe("a document past the byte cap stops paying to read its values", () => {
-  function styledNodes(count: number, terms: number) {
+  function styledNodes(count: number, terms: number): BlockNode[] {
     return Array.from({ length: count }, (_, index) => ({
       id: `n${index}`,
       type: "core/box",

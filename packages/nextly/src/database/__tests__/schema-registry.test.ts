@@ -123,6 +123,39 @@ describe("SchemaRegistry", () => {
     });
   });
 
+  describe("retractDynamicSchema", () => {
+    it("forgets one table and leaves the others", () => {
+      // The counterpart registration lacked. A caller whose schema change failed part way cannot
+      // say what shape a table now has, and `ensureSingleRuntimeTable` adopts a foreign
+      // registration rather than rebuilding — so before this there was no way to express
+      // "unknown", only a guess that survived to the next restart.
+      registry.registerDynamicSchema("dc_products", { _name: "dc_products" });
+      registry.registerDynamicSchema("dc_orders", { _name: "dc_orders" });
+
+      registry.retractDynamicSchema("dc_products");
+
+      expect(registry.getTable("dc_products")).toBeNull();
+      expect(registry.getTable("dc_orders")).not.toBeNull();
+    });
+
+    it("leaves a static table of the same name reachable", () => {
+      // Retracting removes the dynamic OVERRIDE, not the name. Deleting the static fallback too
+      // would make an unrelated table disappear, which is the failure a blanket clear() causes and
+      // the reason this exists as a separate operation.
+      registry.registerStaticSchemas({ users: { _name: "users" } });
+      registry.registerDynamicSchema("users", { _name: "dynamic-users" });
+
+      registry.retractDynamicSchema("users");
+
+      expect(registry.getTable("users")).toEqual({ _name: "users" });
+    });
+
+    it("is a no-op for a table that was never registered", () => {
+      expect(() => registry.retractDynamicSchema("never-there")).not.toThrow();
+      expect(registry.getTable("never-there")).toBeNull();
+    });
+  });
+
   describe("clear", () => {
     it("removes all dynamic schemas", () => {
       registry.registerDynamicSchema("dc_products", {});
