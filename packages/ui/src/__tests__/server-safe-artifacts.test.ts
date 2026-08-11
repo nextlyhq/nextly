@@ -15,6 +15,7 @@ import {
   disallowedSpecifiers,
   domGlobalsPresent,
   packageOf,
+  reachedFrom,
   restrictToSupportedFloor,
   specifiersIn,
 } from "../../scripts/check-server-safe-artifacts.mjs";
@@ -85,30 +86,103 @@ describe("classifying a specifier", () => {
 
 describe("comparing against the allow-list", () => {
   const allowed = new Set(["clsx"]);
+  /** A reader over an in-memory output directory, standing in for `dist`. */
+  const from =
+    (files: Record<string, string>) =>
+    (file: string): string | null =>
+      files[file] ?? null;
 
   it("reports each disallowed package once, and permits the rest", () => {
     expect(
       disallowedSpecifiers(
-        `
-          import "clsx";
-          import "react";
-          import "react";
-          import "./local.mjs";
-          import "node:path";
-        `,
         "artifact.mjs",
+        from({
+          "artifact.mjs": `
+            import "clsx";
+            import "react";
+            import "react";
+            import "node:path";
+          `,
+        }),
         allowed
       )
-    ).toEqual(["react"]);
+    ).toEqual({ offending: ["react"], missing: [] });
   });
 
   it("does not let a subpath of an allowed package smuggle another in", () => {
     expect(
-      disallowedSpecifiers(`import "clsx/lite";`, "artifact.mjs", allowed)
+      disallowedSpecifiers(
+        "a.mjs",
+        from({ "a.mjs": `import "clsx/lite";` }),
+        allowed
+      ).offending
     ).toEqual([]);
     expect(
-      disallowedSpecifiers(`import "clsxx";`, "artifact.mjs", allowed)
+      disallowedSpecifiers(
+        "a.mjs",
+        from({ "a.mjs": `import "clsxx";` }),
+        allowed
+      ).offending
     ).toEqual(["clsxx"]);
+  });
+
+  it("follows a split build's chunks, where the entry names nothing", () => {
+    // With code splitting on — tsup's default for ESM — an entry can be a re-export and nothing
+    // else, with the real dependency in the chunk beside it. Scanning only the named entry exempts
+    // exactly the file holding what this looks for, and the evaluation misses it too, because
+    // importing React under Node succeeds.
+    expect(
+      disallowedSpecifiers(
+        "utils.mjs",
+        from({
+          "utils.mjs": `export { x } from "./chunk-abc.mjs";`,
+          "chunk-abc.mjs": `import "react";\nexport const x = 1;`,
+        }),
+        allowed
+      )
+    ).toEqual({ offending: ["react"], missing: [] });
+  });
+
+  it("does not loop on chunks that import each other", () => {
+    expect(
+      disallowedSpecifiers(
+        "a.mjs",
+        from({
+          "a.mjs": `export { b } from "./b.mjs";`,
+          "b.mjs": `export { a } from "./a.mjs";\nimport "react";`,
+        }),
+        allowed
+      )
+    ).toEqual({ offending: ["react"], missing: [] });
+  });
+
+  it("visits each file once, and reports what it saw", () => {
+    // The walk's own shape, so a change to it is visible here rather than only through its verdict.
+    expect(
+      reachedFrom(
+        "a.mjs",
+        file =>
+          ({
+            "a.mjs": `export { b } from "./b.mjs";\nimport "clsx";`,
+            "b.mjs": `import "react";`,
+          })[file] ?? null
+      )
+    ).toEqual([
+      { file: "a.mjs", missing: false, specifiers: ["./b.mjs", "clsx"] },
+      { file: "b.mjs", missing: false, specifiers: ["react"] },
+    ]);
+  });
+
+  it("names a chunk the build did not emit rather than passing it", () => {
+    // A specifier this cannot read is a hole in the walk, so it is reported. Silently treating it
+    // as empty would exempt whatever it contained.
+    expect(
+      disallowedSpecifiers(
+        "entry.mjs",
+        from({ "entry.mjs": `export { x } from "./gone.mjs";` }),
+        allowed
+      )
+    ).toEqual({ offending: [], missing: ["gone.mjs"] });
   });
 });
 

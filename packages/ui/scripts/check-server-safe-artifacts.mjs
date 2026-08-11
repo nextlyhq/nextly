@@ -41,9 +41,13 @@
  * The allow-list is two pure string utilities and every addition to it is a deliberate decision,
  * which is the control on that.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
-import { dirname, join } from "node:path";
+import { dirname as pathDirname, join } from "node:path";
+
+/** The directory part of an output-relative file name, or "" for a flat one. */
+const dirname = file =>
+  file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : "";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import ts from "typescript";
@@ -53,7 +57,7 @@ import {
   serverSafeArtifacts,
 } from "./published-entries.mjs";
 
-const DIST = join(dirname(fileURLToPath(import.meta.url)), "..", "dist");
+const DIST = join(pathDirname(fileURLToPath(import.meta.url)), "..", "dist");
 
 /**
  * Every module specifier the built artifact still names.
@@ -137,21 +141,83 @@ export function packageOf(specifier) {
 }
 
 /**
- * The specifiers in one artifact that a server-safe entry point may not reach.
+ * Every emitted file reachable from one artifact, following the relative specifiers between them.
  *
- * @param {string} source
- * @param {string} fileName
- * @param {Set<string>} allowed
- * @returns {string[]}
+ * A split build does not put an entry's dependencies in the entry. With code splitting on — tsup's
+ * default — `utils.mjs` can be nothing but `export { x } from "./chunk-abc.mjs"`, and the chunk is
+ * where `react` would appear. Scanning only the named entry exempts exactly the file that holds
+ * what this is looking for, and the evaluation does not catch it either, because importing React
+ * under Node succeeds.
+ *
+ * `read` returns the file's text, or null when it is absent — reported rather than thrown, so a
+ * missing chunk is a named failure instead of a stack trace from inside the walk.
+ *
+ * @param {string} entry file name, relative to the output directory
+ * @param {(file: string) => string | null} read
+ * @returns {Array<{ file: string, missing: boolean, specifiers: string[] }>}
  */
-export function disallowedSpecifiers(source, fileName, allowed) {
-  const offending = [];
-  for (const specifier of specifiersIn(source, fileName)) {
-    const pkg = packageOf(specifier);
-    if (pkg === null) continue;
-    if (!allowed.has(pkg)) offending.push(specifier);
+export function reachedFrom(entry, read) {
+  const seen = new Set();
+  const queue = [entry];
+  const reached = [];
+  while (queue.length > 0) {
+    const file = queue.shift();
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const source = read(file);
+    if (source === null) {
+      reached.push({ file, missing: true, specifiers: [] });
+      continue;
+    }
+    const specifiers = specifiersIn(source, file);
+    reached.push({ file, missing: false, specifiers });
+    for (const specifier of specifiers) {
+      if (!specifier.startsWith(".")) continue;
+      // The output is flat, so joining against the naming file's directory keeps a chunk named
+      // from a subdirectory resolving the same way the runtime would.
+      queue.push(posixJoin(dirname(file), specifier));
+    }
   }
-  return [...new Set(offending)];
+  return reached;
+}
+
+/** Join two output-relative paths the way a module specifier resolves, without touching disk. */
+function posixJoin(from, specifier) {
+  const parts = from === "." || from === "" ? [] : from.split("/");
+  for (const segment of specifier.split("/")) {
+    if (segment === "." || segment === "") continue;
+    if (segment === "..") parts.pop();
+    else parts.push(segment);
+  }
+  return parts.join("/");
+}
+
+/**
+ * The specifiers reachable from one artifact that a server-safe entry point may not reach.
+ *
+ * @param {string} entry
+ * @param {(file: string) => string | null} read
+ * @param {Set<string>} allowed
+ * @returns {{ offending: string[], missing: string[] }}
+ */
+export function disallowedSpecifiers(entry, read, allowed) {
+  const offending = [];
+  const missing = [];
+  for (const { file, missing: absent, specifiers } of reachedFrom(
+    entry,
+    read
+  )) {
+    if (absent) {
+      missing.push(file);
+      continue;
+    }
+    for (const specifier of specifiers) {
+      const pkg = packageOf(specifier);
+      if (pkg === null) continue;
+      if (!allowed.has(pkg)) offending.push(specifier);
+    }
+  }
+  return { offending: [...new Set(offending)], missing: [...new Set(missing)] };
 }
 
 /**
@@ -284,19 +350,30 @@ async function main() {
   for (const file of artifacts) {
     const full = join(DIST, file);
 
-    let source;
-    try {
-      source = readFileSync(full, "utf8");
-    } catch {
+    if (!existsSync(full)) {
       problems.push(`${file} was not emitted by the build.`);
       continue;
     }
 
-    const offending = disallowedSpecifiers(
-      source,
+    // Follows the relative specifiers between emitted files, because a split build puts an entry's
+    // dependencies in a chunk beside it rather than in the entry.
+    const { offending, missing } = disallowedSpecifiers(
       file,
+      name => {
+        try {
+          return readFileSync(join(DIST, name), "utf8");
+        } catch {
+          return null;
+        }
+      },
       SERVER_SAFE_ALLOWED_PACKAGES
     );
+    if (missing.length > 0) {
+      problems.push(
+        `${file} names ${missing.join(", ")}, which the build did not emit, so what it reaches ` +
+          `could not be read.`
+      );
+    }
     if (offending.length > 0) {
       problems.push(
         `${file} reaches ${offending.join(", ")}, which a server-safe entry point may not ` +

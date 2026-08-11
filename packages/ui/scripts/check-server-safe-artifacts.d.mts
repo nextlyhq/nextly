@@ -17,12 +17,26 @@ export function specifiersIn(source: string, fileName: string): string[];
  */
 export function packageOf(specifier: string): string | null;
 
-/** The distinct specifiers in one artifact that name a package outside the allow-list. */
+/**
+ * Every emitted file reachable from one artifact, following the relative specifiers between them.
+ *
+ * `read` returns the file's text, or null when it is absent. A split build puts an entry's
+ * dependencies in a chunk beside it, so an entry alone does not name what it reaches.
+ */
+export function reachedFrom(
+  entry: string,
+  read: (file: string) => string | null
+): Array<{ file: string; missing: boolean; specifiers: string[] }>;
+
+/**
+ * The distinct specifiers reachable from one artifact that name a package outside the allow-list,
+ * plus any file the walk could not read.
+ */
 export function disallowedSpecifiers(
-  source: string,
-  fileName: string,
+  entry: string,
+  read: (file: string) => string | null,
   allowed: Set<string>
-): string[];
+): { offending: string[]; missing: string[] };
 
 /**
  * The DOM-only globals present in `scope`, empty on a bare server.
