@@ -7,13 +7,21 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { NextlyError } from "../errors/nextly-error";
+
 vi.mock("./route-auth", () => ({
   requireRouteCollectionAccess: vi.fn(),
   requireRoutePermission: vi.fn(),
 }));
 
+const { findByID } = vi.hoisted(() => ({ findByID: vi.fn() }));
+
 vi.mock("../init", () => ({
-  getCachedNextly: vi.fn().mockResolvedValue(undefined),
+  getCachedNextly: vi.fn().mockResolvedValue({ findByID }),
+}));
+
+vi.mock("../services/lib/permissions", () => ({
+  resolveRoleSlugs: vi.fn().mockResolvedValue(["editor"]),
 }));
 
 vi.mock("../di", () => ({
@@ -57,6 +65,19 @@ async function json(response: Response): Promise<Record<string, unknown>> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The default: the caller can see the entry they named. Tests about the
+  // entry gate override this.
+  findByID.mockResolvedValue({ id: "7" });
+  (requireRouteCollectionAccess as ReturnType<typeof vi.fn>).mockResolvedValue({
+    userId: "u1",
+    permissions: [],
+    roles: [],
+    authMethod: "session",
+    // A stored `custom` read rule may decide on a claim this framework knows
+    // nothing about, so the probe has to carry them or it answers a different
+    // question than the caller's own read would.
+    claims: { tenant: "acme", tier: "restricted" },
+  });
   getGeneration.mockResolvedValue(0);
   revokeAll.mockResolvedValue(1);
   (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -66,6 +87,116 @@ beforeEach(() => {
 });
 
 describe("mintPreviewLink", () => {
+  it("refuses an entry the caller cannot read when the read THROWS rather than returns null", async () => {
+    // How the production read actually reports an unreadable row. `findByID`
+    // returns null only under `disableErrors`; otherwise it throws NOT_FOUND,
+    // and a row hidden by a row-level rule is reported the same way as an id
+    // that matches nothing. A mock that resolves null exercises a path the
+    // caller never takes, and would certify this gate while the throw sailed
+    // past it into a 404.
+    findByID.mockRejectedValue(
+      NextlyError.notFound({ logContext: { collection: "pages" } })
+    );
+
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "someone-elses-draft" })
+    );
+
+    // 403, the same answer a visible-but-forbidden row gets. Answering 404 here
+    // would tell an unauthorized caller which entry ids exist.
+    expect(response.status).toBe(403);
+  });
+
+  it("lets a genuine failure keep its own status instead of reading as a denial", async () => {
+    // The neighbouring case, and the reason only NOT_FOUND is translated.
+    // Collapsing every failure into "not visible" would report a broken
+    // database as an ordinary permission denial and hide the outage.
+    findByID.mockRejectedValue(new Error("connection reset"));
+
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "7" })
+    );
+
+    // 500, not the 403 an unreadable row gets. The route wraps a thrown error
+    // rather than rejecting, so the only thing separating an outage from a
+    // permission denial is the status it lands on.
+    expect(response.status).toBe(500);
+  });
+
+  it("refuses an entry the caller cannot read, even inside a collection it may edit", async () => {
+    // The collection gate answers a coarser question than the token asks. A
+    // caller bounded by a row-level rule to their own documents passes it, so
+    // without a check on the ENTRY they could mint a working credential for
+    // someone else's draft — a read they cannot perform themselves.
+    findByID.mockResolvedValue(null);
+
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "someone-elses-draft" })
+    );
+
+    expect(response.status).toBe(403);
+    // And the entry was judged as the CALLER, not as a trusted reader: an
+    // `overrideAccess: true` probe here would answer the wrong question.
+    expect(findByID).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: "pages",
+        id: "someone-elses-draft",
+        overrideAccess: false,
+        // The whole identity, not an id: `roles` drives role-based rules and
+        // the claims drive `custom` ones. A probe missing either decides a
+        // different question than the read it stands in for — an
+        // absence-tolerant rule would admit a caller it was written to refuse.
+        user: expect.objectContaining({
+          id: "u1",
+          roles: ["editor"],
+          role: "editor",
+          tenant: "acme",
+          tier: "restricted",
+        }),
+      })
+    );
+    // No token is minted for a refused entry.
+    const body = await json(response);
+    expect(body.item).toBeUndefined();
+  });
+
+  it("judges an API key on the key's own grants, not its owner's", async () => {
+    // The leak direction, which is the one a naive test gets backwards. Asserting
+    // that a key is DENIED something it should not have passes against the broken
+    // code too, because the OWNER's grants happen to allow it. What is wrong is
+    // that the key is still GRANTED something only the owner had — so the probe
+    // has to carry the key's own scope for the service to judge it on.
+    (
+      requireRouteCollectionAccess as ReturnType<typeof vi.fn>
+    ).mockResolvedValue({
+      userId: "owner-who-can-read",
+      // Update but NOT read. The owner is a super-admin who can read everything;
+      // without the scope below the probe resolves the OWNER's RBAC and mints.
+      permissions: ["update-pages"],
+      roles: [],
+      authMethod: "api-key",
+      apiKeyId: "key-1",
+      claims: {},
+    });
+
+    await mintPreviewLink(post({ collection: "pages", entryId: "7" }));
+
+    expect(findByID).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: { actorType: "apiKey", permissions: ["update-pages"] },
+      })
+    );
+  });
+
+  it("sends no actor for a session caller, so it resolves grants the normal way", async () => {
+    // Not merely absent: an empty scope would read as an API key holding nothing
+    // and deny a legitimate session caller everything.
+    await mintPreviewLink(post({ collection: "pages", entryId: "7" }));
+
+    const [call] = findByID.mock.calls;
+    expect(call[0].actor).toBeUndefined();
+  });
+
   it("gates on update for the collection that was named", async () => {
     // Per collection, not a blanket permission: otherwise a caller who may
     // edit posts could mint a link into a collection they cannot read.

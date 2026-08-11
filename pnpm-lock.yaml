@@ -75,6 +75,9 @@ importers:
       '@changesets/cli':
         specifier: ^2.27.10
         version: 2.30.0(@types/node@24.10.0)
+      '@changesets/parse':
+        specifier: ^0.4.3
+        version: 0.4.3
       '@commitlint/cli':
         specifier: ^20.1.0
         version: 20.1.0(@types/node@24.10.0)(typescript@5.9.3)
@@ -108,6 +111,9 @@ importers:
       lint-staged:
         specifier: ^16.2.6
         version: 16.2.6
+      micromatch:
+        specifier: ^4.0.8
+        version: 4.0.8
       prettier:
         specifier: ^3.6.2
         version: 3.6.2
@@ -13398,7 +13404,7 @@ snapshots:
       '@humanfs/node': 0.16.6
       '@humanwhocodes/module-importer': 1.0.1
       '@humanwhocodes/retry': 0.4.3
-      '@types/estree': 1.0.9
+      '@types/estree': 1.0.8
       ajv: 6.15.0
       chalk: 4.1.2
       cross-spawn: 7.0.6

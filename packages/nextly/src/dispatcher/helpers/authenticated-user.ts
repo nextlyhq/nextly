@@ -1,3 +1,4 @@
+import { buildUserContext } from "../../auth/user-context";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import type { Params } from "../types";
 
@@ -37,16 +38,20 @@ function readAuthenticatedClaims(p: Params): Record<string, unknown> {
  * scoping. `role` repeats the first role because rules and field callbacks
  * written against a single-role model read `user.role`; without it a
  * legitimately authorized caller would have fields stripped.
+ *
+ * Shared, and in two directions. Every REST collection and single operation
+ * reaches its access check through this one function, so a field added or
+ * dropped here changes what every stored rule and field callback is judged on.
+ * And the object itself is built by `buildUserContext`, which the preview-link
+ * mint probe also calls — that shared constructor is what makes the probe reach
+ * the same verdict the bearer's own read will, rather than a near-miss that
+ * admits a caller the rule was written to refuse.
  */
 export function readAuthenticatedUser(p: Params): UserContext | undefined {
   if (!p._authenticatedUserId) return undefined;
 
-  const roles = readAuthenticatedRoles(p);
-  return {
-    // Verified extra claims first, so the canonical fields below always win: a
-    // token cannot restate `id` or `roles` as a claim and have it override the
-    // identity the route authenticated.
-    ...readAuthenticatedClaims(p),
+  return buildUserContext({
+    claims: readAuthenticatedClaims(p),
     id: String(p._authenticatedUserId),
     name: p._authenticatedUserName
       ? String(p._authenticatedUserName)
@@ -54,7 +59,6 @@ export function readAuthenticatedUser(p: Params): UserContext | undefined {
     email: p._authenticatedUserEmail
       ? String(p._authenticatedUserEmail)
       : undefined,
-    roles,
-    role: roles?.[0],
-  };
+    roles: readAuthenticatedRoles(p),
+  });
 }
