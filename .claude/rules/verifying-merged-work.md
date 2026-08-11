@@ -23,11 +23,23 @@ final-commit marker, and the check passes over content that was rewritten
 underneath it. When history was rewritten, compare the delta (step 3) rather
 than trusting any single marker.
 
-1. Confirm what was actually merged: `gh pr view N --json headRefOid,mergeCommit`.
-   Probe the recorded **merge commit**, never `origin/main`. Run before a fetch
-   and `origin/main` is still the pre-merge ref, so every check reports loss
+1. Confirm what was actually merged, then FETCH the object before probing it:
+
+   ```
+   gh pr view N --json headRefOid,mergeCommit
+   git fetch origin <mergeCommit>      # gh reports metadata; it does not fetch
+   ```
+
+   `gh pr view` prints PR information and adds nothing to the local object
+   database, so probing the reported SHA without this exits with
+   `unable to resolve revision` — which reads as a failed verification rather
+   than as a missing object.
+
+   Probe that **merge commit**, never `origin/main`. Run before a fetch and
+   `origin/main` is still the pre-merge ref, so every check reports loss
    falsely; run after `main` advances and a later commit can make omitted
    content look present.
+
 2. Take the check from the **final** commit, in whichever direction it changed
    things. A marker only proves anything if it is UNIQUE to that commit and the
    search is SCOPED to the path it changed — a string that also occurs elsewhere
@@ -94,10 +106,22 @@ candidates, and the remedies differ:
 **Do not label it environmental without looking at what `main` changed.** If the
 moved `main` altered a workspace export map, a package manifest, a tsconfig path
 mapping or a shared build config, an untouched package failing to resolve is a
-real regression wearing the same costume. `git diff <mergeBase>..origin/main --
-'**/package.json' '**/tsconfig*.json' 'turbo.jsonc'` before reaching for a
-rebuild: a rebuild that "fixes" it silently absorbs a breaking change into your
-branch, and a rebuild that does not fix it has told you something.
+real regression wearing the same costume.
+
+The comparison needs the **pre-rebase** base, and this is the trap: after the
+rebase, `git merge-base HEAD origin/main` IS `origin/main` — it is now an
+ancestor — so the diff is empty no matter what the rebase brought in. An empty
+diff then reads as "main changed nothing relevant", which is the opposite of
+what it means. Capture the old base before rebasing, or recover it afterwards:
+
+```
+OLD=$(git rev-parse HEAD@{1})            # pre-rebase HEAD, from the reflog
+git diff $(git merge-base $OLD origin/main)..origin/main -- \
+  '**/package.json' '**/tsconfig*.json' 'turbo.jsonc' 'pnpm-workspace.yaml'
+```
+
+Then decide: a rebuild that "fixes" it silently absorbs a breaking change into
+your branch, and a rebuild that does not fix it has told you something.
 
 Related, and cheap to get wrong:
 

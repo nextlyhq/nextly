@@ -13,8 +13,15 @@ paths:
   - "**/*.cjs"
   - "**/*.md"
   - "**/*.mdx"
-  # The changeset package list versus the release group is one of this rule's own
-  # examples, so it loads when those inputs are edited too.
+  # Configuration is where several of this rule's own examples live: the
+  # changeset package list versus the release group, and `pnpm-workspace.yaml`
+  # against the hand-maintained ALL_PACKAGES list that `scripts/lint-report.mjs`
+  # says must mirror it. Editing only the config is exactly the recomputation
+  # drift this rule is about.
+  - "**/*.json"
+  - "**/*.jsonc"
+  - "**/*.yaml"
+  - "**/*.yml"
   - ".changeset/**"
 ---
 
