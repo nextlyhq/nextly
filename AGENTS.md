@@ -88,14 +88,17 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   discovered reads as a pass, which is what this guards. Removing a test on
   purpose is a different act: it is sometimes correct (below), and the PR says
   which test went and why.
-- Before measuring, name the property that DECIDES the outcome, and check that
-  it is the one you are about to measure. A measurement that confirms a true
-  fact about an adjacent property is worse than no measurement, because it
-  carries the authority of having been run and it closes the question. "Can the
-  old object be dropped" and "can the code FIND it" both look like the same
-  question about a database constraint; only the second one decides whether a
-  repair works, and measuring the first returns green on databases the repair
-  would silently skip.
+- Before you assert or measure, name the property that SEPARATES a correct
+  implementation from the plausible broken one you are worried about, and check
+  that it is the property you are about to test. A necessary-but-insufficient
+  property returns green from both, and it does so carrying the authority of
+  having been checked, which closes the question. Two worked examples, both real:
+  - measuring whether an old database constraint could be DROPPED, when what
+    decides the repair is whether the code can FIND it. Dropping succeeded, and
+    the repair would still have skipped every database silently.
+  - asserting a generated identifier is `length <= 63`, when a plain truncation
+    is also 63 characters. The one test guarding the naming passed on the broken
+    implementation; distinctness was the separating property.
 - Ask what ELSE would make a test pass. If anything other than the property
   under test produces the same green, it is not covering that property yet —
   a fixture that never reaches the mechanism, an unregistered type that falls
