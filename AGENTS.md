@@ -57,14 +57,24 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   scripts: `pnpm test:integration:postgres17` (localhost:5435),
   `:postgres15` (:5434), `:mysql` (:3307), `:sqlite` (no URL needed). NEVER
   point a TEST\_\* URL at a database you did not create for the test run.
-- The test databases are their own containers, separate from the dev stack:
-  `docker start nextly-postgres17-test nextly-mysql-test` (add
-  `nextly-postgres15-test` for the 15 leg). `pnpm docker:test` only PROBES the
-  connection and exits 1 when it fails — it starts nothing — and `pnpm
-docker:up` brings up the DEV stack, which on a machine that already has one
-  fails with a container-name conflict. A `DBS DOWN` failure followed by a
-  start command that changes nothing reads like a broken environment; it is
-  usually just the wrong command.
+- The test databases are their own containers in `docker-compose.test.yml`,
+  separate from the dev stack. Neither `pnpm docker:test` nor `pnpm docker:up`
+  starts them: `docker:test` only PROBES a connection and exits 1 when it
+  fails, and `docker:up` brings up the DEV stack, which conflicts by container
+  name where one already exists. A `DBS DOWN` failure followed by a start
+  command that changes nothing reads like a broken environment; it is usually
+  just the wrong command.
+  - Already created but stopped, which is the usual case:
+    `docker start nextly-postgres17-test nextly-mysql-test` (add
+    `nextly-postgres15-test` for the 15 leg).
+  - Never created, on a fresh clone:
+    `docker compose -f docker-compose.test.yml up -d postgres17-test mysql-test`.
+  - Why not always the second: the services set a fixed `container_name`, so
+    exactly one compose project can own them, and the owner is whichever
+    directory first brought them up. In a repo worked through many worktrees
+    that is rarely the one you are standing in, and compose then tries to
+    CREATE containers whose names are taken and fails. `docker start` addresses
+    them by name and does not care which project owns them.
 - Integration files in `packages/nextly` run sequentially on purpose
   (`fileParallelism: false`, single fork): system-table suites share fixed
   table names. Do not "fix" slow integration runs by re-enabling parallelism.
