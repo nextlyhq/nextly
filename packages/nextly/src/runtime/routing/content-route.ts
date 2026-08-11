@@ -715,7 +715,7 @@ export function createPublicContentRoute<TNode>(
       //
       // What a populated target is read AS is settled by
       // `trustedCollections` — outside that set a target is judged by its own
-      // rules and published-only, so enabling expansion no longer widens what
+      // rules and published-only, so enabling expansion does not widen what
       // this route can publish. This default is about cost and surprise rather
       // than exposure: a route that never populates relations should not pay
       // for reads it did not ask for, and `depth` is the one dimension where an

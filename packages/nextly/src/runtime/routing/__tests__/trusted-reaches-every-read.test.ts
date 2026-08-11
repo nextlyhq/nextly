@@ -1,6 +1,8 @@
 /**
- * A public route's trust bound must reach EVERY read the route performs, not
- * only the one a fix was written against.
+ * A public route's trust bound must reach EVERY read the route performs.
+ *
+ * The reads do not share a path, so carrying the bound is a property each one
+ * has or lacks independently.
  *
  * There are four, and they do not share a path:
  *
