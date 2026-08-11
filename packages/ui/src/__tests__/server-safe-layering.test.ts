@@ -17,6 +17,18 @@
  * client directive, containing JSX (which the `react-jsx` transform turns into a
  * `react/jsx-runtime` import appearing nowhere in the source), or reading a browser global where
  * the module body runs.
+ *
+ * ## What this is, and what it is not
+ *
+ * A FAST SIGNAL, not a proof. It reads source, and source has an unbounded number of ways to reach
+ * a runtime: a folded expression, a global nobody has enumerated, a construct a future compiler
+ * introduces. Each is closed as it is found, and the next one is not knowable from here.
+ *
+ * Its value is that it runs in milliseconds without a build and names the file and the specifier,
+ * so the failure is actionable. The COMPLETE check is a different one: inspect the built artifact,
+ * which is bounded by construction because the bundler has already resolved every specifier this
+ * has to predict. The two are complementary, and this file should not be read as making the other
+ * unnecessary.
  */
 import {
   existsSync,
