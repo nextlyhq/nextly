@@ -115,10 +115,22 @@ diff then reads as "main changed nothing relevant", which is the opposite of
 what it means. Capture the old base before rebasing, or recover it afterwards:
 
 ```
-OLD=$(git rev-parse HEAD@{1})            # pre-rebase HEAD, from the reflog
-git diff $(git merge-base $OLD origin/main)..origin/main -- \
-  '**/package.json' '**/tsconfig*.json' 'turbo.jsonc' 'pnpm-workspace.yaml'
+OLD=$(git rev-parse ORIG_HEAD)           # rebase records the pre-rebase tip here
+git diff $(git merge-base $OLD origin/main)..origin/main
 ```
+
+`ORIG_HEAD` (equivalently the BRANCH reflog, `<branch>@{1}`) is the pre-rebase
+tip. **`HEAD@{1}` is not** — after a multi-step rebase that is the last
+`rebase (pick)` entry, so the merge base comes out as the new `origin/main`
+again and the diff is empty exactly as before, with the fix appearing to be in
+place.
+
+**Read that delta UNFILTERED.** A path list here is the same enumeration trap:
+the first version named `package.json`, `tsconfig*.json` and `turbo.jsonc`, and
+would have printed nothing for a change to `packages/*/tsup.config.ts` (which
+decides what `dist` contains) or to `pnpm-lock.yaml` (which decides what
+resolves) — the two inputs most likely to explain the failure being diagnosed.
+Scan the whole delta, then narrow.
 
 Then decide: a rebuild that "fixes" it silently absorbs a breaking change into
 your branch, and a rebuild that does not fix it has told you something.

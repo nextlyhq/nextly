@@ -81,13 +81,14 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   - `@ts-expect-error` is the sharp edge here, because it suppresses ANY error
     on the line that follows. A test asserting "this call is rejected" stays
     green once the code starts erroring for a different reason, and stays green
-    after the original rejection stops happening. A comment naming the expected
-    code does NOT help: `tsc` never reads it, so the directive is still
-    satisfied by an unrelated error and the test still passes. Prefer an
-    assertion the checker actually evaluates — `expectTypeOf(...)`, or a
-    positive control asserting the ACCEPTED form still compiles alongside the
-    rejected one, so "everything on this line errors" and "the right thing
-    errors" stop looking alike.
+    after the original rejection stops happening. Two things that look like
+    mitigations and are not: a comment naming the expected code, which `tsc`
+    never reads; and a positive control asserting the ACCEPTED form still
+    compiles, which an unrelated error confined to the rejected line leaves
+    untouched. Only an assertion the checker EVALUATES distinguishes the cases —
+    `expectTypeOf(...)`, or a diagnostic-aware type test that names the error it
+    expects. If the property cannot be asserted that way, say in the file that
+    the directive is unverified rather than letting it read as coverage.
   - The count must not drop by ACCIDENT: a suite that silently stopped being
     discovered reads as a pass, which is what that guards. Removing a test on
     purpose is a different act, sometimes correct (below), and the PR says
