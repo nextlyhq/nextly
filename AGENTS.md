@@ -68,7 +68,9 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
     `docker start nextly-postgres17-test nextly-mysql-test` (add
     `nextly-postgres15-test` for the 15 leg).
   - Never created, on a fresh clone:
-    `docker compose -f docker-compose.test.yml up -d postgres17-test mysql-test`.
+    `docker compose -f docker-compose.test.yml up -d postgres17-test postgres15-test mysql-test`.
+    `postgres15-test` is the only service on 5434, so omitting it leaves the
+    documented `:postgres15` leg with nothing to connect to.
   - Why not always the second: the services set a fixed `container_name`, so
     exactly one compose project can own them, and the owner is whichever
     directory first brought them up. In a repo worked through many worktrees

@@ -182,8 +182,16 @@ broader property still separates the cases you must tell apart:
   It is wrong for "which object implements this guarantee", because one table can
   carry several objects over the same columns — and this repo already treats
   `{ columns: ["code"], unique: false }` and `{ columns: ["code"], unique: true }`
-  as different indexes during an index-to-unique transition. Match the full
-  signature: columns AND uniqueness AND whether a constraint owns it.
+  as different indexes during an index-to-unique transition. Match the signature
+  the CLAIM needs: columns, uniqueness, and whether a constraint owns the object.
+
+  Note what that signature does NOT currently separate. `indexKey` in
+  `schema/pipeline/diff/index-util.ts` SORTS the columns, so `(a, b)` and
+  `(b, a)` compare equal — even though only the first serves a left-prefix
+  lookup on `a`. Today the pipeline emits single-column indexes, so nothing
+  depends on the distinction; the moment a composite one is emitted, the key
+  will silently treat two different objects as one. Stated here rather than
+  fixed, because widening the key changes every comparison that uses it.
 
 So the rule is not "prefer the broadest structural property". It is: identify by
 structure rather than by someone else's spelling, at the granularity your claim

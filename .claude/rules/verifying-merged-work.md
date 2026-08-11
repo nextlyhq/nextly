@@ -150,13 +150,20 @@ diff then reads as "main changed nothing relevant", which is the opposite of
 what it means. Capture the old base before rebasing, or recover it afterwards:
 
 ```
-OLD=$(git rev-parse ORIG_HEAD)           # rebase records the pre-rebase tip here
+OLD=$(git rev-parse "$(git branch --show-current)@{1}")   # pre-rebase tip
 git diff $(git merge-base $OLD origin/main)..origin/main
 ```
 
-`ORIG_HEAD` (equivalently the BRANCH reflog, `<branch>@{1}`) is the pre-rebase
-tip. **`HEAD@{1}` is not** — after a multi-step rebase that is the last
-`rebase (pick)` entry, so the merge base comes out as the new `origin/main`
+The BRANCH reflog is the reliable source: a rebase moves the branch ref once, so
+`<branch>@{1}` is its pre-rebase tip and nothing but another update to that
+branch disturbs it.
+
+Two tempting alternatives are both wrong. **`ORIG_HEAD` is volatile** — it is
+rewritten by any later command that sets it, `git reset` included, so a single
+`git reset --hard HEAD` after the rebase leaves it pointing at the REBASED tip
+and the diff comes out empty again. **`HEAD@{1}` is not the pre-rebase tip
+either** — after a multi-step rebase it is the last `rebase (pick)` entry, so the
+merge base comes out as the new `origin/main`
 again and the diff is empty exactly as before, with the fix appearing to be in
 place.
 
