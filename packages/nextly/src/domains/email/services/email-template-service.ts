@@ -336,7 +336,6 @@ export class EmailTemplateService extends BaseService {
       throw new NextlyError({
         code: "BUSINESS_RULE_VIOLATION",
         publicMessage: "Cannot delete the default layout.",
-        statusCode: 422,
         logContext: { id, slug: template.slug },
       });
     }

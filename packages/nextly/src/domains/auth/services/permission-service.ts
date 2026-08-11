@@ -737,13 +737,12 @@ export class PermissionService extends BaseService {
 
     if (usage) {
       // Business rule, not a validation issue: the data was correct, but the
-      // operation can't be completed in the current state. Custom code +
-      // explicit 422 per the migration mapping table.
+      // operation can't be completed in the current state. The status comes
+      // from the code, which `NEXTLY_ERROR_STATUS` already maps to 422.
       throw new NextlyError({
         code: "BUSINESS_RULE_VIOLATION",
         publicMessage:
           "This permission is currently assigned to one or more roles and cannot be deleted.",
-        statusCode: 422,
         logContext: { reason: "permission-in-use", permissionId },
       });
     }
@@ -804,7 +803,6 @@ export class PermissionService extends BaseService {
         code: "BUSINESS_RULE_VIOLATION",
         publicMessage:
           "This permission is currently assigned to one or more roles and cannot be deleted.",
-        statusCode: 422,
         logContext: {
           reason: "permission-in-use",
           permissionId: String(permissionId),

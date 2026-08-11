@@ -356,7 +356,6 @@ export class EmailService extends BaseService {
       code: "BUSINESS_RULE_VIOLATION",
       publicMessage:
         "Email template not found. Create it in the admin UI or provide a code-first override.",
-      statusCode: 422,
       logContext: { slug: templateSlug },
     });
   }
@@ -981,7 +980,6 @@ export class EmailService extends BaseService {
       code: "BUSINESS_RULE_VIOLATION",
       publicMessage:
         "No email provider configured. Add a provider in Settings > Email Providers, or configure one in defineConfig({ email: { providerConfig } }).",
-      statusCode: 422,
     });
   }
 

@@ -111,7 +111,6 @@ class EmailProviderRegistry {
         code: "BUSINESS_RULE_VIOLATION",
         publicMessage:
           "Unsupported email provider type. Install the plugin that provides it, or choose a configured provider.",
-        statusCode: 422,
         logContext: { type },
       });
     }
