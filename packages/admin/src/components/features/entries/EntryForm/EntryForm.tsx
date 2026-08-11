@@ -519,12 +519,11 @@ export function EntryForm({
                 is wide enough (@4xl) to fit it beside the main column, until a
                 future mobile sheet ships.
 
-                Why mode === "edit" gate (Task 7 PR-4): in create mode the
-                entry doesn't exist yet, so DocumentPanel returns null
-                anyway. Rendering the empty 320px container left a blank
-                strip down the right side of the page (item 7 of
-                07-admin-bugs-feedback). Skip the whole block until the
-                entry exists. */}
+                The mode === "edit" gate: in create mode the entry does not
+                exist yet, so DocumentPanel returns null and the rail has
+                nothing to show. Rendering it anyway left an empty 320px
+                strip down the right side of the page, which reads as a
+                failed load rather than as an absence. */}
               {mode === "edit" && !railCollapsed && (
                 <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
                   <div className="@4xl/content:sticky @4xl/content:top-0 @4xl/content:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">

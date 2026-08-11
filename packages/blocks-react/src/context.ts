@@ -1,7 +1,7 @@
 import type {
   BlockRenderArgs as EngineBlockRenderArgs,
   BlockDefinition as EngineBlockDefinition,
-  BlockRenderResult,
+  RemotePatternInput,
 } from "@nextlyhq/blocks-engine";
 import type { ReactNode } from "react";
 
@@ -97,6 +97,103 @@ export interface QueryBudget {
 }
 
 /**
+ * Decisions that belong to the site operator rather than to a page editor.
+ *
+ * The distinction this type exists to draw: a block's props are CONTENT, filled
+ * in by whoever edits the page, and content is untrusted input. A few of the
+ * things a block does are not content decisions at all — they are security
+ * posture, and the person who should answer them is the developer standing up
+ * the site, once, in code they control. Modelling those as props put the answer
+ * in a checkbox any editor could tick, against any URL.
+ *
+ * Supplied to `PageRenderer` and handed to every block as a render ARGUMENT,
+ * deliberately not as a field on the context. The context object belongs to the
+ * host and is passed through untouched; the policy belongs to the renderer.
+ * Putting renderer-owned data on a host-owned object meant deriving a modified
+ * copy, and no copy is faithful: a spread loses a class host's prototype
+ * methods, and a prototype-preserving clone still fails a method that reads a
+ * native private field, because the clone is not branded with it. Threading the
+ * value instead means the host's object is never rewritten.
+ *
+ * It also settles the question of who may set it. A block builds the context it
+ * hands `renderSlot`, so a policy living there could be forged by the block or
+ * dropped by a container that rebuilt the object. As an argument supplied by
+ * the boundary, it can be neither.
+ *
+ * Every field is optional, and an absent field means one of two different
+ * things, so read the field to know which.
+ *
+ * `trustedFrameOrigins` defaults CLOSED: absent grants nothing, because the
+ * grant it controls lets a frame script the page around it, and no host should
+ * arrive at that by omission.
+ *
+ * `remotePatterns` defaults OPEN: absent means the question is not asked at all.
+ * It has to, because it arrived after the renderer shipped, and defaulting it
+ * closed would stop every existing site loading its own images the day it
+ * upgraded. A host that wants remote fetches bounded has to say so.
+ *
+ * The rule for anything added here later: a field whose closed default would
+ * break a site that never configured it defaults open and says so, in the field
+ * where someone deciding whether to configure it will read it.
+ */
+export interface BlockHostPolicy {
+  /**
+   * Origins whose documents may keep their own origin inside a frame.
+   *
+   * An iframe granted `allow-same-origin` alongside `allow-scripts` can remove
+   * its own sandbox, so this is the one embed decision that cannot be left to
+   * content. Entries are compared as ORIGINS — scheme, host and port together,
+   * exactly — so `https://player.example.com` does not admit
+   * `http://player.example.com`, a subdomain, or a lookalike host.
+   *
+   * A relative URL never matches, deliberately. It resolves to the host's OWN
+   * origin, where `allow-same-origin` would let the frame script the page
+   * around it; that is the most dangerous grant of all, and it must be asked
+   * for by naming the origin rather than arrived at by writing `/player`. The
+   * same refusal covers `https:player.example.com`, which a URL parser reads as
+   * an absolute URL while a browser resolves it against the document.
+   *
+   * **What this cannot do.** Sandbox permissions belong to the frame, not to
+   * one navigation, so they survive a redirect: an allowlisted origin that
+   * exposes an open redirect can send the frame somewhere unlisted and the
+   * grant travels with it. The renderer sees only the URL it writes and cannot
+   * constrain where the browser goes next.
+   *
+   * So an origin listed here is trusted for everything it can redirect to, and
+   * a site that needs that bounded should pair this with a `frame-src` content
+   * security policy, which is enforced on every navigation rather than only the
+   * first. Listing an origin whose redirect behaviour you do not control is the
+   * case to avoid.
+   */
+  trustedFrameOrigins?: readonly string[];
+  /**
+   * Hosts this site will fetch from, in `next/image`'s `remotePatterns` shape.
+   *
+   * A page fetches from more than one channel. A block writes an `<img src>` or
+   * an `<iframe src>`; a compiled stylesheet writes `url(...)` into a rule that
+   * fires on every page it applies to. Both turn a stored value into a request,
+   * so both ask THIS list rather than each keeping its own — a policy answered
+   * differently by two surfaces is not a policy.
+   *
+   * The shape is deliberately Next.js's, because a Nextly app already declares
+   * the same thing in `next.config` for `next/image`, and copying the entry
+   * across should just work.
+   *
+   * **Enforcement is per-renderer, and this is the part to read twice.** The
+   * boundary cannot apply this on a block's behalf: it sees the element a block
+   * RETURNED, not the URLs the block chose, and an `<img src>` deep inside
+   * returned markup is indistinguishable to it from any other prop. The blocks
+   * shipped here consult it; a block written outside this package is bounded by
+   * it only if it asks. A site that wants a hard limit should pair this with a
+   * content security policy, which the browser enforces whatever a block does.
+   *
+   * Absent means unasked rather than allowed-nothing: a host that configures no
+   * list gets exactly the behaviour it had before this existed.
+   */
+  remotePatterns?: readonly RemotePatternInput[];
+}
+
+/**
  * The context every block render receives.
  *
  * Resolver functions rather than raw maps: a host that resolves media through a
@@ -188,6 +285,17 @@ export interface PageContext {
 export interface BlockRenderArgs<P>
   extends Omit<EngineBlockRenderArgs<P, PageContext>, "renderSlot"> {
   renderSlot(this: void, name: string, ctx?: PageContext): ReactNode;
+  /**
+   * Site-operator decisions this block enforces. See {@link BlockHostPolicy}.
+   *
+   * Absent means the host configured nothing, and every policy then takes its
+   * closed default — the only safe reading of a value that did not arrive.
+   *
+   * An argument rather than a field on `ctx`, so that the host's own context
+   * object is never copied and a block cannot reach the policy through a
+   * context it built itself.
+   */
+  hostPolicy?: BlockHostPolicy;
 }
 
 /** A context with nothing wired up: the standalone default. */
@@ -227,7 +335,20 @@ export function createStandaloneContext(
  */
 export interface ReactBlockDefinition<P extends object>
   extends Omit<EngineBlockDefinition<P, PageContext>, "render"> {
-  render(args: BlockRenderArgs<P>): BlockRenderResult;
+  /**
+   * `ReactNode | Promise<ReactNode>` rather than the engine's
+   * `BlockRenderResult`, which is `unknown`.
+   *
+   * `unknown` is right for the engine, which carries no React types, and wrong
+   * for an authoring helper: it accepts `render: () => ({ not: "a node" })`,
+   * which typechecks and then renders an `invalid-output` placeholder. A helper
+   * whose types admit what the renderer will refuse has moved a compile-time
+   * error to runtime.
+   *
+   * The promise is allowed because a block may be an async Server Component;
+   * the renderer awaits it under the same containment as a synchronous one.
+   */
+  render(args: BlockRenderArgs<P>): ReactNode | Promise<ReactNode>;
 }
 
 /**

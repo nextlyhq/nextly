@@ -1,0 +1,96 @@
+/**
+ * The URL guard every block prop that reaches an `href` or a `src` goes through.
+ *
+ * Tested here rather than only through the blocks, because the guard is one
+ * function and the blocks are nine: a case proved through `core/button` alone
+ * says nothing about the same value reaching `core/embed`.
+ */
+import { describe, expect, it } from "vitest";
+
+import { url } from "./props";
+
+describe("url()", () => {
+  it.each([
+    // The three the old blocklist named.
+    ["javascript", "javascript:alert(1)"],
+    ["vbscript", "vbscript:msgbox"],
+    ["data", "data:text/html,<script>alert(1)</script>"],
+    // The ones it did not, which is the whole reason the shape changed. A
+    // `blob:` document runs in the origin that created it — the page's own.
+    ["blob", "blob:https://example.com/2b8f-11ee"],
+    ["filesystem", "filesystem:https://example.com/temporary/x.html"],
+    ["about", "about:blank"],
+    // Not dangerous today, and that is the point: neither was `blob:` on the
+    // day the blocklist was written.
+    ["ws", "ws://example.com/socket"],
+    ["view-source", "view-source:https://example.com"],
+  ])("refuses %s", (_label, value) => {
+    expect(url(value)).toBeUndefined();
+  });
+
+  it.each([
+    ["an absolute path", "/about"],
+    ["a relative path", "a.png"],
+    ["a fragment", "#top"],
+    ["https", "https://example.com/x"],
+    ["http", "http://example.com/x"],
+    // The two that open an app rather than a page. A contact button is the
+    // ordinary content of a page, and refusing these would break it.
+    ["mailto", "mailto:a@b.co"],
+    ["tel", "tel:+441234567890"],
+    // No scheme, another host. Which hosts may be REACHED is the host policy's
+    // question, asked by the blocks that fetch; this guard only reads schemes.
+    ["protocol-relative", "//cdn.example.com/a.png"],
+    // A file whose NAME holds a space and a colon. The URL parser percent-
+    // encodes an interior space rather than deleting it, so there is no scheme
+    // here — deleting it first would invent `heroimage:` and refuse an ordinary
+    // relative path.
+    ["a path with a space before a colon", "hero image:1.png"],
+    ["a path with a space", "my photo.png"],
+  ])("allows %s", (_label, value) => {
+    expect(url(value)).toBe(value);
+  });
+
+  it("reads the scheme the way a browser does, not as written", () => {
+    // A browser strips control characters and whitespace before resolving, so a
+    // scheme can hide from a naive prefix test while still navigating. The
+    // value RETURNED is the original, so a legitimate URL is never rewritten.
+    expect(url("java\tscript:alert(1)")).toBeUndefined();
+    expect(url("java\nscript:alert(1)")).toBeUndefined();
+    expect(url("  javascript:alert(1)")).toBeUndefined();
+    expect(url("JaVaScRiPt:alert(1)")).toBeUndefined();
+    expect(url("  https://example.com  ")).toBe("https://example.com");
+    // An interior space is NOT removed, so this parses as a relative path and
+    // is not a scheme at all. Treating it as one is what would refuse
+    // `hero image:1.png` alongside it.
+    expect(url("javascript :alert(1)")).toBe("javascript :alert(1)");
+  });
+
+  it("refuses a control character left inside the value", () => {
+    // Tab, LF and CR are removed wherever they appear because the parser does
+    // that, so a scheme cannot hide behind them. Anything else is refused
+    // outright rather than deleted: a URL somebody meant never carries a raw
+    // control character, and deleting one would join the halves into a scheme
+    // that was never written.
+    expect(url("javascript\u0000:alert(1)")).toBeUndefined();
+    expect(url("java\u0001script:alert(1)")).toBeUndefined();
+    expect(url("/safe\u0000/path.png")).toBeUndefined();
+  });
+
+  it("carries the control characters this file claims to test", () => {
+    // Without this the cases above still pass when an escape is flattened into
+    // an ordinary letter: the value is then refused for having no usable
+    // scheme, and the smuggling it stands for goes untested.
+    expect("java\tscript:".includes("\t")).toBe(true);
+    expect("java\nscript:".includes("\n")).toBe(true);
+  });
+
+  it("refuses a value that is not a string", () => {
+    // Documents are JSON round-tripped through a database, so a prop holds
+    // whatever was written there.
+    expect(url(undefined)).toBeUndefined();
+    expect(url(null)).toBeUndefined();
+    expect(url(42)).toBeUndefined();
+    expect(url({ href: "/x" })).toBeUndefined();
+  });
+});

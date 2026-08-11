@@ -3,6 +3,7 @@
  * core tree ops, with bounded undo/redo history. Defaults for new nodes come from the
  * block registry — never a hard-coded list.
  */
+import { declaredSlotNames } from "../../core/invalid-slots";
 import type { MotionConfig } from "../../core/motion";
 import { defaultBlockRegistry } from "../../core/registry";
 import {
@@ -12,7 +13,10 @@ import {
   makeNode,
   moveNode,
   reidSubtree,
+  dropSlots,
+  removeFromSlot,
   removeNode,
+  removeSlot,
   updateNode,
 } from "../../core/tree";
 import type {
@@ -62,6 +66,29 @@ export type EditorAction =
     }
   | { type: "MOVE"; id: string; parentId: string; slot: string; index: number }
   | { type: "REMOVE"; id: string }
+  /**
+   * Discard a block from a named slot, dropping the slot once nothing is left in it.
+   *
+   * Distinct from `REMOVE` because the block it addresses is one the canvas never drew: it sits
+   * under a slot name its parent does not declare, so there is no element to select and `REMOVE`
+   * — which searches every slot and keeps the emptied key — would leave behind the very thing
+   * that refuses the save.
+   */
+  | { type: "REMOVE_FROM_SLOT"; parentId: string; slot: string; id: string }
+  /**
+   * Discard a whole slot a block does not declare, contents and all.
+   *
+   * The repair when such a slot is already empty: validation refuses its NAME, so there is no
+   * child to address and nothing to lose by dropping it.
+   */
+  | { type: "REMOVE_SLOT"; parentId: string; slot: string }
+  /**
+   * Take the slots map off a block that may not hold one.
+   *
+   * Validation refuses any slots object on a definition that is not a container before reading a
+   * key, so once the keys are gone the empty map is still the fault and has no narrower repair.
+   */
+  | { type: "DROP_SLOTS"; parentId: string }
   | { type: "DUPLICATE"; id: string }
   | { type: "UPDATE_PROPS"; id: string; props: Record<string, unknown> }
   | {
@@ -173,6 +200,38 @@ export function editorReducer(
     case "REMOVE": {
       const next = removeNode(root, action.id);
       return { ...commit(state, next), selectedId: null };
+    }
+
+    case "REMOVE_SLOT":
+    case "DROP_SLOTS":
+    case "REMOVE_FROM_SLOT": {
+      // The same slot names the core settles by, from the same registry: a container has to keep
+      // a home for every slot it declares or the canvas draws no drop zone for it.
+      const declared = declaredSlotNames(
+        root,
+        action.parentId,
+        defaultBlockRegistry
+      );
+      const next =
+        action.type === "REMOVE_FROM_SLOT"
+          ? removeFromSlot(
+              root,
+              action.parentId,
+              action.slot,
+              action.id,
+              declared
+            )
+          : action.type === "REMOVE_SLOT"
+            ? removeSlot(root, action.parentId, action.slot, declared)
+            : dropSlots(root, action.parentId);
+      // The discarded block was never on the canvas, so the author's selection is unrelated to it
+      // and clearing it unconditionally would take away work they can see. It only has to go when
+      // the removed subtree contained it.
+      const selectedId = keepValidSelection(
+        { ...state.document, root: next },
+        state.selectedId
+      );
+      return commit(state, next, selectedId);
     }
 
     case "DUPLICATE":

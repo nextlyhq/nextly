@@ -62,6 +62,8 @@
     "R2_SECRET_ACCESS_KEY",
     "UPLOADTHING_TOKEN",
     "UPLOADTHING_SECRET",
+    "RESEND_BASE_URL", // Resend email provider: capture server / egress proxy host
+    "RESEND_USER_AGENT", // Resend email provider: User-Agent some proxies filter on
     "DATABASE_URL",
     "DB_DIALECT",
     "GITHUB_ACTOR", // nextly migrate: appliedBy actor in CI
@@ -284,6 +286,11 @@
         "src/**/*.{ts,tsx}",
         "src/**/*.test.{ts,tsx}",
         "src/**/*.spec.{ts,tsx}",
+        // JavaScript is a test input too. A bundler follows a side-effect import
+        // into a `.js` sibling and ships it, and a guard that reads those files
+        // is cached against a hash that never saw them — so the check would be
+        // skipped in exactly the commit that changed what it checks.
+        "src/**/*.{js,jsx,mjs,cjs}",
         // Some tests read CSS at runtime (e.g. the token-contrast check parses
         // theme.css), so CSS is a real test input; without it a CSS-only change
         // could reuse a cached pass and skip the assertion.
@@ -298,7 +305,14 @@
         "*.md",
         "package.json",
         "vitest.config.ts",
-        "tsconfig.json"
+        "tsconfig.json",
+        // Scripts and build configs are read BY tests, not only by builds: the ui suite derives
+        // its entry-point guards from `scripts/published-entries.mjs`, which the tsup configs
+        // also consume. Without these, retargeting a source barrel or changing an entry's
+        // client/server classification leaves the cache key untouched, so CI replays the previous
+        // pass precisely when the source of truth those guards read has changed.
+        "scripts/**",
+        "tsup*.config.ts"
       ],
       "outputs": ["coverage/**"], // Coverage reports
       "cache": true // Cache test results (only re-run if inputs change)

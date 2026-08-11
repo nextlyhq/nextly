@@ -223,9 +223,119 @@ export interface BlockDefinition<
    * without buying any safety.
    */
   render(args: BlockRenderArgs<P, C>): BlockRenderResult;
+  /**
+   * Whether these props guarantee the block draws nothing, decided WITHOUT
+   * rendering.
+   *
+   * A block that draws nothing still costs a reader something: the stylesheet
+   * carries its rules, and a rule may name a URL, so an empty block can make a
+   * request on behalf of markup that never appears. A renderer can already tell
+   * that an unregistered or un-upgradable node will not draw, but only the block
+   * knows that `core/image` with no source is the same case.
+   *
+   * Answering is optional, and a block that does not is assumed to draw. That
+   * is the safe default in the expensive direction: shipping unused rules wastes
+   * bytes, while withholding the rules of a block that DOES draw ships it
+   * unstyled, which is a visibly broken page.
+   *
+   * Must be PURE and SYNCHRONOUS. It is consulted before any render, on the
+   * stored props alone, at a point where no context, no data access and no
+   * awaiting exist. A caller treats a thrown or non-boolean answer as "draws",
+   * so a mistake here degrades to the current behaviour rather than to a
+   * missing stylesheet.
+   *
+   * Declared `this: void` for the same reason `renderSlot` is: it reads nothing
+   * from the definition it arrives on, and saying so is what lets a caller pull
+   * it out and call it without binding. Kept as a METHOD signature so parameter
+   * checking stays bivariant, which is what allows a definition typed against
+   * its own props to sit in a registry of many prop shapes.
+   */
+  rendersNothing?(this: void, props: P): boolean;
+  /**
+   * What this block contributes to the page's metadata when the entry's own
+   * SEO fields are blank.
+   *
+   * Declared by the BLOCK rather than derived by reading prop names, because
+   * only the block knows which of its props is a title and which is body text.
+   * A deriver that guessed from names would work for the core library and go
+   * silent for every contributed block — the wrong way round, since a page
+   * built mostly from third-party blocks is exactly the one with nothing else
+   * to fall back on.
+   *
+   * Pure and synchronous by design. It runs during metadata generation, once
+   * per node until each field is filled, so a definition that fetched here
+   * would put a network call between a crawler and the page title. An image is
+   * returned as a media id or a URL and resolved by the caller, which is what
+   * keeps it that way.
+   */
+  seo?(props: P): BlockSeoContribution | undefined;
+  /**
+   * Slots this block may decline to render for some props.
+   *
+   * @internal NOT part of the stable block-authoring surface yet — deliberately
+   * absent from `@nextlyhq/plugin-sdk`, because the shape a block author should
+   * write is a freeze decision rather than one to settle mid-review. It exists
+   * now because a CORE block needs it: `core/collection-loop` draws its children
+   * only when a query returns rows, and a reader of the stored document cannot
+   * tell whether it did.
+   *
+   * Consumed by anything deriving page-level facts from a document without
+   * rendering it. Such a reader must skip these slots: their contents may not
+   * reach the page, and describing a page by content it does not contain
+   * publishes that content off-site.
+   *
+   * This closes the class for the core library only. A contributed block that
+   * renders conditionally and declares nothing still contributes, and nothing
+   * outside the block can detect that — which is why the general answer is an
+   * API question rather than a walk question.
+   */
+  conditionalSlots?: readonly string[];
   /** Editor-only metadata; never serialized. */
   editor?: BlockEditorMeta<P>;
 }
+
+/**
+ * A block's offer toward the page's metadata.
+ *
+ * Every field optional and independent: a heading knows a title and nothing
+ * else, an image knows a picture and nothing else, and the deriver fills each
+ * from the first block that answers for it.
+ */
+export interface BlockSeoContribution {
+  /** Page title, e.g. a heading's text. */
+  title?: string;
+  /** Description text, e.g. the opening paragraph. */
+  description?: string;
+  /**
+   * Where the page's picture may come from, best first.
+   *
+   * A list because a block can hold more than one answer and they are not
+   * equally good: an image block carries a media id AND a directly-typed URL,
+   * renders the resolved media when it can and falls back to the URL when it
+   * cannot. Offering only the first makes a link preview disagree with the
+   * page whenever the media record is missing; offering only the last ignores
+   * the resolved one.
+   */
+  image?: BlockSeoImage | readonly BlockSeoImage[];
+}
+
+/**
+ * One place a page's picture may come from, saying WHICH KIND it is.
+ *
+ * Tagged rather than left as a bare string, because the kind cannot be
+ * recovered from the text. A media id is a UUID and a URL is anything a
+ * renderer will accept as a source — which includes a bare word, a relative
+ * path, and a UUID. Every predicate that tried to tell them apart was wrong
+ * about some value a block renders perfectly well: it sent a renderable source
+ * to a media lookup that missed, or passed a real id through unresolved.
+ *
+ * The block already knows, because it read the value out of a `mediaId` prop or
+ * a `src` prop. Saying so costs nothing and removes the guess entirely.
+ *
+ * A plain string means a URL — the safe reading, since a wrong URL renders a
+ * broken image while a wrong media lookup silently drops the picture.
+ */
+export type BlockSeoImage = string | { media: string } | { url: string };
 
 /**
  * Declare a block type. Returns the definition unchanged — its job is to bind
@@ -278,11 +388,17 @@ export type InferBlockProps<D> = D extends BlockDefinition<infer P> ? P : never;
 export interface AnyBlockDefinition
   extends Omit<
     BlockDefinition,
-    "example" | "defaultProps" | "props" | "localized" | "render"
+    | "example"
+    | "defaultProps"
+    | "props"
+    | "localized"
+    | "render"
+    | "rendersNothing"
   > {
   example: { props: object; slots?: Record<string, BlockNode[]> };
   defaultProps?: object;
   props?: Partial<Record<string, PropSchema>>;
   localized?: string[];
   render(args: BlockRenderArgs<object, unknown>): BlockRenderResult;
+  rendersNothing?(this: void, props: object): boolean;
 }

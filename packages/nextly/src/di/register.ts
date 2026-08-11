@@ -46,6 +46,7 @@ import {
   getEmailProviderRegistry,
   resetEmailProviderRegistry,
 } from "../domains/email/services/email-provider-registry";
+import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
 import {
   resolveFieldGroupRegistryName,
   resolveKnownTypeColumns,
@@ -334,6 +335,7 @@ export interface ServiceMap {
   singleEntryService: SingleEntryService;
   /** Owns a Single's table change together with the registry write that records it. */
   singleMetadataService: SingleMetadataService;
+  fieldGroupMetadataService: FieldGroupMetadataService;
   fieldGroupRegistryService: FieldGroupRegistryService;
   fieldGroupSchemaService: FieldGroupSchemaService;
   fieldGroupDataService: FieldGroupDataService;
@@ -2599,10 +2601,9 @@ async function initializePlugins(
 
     // Register contributed email providers (C2/D65) — fail-fast on type collision.
     for (const provider of plugin.contributes?.emailProviders ?? []) {
-      getEmailProviderRegistry().register(
-        provider.type,
-        provider.createAdapter
-      );
+      // Already erased by defineEmailProvider at the plugin's own boundary, so
+      // a contributed provider is indistinguishable from a shipped one here.
+      getEmailProviderRegistry().register(provider);
     }
 
     // Register custom event names this plugin declares (D9) so its emits

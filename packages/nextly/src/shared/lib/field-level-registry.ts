@@ -31,6 +31,10 @@ import { normalizeHookError } from "../../hooks/normalize-hook-error";
 import { singleHookNamespace } from "../../hooks/register-single-hooks";
 import { recordSideEffectWarning } from "../../hooks/side-effect-warnings";
 import type { FieldHookHandler } from "../../hooks/types";
+import {
+  listEffectivePermissions,
+  listRoleSlugsForUser,
+} from "../../services/lib/permissions";
 
 import { detachData } from "./detach";
 import type { ValidatableField } from "./entry-validation";
@@ -45,7 +49,57 @@ type FieldAccessFn = (args: {
   req: FieldRequestContext;
   id?: string;
   data?: Record<string, unknown>;
+  permissions: string[];
+  roles: string[];
 }) => MaybePromise<boolean>;
+
+/**
+ * The caller's grants, in the SAME spelling collection-level access uses.
+ *
+ * A field rule and a collection rule are written by the same person, minutes
+ * apart, and a permission that reads `pages:create` in one and something else
+ * in the other is a rule that silently denies. `listEffectivePermissions` is
+ * the single source for the string, so this carries what it returns rather
+ * than re-deriving it.
+ */
+interface CallerGrants {
+  permissions: string[];
+  roles: string[];
+}
+
+/**
+ * Resolve the caller's grants once, on the first rule that actually runs.
+ *
+ * Field access is evaluated on every authenticated write and read, and most
+ * entities declare no rule at all — so resolving eagerly would put a role and
+ * permission lookup on paths that never ask a question. Memoizing the PROMISE
+ * rather than the value also collapses the concurrent case: the rules at one
+ * level run in sequence but a nested container recurses first, and two levels
+ * asking at once must not become two lookups.
+ */
+function grantsResolver(
+  userId: string | undefined
+): () => Promise<CallerGrants> {
+  let pending: Promise<CallerGrants> | undefined;
+  return () => {
+    if (pending) return pending;
+    if (!userId) {
+      pending = Promise.resolve({ permissions: [], roles: [] });
+      return pending;
+    }
+    pending = Promise.all([
+      listEffectivePermissions(userId),
+      listRoleSlugsForUser(userId),
+    ])
+      .then(([permissions, roles]) => ({ permissions, roles }))
+      // Fail CLOSED on a lookup error: an empty grant set denies every rule
+      // that asks for a permission, which is the safe direction. Throwing here
+      // would instead be caught by the per-rule guard below and read as a
+      // denial anyway, but only for the rule that happened to ask first.
+      .catch(() => ({ permissions: [], roles: [] }));
+    return pending;
+  };
+}
 
 // The registry stores exactly what a field hook is declared as, so the shape
 // lives in one place rather than being restated here.
@@ -281,7 +335,11 @@ async function applyWriteAccessRec(
   data: Record<string, unknown>,
   fns: Record<string, FieldFunctions>,
   operation: "create" | "update",
-  ctx: { user?: Record<string, unknown>; id?: string }
+  ctx: {
+    user?: Record<string, unknown>;
+    id?: string;
+    grants: () => Promise<CallerGrants>;
+  }
 ): Promise<void> {
   // Taken BEFORE the recursion below, which rewrites nested containers in
   // place as it redacts them: a rule at this level that reads into a nested
@@ -303,10 +361,13 @@ async function applyWriteAccessRec(
     if (!fn) continue;
     let allowed = false;
     try {
+      const { permissions, roles } = await ctx.grants();
       allowed = await fn({
         req: { user: ctx.user },
         id: ctx.id,
         data: snapshot,
+        permissions,
+        roles,
       });
     } catch {
       // Fail-secure: an access rule that throws denies the field.
@@ -343,6 +404,9 @@ export async function applyFieldWriteAccess(opts: {
   await applyWriteAccessRec(opts.data, fns, opts.operation, {
     user: opts.user,
     id: opts.id,
+    grants: grantsResolver(
+      typeof opts.user.id === "string" ? opts.user.id : undefined
+    ),
   });
 }
 
@@ -467,7 +531,11 @@ function restoreReadAccessEvidence(
 async function applyReadAccessRec(
   entry: Record<string, unknown>,
   fns: Record<string, FieldFunctions>,
-  ctx: { user?: Record<string, unknown>; id?: string },
+  ctx: {
+    user?: Record<string, unknown>;
+    id?: string;
+    grants: () => Promise<CallerGrants>;
+  },
   redactions: ReadAccessRedactions,
   restoredByRow: RestoredByRow
 ): Promise<void> {
@@ -500,10 +568,13 @@ async function applyReadAccessRec(
     if (!fn) continue;
     let allowed = false;
     try {
+      const { permissions, roles } = await ctx.grants();
       allowed = await fn({
         req: { user: ctx.user },
         id: ctx.id,
         data: snapshot,
+        permissions,
+        roles,
       });
     } catch {
       // Fail-secure: an access rule that throws denies the field.
@@ -580,6 +651,12 @@ export async function applyFieldReadAccess(
     {
       user: opts.user,
       id: typeof opts.entry.id === "string" ? opts.entry.id : undefined,
+      // An unauthenticated read still runs the rules — this path, unlike the
+      // write one, does not bail without a user — so the resolver is handed the
+      // same absent id and answers with no grants rather than not being called.
+      grants: grantsResolver(
+        typeof opts.user?.id === "string" ? opts.user.id : undefined
+      ),
     },
     store,
     restoredByRow

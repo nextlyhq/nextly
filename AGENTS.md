@@ -19,6 +19,13 @@ for all published packages. Status: alpha, all packages version in lockstep.
   documents; its root entry imports no `next/*`, no admin and no CMS runtime, so
   it is usable standalone (enforced by `src/layering.test.ts`). Next-coupled
   helpers live at the `/next` subpath.
+- `packages/builder` - the visual page-builder editor (shell, canvas, op store).
+  It reaches admin only through `plugin-sdk/admin`, and imports nothing outside a
+  short allowlist of exact specifiers - both enforced by `src/layering.test.ts`.
+  That it draws with `blocks-react` rather than a renderer of its own is a
+  review-time convention, NOT a checked one: reimplementing rendering on React
+  and `blocks-engine` imports exactly the same packages, so no import guard can
+  tell the two apart.
 - `packages/plugin-sdk` - the ONLY stable import surface for plugin authors.
 - `packages/plugin-{form-builder,page-builder}` - first-party plugins.
 - `packages/storage-{s3,vercel-blob,uploadthing}` - media storage adapters.
@@ -74,7 +81,7 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   `adapter-postgres`, `adapter-mysql`, `adapter-sqlite`, `adapter-drizzle`,
   `storage-s3`, `storage-vercel-blob`, `storage-uploadthing`,
   `plugin-form-builder`, `plugin-page-builder`, `plugin-seo`, `plugin-sdk`,
-  `blocks-engine`, `blocks-react`,
+  `blocks-engine`, `blocks-react`, `builder`,
   `create-nextly-app`, `eslint-config`, `prettier-config`, `tsconfig`,
   `telemetry`, `client`) plus `playground`, `root`, `ci`, `docs`, `deps`,
   `release`. Scope is optional; the subject must not start with an uppercase

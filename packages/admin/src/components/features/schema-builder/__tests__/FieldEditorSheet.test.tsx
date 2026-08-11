@@ -234,10 +234,10 @@ describe("FieldEditorSheet -- isInsideRepeatingAncestor prop (PR E3)", () => {
     ).not.toBeDisabled();
   });
 
-  // PR Task 7-2/3 (2026-05-09): footer is now left-aligned with the primary
-  // action (Add field / Apply) rendered BEFORE Cancel in DOM order. These two
-  // tests lock that contract so a future revert (`justify-end` or button
-  // re-swap) breaks loudly instead of silently regressing the agreed UX.
+  // The footer is left-aligned with the primary action (Add field / Apply)
+  // rendered BEFORE Cancel in DOM order. These two tests lock that contract so
+  // a revert (`justify-end`, or swapping the buttons back) breaks loudly
+  // instead of silently changing which control reads as primary.
   it("renders Add field button before Cancel in DOM order in create mode", () => {
     render(
       <FieldEditorSheet

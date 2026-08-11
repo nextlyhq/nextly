@@ -311,21 +311,38 @@ describe("RegexRenameDetector - a column left under a legacy spelling", () => {
       }
     }
 
-    // Recorded rather than asserted loosely: `repeater` and `group` were never in the builder's
-    // type map, so their legacy column is `text` where the descriptor asks for JSON, and the
-    // resolution offered is not the data-preserving one.
+    // `repeater` and `group` were never in the builder's type map, so their legacy column is `text`
+    // where the descriptor asks for JSON. That is a change of family and still keeps every value:
+    // a structured value held in a text column is already its own JSON serialization, so the
+    // database can reinterpret it where it lies. All five therefore offer the resolution that moves
+    // the data, and none offers the one that recreates the column empty.
     expect(outcomes).toEqual({
       "postgresql.text": "rename",
       "postgresql.date": "rename",
       "postgresql.number": "rename",
-      "postgresql.repeater": "drop_and_add",
-      "postgresql.group": "drop_and_add",
+      "postgresql.repeater": "rename",
+      "postgresql.group": "rename",
       "mysql.text": "rename",
       "mysql.date": "rename",
       "mysql.number": "rename",
-      "mysql.repeater": "drop_and_add",
-      "mysql.group": "drop_and_add",
+      "mysql.repeater": "rename",
+      "mysql.group": "rename",
     });
+  });
+
+  // The rename is only half the recovery: it moves the column, it does not change what the column
+  // is. Stated here because the detector's answer above is what makes the pair reach the executor
+  // at all, and a reader who stops at "rename" would reasonably assume the type followed.
+  it("does not treat an unrelated family change as recoverable", () => {
+    const candidates = detector.detect(
+      [
+        drop("dc_posts", "_count", "text"),
+        add("dc_posts", "count", "integer"),
+      ] as Operation[],
+      "postgresql"
+    );
+
+    expect(candidates[0]?.defaultSuggestion).toBe("drop_and_add");
   });
 });
 
@@ -424,5 +441,54 @@ describe("RegexRenameDetector - the legacy column reached through the diff", () 
         op => op.type !== "drop_column" && op.type !== "add_column"
       ).length,
     }).toEqual({ drops: 1, adds: 1, others: 0 });
+  });
+});
+
+describe("the text-to-JSON exception is scoped to the shape it repairs", () => {
+  const detector = new RegexRenameDetector();
+
+  it("offers the rename for the legacy underscore column", () => {
+    // The positive control, and the only shape the conversion has evidence for: a table built before
+    // the column-name fix holds `_body` where everything else addresses `body`, and the old builder
+    // is what wrote the JSON into it.
+    const candidates = detector.detect(
+      [
+        drop("dc_posts", "_body", "text"),
+        add("dc_posts", "body", "jsonb"),
+      ] as Operation[],
+      "postgresql"
+    );
+
+    expect(candidates[0]?.defaultSuggestion).toBe("rename");
+  });
+
+  it("does not offer it for two columns that merely share a table", () => {
+    // 🔴 The same two TYPES, and the answer has to differ. Nothing says this column holds serialized
+    // JSON — its text is whatever a user typed. Defaulting the operator into a conversion here fails
+    // on the first row of ordinary prose, and on MySQL the rename has already auto-committed by
+    // then, leaving a half-changed schema no transaction can take back.
+    const candidates = detector.detect(
+      [
+        drop("dc_posts", "summary", "text"),
+        add("dc_posts", "metadata", "jsonb"),
+      ] as Operation[],
+      "postgresql"
+    );
+
+    expect(candidates[0]?.defaultSuggestion).toBe("drop_and_add");
+  });
+
+  it("does not offer it when only the prefix is missing", () => {
+    // `body` -> `body_json` is not `_body` -> `body`. A rule keyed on "one name contains the other"
+    // would accept this; the rule is the exact underscore shape.
+    const candidates = detector.detect(
+      [
+        drop("dc_posts", "body", "text"),
+        add("dc_posts", "body_json", "jsonb"),
+      ] as Operation[],
+      "postgresql"
+    );
+
+    expect(candidates[0]?.defaultSuggestion).toBe("drop_and_add");
   });
 });

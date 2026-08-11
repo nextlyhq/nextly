@@ -13,6 +13,9 @@ import {
   isAllowedRemoteUrl,
   safeValue,
   DEFAULT_BREAKPOINTS,
+  documentKey,
+  refNodeClass,
+  refScopedKey,
 } from "./style-compiler";
 import { makeNode } from "./tree";
 
@@ -23,11 +26,30 @@ describe("nodeClass", () => {
     expect(nodeClass("pb-abc")).not.toBe(nodeClass("pb-def"));
   });
 
-  it("is the engine's class, not a second one under the same prefix", () => {
-    // Both sides emitted `nx-pb-` from different digests, so the compiler and
-    // the engine could name one node two ways. Comparing the strings is the
-    // only assertion that catches them drifting apart again.
-    expect(nodeClass("pb-abc")).toBe(nodeClassName("pb-abc"));
+  it("uses the engine's digest, not a second one under the same prefix", () => {
+    // Both sides once emitted `nx-pb-` from different digests, so the compiler and the engine
+    // could name one node two ways. What has to hold is that there is ONE hash — the plugin
+    // composes a KEY and hands it to the engine, rather than hashing anything itself.
+    //
+    // Asserted through the key rather than the raw id, because a document node is named from
+    // `documentKey(id)` so its name cannot collide with a library node named from a ref. Comparing
+    // `nodeClass(id)` to `nodeClassName(id)` would now be comparing two different questions.
+    expect(nodeClass("pb-abc")).toBe(nodeClassName(documentKey("pb-abc")));
+    expect(refNodeClass("r1", "pb-abc")).toBe(
+      nodeClassName(refScopedKey("r1", "pb-abc"))
+    );
+  });
+
+  it("names a document node and a library node of the same id apart", () => {
+    // The collision the key space exists to close, stated directly.
+    expect(nodeClass("shared")).not.toBe(refNodeClass("r1", "shared"));
+  });
+
+  it("cannot be collided by a document id shaped like a ref key", () => {
+    // A node id is any non-empty string, so a document can carry the literal id a ref key
+    // generates. Prefixing only the ref side would give both the same class.
+    const generated = refScopedKey("r1", "same");
+    expect(nodeClass(generated)).not.toBe(refNodeClass("r1", "same"));
   });
 });
 
@@ -41,7 +63,7 @@ describe("document node classes", () => {
   it("covers every node the document walk reaches", () => {
     expect(documentNodeIds(doc)).toEqual([doc.root.id, leaf.id]);
     expect([...documentNodeClasses(doc).keys()].sort()).toEqual(
-      [doc.root.id, leaf.id].sort()
+      [documentKey(doc.root.id), documentKey(leaf.id)].sort()
     );
   });
 
@@ -50,7 +72,7 @@ describe("document node classes", () => {
     // the class itself would emit a selector the markup never carries. A map
     // holding a name the default would never produce is the only way to tell
     // "consulted it" apart from "happened to agree with it".
-    const classes = new Map([[leaf.id, "nx-pb-from-the-map"]]);
+    const classes = new Map([[documentKey(leaf.id), "nx-pb-from-the-map"]]);
     const styled = { ...leaf, style: { base: { backgroundColor: "#111" } } };
     expect(compileNodeCss(styled, { classes })).toContain(
       ".nx-pb-from-the-map"
@@ -66,7 +88,7 @@ describe("document node classes", () => {
       version: 1 as const,
       root: makeNode("core/container", {}, undefined, { default: [withCss] }),
     };
-    const classes = new Map([[withCss.id, "nx-pb-from-the-map"]]);
+    const classes = new Map([[documentKey(withCss.id), "nx-pb-from-the-map"]]);
     expect(compileDocumentBlockCss(scoped, classes)).toContain(
       ".nx-pb-from-the-map"
     );
@@ -79,7 +101,7 @@ describe("document node classes", () => {
       root: makeNode("core/container", {}, undefined, { default: [styled] }),
     };
     expect(compileDocumentCss(tree)).toContain(
-      `.${documentNodeClasses(tree).get(styled.id)}`
+      `.${documentNodeClasses(tree).get(documentKey(styled.id))}`
     );
   });
 });
@@ -484,8 +506,80 @@ describe("compileNodeCss — width alignment + link colors", () => {
         { base: { linkColor: "#f00", linkColorHover: "#0f0" } }
       )
     );
-    expect(css).toMatch(/\.nx-pb-[a-z0-9]+ a \{ color: #f00; \}/);
-    expect(css).toMatch(/\.nx-pb-[a-z0-9]+ a:hover \{ color: #0f0; \}/);
+    // Both selectors: the links inside the block, and the block itself when its root IS a link.
+    expect(css).toMatch(
+      /\.nx-pb-([a-z0-9]+) a, a\.nx-pb-\1 \{ color: #f00; \}/
+    );
+    expect(css).toMatch(
+      /\.nx-pb-([a-z0-9]+) a:hover, a\.nx-pb-\1:hover \{ color: #0f0; \}/
+    );
+  });
+
+  it("emits link colors per breakpoint, not only from base", () => {
+    // The inspector offers the Link controls whatever device is selected, and writes the value
+    // under that device — so reading only `base` stored the tablet and mobile values and compiled
+    // nothing from them.
+    const css = compileNodeCss(
+      makeNode(
+        "core/container",
+        {},
+        {
+          base: { linkColor: "#f00" },
+          mobile: { linkColor: "#00f", linkColorHover: "#0ff" },
+        }
+      )
+    );
+
+    // Positive control: the base value still compiles, so this is about the breakpoint values.
+    expect(css).toMatch(
+      /\.nx-pb-([a-z0-9]+) a, a\.nx-pb-\1 \{ color: #f00; \}/
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 640px\) \{ \.nx-pb-([a-z0-9]+) a, a\.nx-pb-\1 \{ color: #00f; \} \}/
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 640px\) \{ \.nx-pb-([a-z0-9]+) a:hover, a\.nx-pb-\1:hover \{ color: #0ff; \} \}/
+    );
+  });
+
+  it("ignores a placement band this compilation does not know", () => {
+    // `placementOverrides` is a public option, so `hiddenBands` can name a band that is not in the
+    // configured breakpoints. The band query for an unknown name is indistinguishable from the one
+    // for "every width", so without the guard an unrecognised band would hide the element at EVERY
+    // width rather than at none.
+    const css = compileNodeCss(
+      { ...makeNode("core/container", {}), visibility: { mobile: false } },
+      {
+        placementOverrides: [
+          { className: "nx-pb-known", hiddenBands: ["mobile"] },
+          { className: "nx-pb-bogus", hiddenBands: ["not-a-breakpoint"] },
+        ],
+      }
+    );
+
+    // Positive control: a band that IS configured still produces its rule.
+    expect(css).toContain(".nx-pb-known { display: none; }");
+    expect(css).not.toContain("nx-pb-bogus { display: none; }");
+  });
+
+  it("emits link colors set in Hover mode", () => {
+    // The Style tab writes every control under whichever mode is selected, and the generic hover
+    // pass compiles declarations rather than these descendant rules — so a link color set in Hover
+    // mode was stored and compiled by nobody.
+    const css = compileNodeCss({
+      ...makeNode("core/container", {}),
+      styleHover: {
+        base: { linkColor: "#f0f" },
+        mobile: { linkColor: "#ff0" },
+      },
+    });
+
+    expect(css).toMatch(
+      /\.nx-pb-([a-z0-9]+):hover a, a\.nx-pb-\1:hover \{ color: #f0f; \}/
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 640px\) \{ \.nx-pb-([a-z0-9]+):hover a, a\.nx-pb-\1:hover \{ color: #ff0; \} \}/
+    );
   });
 });
 

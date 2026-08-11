@@ -10,11 +10,12 @@
  * at any depth resolves via `resolveBindings`. `core/query-loop` is intercepted and
  * rendered data-driven via `QueryLoop`.
  */
+import { nodeClassName } from "@nextlyhq/blocks-engine";
 import { cloneElement, isValidElement, type ReactNode } from "react";
 
 import { resolveBindings } from "../core/bindings";
 import type { BlockRegistry } from "../core/registry";
-import { nodeClass } from "../core/style-compiler";
+import { documentKey, refScopedKey } from "../core/style-compiler";
 import type { BlockNode } from "../core/types";
 import type { RemotePatternInput } from "../core/url-policy";
 
@@ -85,11 +86,39 @@ export interface RenderNodeProps {
    * stylesheet was compiled from, because a class disambiguated in one and not
    * the other names a selector the markup never carries.
    *
-   * A node reached through `core/ref` is not in it — the compiler does not walk
-   * the reusable-block library either — and falls back to its plain class,
-   * which is what both halves already give it.
+   * It spans the document's own ids AND one ref-scoped key per node of every
+   * reusable block, so a library node and a document node holding the same id
+   * are named apart rather than sharing a class.
    */
   classes?: ReadonlyMap<string, string>;
+  /**
+   * The ref id whose library subtree this node belongs to, when it belongs to
+   * one.
+   *
+   * Absent for the document's own nodes. Set at each `core/ref` boundary and
+   * carried down the subtree, so a node is named by the block it lives in
+   * rather than by the path taken to reach it — a nested reusable block
+   * resolves to the same names whether it was placed directly or through
+   * another block, and one rule serves every placement.
+   */
+  refScope?: string;
+  /**
+   * Classes belonging to a `core/ref` PLACEMENT, applied to the element this node renders.
+   *
+   * A resolved ref renders its target IN ITS PLACE and emits no element of its own, so a rule
+   * written for the placement's class had nothing to match — every style an author set on a
+   * placement was silently discarded while the editor went on offering the controls.
+   *
+   * Carried onto the target's own root rather than wrapped in a new element, because a block
+   * renders a single element and never wraps it: an extra `div` would change flex and grid layout
+   * around every reusable block on the page. Both classes then land on one element and the cascade
+   * decides, which is why the library is emitted BEFORE the document — the placement is a document
+   * node, so it comes later and wins.
+   *
+   * Applied to the target's root only. It is not carried into that target's own slots, where it
+   * would restyle children the placement never named.
+   */
+  placementClass?: string;
 }
 
 const REF_TYPE = "core/ref";
@@ -104,10 +133,19 @@ export function RenderNode({
   refs,
   refStack,
   classes,
+  refScope,
+  placementClass,
 }: RenderNodeProps): ReactNode {
+  // The same key the compiler names this node by. Deriving it differently on
+  // either side writes a stylesheet against a selector the markup never carries.
+  const styleKey =
+    refScope === undefined || refScope === ""
+      ? documentKey(node.id)
+      : refScopedKey(refScope, node.id);
   const className = [
-    classes?.get(node.id) ?? nodeClass(node.id),
+    classes?.get(styleKey) ?? nodeClassName(styleKey),
     node.customClass,
+    placementClass,
   ]
     .filter(Boolean)
     .join(" ");
@@ -129,15 +167,19 @@ export function RenderNode({
         budget={budget}
         refs={refs}
         refStack={[...(refStack ?? []), refId]}
-        // Not this document's map. It is keyed by id, and a stored subtree can
-        // hold an id the document also holds — a block made reusable from a node
-        // that stayed put is the ordinary way — so passing it on would give the
-        // referenced node a class disambiguated for the OTHER node of that id,
-        // compiled from styles that are not its own. The referenced subtree is
-        // outside the walk the map is built from, so it has no entry to inherit
-        // and its nodes take the plain class, which is what the compiler would
-        // name them if it reached them.
-        classes={undefined}
+        // The map DOES carry this subtree, under ref-scoped keys, so it is
+        // threaded rather than withheld. Withholding it was the previous answer
+        // and it did not work: for any id without a hash collision the plain
+        // class and the map's entry are the same string, so a referenced node
+        // sharing an id with a document node still wore that node's class.
+        // Naming it apart is what separates them; the scope below is what does
+        // the naming.
+        classes={classes}
+        refScope={refId}
+        // The placement's own classes, so a style set on the placement reaches the element the
+        // target renders. Computed above from the placement's node, which is why it is passed
+        // rather than recomputed here.
+        placementClass={className}
       />
     );
   }
@@ -161,6 +203,7 @@ export function RenderNode({
           className={className}
           budget={budget ?? { n: 0 }}
           classes={classes}
+          refScope={refScope}
         />
       </BlockErrorBoundary>
     );
@@ -181,6 +224,11 @@ export function RenderNode({
           refs={refs}
           refStack={refStack}
           classes={classes}
+          // Carried down, not reset: a child of a library node is still inside that reusable
+          // block. Dropping it here would name the child from its bare id while its parent was
+          // named from the ref, so the child would collide with a document node of the same id
+          // and the parent would not — the original bug surviving one level down.
+          refScope={refScope}
         />
       ));
     }

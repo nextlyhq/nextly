@@ -33,7 +33,7 @@ import {
   splitCssTokens,
   trimCssWhitespace,
 } from "./css-value";
-import type { CssValueRejection } from "./css-value";
+import type { CssValueRejection, MayFetchUrl } from "./css-value";
 
 /** Human-readable reasons a value was refused, keyed by the safety check's verdict. */
 const REJECTION_MESSAGES = {
@@ -42,6 +42,7 @@ const REJECTION_MESSAGES = {
     "contains characters that are not allowed in a style value",
   "unsafe-url-scheme": "uses a URL scheme that is not allowed",
   "unsafe-url-characters": "contains characters that are not allowed in a URL",
+  "url-host-not-allowed": "loads from a host this site does not allow",
   "not-a-length": "is not a length",
   "not-a-color": "is not a color",
   "too-deeply-nested": "is nested too deeply",
@@ -500,7 +501,7 @@ function leafIssues(
   value: unknown,
   path: string,
   budget?: ReadyStyleIssueBudget,
-  tokens?: TokenLookup
+  check: ValueCheckContext = {}
 ): ValidationIssue[] {
   // A token reference substitutes for the whole leaf value, so it is checked
   // against the leaf's declared token kinds rather than its literal shape.
@@ -542,6 +543,7 @@ function leafIssues(
     // a token makes every document that used it unpublishable, and would arm
     // the trap where defining a site's FIRST token invalidates every other
     // reference in storage.
+    const { tokens } = check;
     if (tokens === undefined) return [];
     // The site allowance is spent HERE, at the reference, rather than once per
     // property. A property is a whole composite: charging only when it returns
@@ -685,7 +687,7 @@ function leafIssues(
       if (typeof value !== "string") {
         return [invalid(path, `${describeValue(value)} is not a string.`)];
       }
-      const rejection = checkCssValue(value);
+      const rejection = checkCssValue(value, check.mayFetchUrl);
       return rejection === null ? [] : rejected(path, value, rejection);
     }
     case "url": {
@@ -705,7 +707,7 @@ function leafIssues(
       ) {
         return [];
       }
-      const rejection = checkUrlValue(value);
+      const rejection = checkUrlValue(value, "raw", check.mayFetchUrl);
       return rejection === null ? [] : rejected(path, value, rejection);
     }
   }
@@ -741,6 +743,20 @@ function unionTokenKinds(shape: StyleShape): TokenKind[] {
   return kinds;
 }
 
+/**
+ * What a leaf needs besides the value itself.
+ *
+ * One object rather than one parameter apiece. These functions already carry
+ * seven positional arguments, several optional and several defaulted, and a
+ * second optional trailing parameter is the shape where a mis-slotted argument
+ * is silently accepted — here that would mean a URL policy quietly dropped and
+ * every URL in the document unasked about.
+ */
+interface ValueCheckContext {
+  tokens?: TokenLookup;
+  mayFetchUrl?: MayFetchUrl;
+}
+
 /** Validate a value against one named part of a composite shape. */
 function partIssues(
   parts: Readonly<Record<string, StyleShape>>,
@@ -750,7 +766,7 @@ function partIssues(
   budget?: ReadyStyleIssueBudget,
   spent = 0,
   spentBytes = 0,
-  tokens?: TokenLookup
+  check: ValueCheckContext = {}
 ): ValidationIssue[] {
   if (!isPlainRecord(value)) {
     return [
@@ -819,7 +835,7 @@ function partIssues(
       budget,
       spent + count,
       spentBytes + bytes,
-      tokens
+      check
     );
     for (const issue of nested) {
       if (isSiteIssue(issue)) continue;
@@ -839,9 +855,9 @@ function shapeIssues(
   budget?: ReadyStyleIssueBudget,
   spent = 0,
   spentBytes = 0,
-  tokens?: TokenLookup
+  check: ValueCheckContext = {}
 ): ValidationIssue[] {
-  if (isStyleLeaf(shape)) return leafIssues(shape, value, path, budget, tokens);
+  if (isStyleLeaf(shape)) return leafIssues(shape, value, path, budget, check);
   switch (shape.kind) {
     case "logicalSides":
       return partIssues(
@@ -852,7 +868,7 @@ function shapeIssues(
         budget,
         spent,
         spentBytes,
-        tokens
+        check
       );
     case "logicalCorners":
       return partIssues(
@@ -863,7 +879,7 @@ function shapeIssues(
         budget,
         spent,
         spentBytes,
-        tokens
+        check
       );
     case "object":
       return partIssues(
@@ -874,7 +890,7 @@ function shapeIssues(
         budget,
         spent,
         spentBytes,
-        tokens
+        check
       );
     case "union": {
       // A token is judged against every arm's kinds at once. Reporting the
@@ -888,6 +904,7 @@ function shapeIssues(
       // discard the answer. The lookup and reporting allowances are distinct
       // (a name already answered this run costs the caller nothing), so the
       // same guard the leaf reference uses bounds the ask here too.
+      const { tokens } = check;
       if (isTokenRef(value) && tokens !== undefined && !extraTokenKeys(value)) {
         const kinds = unionTokenKinds(shape);
         if (kinds.length > 0) {
@@ -927,7 +944,7 @@ function shapeIssues(
           speculativeBudget(budget),
           spent,
           spentBytes,
-          tokens
+          check
         );
         if (issues.length === 0) return [];
         // A variant that reports only warnings has ACCEPTED the value and
@@ -965,10 +982,22 @@ function shapeIssues(
         budget,
         spent,
         spentBytes,
-        tokens
+        check
       );
     }
   }
+}
+
+/** Caller-supplied policy for a validation run. */
+export interface StyleValueOptions {
+  /**
+   * Which hosts this site will fetch from.
+   *
+   * Absent by default, and absent means unasked rather than allowed: the engine
+   * ships no host list of its own, because which hosts a site trusts is the
+   * site operator's decision and not a property of the document format.
+   */
+  mayFetchUrl?: MayFetchUrl;
 }
 
 /**
@@ -987,7 +1016,13 @@ export function validateStyleValues(
   mode: ValidationMode,
   suppliedBudget?: StyleIssueBudget,
   skipValueParsing = false,
-  suppliedTokens?: TokenLookup
+  suppliedTokens?: TokenLookup,
+  // An OBJECT, where the six before it are positional. Six is already past the
+  // point where a call reads by position, and the next optional added in line
+  // would sit beside `suppliedTokens` with nothing but its type to tell them
+  // apart. A named field cannot be mis-slotted, and a caller who omits it gets
+  // exactly today's behaviour rather than a policy that silently did nothing.
+  options?: StyleValueOptions
 ): ValidationIssue[] {
   // The structural half of this shape has been public since it shipped, so a
   // caller may hand back an object that predates the site allowance. Filling it
@@ -1031,7 +1066,10 @@ export function validateStyleValues(
       // name resolves to cannot decide whether a document is valid, so running
       // out of room to report on names must not cut short the checks that can.
       issues.push(
-        ...shapeIssues(entry.shape, value, path, budget, 0, 0, tokens)
+        ...shapeIssues(entry.shape, value, path, budget, 0, 0, {
+          tokens,
+          mayFetchUrl: options?.mayFetchUrl,
+        })
       );
     }
     // Structural findings only: a site finding is charged at the reference that

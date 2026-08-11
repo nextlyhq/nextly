@@ -149,9 +149,20 @@ export function sanitizeDocument(
  * reaches the page, so letting it reserve an id would take that id from a
  * visible node for no benefit.
  *
+ * `rendersSubtree` extends that same rule one level down. A node the caller
+ * already knows will be replaced by a placeholder still renders — the
+ * placeholder is what makes the failure visible, and it needs a key — but its
+ * CHILDREN do not, because the placeholder replaces the node entirely. Walking
+ * into them anyway let a child that never reaches the page claim an id and
+ * drop a later visible sibling in exchange for nothing. Omitting the predicate
+ * walks everything, which is what a caller with no such knowledge should do.
+ *
  * Returns the ORIGINAL document when nothing collided.
  */
-export function dedupeNodeIds(document: BlockDocument): BlockDocument {
+export function dedupeNodeIds(
+  document: BlockDocument,
+  rendersSubtree?: (node: BlockNode) => boolean
+): BlockDocument {
   let changed = false;
   const seenIds = new Set<string>();
 
@@ -165,7 +176,9 @@ export function dedupeNodeIds(document: BlockDocument): BlockDocument {
       seenIds.add(node.id);
 
       const slots = node.slots;
-      if (slots === undefined) {
+      // The node keeps its id either way: it renders, as itself or as a
+      // placeholder, and React needs the key. Only the descent is skipped.
+      if (slots === undefined || rendersSubtree?.(node) === false) {
         result.push(node);
         continue;
       }

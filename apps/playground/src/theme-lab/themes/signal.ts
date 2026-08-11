@@ -1,0 +1,174 @@
+/**
+ * Signal: Mono, plus exactly one colour.
+ *
+ * Design intent. This is the minimum-change answer to "should the admin have a
+ * brand colour". Every neutral is Mono's, unchanged and unwarmed, so the two
+ * can be compared side by side and the only visible difference is where colour
+ * appears: the primary button, the focus ring, the selected row, the active nav
+ * item. Nothing else is tinted, which is the point -- one saturated hue in an
+ * otherwise achromatic UI reads as a signal rather than as decoration.
+ *
+ * The hue is deep teal (195). Indigo and violet are the default framework-admin
+ * colours and blue is the default everything; teal is far enough from all three
+ * to look chosen, and it is one of the few saturated hues that stays legible
+ * under white type in light mode and against near-black in dark mode without
+ * needing two unrelated colours. The 6px radius is the softest of these four
+ * themes, because a coloured primary already draws the eye and the geometry no
+ * longer has to.
+ */
+import type { ThemeDefinition } from "../types";
+
+export const SIGNAL: ThemeDefinition = {
+  id: "signal",
+  label: "Signal",
+  description:
+    "Mono neutrals plus one deep teal accent, used only for primary actions.",
+  group: "nextly",
+  recommendedDensity: "default",
+  radius: "6px",
+  fontSans: "var(--font-inter), Inter, sans-serif",
+  fontMono:
+    'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+  light: {
+    // Neutrals are Mono's, value for value. Any drift here would confound the
+    // comparison this theme exists to make.
+    background: "oklch(1 0 0)",
+    "page-background": "oklch(0.9818 0 0)",
+    foreground: "oklch(0.2079 0.0399 265.73)",
+    card: "oklch(1 0 0)",
+    "card-foreground": "oklch(0.2079 0.0399 265.73)",
+    popover: "oklch(1 0 0)",
+    "popover-foreground": "oklch(0.2079 0.0399 265.73)",
+    // The single colour. Lightness is capped by the tightest place the teal has
+    // to be readable: the badge, where it is text on a 10% wash of itself over
+    // the page. At 0.52 that pair lands at 4.49:1; 0.512 clears 4.5:1 and is
+    // indistinguishable to the eye. White type on the fill is comfortable at
+    // either value, so the badge is what sets the number.
+    primary: "oklch(0.4915 0.1 195)",
+    "primary-foreground": "oklch(1 0 0)",
+    secondary: "oklch(0.9684 0.0068 247.9)",
+    "secondary-foreground": "oklch(0.2079 0.0399 265.73)",
+    muted: "oklch(0.9696 0 0)",
+    "muted-foreground": "oklch(0.5218 0.0407 257.44)",
+    // Accent follows primary one step deeper, so a filled accent surface sits
+    // below a primary button in emphasis instead of competing with it.
+    accent: "oklch(0.485 0.095 195)",
+    "accent-foreground": "oklch(1 0 0)",
+    // Mono's yellow is kept: it lands near teal's complement, so a highlighted
+    // span stays obviously different from anything interactive.
+    highlight: "oklch(0.9297 0.1638 101.06)",
+    "highlight-foreground": "oklch(0.2079 0.0399 265.73)",
+    destructive: "oklch(0.5778 0.2078 25.33)",
+    "destructive-solid": "oklch(0.5778 0.2078 25.33)",
+    "destructive-foreground": "oklch(1 0 0)",
+    // Mono's green is left alone rather than pulled toward the teal primary:
+    // "succeeded" must not be mistakable for "is the brand colour".
+    success: "oklch(0.53 0.17 149.2)",
+    "success-solid": "oklch(0.53 0.17 149.2)",
+    "success-foreground": "oklch(1 0 0)",
+    warning: "oklch(0.5496 0.1646 70.11)",
+    "warning-foreground": "oklch(0.2079 0.0399 265.73)",
+    "code-bg": "oklch(0.9761 0.0035 247.86)",
+    "code-fg": "oklch(0.2079 0.0399 265.73)",
+    "code-comment": "oklch(0.5264 0.0407 257.44)",
+    "code-keyword": "oklch(0.4882 0.2172 303.9)",
+    "code-string": "oklch(0.4478 0.1189 152.1)",
+    "code-number": "oklch(0.5106 0.1518 44.2)",
+    "code-function": "oklch(0.4757 0.1444 254.6)",
+    "code-operator": "oklch(0.4936 0.1418 8.4)",
+    "code-punctuation": "oklch(0.5264 0.0407 257.44)",
+    "code-variable": "oklch(0.4694 0.1173 62.3)",
+    "code-tag": "oklch(0.5054 0.1905 27.5)",
+    "code-deleted": "oklch(0.5054 0.1905 27.5)",
+    "code-inserted": "oklch(0.4478 0.1189 152.1)",
+    "border-subtle": "oklch(0 0 0 / 0.08)",
+    border: "oklch(0 0 0 / 0.445)",
+    "border-strong": "oklch(0 0 0 / 0.502)",
+    input: "oklch(0.6454 0.0116 286.11)",
+    // Reference, not a literal: this is what carries the accent to the focus
+    // ring, which is the clearest place a single-colour theme earns its keep.
+    ring: "var(--nx-primary)",
+    "focus-ring": "var(--nx-primary)",
+    "shadow-color": "oklch(0 0 0)",
+    "sidebar-background": "oklch(1 0 0)",
+    "sidebar-foreground": "oklch(0.372 0.0392 257.3)",
+    // Navigation is where the accent does real work: the active item is teal,
+    // and its resting hover state is the faintest teal wash rather than grey.
+    "sidebar-primary": "oklch(0.4915 0.1 195)",
+    "sidebar-primary-foreground": "oklch(1 0 0)",
+    "sidebar-accent": "oklch(0.955 0.02 195)",
+    "sidebar-accent-foreground": "oklch(0.2079 0.0399 265.73)",
+    "sidebar-border": "oklch(0.6446 0.0126 255.53)",
+    "sidebar-ring": "var(--nx-primary)",
+    "table-border": "var(--nx-border)",
+    "table-row-hover": "oklch(0.9848 0 0)",
+    "table-header-bg": "var(--nx-card)",
+  },
+  dark: {
+    // Mono's dark neutrals, unchanged for the same reason as light.
+    background: "oklch(0.1358 0.0163 262.71)",
+    "page-background": "oklch(0.1358 0.0163 262.71)",
+    foreground: "oklch(0.9838 0.0035 247.86)",
+    card: "oklch(0.1916 0.0228 266.36)",
+    "card-foreground": "oklch(0.9838 0.0035 247.86)",
+    popover: "oklch(0.24 0.0249 257.44)",
+    "popover-foreground": "oklch(0.9838 0.0035 247.86)",
+    // Authored for dark, not derived: the light teal would nearly vanish on a
+    // near-black surface, so the hue is held and the lightness raised to 0.72,
+    // which flips the on-color from white to the dark neutral.
+    primary: "oklch(0.72 0.11 195)",
+    "primary-foreground": "oklch(0.2079 0.0399 265.73)",
+    secondary: "oklch(0.28 0.0369 259.97)",
+    "secondary-foreground": "oklch(0.9838 0.0035 247.86)",
+    muted: "oklch(0.28 0.0369 259.97)",
+    "muted-foreground": "oklch(0.7107 0.0351 256.79)",
+    // Accent stays a filled surface under white type here rather than tracking
+    // primary all the way up, so accent and primary do not become the same
+    // block of teal on a dark page.
+    accent: "oklch(0.53 0.1 195)",
+    "accent-foreground": "oklch(1 0 0)",
+    highlight: "oklch(0.8 0.1425 101.06)",
+    "highlight-foreground": "oklch(0.2079 0.0399 265.73)",
+    destructive: "oklch(0.6706 0.2078 25.33)",
+    "destructive-solid": "oklch(0.5778 0.2078 25.33)",
+    "destructive-foreground": "oklch(1 0 0)",
+    success: "oklch(0.6210 0.1921 149.58)",
+    "success-solid": "oklch(0.5225 0.1921 149.58)",
+    "success-foreground": "oklch(1 0 0)",
+    warning: "oklch(0.7686 0.1646 70.11)",
+    "warning-foreground": "oklch(0.2079 0.0399 265.73)",
+    "code-bg": "oklch(0.1916 0.0228 266.36)",
+    "code-fg": "oklch(0.9838 0.0035 247.86)",
+    "code-comment": "oklch(0.6626 0.0364 256.79)",
+    "code-keyword": "oklch(0.7482 0.1235 303.9)",
+    "code-string": "oklch(0.7654 0.1476 152.1)",
+    "code-number": "oklch(0.7807 0.1189 44.2)",
+    "code-function": "oklch(0.7365 0.1163 254.6)",
+    "code-operator": "oklch(0.7549 0.1234 8.4)",
+    "code-punctuation": "oklch(0.6626 0.0364 256.79)",
+    "code-variable": "oklch(0.7938 0.1052 62.3)",
+    "code-tag": "oklch(0.7118 0.1476 27.5)",
+    "code-deleted": "oklch(0.7118 0.1476 27.5)",
+    "code-inserted": "oklch(0.7654 0.1476 152.1)",
+    "border-subtle": "oklch(1 0 0 / 0.08)",
+    border: "oklch(1 0 0 / 0.366)",
+    "border-strong": "oklch(1 0 0 / 0.418)",
+    input: "oklch(0.5514 0.0128 285.92)",
+    ring: "var(--nx-primary)",
+    "focus-ring": "var(--nx-primary)",
+    "shadow-color": "oklch(0 0 0)",
+    "sidebar-background": "oklch(0.1358 0.0163 262.71)",
+    "sidebar-foreground": "oklch(0.9838 0.0035 247.86)",
+    "sidebar-primary": "oklch(0.72 0.11 195)",
+    "sidebar-primary-foreground": "oklch(0.2079 0.0399 265.73)",
+    // A deep teal-tinted row rather than plain grey, so the active nav item is
+    // legible as "the accent" even before its label colour is read.
+    "sidebar-accent": "oklch(0.29 0.045 200)",
+    "sidebar-accent-foreground": "oklch(0.9838 0.0035 247.86)",
+    "sidebar-border": "oklch(0.4975 0.0129 257.43)",
+    "sidebar-ring": "var(--nx-primary)",
+    "table-border": "var(--nx-border)",
+    "table-row-hover": "oklch(0.28 0.0369 259.97)",
+    "table-header-bg": "var(--nx-card)",
+  },
+};

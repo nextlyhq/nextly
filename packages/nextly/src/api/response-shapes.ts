@@ -39,6 +39,19 @@ export type PaginationMeta = {
   hasPrev: boolean;
 };
 
+/**
+ * Set on a response whose body is CONFIGURATION rather than records.
+ *
+ * The route handler rewrites date-looking strings in every payload by value, to
+ * present stored timestamps in the installation's timezone. A definition or a
+ * descriptor is not stored data: a field default that merely resembles a date
+ * would be rewritten, so the value delivered would stop matching the value
+ * registered and would differ between installations. Marked responses are
+ * passed through untouched, and the header is stripped before it reaches a
+ * client.
+ */
+export const SKIP_DATE_FORMATTING_HEADER = "x-nextly-skip-date-formatting";
+
 function jsonResponse(body: unknown, init?: ResponseInit): Response {
   // Preserve caller-supplied headers, but default content-type to
   // application/json so individual call sites don't have to repeat it.

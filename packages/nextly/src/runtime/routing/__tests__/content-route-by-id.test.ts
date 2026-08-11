@@ -30,6 +30,8 @@ interface Row extends Record<string, unknown> {
   id: string;
   slug: string;
   status: string;
+  /** Stands for a stored read rule that an anonymous caller does not satisfy. */
+  restricted?: boolean;
 }
 
 function stubReader(rows: Row[]): {
@@ -51,6 +53,10 @@ function stubReader(rows: Row[]): {
       // than reproducible.
       const items = rows
         .filter(row => row.slug === slug)
+        // What an enforced read does: a row the caller cannot see is not
+        // returned. `overrideAccess` short-circuits that constraint, so a query
+        // carrying it sees restricted rows too.
+        .filter(row => args.overrideAccess === true || row.restricted !== true)
         .filter(row => args.status === "all" || row.status === "published")
         .sort((left, right) => left.id.localeCompare(right.id))
         .slice(0, 1);
@@ -108,12 +114,24 @@ describe("a preview grant that names an entry", () => {
     expect(entry._isWorkingDraft).toBe(true);
   });
 
+  // Both fall-through cases carry `aaa-shadow`: a never-published row sharing
+  // the requested slug and sorting AHEAD of the published one under `sort: "id"`.
+  //
+  // It is the only shape where the two lifecycle scopes disagree, so it is what
+  // makes these tests capable of failing at all. Without it the fixture returns
+  // the same row whether the fall-through reads `published` or `all`, and the
+  // guarantee the fall-through exists for — that a grant which did not answer
+  // this path cannot surface a row it never named — is asserted in prose and
+  // nowhere in code.
+  const SHADOW: Row = { id: "aaa-shadow", slug: "a", status: "draft" };
+
   it("does not serve the granted entry at a path it does not live at", async () => {
     // The trap this design exists to avoid. Resolving by the granted id alone
     // would render that entry at EVERY url for the life of the session, which
     // is worse than the duplicate-slug bug it fixes.
     const { reader } = stubReader([
       { id: "elsewhere", slug: "somewhere-else", status: "draft" },
+      SHADOW,
       { id: "here", slug: "a", status: "published" },
     ]);
 
@@ -125,10 +143,34 @@ describe("a preview grant that names an entry", () => {
     expect(entry._isWorkingDraft).toBeUndefined();
   });
 
+  it("withdraws the widened trust when the grant does not answer this path", async () => {
+    // The grant names an entry that lives somewhere else, so the by-id read
+    // cannot answer `/a` and the resolver falls through to a published-only
+    // read. That fall-through inherits the trust the draft decision forced on,
+    // so it must give it back: the widening exists to reach the NAMED entry,
+    // and once the grant misses, a preview link is just an anonymous request.
+    // Leaving it on turns one document-scoped grant into a collection-wide
+    // read that ignores the collection's own access rules.
+    const { reader, calls } = stubReader([
+      { id: "granted", slug: "somewhere-else", status: "draft" },
+      { id: "members-only", slug: "a", status: "published", restricted: true },
+    ]);
+
+    await expect(
+      routeFor(reader, "granted").ContentPage(params)
+    ).rejects.toThrow();
+
+    // And the reason it was not served is the enforced read, not luck: the
+    // fall-through query must carry the caller's own access, not the grant's.
+    const fallThrough = calls.at(-1);
+    expect(fallThrough?.overrideAccess).toBe(false);
+  });
+
   it("falls back to published when the grant names a deleted entry", async () => {
     // A preview link outlives what it points at. Failing here would make a
     // stale-but-valid link distinguishable from a forged one.
     const { reader } = stubReader([
+      SHADOW,
       { id: "here", slug: "a", status: "published" },
     ]);
 
@@ -138,6 +180,20 @@ describe("a preview grant that names an entry", () => {
 
     expect(entry.id).toBe("here");
     expect(entry._isWorkingDraft).toBeUndefined();
+  });
+
+  it("reads the fall-through with the published scope, not the widened one", async () => {
+    // Stated directly rather than only inferred from which row came back, so
+    // the guarantee survives a future fixture change that stops distinguishing
+    // the two scopes.
+    const { reader, calls } = stubReader([
+      SHADOW,
+      { id: "here", slug: "a", status: "published" },
+    ]);
+
+    await routeFor(reader, "gone").ContentPage(params);
+
+    expect(calls.at(-1)?.status).toBe("published");
   });
 
   it("still opens the draft when a hook rewrites the entry's id", async () => {

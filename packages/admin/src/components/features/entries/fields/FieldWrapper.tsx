@@ -300,8 +300,10 @@ export function FieldWrapper({
       {/* i18n M7: default-language source text, shown while translating another language. */}
       {sourceHint}
 
-      {/* Description / helper text — always visible below the input. Replaces
-          the previous tooltip-on-info-icon pattern (Task 5 PR 5 design D3). */}
+      {/* Description / helper text — always visible below the input, rather
+          than behind a tooltip on an info icon. Help that only appears on
+          hover is unreachable by touch and easy to miss by keyboard, and it
+          arrives after the user has already decided what to type. */}
       {description && (
         <p className="text-xs text-muted-foreground leading-relaxed">
           {description}

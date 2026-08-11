@@ -147,6 +147,7 @@ jobs:
           pnpm turbo test
           --filter=@nextlyhq/blocks-engine
           --filter=@nextlyhq/blocks-react
+          --filter=@nextlyhq/builder
           --filter=@nextlyhq/plugin-page-builder
           --filter=@nextlyhq/plugin-form-builder
           --filter=@nextlyhq/plugin-seo

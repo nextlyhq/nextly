@@ -224,7 +224,13 @@ export interface BlockRenderArgs<P>
 export interface BlockDefinition<P extends object = Record<string, unknown>>
   extends Omit<
     EngineBlockDefinition<P, BlockRenderContext>,
-    "supports" | "render"
+    // `conditionalSlots` is withheld ON PURPOSE. It exists because a core block
+    // needs it, and what a block author should write is a Block API freeze
+    // decision — but an `@internal` tag removes nothing from a published type,
+    // and this `Omit` inherits every property it does not name. Reserving it
+    // takes naming it here; anything less lets a plugin compile against a
+    // provisional shape and be broken when the freeze settles it.
+    "supports" | "render" | "conditionalSlots"
   > {
   supports?: BlockSupports;
   /**
@@ -343,6 +349,8 @@ export type BlockRenderResult = ReactNode | Promise<ReactNode>;
 export type {
   BlockEditorMeta,
   BlockExample,
+  BlockSeoContribution,
+  BlockSeoImage,
   BlockVariation,
   ComponentPath,
   NodeStyles,

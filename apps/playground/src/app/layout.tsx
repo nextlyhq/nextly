@@ -6,7 +6,7 @@ import {
   QueryProvider,
   ThemeProvider,
 } from "@nextlyhq/admin";
-import { Inter } from "next/font/google";
+import { IBM_Plex_Mono, Inter, Source_Serif_4 } from "next/font/google";
 import "./globals.css";
 
 const inter = Inter({
@@ -14,6 +14,24 @@ const inter = Inter({
   subsets: ["latin"],
   display: "swap",
   weight: ["400", "500", "600", "700"], // Only load weights used in design system
+});
+
+// Self-hosted at build time (no runtime CDN fetch) so the Ink theme lab
+// variant, which sets its serif token to var(--font-source-serif), has a
+// real font to fall back on instead of the browser's default serif.
+const sourceSerif = Source_Serif_4({
+  variable: "--font-source-serif",
+  subsets: ["latin"],
+  display: "swap",
+});
+
+// Same reasoning as sourceSerif above, for the Blueprint theme lab variant's
+// var(--font-ibm-plex-mono) monospace token.
+const ibmPlexMono = IBM_Plex_Mono({
+  variable: "--font-ibm-plex-mono",
+  subsets: ["latin"],
+  display: "swap",
+  weight: ["400", "500", "600"],
 });
 
 export default function RootLayout({
@@ -24,7 +42,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={inter.variable}
+      className={`${inter.variable} ${sourceSerif.variable} ${ibmPlexMono.variable}`}
       /**
        * suppressHydrationWarning is needed to prevent hydration errors caused by
        * browser extensions (e.g., Bitwarden, password managers) that inject

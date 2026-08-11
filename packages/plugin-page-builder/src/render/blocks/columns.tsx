@@ -1,5 +1,6 @@
 import { Children } from "react";
 
+import { columnsStructure } from "../../core/block-structure";
 import { defineBlock } from "../../core/registry";
 
 import { str } from "./util";
@@ -9,13 +10,11 @@ import { str } from "./util";
  * Columns wrap (stack) on narrow viewports. Per-column fixed widths are a refinement.
  */
 export const columns = defineBlock({
-  type: "core/columns",
+  ...columnsStructure,
   version: 1,
   label: "Columns",
   icon: "Columns",
   category: "layout",
-  isContainer: true,
-  slots: [{ name: "default" }],
   defaultProps: { gap: "24px", verticalAlign: "stretch" },
   contentFields: [
     { name: "gap", type: "text", label: "Gap", placeholder: "24px" },

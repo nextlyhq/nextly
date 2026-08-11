@@ -92,10 +92,37 @@ case "$command" in
     [[ -n "${2:-}" ]] || die "usage: file-at <sha> <path>"
     exec gh api "repos/$REPO/contents/$2?ref=$1" --header "Accept: application/vnd.github.raw+json"
     ;;
+  head-sha)
+    require_number "${1:-}"
+    exec gh api "repos/$REPO/pulls/$1" --jq '.head.sha'
+    ;;
+  review-ids-at)
+    # One id per line for this bot's reviews at one commit, sorted so the set
+    # can be differenced. Emitting a value PER MATCH rather than per page is
+    # what makes this survive pagination: `--paginate --jq` runs the expression
+    # once per page, so an expression that returns a single value returns one
+    # per page, and a numeric test on the result then fails open.
+    require_number "${1:-}"
+    require_sha "${2:-}"
+    gh api --paginate "repos/$REPO/pulls/$1/reviews" \
+      --jq ".[] | select(.user.login == \"github-actions[bot]\" and .commit_id == \"$2\") | .id" |
+      sort
+    ;;
   post-review)
     # The agent composes the review JSON; this only decides where it is sent.
+    #
+    # An expected head may be given, and when it is, the PR is re-read here and
+    # the post refused if the branch has moved. The agent checks the head when
+    # it starts, which leaves the whole length of a review as a window in which
+    # a push can land; closing it at the moment of writing is what keeps a
+    # review from describing a commit nobody is looking at any more.
     require_number "${1:-}"
     require_file "${2:-}"
+    if [ -n "${3:-}" ]; then
+      require_sha "$3"
+      current=$(gh api "repos/$REPO/pulls/$1" --jq '.head.sha')
+      [ "$current" = "$3" ] || die "head moved to $current since $3 was reviewed; not posting"
+    fi
     exec gh api --method POST "repos/$REPO/pulls/$1/reviews" --input "$2"
     ;;
   reply)
@@ -108,6 +135,6 @@ case "$command" in
       -F in_reply_to="$2" -F body=@"$3"
     ;;
   *)
-    die "usage: review-bot-gh.sh {pr|diff|reviews|review-comments|issue-comments|files|threads|file-at|post-review|reply} ..."
+    die "usage: review-bot-gh.sh {pr|head-sha|diff|reviews|review-ids-at|review-comments|issue-comments|files|threads|file-at|post-review|reply} ..."
     ;;
 esac

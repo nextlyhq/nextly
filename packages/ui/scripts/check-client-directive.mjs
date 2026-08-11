@@ -10,6 +10,10 @@
  * artifact settles it, so it is asserted here rather than assumed.
  */
 import { readFileSync } from "node:fs";
+import {
+  clientArtifacts,
+  serverSafeArtifacts,
+} from "./published-entries.mjs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -31,15 +35,10 @@ function readClientDirective(file) {
   return /^["']use client["'];?$/.test(first.trim());
 }
 
-const mustHave = ["index.mjs", "index.cjs"];
+const mustHave = clientArtifacts();
 // The server-safe entries: build tooling and a pure helper, both of which
 // server code must be able to import.
-const mustNotHave = [
-  "tailwind-preset.mjs",
-  "tailwind-preset.cjs",
-  "utils.mjs",
-  "utils.cjs",
-];
+const mustNotHave = serverSafeArtifacts();
 
 const problems = [];
 

@@ -69,17 +69,29 @@ export {
 
 // Content routing + sitemap/robots delivery. `next`/`react` are type-only and
 // `next/navigation` resolves lazily, so importing these never forces them.
+// `getNextly` is the documented default for `ContentRouteConfig.nextly`, and a
+// helper built ON a content route needs the same instance the route resolves
+// through — on a per-tenant setup a second instance is a second DATABASE. It is
+// exported so such a helper can resolve it the same way, rather than having the
+// route hand a general reader to every callback in order to share one.
+export { getNextly } from "./direct-api/nextly";
+
 export {
   resolveContent,
   isReservedPath,
   createContentRoute,
+  createPublicContentRoute,
+  slugToStaticParam,
   nextlySitemap,
   nextlyRobots,
   type ContentEntry,
   type ResolveContentOptions,
   type ContentRoute,
+  type StaticContentRoute,
   type ContentRouteArgs,
   type ContentRouteConfig,
+  type RenderContext,
+  type NextlyContentReader,
   type ResolvedContext,
   type NextlySitemapEntry,
   type NextlySitemapOptions,

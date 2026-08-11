@@ -12,12 +12,12 @@
  *
  * @module blocks/image
  */
-import { defineBlock } from "@nextlyhq/blocks-engine";
+import { defineBlock, isFetchableUrl } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
-import { flag, oneOf, text, url } from "./props";
+import { flag, isAuthoredText, oneOf, text, url } from "./props";
 
 /** How the browser should schedule the image. */
 export const IMAGE_LOADING = ["lazy", "eager"] as const;
@@ -41,21 +41,68 @@ export async function renderImage({
   props,
   className,
   ctx,
+  hostPolicy,
 }: BlockRenderArgs<ImageProps>): Promise<ReactElement | null> {
   const mediaId = text(props.mediaId);
   // A resolver that throws must not take the page with it: media lives behind
   // a network call for a signed-URL host, and one unreachable image is not a
   // reason to lose the article around it.
-  const resolved =
+  const record =
     mediaId === "" ? null : await ctx.resolveMedia(mediaId).catch(() => null);
 
-  const src = resolved?.url ?? url(props.src);
+  // A candidate has to clear BOTH filters, and both are asked before the two are
+  // chosen between rather than after.
+  //
+  // Both, because they refuse different things: the scheme filter refuses a
+  // value that could execute, the host list refuses one this site will not fetch
+  // from. A resolver is trusted code, but the value it returns came out of a
+  // media record a person filled in, so it is input in the same sense the typed
+  // prop is — checking one position of that pair and not the other lets a value
+  // through unfiltered.
+  //
+  // Before, because selecting first and filtering after means a library image
+  // the site will not load beats a perfectly good typed URL and then takes the
+  // whole block down with it: the author is left with nothing over a setting
+  // they cannot see, while the fallback they wrote sits unused. Filtering first
+  // renders the first candidate actually allowed, which is what a fallback is
+  // for and what the link-preview path does with the same pair.
+  const patterns = hostPolicy?.remotePatterns;
+  const fetchable = (value: unknown): string | undefined => {
+    const safe = url(value);
+    if (safe === undefined) return undefined;
+    return patterns === undefined || isFetchableUrl(safe, patterns)
+      ? safe
+      : undefined;
+  };
+
+  // A record whose url either filter refused is dropped WHOLE, not just for its
+  // url. Its alt text and intrinsic size describe the asset that was refused, so
+  // keeping them beside the fallback announces one image to a screen reader
+  // while reserving the other one's space.
+  const usable = fetchable(record?.url) === undefined ? null : record;
+  const src = fetchable(usable?.url) ?? fetchable(props.src);
   // Nothing to show. An `<img>` with no `src` still requests the current page
   // in some browsers, so render nothing rather than a broken element.
   if (src === undefined) return null;
 
   const decorative = flag(props.decorative);
-  const alt = decorative ? "" : text(props.alt, resolved?.alt ?? "");
+  // Three states, not two, and `text()` collapses two of them: it answers `""`
+  // for a MISSING alt and for an explicitly empty one, which here mean opposite
+  // things. An explicit `""` is this block's documented way to say "decorative"
+  // and is emitted as written; a missing alt is nobody having said anything,
+  // and falling back to the record's text is what keeps a screen reader from
+  // being handed the file name.
+  //
+  // Order is deliberate: `decorative` wins outright, because an author marking
+  // an image decorative means `alt=""` even when the record holds text; an
+  // author's own alt beats the record's, because it was written for THIS
+  // placement; and the record's is the fallback for a placement that says
+  // nothing.
+  const alt = decorative
+    ? ""
+    : isAuthoredText(props.alt)
+      ? text(props.alt)
+      : (usable?.alt ?? "");
   const caption = text(props.caption);
 
   const image = (
@@ -66,8 +113,8 @@ export async function renderImage({
       loading={oneOf(props.loading, IMAGE_LOADING, "lazy")}
       // Intrinsic dimensions reserve the space before the file arrives, which
       // is what stops the text below it jumping when it loads.
-      {...(resolved?.width === undefined ? {} : { width: resolved.width })}
-      {...(resolved?.height === undefined ? {} : { height: resolved.height })}
+      {...(usable?.width === undefined ? {} : { width: usable.width })}
+      {...(usable?.height === undefined ? {} : { height: usable.height })}
       {...(decorative ? { role: "presentation" } : {})}
     />
   );
@@ -101,6 +148,24 @@ export const image = defineBlock<ImageProps, PageContext>({
     caption: { type: "text" },
   },
   defaultProps: { alt: "", loading: "lazy" },
+  // Both candidates, in the order the render prefers them: the resolved media
+  // first, the directly-typed URL as the fallback the render itself falls back
+  // to when the record is missing.
+  //
+  // Each says WHICH KIND it is, because only this block knows: the
+  // id came from `mediaId` and the address from `src`, and no inspection of the
+  // text can tell them apart — a UUID is a valid relative URL and a bare word
+  // is a valid src.
+  seo: props => {
+    const mediaId = text(props.mediaId);
+    const src = url(props.src) ?? "";
+    return {
+      image: [
+        ...(mediaId === "" ? [] : [{ media: mediaId }]),
+        ...(src === "" ? [] : [{ url: src }]),
+      ],
+    };
+  },
   example: { props: { src: "/example.jpg", alt: "An example image" } },
   supports: {
     spacing: true,
@@ -110,4 +175,11 @@ export const image = defineBlock<ImageProps, PageContext>({
     position: true,
   },
   render: renderImage,
+  // A media id may still resolve to nothing, and that is settled by a call to
+  // the host — so only the case decidable from the props alone is claimed here:
+  // no id AND no usable direct url means there is nothing to draw and nothing
+  // to ask about. An id that fails to resolve falls back to drawing nothing at
+  // render time, which the boundary already treats as a deliberate decision.
+  rendersNothing: props =>
+    text(props.mediaId) === "" && url(props.src) === undefined,
 });

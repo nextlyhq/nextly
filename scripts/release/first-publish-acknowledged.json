@@ -18,5 +18,5 @@
     "Once a package has published a real version the entry stops doing anything and",
     "preflight will say so; remove it then."
   ],
-  "packages": []
+  "packages": ["@nextlyhq/builder"]
 }

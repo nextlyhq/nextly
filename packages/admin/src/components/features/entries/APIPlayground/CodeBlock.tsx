@@ -76,7 +76,10 @@ export function CodeBlock({
           backgroundColor: "transparent !important",
         },
         ".cm-scroller": {
-          fontFamily: "var(--nx-font-mono, ui-monospace, monospace)",
+          // `--font-mono` is the theme's mono stack, so the editor renders in
+          // the same face as every other mono surface in the admin. The
+          // fallback only covers a host that has not loaded the theme.
+          fontFamily: "var(--font-mono, ui-monospace, monospace)",
           padding: showGutter ? "16px 12px" : "16px 24px",
         },
         ".cm-gutters": {

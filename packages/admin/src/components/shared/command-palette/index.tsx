@@ -9,8 +9,10 @@ import {
   CommandList,
   CommandSeparator,
   CommandShortcut,
+  ShortcutProvider,
+  useShortcuts,
 } from "@nextlyhq/ui";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 import { Home, Settings, Shield, Users } from "@admin/components/icons";
 import { ROUTES } from "@admin/constants/routes";
@@ -110,7 +112,23 @@ const navigationCommands: NavigationCommand[] = [
   },
 ];
 
+/**
+ * The command palette, with the shortcut owner it needs.
+ *
+ * It carries its own provider because it is exported for embedding and is routinely rendered
+ * OUTSIDE the admin shell — the playground mounts it as a sibling of the routed children, where no
+ * shell provider is an ancestor, and registering a shortcut there would throw. Nesting is free:
+ * providers share one manager per target, so inside the shell this reuses the shell's.
+ */
 export function CommandPalette() {
+  return (
+    <ShortcutProvider>
+      <CommandPaletteContent />
+    </ShortcutProvider>
+  );
+}
+
+function CommandPaletteContent() {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
 
@@ -131,81 +149,51 @@ export function CommandPalette() {
   }, []);
 
   /**
-   * Keyboard shortcut listeners:
-   * 1. Cmd+K / Ctrl+K - Toggle command palette
-   * 2. G then D/U/R/S - Gmail-style navigation shortcuts (when palette is closed)
+   * Keyboard shortcuts, registered with the application's one keydown owner.
+   *
+   * The `g <key>` navigation used to be hand-rolled here, holding the previous key and a
+   * timestamp in the closure and comparing against a one-second window. The manager models a
+   * sequence directly, with the same one-second default, so the state and the comparison go away
+   * — along with the `document` listener that carried them.
    */
-  useEffect(() => {
-    // Sequential key timeout in milliseconds (1 second window for G+key shortcuts)
-    const SEQUENTIAL_KEY_TIMEOUT = 1000;
-
-    let lastKey = "";
-    let lastKeyTime = 0;
-
-    const down = (e: KeyboardEvent) => {
-      // Cmd+K / Ctrl+K - Toggle command palette
-      if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        setOpen(open => !open);
-        return;
-      }
-
-      // Gmail-style shortcuts (G then D/U/R/S) - only when palette is closed
-      if (!open) {
-        // Ignore shortcuts if user is typing in an input field
-        const activeElement = document.activeElement;
-        const isTyping =
-          activeElement?.tagName === "INPUT" ||
-          activeElement?.tagName === "TEXTAREA" ||
-          activeElement?.getAttribute("contenteditable") === "true";
-
-        if (isTyping) return;
-
-        const currentTime = Date.now();
-        const timeSinceLastKey = currentTime - lastKeyTime;
-
-        // If 'g' was pressed recently (within timeout window)
-        // The "g <key>" shortcuts jump between admin sections, so they route
-        // through the admin's own SPA navigation rather than a full page load.
-        if (lastKey === "g" && timeSinceLastKey < SEQUENTIAL_KEY_TIMEOUT) {
-          switch (e.key.toLowerCase()) {
-            case "d":
-              e.preventDefault();
-              handleSelect(() => navigateTo(ROUTES.DASHBOARD));
-              lastKey = "";
-              break;
-            case "u":
-              e.preventDefault();
-              handleSelect(() => navigateTo("/admin/users"));
-              lastKey = "";
-              break;
-            case "r":
-              e.preventDefault();
-              handleSelect(() => navigateTo("/admin/roles"));
-              lastKey = "";
-              break;
-            case "s":
-              e.preventDefault();
-              handleSelect(() => navigateTo("/admin/settings"));
-              lastKey = "";
-              break;
-            default:
-              lastKey = "";
-          }
-        } else if (e.key?.toLowerCase() === "g") {
-          // Store 'g' key press
-          lastKey = "g";
-          lastKeyTime = currentTime;
-        } else {
-          // Reset if any other key is pressed
-          lastKey = "";
-        }
-      }
-    };
-
-    document.addEventListener("keydown", down);
-    return () => document.removeEventListener("keydown", down);
-  }, [open, handleSelect]);
+  useShortcuts(
+    [
+      {
+        keys: "mod+k",
+        description: "Open the command palette",
+        run: () => setOpen(previous => !previous),
+        // The palette has to be reachable from wherever the user is, including mid-sentence in a
+        // field, which is why this one is exempt from the typing rule and the `g` sequences below
+        // are not.
+        whenTyping: true,
+      },
+      {
+        keys: "g d",
+        description: "Go to the dashboard",
+        run: () => handleSelect(() => navigateTo(ROUTES.DASHBOARD)),
+        when: () => !open,
+      },
+      {
+        keys: "g u",
+        description: "Go to users",
+        run: () => handleSelect(() => navigateTo("/admin/users")),
+        when: () => !open,
+      },
+      {
+        keys: "g r",
+        description: "Go to roles",
+        run: () => handleSelect(() => navigateTo("/admin/roles")),
+        when: () => !open,
+      },
+      {
+        keys: "g s",
+        description: "Go to settings",
+        run: () => handleSelect(() => navigateTo("/admin/settings")),
+        when: () => !open,
+      },
+    ],
+    { name: "command-palette" }
+  );
 
   /**
    * Handle dialog open/close state changes

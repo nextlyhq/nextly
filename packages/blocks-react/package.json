@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/blocks-react",
-  "version": "0.0.2-alpha.53",
+  "version": "0.0.2-alpha.55",
   "description": "The React Server Component renderer for Nextly block documents, usable with or without the CMS.",
   "license": "MIT",
   "repository": {
@@ -54,10 +54,14 @@
   },
   "peerDependencies": {
     "next": "^15.0.0 || ^16.0.0",
+    "nextly": "workspace:*",
     "react": "^19.0.0"
   },
   "peerDependenciesMeta": {
     "next": {
+      "optional": true
+    },
+    "nextly": {
       "optional": true
     }
   },
@@ -68,6 +72,7 @@
     "@types/react": "19.2.0",
     "@types/react-dom": "19.2.0",
     "eslint": "^9.39.1",
+    "nextly": "workspace:*",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "rimraf": "^6.1.3",

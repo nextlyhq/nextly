@@ -6,6 +6,7 @@
  * resolution time) for component-field read/write support.
  */
 
+import { FieldGroupMetadataService } from "../../domains/field-groups/services/field-group-metadata-service";
 import type { CollectionRelationshipService } from "../../services/collections/collection-relationship-service";
 import {
   FieldGroupDataService,
@@ -30,6 +31,21 @@ export function registerComponentServices(ctx: RegistrationContext): void {
   container.registerSingleton<FieldGroupSchemaService>(
     "fieldGroupSchemaService",
     () => new FieldGroupSchemaService(adapter.getCapabilities().dialect)
+  );
+
+  // FieldGroupMetadataService — schema changes for a field group, holding the table change and the
+  // registry write together. Registered rather than built per request so one wrapper here governs
+  // every caller: the migration lock has to enclose both halves, and a lock applied at one call
+  // site leaves the others uncovered. That is the same reason the three create transports were
+  // allowed to disagree about whether the table gets made at all.
+  container.registerSingleton<FieldGroupMetadataService>(
+    "fieldGroupMetadataService",
+    () =>
+      new FieldGroupMetadataService(
+        container.get<FieldGroupRegistryService>("fieldGroupRegistryService"),
+        logger,
+        adapter
+      )
   );
 
   // FieldGroupDataService — CRUD for component instance data.

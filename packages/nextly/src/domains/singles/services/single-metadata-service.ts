@@ -44,6 +44,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { NextlyError } from "../../../errors";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
   DynamicSingleInsert,
@@ -163,6 +164,66 @@ export class SingleMetadataService {
     });
 
     return { record, migrationStatus };
+  }
+
+  /**
+   * Remove a Single: its storage first, then its registry row.
+   *
+   * The order is the opposite of the create's and for the same reason. A create writes the row last
+   * so a failure cannot leave a row describing storage that was never made; a delete drops the
+   * storage first so a failure cannot leave storage that no row describes. Both put the registry
+   * write on the side where an interruption is visible rather than invisible.
+   *
+   * Failures propagate here rather than being recorded as a status. A single that cannot be fully
+   * removed stays intact and retryable, which is a better state than one whose row is gone while its
+   * tables survive: the row is what makes the tables findable.
+   */
+  async deleteSingle(
+    slug: string,
+    tableName: string | undefined
+  ): Promise<void> {
+    const adapter = this.adapter;
+    if (tableName && adapter) {
+      // Embedded field-group instances point back at this table by a plain string with no foreign
+      // key, so the drop below cascades nothing and would strand them. Sweep first.
+      const { teardownEntityComponentData } = await import(
+        "../../field-groups/services/teardown-entity-field-group-data"
+      );
+      await teardownEntityComponentData({ adapter, parentTable: tableName });
+
+      // Remove the companion `_locales` table and this single's archive rows before the main table.
+      // The companion holds a foreign key to `<main>.id`, so it must go first or the main drop
+      // orphans it on PostgreSQL and is rejected by the constraint on MySQL.
+      const { teardownEntityI18n } = await import(
+        "../../i18n/migration/teardown-entity-i18n"
+      );
+      await teardownEntityI18n({ adapter, slug, tableName, kind: "single" });
+
+      // PostgreSQL needs CASCADE to drop dependent objects: the companion's foreign key makes the
+      // main table a target, and a non-cascading drop raises rather than proceeding. The other two
+      // dialects reject the keyword, so it is asked for only where it means something.
+      //
+      // The adapter renders this rather than a SQL string built here, because it already owns the
+      // two things such a string has to get right on every dialect: quoting the identifier, and
+      // turning a driver failure into the normalised database error the callers above expect.
+      await adapter.dropTable(tableName, {
+        ifExists: true,
+        cascade: adapter.getCapabilities().dialect === "postgresql",
+      });
+    }
+
+    // A row a concurrent delete already took is the state this method exists to reach, so it
+    // completes rather than failing.
+    //
+    // The tolerance covers this one call and nothing above it. A teardown or a drop that fails has
+    // to surface even when its message mentions something missing, because answering "deleted" to
+    // it would leave the registry row present and the storage half removed — the exact state the
+    // ordering above is arranged to prevent.
+    try {
+      await this.registry.deleteSingle(slug, { force: true });
+    } catch (error) {
+      if (!NextlyError.isNotFound(error)) throw error;
+    }
   }
 
   /**

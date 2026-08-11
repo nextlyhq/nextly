@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`ui public export surface > index.ts surface is unchanged 1`] = `
+exports[`ui public export surface > . surface is unchanged 1`] = `
 [
   "Accordion (value)",
   "AccordionContent (value)",
@@ -11,6 +11,7 @@ exports[`ui public export surface > index.ts surface is unchanged 1`] = `
   "AccordionTrigger (value)",
   "AccordionTriggerProps (type)",
   "ActionCallbacks (type)",
+  "ActiveShortcut (type)",
   "Alert (value)",
   "AlertDescription (value)",
   "AlertDescriptionProps (type)",
@@ -144,6 +145,8 @@ exports[`ui public export surface > index.ts surface is unchanged 1`] = `
   "GridProps (type)",
   "Input (value)",
   "InputProps (type)",
+  "KeyChord (type)",
+  "KeySequence (type)",
   "Label (value)",
   "ListResponse (type)",
   "PaginationConfig (type)",
@@ -195,8 +198,19 @@ exports[`ui public export surface > index.ts surface is unchanged 1`] = `
   "SheetTitleRef (type)",
   "SheetTrigger (value)",
   "SheetTriggerProps (type)",
+  "ShortcutBinding (type)",
+  "ShortcutLayerOptions (type)",
+  "ShortcutManager (type)",
+  "ShortcutManagerOptions (type)",
+  "ShortcutProvider (value)",
+  "ShortcutProviderProps (type)",
+  "ShortcutRegistration (type)",
+  "ShortcutScope (value)",
   "Skeleton (value)",
   "SkeletonProps (type)",
+  "Slider (value)",
+  "SliderProps (type)",
+  "SliderThumbProps (type)",
   "SortInfo (type)",
   "Spinner (value)",
   "SpinnerProps (type)",
@@ -241,31 +255,53 @@ exports[`ui public export surface > index.ts surface is unchanged 1`] = `
   "TreeNode (type)",
   "TreeView (value)",
   "TreeViewProps (type)",
+  "UseShortcutsOptions (type)",
   "alertVariants (value)",
   "avatarVariants (value)",
   "badgeVariants (value)",
   "buttonVariants (value)",
   "cardVariants (value)",
+  "createShortcutManager (value)",
   "dialogContentVariants (value)",
   "inputVariants (value)",
+  "parseKeys (value)",
   "progressVariants (value)",
   "selectTriggerVariants (value)",
   "sheetVariants (value)",
   "spinnerVariants (value)",
   "toast (value)",
+  "useActiveShortcuts (value)",
   "usePortalContainer (value)",
+  "useShortcutManager (value)",
+  "useShortcuts (value)",
 ]
 `;
 
-exports[`ui public export surface > lib/utils.ts surface is unchanged 1`] = `
+exports[`ui public export surface > ./color surface is unchanged 1`] = `
 [
-  "cn (value)",
+  "Hsv (type)",
+  "Oklch (type)",
+  "Rgb (type)",
+  "Rgba (type)",
+  "hsvToRgb (value)",
+  "normalizeHue (value)",
+  "oklchToRgb (value)",
+  "parseHex (value)",
+  "rgbToHsv (value)",
+  "rgbToOklch (value)",
+  "toHex (value)",
 ]
 `;
 
-exports[`ui public export surface > tailwind-preset.ts surface is unchanged 1`] = `
+exports[`ui public export surface > ./tailwind-preset surface is unchanged 1`] = `
 [
   "default (value)",
   "uiPreset (value)",
+]
+`;
+
+exports[`ui public export surface > ./utils surface is unchanged 1`] = `
+[
+  "cn (value)",
 ]
 `;

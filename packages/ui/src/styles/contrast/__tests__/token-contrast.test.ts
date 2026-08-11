@@ -95,5 +95,43 @@ for (const mode of MODES) {
           `needs ${required}:1 (${pairing.kind})`
       ).toBeGreaterThanOrEqual(required);
     });
+
+    it("clears every threshold by a margin, not on the line", () => {
+      // Passing and passing-by-enough are different properties, and only the
+      // first was ever asserted. A pairing sitting a hundredth above its
+      // threshold is one rounding away from failing, and the suite would
+      // report it as healthy right up until it did -- which is how a control
+      // boundary reached 3.05:1 against a real page surface and stayed green.
+      //
+      // The band is the one the margin evidence already uses to call a pairing
+      // fragile, so this enforces a distinction the audit was drawing by hand.
+      const MARGIN = 0.25;
+
+      const thin = applicable
+        .map(pairing => {
+          const surface = surfaceOf(pairing, ctx);
+          const foreground = foregroundOf(pairing, ctx, surface);
+          const ratio = contrastRatio(foreground, surface);
+          return {
+            label: pairing.label,
+            margin: ratio - THRESHOLDS[pairing.kind],
+            ratio,
+            required: THRESHOLDS[pairing.kind],
+          };
+        })
+        .filter(row => row.margin < MARGIN)
+        .sort((a, b) => a.margin - b.margin);
+
+      expect(
+        thin.map(
+          row =>
+            `${row.label} = ${row.ratio.toFixed(2)}:1, needs ${row.required}:1 ` +
+            `(margin ${row.margin.toFixed(3)})`
+        ),
+        `${mode.name}: these pairings pass only just. Solve the token to a ` +
+          `margin rather than to the threshold, so a later palette nudge ` +
+          `cannot push it under without anyone choosing to.`
+      ).toEqual([]);
+    });
   });
 }

@@ -43,6 +43,7 @@
  * shared directory this exists to stay out of.
  */
 import { execFileSync } from "node:child_process";
+import { declarationFiles } from "../../scripts/published-entries.mjs";
 import { existsSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -59,22 +60,13 @@ const pkgRoot = join(here, "..", "..");
 const OUT_DIR = join(pkgRoot, "node_modules", ".cache", "surface-declarations");
 
 /**
- * Every declaration a published entry point resolves to.
+ * Every declaration a published entry point resolves to, derived from the export map.
  *
- * Both module systems, because `package.json` gives each entry point an
- * `import.types` AND a `require.types` condition. Listing only the ESM `.d.ts`
- * left the files served to CommonJS consumers unbuilt and unchecked for release
- * tags, so `index.d.cts` could be missing or untagged while every assertion
- * here stayed green.
+ * Derived rather than listed, because a hand-written copy is unprotected by default for anything
+ * added after it: a new subpath is simply absent, every assertion here stays green, and nothing
+ * says the new entry point is unchecked.
  */
-export const DECLARATION_ENTRIES = [
-  "index.d.ts",
-  "utils.d.ts",
-  "tailwind-preset.d.ts",
-  "index.d.cts",
-  "utils.d.cts",
-  "tailwind-preset.d.cts",
-];
+export const DECLARATION_ENTRIES: string[] = declarationFiles();
 
 /**
  * Build the declarations and return the directory holding them.

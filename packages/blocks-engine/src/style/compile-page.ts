@@ -36,10 +36,12 @@ import { DEFAULT_LIMITS } from "../limits";
 import type { DocumentLimits } from "../limits";
 import { isPlainRecord } from "../plain-record";
 import type { ValidationIssue } from "../validation";
+import { isConditionGated } from "../visibility";
 
 import { BREAKPOINT_AXES } from "./breakpoint-axes";
 import type { BreakpointAxis } from "./breakpoint-axes";
 import { escapeIdentifier } from "./css-value";
+import type { MayFetchUrl } from "./css-value";
 import { compileStyleValues, DEFAULT_TOKEN_PREFIX } from "./declarations";
 import type { Declaration } from "./declarations";
 import type { NamedClass } from "./named-class";
@@ -72,6 +74,35 @@ import type { WarningAllowance } from "./warning-allowance";
 /** Everything site-level the compiler needs; the caller loads it. */
 export interface StyleCompileContext {
   breakpoints: BreakpointSet;
+  /**
+   * Which hosts this site will fetch from.
+   *
+   * A stylesheet is a fetching surface: `background-image: url(...)` makes the
+   * browser request whatever it names, on every page that rule applies to. The
+   * scheme allowlist below the compile refuses `javascript:` and friends but has
+   * nothing to say about WHICH http(s) host is reached, and a value carrying no
+   * scheme at all can still name one — `//cdn.example/a.png` inherits the page's
+   * protocol and nothing else.
+   *
+   * Left undefined, no host question is asked and the compile behaves exactly as
+   * it did before this existed. The engine ships no list of its own because
+   * which hosts a site trusts belongs to the site, not to the document format.
+   */
+  mayFetchUrl?: MayFetchUrl;
+  /**
+   * What this run's fetch policy IS, for a reader deciding whether a stylesheet
+   * compiled earlier may be reused.
+   *
+   * Only needed when `mayFetchUrl` is supplied directly. A predicate is opaque —
+   * nothing can tell one function from another — so a caller that supplies one
+   * and wants its compiled sheets cached has to say which policy that function
+   * represents. Omit it and a reader treats every stored sheet as compiled under
+   * different rules, which is slower and never wrong.
+   *
+   * The compiler does not read this. It travels with the compile so the answer
+   * and the thing it describes cannot be recorded separately and disagree.
+   */
+  fetchPolicyId?: string;
   /**
    * Base styles per block type, keyed by block name. One shared rule per type
    * rather than a copy inside every node: a page of forty default sections
@@ -505,6 +536,15 @@ function unknownBreakpointWarnings(
   }
 }
 
+/** What one envelope is, and what may be written from it. */
+interface EnvelopeContext {
+  origin: StyleOrigin;
+  /** Appended to as declarations are emitted; absent when no caller asked for a trace. */
+  trace?: StyleTraceEntry[];
+  /** Which hosts this site will fetch from; unasked when absent. */
+  mayFetchUrl?: MayFetchUrl;
+}
+
 /** Compile one styles envelope into rules under one selector. */
 function envelopeRules(
   styles: NodeStyles | undefined,
@@ -515,10 +555,18 @@ function envelopeRules(
   warnings: ValidationIssue[],
   budget: StyleIssueBudget,
   warningAllowance: WarningAllowance,
-  origin: StyleOrigin,
-  /** Appended to as declarations are emitted; absent when no caller asked for a trace. */
-  trace: StyleTraceEntry[] | undefined
+  /**
+   * What this envelope IS and what may be written from it, grouped rather than
+   * appended. Ten positional arguments was already past the point where a call
+   * reads by position, and the policy below had to arrive with them: as an
+   * eleventh optional in line it would have sat beside `trace` with nothing but
+   * its type to tell the two apart, and a policy dropped in a mis-slotted call
+   * leaves every URL in the document unasked about. Named fields cannot be
+   * mis-slotted, and grouping takes the arity DOWN rather than up.
+   */
+  about: EnvelopeContext
 ): CssRule[] {
+  const { origin, trace, mayFetchUrl } = about;
   if (styles === undefined) return [];
   // A stored envelope that is not an object — `[]`, a string, `null` — styles
   // nothing, and this compiler reads persisted data whether or not a caller
@@ -590,7 +638,8 @@ function envelopeRules(
         path,
         tokenPrefix,
         budget,
-        warningAllowance
+        warningAllowance,
+        { mayFetchUrl }
       );
       // Appended as they come. `compileStyleValues` holds this same allowance and charges
       // everything it returns against it exactly once, so charging again here would spend it
@@ -624,22 +673,6 @@ function envelopeRules(
     }
   }
   return rules;
-}
-
-/**
- * Whether a node's styling can be pruned from the page after the sheet is written.
- *
- * True only for a node that DECLARES entry-field conditions. `devices` is not the same thing and
- * must not be conflated with it: per-breakpoint hiding is presentation, decided by CSS on a node
- * that is always in the markup, while a condition decides whether the node is served at all.
- *
- * Read defensively, because a document reaches this compiler whether or not anything validated
- * it. An empty array declares nothing, and neither does a value that is not an array.
- */
-function declaresConditions(node: BlockNode): boolean {
-  const conditions = (node as { visibility?: { conditions?: unknown } })
-    .visibility?.conditions;
-  return Array.isArray(conditions) && conditions.length > 0;
 }
 
 /** Split declarations by the descendant they attach to, root first. */
@@ -813,10 +846,19 @@ function boundedAtRule(
   return `${feature} ${upper}(width > ${lowerBound}px)`;
 }
 
-/** One node and the pointer that resolves to it inside the document. */
+/** One node, the pointer that resolves to it, and whether anything gates it. */
 interface PlacedNode {
   node: BlockNode;
   path: string;
+  /**
+   * Whether this node is condition-gated, by its OWN conditions or an ancestor's.
+   *
+   * Inherited down the walk because a reader prunes whole SUBTREES: a conditioned container takes
+   * its children with it. A node judged only by its own conditions therefore leaves an
+   * unconditional child's rules in the main sheet while that child's markup is withheld —
+   * publishing the colours, fonts and `url(...)` of an element nobody was served.
+   */
+  gated: boolean;
 }
 
 /**
@@ -841,8 +883,12 @@ function documentNodes(
   // overflow the stack and fail the request with a RangeError instead of
   // returning a stylesheet. Validation walks the same adversarial shape the
   // same way.
-  const queue: { nodes: readonly BlockNode[]; base: string; depth: number }[] =
-    [{ nodes: doc.nodes, base: "/nodes", depth: 1 }];
+  const queue: {
+    nodes: readonly BlockNode[];
+    base: string;
+    depth: number;
+    gated: boolean;
+  }[] = [{ nodes: doc.nodes, base: "/nodes", depth: 1, gated: false }];
   // Iterating instead of recursing keeps a deep document from overflowing the
   // stack; it does not keep one from exhausting memory. Every queued level
   // retains the cumulative pointer to it, so a chain nested as deep as the byte
@@ -891,7 +937,10 @@ function documentNodes(
       const node = level.nodes[index];
       if (!isPlainRecord(node) || typeof node.id !== "string") continue;
       const path = pointer(level.base, index);
-      placed.push({ node, path });
+      // Once gated, gated for the whole subtree: a descendant cannot be served when the ancestor
+      // carrying it is not.
+      const gated = level.gated || isConditionGated(node);
+      placed.push({ node, path, gated });
       if (!isPlainRecord(node.slots)) continue;
       // Sorted, so two documents whose slots were written in a different order
       // still compile to the same bytes.
@@ -902,6 +951,7 @@ function documentNodes(
           nodes: children,
           base: pointer(pointer(path, "slots"), slot),
           depth: level.depth + 1,
+          gated,
         });
       }
     }
@@ -937,6 +987,7 @@ export function compilePageCss(
   const warningAllowance = newWarningAllowance();
   const contexts = breakpointContexts(ctx.breakpoints);
   const tokenPrefix = ctx.tokenPrefix ?? DEFAULT_TOKEN_PREFIX;
+  const mayFetchUrl = ctx.mayFetchUrl;
   const scope = scopeSelector(ctx.scope, warnings);
   const pageRoot = `${PAGE_ROOT_SELECTOR}${scope}`;
 
@@ -959,7 +1010,16 @@ export function compilePageCss(
   }
 
   const rules: CssRule[] = [];
-  const gated: Record<string, string> = {};
+  // A null-prototype record, because a node id is author data and `__proto__` is a legal one.
+  // Assigning it on an ordinary object runs the inherited setter instead of creating an own
+  // property, so the entry vanishes: `Object.keys` stays empty, the field is omitted as though the
+  // page gated nothing, and a reader then treats a fresh artifact as one compiled before the split
+  // and withholds the WHOLE sheet — every visible sibling losing its styling because one node was
+  // named `__proto__`.
+  const gated: Record<string, string> = Object.create(null) as Record<
+    string,
+    string
+  >;
   // One array for the whole compile, appended to in emission order by every tier below.
   const trace: StyleTraceEntry[] | undefined =
     ctx.trace === true ? [] : undefined;
@@ -977,8 +1037,7 @@ export function compilePageCss(
       warnings,
       budget,
       warningAllowance,
-      { kind: "page" },
-      trace
+      { origin: { kind: "page" }, trace, mayFetchUrl }
     )
   );
 
@@ -1024,8 +1083,7 @@ export function compilePageCss(
         warnings,
         budget,
         warningAllowance,
-        { kind: "blockType", type },
-        trace
+        { origin: { kind: "blockType", type }, trace, mayFetchUrl }
       )
     );
   }
@@ -1169,8 +1227,11 @@ export function compilePageCss(
         // allowance, which is shared and is what actually caps the reporting.
         newStyleIssueBudget(),
         warningAllowance,
-        { kind: "class", id: cls.id, slug: cls.slug },
-        trace
+        {
+          origin: { kind: "class", id: cls.id, slug: cls.slug },
+          trace,
+          mayFetchUrl,
+        }
       )
     );
   }
@@ -1178,7 +1239,7 @@ export function compilePageCss(
   // Each node's own values, in document order so the stylesheet reads the way
   // the page does.
   const reportedDuplicates = new Set<string>();
-  for (const { node, path } of nodes) {
+  for (const { node, path, gated: nodeGated } of nodes) {
     const className = classes.get(node.id);
     if (className === undefined) continue;
     if (duplicateIds.has(node.id)) {
@@ -1197,6 +1258,7 @@ export function compilePageCss(
       continue;
     }
     const selector = `${pageRoot} .${className}`;
+    const traceBeforeNode = trace?.length ?? 0;
     const nodeRules = [
       ...envelopeRules(
         node.styles,
@@ -1207,8 +1269,7 @@ export function compilePageCss(
         warnings,
         budget,
         warningAllowance,
-        { kind: "node", id: node.id },
-        trace
+        { origin: { kind: "node", id: node.id }, trace, mayFetchUrl }
       ),
       ...visibilityRules(
         node,
@@ -1224,8 +1285,15 @@ export function compilePageCss(
     // without reading what came before. Appending is safe because every node carries its own
     // hashed class: two nodes' local rules never collide, and tier order is preserved inside
     // each entry.
-    if (declaresConditions(node)) {
+    if (nodeGated) {
       gated[node.id] = serializeRules(nodeRules);
+      // The trace has to describe the sheet that was RETURNED. `envelopeRules` appended this
+      // node's declarations while building them, and they are now leaving `css` — so left in
+      // place they would report declarations the browser never received, at an interleaved
+      // position the appended entry does not occupy either. Rolled back to where this node
+      // started rather than filtered afterwards, because the entries carry no marker saying
+      // which node produced them.
+      if (trace !== undefined) trace.length = traceBeforeNode;
       continue;
     }
     rules.push(...nodeRules);

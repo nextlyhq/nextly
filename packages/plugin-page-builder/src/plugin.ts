@@ -18,6 +18,7 @@ import { PAGE_BUILDER_FIELD_TYPE } from "./collections/pageBuilderEntry";
 import { pagesCollection } from "./collections/pages";
 import type { RemotePattern } from "./core/url-policy";
 import { BLOCKS_FIELD_TYPE } from "./fields/blocksField";
+import { CUSTOM_CSS_ACTION, CUSTOM_CSS_RESOURCE } from "./permissions";
 
 export interface PageBuilderOptions {
   /** Disable behavior while still applying schema. Default true. */
@@ -32,17 +33,59 @@ export interface PageBuilderOptions {
    * only on `PageRenderer` because the canvas runs in the browser, where a
    * component prop from the host's server config cannot reach it.
    *
-   * Set the SAME value on `PageRenderer.remotePatterns`. These are two
-   * assignments, not one: this configures the editor, and `PageRenderer` reads
-   * only its own prop. Setting one alone produces a mismatch in whichever
-   * direction you set it, so a shared constant in the host is what keeps them
-   * equal.
+   * Set the SAME value on `PageRenderer.remotePatterns` from
+   * `@nextlyhq/plugin-page-builder/render`, and pass it to `cspDirectives()` or
+   * `cspHeaderValue()`. Three assignments: each surface reads only what it was
+   * handed, and the CSP helpers default to an empty list.
    *
-   * Object patterns only, unlike `PageRenderer`, which also accepts a `URL`.
-   * This value is serialized to the browser and a `URL` does not survive that:
-   * it would arrive as a string. Converting one here would mean deciding what
-   * its default `pathname` of `"/"` means as a glob, and guessing at that in a
-   * security control is worse than declining the input.
+   * Even then the three are not identical. CSP cannot express a `pathname` or
+   * `search` constraint, so `cspDirectives()` omits such a host rather than
+   * widening the policy to its whole origin; `unexpressibleHosts()` reports what
+   * it refused so the host can write that source itself.
+   *
+   * **Enforced for** the built-in block renderers and structured style values,
+   * through `isFetchableUrl`; the embed HTML sanitizer; the editor canvas. A
+   * CUSTOM block is handed the patterns and must apply them itself — `RenderNode`
+   * passes them in and cannot inspect the element a block returns.
+   *
+   * **Not custom CSS.** `sanitizeCustomCss` takes no patterns and drops every
+   * url naming a host, whether by scheme — including `https://site.example/a.png`,
+   * the site's own origin, since compilation has no document origin to compare
+   * against — or by the scheme-less `//cdn.example/a.png`. What survives is a
+   * path naming no host: `/a.png`, `a.png`. That is a property of the stored
+   * TEXT, not of the eventual request — a cross-origin `<base href>` on the
+   * host document re-points every such path at another origin, which is a
+   * surface a parser cannot reach and one reason `cspDirectives()` emits
+   * `base-uri`. That surface is stricter than this value, not governed by it.
+   *
+   * **Also `@nextlyhq/blocks-react`**, which now bounds what a published page
+   * fetches — but only when it is TOLD to, and from its own field. Pass the same
+   * list as `hostPolicy={{ remotePatterns }}` on its `PageRenderer`, or as
+   * `hostPolicy` in `createBlocksPage({ ... })`. Leaving it unset while this is
+   * configured means the editor and the published page enforce different rules,
+   * which is the failure this note exists to prevent: the canvas refuses a host
+   * the live page then loads.
+   *
+   * That covers the three ways the published page reaches out — a block's own
+   * markup, the compiled stylesheet, and the link-preview image in metadata.
+   * The renderer's remaining checks are about SCHEMES and stay narrower than a
+   * host rule: the engine's CSS compiler limits an explicit scheme to
+   * `http`/`https` and leaves a scheme-less value alone, so `//cdn.example/a.png`
+   * passes the scheme check and is judged by the host list instead; a block's
+   * attribute props admit `http`, `https`, `mailto` and `tel` and refuse every
+   * other scheme.
+   *
+   * A CUSTOM block written against `blocks-react` is bounded only if it asks,
+   * for the same reason as above: the boundary sees the element a block returned
+   * and not the URLs it chose. `hostPolicy.trustedFrameOrigins` remains a
+   * separate question — it decides whether an embed keeps its own origin, which
+   * is a sandbox permission rather than whether the frame is loaded.
+   *
+   * Object patterns only. This value is serialized to the browser and a `URL`
+   * does not survive that: it would arrive as a string. Converting one here
+   * would mean deciding what its default `pathname` of `"/"` means as a glob,
+   * and guessing at that in a security control is worse than declining the
+   * input.
    */
   remotePatterns?: readonly RemotePattern[];
 }
@@ -110,6 +153,27 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
       // `update-pages` already covers, and no code path asked whether the user
       // could publish. Granting it did nothing and withholding it prevented
       // nothing. Declare it again alongside the check that reads it.
+      //
+      // The permission below is read by the `customCss` field rule in
+      // `pagesCollection()`, so granting and withholding it each change what a
+      // user can do.
+      permissions: [
+        {
+          action: CUSTOM_CSS_ACTION,
+          resource: CUSTOM_CSS_RESOURCE,
+          label: "Write custom CSS",
+          description:
+            "Author per-page and per-block custom CSS in the page builder. Without it the CSS already on a page stays visible and applied, but cannot be changed.",
+          // No `group`: the admin files this under the plugin that declared it,
+          // and one permission does not need sorting into headings.
+          //
+          // `danger` because it is author-written CSS that reaches the
+          // published page. A site that declared `remotePatterns` for its
+          // images declared them for this too, and a selector can make such a
+          // request conditional on what a page contains.
+          danger: true,
+        },
+      ],
       admin: {
         // The canvas needs the allowlist and runs in the browser, so it
         // travels with the rest of the admin metadata. `remotePatterns` is

@@ -7,6 +7,15 @@ beforeAll(() => {
   console.log("🧪 Setting up nextly tests...");
 });
 
+// A real install always has this: production refuses to boot without it, and
+// anything storing a credential refuses to write without it. Leaving it unset
+// made the suite exercise a configuration no deployment can be in, so a test
+// touching provider credentials failed for a reason unrelated to its subject.
+//
+// Assigned rather than overwritten, so a run that deliberately supplies its own
+// secret keeps it, and a file testing the absent case can still delete it.
+process.env.NEXTLY_SECRET ??= "nextly-test-encryption-secret-at-least-32-chars";
+
 /**
  * Fail any test that leaves a PostgreSQL transaction aborted.
  *
