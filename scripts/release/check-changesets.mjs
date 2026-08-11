@@ -28,6 +28,8 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import parseChangeset from "@changesets/parse";
+
 import { getWorkspacePackageNames } from "./lib.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -40,6 +42,59 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
  * package gets, and one mislabelled changeset moves the whole train.
  */
 const ALPHA_BUMP = "patch";
+
+/**
+ * Whether `fixed` has the SHAPE Changesets requires, as a list of sentences.
+ *
+ * Flattening answers the same set for `[["a","b"]]` and for `["a","b"]`, so a
+ * config hand-edited into the flat form produces exactly the expected names here
+ * and is refused by the release tooling. Same for a package repeated across two
+ * groups: flattening hides it, `@changesets/config` rejects it. Either way the
+ * malformed config merges and surfaces only when a release is attempted.
+ *
+ * Checked here rather than by handing the file to `@changesets/config`, whose
+ * `parse` needs a resolved workspace from `@manypkg/get-packages` — a second
+ * dependency, for a rule that is three sentences long and fully stated by them.
+ * That is the opposite trade to the YAML reader, and for the opposite reason:
+ * this rule cannot drift, and a frontmatter grammar can.
+ */
+export function fixedGroupShape(config) {
+  const groups = config.fixed;
+  if (groups === undefined) return [];
+  if (!Array.isArray(groups)) {
+    return ['.changeset/config.json: `fixed` must be an array of arrays.'];
+  }
+  const problems = [];
+  const flat = groups.filter(group => !Array.isArray(group));
+  if (flat.length > 0) {
+    problems.push(
+      '.changeset/config.json: `fixed` must be an array of ARRAYS — a group per ' +
+        `line, not a flat list of names. Found ${JSON.stringify(flat[0])} where a group was expected.`
+    );
+    return problems;
+  }
+  const seen = new Set();
+  const repeated = new Set();
+  for (const group of groups) {
+    for (const name of group) {
+      if (typeof name !== "string" || name === "") {
+        problems.push(
+          `.changeset/config.json: \`fixed\` holds ${JSON.stringify(name)}, which is not a package name.`
+        );
+        continue;
+      }
+      if (seen.has(name)) repeated.add(name);
+      seen.add(name);
+    }
+  }
+  if (repeated.size > 0) {
+    problems.push(
+      `.changeset/config.json: \`fixed\` lists ${[...repeated].join(", ")} in more than one ` +
+        `group. The groups must be disjoint; a package cannot version in lockstep with two sets.`
+    );
+  }
+  return problems;
+}
 
 /** Every package that must appear in a changeset, read from the Changesets config. */
 export function lockstepPackages(configText) {
@@ -88,77 +143,37 @@ export function groupMatchesWorkspace(packages, workspaceNames) {
 }
 
 /**
- * One scalar as YAML would read it: quotes stripped, a trailing comment removed.
+ * The `package: bump` pairs a changeset declares, or `undefined` when Changesets
+ * itself would refuse the file.
  *
- * A quoted value keeps everything inside the quotes, `#` included, because a
- * comment cannot start inside a scalar. Only an unquoted value has a comment to
- * strip, and only when the `#` is preceded by whitespace — `patch#1` is one
- * token, `patch # note` is a value and a note.
- */
-function scalar(raw) {
-  const trimmed = raw.trim();
-  const quoted = /^(["'])((?:(?!\1)[\s\S])*)\1\s*(?:#[\s\S]*)?$/.exec(trimmed);
-  if (quoted !== null) return quoted[2];
-  return trimmed.split(/\s+#/)[0].trim();
-}
-
-/**
- * The name and the rest of one `name: bump` line, or `undefined` when it is
- * neither that nor something to skip.
- */
-function entryOn(line) {
-  const quotedName = /^(["'])((?:(?!\1)[\s\S])*)\1\s*:([\s\S]*)$/.exec(line);
-  if (quotedName !== null) return { name: quotedName[2], rest: quotedName[3] };
-  const bareName = /^([^:\s'"]+)\s*:([\s\S]*)$/.exec(line);
-  if (bareName !== null) return { name: bareName[1], rest: bareName[2] };
-  return undefined;
-}
-
-/**
- * The `package: bump` pairs a changeset declares, or `undefined` when the file
- * is not one this can read.
+ * Handed to `@changesets/parse` rather than read here. A hand-rolled reader was
+ * tried and corrected twice — once for being STRICTER than Changesets (single
+ * quotes, quoted bumps and comments are valid YAML it was rejecting, which
+ * blocks a compliant pull request) and once for being LOOSER (`---junk` as a
+ * closing delimiter, and duplicate keys, which it accepted and the release
+ * tooling does not). A third such correction would have been the third instance
+ * of one shape, so the reading moved to the library that decides the real answer
+ * instead. Anything this accepts, the release accepts, by construction rather
+ * than by agreement.
  *
- * Hand-parsed rather than handed to `@changesets/parse`, which this repository
- * does not depend on and which would be a new dependency for a lint step. The
- * subset accepted is deliberately the one Changesets itself writes and reads:
- * quoted names (single or double, which every scoped package needs), bare names,
- * quoted or bare bumps, blank lines and comments.
+ * `@changesets/parse` was already in the tree as a transitive dependency of
+ * `@changesets/cli`; declaring it changes what resolves, not what is installed.
  *
- * The two ways a hand-rolled reader goes wrong are both closed explicitly,
- * because each fails in a direction that matters:
- *
- * - Being STRICTER than Changesets blocks a compliant pull request over a
- *   spelling the release tooling would have accepted. That is why single quotes,
- *   quoted bumps and comments are read rather than refused.
- * - Being LOOSER lets malformed release metadata reach `main`, where it fails
- *   the CI-only release workflow after a version PR has already merged. That is
- *   why the closing delimiter must be exactly `---` on its own line, and why a
- *   duplicate key is refused rather than silently taking the last one.
- *
- * A file this cannot read is reported as unreadable rather than as declaring
- * nothing: "no releases" and "every release" are opposite answers, and a
- * missing-package check would score them the same way.
+ * A file it refuses is reported as unreadable rather than as declaring nothing:
+ * "no releases" and "every release" are opposite answers, and a missing-package
+ * check would score them the same way. That distinction is why the empty case is
+ * still called out separately below — `parse` returns an empty release list for a
+ * frontmatter that is well-formed and says nothing.
  */
 export function declaredReleases(fileText) {
-  const match = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(
-    fileText
-  );
-  if (match === null) return undefined;
-  const releases = new Map();
-  for (const line of match[1].split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (trimmed === "" || trimmed.startsWith("#")) continue;
-    const entry = entryOn(trimmed);
-    if (entry === undefined) return undefined;
-    const name = entry.name.trim();
-    const bump = scalar(entry.rest);
-    if (name === "" || bump === "") return undefined;
-    // A repeated key is not a reading this can choose between. YAML's own answer
-    // is to take the last, which would let `"nextly": patch` sit above
-    // `"nextly": major` and report the file as compliant.
-    if (releases.has(name)) return undefined;
-    releases.set(name, bump);
+  let parsed;
+  try {
+    parsed = parseChangeset(fileText);
+  } catch {
+    return undefined;
   }
+  const releases = new Map();
+  for (const release of parsed.releases) releases.set(release.name, release.type);
   return releases;
 }
 
@@ -175,6 +190,16 @@ export function problemsWith(path, fileText, packages) {
     return [
       `${path}: the frontmatter is missing or has a line this cannot read. ` +
         `A changeset opens with \`---\`, one \`"package": bump\` per line, and closes with \`---\`.`,
+    ];
+  }
+  if (releases.size === 0) {
+    // Well-formed and saying nothing. Reported on its own rather than as "missing
+    // all of them", because the cause is different — an empty frontmatter is a
+    // changeset someone forgot to fill in, not one generated against an older
+    // group — and the fix a reader needs is not the same.
+    return [
+      `${path}: declares no packages at all. A changeset that releases nothing ` +
+        `still consumes a file name and produces no changelog entry.`,
     ];
   }
   const problems = [];
@@ -221,6 +246,12 @@ export function checkChangesets(paths, readFile, configText, workspaceNames) {
       ".changeset/config.json declares no `fixed` group, so nothing here can be checked.",
     ];
   }
+  const shape = fixedGroupShape(JSON.parse(configText));
+  // Returned alone. Every check below reads the flattened group, and a group
+  // whose shape is wrong flattens to something that looks right — so reporting
+  // the downstream answers beside it would be reporting answers derived from a
+  // reading the release tooling does not share.
+  if (shape.length > 0) return shape;
   return [
     ...groupMatchesWorkspace(packages, workspaceNames),
     ...paths.flatMap(path => problemsWith(path, readFile(path), packages)),
@@ -240,13 +271,32 @@ export function checkChangesets(paths, readFile, configText, workspaceNames) {
  * an empty argument list has to survive shell expansion under `set -u` to get
  * here at all.
  */
+/**
+ * Whether a path names a file Changesets would READ as a changeset.
+ *
+ * Copied from `@changesets/read`, whose filter is
+ * `!file.startsWith(".") && file.endsWith(".md") && !/^README\.md$/i.test(file)`.
+ * Anything else in `.changeset/` is documentation or a helper — a template, a
+ * README in any casing — and passing one of those to a frontmatter check rejects
+ * ordinary docs as malformed.
+ *
+ * Applied HERE rather than in the workflow's `grep`, so a hand-run and the build
+ * agree about what a changeset is. A shell filter is one caller's answer.
+ */
+function isChangesetFile(path) {
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  return (
+    !name.startsWith(".") && name.endsWith(".md") && !/^README\.md$/i.test(name)
+  );
+}
+
 export function pathsToCheck(argv, stdinText) {
-  const fromArgv = argv.filter(path => path.endsWith(".md"));
+  const fromArgv = argv.filter(isChangesetFile);
   if (fromArgv.length > 0) return fromArgv;
   return stdinText
     .split("\n")
     .map(line => line.trim())
-    .filter(line => line.endsWith(".md"));
+    .filter(isChangesetFile);
 }
 
 /**

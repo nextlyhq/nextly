@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   checkChangesets,
   declaredReleases,
+  fixedGroupShape,
   groupMatchesWorkspace,
   lockstepPackages,
   pathsToCheck,
@@ -168,7 +169,7 @@ describe("the group against the workspace", () => {
   });
 });
 
-describe("frontmatter spellings Changesets itself accepts", () => {
+describe("frontmatter spellings the release tooling accepts", () => {
   it("reads single-quoted names", () => {
     // Refusing this would block a compliant PR over a spelling the release
     // tooling reads without complaint.
@@ -187,7 +188,7 @@ describe("frontmatter spellings Changesets itself accepts", () => {
   });
 });
 
-describe("frontmatter Changesets itself would refuse", () => {
+describe("frontmatter the release tooling refuses", () => {
   it("refuses a closing delimiter with anything after it", () => {
     // `---junk` does not close the block, so everything below it is frontmatter
     // as far as Changesets is concerned. A reader that stops at the first three
@@ -201,6 +202,25 @@ describe("frontmatter Changesets itself would refuse", () => {
     // `"nextly": patch` sit above a `"nextly": major` that decides the release.
     const duplicated = `---\n"nextly": patch\n"nextly": major\n"@nextlyhq/ui": patch\n"@nextlyhq/builder": patch\n---\n\nBody.\n`;
     expect(declaredReleases(duplicated)).toBeUndefined();
+  });
+
+  it("refuses inconsistent indentation", () => {
+    // Valid-looking to any reader that trims each line, and rejected by the
+    // release tooling as `bad indentation of a mapping entry`. A file like this
+    // merging is a release that fails after a version PR is already in.
+    const indented = `---\n"nextly": patch\n  "@nextlyhq/ui": patch\n"@nextlyhq/builder": patch\n---\n\nBody.\n`;
+    expect(declaredReleases(indented)).toBeUndefined();
+  });
+
+  it("reports a well-formed changeset that names nothing", () => {
+    // Distinct from unreadable: the file parses, it just releases nothing. The
+    // cause is a changeset someone forgot to fill in rather than one generated
+    // against an older group, so it gets its own sentence.
+    const empty = `---\n---\n\nBody.\n`;
+    expect(declaredReleases(empty)?.size).toBe(0);
+    expect(problemsWith("a.md", empty, PACKAGES)).toEqual([
+      expect.stringContaining("declares no packages at all"),
+    ]);
   });
 
   it("refuses an entry with no bump at all", () => {
@@ -233,6 +253,74 @@ describe("a file this cannot read", () => {
     const crlf = COMPLETE.replace(/\n/g, "\r\n");
     expect(declaredReleases(crlf)?.get("nextly")).toBe("patch");
     expect(problemsWith("a.md", crlf, PACKAGES)).toEqual([]);
+  });
+});
+
+describe("the shape of the fixed group itself", () => {
+  it("accepts the array of arrays Changesets requires", () => {
+    expect(fixedGroupShape({ fixed: [["a", "b"], ["c"]] })).toEqual([]);
+    // No `fixed` at all is not a shape error; the caller reports it separately.
+    expect(fixedGroupShape({})).toEqual([]);
+  });
+
+  it("refuses a flat array", () => {
+    // Flattening answers the same set for `[["a","b"]]` and `["a","b"]`, so every
+    // check downstream reports success while the release tooling refuses the file.
+    const problems = fixedGroupShape({ fixed: ["a", "b"] });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("array of ARRAYS");
+  });
+
+  it("refuses a package repeated across groups", () => {
+    const problems = fixedGroupShape({ fixed: [["a", "b"], ["b"]] });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("more than one");
+    expect(problems[0]).toContain("b");
+  });
+
+  it("refuses a group holding something that is not a name", () => {
+    const problems = fixedGroupShape({ fixed: [["a", 7]] });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("not a package name");
+  });
+
+  it("reports the shape ALONE, without answers derived from it", () => {
+    // A group whose shape is wrong flattens to something that looks right, so
+    // reporting the coverage answers beside it would be reporting a reading the
+    // release tooling does not share.
+    const problems = checkChangesets(
+      [],
+      () => "",
+      JSON.stringify({ fixed: ["nextly", "@nextlyhq/ui"] }),
+      ["nextly", "@nextlyhq/ui", "@nextlyhq/builder"]
+    );
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("array of ARRAYS");
+  });
+});
+
+describe("which files count as changesets", () => {
+  it("skips what Changesets itself skips", () => {
+    // `@changesets/read` filters on
+    // `!startsWith(".") && endsWith(".md") && !/^README\.md$/i`. A docs-only PR
+    // touching any of these must not be told its documentation is malformed
+    // frontmatter.
+    expect(
+      pathsToCheck(
+        [],
+        [
+          ".changeset/real-one.md",
+          ".changeset/README.md",
+          ".changeset/readme.md",
+          ".changeset/.template.md",
+          ".changeset/config.json",
+        ].join("\n")
+      )
+    ).toEqual([".changeset/real-one.md"]);
+  });
+
+  it("applies the same rule to arguments", () => {
+    expect(pathsToCheck([".changeset/readme.md"], "")).toEqual([]);
   });
 });
 
