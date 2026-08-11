@@ -10,6 +10,7 @@
  */
 
 import userEvent from "@testing-library/user-event";
+import { fireEvent, waitFor } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
@@ -18,11 +19,30 @@ import type {
   EmailProviderRecord,
 } from "@admin/services/emailProviderApi";
 
-import { EmailProviderForm } from "./EmailProviderForm";
+import { EMAIL_PROVIDER_FORM_ID, EmailProviderForm } from "./EmailProviderForm";
+import type { EmailProviderPayload } from "./schemas/emailProviderSchema";
 
 const ACME: EmailProviderDescriptor = {
   type: "acme",
   label: "Acme",
+  capabilities: {},
+  configFields: [
+    { name: "region", label: "Region", kind: "text", required: true },
+  ],
+};
+
+/**
+ * A second registered type that declares the SAME field name.
+ *
+ * This is what makes a stale value reachable. `formValuesToPayload` builds the
+ * payload from the NEW descriptor's declared fields, so a value left over
+ * under a name the new type does not declare is dropped on its way out and
+ * cannot be submitted. A shared name has no such protection — and shared names
+ * are the common case: `apiKey` is declared by both built-in API providers.
+ */
+const OTHER_WITH_FIELD: EmailProviderDescriptor = {
+  type: "other",
+  label: "Other",
   capabilities: {},
   configFields: [
     { name: "region", label: "Region", kind: "text", required: true },
@@ -126,6 +146,99 @@ describe("the same provider, changed by someone else while the form is open", ()
     );
 
     expect(regionInput()?.value).toBe("typed-by-hand");
+  });
+
+  it("drops configuration typed for a type the record no longer is", async () => {
+    // Someone switched this provider to another type while the form sat open.
+    // The value on screen was typed for the PREVIOUS provider, so keeping it
+    // submits one provider's credential as another's — and overwrites what the
+    // server holds for the new one.
+    //
+    // Asserted on the SUBMITTED PAYLOAD, not on the DOM: the rendered fields
+    // come from the descriptor, so an input can disappear while its value is
+    // still in form state. Only the payload separates those.
+    const user = userEvent.setup();
+    const submitted: EmailProviderPayload[] = [];
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[ACME, OTHER_WITH_FIELD]}
+        isPending={false}
+        onSubmit={payload => submitted.push(payload)}
+      />
+    );
+
+    const input = regionInput();
+    if (!input) throw new Error("expected the region field to render");
+    await user.clear(input);
+    await user.type(input, "typed-for-acme");
+
+    rerender(
+      <EmailProviderForm
+        mode="edit"
+        provider={{
+          ...STORED,
+          type: "other",
+          configuration: { region: "from-the-server" },
+          updatedAt: "2026-02-02T00:00:00.000Z",
+        }}
+        descriptors={[ACME, OTHER_WITH_FIELD]}
+        isPending={false}
+        onSubmit={payload => submitted.push(payload)}
+      />
+    );
+
+    const form = document.getElementById(EMAIL_PROVIDER_FORM_ID);
+    if (!form) throw new Error("expected the form to render");
+    fireEvent.submit(form);
+    await waitFor(() => expect(submitted).toHaveLength(1));
+
+    expect(submitted[0]?.type).toBe("other");
+    // The server's value, not the one typed for the previous provider.
+    expect(submitted[0]?.configuration).toMatchObject({
+      region: "from-the-server",
+    });
+  });
+
+  it("keeps a dirty IDENTITY field across a type change", async () => {
+    // The control. Identity fields do not belong to a provider type, so a
+    // rename in progress must survive — dropping everything dirty would be as
+    // wrong as keeping everything.
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[ACME, OTHER_WITH_FIELD]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    const name = document.querySelector<HTMLInputElement>('input[name="name"]');
+    if (!name) throw new Error("expected the name field to render");
+    await user.clear(name);
+    await user.type(name, "Renaming In Progress");
+
+    rerender(
+      <EmailProviderForm
+        mode="edit"
+        provider={{
+          ...STORED,
+          type: "other",
+          configuration: { region: "from-the-server" },
+          updatedAt: "2026-02-02T00:00:00.000Z",
+        }}
+        descriptors={[ACME, OTHER_WITH_FIELD]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    expect(
+      document.querySelector<HTMLInputElement>('input[name="name"]')?.value
+    ).toBe("Renaming In Progress");
   });
 
   it("does nothing when the record has not changed", async () => {

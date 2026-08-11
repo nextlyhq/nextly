@@ -475,6 +475,41 @@ describe("email provider activity", () => {
     );
   });
 
+  describe("a logger that throws while reporting a failed trail write", () => {
+    it("does not turn a committed mutation into a failure", async () => {
+      // The mutation has already committed by the time the trail is written, so
+      // an installed logger that throws while reporting the trail's own failure
+      // must not escape: reporting a create as failed after it happened invites
+      // a retry of something that does not need one.
+      const sqlite = new Database(":memory:");
+      createEmailProvidersTable(sqlite);
+      const throwing: Logger = {
+        ...logger,
+        error: () => {
+          throw new Error("the logging transport is down");
+        },
+      };
+      const service = new EmailProviderService(
+        makeAdapter(drizzle({ client: sqlite })),
+        throwing
+      );
+
+      // The trail write has to genuinely FAIL. An absent registration is not
+      // enough: `recordProviderActivity` treats that as a boot-time fact and
+      // returns without writing, so the recovery path is never entered and this
+      // test would pass without reaching what it names.
+      container.register("activityLogService", () => ({
+        logActivity: () => Promise.reject(new Error("activity store is down")),
+      }));
+
+      await expect(
+        service.createProvider({ ...INPUT, name: "Committed" }, ACTOR)
+      ).resolves.toMatchObject({ name: "Committed" });
+
+      sqlite.close();
+    });
+  });
+
   describe("the provider a promotion displaces", () => {
     it("is recorded alongside the one promoted", async () => {
       // A promotion changes two rows. Recording only the winner leaves a trail

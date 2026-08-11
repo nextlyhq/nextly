@@ -852,11 +852,19 @@ export class EmailProviderService extends BaseService {
     try {
       await recordProviderActivity(input);
     } catch (error) {
-      this.logger.error("Failed to record email provider activity", {
-        providerId: input.providerId,
-        action: input.action,
-        message: error instanceof Error ? error.message : String(error),
-      });
+      try {
+        this.logger.error("Failed to record email provider activity", {
+          providerId: input.providerId,
+          action: input.action,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      } catch {
+        // Nowhere left to report to: the reporting mechanism is what failed.
+        // The mutation this describes has already committed, so letting the
+        // throw out would report a create, an update, a delete or a promotion
+        // as failed after it happened -- and invite a retry of something that
+        // does not need one.
+      }
     }
   }
 

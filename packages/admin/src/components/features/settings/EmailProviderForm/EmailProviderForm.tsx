@@ -204,6 +204,8 @@ export function EmailProviderForm({
     hadDescriptor: boolean;
     /** Which VERSION of the record filled the form, not merely which record. */
     updatedAt: string;
+    /** Which PROVIDER the configuration on screen was built for. */
+    type: string;
   } | null>(null);
 
   // Repopulate once the record and the catalog have both arrived: both are
@@ -234,14 +236,29 @@ export function EmailProviderForm({
       // server's newer value. A plain reset here would discard their work,
       // which is what the identity guard exists to prevent.
       if (hydrated.updatedAt !== provider.updatedAt) {
+        const typeChanged = hydrated.type !== provider.type;
         hydratedFor.current = {
           id: provider.id,
           hadDescriptor: descriptor !== undefined,
           updatedAt: provider.updatedAt,
+          type: provider.type,
         };
-        form.reset(providerToFormValues(provider, descriptor), {
-          keepDirtyValues: true,
-        });
+
+        const next = providerToFormValues(provider, descriptor);
+        form.reset(next, { keepDirtyValues: true });
+
+        // A revision that also changed the TYPE is not a newer version of the
+        // same form. Configuration typed under the old descriptor describes a
+        // provider this record is no longer, so keeping it submits an SMTP
+        // host to a Resend payload -- stored as an undeclared key by a
+        // permissive parser, or refused outright by a stricter one, on every
+        // save from then on. The identity fields are type-independent and keep
+        // whatever was typed.
+        if (typeChanged) {
+          form.setValue("configuration", next.configuration, {
+            shouldDirty: false,
+          });
+        }
         return;
       }
 
@@ -259,6 +276,7 @@ export function EmailProviderForm({
         id: provider.id,
         hadDescriptor: true,
         updatedAt: provider.updatedAt,
+        type: provider.type,
       };
       // Only the configuration is replaced. The identity fields were filled
       // from the record and belong to whoever has the form open.
@@ -273,6 +291,7 @@ export function EmailProviderForm({
       id: provider.id,
       hadDescriptor: descriptor !== undefined,
       updatedAt: provider.updatedAt,
+      type: provider.type,
     };
     form.reset(providerToFormValues(provider, descriptor));
   }, [provider, isEdit, descriptors, form]);

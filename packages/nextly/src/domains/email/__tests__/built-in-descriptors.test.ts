@@ -1584,6 +1584,40 @@ describe("options metadata on a field that is not a select", () => {
     ).toThrow(/value: string; label: string/);
   });
 
+  it("refuses a SPARSE options array", () => {
+    // `new Array(1)` from a JavaScript caller. The shape check uses
+    // `findIndex`, which visits a hole as `undefined` rather than skipping it
+    // — unlike `some` and `forEach`, which the select's own later rules use
+    // and which would pass a sparse array straight through.
+    //
+    // Pinned here because the protection is ORDERING: this check runs before
+    // those, and a refactor that reordered them would publish `[null]` into
+    // the catalog and break the form for every provider.
+    expect(
+      withField({
+        name: "region",
+        label: "Region",
+        kind: "select",
+        options: new Array(1) as unknown,
+      })
+    ).toThrow(/value: string; label: string/);
+
+    // A hole AFTER a valid option, so the check cannot pass by looking only at
+    // index zero.
+    expect(
+      withField({
+        name: "region",
+        label: "Region",
+        kind: "select",
+        options: (() => {
+          const options = [{ value: "eu", label: "Europe" }] as unknown[];
+          options.length = 2;
+          return options;
+        })(),
+      })
+    ).toThrow(/value: string; label: string/);
+  });
+
   it("accepts a non-select field that declares none", () => {
     // The control. The check must not start demanding options from every
     // field — only a select needs choices, and almost no field is a select.
