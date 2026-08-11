@@ -99,17 +99,22 @@ export type { PrepareDocumentArgs } from "./prepare-document";
  * import a host already has the package for.
  */
 export type {
+  AnyBlockDefinition,
   Binding,
+  BlockDefinition,
   BlockDocument,
   BlockNode,
   BreakpointDef,
   BreakpointId,
   BreakpointSet,
+  CompiledPageCss,
   Condition,
   DocumentKind,
   DocumentLimits,
   NodeStyles,
+  MigrationSource,
   NodeVisibility,
+  RemotePatternInput,
   StyleCompileContext,
   StyleState,
 } from "@nextlyhq/blocks-engine";

@@ -22,7 +22,7 @@
  *
  * @module type-surface.test
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -68,76 +68,87 @@ function exportedNames(declaration: string): Set<string> {
 }
 
 /**
- * What each entry must hand a caller.
+ * Every engine type the built declarations IMPORT, derived rather than listed.
  *
- * Listed explicitly rather than derived from what the file mentions. A derived
- * check would pass the moment a type stopped being referenced, which is the
- * opposite of what this guards — and it would also sweep in prose from the
- * doc comments, which is how the first version of this measurement produced a
- * list containing `The`, `Why` and `HTML`.
+ * **A hand-written list has the defect it exists to catch.** The first version
+ * of this test enumerated the types a reported gap had named, and passed while
+ * `AnyBlockDefinition`, `MigrationSource`, `CompiledPageCss` and
+ * `RemotePatternInput` were still unreachable — they sit in the signatures of
+ * `createBlockResolver`, `migrationSourceFor`, `toPageStyles` and
+ * `fetchPolicyLabel`, in bundler CHUNK declarations rather than in the entry
+ * file, so neither the measurement nor the list saw them.
+ *
+ * The declarations name their own dependency: every chunk carries an
+ * `import { ... } from "@nextlyhq/blocks-engine"` listing exactly the engine
+ * types that surface is written in. Reading THAT means the requirement grows
+ * with the API instead of with someone remembering to extend an array.
  */
-const REQUIRED: Readonly<
-  Record<string, { sentinel: string; types: readonly string[] }>
-> = {
-  // Types originating in `@nextlyhq/blocks-engine`, which is a DEPENDENCY of
-  // this package rather than a peer — so a host has no direct path to it and
-  // cannot import these itself.
-  index: {
-    sentinel: "PageRenderer",
-    types: [
-      "BlockDocument",
-      "BlockNode",
-      "BreakpointSet",
-      "DocumentLimits",
-      "NodeStyles",
-      "StyleCompileContext",
-      // This package's own render-context surface.
-      "BlockRenderArgs",
-      "BlocksDataProvider",
-      "BlockResolver",
-      "PageContext",
-      "PageStyles",
-      "QueryBudget",
-      "ReactBlockDefinition",
-      "ResolvedMedia",
-    ],
-  },
-  // The Next-coupled entry re-states what its own options are written in.
-  // `nextly`'s route types are deliberately absent: it is a PEER dependency, so
-  // a host has installed it directly and names `ContentEntry`, `RenderContext`
-  // and the route shapes from `nextly/runtime` where they live. Two import
-  // paths for one type costs more than one import a host already has.
-  next: {
-    sentinel: "createBlocksPage",
-    types: ["BlockSeoContribution", "BlockSeoImage", "DerivedPageSeo"],
-  },
+function importedEngineTypes(): Set<string> {
+  const names = new Set<string>();
+  for (const file of readdirSync(DIST).filter(f => f.endsWith(".d.ts"))) {
+    const src = readFileSync(join(DIST, file), "utf8");
+    for (const line of src.matchAll(
+      /import\s*\{([^}]*)\}\s*from\s*['"]@nextlyhq\/blocks-engine['"]/g
+    )) {
+      for (const clause of line[1].split(",")) {
+        // `BlockRenderArgs as BlockRenderArgs$1` imports the LEFT name; the
+        // right is the bundler's local alias, which no consumer ever writes.
+        const original = clause
+          .trim()
+          .replace(/^type\s+/, "")
+          .split(/\s+as\s+/)[0];
+        const trimmed = (original ?? "").trim();
+        if (trimmed !== "") names.add(trimmed);
+      }
+    }
+  }
+  return names;
+}
+
+/** The sentinel each entry is pinned against — see the assertion for why. */
+const SENTINELS: Readonly<Record<string, string>> = {
+  index: "PageRenderer",
+  next: "createBlocksPage",
 };
 
 describe("the published type surface", () => {
-  for (const [entry, { sentinel, types }] of Object.entries(REQUIRED)) {
-    it(`${entry} exports every type its API is written in`, () => {
-      const file = join(DIST, `${entry}.d.ts`);
-      // A build is the precondition, and saying so beats an empty-set pass:
-      // without it every name below is "missing" for a reason that has nothing
-      // to do with the surface.
+  it("exports every engine type its declarations import", () => {
+    const entries = Object.keys(SENTINELS).map(name =>
+      join(DIST, `${name}.d.ts`)
+    );
+    for (const file of entries) {
       expect(
         existsSync(file),
         `${file} is missing — run \`pnpm build --filter @nextlyhq/blocks-react\``
       ).toBe(true);
+    }
 
-      const exported = exportedNames(readFileSync(file, "utf8"));
+    const required = importedEngineTypes();
+    // The positive control, and it is load-bearing. A derivation that found
+    // NOTHING would assert nothing at all and read as a clean pass — which is
+    // precisely how the previous version of this test passed over four
+    // unreachable types.
+    expect(required.size).toBeGreaterThan(4);
 
-      // The positive control, and it is load-bearing rather than setup. A
-      // parser that returned NOTHING would report every required name as
-      // missing and read as a real regression; one that returned everything
-      // would pass while checking nothing. Naming a value this entry certainly
-      // exports pins the parser against the real artifact — a size threshold
-      // would not, because `next.d.ts` legitimately exports only a handful.
-      expect(exported.has(sentinel), `parser found no \`${sentinel}\``).toBe(
-        true
-      );
+    // Exported from EITHER entry: a type belonging to the Next-coupled surface
+    // has no reason to appear on the root, and requiring both would push names
+    // onto an entry that does not use them.
+    const exported = new Set<string>();
+    for (const file of entries) {
+      for (const name of exportedNames(readFileSync(file, "utf8"))) {
+        exported.add(name);
+      }
+    }
 
-      expect([...types].filter(name => !exported.has(name))).toEqual([]);
-    });
-  }
+    for (const [entry, sentinel] of Object.entries(SENTINELS)) {
+      expect(
+        exported.has(sentinel),
+        `parser found no \`${sentinel}\` in ${entry}.d.ts`
+      ).toBe(true);
+    }
+
+    expect([...required].filter(name => !exported.has(name)).sort()).toEqual(
+      []
+    );
+  });
 });
