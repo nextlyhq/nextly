@@ -30,7 +30,13 @@ import type {
 } from "./prepare-document";
 import { prepareDocumentReadStages, readingViewOf } from "./prepare-document";
 import type { PageStyles } from "./styles";
-import { effectiveCompile, resolvePageStyles } from "./styles";
+import {
+  effectiveCompile,
+  gatedMapCoversPrunedNodes,
+  hasDuplicateNodeIds,
+  readableGatedRules,
+  resolvePageStyles,
+} from "./styles";
 
 export interface ReadPageArgs extends PrepareDocumentArgs {
   /** The stylesheet artifact stored with the page, when it has one. */
@@ -74,40 +80,54 @@ export interface PreparedPage {
  * Whether the passes changed the tree in a way a STORED stylesheet cannot
  * describe.
  *
- * Three of the five stage boundaries count, and which three is the whole content
- * of this function:
+ * Four of the five stage boundaries count, and the fifth is excluded for a
+ * reason that would otherwise blank every page:
  *
  * - **The caps pass**, because a document over its limits is truncated, and the
  *   sheet was compiled from the untruncated one.
+ * - **Condition gating**, but only when the artifact cannot ACCOUNT for what it
+ *   removed. The per-node map was built for this case and usually covers it, so
+ *   refusing categorically would cost every page carrying a conditioned block
+ *   its whole stylesheet. Coverage is asked through the same check the renderer
+ *   uses, which is stricter than "every removed node has an entry": a block
+ *   type's defaults are emitted ONCE into the main sheet and shared, so removing
+ *   the LAST node of a type leaves that type's rule — and any `url(...)` in it —
+ *   published for a block nobody was served. Only a recompile can drop a
+ *   type-level rule, so the artifact must not claim to cover that.
  * - **Address repair**, for the reason that first looked like grounds to exclude
  *   it. The compiler refuses to style duplicated ids at all — there is one class
  *   for the id and no way to tell a renderer about a second — so the sheet holds
  *   no node-local rules for EITHER. It still NAMES the id in its class map, so
  *   the artifact reads as usable and is trusted, and the node that survived
- *   deduplication renders carrying a class no rule targets. Recompiling against
- *   the deduplicated tree is what styles it, because by then the id is unique.
+ *   deduplication renders carrying a class no rule targets. Asked of the
+ *   MIGRATED tree rather than by comparing stages, because gating can remove the
+ *   twin first: the collision then never reaches the address pass, the two
+ *   stages compare equal, and the survivor is still missing its rules. The
+ *   pre-gating document is the only place that evidence survives.
  * - **The placeholder pass**, because a node that resolves to a placeholder is
  *   gone for every visitor until the page is republished, while the tiers it
  *   pulled into the sheet stay behind.
  *
- * The remaining two are excluded, and both exclusions are load bearing rather
- * than cosmetic:
- *
- * - **Migration** allocates unconditionally, so comparing it against the caps
- *   pass is true on every document ever read. Included, every page would report
- *   as repaired and every stored sheet would be withheld on the happy path.
- * - **Condition gating** is the case the per-node `gated` map was built for. Its
- *   rules travel per node and are appended for exactly the survivors, so a gated
- *   node's absence is described rather than unaccounted. Included, every page
- *   carrying a conditioned block would lose its whole stylesheet.
+ * **Migration** is the exclusion. It allocates unconditionally, so comparing it
+ * against the caps pass is true on every document ever read; included, every
+ * page would report as repaired and every stored sheet would be withheld on the
+ * happy path.
  */
 function storedSheetCannotDescribe(
   document: BlockDocument,
-  stages: DocumentReadStages
+  stages: DocumentReadStages,
+  styles: PageStyles | undefined
 ): boolean {
+  const gatedRules = readableGatedRules(styles);
+  // An ABSENT map means "compiled before the split existed", not "nothing was
+  // gated", so only a readable one licenses skipping the recompile.
+  const gatingCovered =
+    gatedRules !== undefined &&
+    gatedMapCoversPrunedNodes(stages.migrated, stages.gated, gatedRules);
   return (
     stages.sanitized !== document ||
-    stages.deduped !== stages.gated ||
+    hasDuplicateNodeIds(stages.migrated) ||
+    (stages.gated !== stages.migrated && !gatingCovered) ||
     stages.prepared !== stages.deduped
   );
 }
@@ -156,7 +176,7 @@ export function preparePageForRead(
     args.styles,
     compile.context,
     args.resolver,
-    storedSheetCannotDescribe(document, stages),
+    storedSheetCannotDescribe(document, stages, args.styles),
     { fetchPolicyId: compile.fetchPolicyId }
   );
 

@@ -1,7 +1,6 @@
 import {
   DOCUMENT_FORMAT_VERSION,
   PAGE_ROOT_CLASS,
-  walkNodes,
   type BlockDocument,
   type DocumentLimits,
   type StyleCompileContext,
@@ -23,7 +22,9 @@ import { registeredBlocks, type BlockResolver } from "./resolver";
 import {
   drawlessTestFor,
   effectiveCompile,
-  isRecordedGatedEntry,
+  gatedEntriesCoverRemovedNodes,
+  gatedMapCoversPrunedNodes,
+  hasDuplicateNodeIds,
   readableGatedRules,
   resolvePageStyles,
   styleTextForInjection,
@@ -75,90 +76,6 @@ export interface PageRendererProps {
    * omitting this does not deny remote fetches.
    */
   hostPolicy?: BlockHostPolicy;
-}
-
-/**
- * Whether the artifact holds the OWN rules of every node the prune removed.
- *
- * "A map is present" is not coverage. A stored artifact can be stale relative to the document it
- * is rendered with — compiled when one node was unconditional, so its rules are in `css`, while a
- * different node was already gated and has an entry. The map exists, but it does not cover the
- * node that was actually pruned, and serving the stored sheet publishes that node's rules and
- * asset URLs.
- *
- * The compiler writes an entry for EVERY node it holds back, including one with no styles of its
- * own, so an id missing from the map means the artifact was compiled when that node was still
- * being served. That makes presence-per-removed-id an exact test rather than a heuristic.
- *
- * The ENTRY has to be usable, not merely present. A key whose value the delivery refuses to read
- * certifies coverage that never reaches the sheet, which is the same divergence one value deeper.
- *
- * This is the NODE-LOCAL half on its own, because the two prunes that ask it need different
- * amounts. Written once so neither can drift from the other on the part they share.
- */
-function gatedEntriesCoverRemovedNodes(
-  before: BlockDocument,
-  after: BlockDocument,
-  gated: Readonly<Record<string, unknown>>
-): boolean {
-  const surviving = new Set<string>();
-  walkNodes(after.nodes, node => surviving.add(node.id));
-  let covered = true;
-  walkNodes(before.nodes, node => {
-    if (surviving.has(node.id)) return;
-    if (!isRecordedGatedEntry(gated[node.id])) covered = false;
-  });
-  return covered;
-}
-
-/**
- * Whether the artifact's gated map accounts for every node the visibility prune removed.
- *
- * The node-local rules, plus one thing more. The map holds a node's OWN rules; a block type's
- * defaults are shared, emitted once per type into the main sheet, and stay there — so when pruning
- * removes the last instance of a type, the stored sheet still publishes that type's defaults, and
- * any `url(...)` in them, for a block nobody was served. Only a recompile can drop a type-level
- * rule, so the artifact cannot cover this case and must not claim to.
- *
- * Asked HERE and not of a draws-nothing node, and the difference is what the two prunes are for. A
- * condition withholds content from a reader, so the block a page was built from is itself part of
- * what is being withheld and a rule naming that type says something. A block that draws nothing is
- * an ordinary node the site uses and will draw again as soon as it is filled in; its type's
- * defaults come from the block package rather than from the document, and refusing coverage over
- * them would leave the drop unreachable for the page with one image and no second one.
- */
-function gatedMapCoversPrunedNodes(
-  before: BlockDocument,
-  after: BlockDocument,
-  gated: Readonly<Record<string, unknown>>
-): boolean {
-  const survivingTypes = new Set<string>();
-  walkNodes(after.nodes, node => survivingTypes.add(node.type));
-  const surviving = new Set<string>();
-  walkNodes(after.nodes, node => surviving.add(node.id));
-  let covered = gatedEntriesCoverRemovedNodes(before, after, gated);
-  walkNodes(before.nodes, node => {
-    if (surviving.has(node.id)) return;
-    if (!survivingTypes.has(node.type)) covered = false;
-  });
-  return covered;
-}
-
-/**
- * Whether any id appears on more than one node.
- *
- * The compiler suppresses the node-local rules of every node sharing an id, so a stored sheet
- * compiled from such a document is missing them — and stays missing them after a prune removes the
- * duplicate that made the collision visible.
- */
-function hasDuplicateNodeIds(document: BlockDocument): boolean {
-  const seen = new Set<string>();
-  let duplicate = false;
-  walkNodes(document.nodes, node => {
-    if (seen.has(node.id)) duplicate = true;
-    seen.add(node.id);
-  });
-  return duplicate;
 }
 
 /**

@@ -114,10 +114,23 @@ const SOURCE_MODULES: ReadonlyArray<{
     // Deliberately NOT a consumer surface: publishing it would offer a third way
     // to assemble a page by hand, and assembling by hand is precisely the path
     // that gets this wrong. `preparePageForRead` is the consumer's answer.
+    // `gatedEntriesCoverRemovedNodes`, `gatedMapCoversPrunedNodes` and
+    // `hasDuplicateNodeIds` are the artifact-trust vocabulary: what a stored
+    // sheet can still ACCOUNT for once a pass has removed something. They live
+    // beside `isRecordedGatedEntry`, which they read through, so coverage and
+    // delivery cannot disagree about the same map. `page-renderer` and
+    // `read-page` both decide whether to trust a stored artifact and must reach
+    // the same verdict — a type-level rule survives its last node either way,
+    // and a duplicate id suppresses both twins' rules either way. They cross a
+    // module boundary inside this package; a consumer asks the question through
+    // `preparePageForRead` rather than assembling the verdict itself.
     internal: [
       "UNIDENTIFIED_FETCH_POLICY",
       "drawlessTestFor",
       "effectiveCompile",
+      "gatedEntriesCoverRemovedNodes",
+      "gatedMapCoversPrunedNodes",
+      "hasDuplicateNodeIds",
       "isRecordedGatedEntry",
       "isUsableGatedEntry",
       "readableGatedRules",

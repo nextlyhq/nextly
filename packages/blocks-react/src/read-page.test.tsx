@@ -373,6 +373,133 @@ describe("a document carrying duplicate node ids", () => {
   });
 });
 
+describe("gating is trusted only as far as the artifact accounts for it", () => {
+  /** A conditioned node of a type nothing else on the page uses. */
+  function onlyInstanceOfItsType(): BlockDocument {
+    return {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "gone",
+          type: "plugin/drawless",
+          version: 1,
+          props: { draw: true },
+          styles: { base: { base: { color: "crimson" } } },
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+          },
+        },
+        {
+          id: "b",
+          type: "test/text",
+          version: 1,
+          props: { value: "y" },
+          styles: { base: { base: { color: "teal" } } },
+        },
+      ],
+    };
+  }
+
+  it("refuses when gating removes the last node of a block type", () => {
+    // A type's defaults are emitted ONCE into the main sheet and shared, so the
+    // per-node map cannot account for them. When the conditioned node was the
+    // only one of its type, that type's rule stays in `css` — with whatever
+    // `url(...)` it names — for a block nobody was served.
+    const page = onlyInstanceOfItsType();
+    const stored = resolvePageStyles(page, undefined, context, withPlugin);
+    expect(stored.gated?.gone).toContain("crimson");
+    expect(stored.css).toContain("nx-bt-plugin--drawless");
+
+    const read = preparePageForRead(page, {
+      resolver: withPlugin,
+      styles: stored,
+      styleContext: context,
+    });
+
+    expect(read.styles.css).not.toContain("nx-bt-plugin--drawless");
+    expect(read.styles.css).toContain("color: teal");
+  });
+
+  it("CONTROL: trusts it when another node of that type survives", () => {
+    // The separating property. If the type is still on the page its rule is
+    // still earned, the per-node map covers the rest, and the stored sheet must
+    // be reused rather than recompiled on every render.
+    const page = onlyInstanceOfItsType();
+    const withSurvivor: BlockDocument = {
+      ...page,
+      nodes: [
+        ...page.nodes,
+        {
+          id: "stays",
+          type: "plugin/drawless",
+          version: 1,
+          props: { draw: true },
+        },
+      ],
+    };
+    const stored = resolvePageStyles(
+      withSurvivor,
+      undefined,
+      context,
+      withPlugin
+    );
+
+    const read = preparePageForRead(withSurvivor, {
+      resolver: withPlugin,
+      styles: stored,
+    });
+
+    expect(read.styles.css).toContain("nx-bt-plugin--drawless");
+    expect(read.styles.css).not.toContain("crimson");
+  });
+
+  it("refuses when gating hid a duplicate id before the address pass saw it", () => {
+    // The compiler writes no node-local rules for either twin. If gating removes
+    // one, the collision never reaches the address pass, the two stages compare
+    // equal, and the survivor is still missing its rules — so the evidence only
+    // exists in the pre-gating tree.
+    const hiddenCollision: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "twin",
+          type: "test/text",
+          version: 1,
+          props: { value: "conditioned" },
+          styles: { base: { base: { color: "crimson" } } },
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+          },
+        },
+        {
+          id: "twin",
+          type: "test/text",
+          version: 1,
+          props: { value: "survivor" },
+          styles: { base: { base: { color: "olive" } } },
+        },
+      ],
+    };
+    const stored = resolvePageStyles(
+      hiddenCollision,
+      undefined,
+      context,
+      withPlugin
+    );
+    expect(stored.css).not.toContain("olive");
+
+    const read = preparePageForRead(hiddenCollision, {
+      resolver: withPlugin,
+      styles: stored,
+      styleContext: context,
+    });
+
+    expect(read.styles.css).toContain("olive");
+  });
+});
+
 describe("the reading view", () => {
   it("answers null for an envelope this build cannot speak", () => {
     const wrongVersion = {
