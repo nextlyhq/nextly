@@ -384,6 +384,36 @@ describe("reading what the build bundled", () => {
     expect(packageOfInput("src/lib/utils.ts")).toBeNull();
   });
 
+  it("refuses a PARTIALLY described set rather than answering from the rest", () => {
+    // The entry is described and the chunk is not. Answering from the outputs that WERE found
+    // reads as a complete result, and whatever the unmatched chunk inlined passes unseen.
+    const metafile = {
+      outputs: { "dist/utils.mjs": { inputs: { "src/lib/utils.ts": {} } } },
+    };
+    expect(
+      bundledPackages(metafile, ["dist/utils.mjs", "dist/chunk-abc.mjs"])
+    ).toBeNull();
+  });
+
+  it("reads what the bundler RESOLVED but did not inline", () => {
+    // `require.resolve` reaches a package that appears in no input and in no surviving specifier.
+    // The metafile records it under `imports`, so the information was present and unread.
+    const metafile = {
+      outputs: {
+        "dist/utils.cjs": {
+          inputs: { "src/lib/utils.ts": {} },
+          imports: [
+            { path: "@nextlyhq/admin-css", kind: "require-resolve" },
+            { path: "./chunk-abc.cjs", kind: "require-call" },
+          ],
+        },
+      },
+    };
+    expect(bundledPackages(metafile, ["dist/utils.cjs"])).toEqual([
+      "@nextlyhq/admin-css",
+    ]);
+  });
+
   it("reports an artifact the metafile does not describe, rather than passing it", () => {
     // An absent entry means the question was not answered. Returning an empty list would read as
     // "nothing bundled", which is the failure this whole check exists to prevent.
@@ -461,9 +491,13 @@ describe("restricting to the oldest supported Node", () => {
   it("names a post-floor global that reappeared", () => {
     // Asked BETWEEN imports. An artifact that installs `navigator` puts it back for everything
     // evaluated afterwards, and those entries then pass against a runtime no consumer has.
-    expect(floorGlobalsPresent({ navigator: {}, WebSocket: class {} })).toEqual(
-      ["navigator", "WebSocket"]
-    );
+    expect(
+      floorGlobalsPresent({
+        navigator: {},
+        WebSocket: class {},
+        Iterator: class {},
+      })
+    ).toEqual(["navigator", "WebSocket", "Iterator"]);
     expect(floorGlobalsPresent({ clean: 1 })).toEqual([]);
   });
 

@@ -298,17 +298,30 @@ describe("the hand-written declaration beside the module", () => {
     "..",
     "scripts"
   );
-  const names = (file: string): string[] =>
-    [
-      // Every exported BINDING, not only the functions. A `const` added to the module and missed
-      // in the declaration gives every TypeScript consumer `TS2305` while working at runtime, and
-      // a function-only comparison reported that as parity.
-      ...readFileSync(path.join(scripts, file), "utf8").matchAll(
-        /^export (?:declare )?(?:function|const|let|var|class) (\w+)/gm
+  const names = (file: string): string[] => {
+    const source = readFileSync(path.join(scripts, file), "utf8");
+    // Every exported BINDING, not only the functions. A `const` added to the module and missed in
+    // the declaration gives every TypeScript consumer `TS2305` while working at runtime, and a
+    // function-only comparison reported that as parity.
+    //
+    // `async` sits between `export` and `function`, and an export LIST names bindings declared
+    // elsewhere — both are ordinary ways to export something, and a matcher blind to either
+    // reports a missing declaration as agreement.
+    const declared = [
+      ...source.matchAll(
+        /^export (?:declare )?(?:async )?(?:function|const|let|var|class) (\w+)/gm
       ),
-    ]
-      .map(match => match[1]!)
-      .sort();
+    ].map(match => match[1]!);
+    const listed = [...source.matchAll(/^export \{([^}]*)\}(?!\s*from)/gm)]
+      .flatMap(match => match[1]!.split(","))
+      .map(part => {
+        // `export { extra as renamed }` publishes the name on the RIGHT.
+        const segments = part.trim().split(/\s+as\s+/);
+        return (segments[segments.length - 1] ?? "").trim();
+      })
+      .filter(name => name.length > 0 && name !== "type");
+    return [...declared, ...listed].sort();
+  };
 
   it("declares exactly the bindings the module exports", () => {
     const runtime = names("published-entries.mjs");

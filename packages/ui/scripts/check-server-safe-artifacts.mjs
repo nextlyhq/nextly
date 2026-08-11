@@ -471,8 +471,20 @@ export function bundledPackages(metafile, outputNames) {
       const pkg = packageOfInput(input);
       if (pkg !== null) packages.add(pkg);
     }
+    // The bundler also records what it RESOLVED without inlining — a `require.resolve` reaches a
+    // package that appears in no input and in no surviving specifier, and the consumer without
+    // that dependency gets MODULE_NOT_FOUND at import. The record is already here; it was simply
+    // not being read.
+    for (const entry of output.imports ?? []) {
+      if (typeof entry?.path !== "string") continue;
+      const pkg = packageOfInput(entry.path) ?? packageOf(entry.path);
+      if (pkg !== null) packages.add(pkg);
+    }
   }
-  if (missing.length === names.length) return null;
+  // ANY unmatched output means the answer is incomplete, not that the rest is clean. Returning
+  // the packages of the outputs that WERE described reads as a full result, and a package inlined
+  // into the unmatched chunk passes — the fail-open case this function exists to prevent.
+  if (missing.length > 0) return null;
   return [...packages];
 }
 
@@ -516,6 +528,8 @@ const ADDED_AFTER_SUPPORTED_FLOOR = [
   // v24.
   "CloseEvent",
   "EventSource",
+  // A post-floor JavaScript global rather than a web one, and absent on the floor all the same.
+  "Iterator",
   // Not in any release the floor covers; listed ahead of the Node that ships it.
   "URLPattern",
 ];
@@ -731,6 +745,17 @@ async function main() {
         await import(pathToFileURL(full).href);
       }
       importing = null;
+      // Asked immediately AFTER too, not only before the next one. The before-check gives the
+      // final artifact no later iteration to be observed in, so a leak installed by the last
+      // import — which pollutes a consumer's environment just as much — went unreported.
+      const installed = [...domGlobalsPresent(), ...floorGlobalsPresent()];
+      if (installed.length > 0) {
+        problems.push(
+          `${file} installed ${installed.join(", ")} while being imported. A server-safe entry ` +
+            `point must not put a browser global into its consumer's environment.`
+        );
+        break;
+      }
     } catch (error) {
       problems.push(
         `${file} threw while being imported under Node: ${error instanceof Error ? error.message : String(error)}. ` +
