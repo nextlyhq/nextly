@@ -65,6 +65,38 @@ Underneath all three sits time-of-check-to-time-of-use, which may need a
 different answer per dialect. Say which dialect a mitigation covers rather than
 implying one policy fits all.
 
+## When a check reaches for a NAME, ask what structurally decides it
+
+A name, a version string or a string pattern is nearly always a proxy, and the
+cases that motivated writing the check are the ones that violate the proxy.
+
+The reason is worth stating, because it tells you when the rule applies: **a
+name is a claim made by someone else; structure is the thing itself.** The
+engine chose the collision suffix, the vendor chose what version to report, a
+previous release of your own code chose the prefix. You never controlled any of
+those strings, and the check exists precisely for the cases where the other
+party's choice diverges from your expectation — so the divergence and the check
+have the same cause. Not every string in a codebase has that property; the ones
+assigned by something outside your control do.
+
+Five instances in one area, each found only after the name-based version had
+been written:
+
+- classify a driver failure by SQLSTATE **class**, not a list of codes;
+- find a database object by the **column set it covers**, not by its name — an
+  engine appends `_2` on collision and truncates at its identifier limit, so
+  there is no single string to match;
+- decide a capability by **probing it on a scratch object**, not by reading the
+  server's version — the platforms worth detecting are the ones that misreport;
+- decide indexability by asking the **shared rule**, not by restating which
+  types a dialect can key;
+- confirm a merge by **comparing the object**, not by grepping for a marker
+  that may occur elsewhere.
+
+The tell is a check whose correctness depends on how some other system chose to
+spell something. Ask instead what property makes the answer true, and query
+that. It is usually available and it usually costs the same.
+
 ## A bare `catch` is only a defect when its fallback makes a CLAIM
 
 `catch { return conservative }` that degrades to caution is sound for the
