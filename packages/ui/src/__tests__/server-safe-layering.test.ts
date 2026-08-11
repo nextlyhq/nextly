@@ -34,6 +34,7 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -42,7 +43,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 
 import { publishedEntries } from "../../scripts/published-entries.mjs";
 
@@ -195,6 +196,21 @@ function analyze(source: string, fileName: string): Analysis {
   const readsTheGlobal = (node: ts.Identifier): boolean => {
     if (declared.has(node.text)) return false;
     const parent = node.parent;
+    // `export type Root = HTMLElement` names a TYPE. TypeScript erases the annotation, so nothing
+    // reads the global at runtime and reporting it would reject declaration-only code.
+    if (ts.isTypeReferenceNode(parent) || ts.isTypeQueryNode(parent))
+      return false;
+    // `globalThis.document` reaches the same global through a property. `globalThis` exists on a
+    // server while `document` does not, so the read still throws while naming nothing the bare
+    // identifier check would see.
+    if (
+      ts.isPropertyAccessExpression(parent) &&
+      parent.name === node &&
+      ts.isIdentifier(parent.expression) &&
+      parent.expression.text === "globalThis"
+    ) {
+      return true;
+    }
     // `shape.window` and `{ window: 1 }` name a property, not the global.
     if (ts.isPropertyAccessExpression(parent) && parent.name === node) {
       return false;
@@ -304,12 +320,16 @@ function resolveLocal(fromFile: string, specifier: string): string | null {
   // substitutes the extension. Probing `helper.js.ts` finds nothing, and the specifier would then
   // be recorded as an external PACKAGE, failing the allow-list for an ordinary local import.
   const swapped = base.replace(/\.(?:js|jsx|mjs|cjs)$/, "");
+  // `./helper.mjs` may be backed by `helper.mts`, and `.cjs` by `.cts`. Those keep their own
+  // extension rather than collapsing to `.ts`, so they need their own candidates.
+  const moduleForm = base.replace(/\.mjs$/, ".mts").replace(/\.cjs$/, ".cts");
   for (const candidate of [
     base,
     `${base}.ts`,
     `${base}.tsx`,
     `${swapped}.ts`,
     `${swapped}.tsx`,
+    moduleForm,
     path.join(base, "index.ts"),
     path.join(base, "index.tsx"),
   ]) {
@@ -487,6 +507,25 @@ describe("reading a module", () => {
     ).toEqual([]);
   });
 
+  it("does not report a browser global named in a TYPE position", () => {
+    // `export type Root = HTMLElement` is erased with the rest of the annotation, so nothing reads
+    // the global at runtime. Reporting it rejects declaration-only code.
+    expect(
+      read(`
+        export type Root = HTMLElement;
+        export type W = typeof window;
+      `).globals
+    ).toEqual([]);
+  });
+
+  it("reports a browser global reached through globalThis", () => {
+    // `globalThis` exists on a server and `document` does not, so this still throws — while the
+    // bare-identifier check sees only `globalThis`, which is legitimate everywhere.
+    expect(read(`export const b = globalThis.document.title;`).globals).toEqual(
+      ["document"]
+    );
+  });
+
   it("reports a specifier it cannot read, rather than passing it in silence", () => {
     // A bundler folds constant expressions — `import("re" + "act")` resolves to React — and this
     // does not evaluate them. Failing closed reports it as unreadable; skipping it would hide
@@ -534,6 +573,9 @@ describe("resolving a local import", () => {
     // import. Written to a temp directory so the fixture is real files, which is what the resolver
     // reads, without adding a `.js`-specifier module to this package's own sources.
     const dir = mkdtempSync(path.join(os.tmpdir(), "nx-layering-"));
+    // Removed however this ends. A watch session reruns this constantly, and a fixture left behind
+    // each time accumulates directories on developer and CI hosts indefinitely.
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
     writeFileSync(path.join(dir, "helper.ts"), "export const helper = 1;\n");
     const entry = path.join(dir, "entry.ts");
     writeFileSync(
