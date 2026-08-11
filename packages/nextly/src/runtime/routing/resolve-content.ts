@@ -418,19 +418,23 @@ export async function resolveContent(
       ? undefined
       : (name: string): boolean => trustedNames.includes(name);
 
-  // A bounded read that EXPANDS has an enforced component: the targets its
-  // predicate rejects are read against their own stored policies, and this
-  // module already refuses to cache an enforced read for exactly that reason —
-  // a policy change (public -> restricted) writes no row, so no content tag
-  // busts, and the entry keeps serving rows the policy now hides.
+  // A bounded read's rejected targets are judged by stored policies, and a
+  // policy change writes no row — so no content tag busts and the entry keeps
+  // serving rows the policy now hides.
   //
-  // Only when it expands. At `depth: 0` — the public factory's default — no
-  // target is reached, there is no enforced component, and the read caches as
-  // before. A route that opts into expansion AND bounds it pays per-request
-  // freshness for the targets it refused to trust, which is the same trade the
-  // enforced path already makes.
-  const boundedExpansion = trustedNames !== undefined && depth > 0;
-  const cacheable = overrideAccess && !user && !draft && !boundedExpansion;
+  // That is NOT a reason to refuse the cache here, and treating it as one was
+  // wrong twice over. The escape from caching in this module is `markDynamic()`,
+  // which contradicts the one factory that would hit this path:
+  // `createPublicContentRoute` exports `generateStaticParams`, so marking its
+  // render dynamic is the same error the factory already refuses `draft` for.
+  //
+  // And the staleness is not introduced by the bound. A pre-rendered page is a
+  // point-in-time copy of everything it read; a policy tightening after the
+  // build leaves the whole page stale, bounded targets or not. The remedy is
+  // revalidation — the `tags` option exists to name the related collections a
+  // populated read depends on — not per-request rendering on a route that has
+  // told Next it is static.
+  const cacheable = overrideAccess && !user && !draft;
   if (!cacheable) {
     // Bypassing `unstable_cache` alone does not opt out of Next's Full Route
     // Cache, so a page rendered while a policy was public could stay statically

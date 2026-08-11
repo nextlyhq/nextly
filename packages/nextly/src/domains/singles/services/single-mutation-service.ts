@@ -2330,7 +2330,15 @@ export class SingleMutationService extends BaseService {
           // A trusted write sees the row it just wrote regardless of
           // lifecycle; an untrusted one gets the published default, the
           // same answer its own GET would give.
-          status: options.overrideAccess === true ? "all" : undefined,
+          // The row this write just produced, read back at its own lifecycle.
+          // Withheld from a BOUNDED caller because it propagates into
+          // relationship expansion, where an explicit `"all"` is honoured
+          // before the narrowed override is consulted — so the bound would be
+          // defeated by a status that was never asked for.
+          status:
+            options.overrideAccess === true && options.trusted === undefined
+              ? "all"
+              : undefined,
         }
       );
 

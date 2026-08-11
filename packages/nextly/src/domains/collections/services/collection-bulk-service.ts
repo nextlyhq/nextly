@@ -245,7 +245,15 @@ export class CollectionBulkService extends BaseService {
       // Draft visibility is limited to trusted (overrideAccess) callers: route
       // auth attested create, not the right to read unpublished rows, so a
       // route/untrusted duplicate keeps the default published-only visibility.
-      const sourceStatus = params.overrideAccess ? "all" : undefined;
+      // Scoped to the SOURCE ROW, not to what it points at. A bounded caller
+      // must not have this reach expansion: `expansionStatusScope` cannot tell
+      // a manufactured `"all"` from one the caller asked for, and would carry
+      // it into every rejected target — whose drafts would then be COPIED into
+      // the new row, outliving the refusal as data.
+      const sourceStatus =
+        params.overrideAccess && params.trusted === undefined
+          ? "all"
+          : undefined;
       const sourceResult = await this.queryService.getEntry({
         collectionName: params.collectionName,
         entryId: params.entryId,
