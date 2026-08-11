@@ -385,13 +385,15 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
     expect(written?.migrationStatus).toBe("failed");
   });
 
-  it("does not bind the runtime shape when the companion reconcile fails", async () => {
-    // 🔴 The shape bound on a localization ENABLE omits the translatable columns, which are still
-    // physically on the main table until the companion has taken them. Binding it before the
-    // companion succeeds leaves the resolver describing a table that does not exist in that shape —
-    // and `ensure-runtime-table.ts` treats a registration it did not make as owned by whoever made
-    // it, so it ADOPTS this one rather than rebuilding. Reads would drop those fields until a
-    // restart.
+  it("binds the shape the main table actually has when the companion fails mid-enable", async () => {
+    // 🔴 A failed companion leaves the two halves in DIFFERENT states, and the runtime shape is
+    // composed from both: the main table holds the new field set, while the translatable columns
+    // have not moved off it. Binding the shape the save ASKED for would omit columns that are
+    // still physically there.
+    //
+    // Something must be bound rather than nothing: `ensure-runtime-table.ts` adopts a registration
+    // it did not make instead of rebuilding, and the registry cannot invalidate one table, so a
+    // stale entry survives to the next restart either way.
     const { written } = await runUpdate(
       { localized: true },
       {
@@ -401,7 +403,37 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
     );
 
     expect(written?.migrationStatus).toBe("failed");
-    expect(registeredShapes).not.toHaveBeenCalled();
+    expect(registeredShapes).toHaveBeenCalledTimes(1);
+    const table = registeredShapes.mock.calls[0][1] as Record<string, unknown>;
+    // `heading` is a text field, so it translates by default. It is still on main because the
+    // enable never completed, and the bound shape has to say so.
+    expect(Object.keys(table)).toContain("heading");
+  });
+
+  it("binds the new columns when a localized single's own ALTER succeeded", async () => {
+    // The other half of the same rule, and the case that ordering alone cannot fix. An
+    // already-localized single edits a NON-translatable field: the main ALTER adds the column, then
+    // the companion fails. Binding nothing leaves the resolver on a shape without the column the
+    // ALTER just added, and reads drop it until a restart.
+    const { written } = await runUpdate(
+      {
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "count", type: "number" },
+        ],
+      },
+      {
+        existing: existingSingle({
+          localized: true,
+          fields: [{ name: "heading", type: "text" }],
+        }),
+        companionFailure: new Error("companion ALTER rejected"),
+      }
+    );
+
+    expect(written?.migrationStatus).toBe("failed");
+    const table = registeredShapes.mock.calls[0][1] as Record<string, unknown>;
+    expect(Object.keys(table)).toContain("count");
   });
 
   it("binds the runtime shape once the companion has taken", async () => {

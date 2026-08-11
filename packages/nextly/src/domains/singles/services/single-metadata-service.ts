@@ -592,6 +592,10 @@ export class SingleMetadataService {
         return "failed";
       }
 
+      // 🔴 Past this point the MAIN table holds `plan.fields`. The companion may or may not follow,
+      // and the two halves are what the runtime shape is composed from — so from here the position
+      // in this method is the evidence for which state is true, and no flag is needed to track it.
+      //
       // i18n: provision or alter the companion for the field set being saved — CREATE and seed the
       // default locale from main on enable, restore and archive on disable, ADD/DROP columns as
       // translatable fields change. Reported as a failed migration rather than thrown: the main
@@ -599,17 +603,42 @@ export class SingleMetadataService {
       const { reconcileSingleCompanion } = await import(
         "./reconcile-single-companion"
       );
-      await reconcileSingleCompanion({
-        slug: input.slug,
-        tableName,
-        oldFields: plan.previousFields,
-        newFields: plan.fields,
-        localized: input.isLocalized,
-        wasLocalized: input.wasLocalized,
-        status: input.hasStatus,
-        wasStatus: input.wasStatus,
-        adapter,
-      });
+      try {
+        await reconcileSingleCompanion({
+          slug: input.slug,
+          tableName,
+          oldFields: plan.previousFields,
+          newFields: plan.fields,
+          localized: input.isLocalized,
+          wasLocalized: input.wasLocalized,
+          status: input.hasStatus,
+          wasStatus: input.wasStatus,
+          adapter,
+        });
+      } catch (companionError) {
+        // The main table changed and the companion did not, so the shape that is TRUE right now is
+        // the new field set under the PREVIOUS localization. Binding either end whole would be
+        // wrong in one direction: `isLocalized` omits translatable columns an enable has not moved
+        // yet, and leaving the old registration in place omits the column the ALTER just added.
+        //
+        // Something has to be bound rather than nothing, because `ensure-runtime-table.ts` adopts a
+        // registration it did not make instead of rebuilding, and the registry has no way to
+        // invalidate one table — so a stale entry survives until a restart either way.
+        await this.registerUpdatedRuntimeSchema(
+          input,
+          plan,
+          adapter,
+          input.wasLocalized
+        );
+        this.logger.error(
+          `[Singles] Companion reconcile failed for "${tableName}": ${
+            companionError instanceof Error
+              ? companionError.message
+              : String(companionError)
+          }`
+        );
+        return "failed";
+      }
 
       // 🔴 Registered only once the companion has been reconciled, never before it.
       //
@@ -623,7 +652,12 @@ export class SingleMetadataService {
       //
       // Leaving the previous shape in place on failure is the safe direction: it is at worst stale
       // in the same way it was before the save, and the lazy rebuild can still correct it.
-      await this.registerUpdatedRuntimeSchema(input, plan, adapter);
+      await this.registerUpdatedRuntimeSchema(
+        input,
+        plan,
+        adapter,
+        input.isLocalized
+      );
 
       // 🔴 Only a plan that describes the WHOLE table may clear a durable `failed`.
       //
@@ -687,7 +721,14 @@ export class SingleMetadataService {
   private async registerUpdatedRuntimeSchema(
     input: UpdateSingleSchemaInput,
     plan: UpdateDdlPlan,
-    adapter: DrizzleAdapter
+    adapter: DrizzleAdapter,
+    /**
+     * Where the translatable columns physically live RIGHT NOW, which is not always what the save
+     * asked for: an enable that failed its companion leaves them on the main table. Passed rather
+     * than read from `input.isLocalized` so the caller states what it observed instead of what it
+     * intended.
+     */
+    localized: boolean
   ): Promise<void> {
     try {
       const { generateRuntimeSchema } = await import(
@@ -698,8 +739,8 @@ export class SingleMetadataService {
         plan.fields,
         adapter.getCapabilities().dialect,
         // i18n: the main runtime table omits translatable columns for a localized single, matching
-        // the DDL above.
-        { status: input.hasStatus, localized: input.isLocalized }
+        // where those columns physically are.
+        { status: input.hasStatus, localized }
       );
       const resolver = (
         adapter as unknown as { tableResolver?: DynamicSchemaResolver }
