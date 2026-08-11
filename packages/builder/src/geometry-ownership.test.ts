@@ -201,21 +201,16 @@ describe("rectangles are read across the frame in one place", () => {
   });
 
   it("does not claim to see a read routed through a computed name", () => {
-    // Recorded as a LIMIT rather than left for the next reader to discover.
+    // The limit of the scan, asserted rather than left to be discovered.
     //
-    // Three narrowings of this guard have each been followed by a finding of
-    // the same shape — another spelling it did not recognise — and that is the
-    // signal that the design is the problem, not the coverage. A scan over
-    // syntax has an unbounded surface: a name assembled at runtime, a
-    // `Reflect.get`, a property descriptor, an `eval`. Adding a fourth case
-    // would move the boundary without closing it.
+    // A scan over syntax has an unbounded surface: a name assembled at runtime,
+    // a `Reflect.get`, a property descriptor, an `eval`. Recognising one more
+    // spelling moves the edge without closing it, so this is a REVIEW AID over
+    // a bounded set of spellings, NOT a boundary the code cannot cross.
     //
-    // So the claim is narrowed to what is true. This is a REVIEW AID over a
-    // bounded set of spellings, NOT a boundary the code cannot cross. The
-    // enforceable half is elsewhere: `geometry.ts` owns the arithmetic and
-    // every caller is expected to ask it, which review checks. This assertion
-    // exists so that fact is written down as a passing test rather than as a
-    // sentence someone may stop believing.
+    // The enforceable half is elsewhere: `geometry.ts` owns the arithmetic and
+    // every caller asks it. Writing the limit as a passing assertion keeps it
+    // true, where a sentence in a header stops being read.
     const computed = crossFrameReads(
       'const name = "getBounding" + "ClientRect"; const r = el[name]();',
       "probe.ts"

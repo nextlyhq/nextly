@@ -13,13 +13,23 @@
  * bug is not caught by either module's own tests, because each is correct about
  * the question it asked.
  *
- * How much of that is ENFORCED, stated plainly because the difference matters:
- * a sibling test refuses a rectangle READ across the frame anywhere else in this
- * package, and the e2e helper adapts these functions rather than restating them.
- * Neither can stop a module that is handed an origin and a scale from
- * open-coding the arithmetic — two numbers multiplied and added look like any
- * other code — so that half is held at review, the same way the builder's
- * "draws with `blocks-react`" rule is.
+ * How much of that is ENFORCED, stated plainly because the difference matters —
+ * and the honest answer is: none of it, by a boundary.
+ *
+ * A sibling test scans for a rectangle READ across the frame elsewhere in this
+ * package, and it recognises a bounded set of spellings: a property access, a
+ * string element access, a destructured binding. A name assembled at runtime, a
+ * `Reflect.get` or a property descriptor all walk past it, and its own tests say
+ * so. It narrows the easy paths; it is not a wall.
+ *
+ * Nothing checks the other half at all. A module handed an origin and a scale can
+ * open-code the arithmetic without touching the DOM, and two numbers multiplied
+ * and added look like any other code.
+ *
+ * So treat both as review-time conventions, the same way the builder's "draws
+ * with `blocks-react`" rule is. What is real is that the e2e helper adapts these
+ * functions rather than restating them, and that every caller needing a content
+ * origin asks {@link frameContentOrigin} for one.
  *
  * The functions are pure and take plain numbers rather than DOM nodes, so the
  * mapping can be exercised without a browser and the DOM reads stay at the edge.
