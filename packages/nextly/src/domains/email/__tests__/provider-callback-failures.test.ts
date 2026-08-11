@@ -1146,11 +1146,12 @@ describe("a diagnostic whose case folding changes its length", () => {
   }
 
   it("redacts the credential however far the fold shifts", async () => {
-    // `İ` lowercases to TWO code units, so an index found in a lowercased copy
-    // does not address the original. Redacting by that index shifts the
-    // replacement forward, and past enough of them it clears the credential
-    // entirely and leaves the whole secret in what `email.failed` logs.
-    // Measured before the fix: 5 leaked `SK-LI`, 25 leaked all of it.
+    // `İ` lowercases to TWO code units, so an index taken from a lowercased
+    // copy does not address the original string. The four counts bracket the
+    // consequence: none is the ordinary case, a few shift the redaction part
+    // way into the credential and leave its head behind, and more than the
+    // credential is long shift it clear of the value entirely — which is what
+    // would put a whole secret in the line `email.failed` writes.
     for (const count of [0, 5, 25, 60]) {
       const described_ = await described(
         `${"İ".repeat(count)} rejected ${KEY}`
@@ -1184,5 +1185,57 @@ describe("a diagnostic whose case folding changes its length", () => {
     // Generous against the quadratic form, so this fails on the shape of the
     // algorithm rather than on a slow machine.
     expect(elapsed).toBeLessThan(50);
+  });
+});
+
+describe("two declared credentials where one is a prefix of the other", () => {
+  const SHORT = "sk_live";
+  const LONG = "sk_live_REAL_SECRET_VALUE";
+
+  function overlapping(message: string) {
+    return defineEmailProvider<{ a: string; b: string }>({
+      type: "overlapping",
+      label: "Overlapping",
+      configFields: [
+        { name: "a", label: "A", kind: "password", secret: true },
+        { name: "b", label: "B", kind: "password", secret: true },
+      ],
+      parseConfig: input => input as { a: string; b: string },
+      createAdapter: () => ({
+        send: () => {
+          throw new Error(message);
+        },
+      }),
+    });
+  }
+
+  async function described(message: string) {
+    try {
+      await overlapping(message)
+        .createAdapterFrom({ a: SHORT, b: LONG })
+        .send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" });
+      throw new Error("the adapter was expected to fail");
+    } catch (error) {
+      return JSON.stringify(describeProviderFailure(error));
+    }
+  }
+
+  it("leaves no tail of the longer one behind", async () => {
+    // Redacting the shorter credential first consumes the head of the longer
+    // one, and what is left no longer matches anything — so the remainder of a
+    // live secret reaches the log as `[secret]_REAL_SECRET_VALUE`.
+    const text = await described(`rejected ${LONG}`);
+
+    expect(text).not.toContain("_REAL_SECRET_VALUE");
+    expect(text).not.toContain(LONG);
+  });
+
+  it("still redacts the shorter one on its own", async () => {
+    // The control: ordering by length must not stop a short credential being
+    // found when it is the one that appears.
+    const text = await described(`rejected ${SHORT} alone`);
+
+    expect(text).not.toContain(SHORT);
+    expect(text).toContain("alone");
   });
 });

@@ -28,6 +28,7 @@ import { BaseService } from "../../../shared/base-service";
 import {
   isRecognisedMessageId,
   mailboxOf,
+  refusedMailbox,
   messageIdWithoutRecipients,
   type EmailDeliveryRecipientKind,
 } from "../delivery-record";
@@ -475,7 +476,9 @@ export class EmailService extends BaseService {
       // saying `sent` for a refused address is a wrong answer to the one
       // question this table exists to answer.
       const refused = new Set(
-        (result.rejected ?? []).map(address => mailboxOf(address).toLowerCase())
+        (result.rejected ?? [])
+          .map(entry => refusedMailbox(entry).toLowerCase())
+          .filter(mailbox => mailbox !== "")
       );
       const recipients = deliveryRecipients(filtered);
       // A provider is handed `options.to` and may build its identifier out of

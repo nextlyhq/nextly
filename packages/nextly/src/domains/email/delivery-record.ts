@@ -195,6 +195,30 @@ export function mailboxOf(address: string): string {
 }
 
 /**
+ * The mailbox out of whatever a provider reports as a refused recipient.
+ *
+ * `rejected` is provider-supplied, and nodemailer reports either a plain
+ * string or an envelope-style object depending on how the message was
+ * addressed — so a provider forwarding its transport's array untouched hands
+ * over objects. Narrowed rather than assumed: reading `.trim()` off one throws
+ * AFTER the provider has already sent, turning a delivered message into a
+ * failure.
+ *
+ * An entry that carries no address yields `""`, which matches nothing and so
+ * refuses nobody. That is the safe direction here — the alternative is
+ * treating an unreadable entry as a refusal of some recipient it does not
+ * name.
+ */
+export function refusedMailbox(entry: unknown): string {
+  if (typeof entry === "string") return mailboxOf(entry);
+  if (entry !== null && typeof entry === "object" && "address" in entry) {
+    const address = (entry as { address?: unknown }).address;
+    if (typeof address === "string") return mailboxOf(address);
+  }
+  return "";
+}
+
+/**
  * Whether a provider's identifier is one of the shapes core recognises.
  *
  * Exported so both send paths ask the same question; a shape rule enforced in

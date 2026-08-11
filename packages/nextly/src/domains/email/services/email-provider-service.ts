@@ -38,6 +38,7 @@ import {
   isRecognisedMessageId,
   mailboxOf,
   messageIdWithoutRecipients,
+  refusedMailbox,
   type EmailDeliveryInput,
 } from "../delivery-record";
 import { describeProviderFailure } from "../provider-definition";
@@ -769,8 +770,8 @@ export class EmailProviderService extends BaseService {
       // strings as written never matches, and the Test button reports success
       // for the one recipient the provider refused.
       const accepted = (result.rejected ?? []).every(
-        address =>
-          mailboxOf(address).toLowerCase() !== testMailbox.toLowerCase()
+        entry =>
+          refusedMailbox(entry).toLowerCase() !== testMailbox.toLowerCase()
       );
       const delivered = result.success && accepted;
 

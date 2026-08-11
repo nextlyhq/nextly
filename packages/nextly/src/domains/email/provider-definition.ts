@@ -663,7 +663,15 @@ function containedFailure(
   // match. Rebuilt by index rather than by regular expression, because a
   // credential may contain characters a pattern would read as syntax.
   let text = texts.join(": ");
-  for (const secret of secrets.comparable) {
+  // LONGEST first. A provider may declare one credential that is a prefix of
+  // another -- `sk_live` beside `sk_live_REAL_SECRET` -- and redacting the
+  // short one first consumes the head of the long one, leaving its tail in the
+  // text as `[secret]_REAL_SECRET`. Replacing the longest match first cannot
+  // be undone by a shorter one, because the characters are already gone.
+  const byLengthDescending = [...secrets.comparable].sort(
+    (left, right) => right.length - left.length
+  );
+  for (const secret of byLengthDescending) {
     if (secret.length === 0) continue;
     text = text.replace(caseInsensitivePattern(secret), REDACTED_SECRET);
   }

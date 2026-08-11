@@ -988,3 +988,68 @@ describe("a provider that returns no identifier at all", () => {
     expect(result).toEqual({ success: true });
   });
 });
+
+describe("a provider that reports refusals the way its transport does", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetFilterRegistry();
+  });
+
+  afterEach(() => {
+    resetFilterRegistry();
+  });
+
+  it("reads an envelope-style entry rather than throwing on it", async () => {
+    // Nodemailer reports either a plain string or an object depending on how
+    // the message was addressed, so a provider forwarding its transport's
+    // array untouched hands over objects. Reading `.trim()` off one throws
+    // AFTER the provider has already sent — turning a delivered message into a
+    // failure, which is the one outcome worse than mis-recording it.
+    const { service } = buildSend();
+    (service as unknown as { createAdapterFromRecord: unknown })[
+      "createAdapterFromRecord"
+    ] = () => ({
+      send: () =>
+        Promise.resolve({
+          success: true,
+          messageId: "msg-1",
+          rejected: [{ address: "a@b.com", name: "" }],
+        } as unknown as { success: boolean; messageId?: string }),
+    });
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    // The refusal is UNDERSTOOD, not merely survived: the primary recipient
+    // was refused, so the send did not reach the caller's address.
+    expect(result.success).toBe(false);
+  });
+
+  it("ignores an entry that names no address", async () => {
+    // An unreadable entry matches nothing and so refuses nobody. The
+    // alternative — treating it as a refusal — would fail a send on the
+    // strength of a value the provider did not manage to name.
+    const { service } = buildSend();
+    (service as unknown as { createAdapterFromRecord: unknown })[
+      "createAdapterFromRecord"
+    ] = () => ({
+      send: () =>
+        Promise.resolve({
+          success: true,
+          messageId: "msg-1",
+          rejected: [{ nothing: true }, null],
+        } as unknown as { success: boolean; messageId?: string }),
+    });
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(result).toEqual({ success: true, messageId: "msg-1" });
+  });
+});
