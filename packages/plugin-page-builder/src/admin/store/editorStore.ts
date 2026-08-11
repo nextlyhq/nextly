@@ -195,10 +195,10 @@ export function editorReducer(
       // The discarded block was never on the canvas, so the author's selection is unrelated to it
       // and clearing it unconditionally would take away work they can see. It only has to go when
       // the removed subtree contained it.
-      const selectedId =
-        state.selectedId && !findNode(next, state.selectedId)
-          ? null
-          : state.selectedId;
+      const selectedId = keepValidSelection(
+        { ...state.document, root: next },
+        state.selectedId
+      );
       return commit(state, next, selectedId);
     }
 
