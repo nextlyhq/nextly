@@ -79,9 +79,30 @@ export function isRemoteUrl(value: string): boolean {
  *
  * `next.config` accepts `remotePatterns: [new URL("https://cdn.example/img/**")]`
  * as well as the object form, and a `URL` already carries every field this
- * matches on. The only difference is that its `protocol` keeps the trailing
- * colon, which is why the comparison below strips one from both sides rather
- * than appending one — the same accommodation `matchRemotePattern` makes.
+ * matches on. Its `protocol` keeps the trailing colon, which is why the
+ * comparison below strips one from both sides rather than appending one — the
+ * same accommodation `matchRemotePattern` makes.
+ *
+ * **A `URL` is STRICTER than the object spelling that looks like it**, and the
+ * difference is easy to be surprised by. A `URL` answers `""` for a `port` and a
+ * `search` it does not have, while the object form leaves them undefined, and an
+ * omitted field means "anything" here while an empty one means "exactly empty".
+ * So `new URL("https://cdn.example/img/**")` matches only the default port AND
+ * only a URL with no query string, where
+ * `{ protocol: "https", hostname: "cdn.example", pathname: "/img/**" }` accepts
+ * any port and any query. An image requested as `?v=2` is refused by the first
+ * and admitted by the second.
+ *
+ * This is not a quirk of this implementation. `next/image`'s `matchRemotePattern`
+ * takes `RemotePattern | URL` and applies the same `!== undefined` tests to
+ * both, so a `URL` narrows it there in exactly the same way. Normalising the
+ * empty strings away here would be friendlier in isolation and WRONG in the way
+ * that matters: the reason this type takes a `URL` at all is that an entry
+ * copied from `next.config` should behave identically, and a rule that admitted
+ * more here than it does for `next/image` would leave a site believing one
+ * boundary while running two.
+ *
+ * Write the object form when the intent is "any port, any query".
  */
 export type RemotePatternInput = URL | RemotePattern;
 
