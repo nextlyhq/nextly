@@ -7,12 +7,18 @@ settle most questions in this lane. Written to be read cold.
 
 ## 1. Where things stand
 
-| PR                                  | State                  | Head        | Threads                    |
-| ----------------------------------- | ---------------------- | ----------- | -------------------------- |
-| **#634** admin theme                | **MERGED** `6823b57db` | —           | 59, all resolved           |
-| **#659** theme lab harness          | **MERGED** `2f883401d` | —           | 14, all resolved           |
-| **#675** one colour type            | **MERGED** `49a87c51f` | —           | 0                          |
-| **#674** dashboard capture evidence | **OPEN**               | `b43e25c31` | 8 raised, **0 unresolved** |
+| PR                                  | State                  | Threads          |
+| ----------------------------------- | ---------------------- | ---------------- |
+| **#634** admin theme                | **MERGED** `6823b57db` | 59, all resolved |
+| **#659** theme lab harness          | **MERGED** `2f883401d` | 14, all resolved |
+| **#675** one colour type            | **MERGED** `49a87c51f` | 0                |
+| **#678** SidebarInset landmark      | **MERGED** `ed5e26ecb` | 0                |
+| **#674** dashboard capture evidence | **OPEN**               | worked in rounds |
+
+A merged PR's commit is worth recording because it is permanent. **An open PR's
+head is not** — it is stale the moment anything is pushed, so it is deliberately
+absent here. Read it from `gh pr view` and require that the local, remote and
+API values agree with each other rather than with a number written down.
 
 Branch: `fix/dashboard-capture-evidence`.
 Worktree: `nextly-worktrees/theme-variations`. **Work only here.** Never in
@@ -103,14 +109,24 @@ merge without CI green **and** zero unresolved.
 
 ### Queued, unstarted
 
-- **`SidebarInset` dead `<main>`** — `packages/admin/src/components/layout/sidebar/index.tsx:289`.
-  Exported, never rendered (`grep -rn "<SidebarInset"` returns nothing),
-  carries a `<main>`. A live e2e strict-mode tripwire the moment anyone
-  renders it. **Hygiene, not a P1** — it was mistakenly handed over as the
-  cause of task 194 and that was retracted. Options: delete it, or change its
-  element to a `<div>` and keep the layout behaviour. The second is probably
-  right — the `<main>` is a shadcn default, and the admin already renders its
-  own landmark at `DashboardLayout.tsx:105`.
+Nothing. Both items that were queued here are closed — `SidebarInset` shipped
+as #678, `--nx-font-mono` was withdrawn below.
+
+**`SidebarInset` is worth reading for how the decision was reached**, because
+the obvious reason was the wrong one. It was queued as dead code carrying a
+`<main>`. Dead it certainly was, but so are **13 of the 23 exports in that
+module**, so acting on it for being unused would have been arbitrary and the
+justification would not have survived being asked about.
+
+What actually singles it out is that it is the **only component in the module
+that emits a document landmark**, in a shell that already renders one at
+`DashboardLayout.tsx:105`. That is why the fix changed the element rather than
+deleting the component: deleting would have removed vendored shadcn surface on
+a basis that applies equally to twelve neighbours, while changing the element
+removes the hazard and leaves that larger question to whoever wants to raise it.
+
+The test asserts the ROLE rather than the tag, since `<div role="main">` would
+otherwise reintroduce the defect through a green check.
 
 ### Withdrawn after measurement
 

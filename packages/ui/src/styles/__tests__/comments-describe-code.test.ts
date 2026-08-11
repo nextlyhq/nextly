@@ -42,10 +42,40 @@ const EXTENSIONS = new Set([
  * as a comment. */
 const LINE_COMMENTS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".mts"]);
 
-/** One comment found in a source file, with the line it starts on. */
+/**
+ * One comment found in a source file, with the line it starts on.
+ *
+ * `startsLine` and `endsLine` record whether code shares the comment's opening
+ * and closing lines. They are what separates a comment that CONTINUES onto the
+ * next line from one that merely sits above another: two trailing comments on
+ * consecutive statements are adjacent, but code stands between them, so they
+ * are two remarks rather than one sentence.
+ */
 interface CommentSpan {
   line: number;
   text: string;
+  startsLine: boolean;
+  endsLine: boolean;
+}
+
+/** Whether only whitespace precedes `index` on its line. */
+function onlySpaceBefore(source: string, index: number): boolean {
+  for (let j = index - 1; j >= 0; j--) {
+    const ch = source[j] as string;
+    if (ch === "\n") return true;
+    if (ch !== " " && ch !== "\t" && ch !== "\r") return false;
+  }
+  return true;
+}
+
+/** Whether only whitespace follows `index` on its line. */
+function onlySpaceAfter(source: string, index: number): boolean {
+  for (let j = index; j < source.length; j++) {
+    const ch = source[j] as string;
+    if (ch === "\n") return true;
+    if (ch !== " " && ch !== "\t" && ch !== "\r") return false;
+  }
+  return true;
 }
 
 /**
@@ -100,7 +130,14 @@ function commentsIn(source: string, allowLineComments: boolean): CommentSpan[] {
     if (allowLineComments && ch === "/" && next === "/") {
       const end = source.indexOf("\n", i);
       const stop = end === -1 ? source.length : end;
-      found.push({ line, text: source.slice(i, stop) });
+      found.push({
+        line,
+        text: source.slice(i, stop),
+        startsLine: onlySpaceBefore(source, i),
+        // A line comment runs to the newline by definition, so nothing can
+        // follow it on its own line.
+        endsLine: true,
+      });
       i = stop;
       continue;
     }
@@ -109,7 +146,12 @@ function commentsIn(source: string, allowLineComments: boolean): CommentSpan[] {
       const end = source.indexOf("*/", i + 2);
       const stop = end === -1 ? source.length : end + 2;
       const text = source.slice(i, stop);
-      found.push({ line, text });
+      found.push({
+        line,
+        text,
+        startsLine: onlySpaceBefore(source, i),
+        endsLine: onlySpaceAfter(source, stop),
+      });
       line += text.split("\n").length - 1;
       i = stop;
       continue;
@@ -204,11 +246,18 @@ const strip = (line: string): string =>
  * happened to keep it together.
  */
 function commentLines(spans: CommentSpan[]): CommentSpan[] {
-  return spans.flatMap(span =>
-    span.text
-      .split("\n")
-      .map((text, offset) => ({ line: span.line + offset, text }))
-  );
+  return spans.flatMap(span => {
+    const lines = span.text.split("\n");
+    return lines.map((text, offset) => ({
+      line: span.line + offset,
+      text,
+      // Code can only sit before a comment's FIRST line and after its LAST.
+      // Every line in between is bounded by the comment itself, so nothing
+      // there can interrupt the prose.
+      startsLine: offset === 0 ? span.startsLine : true,
+      endsLine: offset === lines.length - 1 ? span.endsLine : true,
+    }));
+  });
 }
 
 /** The rule itself, over source text, so both directions can be pinned. */
@@ -232,18 +281,26 @@ function violationsInSource(
     // phrase escape through a line break -- an escape hatch that opens by
     // accident, whenever a comment is reflowed.
     //
-    // Only PHYSICALLY ADJACENT lines join. Joining every comment to the next
-    // one in source order would splice unrelated sentences from opposite ends
-    // of a file into a phrase nobody wrote, and a rule that invents its own
-    // violations gets switched off faster than one that misses some.
+    // Two lines join only where the prose is UNINTERRUPTED: they are adjacent,
+    // the first runs to the end of its line, and the second begins with its
+    // comment. Physical adjacency alone is not continuity -- two trailing
+    // comments on consecutive statements have code between them, and joining
+    // those turns two innocent remarks into a phrase neither of them made.
+    //
+    // A rule that invents its own violations gets switched off faster than one
+    // that misses some, so both directions are pinned below.
     //
     // The pair is searched but the FIRST line is reported, so a reader lands
     // on where the phrase starts rather than where it happened to break.
     const next = lines[index + 1];
-    const joined =
-      next === undefined || next.line !== current.line + 1
-        ? current.text
-        : `${strip(current.text)} ${strip(next.text)}`.replace(/\s+/g, " ");
+    const continues =
+      next !== undefined &&
+      next.line === current.line + 1 &&
+      current.endsLine &&
+      next.startsLine;
+    const joined = continues
+      ? `${strip(current.text)} ${strip(next.text)}`.replace(/\s+/g, " ")
+      : current.text;
 
     for (const [pattern, kind] of META_REFERENCES) {
       if (!pattern.test(current.text) && !pattern.test(joined)) continue;
@@ -346,6 +403,23 @@ describe("comments describe the code, not the process", () => {
     // phrases nobody wrote, anywhere in a file.
     expect(
       kinds(["// the second half of a", "const a = 1;", "// fix"].join("\n"))
+    ).toEqual([]);
+
+    // Two TRAILING comments on consecutive statements are adjacent lines but
+    // not continuous prose: code separates them, so they are two remarks about
+    // two declarations. Joining them invents a phrase out of both halves and
+    // fails CI on comments that are individually fine.
+    expect(
+      kinds(
+        ["const a = 1; // see phase", "const b = 2; // 2 of the run"].join("\n")
+      )
+    ).toEqual([]);
+
+    // The mirror case: prose can only continue where the first comment runs to
+    // the end of its line. Here code follows the block comment, so what comes
+    // next is a new thought and not a continuation.
+    expect(
+      kinds(["const a = /* phase */ 1;", "// 2 of the run"].join("\n"))
     ).toEqual([]);
   });
 

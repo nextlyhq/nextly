@@ -22,8 +22,13 @@ gh pr view 674 --repo nextlyhq/nextly --json headRefOid,mergeable,mergeStateStat
 gh pr checks 674 --repo nextlyhq/nextly --json name,state -q '.[] | "\(.state)\t\(.name)"'
 ```
 
-Expect head `b43e25c31`, remote identical. `origin/main` moves several times an
-hour.
+**What to check is that the three agree, not that they equal any particular
+value.** `git rev-parse HEAD`, the `ls-remote` line and `headRefOid` must all
+match each other; that is the property worth having. A head written down here
+is stale the moment anything is pushed, and a resume prompt that tells you the
+correct branch is unexpected sends you looking for a problem you do not have.
+
+`origin/main` moves several times an hour, so merge it before trusting a red.
 
 Count unresolved threads with the GraphQL `reviewThreads` query — **never
 infer from CI colour or review timestamps**:
@@ -73,12 +78,14 @@ because no mono face is loaded. Pointing it at a webfont means shipping one to
 every admin page for a handful of code surfaces. Only revisit if a mono face is
 actually adopted.
 
-### 3. `SidebarInset` — hygiene
+### 3. `SidebarInset` — SHIPPED as #678
 
-`packages/admin/src/components/layout/sidebar/index.tsx:289`. Exported, never
-rendered, carries a `<main>`. Prefer changing its element to a `<div>` over
-deleting it: the `<main>` is a shadcn default and the admin already renders its
-own landmark at `DashboardLayout.tsx:105`.
+Now a `div`, with the role pinned by a test. Nothing to do.
+
+Worth one line, because the queued reason was the wrong one: it was filed as
+dead code carrying a `<main>`, but **13 of the 23 exports in that module are
+unrendered**, so "it's dead" singled it out for nothing. What did was being the
+only component there that emits a landmark, in a shell that already has one.
 
 ### 4. Raise, do not start
 
