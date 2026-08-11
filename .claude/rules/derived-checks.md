@@ -83,6 +83,20 @@ rows, derived from the constraint its schema declares — which is precisely the
 guarantee the cited defect removes. The safety analysis was built on the
 absence of the defect being argued from.
 
+The same shape appears without any document involved, which is worth knowing
+because it is the harder one to see. A control that needed to modify a test file
+was run in a DISPOSABLE worktree specifically so there would be nothing to
+restore. Twenty minutes later a control on a tooling script modified it in place
+with a hand-rolled backup, the backup was taken after a previous run had already
+contaminated the file, and "restoring" reinstated the contamination.
+
+The instinct was not missing. It was SCOPED — available under "test code", not
+transposed to "tooling" — and the boundary was a category in the author's head
+rather than anything present in the work. Both halves were twenty minutes apart,
+both were the same person's, and neither looked wrong at the time. When you
+solve something structurally, ask what else you are doing right now that the
+same structure would fix.
+
 ## When a check reaches for a NAME, ask what structurally decides it
 
 A name, a version string or a string pattern is nearly always a proxy, and the
