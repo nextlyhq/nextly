@@ -471,6 +471,15 @@ function analyze(source: string, fileName: string): Analysis {
   ): boolean | undefined => {
     let node: ts.Node = condition;
     while (ts.isParenthesizedExpression(node)) node = node.expression;
+    // `!(typeof window === "undefined")` is the same guard read the other way round, and it nests:
+    // each negation flips which branch the name exists on.
+    if (
+      ts.isPrefixUnaryExpression(node) &&
+      node.operator === ts.SyntaxKind.ExclamationToken
+    ) {
+      const inner = definedWhenTrue(node.operand, name);
+      return inner === undefined ? undefined : !inner;
+    }
     // `globalThis.document && globalThis.document.body` guards by TRUTHINESS, and it is safe for
     // this spelling only: reading a property off `globalThis` yields undefined rather than
     // throwing, so the chain short-circuits. The bare `document && document.body` is NOT
@@ -572,14 +581,18 @@ function analyze(source: string, fileName: string): Analysis {
       if (outer.questionDotToken === undefined) return true;
       // `a?.b.c` short-circuits the whole chain, but PARENTHESES end it: `(a?.b).c` reads
       // `.c` off the `undefined` the chain produced, and throws.
-      // ANY erased wrapper ends the chain, not only parentheses: TypeScript emits
-      // `(globalThis.document?.body).title` for the `as` form too, and the assertion is gone by
-      // the time it runs. Asked of the shared set so this cannot drift from the other unwrappers.
-      return (
-        outer.parent !== undefined &&
-        isErasedWrapper(outer.parent) &&
-        usedAsValue(outer.parent)
-      );
+      // GROUPING ends an optional chain; an assertion on its own does not. `a?.b!.c` compiles to
+      // `a?.b.c` and short-circuits, while `(a?.b)!.c` and `(a?.b as T).c` compile to `(a?.b).c`
+      // and throw. So the question is whether a PARENTHESIS sits among the wrappers above the
+      // access, not whether a wrapper does — the assertions only ever accompany one.
+      let wrapper: ts.Node | undefined = outer.parent;
+      let grouped = false;
+      while (wrapper !== undefined && isErasedWrapper(wrapper)) {
+        if (ts.isParenthesizedExpression(wrapper)) grouped = true;
+        wrapper = wrapper.parent;
+      }
+      if (!grouped || outer.parent === undefined) return false;
+      return usedAsValue(outer.parent);
     }
     // `new globalThis.Image()` throws for the same reason a call does, and `new` has no optional
     // form that could short-circuit it. A tagged template invokes its tag, so ``globalThis.foo`x` ``
@@ -1610,6 +1623,33 @@ describe("reading a module", () => {
         `export const w = typeof window !== "undefined" && window.innerWidth;`
       ).globals
     ).toEqual([]);
+  });
+
+  it("ends an optional chain at grouping, but not at a bare assertion", () => {
+    // `a?.b!.c` compiles to `a?.b.c` and short-circuits; `(a?.b)!.c` and `(a?.b as T).c` compile
+    // to `(a?.b).c` and throw. The parenthesis is what ends the chain — the assertion is only ever
+    // there alongside it.
+    expect(
+      read(`export const t = globalThis.document?.body!.title;`).globals
+    ).toEqual([]);
+    expect(
+      read(`export const t = (globalThis.document?.body)!.title;`).globals
+    ).toEqual(["document"]);
+  });
+
+  it("accepts a negated typeof guard", () => {
+    // `!(typeof window === "undefined")` is the same guard read the other way round.
+    expect(
+      read(
+        `export const w = !(typeof window === "undefined") ? window.innerWidth : 0;`
+      ).globals
+    ).toEqual([]);
+    // The control: negating it back reports again, so the fix inverts rather than disables.
+    expect(
+      read(
+        `export const w = !(typeof window !== "undefined") ? window.innerWidth : 0;`
+      ).globals
+    ).toEqual(["window"]);
   });
 
   it("ends an optional chain at any erased wrapper", () => {
