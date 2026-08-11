@@ -84,10 +84,10 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
     after the original rejection stops happening. Assert the diagnostic where
     the tooling allows it; otherwise put the expected error code in a comment
     on the directive, so a drift is visible in review rather than silent.
-- The test count must not drop by ACCIDENT. A suite that silently stopped being
-  discovered reads as a pass, which is what this guards. Removing a test on
-  purpose is a different act: it is sometimes correct (below), and the PR says
-  which test went and why.
+  - The count must not drop by ACCIDENT: a suite that silently stopped being
+    discovered reads as a pass, which is what that guards. Removing a test on
+    purpose is a different act, sometimes correct (below), and the PR says
+    which test went and why.
 - Before you assert or measure, name the property that SEPARATES a correct
   implementation from the plausible broken one you are worried about, and check
   that it is the property you are about to test. A necessary-but-insufficient
@@ -99,11 +99,14 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   - asserting a generated identifier is `length <= 63`, when a plain truncation
     is also 63 characters. The one test guarding the naming passed on the broken
     implementation; distinctness was the separating property.
-- Ask what ELSE would make a test pass. If anything other than the property
-  under test produces the same green, it is not covering that property yet —
-  a fixture that never reaches the mechanism, an unregistered type that falls
-  through to a default, an assertion satisfied by absence. Add the positive
-  control that makes the mechanism's presence observable.
+
+  The operational form is to ask what ELSE would produce the same green. If
+  anything other than the property under test does — a fixture that never
+  reaches the mechanism, an unregistered type falling through to a default, an
+  assertion satisfied by absence, a search whose glob missed the directory —
+  the property is not covered yet. Add the positive control that makes the
+  mechanism's presence observable, and run it.
+
 - A test that passes both with and without the fix is worse than no test:
   the next reader takes the green as coverage. Delete it, and say in the file
   that remains where the behaviour IS covered. This is the deliberate removal
@@ -146,14 +149,6 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   needed, DERIVE it from the richer one; never compute it alongside. Two
   functions that agree today drift, and the drift is silent because both look
   correct. This has produced defects in five unrelated packages.
-- When you cite a known defect, PROPAGATE it through the same document. A
-  defect invoked for one purpose — arguing severity, justifying a workaround —
-  invalidates every other claim that assumes its absence, and the two sit on
-  the page together with neither looking wrong alone. The check is mechanical
-  rather than a matter of care: after citing it, re-read every statement about
-  the population it affects. A known "schema changes may not reach existing
-  databases" was cited for severity in one paragraph while the next asserted a
-  property of all existing databases derived from their schema.
 - Unreachability is a property of the current call graph, not of the code, and
   the call graph changes underneath you. "This cannot happen" is not a reason to
   omit a guard — it is a reason the guard is CHEAP, provided it is cheap: an

@@ -65,6 +65,24 @@ Underneath all three sits time-of-check-to-time-of-use, which may need a
 different answer per dialect. Say which dialect a mitigation covers rather than
 implying one policy fits all.
 
+## Citing a known defect invalidates the claims that assume its absence
+
+Two implementations drifting apart is the code version of this. The prose
+version is a document that invokes a known defect for one purpose — arguing
+severity, justifying a workaround — while another paragraph asserts something
+that is only true if the defect does not exist. Both sit on the page together
+and neither looks wrong alone, which is why re-reading does not catch it.
+
+The check is mechanical rather than a matter of care: after citing a defect,
+re-read every statement about the POPULATION it affects.
+
+Worked example, from a schema task in this repo. A standing "core schema
+changes may not reach existing databases" was cited for severity in one
+paragraph. The next asserted that no existing database could hold duplicate
+rows, derived from the constraint its schema declares — which is precisely the
+guarantee the cited defect removes. The safety analysis was built on the
+absence of the defect being argued from.
+
 ## When a check reaches for a NAME, ask what structurally decides it
 
 A name, a version string or a string pattern is nearly always a proxy, and the
