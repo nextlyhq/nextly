@@ -124,6 +124,52 @@ jobs:
       - name: Release script tests
         run: pnpm test:scripts
 
+      # The published packages version in lockstep, so a changeset that names
+      # only some of them still bumps them all — and the ones it left out get a
+      # version with no changelog entry beside it. Generating the frontmatter from
+      # the config is not enough on its own, because the group grows: a list
+      # generated before a package joined it is complete against the config it was
+      # read from and short against the current one.
+      #
+      # Scoped to the changesets THIS pull request adds or edits. Several hundred
+      # are pending on `main`, most written before the group grew; rewriting them
+      # to satisfy a rule they predate would churn the eventual changelog for no
+      # gain.
+      #
+      # `HEAD^1` is what makes the scoping exact. On a pull request the checkout
+      # is the MERGE commit, whose first parent is the base branch — so diffing
+      # against it is the pull request's own diff, already relative to the merge
+      # base. Diffing against the base branch TIP instead would report every
+      # changeset the branch picked up by merging `main` as one this branch
+      # wrote, which is how a guard starts failing PRs over other people's files.
+      - name: Changeset covers the lockstep group
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          # `git diff` runs on its own line so a failure — an unavailable `HEAD^1`
+          # in some other checkout shape, a broken object store — aborts the step
+          # under `set -e`. Inside a pipeline with a trailing `|| true` it would
+          # not: the checker would read empty stdin, report nothing to check, and
+          # the gate would be off while the step stayed green.
+          #
+          # Which of those paths is a changeset is decided by the checker, using
+          # the same filter `@changesets/read` applies. A `grep` here would be a
+          # second answer, and it would differ from the release tooling on a
+          # lowercase `readme.md` or a hidden `.template.md`.
+          #
+          # `T` sits beside `ACMR` because a changeset converted between a
+          # regular file and a symlink is reported as a TYPE change, and
+          # `@changesets/read` follows symlinks — so a release would consume a
+          # replacement this check never saw. `D` stays out: a deleted changeset
+          # has nothing left to read.
+          #
+          # The pathspec excludes subdirectories because git matches `*` across
+          # `/` while `@changesets/read` lists `.changeset` non-recursively — so
+          # a file under `.changeset/archive/` is something the release never
+          # reads, and checking it would fail a pull request over a note.
+          touched="$(git diff --name-only --diff-filter=ACMRT HEAD^1 HEAD -- '.changeset/*.md' ':(exclude).changeset/*/**')"
+          printf '%s\n' "$touched" | node scripts/release/check-changesets.mjs
+
       # Enforce the design-token theming contract in the admin + plugin packages
       # (no hsl(var(--x)) wrappers, no hardcoded colors, no stray !important).
       # See packages/ui/docs/plugin-ui-authoring.md. Cheap check, fails fast.

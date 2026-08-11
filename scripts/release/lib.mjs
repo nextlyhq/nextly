@@ -88,6 +88,28 @@ export function readPreState() {
  * A manifest that exists but cannot be parsed is an error rather than a silent
  * skip: dropping it here would also drop it from every check below.
  */
+/**
+ * Every package name under `packages/`, private ones included.
+ *
+ * Deliberately wider than {@link getReleaseManifest}, which answers "what do we
+ * publish". Changesets versions private workspace packages too unless told
+ * otherwise, so the set it has to be told about is every package in the
+ * directory rather than only the publishable ones — and a checker comparing the
+ * `fixed` group against the narrower list would report the config-only packages
+ * as errors on every run.
+ */
+export function getWorkspacePackageNames() {
+  const names = [];
+  for (const entry of readdirSync(PACKAGES_DIR, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const manifestPath = join(PACKAGES_DIR, entry.name, "package.json");
+    if (!existsSync(manifestPath)) continue;
+    const pkg = readJson(manifestPath);
+    if (typeof pkg.name === "string") names.push(pkg.name);
+  }
+  return names.sort((a, b) => a.localeCompare(b));
+}
+
 export function getReleaseManifest() {
   const manifest = [];
 
