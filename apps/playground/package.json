@@ -21,7 +21,8 @@
     "theme:capture": "tsx scripts/capture-themes.mjs",
     "theme:contrast-report": "tsx scripts/generate-contrast-report.mjs",
     "theme:margins": "tsx scripts/audit-margins.mjs",
-    "theme:solve": "tsx scripts/solve-margin.mjs"
+    "theme:solve": "tsx scripts/solve-margin.mjs",
+    "theme:solve-lightness": "tsx scripts/solve-calm.mts"
   },
   "dependencies": {
     "@nextlyhq/adapter-drizzle": "workspace:^",
