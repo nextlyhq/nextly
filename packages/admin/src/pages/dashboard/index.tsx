@@ -67,7 +67,11 @@ const DashboardPage: React.FC = () => {
               already-seeded/skipped projects render nothing here. */}
           <SeedDemoContentCard />
 
-          {/* Widgets are intentionally omitted per user request to focus on resource organization */}
+          {/* The stats grid is deliberately absent: the dashboard's job here is
+              to get an editor to their content, and a row of counters above the
+              resource sections competes with that without answering a question
+              an editor actually has. Kept commented rather than deleted because
+              the component still ships and is cheap to restore. */}
           {/* <ContentStatsGrid /> */}
 
           <div className="space-y-12">

@@ -900,7 +900,11 @@
   /* Utility colors */
   --nx-muted: oklch(0.23 0 0);
   --nx-muted-foreground: oklch(0.72 0 0);
-  --nx-accent: oklch(0.32 0 0); /* Slate-500 per user request #64748b */
+  /* The hover and selected surface: one step lighter than --nx-muted so a row
+     under the pointer separates from a merely quiet one. Neutral, not the blue
+     it was once labelled -- a tinted accent reads as a status on a surface that
+     carries none. */
+  --nx-accent: oklch(0.32 0 0);
   --nx-accent-foreground: oklch(1 0 0);
   /* white */
 

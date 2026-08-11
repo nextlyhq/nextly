@@ -198,9 +198,11 @@ export function FieldEditorSheet({
             </Button>
           ) : (
             <>
-              {/* Footer order is primary-action-first per Task 7-2 spec:
-                  the Add field / Apply button renders to the LEFT of Cancel,
-                  with the whole footer left-aligned. */}
+              {/* Primary action first: the Add field / Apply button renders to
+                  the LEFT of Cancel, with the whole footer left-aligned. The
+                  sheet's content is left-aligned too, so the confirming action
+                  sits where the eye already is and where tab order reaches it
+                  before the escape hatch. */}
               <Button onClick={() => onApply(draft)}>
                 {mode === "create" ? "Add field" : "Apply"}
               </Button>

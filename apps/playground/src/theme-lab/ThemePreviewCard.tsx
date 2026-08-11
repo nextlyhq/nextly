@@ -222,6 +222,16 @@ export function ThemePreviewCard({
                admin to the theme's. The preview has to show what Apply
                produces or it is not a preview. */
             data-density={theme.recommendedDensity}
+            /* This panel owns its light/dark class, so the admin's ThemeSync
+               must leave it alone. Without the opt-out, ThemeSync applies the
+               page's single resolved mode to every `.nextly-admin` it finds:
+               the dark panel loses `dark` whenever the page is light and the
+               light panel gains it whenever the page is dark. The inline
+               tokens would still differ, so the panels looked plausible while
+               every `dark:` component variant followed the page instead of
+               the panel -- a gallery that claims to show both modes and
+               shows one. */
+            data-theme-sync="off"
             /* `nextly-admin` brings the ui components' base styles; `dark`
                is what their dark-mode variants key off. The inline vars then
                decide every token those styles read. */

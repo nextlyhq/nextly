@@ -25,6 +25,24 @@ Element.prototype.setPointerCapture = () => undefined;
 Element.prototype.releasePointerCapture = () => undefined;
 Element.prototype.scrollIntoView = () => undefined;
 
+// jsdom implements no media queries at all, and next-themes calls matchMedia
+// while mounting, so a provider test dies on `matchMedia is not a function`
+// before reaching an assertion. This stub always answers "no match", which
+// means the OS reports light: a test about SYSTEM theme resolution must set up
+// its own matchMedia rather than trust this one, or it passes for the wrong
+// reason. Tests that pin explicit modes should force the theme instead.
+window.matchMedia = (query: string): MediaQueryList =>
+  ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: () => undefined,
+    removeListener: () => undefined,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    dispatchEvent: () => false,
+  }) as MediaQueryList;
+
 // Cleanup after each test
 afterEach(() => {
   cleanup();
