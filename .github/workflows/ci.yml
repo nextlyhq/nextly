@@ -124,8 +124,15 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           set -euo pipefail
-          { git diff --name-only --diff-filter=ACMR HEAD^1 HEAD -- '.changeset/*.md' \
-              | grep -v '^\.changeset/README\.md$' || true; } \
+          # `git diff` runs on its own line so a failure — an unavailable `HEAD^1`
+          # in some other checkout shape, a broken object store — aborts the step
+          # under `set -e`. Inside a pipeline with a trailing `|| true` it would
+          # not: the checker would read empty stdin, report nothing to check, and
+          # the gate would be off while the step stayed green. Only `grep`'s
+          # no-match status is suppressed, which is the one expected failure here.
+          touched="$(git diff --name-only --diff-filter=ACMR HEAD^1 HEAD -- '.changeset/*.md')"
+          printf '%s\n' "$touched" \
+            | { grep -v '^\.changeset/README\.md$' || true; } \
             | node scripts/release/check-changesets.mjs
 
       # Enforce the design-token theming contract in the admin + plugin packages

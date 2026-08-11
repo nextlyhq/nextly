@@ -17,10 +17,18 @@
 // hundred are pending on `main`, most written before the group grew, and
 // rewriting them to satisfy a rule they predate would put churn in front of
 // every reader of the eventual changelog for no gain.
+//
+// The GROUP is checked too, and against the workspace rather than against
+// itself. A checker that reads `.changeset/config.json` as the source of truth
+// cannot see a package added under `packages/` and never added to `fixed`, which
+// is the drift that makes every changeset written afterwards wrong while each of
+// them passes.
 
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { getWorkspacePackageNames } from "./lib.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -40,26 +48,116 @@ export function lockstepPackages(configText) {
 }
 
 /**
- * The `package: bump` pairs a changeset declares.
+ * What is wrong with the GROUP itself, as a list of sentences, empty when nothing is.
  *
- * Parsed rather than pulled from `@changesets/parse`, because the answer needed
- * here is "what does the file SAY", and a parser that tolerates a malformed
- * frontmatter by returning an empty release list would report a changeset naming
- * nothing as one naming nothing WRONG. A file this cannot read is reported as
- * unreadable instead.
+ * The config is what every changeset is generated from, so a checker that treats
+ * it as the source of truth cannot see the one drift that matters most: a pull
+ * request adding a package under `packages/` and not adding it to `fixed`. Every
+ * changeset in that PR names the old members, passes, and the new package is left
+ * behind on the next train — discovered after a version PR has already merged.
+ *
+ * Compared against `packages/` rather than against the publishable subset,
+ * because Changesets versions private workspace packages too unless told
+ * otherwise, and four of this group's members are `private: true` build-time
+ * config packages. Measuring against "what we publish" would report those four as
+ * errors on every run.
+ *
+ * Checked in BOTH directions. A name in the group that no package answers to is
+ * a rename or a deletion that the config still believes in, and Changesets fails
+ * a release on an unknown package in `fixed`.
+ */
+export function groupMatchesWorkspace(packages, workspaceNames) {
+  const problems = [];
+  const absent = workspaceNames.filter(name => !packages.includes(name));
+  if (absent.length > 0) {
+    problems.push(
+      `.changeset/config.json: the \`fixed\` group is missing ${absent.join(", ")}. ` +
+        `Every package under packages/ versions with the group; one left out is ` +
+        `stranded at an older version by the next release.`
+    );
+  }
+  const unknown = packages.filter(name => !workspaceNames.includes(name));
+  if (unknown.length > 0) {
+    problems.push(
+      `.changeset/config.json: the \`fixed\` group names ${unknown.join(", ")}, ` +
+        `which no package under packages/ answers to. Changesets refuses a release ` +
+        `on an unknown package in \`fixed\`.`
+    );
+  }
+  return problems;
+}
+
+/**
+ * One scalar as YAML would read it: quotes stripped, a trailing comment removed.
+ *
+ * A quoted value keeps everything inside the quotes, `#` included, because a
+ * comment cannot start inside a scalar. Only an unquoted value has a comment to
+ * strip, and only when the `#` is preceded by whitespace — `patch#1` is one
+ * token, `patch # note` is a value and a note.
+ */
+function scalar(raw) {
+  const trimmed = raw.trim();
+  const quoted = /^(["'])((?:(?!\1)[\s\S])*)\1\s*(?:#[\s\S]*)?$/.exec(trimmed);
+  if (quoted !== null) return quoted[2];
+  return trimmed.split(/\s+#/)[0].trim();
+}
+
+/**
+ * The name and the rest of one `name: bump` line, or `undefined` when it is
+ * neither that nor something to skip.
+ */
+function entryOn(line) {
+  const quotedName = /^(["'])((?:(?!\1)[\s\S])*)\1\s*:([\s\S]*)$/.exec(line);
+  if (quotedName !== null) return { name: quotedName[2], rest: quotedName[3] };
+  const bareName = /^([^:\s'"]+)\s*:([\s\S]*)$/.exec(line);
+  if (bareName !== null) return { name: bareName[1], rest: bareName[2] };
+  return undefined;
+}
+
+/**
+ * The `package: bump` pairs a changeset declares, or `undefined` when the file
+ * is not one this can read.
+ *
+ * Hand-parsed rather than handed to `@changesets/parse`, which this repository
+ * does not depend on and which would be a new dependency for a lint step. The
+ * subset accepted is deliberately the one Changesets itself writes and reads:
+ * quoted names (single or double, which every scoped package needs), bare names,
+ * quoted or bare bumps, blank lines and comments.
+ *
+ * The two ways a hand-rolled reader goes wrong are both closed explicitly,
+ * because each fails in a direction that matters:
+ *
+ * - Being STRICTER than Changesets blocks a compliant pull request over a
+ *   spelling the release tooling would have accepted. That is why single quotes,
+ *   quoted bumps and comments are read rather than refused.
+ * - Being LOOSER lets malformed release metadata reach `main`, where it fails
+ *   the CI-only release workflow after a version PR has already merged. That is
+ *   why the closing delimiter must be exactly `---` on its own line, and why a
+ *   duplicate key is refused rather than silently taking the last one.
+ *
+ * A file this cannot read is reported as unreadable rather than as declaring
+ * nothing: "no releases" and "every release" are opposite answers, and a
+ * missing-package check would score them the same way.
  */
 export function declaredReleases(fileText) {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(fileText);
+  const match = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(
+    fileText
+  );
   if (match === null) return undefined;
   const releases = new Map();
   for (const line of match[1].split(/\r?\n/)) {
     const trimmed = line.trim();
-    if (trimmed === "") continue;
-    // Both spellings Changesets accepts for a name: quoted, which every scoped
-    // package needs, and bare, which an unscoped one may use.
-    const entry = /^(?:"([^"]+)"|([^:\s]+))\s*:\s*(\S+)\s*$/.exec(trimmed);
-    if (entry === null) return undefined;
-    releases.set(entry[1] ?? entry[2], entry[3]);
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
+    const entry = entryOn(trimmed);
+    if (entry === undefined) return undefined;
+    const name = entry.name.trim();
+    const bump = scalar(entry.rest);
+    if (name === "" || bump === "") return undefined;
+    // A repeated key is not a reading this can choose between. YAML's own answer
+    // is to take the last, which would let `"nextly": patch` sit above
+    // `"nextly": major` and report the file as compliant.
+    if (releases.has(name)) return undefined;
+    releases.set(name, bump);
   }
   return releases;
 }
@@ -107,8 +205,14 @@ export function problemsWith(path, fileText, packages) {
   return problems;
 }
 
-/** Every problem across the given changeset paths. */
-export function checkChangesets(paths, readFile, configText) {
+/**
+ * Every problem: the group's own integrity first, then each changeset against it.
+ *
+ * The group is checked even when the pull request touches no changeset at all,
+ * because the PR that adds a package is often exactly that one — and a stale
+ * group makes every later changeset wrong while each of them passes.
+ */
+export function checkChangesets(paths, readFile, configText, workspaceNames) {
   const packages = lockstepPackages(configText);
   if (packages.length === 0) {
     // A config with no fixed group would make every check below vacuous, and a
@@ -117,7 +221,10 @@ export function checkChangesets(paths, readFile, configText) {
       ".changeset/config.json declares no `fixed` group, so nothing here can be checked.",
     ];
   }
-  return paths.flatMap(path => problemsWith(path, readFile(path), packages));
+  return [
+    ...groupMatchesWorkspace(packages, workspaceNames),
+    ...paths.flatMap(path => problemsWith(path, readFile(path), packages)),
+  ];
 }
 
 /**
@@ -163,17 +270,21 @@ async function readStdin() {
 
 async function main(argv) {
   const paths = pathsToCheck(argv, await readStdin());
-  if (paths.length === 0) {
-    console.log("No changesets added or edited; nothing to check.");
-    return 0;
-  }
+  // No early return on an empty list. The group's own integrity still has to be
+  // checked, and the pull request that adds a package is often the one that
+  // touches no changeset at all.
   const problems = checkChangesets(
     paths,
     path => readFileSync(resolve(REPO_ROOT, path), "utf8"),
-    readFileSync(resolve(REPO_ROOT, ".changeset", "config.json"), "utf8")
+    readFileSync(resolve(REPO_ROOT, ".changeset", "config.json"), "utf8"),
+    getWorkspacePackageNames()
   );
   if (problems.length === 0) {
-    console.log(`Checked ${paths.length} changeset(s): all cover the group.`);
+    console.log(
+      paths.length === 0
+        ? "No changesets added or edited; the lockstep group matches the workspace."
+        : `Checked ${paths.length} changeset(s): all cover the group.`
+    );
     return 0;
   }
   for (const problem of problems) console.error(`✖ ${problem}`);
