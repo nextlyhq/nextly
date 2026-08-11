@@ -14,8 +14,21 @@ import {
 const CONFIG = JSON.stringify({
   fixed: [["nextly", "@nextlyhq/ui", "@nextlyhq/builder"]],
 });
-const WORKSPACE = ["nextly", "@nextlyhq/ui", "@nextlyhq/builder"];
-const PACKAGES = lockstepPackages(CONFIG, WORKSPACE);
+const MEMBERS = ["nextly", "@nextlyhq/ui", "@nextlyhq/builder"];
+
+/** A workspace whose every package is one the group is supposed to contain. */
+const WORKSPACE = { all: MEMBERS, underPackagesDir: MEMBERS };
+
+/**
+ * The same workspace plus an app, which is the shape the real repository has:
+ * in the workspace, versioned on its own line, deliberately NOT on the train.
+ */
+const WITH_AN_APP = {
+  all: [...MEMBERS, "playground"],
+  underPackagesDir: MEMBERS,
+};
+
+const PACKAGES = lockstepPackages(CONFIG, WORKSPACE.all);
 
 /** A changeset naming the given `package: bump` pairs. */
 function changeset(pairs, body = "Something changed.") {
@@ -34,7 +47,7 @@ describe("reading the group", () => {
     // A guard that passes because it found nothing to check is worse than no
     // guard: it reports success on every changeset for as long as the config is
     // broken.
-    const problems = checkChangesets(["a.md"], () => COMPLETE, "{}", PACKAGES);
+    const problems = checkChangesets(["a.md"], () => COMPLETE, "{}", WORKSPACE);
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain("no `fixed` group");
   });
@@ -127,17 +140,24 @@ describe("what else a frontmatter can get wrong", () => {
 describe("the group against the workspace", () => {
   it("accepts a group that matches", () => {
     // The control, and the state the repository is in today.
-    expect(groupMatchesWorkspace(PACKAGES, [...PACKAGES])).toEqual([]);
+    expect(groupMatchesWorkspace(PACKAGES, WORKSPACE)).toEqual([]);
+  });
+
+  it("accepts a group that leaves an app out of the train", () => {
+    // The other control, and the one the real config relies on: a workspace
+    // package outside packages/ is not a gap in the group. A check measuring the
+    // group against the whole workspace would report `playground` on every run.
+    expect(groupMatchesWorkspace(PACKAGES, WITH_AN_APP)).toEqual([]);
   });
 
   it("catches a package the config was never told about", () => {
     // The drift the config cannot see about itself: a PR adds a package under
     // packages/ and every changeset in it names the old members, so all of them
     // pass while the new package is stranded on the next train.
-    const problems = groupMatchesWorkspace(PACKAGES, [
-      ...PACKAGES,
-      "@nextlyhq/newcomer",
-    ]);
+    const problems = groupMatchesWorkspace(PACKAGES, {
+      all: [...MEMBERS, "@nextlyhq/newcomer"],
+      underPackagesDir: [...MEMBERS, "@nextlyhq/newcomer"],
+    });
 
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain("@nextlyhq/newcomer");
@@ -149,21 +169,43 @@ describe("the group against the workspace", () => {
     // release on an unknown package in `fixed`.
     const problems = groupMatchesWorkspace(
       [...PACKAGES, "@nextlyhq/departed"],
-      [...PACKAGES]
+      WORKSPACE
     );
 
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain("@nextlyhq/departed");
+    expect(problems[0]).toContain("refuses a release");
+  });
+
+  it("separates a group reaching outside packages/ from a name that resolves to nothing", () => {
+    // Two different outcomes, so they cannot share a sentence. A name nothing
+    // answers to fails the release; a name answering to an app succeeds it, at
+    // whatever version that app happens to carry.
+    const problems = groupMatchesWorkspace(
+      [...PACKAGES, "playground", "@nextlyhq/departed"],
+      WITH_AN_APP
+    );
+
+    expect(problems).toHaveLength(2);
+    const reaches = problems.find(problem => problem.includes("playground"));
+    expect(reaches).toContain("not under packages/");
+    expect(reaches).not.toContain("@nextlyhq/departed");
+
+    const unknown = problems.find(problem =>
+      problem.includes("@nextlyhq/departed")
+    );
+    expect(unknown).toContain("refuses a release");
+    expect(unknown).not.toContain("playground");
   });
 
   it("is asked even when the pull request touches no changeset", () => {
     // The PR that adds a package is often exactly the one with no changeset of
     // its own, so an early return on an empty list would skip the check that
     // matters most.
-    const problems = checkChangesets([], () => "", CONFIG, [
-      ...PACKAGES,
-      "@nextlyhq/newcomer",
-    ]);
+    const problems = checkChangesets([], () => "", CONFIG, {
+      all: [...MEMBERS, "@nextlyhq/newcomer"],
+      underPackagesDir: [...MEMBERS, "@nextlyhq/newcomer"],
+    });
 
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain("@nextlyhq/newcomer");
@@ -295,7 +337,7 @@ describe("the shape of the fixed group itself", () => {
       [],
       () => "",
       JSON.stringify({ fixed: ["nextly", "@nextlyhq/ui"] }),
-      ["nextly", "@nextlyhq/ui", "@nextlyhq/builder"]
+      WORKSPACE
     );
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain("array of ARRAYS");
@@ -309,8 +351,8 @@ describe("a group written with globs", () => {
     // report every matching package as missing and the pattern as unknown, which
     // on a config written this way rejects every pull request.
     const globbed = JSON.stringify({ fixed: [["nextly", "@nextlyhq/*"]] });
-    expect(lockstepPackages(globbed, WORKSPACE).sort()).toEqual(
-      [...WORKSPACE].sort()
+    expect(lockstepPackages(globbed, WORKSPACE.all).sort()).toEqual(
+      [...MEMBERS].sort()
     );
   });
 
@@ -319,7 +361,7 @@ describe("a group written with globs", () => {
     // `@changesets/config` does it. Evaluating each pattern alone and unioning
     // the results would let `**` put back what `!…` excluded.
     const negated = JSON.stringify({ fixed: [["**", "!@nextlyhq/builder"]] });
-    expect(lockstepPackages(negated, WORKSPACE).sort()).toEqual([
+    expect(lockstepPackages(negated, WORKSPACE.all).sort()).toEqual([
       "@nextlyhq/ui",
       "nextly",
     ]);
@@ -327,14 +369,36 @@ describe("a group written with globs", () => {
 
   it("reports a pattern that matches nothing by the name it was written as", () => {
     const globbed = JSON.stringify({ fixed: [["@nowhere/*"]] });
-    expect(lockstepPackages(globbed, WORKSPACE)).toEqual(["@nowhere/*"]);
+    expect(lockstepPackages(globbed, WORKSPACE.all)).toEqual(["@nowhere/*"]);
   });
 
   it("does not report the workspace as missing when a glob covers it", () => {
     const globbed = JSON.stringify({ fixed: [["nextly", "@nextlyhq/*"]] });
-    expect(
-      checkChangesets([], () => "", globbed, WORKSPACE)
-    ).toEqual([]);
+    expect(checkChangesets([], () => "", globbed, WORKSPACE)).toEqual([]);
+  });
+
+  it("expands a broad pattern over the packages a release resolves, not one directory", () => {
+    // The gap this closes. `**` reaches every package Changesets enumerates,
+    // which includes the ones outside packages/. Expanding it against the
+    // packages/ listing alone answers with exact coverage, so a changeset naming
+    // only those packages passes here and the release widens underneath it.
+    const globbed = JSON.stringify({ fixed: [["**"]] });
+
+    expect(lockstepPackages(globbed, WITH_AN_APP.all).sort()).toEqual(
+      [...WITH_AN_APP.all].sort()
+    );
+
+    const problems = checkChangesets([], () => "", globbed, WITH_AN_APP);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("playground");
+    expect(problems[0]).toContain("not under packages/");
+  });
+
+  it("still accepts a broad pattern in a workspace that is only packages/", () => {
+    // The other direction, so the case above cannot pass by rejecting `**` on
+    // sight: with nothing outside packages/ to reach, the same group is correct.
+    const globbed = JSON.stringify({ fixed: [["**"]] });
+    expect(checkChangesets([], () => "", globbed, WORKSPACE)).toEqual([]);
   });
 });
 
@@ -403,7 +467,7 @@ describe("what the check is pointed at", () => {
       ["good.md", "bad.md"],
       path => files[path],
       CONFIG,
-      PACKAGES
+      WORKSPACE
     );
 
     expect(problems).toHaveLength(1);
@@ -413,6 +477,6 @@ describe("what the check is pointed at", () => {
   it("passes when it is given nothing", () => {
     // The ordinary PR touches no changeset — a test-only or docs-only one gets
     // none at all — and that must not be a failure.
-    expect(checkChangesets([], () => "", CONFIG, PACKAGES)).toEqual([]);
+    expect(checkChangesets([], () => "", CONFIG, WORKSPACE)).toEqual([]);
   });
 });
