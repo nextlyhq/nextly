@@ -19,12 +19,15 @@
 
 import { z } from "zod";
 
+import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { signPreviewToken } from "../auth/preview/preview-token";
+import { buildUserContext } from "../auth/user-context";
 import { container } from "../di";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { env } from "../lib/env";
 import type { GeneralSettingsService } from "../services/general-settings/general-settings-service";
+import { resolveRoleSlugs } from "../services/lib/permissions";
 
 import { respondMutation } from "./response-shapes";
 import {
@@ -55,6 +58,27 @@ const mintSchema = z.object({
 async function settingsService(): Promise<GeneralSettingsService> {
   await getCachedNextly();
   return container.get<GeneralSettingsService>("generalSettingsService");
+}
+
+/**
+ * Run an access-enforced read and report an unreadable entry as `null`.
+ *
+ * Two outcomes are deliberately collapsed: a row a row-level rule hides, and an
+ * id that matches nothing. Both mean the caller gets no link, and answering them
+ * differently would tell an unauthorized caller which entries exist.
+ *
+ * Only a not-found is translated. Any other failure keeps its own error, so a
+ * broken database is not reported as an ordinary denial.
+ */
+async function readEntryAsCaller<T>(
+  read: () => Promise<T | null>
+): Promise<T | null> {
+  try {
+    return await read();
+  } catch (error) {
+    if (NextlyError.isNotFound(error)) return null;
+    throw error;
+  }
 }
 
 /**
@@ -92,7 +116,67 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
 
   // The gate is per COLLECTION, so a caller who may edit posts cannot mint a
   // link into a collection they have no access to by naming it here.
-  await requireRouteCollectionAccess(req, "update", collection);
+  const auth = await requireRouteCollectionAccess(req, "update", collection);
+
+  // That gate is one granularity coarser than what it hands out: it answers
+  // "may this caller edit this COLLECTION", while the token names one ENTRY
+  // and confers a read of it. Where a collection carries a row-level rule the
+  // two diverge, and the coarse answer alone would let a caller bounded to
+  // their own documents mint a working credential for someone else's.
+  //
+  // So the entry is authorized here too, by reading it back as the caller:
+  // enforced (`overrideAccess: false`) and with their identity, which is the
+  // same evaluation the bearer's own read will face. A row this caller cannot
+  // see yields no link, and an entry that does not exist yields no link
+  // either, rather than a token for nothing.
+  const nextly = await getCachedNextly();
+  const roles = await resolveRoleSlugs(auth);
+
+  // An API key is authorized on the grants stamped on the KEY, never on its
+  // owner's roles. Without this the probe resolves the owner's RBAC — including
+  // a super-admin bypass — so a key holding `update-*` but not `read-*` would
+  // mint a link on the strength of an account that can read, handing out a
+  // bearer credential for a document the key itself may not fetch.
+  const actor: AuthenticatedScope | undefined =
+    auth.authMethod === "api-key"
+      ? { actorType: "apiKey", permissions: auth.permissions }
+      : undefined;
+  // `findByID` reports an unreadable row by THROWING `NOT_FOUND`, not by
+  // returning null: null comes back only under `disableErrors`, which would also
+  // swallow a genuine internal failure and report it here as an ordinary denial.
+  // So the not-found case is translated and everything else keeps its own status
+  // — otherwise the throw skips the check below and the caller is told the entry
+  // does not exist, which is both the wrong answer and a different one from the
+  // answer a hidden row gets.
+  const visible = await readEntryAsCaller(() =>
+    nextly.findByID({
+      collection,
+      id: entryId,
+      depth: 0,
+      overrideAccess: false,
+      ...(actor ? { actor } : {}),
+      // Built the one way a caller is built, so this probe reaches the verdict
+      // the caller's own read would. Claims matter here specifically: a stored
+      // `custom` rule that decides on one is absence-tolerant, so a probe that
+      // dropped them would admit exactly the caller the rule refuses.
+      user: buildUserContext({
+        claims: auth.claims,
+        id: auth.userId,
+        name: auth.userName,
+        email: auth.userEmail,
+        roles,
+      }),
+    })
+  );
+  if (!visible) {
+    throw NextlyError.forbidden({
+      logContext: {
+        reason: "preview-link-entry-not-visible",
+        collection,
+        entryId,
+      },
+    });
+  }
 
   const generation = await (
     await settingsService()
