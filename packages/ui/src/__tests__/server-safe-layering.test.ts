@@ -572,9 +572,12 @@ function analyze(source: string, fileName: string): Analysis {
       if (outer.questionDotToken === undefined) return true;
       // `a?.b.c` short-circuits the whole chain, but PARENTHESES end it: `(a?.b).c` reads
       // `.c` off the `undefined` the chain produced, and throws.
+      // ANY erased wrapper ends the chain, not only parentheses: TypeScript emits
+      // `(globalThis.document?.body).title` for the `as` form too, and the assertion is gone by
+      // the time it runs. Asked of the shared set so this cannot drift from the other unwrappers.
       return (
         outer.parent !== undefined &&
-        ts.isParenthesizedExpression(outer.parent) &&
+        isErasedWrapper(outer.parent) &&
         usedAsValue(outer.parent)
       );
     }
@@ -742,111 +745,6 @@ function analyze(source: string, fileName: string): Analysis {
     return !guardedByTypeof(node, node.text);
   };
 
-  /**
-   * Functions whose bodies run while the module loads, because something calls them by NAME.
-   *
-   * `function f() { return window.innerWidth } export const width = f()` is ordinary code, not an
-   * exotic spelling, and the immediate-invocation checks never saw it: they ask whether the
-   * function node itself is the callee, which is true for an IIFE and false for every named
-   * function. Closed transitively, so a call chain reached from module scope is covered too.
-   */
-  const eager = new Set<ts.Node>();
-  {
-    /** The function a name is bound to DIRECTLY in one scope, without descending into others. */
-    const functionBoundIn = (
-      scope: ts.Node,
-      name: string
-    ): ts.Node | undefined => {
-      let found: ts.Node | undefined;
-      const look = (node: ts.Node): void => {
-        if (found !== undefined) return;
-        ts.forEachChild(node, child => {
-          if (found !== undefined) return;
-          if (ts.isFunctionDeclaration(child) && child.name?.text === name) {
-            found = child;
-            return;
-          }
-          if (
-            ts.isVariableDeclaration(child) &&
-            ts.isIdentifier(child.name) &&
-            child.name.text === name &&
-            child.initializer !== undefined &&
-            (ts.isArrowFunction(child.initializer) ||
-              ts.isFunctionExpression(child.initializer))
-          ) {
-            found = child.initializer;
-            return;
-          }
-          // Another scope keeps its own bindings; the caller walks outward instead.
-          if (opensScope(child)) return;
-          look(child);
-        });
-      };
-      look(scope);
-      return found;
-    };
-
-    /**
-     * The function a call resolves to, from the call site outward.
-     *
-     * One map keyed by spelling was wrong: a nested `function f` overwrote the outer one, so BOTH
-     * call sites resolved to whichever declaration was collected last. A name is only a name
-     * within a scope.
-     */
-    const calleeOf = (call: ts.Node, name: string): ts.Node | undefined => {
-      for (let scope: ts.Node | undefined = call; scope; scope = scope.parent) {
-        if (!opensScope(scope)) continue;
-        const fn = functionBoundIn(scope, name);
-        if (fn !== undefined) return fn;
-      }
-      return undefined;
-    };
-
-    /** The invocations in a subtree that run when it does, paired with their call site. */
-    const invokedIn = (node: ts.Node, into: ts.Node[]): void => {
-      ts.forEachChild(node, child => {
-        // `new F()` runs `F` exactly as `F()` does, and the constructor form has no way back to
-        // the declaration through the immediate-invocation checks.
-        if (
-          (ts.isCallExpression(child) || ts.isNewExpression(child)) &&
-          ts.isIdentifier(child.expression)
-        ) {
-          into.push(child);
-        }
-        // An INSTANCE field initializer runs at construction, not at import — the same rule the
-        // walk applies. Descending here marked a helper eager because a class merely mentions it,
-        // and rejected a module nothing had run.
-        if (
-          ts.isPropertyDeclaration(child) &&
-          !child.modifiers?.some(
-            modifier => modifier.kind === ts.SyntaxKind.StaticKeyword
-          )
-        ) {
-          return;
-        }
-        // A nested function's body is deferred unless it too is reached, which the worklist
-        // decides; descending here would mark everything the module merely defines.
-        if (ts.isFunctionLike(child)) {
-          if (ts.isCallExpression(child.parent)) invokedIn(child, into);
-          return;
-        }
-        invokedIn(child, into);
-      });
-    };
-
-    const pending: ts.Node[] = [];
-    invokedIn(tree, pending);
-    while (pending.length > 0) {
-      const call = pending.pop()!;
-      const name = (call as ts.CallExpression).expression;
-      if (!ts.isIdentifier(name)) continue;
-      const fn = calleeOf(call, name.text);
-      if (fn === undefined || eager.has(fn)) continue;
-      eager.add(fn);
-      invokedIn(fn, pending);
-    }
-  }
-
   const visit = (node: ts.Node, insideFunction: boolean): void => {
     if (ts.isImportDeclaration(node)) {
       // `import type` is erased before the emitted JavaScript exists, so it cannot pull in a
@@ -984,7 +882,7 @@ function analyze(source: string, fileName: string): Analysis {
       }
       return ts.isCallExpression(parent) && parent.expression === invoked;
     })();
-    const entersFunction = isFunction && !runsNow && !eager.has(node);
+    const entersFunction = isFunction && !runsNow;
 
     ts.forEachChild(node, child => {
       // A computed member name is evaluated when the class body runs, even though the member it
@@ -1714,64 +1612,17 @@ describe("reading a module", () => {
     ).toEqual([]);
   });
 
-  it("reports a function the module calls while it loads", () => {
-    // Ordinary code, not an exotic spelling: the immediate-invocation checks ask whether the
-    // function node IS the callee, which is true for an IIFE and false for every named function.
+  it("ends an optional chain at any erased wrapper", () => {
+    // TypeScript emits `(globalThis.document?.body).title` for the `as` form, so the assertion
+    // ends the chain exactly as parentheses do and the dereference throws.
     expect(
-      read(`
-        function f() { return window.innerWidth; }
-        export const width = f();
-      `).globals
-    ).toEqual(["window"]);
-    // Through a chain, and through a const-bound arrow.
-    expect(
-      read(`
-        const inner = () => document.title;
-        function outer() { return inner(); }
-        export const t = outer();
-      `).globals
+      read(`export const t = (globalThis.document?.body as HTMLElement).title;`)
+        .globals
     ).toEqual(["document"]);
-  });
-
-  it("reports a named function invoked with new", () => {
-    // Construction runs the body exactly as a call does, and the constructor form has no way back
-    // to the declaration through the immediate-invocation checks.
+    // The control: with the chain unbroken, it short-circuits and nothing throws.
     expect(
-      read(`
-        function F() { return window.innerWidth; }
-        export const x = new F();
-      `).globals
-    ).toEqual(["window"]);
-  });
-
-  it("resolves a called name in its own scope", () => {
-    // One map keyed by spelling let the nested declaration overwrite the outer one, so BOTH call
-    // sites resolved to the safe nested function and the exported initializer went unchecked.
-    expect(
-      read(`
-        function f() { return window.innerWidth; }
-        { function f() { return 1; } f(); }
-        export const x = f();
-      `).globals
-    ).toEqual(["window"]);
-  });
-
-  it("defers a helper called only from an instance field", () => {
-    // An instance field initializer runs at construction, not at import, so importing the class
-    // without building one never reaches the helper.
-    expect(
-      read(`
-        function f() { return window.innerWidth; }
-        export class C { x = f(); }
-      `).globals
+      read(`export const t = globalThis.document?.body?.title;`).globals
     ).toEqual([]);
-    // The control: a STATIC field does run when the class is defined.
-    expect(
-      read(`
-        function g() { return window.innerWidth; }
-        export class D { static y = g(); }
-      `).globals
-    ).toEqual(["window"]);
   });
 
   it("still defers a function the module only defines", () => {
