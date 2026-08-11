@@ -34,7 +34,12 @@ import {
   styleTextForInjection,
   type PageStyles,
 } from "./styles";
-import { pruneHiddenNodes } from "./visibility";
+import {
+  drawsNothing,
+  pruneDrawlessNodes,
+  pruneHiddenNodes,
+  pruneNodes,
+} from "./visibility";
 
 export interface PageRendererProps {
   /** The stored document to render. */
@@ -94,26 +99,17 @@ export interface PageRendererProps {
  * stored ahead of the definition that would render it. All three are pure
  * comparisons.
  *
- * A block can now DECLARE that its props draw nothing (`rendersNothing`), and
- * `core/image` with no source says so. That answer is deliberately NOT consumed
- * here yet. Removing such a node from the style input marks the document
- * repaired, and on the ordinary published path — a stored stylesheet with no
- * compile context — a repaired document has its whole sheet withheld. Blanking
- * every rule on the page because one image is waiting for its picture trades a
- * few unused bytes for an unstyled site, and an image without a picture yet is
- * an ordinary authoring state rather than the exceptional one the other prune
- * cases describe.
+ * A block DECLARING that its props draw nothing (`rendersNothing`) is a separate
+ * question, answered by `pruneDrawlessNodes` rather than here, because the two
+ * are not equally safe to act on. A node this pass rejects resolves to a visible
+ * placeholder, which is already an exceptional state; a block that draws nothing
+ * is an ordinary one — an image waiting for its picture — and dropping it costs
+ * the page its stylesheet unless the stored sheet can account for it.
  *
- * Wiring it needs the stored artifact to be able to drop ONE node's rules,
- * which is what `CompiledPageCss.gated` already does for condition-gated nodes.
- * Until a draws-nothing node can travel that path, this pass does not consult
- * the declaration.
- *
- * It is consulted ELSEWHERE, and the distinction is worth keeping straight: the
- * block boundary reads it to decide whether a node's `cssId` and attributes may
- * be refused, which is a question about one node's own output and costs nothing
- * when the answer is wrong in the safe direction. This pass decides what reaches
- * the STYLESHEET, where being wrong blanks the page.
+ * It is consulted ELSEWHERE too, and the distinction is worth keeping straight:
+ * the block boundary reads it to decide whether a node's `cssId` and attributes
+ * may be refused, which is a question about one node's own output and costs
+ * nothing when the answer is wrong in the safe direction.
  *
  * The rest are NOT knowable here, and deliberately so: whether a block throws,
  * returns something unrenderable, or renders a given slot at all is only
@@ -130,7 +126,7 @@ function rendersOwnMarkup(node: BlockNode, resolver: BlockResolver): boolean {
 }
 
 /**
- * Whether the artifact's gated map accounts for every node the prune removed.
+ * Whether the artifact holds the OWN rules of every node the prune removed.
  *
  * "A map is present" is not coverage. A stored artifact can be stale relative to the document it
  * is rendered with — compiled when one node was unconditional, so its rules are in `css`, while a
@@ -138,33 +134,59 @@ function rendersOwnMarkup(node: BlockNode, resolver: BlockResolver): boolean {
  * node that was actually pruned, and serving the stored sheet publishes that node's rules and
  * asset URLs.
  *
- * The compiler writes an entry for EVERY gated node, including one with no styles of its own, so
- * an id missing from the map means the artifact was compiled when that node was not gated. That
- * makes presence-per-removed-id an exact test rather than a heuristic.
+ * The compiler writes an entry for EVERY node it holds back, including one with no styles of its
+ * own, so an id missing from the map means the artifact was compiled when that node was still
+ * being served. That makes presence-per-removed-id an exact test rather than a heuristic.
  *
  * The ENTRY has to be usable, not merely present. A key whose value the delivery refuses to read
  * certifies coverage that never reaches the sheet, which is the same divergence one value deeper.
+ *
+ * This is the NODE-LOCAL half on its own, because the two prunes that ask it need different
+ * amounts. Written once so neither can drift from the other on the part they share.
+ */
+function gatedEntriesCoverRemovedNodes(
+  before: BlockDocument,
+  after: BlockDocument,
+  gated: Readonly<Record<string, unknown>>
+): boolean {
+  const surviving = new Set<string>();
+  walkNodes(after.nodes, node => surviving.add(node.id));
+  let covered = true;
+  walkNodes(before.nodes, node => {
+    if (surviving.has(node.id)) return;
+    if (!isRecordedGatedEntry(gated[node.id])) covered = false;
+  });
+  return covered;
+}
+
+/**
+ * Whether the artifact's gated map accounts for every node the visibility prune removed.
+ *
+ * The node-local rules, plus one thing more. The map holds a node's OWN rules; a block type's
+ * defaults are shared, emitted once per type into the main sheet, and stay there — so when pruning
+ * removes the last instance of a type, the stored sheet still publishes that type's defaults, and
+ * any `url(...)` in them, for a block nobody was served. Only a recompile can drop a type-level
+ * rule, so the artifact cannot cover this case and must not claim to.
+ *
+ * Asked HERE and not of a draws-nothing node, and the difference is what the two prunes are for. A
+ * condition withholds content from a reader, so the block a page was built from is itself part of
+ * what is being withheld and a rule naming that type says something. A block that draws nothing is
+ * an ordinary node the site uses and will draw again as soon as it is filled in; its type's
+ * defaults come from the block package rather than from the document, and refusing coverage over
+ * them would leave the drop unreachable for the page with one image and no second one.
  */
 function gatedMapCoversPrunedNodes(
   before: BlockDocument,
   after: BlockDocument,
   gated: Readonly<Record<string, unknown>>
 ): boolean {
-  const surviving = new Set<string>();
   const survivingTypes = new Set<string>();
-  walkNodes(after.nodes, node => {
-    surviving.add(node.id);
-    survivingTypes.add(node.type);
-  });
-  let covered = true;
+  walkNodes(after.nodes, node => survivingTypes.add(node.type));
+  const surviving = new Set<string>();
+  walkNodes(after.nodes, node => surviving.add(node.id));
+  let covered = gatedEntriesCoverRemovedNodes(before, after, gated);
   walkNodes(before.nodes, node => {
     if (surviving.has(node.id)) return;
-    if (!isRecordedGatedEntry(gated[node.id])) covered = false;
-    // The map holds a node's OWN rules. A block type's defaults are shared, emitted once per type
-    // into the main sheet, and stay there — so when pruning removes the last instance of a type,
-    // the stored sheet still publishes that type's defaults, and any `url(...)` in them, for a
-    // block nobody was served. Only a recompile can drop a type-level rule, so the artifact cannot
-    // cover this case and must not claim to.
     if (!survivingTypes.has(node.type)) covered = false;
   });
   return covered;
@@ -211,36 +233,7 @@ function pruneKnownPlaceholders(
   document: BlockDocument,
   resolver: BlockResolver
 ): BlockDocument {
-  let changed = false;
-
-  const prune = (nodes: BlockNode[]): BlockNode[] => {
-    const kept: BlockNode[] = [];
-    for (const node of nodes) {
-      if (!rendersOwnMarkup(node, resolver)) {
-        changed = true;
-        continue;
-      }
-
-      const slots = node.slots;
-      if (slots === undefined) {
-        kept.push(node);
-        continue;
-      }
-
-      let slotsChanged = false;
-      const nextSlots: Record<string, BlockNode[]> = {};
-      for (const [name, children] of Object.entries(slots)) {
-        const pruned = prune(children);
-        if (pruned !== children) slotsChanged = true;
-        nextSlots[name] = pruned;
-      }
-      kept.push(slotsChanged ? { ...node, slots: nextSlots } : node);
-    }
-    return changed ? kept : nodes;
-  };
-
-  const nodes = prune(document.nodes);
-  return changed ? { ...document, nodes } : document;
+  return pruneNodes(document, node => rendersOwnMarkup(node, resolver));
 }
 
 /**
@@ -372,10 +365,6 @@ export function PageRenderer({
   // unchanged and the stale sheet would be trusted. Skipping the reservation
   // and then trusting the sheet is worse than either on its own, because the
   // colliding case previously repaired the tree and therefore recompiled.
-  // Compiled from a tree with the knowable placeholders removed, while the
-  // render keeps them so their placeholders still appear.
-  const styleInput = pruneKnownPlaceholders(visible, resolver);
-
   // Gating is the one repair cause a stored artifact can answer on its own: an
   // artifact carrying `gated` holds each conditioned node's rules separately, so
   // the reader appends the survivors instead of recompiling the whole sheet or
@@ -399,11 +388,51 @@ export function PageRenderer({
     gatedMapCoversPrunedNodes(doc, pruned, gatedRules) &&
     !hasDuplicateNodeIds(doc);
 
+  // A node whose block declares it draws nothing is dropped from the style input
+  // for the same reason a gated one is: every rule compiled for the markup it
+  // would have drawn matches nothing and ships anyway, publishing whatever those
+  // rules named. It is dropped only where doing so does not cost the page its
+  // stylesheet, which is the whole difference between this and the passes above.
+  //
+  // It costs nothing exactly when the artifact already holds those rules per
+  // node, as it does for a gated one: the compiler is told which nodes draw
+  // nothing through the same rule used here, so a sheet compiled since carries an
+  // entry for each of them and the reader appends only survivors.
+  //
+  // Nothing is dropped on a render that COMPILES, and nothing needs to be. The
+  // compiler holds a drawless node's rules back at the source, into `gated`
+  // rather than into `css`, so a sheet built on this render never contained them
+  // — pruning the tree first would change which rules exist, not which ship, and
+  // would cost an identity comparison the repair decision reads.
+  //
+  // What is left is the ordinary published page with a sheet stored before any of
+  // this existed, and there the node STAYS: its unused rules ship, as they always
+  // have. That is the deliberate direction. An image waiting for its picture is
+  // an authoring state, not a failure, and blanking every rule on the page over
+  // it would be a far larger regression than the bytes it saves. Republishing the
+  // page compiles the entries and the drop starts working, with nothing to
+  // invalidate by hand.
+  const drawlessDropped = pruneDrawlessNodes(visible, resolver);
+  const drawlessCoveredByArtifact =
+    drawlessDropped !== visible &&
+    gatedRules !== undefined &&
+    gatedEntriesCoverRemovedNodes(visible, drawlessDropped, gatedRules) &&
+    !hasDuplicateNodeIds(doc);
+  const drawlessInput = drawlessCoveredByArtifact ? drawlessDropped : visible;
+  // Compiled from a tree with the knowable placeholders removed, while the
+  // render keeps them so their placeholders still appear.
+  const styleInput = pruneKnownPlaceholders(drawlessInput, resolver);
+
+  // Each pass is compared against ITS OWN input rather than folding two removals
+  // into one identity test. A single `styleInput !== visible` would let a covered
+  // drawless drop excuse a placeholder removal that happened in the same step,
+  // and that removal is one only a recompile can answer for.
   const repairedDocument =
     sanitized !== document ||
     (pruned !== doc && !gatingCoveredByArtifact) ||
     visible !== pruned ||
-    styleInput !== visible;
+    (drawlessInput !== visible && !drawlessCoveredByArtifact) ||
+    styleInput !== drawlessInput;
 
   // Recompiling after pruning must not lose what the stored artifact and the
   // renderer knew. `scope` lives on the artifact rather than in the compile
@@ -444,6 +473,18 @@ export function PageRenderer({
       : {
           ...styleContext,
           limits: effectiveLimits,
+          // The compiler is told which nodes draw nothing through the same rule
+          // this render used to decide it, so a node's markup and its rules
+          // cannot disagree about whether it is on the page. This is what makes
+          // the drop above self-healing: a sheet compiled here holds each
+          // drawless node's rules per node, so the NEXT render can drop them
+          // from a stored artifact instead of needing a compile context.
+          //
+          // Passed even though the drawless nodes are already out of the tree
+          // being compiled. The tree is only one input: `blockBases` still
+          // reaches the compile, and a caller can hand `resolvePageStyles` a
+          // document this pass never pruned.
+          drawsNothing: (node: BlockNode) => drawsNothing(node, resolver),
           ...(patterns === undefined || styleContext.mayFetchUrl !== undefined
             ? {}
             : { mayFetchUrl: (url: string) => isFetchableUrl(url, patterns) }),

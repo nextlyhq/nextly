@@ -113,7 +113,23 @@ const SOURCE_MODULES: ReadonlyArray<{
     // question from a second package is how the compiler and this renderer came to
     // disagree about gating three separate times; the entry offers the PASS a caller
     // actually needs and leaves the predicate with its single owner.
-    internal: ["isUnconditional"],
+    // `drawsNothing` is the same case one question over: the engine owns
+    // `declaresNoMarkup`, and this is the spelling that reads it through a
+    // resolver.
+    // `pruneNodes` is the shared walk the three passes share so their identity
+    // behaviour cannot diverge. It is a shape, not a policy, and a consumer
+    // reaching for it is writing a fourth pass this package cannot account for.
+    // `pruneDrawlessNodes` is deliberately NOT offered. It is only safe where
+    // the stylesheet survives the drop, and that judgement lives in
+    // `PageRenderer`; a caller applying it before `resolvePageStyles` would make
+    // its own document read as repaired and lose the whole sheet — which is the
+    // outcome this pass exists to avoid.
+    internal: [
+      "drawsNothing",
+      "isUnconditional",
+      "pruneDrawlessNodes",
+      "pruneNodes",
+    ],
   },
   { name: "placeholder", module: placeholderModule, internal: [] },
   { name: "page-renderer", module: pageRendererModule, internal: [] },

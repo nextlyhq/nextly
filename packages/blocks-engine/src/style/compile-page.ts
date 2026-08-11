@@ -109,6 +109,25 @@ export interface StyleCompileContext {
    * stores no style bytes, resetting a node is deleting its own values, and
    * improving a block's default look reaches pages that already exist.
    */
+  /**
+   * Whether a node's block declares that these props draw nothing.
+   *
+   * A second reason a node's markup never reaches the page, beside a visibility
+   * condition, and its rules have to leave the main sheet for the same reason:
+   * a stylesheet compiled with them carries whatever they reference — the
+   * `url(...)` of an image block still waiting for its picture — for markup
+   * nobody is served.
+   *
+   * A predicate rather than the definitions themselves, because this package
+   * has no runtime and does not know what a block is. The caller holds the
+   * registry and answers from it; `declaresNoMarkup` in `visibility` is the one
+   * implementation, so the compiler and the renderer cannot answer differently
+   * about the same node.
+   *
+   * Left undefined, no such question is asked and the compile behaves exactly
+   * as it did before this existed.
+   */
+  drawsNothing?: (node: BlockNode) => boolean;
   blockBases?: Readonly<Record<string, NodeStyles>>;
   /**
    * The site's named classes, in any order.
@@ -210,13 +229,14 @@ export interface CompiledPageCss {
    */
   trace?: readonly StyleTraceEntry[];
   /**
-   * The node-local rules of every node that declares `visibility.conditions`, keyed by node id
-   * and EXCLUDED from `css`.
+   * The node-local rules of every node a reader may not serve, keyed by node id and EXCLUDED from
+   * `css`. Two things put a node here: its own `visibility.conditions` (or an ancestor's), and a
+   * block answering {@link StyleCompileContext.drawsNothing} for its props.
    *
-   * A page's stylesheet is compiled when the document is saved; a condition is decided when the
-   * page is read. So a single pre-compiled string carries rules for nodes a reader will prune —
-   * and any `url(...)` inside them — publishing the assets of a block whose markup is withheld.
-   * A reader appends the entries whose nodes survived.
+   * A page's stylesheet is compiled when the document is saved; whether a node draws is settled
+   * when the page is read. So a single pre-compiled string carries rules for nodes a reader will
+   * prune — and any `url(...)` inside them — publishing the assets of a block whose markup is
+   * withheld. A reader appends the entries whose nodes survived.
    *
    * Only NODE-LOCAL rules move. A block type's base rules stay in `css`, because an
    * unconditional node may share the type and those rules come from the block definition rather
@@ -873,7 +893,8 @@ function documentNodes(
   doc: BlockDocument,
   warnings: ValidationIssue[],
   warningAllowance: WarningAllowance,
-  limits: DocumentLimits = DEFAULT_LIMITS
+  limits: DocumentLimits = DEFAULT_LIMITS,
+  drawsNothing?: (node: BlockNode) => boolean
 ): PlacedNode[] {
   const placed: PlacedNode[] = [];
   if (!Array.isArray(doc.nodes)) return placed;
@@ -938,8 +959,11 @@ function documentNodes(
       if (!isPlainRecord(node) || typeof node.id !== "string") continue;
       const path = pointer(level.base, index);
       // Once gated, gated for the whole subtree: a descendant cannot be served when the ancestor
-      // carrying it is not.
-      const gated = level.gated || isConditionGated(node);
+      // carrying it is not. A block that draws nothing takes its slots with it for the same
+      // reason — a slot's children are placed by the markup the block returns, and a block
+      // returning nothing places none of them.
+      const gated =
+        level.gated || isConditionGated(node) || drawsNothing?.(node) === true;
       placed.push({ node, path, gated });
       if (!isPlainRecord(node.slots)) continue;
       // Sorted, so two documents whose slots were written in a different order
@@ -991,7 +1015,13 @@ export function compilePageCss(
   const scope = scopeSelector(ctx.scope, warnings);
   const pageRoot = `${PAGE_ROOT_SELECTOR}${scope}`;
 
-  const nodes = documentNodes(doc, warnings, warningAllowance, ctx.limits);
+  const nodes = documentNodes(
+    doc,
+    warnings,
+    warningAllowance,
+    ctx.limits,
+    ctx.drawsNothing
+  );
   const classes = nodeClassNames(nodes.map(entry => entry.node.id));
   // Two nodes sharing an id share a class, because a class is derived from the
   // id and the map this returns is keyed by it — there is no second class to

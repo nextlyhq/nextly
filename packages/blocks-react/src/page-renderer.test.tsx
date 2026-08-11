@@ -126,6 +126,21 @@ const text = defineBlock<{ value: string }>({
   render: ({ props, className }) => <p className={className}>{props.value}</p>,
 });
 
+/**
+ * A block that answers whether these props make it draw, so one document can
+ * hold an instance on each side of the declaration.
+ */
+const drawless = defineBlock<{ draw: boolean }>({
+  name: "test/drawless",
+  version: 1,
+  description: "Draws only when told to.",
+  example: { props: { draw: true } },
+  defaultProps: { draw: false },
+  rendersNothing: props => props.draw !== true,
+  render: ({ props, className }) =>
+    props.draw ? <p className={className}>drawn</p> : null,
+});
+
 /** A second type, so a document can lose every instance of one and keep the other. */
 const onlyHidden = defineBlock<{ value: string }>({
   name: "test/only-hidden",
@@ -3649,6 +3664,186 @@ describe("PageRenderer", () => {
       expect(html).not.toContain("gated");
       expect(html).toContain("deep leaf");
       expect(html).toContain("rebeccapurple");
+    });
+  });
+
+  describe("a block that declares it draws nothing", () => {
+    it("keeps its rules out of the sheet when the artifact holds them per node", async () => {
+      // The point of the whole pass. `a` draws nothing, so every rule compiled
+      // for the markup it would have drawn matches no element and ships anyway,
+      // carrying whatever it named. An artifact that holds those rules per node
+      // lets the reader leave them out without recompiling anything.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/drawless", { props: { draw: false } }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([
+            drawless as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+          styles={{
+            css: ".nx-b { color: teal }",
+            classes: { a: "nx-a", b: "nx-b" },
+            gated: { a: ".nx-a { background-image: url(/unpainted.png) }" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("unpainted.png");
+      // And the constraint that made this hard: the REST of the sheet survives.
+      expect(html).toContain("color: teal");
+      expect(html).toContain("public body");
+    });
+
+    it("keeps the whole sheet when the artifact predates the split", async () => {
+      // The direction that matters more than the drop. An artifact with no entry
+      // for `a` was compiled before anything asked whether `a` draws, so its
+      // rules are in `css` and cannot be separated out. Treating that as a repair
+      // would withhold the sheet, and blanking a page because one image is
+      // waiting for its picture is a far larger regression than the unused rules
+      // it would save. So the node stays and the sheet ships whole.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/drawless", { props: { draw: false } }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([
+            drawless as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+          styles={{
+            css: ".nx-a { background-image: url(/unpainted.png) } .nx-b { color: teal }",
+            classes: { a: "nx-a", b: "nx-b" },
+          }}
+        />
+      );
+
+      expect(html).toContain("color: teal");
+      expect(html).toContain("public body");
+      // Stated rather than left implied: this is the cost the design accepts.
+      expect(html).toContain("unpainted.png");
+    });
+
+    it("never emits its rules when the sheet is compiled on this render", async () => {
+      // The compiler half, and the reason the renderer drops nothing here. A
+      // sheet built on this render holds a drawless node's rules per node rather
+      // than in `css`, so they are never emitted instead of emitted and then
+      // withheld — which is also what makes the NEXT render able to drop them
+      // from the stored artifact.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/drawless", {
+              props: { draw: false },
+              styles: { base: { base: { color: "rebeccapurple" } } },
+            }),
+            node("b", "test/text", {
+              props: { value: "public body" },
+              styles: { base: { base: { color: "teal" } } },
+            })
+          )}
+          blocks={createBlockResolver([
+            drawless as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+          styleContext={{ breakpoints: { viewport: [], container: [] } }}
+        />
+      );
+
+      expect(html).not.toContain("rebeccapurple");
+      expect(html).toContain("teal");
+      expect(html).toContain("public body");
+    });
+
+    it("leaves a node that does draw completely alone", async () => {
+      // The control. Without it every assertion above could pass because the
+      // pass removes everything, or because the fixture never declares anything.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/drawless", {
+              props: { draw: true },
+              styles: { base: { base: { color: "rebeccapurple" } } },
+            })
+          )}
+          blocks={createBlockResolver([drawless as AnyBlockDefinition])}
+          styleContext={{ breakpoints: { viewport: [], container: [] } }}
+        />
+      );
+
+      expect(html).toContain("rebeccapurple");
+      expect(html).toContain("drawn");
+    });
+
+    it("is not covered by a gated map that never mentions it", async () => {
+      // A map being PRESENT is not coverage. This artifact gates something else
+      // entirely, so it was compiled while `a` was still being served and `a`'s
+      // rules are in `css` where nothing can separate them out.
+      //
+      // Read through what happens to the node rather than to those rules, because
+      // they ship either way — the artifact carries them and this pass does not
+      // rewrite `css`. Wrongly counted as covered, `a` would leave the document
+      // and the artifact's class map would look complete without it; correctly
+      // refused, `a` stays, the map is missing its class, and the whole sheet is
+      // rebuilt rather than trusted.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/drawless", { props: { draw: false } }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([
+            drawless as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+          styles={{
+            css: ".nx-b { color: teal }",
+            classes: { b: "nx-b" },
+            gated: { z: ".nx-z { color: red }" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("color: teal");
+      expect(html).toContain("public body");
+    });
+
+    it("still repairs when a placeholder is removed in the same render", async () => {
+      // Each prune is compared against its OWN input rather than folded into one
+      // identity test, so a drop the artifact covers cannot excuse one it does
+      // not. `a` is covered; `c` resolves to a placeholder, which only a
+      // recompile can account for.
+      //
+      // The artifact names no class for `c` while its `css` still carries `c`'s
+      // rules — a stale record, which is what a stored artifact can always be.
+      // Nothing downstream catches that: the unaccounted-nodes check reads the
+      // CLASS MAP, and a node the map never mentioned is not unaccounted for.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/drawless", { props: { draw: false } }),
+            node("b", "test/text", { props: { value: "public body" } }),
+            node("c", "test/unregistered")
+          )}
+          blocks={createBlockResolver([
+            drawless as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+          styles={{
+            css: ".nx-c { background-image: url(/placeholder-asset.png) } .nx-b { color: teal }",
+            classes: { a: "nx-a", b: "nx-b" },
+            gated: { a: ".nx-a { background-image: url(/unpainted.png) }" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("placeholder-asset.png");
+      expect(html).not.toContain("unpainted.png");
+      // The page still renders; only its stale sheet is withheld.
+      expect(html).toContain("public body");
     });
   });
 

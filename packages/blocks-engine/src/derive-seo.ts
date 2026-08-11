@@ -17,6 +17,7 @@
  */
 import type { BlockSeoContribution, BlockSeoImage } from "./block";
 import type { BlockDocument, BlockNode } from "./document";
+import { declaresNoMarkup } from "./visibility";
 
 /**
  * What a walk over a document produced.
@@ -166,43 +167,6 @@ function offerOf(
 }
 
 /**
- * Whether a block says these props make it draw nothing.
- *
- * Only `true` counts. A definition that does not answer, answers with something
- * other than a boolean, or throws is treated as drawing — the safe direction,
- * since assuming otherwise removes a block that IS on the page from everything
- * derived about it.
- */
-function drawsNothing(
-  node: BlockNode,
-  definitions: SeoDefinitionSource
-): boolean {
-  const predicate = definitions(node.type)?.rendersNothing;
-  if (typeof predicate !== "function") return false;
-  let answer: unknown;
-  let deferred = false;
-  try {
-    answer = predicate(node.props as never);
-    // Inside the guard, for the same reason as `offerOf`: a throwing `then`
-    // getter would otherwise escape the containment on its way to being caught.
-    deferred =
-      typeof (answer as { then?: unknown } | undefined)?.then === "function";
-  } catch {
-    return false;
-  }
-  // A block mistakenly declared `async rendersNothing` returns a pending
-  // promise, so the `try` above finishes before any rejection happens and its
-  // `catch` never sees one. Node reports that as an unhandled rejection and can
-  // end the process — the whole page lost because a block was asked about
-  // itself. The same containment the `seo` hook needed, for the same reason.
-  if (deferred) {
-    void Promise.resolve(answer).catch(() => undefined);
-    return false;
-  }
-  return answer === true;
-}
-
-/**
  * Derive title, description and image from a document's blocks.
  *
  * Returns only the fields something answered for, so the result can be spread
@@ -246,7 +210,7 @@ export function deriveSeoFromDocument(
       // metadata path where a throw fails the whole route, and a non-boolean
       // answer means the block did not really answer. Both degrade to "draws",
       // which costs unused work rather than a missing page.
-      if (drawsNothing(node, definitions)) continue;
+      if (declaresNoMarkup(node, definitions)) continue;
 
       const offer = offerOf(node, definitions);
       if (offer) {
