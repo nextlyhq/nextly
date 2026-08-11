@@ -64,6 +64,27 @@ export interface UpdateEmailProviderInput {
   fromEmail?: string;
   fromName?: string | null;
   configuration?: Record<string, unknown>;
+  /**
+   * Configuration paths this update REMOVES, as declared field names.
+   *
+   * Out of band rather than a marker value inside `configuration`, because a
+   * patch merged over stored configuration otherwise has only two states --
+   * absent means "leave it", a value means "set it" -- and no way to say
+   * "unset it", so an optional field became permanent the moment it was first
+   * saved. Clearing it in the form omitted it, and omission is
+   * indistinguishable from not touching it.
+   *
+   * Every in-band alternative collides with real data: a provider's
+   * `parseConfig` may legitimately accept `null`, an empty string, or any
+   * sentinel string chosen here, and a create already stores those verbatim.
+   * A separate list cannot be confused with a value because it does not live
+   * in the value space at all.
+   *
+   * Each entry must name a field the effective provider DECLARES. Anything
+   * else is rejected, which also means these strings never become arbitrary
+   * object paths.
+   */
+  unsetConfiguration?: string[];
   isDefault?: boolean;
   isActive?: boolean;
 }
@@ -286,22 +307,12 @@ export class EmailProviderService extends BaseService {
     for (const [key, value] of Object.entries(incoming)) {
       if (value === undefined) continue;
 
-      // `null` REMOVES the key. A patch merged over stored configuration has
-      // only two states otherwise -- absent means "leave it" and a value means
-      // "set it" -- with no way to say "unset it", so an optional field became
-      // permanent the moment it was first saved. Clearing it in the form
-      // omitted it, and omission is indistinguishable from not touching it.
-      //
-      // `null` rather than an empty string because an empty string is a value
-      // a provider may legitimately want to store, and because a parser
-      // written as `z.enum(options).optional()` rejects both an empty string
-      // and a null while accepting an absent key. Removing the key is what
-      // "optional and unset" actually means.
-      if (value === null) {
-        delete merged[key];
-        continue;
-      }
-
+      // `null` is a VALUE here, carried through like any other. Removal is
+      // asked for by `unsetConfiguration` instead, because a contributed
+      // provider's `parseConfig` may accept a nullable field, and a create
+      // already stores that null verbatim -- reading it as "delete" on the
+      // patch path would make the same request mean two different things
+      // depending on whether the row existed.
       if (this.isPlainObject(value) && this.isPlainObject(merged[key])) {
         merged[key] = this.deepMergeConfig(merged[key], value);
       } else {
@@ -310,6 +321,86 @@ export class EmailProviderService extends BaseService {
     }
 
     return merged;
+  }
+
+  /**
+   * Narrow `unsetConfiguration` from what a request actually sent.
+   *
+   * The REST route copies this field out of parsed JSON, so the declared type
+   * is a promise rather than a fact. A non-array reaching the walk below would
+   * fail as a TypeError -- a 500 with a driver-shaped message for a malformed
+   * request -- instead of the validation error the caller can act on.
+   */
+  private readUnsetPaths(value: unknown): readonly string[] {
+    if (value === undefined) return [];
+    const paths = Array.isArray(value) ? value : null;
+    if (paths === null || paths.some(entry => typeof entry !== "string")) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "unsetConfiguration",
+            code: "INVALID_TYPE",
+            message: "Must be an array of configuration field names.",
+          },
+        ],
+      });
+    }
+    return paths as string[];
+  }
+
+  /**
+   * Remove the configuration paths an update asked to unset.
+   *
+   * Each path must name a field the provider DECLARES. That is the whole
+   * safety argument: the strings are checked against a set built from the
+   * registry, and `assertConfigFieldsAreUsable` already refuses a field named
+   * `__proto__`, `constructor` or `prototype` at registration, so a request
+   * cannot steer this walk anywhere a declared field does not go. An
+   * undeclared path is rejected rather than ignored, because silently doing
+   * nothing would leave the operator looking at a value they just cleared.
+   *
+   * Unsetting an absent path is not an error — it is the state being asked
+   * for, and a retried request must not fail on its second attempt.
+   */
+  private applyConfigUnsets(
+    config: Record<string, unknown>,
+    paths: readonly string[],
+    effectiveType: string
+  ): Record<string, unknown> {
+    if (paths.length === 0) return config;
+
+    const declared = this.declaredConfigPaths(effectiveType);
+    const undeclared = paths.filter(path => !declared.has(path));
+    if (undeclared.length > 0) {
+      throw NextlyError.validation({
+        errors: undeclared.map(path => ({
+          path: `unsetConfiguration.${path}`,
+          code: "UNKNOWN_FIELD",
+          message: `"${path}" is not a configuration field of this provider.`,
+        })),
+        logContext: { effectiveType, undeclared },
+      });
+    }
+
+    const result = structuredClone(config);
+    for (const path of paths) {
+      const segments = path.split(".");
+      const leaf = segments.pop();
+      if (leaf === undefined) continue;
+
+      let branch: Record<string, unknown> = result;
+      let reachable = true;
+      for (const segment of segments) {
+        const next = branch[segment];
+        if (!this.isPlainObject(next)) {
+          reachable = false;
+          break;
+        }
+        branch = next;
+      }
+      if (reachable) delete branch[leaf];
+    }
+    return result;
   }
 
   /**
@@ -479,16 +570,27 @@ export class EmailProviderService extends BaseService {
     if (data.type !== undefined) updateData.type = data.type;
     if (data.fromEmail !== undefined) updateData.fromEmail = data.fromEmail;
     if (data.fromName !== undefined) updateData.fromName = data.fromName;
-    if (data.configuration !== undefined) {
+    // An update that only clears fields carries no `configuration` of its own,
+    // so the branch below has to run for either half of the request. Without
+    // this, unsetting a value while changing nothing else would be accepted
+    // and do nothing.
+    const unsetPaths = this.readUnsetPaths(data.unsetConfiguration);
+    if (data.configuration !== undefined || unsetPaths.length > 0) {
       const existingConfig = this.decryptConfiguration(
         currentRow.configuration
       );
-      const incomingConfig = this.stripMaskedConfigValues(data.configuration);
+      const incomingConfig = this.stripMaskedConfigValues(
+        data.configuration ?? {}
+      );
       // Across a type change the stored configuration belongs to the previous
       // provider, so it is discarded rather than merged into the new shape.
-      const mergedConfig = typeChanged
-        ? incomingConfig
-        : this.deepMergeConfig(existingConfig, incomingConfig);
+      const mergedConfig = this.applyConfigUnsets(
+        typeChanged
+          ? incomingConfig
+          : this.deepMergeConfig(existingConfig, incomingConfig),
+        unsetPaths,
+        effectiveType
+      );
 
       // Validate the MERGED result, not the incoming patch: an update usually
       // carries only the fields that changed, and the masked values it omits

@@ -79,14 +79,21 @@ import type {
  * variant. A missing entry is the normal case for a plugin provider, never an
  * error, which is what the old hardcoded map made it.
  */
-const PROVIDER_BADGE_VARIANTS: Record<
+/**
+ * A `Map` rather than an object literal, because the key is a plugin-chosen
+ * provider type. `variants["constructor"]` on a plain object answers with an
+ * inherited function, which is truthy, so the `?? "default"` fallback beside
+ * the lookup would never run and `Badge` would receive a function as its
+ * variant. A `Map` has no inherited keys to find.
+ */
+const PROVIDER_BADGE_VARIANTS = new Map<
   string,
   "default" | "primary" | "success"
-> = {
-  smtp: "default",
-  resend: "primary",
-  sendlayer: "success",
-};
+>([
+  ["smtp", "default"],
+  ["resend", "primary"],
+  ["sendlayer", "success"],
+]);
 
 /**
  * A one-line summary of a provider's configuration for the table.
@@ -472,7 +479,7 @@ function EmailProviderTable() {
         cell: ({ row }) => {
           const descriptor = descriptorsByType.get(row.type);
           return (
-            <Badge variant={PROVIDER_BADGE_VARIANTS[row.type] ?? "default"}>
+            <Badge variant={PROVIDER_BADGE_VARIANTS.get(row.type) ?? "default"}>
               {/* The registry's label when it has one; otherwise the stored
                   type, so a provider whose plugin was removed still says what
                   it is instead of rendering blank. */}

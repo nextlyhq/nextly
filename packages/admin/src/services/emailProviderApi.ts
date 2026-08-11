@@ -111,6 +111,15 @@ export interface UpdateEmailProviderPayload {
   fromEmail?: string;
   fromName?: string | null;
   configuration?: Record<string, unknown>;
+  /**
+   * Configuration fields to REMOVE, by the name the descriptor declares.
+   *
+   * Beside the values rather than inside them: a patch merged over stored
+   * configuration can otherwise only say "leave it" or "set it", and every
+   * in-band marker for "unset it" — `null`, `""`, a sentinel — is a value some
+   * provider's parser legitimately accepts.
+   */
+  unsetConfiguration?: string[];
   isDefault?: boolean;
   isActive?: boolean;
 }

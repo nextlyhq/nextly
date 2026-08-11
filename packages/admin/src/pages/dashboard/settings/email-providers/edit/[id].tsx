@@ -6,6 +6,7 @@ import { useCallback } from "react";
 import {
   EMAIL_PROVIDER_FORM_ID,
   EmailProviderForm,
+  isUnregisteredProviderType,
   type EmailProviderPayload,
 } from "@admin/components/features/settings/EmailProviderForm";
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
@@ -167,6 +168,19 @@ export default function EditEmailProviderPage() {
     );
   }
 
+  // The same question the form answers before it disables every field: is the
+  // stored type still registered? Asked once, from the shared predicate, so
+  // the button and the notice beside it can never disagree — an enabled Update
+  // under a "settings cannot be edited" banner submits an empty configuration
+  // and comes back with an unsupported-provider error.
+  //
+  // Gated on the catalog having settled, because an empty list mid-fetch makes
+  // every type look unregistered.
+  const cannotEdit =
+    !descriptorsLoading &&
+    !descriptorsError &&
+    isUnregisteredProviderType(provider?.type, descriptors ?? []);
+
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
@@ -187,7 +201,7 @@ export default function EditEmailProviderPage() {
               <Button
                 type="submit"
                 form={EMAIL_PROVIDER_FORM_ID}
-                disabled={isPending}
+                disabled={isPending || cannotEdit}
               >
                 {isPending ? (
                   <>

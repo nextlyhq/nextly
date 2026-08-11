@@ -76,6 +76,7 @@ export const GET = withErrorHandler(
  * - fromEmail: From email address
  * - fromName: From display name
  * - configuration: Provider-specific config object
+ * - unsetConfiguration: Configuration field names to remove
  * - isActive: Enable/disable provider
  *
  * Response Codes:
@@ -107,6 +108,12 @@ export const PATCH = withErrorHandler(
     if (body.fromName !== undefined) updateData.fromName = body.fromName;
     if (body.configuration !== undefined)
       updateData.configuration = body.configuration;
+    // Which fields the update CLEARS, carried beside the values it sets rather
+    // than as a marker inside them: any in-band marker is a value some
+    // provider's parser legitimately accepts. The service validates the shape
+    // and rejects any name the provider does not declare.
+    if (body.unsetConfiguration !== undefined)
+      updateData.unsetConfiguration = body.unsetConfiguration;
     if (body.isActive !== undefined) updateData.isActive = body.isActive;
 
     const service = await getEmailProviderService();

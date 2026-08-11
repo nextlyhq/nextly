@@ -510,6 +510,26 @@ function withoutUntouchedSecrets(
   return cleaned;
 }
 
+/**
+ * Did the SERVER send a mask for this field — that is, does a stored
+ * credential exist behind it?
+ *
+ * Provenance, which the field's own value cannot supply. A credential that
+ * happens to be typed as `••••` is character-identical to the mask, so a field
+ * inferring "this came from storage" from its contents would clear a password
+ * the user just entered the moment they pressed reveal. The stored record
+ * answers it instead, and it is the only thing that can.
+ */
+export function hasStoredSecret(
+  stored: Record<string, unknown> | undefined,
+  fieldName: string
+): boolean {
+  if (stored === undefined) return false;
+  const path = splitFieldPath(fieldName);
+  if (path === null) return false;
+  return isMaskedSecret(readAtPath(stored, path));
+}
+
 /** The create/update payload these form values produce. */
 export interface EmailProviderPayload {
   name: string;
@@ -519,6 +539,16 @@ export interface EmailProviderPayload {
   isDefault: boolean;
   isActive: boolean;
   configuration: Record<string, unknown>;
+  /**
+   * Configuration fields this submission CLEARS, by declared name.
+   *
+   * Beside the values rather than inside them. Any marker placed in
+   * `configuration` itself — `null`, `""`, a sentinel string — is a value some
+   * provider's parser legitimately accepts, so a create would store it while
+   * an update read the identical request as a deletion. Absent on a create,
+   * where there is nothing to clear.
+   */
+  unsetConfiguration?: string[];
 }
 
 /**
@@ -535,7 +565,7 @@ export function formValuesToPayload(
 ): EmailProviderPayload {
   // Untouched credentials are dropped first, so a mask never reaches the
   // clear check and is never mistaken for an emptied field.
-  const configuration = markClearedOptionalFields(
+  const { configuration, unsetConfiguration } = separateClearedOptionalFields(
     withoutUntouchedSecrets(values.configuration ?? {}, descriptor, stored),
     descriptor,
     stored
@@ -549,6 +579,7 @@ export function formValuesToPayload(
     isDefault: values.isDefault,
     isActive: values.isActive,
     configuration,
+    ...(unsetConfiguration.length > 0 ? { unsetConfiguration } : {}),
   };
 }
 
@@ -564,12 +595,18 @@ export function formValuesToPayload(
  * So an emptied field says one of two things depending on whether there was
  * ever anything there:
  *
- * - **Stored, now empty** → `null`, the request to remove the key. The server
- *   deletes it, and the provider's own parser then sees an absent optional
- *   field, which is what "optional and unset" means to a parser written as
+ * - **Stored, now empty** → named in `unsetConfiguration`, the request to
+ *   remove the key, and omitted from `configuration`. The server deletes it,
+ *   and the provider's own parser then sees an absent optional field, which is
+ *   what "optional and unset" means to a parser written as
  *   `z.enum(options).optional()` or `z.string().min(1).optional()` — both of
  *   which reject an empty string.
- * - **Never stored, still empty** → omitted. Nothing happened.
+ * - **Never stored, still empty** → omitted entirely. Nothing happened.
+ *
+ * The removal travels beside the configuration rather than inside it because
+ * every in-band marker is a value some provider legitimately stores: `null`
+ * and `""` are both accepted by nullable parsers, and a create writes them
+ * verbatim. Only a separate list can mean "remove" and nothing else.
  *
  * Applies to EVERY optional field, not only selects. A cleared number
  * serialises away to nothing, and a cleared optional credential would
@@ -579,14 +616,16 @@ export function formValuesToPayload(
  * A required field never reaches here empty: the generated schema stops it,
  * naming the field, which is a better answer than a silent omission.
  */
-function markClearedOptionalFields(
+function separateClearedOptionalFields(
   configuration: Record<string, unknown>,
   descriptor?: EmailProviderDescriptor,
   stored?: Record<string, unknown>
-): Record<string, unknown> {
-  if (!descriptor) return configuration;
+): { configuration: Record<string, unknown>; unsetConfiguration: string[] } {
+  if (!descriptor) return { configuration, unsetConfiguration: [] };
 
   const cleaned = structuredClone(configuration);
+  const unsetConfiguration: string[] = [];
+
   for (const field of descriptor.configFields) {
     // A switch always holds a value, so it can never be "cleared".
     if (field.required === true || field.kind === "boolean") continue;
@@ -599,13 +638,15 @@ function markClearedOptionalFields(
     // before it ever becomes a string, so it arrives here as neither.
     if (current !== "" && current !== undefined) continue;
 
+    // Removed from the values either way. What differs is whether the server
+    // is also asked to delete what it holds — the field name is sent only
+    // when there is something stored to remove.
+    deleteAtPath(cleaned, path);
+
     const hadValue =
       stored !== undefined && readAtPath(stored, path) !== undefined;
-    if (hadValue) {
-      writeAtPath(cleaned, path, null);
-    } else {
-      deleteAtPath(cleaned, path);
-    }
+    if (hadValue) unsetConfiguration.push(field.name);
   }
-  return cleaned;
+
+  return { configuration: cleaned, unsetConfiguration };
 }

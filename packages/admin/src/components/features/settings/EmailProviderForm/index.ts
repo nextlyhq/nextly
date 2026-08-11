@@ -1,4 +1,8 @@
-export { EmailProviderForm, EMAIL_PROVIDER_FORM_ID } from "./EmailProviderForm";
+export {
+  EmailProviderForm,
+  EMAIL_PROVIDER_FORM_ID,
+  isUnregisteredProviderType,
+} from "./EmailProviderForm";
 export type { EmailProviderFormProps } from "./EmailProviderForm";
 export type {
   EmailProviderPayload,

@@ -25,7 +25,10 @@ import type {
 import { SettingsRow } from "../SettingsRow";
 import { SettingsSection } from "../SettingsSection";
 
-import type { ProviderFormValues } from "./schemas/emailProviderSchema";
+import {
+  hasStoredSecret,
+  type ProviderFormValues,
+} from "./schemas/emailProviderSchema";
 import { SecretField } from "./SecretField";
 
 /**
@@ -53,10 +56,19 @@ export function ProviderConfigFields({
   descriptor,
   control,
   disabled,
+  storedConfiguration,
 }: {
   descriptor: EmailProviderDescriptor;
   control: Control<ProviderFormValues>;
   disabled?: boolean;
+  /**
+   * The configuration as the SERVER returned it, credentials masked.
+   *
+   * Passed down so a credential field can tell a mask it was given from a
+   * value the user typed. Absent on a create, and across a type change, where
+   * nothing is stored for these fields.
+   */
+  storedConfiguration?: Record<string, unknown>;
 }) {
   if (descriptor.configFields.length === 0) return null;
 
@@ -68,6 +80,7 @@ export function ProviderConfigFields({
           field={field}
           control={control}
           disabled={disabled}
+          storedSecret={hasStoredSecret(storedConfiguration, field.name)}
         />
       ))}
     </SettingsSection>
@@ -78,10 +91,12 @@ function ProviderConfigField({
   field,
   control,
   disabled,
+  storedSecret,
 }: {
   field: EmailProviderConfigField;
   control: Control<ProviderFormValues>;
   disabled?: boolean;
+  storedSecret: boolean;
 }) {
   const name = configFieldPath(field);
 
@@ -94,6 +109,7 @@ function ProviderConfigField({
         placeholder={field.placeholder}
         description={field.help}
         disabled={disabled}
+        storedSecret={storedSecret}
       />
     );
   }

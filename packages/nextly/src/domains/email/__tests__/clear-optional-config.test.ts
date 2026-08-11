@@ -5,6 +5,9 @@
  * means "leave it" and a value means "set it". An optional field therefore
  * became permanent the moment it was first saved — clearing it in the form
  * omitted it, and omission is indistinguishable from not touching it.
+ *
+ * The third state is carried BESIDE the values, not inside them, because every
+ * in-band marker is a value some provider legitimately stores.
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -140,16 +143,63 @@ describe("clearing an optional configuration value", () => {
     getEmailProviderRegistry().reset();
   });
 
-  it("removes the key when the patch carries null", async () => {
+  it("removes the key the patch names in unsetConfiguration", async () => {
     await service.updateProvider(providerId, {
-      configuration: { tier: null },
+      unsetConfiguration: ["tier"],
     });
 
     const stored = await service.getProviderDecrypted(providerId);
-    expect(stored.configuration).not.toHaveProperty("tier");
+    expect(Object.keys(stored.configuration)).not.toContain("tier");
     // The control: removal must not take the rest of the configuration with
     // it, or "clear one field" becomes "lose the credential".
     expect(stored.configuration).toMatchObject({ apiKey: "k-1" });
+  });
+
+  it("stores null as a value rather than reading it as a removal", async () => {
+    // A contributed provider may accept a nullable field, and a create already
+    // stores that null verbatim. Reading the same value as "delete" on the
+    // patch path would make one request mean two things depending on whether
+    // the row existed.
+    const nullable = defineEmailProvider({
+      type: "nullable",
+      label: "Nullable",
+      configFields: [{ name: "tag", label: "Tag", kind: "text" }],
+      parseConfig: input => input as Record<string, unknown>,
+      createAdapter: () => ({
+        send: () => Promise.resolve({ success: true, messageId: "x" }),
+      }),
+    });
+    getEmailProviderRegistry().register(nullable);
+
+    const created = await service.createProvider({
+      name: "Nullable",
+      type: "nullable",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { tag: "before" },
+      isDefault: false,
+      isActive: true,
+    });
+
+    await service.updateProvider(created.id, {
+      configuration: { tag: null },
+    });
+
+    const stored = await service.getProviderDecrypted(created.id);
+    // Present AND null. The control is the key still existing: a deletion
+    // would satisfy a `toBeNull()` written against a missing property.
+    expect(Object.keys(stored.configuration)).toContain("tag");
+    expect(stored.configuration.tag).toBeNull();
+  });
+
+  it("refuses to unset a field the provider does not declare", async () => {
+    // The names are checked against the registry, which is also what keeps
+    // them from becoming arbitrary object paths.
+    await expect(
+      service.updateProvider(providerId, {
+        unsetConfiguration: ["somethingElse"],
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
   });
 
   it("leaves the key alone when the patch omits it", async () => {
@@ -165,7 +215,7 @@ describe("clearing an optional configuration value", () => {
     // Removal is a request, not an instruction: the provider's own parser
     // decides, and a credential it needs cannot be cleared.
     await expect(
-      service.updateProvider(providerId, { configuration: { apiKey: null } })
+      service.updateProvider(providerId, { unsetConfiguration: ["apiKey"] })
     ).rejects.toThrow();
   });
 });

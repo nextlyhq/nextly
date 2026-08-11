@@ -40,6 +40,27 @@ import {
 
 export const EMAIL_PROVIDER_FORM_ID = "email-provider-form";
 
+/**
+ * Whether a stored provider's type is absent from the catalog this server
+ * registered — its plugin was removed while the record survived.
+ *
+ * Exported because the page that renders the Update button is not the
+ * component that renders the form, and both have to reach the same answer. A
+ * page deciding it separately is how the form comes to say the settings cannot
+ * be edited while the button beside it still submits them.
+ *
+ * Only meaningful once the catalog has settled: while it is loading, every
+ * type looks unregistered. Callers gate on their own loading state, exactly as
+ * the form does before it uses this.
+ */
+export function isUnregisteredProviderType(
+  providerType: string | undefined,
+  descriptors: EmailProviderDescriptor[]
+): boolean {
+  if (providerType === undefined) return false;
+  return !descriptors.some(entry => entry.type === providerType);
+}
+
 // ============================================================
 // EmailProviderForm Component
 // ============================================================
@@ -203,13 +224,25 @@ export function EmailProviderForm({
   // A stored provider whose type is no longer registered — its plugin was
   // removed. The record is kept and readable; editing it would mean rendering
   // fields nothing can validate, so the form says what happened instead.
-  const isUnknownStoredType = isEdit && provider && !selectedDescriptor;
+  const isUnknownStoredType =
+    isEdit &&
+    provider !== undefined &&
+    isUnregisteredProviderType(provider.type, descriptors);
 
   return (
     <Form {...form}>
       <form
         id={EMAIL_PROVIDER_FORM_ID}
         onSubmit={e => {
+          // Refused here as well as on the button. Every field is disabled in
+          // this state, so the payload could only ever be an empty
+          // configuration, which the server would reject as an unsupported
+          // provider — an error contradicting the notice above it. A disabled
+          // button is a UI affordance; this is the rule.
+          if (isUnknownStoredType) {
+            e.preventDefault();
+            return;
+          }
           void form.handleSubmit(handleValidSubmit)(e);
         }}
         className="space-y-6"
@@ -293,6 +326,15 @@ export function EmailProviderForm({
             descriptor={selectedDescriptor}
             control={form.control}
             disabled={isPending}
+            // Only while the type is unchanged, on the same reasoning the
+            // submit path uses: across a type change the stored configuration
+            // belongs to the previous provider, so none of these fields has
+            // anything stored behind it.
+            storedConfiguration={
+              provider && provider.type === selectedType
+                ? provider.configuration
+                : undefined
+            }
           />
         )}
 

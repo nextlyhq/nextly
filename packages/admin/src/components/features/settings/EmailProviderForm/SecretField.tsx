@@ -35,6 +35,13 @@ import {
  * and leaving without typing puts it back — otherwise a glance at the field
  * would turn an untouched credential into an empty one, which for a required
  * credential is a validation error the user did nothing to earn.
+ *
+ * Whether the current value IS that mask is a question about where it came
+ * from, not about how it is spelled. A password of four bullets is
+ * character-identical to a mask, so a field reading only its own contents
+ * would treat one the user just typed as the server's placeholder and wipe it
+ * on the first reveal. `storedSecret` says whether the server sent one, and
+ * the field stops trusting it the moment anything is typed.
  */
 export function SecretField({
   label,
@@ -43,6 +50,7 @@ export function SecretField({
   name,
   control,
   disabled,
+  storedSecret,
 }: {
   label: string;
   placeholder?: string;
@@ -50,8 +58,14 @@ export function SecretField({
   name: FieldPath<ProviderFormValues>;
   control: Control<ProviderFormValues>;
   disabled?: boolean;
+  /** Whether the server returned a mask for this field — a credential exists. */
+  storedSecret: boolean;
 }) {
   const [visible, setVisible] = useState(false);
+  // Set by the first keystroke and never cleared while the form is open. After
+  // it, the value in this field is the user's own — whatever it looks like —
+  // so nothing here may treat it as the server's placeholder again.
+  const [replaced, setReplaced] = useState(false);
   // The mask this field started with, so it can be restored when the user
   // clears it by focusing and leaves without typing anything.
   const storedMask = useRef<string | null>(null);
@@ -68,7 +82,8 @@ export function SecretField({
       name={name}
       render={({ field }) => {
         const currentValue = typeof field.value === "string" ? field.value : "";
-        const isMaskedPlaceholder = isMaskedSecret(currentValue);
+        const isMaskedPlaceholder =
+          storedSecret && !replaced && isMaskedSecret(currentValue);
 
         const helperText = isMaskedPlaceholder
           ? (description ? `${description} ` : "") +
@@ -101,6 +116,7 @@ export function SecretField({
                       // Any keystroke, including the one that empties the
                       // field, makes what is left the user's decision.
                       edited.current = true;
+                      setReplaced(true);
                       field.onChange(event.target.value);
                     }}
                     onBlur={() => {

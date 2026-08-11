@@ -471,8 +471,13 @@ describe("an optional select nobody chose a value for", () => {
       configuration: { tier: "", note: "" },
     };
 
-    const { configuration } = formValuesToPayload(values, descriptor);
+    const { configuration, unsetConfiguration } = formValuesToPayload(
+      values,
+      descriptor
+    );
     expect(configuration).not.toHaveProperty("tier");
+    // Nothing was stored, so there is nothing to ask the server to remove.
+    expect(unsetConfiguration).toBeUndefined();
     // An empty optional TEXT field is omitted too, and this assertion used to
     // say the opposite. When the rule covered only selects, sending `""` for a
     // blank text field was the conservative choice; generalising it showed the
@@ -487,20 +492,27 @@ describe("an optional select nobody chose a value for", () => {
 
   it("asks for removal when a stored value is cleared", () => {
     // Omitting it would be read as "leave this alone" by the server's merge,
-    // which made an optional selection permanent the moment it was saved.
-    // `null` is the request to remove the key, which is what "optional and
-    // unset" means once something has been stored.
+    // which made an optional selection permanent the moment it was saved. The
+    // removal is named beside the values instead, because every marker that
+    // could be placed among them is a value some provider stores.
     const values: ProviderFormValues = {
       ...defaultFormValues(descriptor),
       configuration: { tier: "", note: "" },
     };
 
-    const { configuration } = formValuesToPayload(values, descriptor, {
-      tier: "standard",
-      note: "",
-    });
+    const { configuration, unsetConfiguration } = formValuesToPayload(
+      values,
+      descriptor,
+      { tier: "standard", note: "" }
+    );
 
-    expect(configuration).toHaveProperty("tier", null);
+    // Both stored fields were cleared, so both are named. A stored empty
+    // string is something to remove just as much as a stored selection is.
+    expect(unsetConfiguration).toEqual(["tier", "note"]);
+    // The control: they are not ALSO left in the values, where an empty string
+    // would be validated by the provider's own parser.
+    expect(Object.keys(configuration)).not.toContain("tier");
+    expect(Object.keys(configuration)).not.toContain("note");
   });
 
   it("asks for removal when a stored NUMBER is cleared", () => {
@@ -520,8 +532,8 @@ describe("an optional select nobody chose a value for", () => {
 
     expect(
       formValuesToPayload(values, numberDescriptor, { retries: 3 })
-        .configuration
-    ).toHaveProperty("retries", null);
+        .unsetConfiguration
+    ).toEqual(["retries"]);
   });
 
   it("asks for removal when a stored optional SECRET is cleared", () => {
@@ -549,8 +561,8 @@ describe("an optional select nobody chose a value for", () => {
     expect(
       formValuesToPayload(values, secretDescriptor, {
         fallbackKey: MASKED_SECRET,
-      }).configuration
-    ).toHaveProperty("fallbackKey", null);
+      }).unsetConfiguration
+    ).toEqual(["fallbackKey"]);
   });
 
   it("is sent once it has a value", () => {
