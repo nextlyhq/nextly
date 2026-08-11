@@ -99,16 +99,30 @@ describe("expansionStatusScope", () => {
   // lifecycle scope it runs under is DERIVED. These cases pin which derivations
   // survive a caller that has bounded its own bypass.
 
-  it("propagates a scope the caller actually asked for", () => {
-    // `status: "all"` is a statement about this read, not an inference from
-    // trust, so bounding the bypass does not retract it.
+  it("propagates a scope an UNBOUNDED caller actually asked for", () => {
+    // `status: "all"` is a statement about this read rather than an inference
+    // from trust, so an unbounded caller keeps it through expansion.
+    expect(
+      expansionStatusScope({
+        status: "all",
+        overrideAccess: true,
+        bounded: false,
+      })
+    ).toBe("all");
+  });
+
+  it("does not let a BOUNDED caller's own `all` reach its targets", () => {
+    // The bound is a statement about the collections the caller did NOT name
+    // as much as the ones it did. Its `"all"` describes the row it asked for;
+    // carrying that into a refused target publishes that target's pending
+    // edits — on a public route, into a static artifact that outlives them.
     expect(
       expansionStatusScope({
         status: "all",
         overrideAccess: true,
         bounded: true,
       })
-    ).toBe("all");
+    ).toBeUndefined();
   });
 
   it("widens for a trusted caller that has not bounded itself", () => {

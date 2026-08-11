@@ -569,11 +569,11 @@ function buildRoute<TNode>(
             limit: MAX_STATIC_PARAMS_PER_PAGE,
             page,
             overrideAccess,
-            // The same bound as the render read, and the entry point most
-            // easily missed: this scan calls `find` DIRECTLY rather than going
-            // through `resolveContent`, so a fix applied only there leaves the
-            // pre-rendering path — the one that writes a static artifact —
-            // reading every populated target trusted.
+            // This scan calls `find` DIRECTLY rather than through
+            // `resolveContent`, so it carries the bound independently — an
+            // option threaded through that helper never reaches here. It is
+            // also the PRE-RENDERING read: what it returns is written into a
+            // static artifact and served to everyone.
             trusted,
             // The build-time scan is anonymous — pass an explicit `undefined`
             // so it can't inherit a default user configured on the reader.

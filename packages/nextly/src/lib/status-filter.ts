@@ -51,9 +51,11 @@ export function resolveStatusFilter(
  * bounded itself:
  *
  * - **The caller asked for it.** `status: "all"` is an explicit statement about
- *   what this read should see, and it propagates.
+ *   what this read should see, and it propagates — unless the caller is
+ *   bounded, because that statement is about the row it named, not about a
+ *   collection it refused to trust.
  * - **The caller is trusted and said nothing.** `overrideAccess: true` widens
- *   by implication — but only for a caller that has NOT supplied `trusted`.
+ *   by implication, again only when unbounded.
  *
  * Supplying `trusted` declares one fixed audience; that is the only reason to
  * bound a bypass you already hold. Such a caller must not inherit drafts,
@@ -74,7 +76,18 @@ export function expansionStatusScope(args: {
   /** Whether the caller bounded that bypass to named collections. */
   bounded: boolean;
 }): "all" | undefined {
-  if (args.status === "all") return "all";
+  // The bound is checked FIRST, ahead of the caller's own `"all"`.
+  //
+  // A caller that bounds its bypass has declared one fixed audience, and that
+  // declaration is about the collections it did NOT name as much as the ones it
+  // did. Its `status: "all"` is a statement about the row it asked for; letting
+  // that reach a target it refused to trust would publish that target's pending
+  // edits — on a public route, into a static artifact.
+  //
+  // So a bounded caller never widens the lifecycle of an expansion, by any
+  // route. Trust decides WHO may read a row; being published decides whether it
+  // is ready for anyone, and no amount of the first supplies the second.
   if (args.bounded) return undefined;
+  if (args.status === "all") return "all";
   return args.overrideAccess === true ? "all" : undefined;
 }
