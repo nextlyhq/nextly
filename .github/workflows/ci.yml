@@ -157,11 +157,17 @@ jobs:
           # second answer, and it would differ from the release tooling on a
           # lowercase `readme.md` or a hidden `.template.md`.
           #
+          # `T` sits beside `ACMR` because a changeset converted between a
+          # regular file and a symlink is reported as a TYPE change, and
+          # `@changesets/read` follows symlinks — so a release would consume a
+          # replacement this check never saw. `D` stays out: a deleted changeset
+          # has nothing left to read.
+          #
           # The pathspec excludes subdirectories because git matches `*` across
           # `/` while `@changesets/read` lists `.changeset` non-recursively — so
           # a file under `.changeset/archive/` is something the release never
           # reads, and checking it would fail a pull request over a note.
-          touched="$(git diff --name-only --diff-filter=ACMR HEAD^1 HEAD -- '.changeset/*.md' ':(exclude).changeset/*/**')"
+          touched="$(git diff --name-only --diff-filter=ACMRT HEAD^1 HEAD -- '.changeset/*.md' ':(exclude).changeset/*/**')"
           printf '%s\n' "$touched" | node scripts/release/check-changesets.mjs
 
       # Enforce the design-token theming contract in the admin + plugin packages
