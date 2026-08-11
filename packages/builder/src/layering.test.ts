@@ -116,6 +116,9 @@ function sourceFiles(dir: string): string[] {
  *   not a module resolve.
  * - `import x = require("pkg")`, the documented CommonJS-interop spelling, which
  *   is neither of the above.
+ * - `typeof import("pkg")` in type position, which the parser gives as an
+ *   `ImportTypeNode` rather than a call. It erases at build, so a purely runtime
+ *   guard would skip it — this one does not, for the reason below.
  *
  * Template literals with no substitutions are as statically known as quoted
  * strings, so they count as literals here.
@@ -144,6 +147,15 @@ function importsOfSource(text: string, fileName = "module.ts"): string[] {
       ts.isStringLiteralLike(node.moduleSpecifier)
     ) {
       found.push(node.moduleSpecifier.text);
+    } else if (ts.isImportTypeNode(node)) {
+      // `type A = typeof import("pkg")`. A type query, so it never reaches a bundle — but it is
+      // still a dependency on that package's internals, which is what the admin rule forbids.
+      const target = node.argument;
+      found.push(
+        ts.isLiteralTypeNode(target) && ts.isStringLiteralLike(target.literal)
+          ? target.literal.text
+          : UNRESOLVABLE_SPECIFIER
+      );
     } else if (
       ts.isImportEqualsDeclaration(node) &&
       ts.isExternalModuleReference(node.moduleReference)
@@ -226,6 +238,18 @@ describe("reading a module's imports", () => {
     expect(importsOfSource(`const a = require("@nextlyhq/admin");`)).toEqual([
       "@nextlyhq/admin",
     ]);
+  });
+
+  it("sees a typeof-import type query, which no call expression covers", () => {
+    // The parser gives this as an ImportTypeNode, so a visitor watching for calls and declarations
+    // walks past it. It erases at build, which is exactly why it is an easy way to take a
+    // dependency on admin internals without appearing to import anything.
+    expect(
+      importsOfSource(`type A = typeof import("@nextlyhq/admin");`)
+    ).toEqual(["@nextlyhq/admin"]);
+    expect(
+      importsOfSource(`let x: import("@nextlyhq/admin/lexical").Node;`)
+    ).toEqual(["@nextlyhq/admin/lexical"]);
   });
 
   it("sees the CommonJS-interop import-equals spelling", () => {
