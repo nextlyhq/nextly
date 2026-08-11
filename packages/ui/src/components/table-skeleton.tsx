@@ -98,7 +98,7 @@ export const TableSkeleton: React.FC<TableSkeletonProps> = ({
       {/* Footer Skeleton */}
       {!hideFooter && (
         <div className="table-footer  border-t border-border">
-          <div className="flex items-center justify-between px-2 py-4 p-4">
+          <div className="flex items-center justify-between p-4">
             <div className="flex items-center gap-2 text-sm">
               <GrayBar className="h-4 w-[120px]" />
             </div>

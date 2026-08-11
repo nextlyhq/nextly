@@ -20,6 +20,7 @@ import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { DataTableView } from "@admin/components/ui/table/data-table";
 import type { NextlyColumn } from "@admin/components/ui/table/data-table";
+import { ListShell } from "@admin/components/ui/table/list-shell";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
@@ -235,60 +236,74 @@ export default function PluginsTable() {
   );
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <SearchBar
-          value={search}
-          onChange={setSearch}
-          placeholder="Search plugins..."
-          className="w-full border-border bg-background text-foreground md:max-w-sm"
-        />
-        <div className="flex items-center gap-2">
-          <div
-            className="flex items-center gap-1"
-            role="group"
-            aria-label="Filter plugins by status"
-          >
-            {(["all", "enabled", "disabled"] as StatusFilter[]).map(f => (
-              <Button
-                key={f}
-                variant={statusFilter === f ? "default" : "outline"}
-                size="md"
-                onClick={() => setStatusFilter(f)}
-                className="capitalize"
-              >
-                {f}
-              </Button>
-            ))}
-          </div>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="md"
-                className="border-border bg-background text-foreground hover:bg-accent/10"
-              >
-                <Columns className="h-4 w-4" />
-                Columns
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              {toggleableColumns.map(col => (
-                <DropdownMenuCheckboxItem
-                  key={col.name}
-                  checked={!hiddenColumns.has(col.name)}
-                  onCheckedChange={() => toggleColumn(col.name)}
+    <ListShell
+      toolbar={
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <SearchBar
+            value={search}
+            onChange={setSearch}
+            placeholder="Search plugins..."
+            className="w-full border-border bg-background text-foreground md:max-w-sm"
+          />
+          <div className="flex items-center gap-2">
+            <div
+              className="flex items-center gap-1"
+              role="group"
+              aria-label="Filter plugins by status"
+            >
+              {(["all", "enabled", "disabled"] as StatusFilter[]).map(f => (
+                <Button
+                  key={f}
+                  variant={statusFilter === f ? "default" : "outline"}
+                  size="md"
+                  onClick={() => setStatusFilter(f)}
+                  className="capitalize"
                 >
-                  {typeof col.header === "string" ? col.header : col.name}
-                </DropdownMenuCheckboxItem>
+                  {f}
+                </Button>
               ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="md"
+                  className="border-border bg-background text-foreground hover:bg-accent/10"
+                >
+                  <Columns className="h-4 w-4" />
+                  Columns
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {toggleableColumns.map(col => (
+                  <DropdownMenuCheckboxItem
+                    key={col.name}
+                    checked={!hiddenColumns.has(col.name)}
+                    onCheckedChange={() => toggleColumn(col.name)}
+                  >
+                    {typeof col.header === "string" ? col.header : col.name}
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
-      </div>
-
+      }
+      pagination={
+        totalCount > 0 ? (
+          <Pagination
+            currentPage={page}
+            totalPages={Math.ceil(totalCount / pageSize)}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={handlePageSizeChange}
+            totalItems={totalCount}
+          />
+        ) : undefined
+      }
+    >
       <DataTableView<PluginWithId>
         columns={columns}
         rows={paginatedPlugins}
@@ -297,22 +312,13 @@ export default function PluginsTable() {
         }
         registryKey="plugins"
         ariaLabel="Installed plugins table"
+        bordered={false}
         emptyMessage={
           debouncedSearch || statusFilter !== "all"
             ? "No plugins match the current filters."
             : "No plugins installed. Add plugins to your Nextly config to extend functionality."
         }
       />
-      {totalCount > 0 && (
-        <Pagination
-          currentPage={page}
-          totalPages={Math.ceil(totalCount / pageSize)}
-          pageSize={pageSize}
-          onPageChange={setPage}
-          onPageSizeChange={handlePageSizeChange}
-          totalItems={totalCount}
-        />
-      )}
-    </div>
+    </ListShell>
   );
 }

@@ -31,6 +31,7 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import { ListShell } from "@admin/components/ui/table/list-shell";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useUserFields } from "@admin/hooks/queries/useUserFields";
 import {
@@ -426,97 +427,107 @@ export default function UserTable() {
   const showLoadingSkeleton = isLoading || (isFetching && !data);
 
   return (
-    <div className="space-y-4">
-      {selectedCount > 0 && (
-        <BulkActionBar
-          selectedCount={selectedCount}
-          collection={undefined}
-          onDelete={handleBulkDelete}
-          onClear={clearSelection}
-          itemLabel="user"
-        />
-      )}
+    <>
+      <ListShell
+        toolbar={
+          <>
+            {selectedCount > 0 && (
+              <BulkActionBar
+                selectedCount={selectedCount}
+                collection={undefined}
+                onDelete={handleBulkDelete}
+                onClear={clearSelection}
+                itemLabel="user"
+              />
+            )}
 
-      {/* Search + column visibility */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <SearchBar
-          value={search}
-          onChange={setSearch}
-          placeholder="Search users by name or email"
-          isLoading={isFetching}
-          className="max-w-sm flex-1 border-border bg-background text-foreground"
-        />
+            {/* Search + column visibility */}
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <SearchBar
+                value={search}
+                onChange={setSearch}
+                placeholder="Search users by name or email"
+                isLoading={isFetching}
+                className="max-w-sm flex-1 border-border bg-background text-foreground"
+              />
 
-        <div className="flex items-center gap-2">
-          {showLoadingSkeleton ? (
-            <Skeleton className="h-9 w-25" />
-          ) : (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="md"
-                  className="border-border bg-background text-foreground hover:bg-accent/10"
-                >
-                  <Columns className="h-4 w-4" />
-                  Columns
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {toggleableColumns.map(col => (
-                  <DropdownMenuCheckboxItem
-                    key={col.name}
-                    checked={!hiddenColumns.has(col.name)}
-                    onCheckedChange={() => toggleColumn(col.name)}
-                  >
-                    {typeof col.header === "string" ? col.header : col.name}
-                  </DropdownMenuCheckboxItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-        </div>
-      </div>
-
-      {isError ? (
-        <Alert variant="destructive">
-          {error instanceof Error
-            ? error.message
-            : "Failed to load users. Please try again."}
-        </Alert>
-      ) : (
-        <DataTableView<UserApiResponse>
-          columns={columns}
-          rows={filteredData}
-          loading={showLoadingSkeleton}
-          rowHref={user => buildRoute(ROUTES.USERS_EDIT, { id: user.id })}
-          primaryColumn="name"
-          selection={selection}
-          rowActions={rowActions}
-          registryKey="users"
-          ariaLabel="Users table"
-          emptyMessage={
-            search || roleFilter !== "all"
-              ? "No users found. Try adjusting your search or filters."
-              : "No users available."
-          }
-        />
-      )}
-
-      {data && data.meta.totalPages > 0 && (
-        <Pagination
-          currentPage={page}
-          totalPages={data.meta.totalPages}
-          totalItems={data.meta.total}
-          pageSize={pageSize}
-          pageSizeOptions={[10, 25, 50]}
-          onPageChange={setPage}
-          onPageSizeChange={handlePageSizeChange}
-          isLoading={isLoading}
-        />
-      )}
+              <div className="flex items-center gap-2">
+                {showLoadingSkeleton ? (
+                  <Skeleton className="h-9 w-25" />
+                ) : (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="md"
+                        className="border-border bg-background text-foreground hover:bg-accent/10"
+                      >
+                        <Columns className="h-4 w-4" />
+                        Columns
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-48">
+                      <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      {toggleableColumns.map(col => (
+                        <DropdownMenuCheckboxItem
+                          key={col.name}
+                          checked={!hiddenColumns.has(col.name)}
+                          onCheckedChange={() => toggleColumn(col.name)}
+                        >
+                          {typeof col.header === "string"
+                            ? col.header
+                            : col.name}
+                        </DropdownMenuCheckboxItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+              </div>
+            </div>
+          </>
+        }
+        pagination={
+          data && data.meta.totalPages > 0 ? (
+            <Pagination
+              currentPage={page}
+              totalPages={data.meta.totalPages}
+              totalItems={data.meta.total}
+              pageSize={pageSize}
+              pageSizeOptions={[10, 25, 50]}
+              onPageChange={setPage}
+              onPageSizeChange={handlePageSizeChange}
+              isLoading={isLoading}
+            />
+          ) : undefined
+        }
+      >
+        {isError ? (
+          <Alert variant="destructive">
+            {error instanceof Error
+              ? error.message
+              : "Failed to load users. Please try again."}
+          </Alert>
+        ) : (
+          <DataTableView<UserApiResponse>
+            columns={columns}
+            rows={filteredData}
+            loading={showLoadingSkeleton}
+            rowHref={user => buildRoute(ROUTES.USERS_EDIT, { id: user.id })}
+            primaryColumn="name"
+            selection={selection}
+            rowActions={rowActions}
+            registryKey="users"
+            ariaLabel="Users table"
+            bordered={false}
+            emptyMessage={
+              search || roleFilter !== "all"
+                ? "No users found. Try adjusting your search or filters."
+                : "No users available."
+            }
+          />
+        )}
+      </ListShell>
 
       <UserDeleteDialog
         open={deleteDialogOpen}
@@ -534,6 +545,6 @@ export default function UserTable() {
           .map(user => ({ id: user.id, name: user.name, email: user.email }))}
         onConfirm={handleConfirmBulkDelete}
       />
-    </div>
+    </>
   );
 }
