@@ -1,10 +1,11 @@
 /**
  * PostgreSQL schema for the email delivery log.
  *
- * Records that a message was attempted and what happened to it. A failed
- * password-reset previously left no trace at all — the adapter threw, the
- * service turned it into `{ success: false }`, one log line was written, and
- * that was the entire record. The operator learned from the user.
+ * One row per RECIPIENT per send: which provider carried the message, which
+ * template produced it, whether that recipient was accepted, and a hash of the
+ * address. Together they answer "did this send", "how many are failing" and
+ * "did this person receive it" — the last for someone who was copied as much
+ * as for the primary recipient.
  *
  * ## What this table deliberately does not contain
  *

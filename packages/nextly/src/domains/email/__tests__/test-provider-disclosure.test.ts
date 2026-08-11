@@ -290,9 +290,9 @@ describe("a test that never reached the provider", () => {
   });
 
   it("records one when the send itself fails", async () => {
-    // The control. Without it the case above would pass on a service that had
-    // stopped recording test sends altogether, which is the gap the recorder
-    // was added to close.
+    // The control: a recorder that never writes anything would satisfy the
+    // case above, so this pins that a send reaching the provider DOES produce
+    // a row.
     const recorded: unknown[] = [];
     (service as unknown as { deliveries: unknown })["deliveries"] = {
       record: (input: unknown) => {

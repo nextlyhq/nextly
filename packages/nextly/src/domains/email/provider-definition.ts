@@ -196,15 +196,20 @@ export interface RegisteredEmailProvider {
  * names calls `credential` public and a harmless `token` secret, and it can
  * only ever be right about names core has seen.
  *
- * Values shorter than four characters are skipped — a one- or two-character
- * secret matches almost any identifier, and containment would become deletion.
+ * A value of one to three characters cannot be compared safely: it matches
+ * almost any identifier, so using it as a needle would delete every message id
+ * the provider returns. It is reported separately rather than dropped, because
+ * ignoring it is what let a short PIN travel.
  */
 function declaredSecretValues(
   fields: ReadonlyArray<EmailProviderConfigField>,
   config: unknown
-): string[] {
-  if (config === null || typeof config !== "object") return [];
-  const values: string[] = [];
+): { comparable: string[]; hasUnmatchable: boolean } {
+  if (config === null || typeof config !== "object") {
+    return { comparable: [], hasUnmatchable: false };
+  }
+  const comparable: string[] = [];
+  let hasUnmatchable = false;
 
   for (const field of fields) {
     if (field.secret !== true) continue;
@@ -230,10 +235,16 @@ function declaredSecretValues(
         : typeof current === "number" || typeof current === "bigint"
           ? String(current)
           : undefined;
-    if (scalar !== undefined && scalar.length >= 4) values.push(scalar);
+    if (scalar === undefined || scalar.length === 0) continue;
+    // A secret of one to three characters matches almost any identifier, so
+    // comparing against it would delete every message id this provider
+    // returns. It cannot be compared safely and it cannot be ignored either --
+    // it is recorded as UNMATCHABLE, and the caller drops the id outright.
+    if (scalar.length < 4) hasUnmatchable = true;
+    else comparable.push(scalar);
   }
 
-  return values;
+  return { comparable, hasUnmatchable };
 }
 
 /**
@@ -247,11 +258,21 @@ function declaredSecretValues(
  */
 function withoutLeakedSecrets(
   result: EmailSendResult,
-  secrets: readonly string[]
+  secrets: { comparable: readonly string[]; hasUnmatchable: boolean }
 ): EmailSendResult {
   const messageId = result.messageId;
-  if (typeof messageId !== "string" || secrets.length === 0) return result;
-  if (!secrets.some(secret => messageId.includes(secret))) return result;
+  if (typeof messageId !== "string") return result;
+
+  // A provider holding a secret too short to compare loses its message ids
+  // entirely. That is the honest trade: the id is a convenience for matching a
+  // send against the provider's own dashboard, and a credential in a database
+  // column is not recoverable. A provider that wants its ids back declares a
+  // longer credential.
+  if (secrets.hasUnmatchable) return { ...result, messageId: undefined };
+
+  if (!secrets.comparable.some(secret => messageId.includes(secret))) {
+    return result;
+  }
   return { ...result, messageId: undefined };
 }
 

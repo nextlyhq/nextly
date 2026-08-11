@@ -380,6 +380,64 @@ describe("a provider that never passed through the authoring helper", () => {
   });
 });
 
+describe("a credential too short to compare", () => {
+  it("costs the provider its message ids", async () => {
+    // A three-character secret matches almost any identifier, so using it as a
+    // needle would delete every id this provider returns. It cannot be ignored
+    // either — that is what let a short PIN travel — so the id is dropped
+    // whenever such a secret is declared.
+    const registry = getEmailProviderRegistry();
+    registry.register(
+      defineEmailProvider<{ pin: string }>({
+        type: "short-secret",
+        label: "Short secret",
+        configFields: [
+          { name: "pin", label: "PIN", kind: "password", secret: true },
+        ],
+        parseConfig: input => input as { pin: string },
+        createAdapter: config => ({
+          send: () =>
+            Promise.resolve({ success: true, messageId: `msg-${config.pin}` }),
+        }),
+      })
+    );
+
+    const result = await registry
+      .create("short-secret", { pin: "742" })
+      .send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" });
+
+    expect(result.messageId).toBeUndefined();
+  });
+
+  it("does not punish a provider whose short field is not secret", async () => {
+    // The control. The rule keys on `secret: true`, not on shortness — a brief
+    // non-secret value must not cost the provider its ids.
+    const registry = getEmailProviderRegistry();
+    registry.register(
+      defineEmailProvider<{ tag: string }>({
+        type: "short-public",
+        label: "Short public",
+        configFields: [{ name: "tag", label: "Tag", kind: "text" }],
+        parseConfig: input => input as { tag: string },
+        createAdapter: () => ({
+          send: () =>
+            Promise.resolve({ success: true, messageId: "<ok@mail.test>" }),
+        }),
+      })
+    );
+
+    await expect(
+      registry
+        .create("short-public", { tag: "eu" })
+        .send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" })
+    ).resolves.toEqual({ success: true, messageId: "<ok@mail.test>" });
+  });
+
+  afterEach(() => {
+    getEmailProviderRegistry().reset();
+  });
+});
+
 describe("a credential that is not a string", () => {
   it("is contained too", async () => {
     // `secret: true` is permitted on a `kind: "number"` field, so a numeric

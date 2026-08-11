@@ -267,9 +267,13 @@ export class EmailDeliveryService extends BaseService {
         .select()
         .from(this.deliveries)
         .where(filters.length > 0 ? and(...filters) : undefined)
-        // `id` breaks the tie. Rows written by one send share a timestamp by
-        // design, and without a second key a limited read would return an
-        // arbitrary subset of them — different rows for the same query.
+        // `id` breaks the tie, and what that buys is DETERMINISM, not
+        // chronology. Rows written by one send share a timestamp by design, so
+        // without a second key a limited read returns a different subset of
+        // them each time it runs. Two INDEPENDENT sends landing in the same
+        // millisecond are ordered arbitrarily between themselves; recovering
+        // that would need an insertion sequence the table does not keep, and
+        // `created_at` already carries every bit of chronology it is given.
         .orderBy(desc(this.deliveries.createdAt), desc(this.deliveries.id))
         // Bounded by default. An unbounded read of a log table is the query
         // that works in development and takes the database down in production.
