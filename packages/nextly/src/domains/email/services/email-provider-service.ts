@@ -163,7 +163,6 @@ export class EmailProviderService extends BaseService {
           "Email provider credentials cannot be saved because NEXTLY_SECRET is not set. " +
           "Set it in the environment and restart — provider passwords and API keys are " +
           "encrypted under it, and without it they would be stored readable.",
-        statusCode: 422,
         logContext: { reason: "email-provider-no-encryption-key" },
       });
     }
@@ -875,7 +874,6 @@ export class EmailProviderService extends BaseService {
         code: "BUSINESS_RULE_VIOLATION",
         publicMessage:
           "Cannot delete the default email provider. Set another provider as default first.",
-        statusCode: 422,
         logContext: { id },
       });
     }
@@ -933,7 +931,6 @@ export class EmailProviderService extends BaseService {
         code: "BUSINESS_RULE_VIOLATION",
         publicMessage:
           "This provider's type is not registered on this server, so it cannot be made the default. Install the package that provides it first.",
-        statusCode: 422,
         logContext: { id, type: row.type },
       });
     }
