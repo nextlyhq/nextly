@@ -60,12 +60,6 @@ async function settingsService(): Promise<GeneralSettingsService> {
 }
 
 /**
- * The key preview tokens are signed with.
- *
- * Read here rather than at module load so a misconfigured deployment fails the
- * one request that needs it, with a remedy, instead of refusing to boot.
- */
-/**
  * Run an access-enforced read and report an unreadable entry as `null`.
  *
  * Two outcomes are deliberately collapsed: a row a row-level rule hides, and an
@@ -86,6 +80,12 @@ async function readEntryAsCaller<T>(
   }
 }
 
+/**
+ * The key preview tokens are signed with.
+ *
+ * Read here rather than at module load so a misconfigured deployment fails the
+ * one request that needs it, with a remedy, instead of refusing to boot.
+ */
 function previewSigningSecret(): string {
   const secret = env.NEXTLY_SECRET;
   if (!secret) {
