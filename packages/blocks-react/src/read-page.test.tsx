@@ -232,9 +232,11 @@ describe("what a page is compiled WITH", () => {
   });
 
   it("compiles against the caps preparation actually used", () => {
-    // Preparation honours `limits`; the compiler reads them off the context. A
-    // raw context therefore keeps nodes whose styles were never written, so the
-    // document holds ids the class map does not name.
+    // The two caps must DISAGREE for this to separate anything. Preparation
+    // takes `limits`; compilation reads them off the context, so a context with
+    // a tighter cap of its own writes styles for fewer nodes than preparation
+    // kept — leaving the returned document holding ids the class map never
+    // names, and those nodes rendering unstyled with nothing to say why.
     const wide: BlockDocument = {
       formatVersion: DOCUMENT_FORMAT_VERSION,
       kind: "page",
@@ -253,20 +255,28 @@ describe("what a page is compiled WITH", () => {
           props: { value: "two" },
           styles: { base: { base: { color: "crimson" } } },
         },
+        {
+          id: "n3",
+          type: "test/text",
+          version: 1,
+          props: { value: "three" },
+          styles: { base: { base: { color: "olive" } } },
+        },
       ],
     };
-    const limits = { ...DEFAULT_LIMITS, maxNodes: 2 };
 
     const read = preparePageForRead(wide, {
       resolver: withPlugin,
-      limits,
-      styleContext: context,
+      limits: { ...DEFAULT_LIMITS, maxNodes: 3 },
+      styleContext: { ...context, limits: { ...DEFAULT_LIMITS, maxNodes: 1 } },
     });
 
+    // Every node preparation kept must have been styled by the same run.
+    expect(read.document?.nodes).toHaveLength(3);
     for (const node of read.document?.nodes ?? []) {
       expect(read.styles.classes[node.id]).toBeTypeOf("string");
     }
-    expect(read.styles.css).toContain("crimson");
+    expect(read.styles.css).toContain("olive");
   });
 
   it("refuses a sheet with no policy stamp when a predicate is in force", () => {
