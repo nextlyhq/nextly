@@ -347,24 +347,12 @@ export function defineEmailProvider<TConfig>(
    * to show, while a bare `Error`'s message is whatever the throw site
    * happened to interpolate.
    */
-  const normalizeCallbackFailure = (
-    error: unknown,
-    stage: "createAdapter" | "testConnection" | "send"
-  ): unknown => {
-    if (NextlyError.is(error)) return error;
-    // Constructed rather than `NextlyError.internal()`, which fixes its own
-    // public sentence: naming the provider is what tells an operator which of
-    // several configured providers failed, and the type comes from the
-    // install's own code rather than from a request.
-    return new NextlyError({
-      code: "INTERNAL_ERROR",
-      publicMessage: `The "${definition.type}" email provider failed. Check the server logs for the reason.`,
-      cause: error instanceof Error ? error : undefined,
-      logContext: { providerType: definition.type, stage },
-    });
-  };
 
-  return {
+  // Built raw, then contained. The wrapper is the same one `register()` applies
+  // to a hand-built provider, so the two cannot come to differ about what a
+  // callback is allowed to let out -- and applying it twice is harmless, which
+  // is what makes enforcing at both ends safe.
+  return containProviderCallbacks({
     type: definition.type,
     label: definition.label,
     description: definition.description,
@@ -374,61 +362,15 @@ export function defineEmailProvider<TConfig>(
     validateConfig: (input: unknown): void => {
       parse(input);
     },
-    createAdapterFrom: (input: unknown): EmailProviderAdapter => {
-      const config = parse(input);
-      let adapter: EmailProviderAdapter;
-      try {
-        adapter = definition.createAdapter(config);
-      } catch (error) {
-        throw normalizeCallbackFailure(error, "createAdapter");
-      }
-
-      // The adapter CLOSES OVER the parsed configuration, so its `send` is the
-      // longest-lived route from a credential to an error message: building it
-      // succeeds and the disclosure happens later, on a rejection nothing here
-      // would otherwise see. Wrapping the factory alone left that open.
-      //
-      // The RESOLVED result is the other half of that route, and the one that
-      // persists: `messageId` is stored verbatim in the delivery log, and a
-      // provider is free to derive it from its own configuration -- this
-      // repository's own contribution fixture returns `fake-${config.apiKey}`.
-      // A rejection is normalised and a success was not, so the disclosure that
-      // survives a restart went out through the path nobody was watching.
-      //
-      // This is the only place both the configuration and the result are in
-      // scope, which is why the containment lives here rather than at each
-      // recorder.
-      //
-      // `adapter.send(...)` is called through the adapter rather than a
-      // detached reference, so a class-based implementation keeps its `this`.
-      const secrets = declaredSecretValues(definition.configFields, config);
-      return {
-        ...adapter,
-        send: async options => {
-          let result: EmailSendResult;
-          try {
-            result = await adapter.send(options);
-          } catch (error) {
-            throw normalizeCallbackFailure(error, "send");
-          }
-          return withoutLeakedSecrets(result, secrets);
-        },
-      };
-    },
+    // Parses AND builds, so the typed value never escapes the closure that
+    // knows its type. Nothing here catches: the containment above does it.
+    createAdapterFrom: (input: unknown): EmailProviderAdapter =>
+      definition.createAdapter(parse(input)),
     testConnectionFrom: probe
-      ? async (input: unknown) => {
-          // Awaited inside the try so a rejected promise is normalized too —
-          // returning it unawaited would leave the async half of exactly the
-          // same leak open.
-          try {
-            return await probe(parse(input));
-          } catch (error) {
-            throw normalizeCallbackFailure(error, "testConnection");
-          }
-        }
+      ? (input: unknown) => probe(parse(input))
       : undefined,
     hasConnectionTest: typeof probe === "function",
-  };
+  });
 }
 
 /**
@@ -448,6 +390,104 @@ export interface EmailProviderDescriptor {
 }
 
 /** Reduce a registered provider to what may safely leave the server. */
+/**
+ * A provider callback's failure, as it is allowed to leave the provider.
+ *
+ * A deliberately thrown `NextlyError` passes through: its `publicMessage` is an
+ * authoring decision about what is safe to show, while a bare `Error`'s message
+ * is whatever the throw site happened to interpolate — and a provider that
+ * writes its configuration into a diagnostic (`Invalid key ${apiKey}` is an
+ * easy thing to write) would otherwise hand a credential to any authenticated
+ * caller who pressed Test.
+ *
+ * The provider's own text is not lost: it is moved onto `cause`, which is what
+ * the log reads.
+ */
+function normalizeProviderFailure(
+  type: string,
+  error: unknown,
+  stage: "createAdapter" | "testConnection" | "send"
+): unknown {
+  if (NextlyError.is(error)) return error;
+  // Constructed rather than `NextlyError.internal()`, which fixes its own
+  // public sentence: naming the provider is what tells an operator which of
+  // several configured providers failed, and the type comes from the install's
+  // own code rather than from a request.
+  return new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: `The "${type}" email provider failed. Check the server logs for the reason.`,
+    cause: error instanceof Error ? error : undefined,
+    logContext: { providerType: type, stage },
+  });
+}
+
+/**
+ * Wrap a provider's callbacks so a credential cannot leave through one.
+ *
+ * `defineEmailProvider` applies this to what it builds, and the registry
+ * applies it to everything it is handed. Both, because
+ * `RegisteredEmailProvider` is a STRUCTURAL type: a JavaScript plugin or a
+ * hand-built object reaches `register()` with its own `createAdapterFrom`, and
+ * containment that lived only in the authoring helper would protect exactly the
+ * authors least likely to need it. `assertConfigFieldsAreUsable` is enforced at
+ * both ends for the same reason.
+ *
+ * Applying it twice is harmless: `normalizeProviderFailure` passes a
+ * `NextlyError` through unchanged, and a message id with no credential in it is
+ * returned as it is. That is what makes enforcing at both ends safe.
+ *
+ * The secrets are read from the configuration this adapter was built FROM,
+ * which is the stored value rather than the provider's parsed form. That is the
+ * right side: a parser may coerce a port to a number, but a credential is the
+ * string it was given.
+ */
+export function containProviderCallbacks(
+  provider: RegisteredEmailProvider
+): RegisteredEmailProvider {
+  const probe = provider.testConnectionFrom;
+
+  return {
+    ...provider,
+    createAdapterFrom: (input: unknown): EmailProviderAdapter => {
+      let adapter: EmailProviderAdapter;
+      try {
+        adapter = provider.createAdapterFrom(input);
+      } catch (error) {
+        throw normalizeProviderFailure(provider.type, error, "createAdapter");
+      }
+
+      const secrets = declaredSecretValues(provider.configFields, input);
+      return {
+        ...adapter,
+        send: async options => {
+          let result: EmailSendResult;
+          try {
+            result = await adapter.send(options);
+          } catch (error) {
+            throw normalizeProviderFailure(provider.type, error, "send");
+          }
+          return withoutLeakedSecrets(result, secrets);
+        },
+      };
+    },
+    ...(probe
+      ? {
+          testConnectionFrom: async (input: unknown) => {
+            try {
+              return await probe(input);
+            } catch (error) {
+              throw normalizeProviderFailure(
+                provider.type,
+                error,
+                "testConnection"
+              );
+            }
+          },
+        }
+      : {}),
+  };
+}
+
 export function toDescriptor(
   provider: RegisteredEmailProvider
 ): EmailProviderDescriptor {

@@ -209,6 +209,45 @@ describe("EmailService — D63 filter/action seams", () => {
     expect(captured).toEqual([expect.objectContaining({ success: false })]);
   });
 
+  it("records a refused recipient as failed while the others succeed", async () => {
+    // SMTP answers `RCPT TO` one address at a time, so a server can accept the
+    // message for some recipients and refuse it for others while the send as a
+    // whole succeeds. A row saying `sent` for a refused address would claim
+    // someone received a message that never went to them.
+    const recorded: Array<{ to: string; status: string }> = [];
+    const { service } = buildSend();
+    (service as unknown as { createAdapterFromRecord: unknown })[
+      "createAdapterFromRecord"
+    ] = () => ({
+      send: () =>
+        Promise.resolve({
+          success: true,
+          messageId: "msg-1",
+          rejected: ["Refused@B.com"],
+        }),
+    });
+    (service as unknown as { deliveries: unknown })["deliveries"] = {
+      recordAll: (inputs: Array<{ to: string; status: string }>) => {
+        recorded.push(...inputs);
+        return Promise.resolve();
+      },
+    };
+
+    await service.send({
+      to: "a@b.com",
+      cc: ["refused@b.com"],
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    // Matched case-insensitively, because a server echoes the address in
+    // whatever case it received it.
+    expect(recorded).toEqual([
+      expect.objectContaining({ to: "a@b.com", status: "sent" }),
+      expect.objectContaining({ to: "refused@b.com", status: "failed" }),
+    ]);
+  });
+
   it.each([
     ["accepts the message", { success: true, messageId: "msg-1" }, undefined],
     ["throws", undefined, new Error("smtp down")],

@@ -63,8 +63,6 @@ export function hashRecipient(address: string): string {
  *   no dot at all, as `postmaster@localhost` does on the machines most likely
  *   to be running a local relay.
  *
- * Each of those was verified to pass through an earlier pattern untouched.
- *
  * The escape consumes any character except a line break, so an unterminated
  * quote cannot make the match run past the end of the line it started on.
  *

@@ -52,7 +52,7 @@ export const emailDeliveriesMysql = mysqlTable(
     attemptCount: int("attempt_count").notNull().default(1),
 
     /** Reserved for a drain. Always NULL today — see the PostgreSQL module. */
-    nextAttemptAt: datetime("next_attempt_at"),
+    nextAttemptAt: datetime("next_attempt_at", { fsp: 3 }),
 
     /** Why it failed, with anything address-shaped removed. */
     error: text("error"),
@@ -65,7 +65,17 @@ export const emailDeliveriesMysql = mysqlTable(
       .notNull()
       .default("email"),
 
-    createdAt: datetime("created_at").notNull(),
+    /**
+     * `fsp: 3` — milliseconds, not whole seconds.
+     *
+     * A bare MySQL `datetime` truncates to the second, and this table appends
+     * one row per recipient per send. Several messages within one second would
+     * store an identical timestamp, and a newest-first read with a limit would
+     * then break the tie on whatever the index happened to return — an
+     * arbitrary subset rather than the latest sends. PostgreSQL and SQLite
+     * already keep sub-second precision.
+     */
+    createdAt: datetime("created_at", { fsp: 3 }).notNull(),
   },
   t => [
     // The unfiltered read — "what happened recently", and the default this

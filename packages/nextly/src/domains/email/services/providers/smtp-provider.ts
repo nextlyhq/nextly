@@ -115,6 +115,21 @@ function smtpTransportOptions(config: SmtpProviderConfig) {
   };
 }
 
+/**
+ * The address out of whatever nodemailer reports as a rejected recipient.
+ *
+ * It returns either a plain string or an envelope-style object depending on
+ * how the message was addressed, so the shape is narrowed rather than assumed.
+ */
+function addressOf(entry: unknown): string {
+  if (typeof entry === "string") return entry;
+  if (entry !== null && typeof entry === "object" && "address" in entry) {
+    const address = (entry as { address?: unknown }).address;
+    if (typeof address === "string") return address;
+  }
+  return "";
+}
+
 export function createSmtpProvider(
   config: SmtpProviderConfig
 ): EmailProviderAdapter {
@@ -153,6 +168,10 @@ export function createSmtpProvider(
         return {
           success: true,
           messageId: info.messageId,
+          // Nodemailer reports `RCPT TO` outcomes per address. Discarding them
+          // would let a partially refused send be recorded as delivered to
+          // everyone it was addressed to.
+          rejected: info.rejected?.map(addressOf).filter(Boolean),
         };
       } catch (error) {
         const message =

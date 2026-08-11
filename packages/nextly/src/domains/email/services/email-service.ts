@@ -453,16 +453,32 @@ export class EmailService extends BaseService {
       // long enough for the request to be torn down loses the record of a
       // message the provider has already accepted. Writing first means the row
       // exists whatever a plugin does afterwards.
+      // Per recipient, not per message. SMTP answers `RCPT TO` one address at
+      // a time, so a server can accept the message for some recipients and
+      // refuse it for others while the send as a whole succeeds -- and a row
+      // saying `sent` for a refused address is a wrong answer to the one
+      // question this table exists to answer.
+      const refused = new Set(
+        (result.rejected ?? []).map(address => address.trim().toLowerCase())
+      );
       await this.deliveries?.recordAll(
-        deliveryRecipients(filtered).map(recipient => ({
-          ...recipient,
-          providerId: resolvedProviderId ?? null,
-          providerType,
-          templateSlug: options.templateSlug ?? null,
-          status: result.success ? "sent" : "failed",
-          messageId: result.messageId ?? null,
-          error: result.success ? null : "Send returned unsuccessful",
-        }))
+        deliveryRecipients(filtered).map(recipient => {
+          const wasRefused = refused.has(recipient.to.trim().toLowerCase());
+          const delivered = result.success && !wasRefused;
+          return {
+            ...recipient,
+            providerId: resolvedProviderId ?? null,
+            providerType,
+            templateSlug: options.templateSlug ?? null,
+            status: delivered ? ("sent" as const) : ("failed" as const),
+            messageId: result.messageId ?? null,
+            error: delivered
+              ? null
+              : wasRefused
+                ? "Recipient refused by the provider"
+                : "Send returned unsuccessful",
+          };
+        })
       );
 
       // D63 action seam: ordered, isolated side-effects after a send attempt.

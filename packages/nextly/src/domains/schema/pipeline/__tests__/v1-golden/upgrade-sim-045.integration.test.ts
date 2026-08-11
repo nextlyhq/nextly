@@ -101,10 +101,9 @@ const POST_045_TABLES = [
   // assertion below is what proves it then round-trips to silence rather than
   // being re-proposed forever.
   "nextly_i18n_archive",
-  // Same shape as the line above, and added at the same time as the bundle
-  // export that makes the upgrade actually emit its CREATE TABLE, indexes and
-  // (on PostgreSQL) its foreign key. Omitting it here would make those
-  // legitimate additions read as phantom diffs.
+  // A post-0.45 table like the others: the upgrade emits its CREATE TABLE, its
+  // indexes and (on PostgreSQL) its foreign key, and this list is what marks
+  // those statements legitimate rather than phantom diffs.
   "email_deliveries",
 ];
 

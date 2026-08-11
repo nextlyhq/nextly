@@ -141,8 +141,13 @@ export class EmailDeliveryService extends BaseService {
     if (inputs.length === 0) return;
 
     const now = new Date();
+    // Generated ONCE, outside the retry. Regenerating them would let a
+    // connection lost after the first statement committed write the whole
+    // batch a second time under new keys -- one send, two sets of rows.
+    const ids = inputs.map(() => randomUUID());
+
     try {
-      await this.insertRows(inputs, now, true);
+      await this.insertRows(inputs, ids, now, true);
     } catch (error) {
       // The one recoverable failure: PostgreSQL and SQLite carry a foreign key
       // to `email_providers`, and an administrator deleting a provider while
@@ -155,8 +160,23 @@ export class EmailDeliveryService extends BaseService {
       // during a send. Retried once without the reference: `provider_type`
       // beside it keeps every row meaningful without the join, which is the
       // same reason MySQL carries no key here at all.
+      // ONLY a foreign-key violation. Any other failure -- a deadlock, a
+      // timeout, a lost connection -- has nothing to do with the provider
+      // reference, and retrying without it would clear a reference whose
+      // provider still exists, quietly weakening every row written during a
+      // database hiccup.
+      if (toDbError(this.dialect, error).kind !== "fk-violation") {
+        this.logger.error("Failed to record an email delivery", {
+          providerType: inputs[0]?.providerType,
+          status: inputs[0]?.status,
+          recipientCount: inputs.length,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+
       try {
-        await this.insertRows(inputs, now, false);
+        await this.insertRows(inputs, ids, now, false);
         this.logger.warn(
           "Recorded an email delivery without its provider reference",
           {
@@ -183,16 +203,18 @@ export class EmailDeliveryService extends BaseService {
    *
    * Split out so the retry above writes exactly the same rows rather than a
    * second, subtly different statement — which is how a fallback path comes to
-   * store something the primary one never would.
+   * store something the primary one never would. The ids are passed in for the
+   * same reason: the retry must replace the failed rows, not add new ones.
    */
   private async insertRows(
     inputs: EmailDeliveryInput[],
+    ids: string[],
     now: Date,
     withProvider: boolean
   ): Promise<void> {
     await this.db.insert(this.deliveries).values(
-      inputs.map(input => ({
-        id: randomUUID(),
+      inputs.map((input, index) => ({
+        id: ids[index],
         providerId: withProvider ? (input.providerId ?? null) : null,
         providerType: input.providerType,
         templateSlug: input.templateSlug ?? null,
@@ -245,7 +267,10 @@ export class EmailDeliveryService extends BaseService {
         .select()
         .from(this.deliveries)
         .where(filters.length > 0 ? and(...filters) : undefined)
-        .orderBy(desc(this.deliveries.createdAt))
+        // `id` breaks the tie. Rows written by one send share a timestamp by
+        // design, and without a second key a limited read would return an
+        // arbitrary subset of them — different rows for the same query.
+        .orderBy(desc(this.deliveries.createdAt), desc(this.deliveries.id))
         // Bounded by default. An unbounded read of a log table is the query
         // that works in development and takes the database down in production.
         .limit(options.limit ?? 50);

@@ -74,10 +74,11 @@ describe("redacting a provider's failure message", () => {
   });
 });
 
-describe("address forms a narrower pattern misses", () => {
-  // Each of these passed through the previous pattern verbatim. They are the
-  // reason the rule is "anything with an @" rather than a shape built from
-  // what an address usually looks like.
+describe("address forms a narrower pattern would miss", () => {
+  // All valid, and none of them looks like the address a shape-based rule is
+  // usually written for: a quoted local part holds a space, an address literal
+  // has brackets, and `localhost` has no dot. They are why the rule is
+  // "anything with an @" rather than a shape.
   it.each([
     ['550 <"odd user"@example.com> User unknown', "odd user"],
     ["550 <user@[192.0.2.1]> User unknown", "192.0.2.1"],

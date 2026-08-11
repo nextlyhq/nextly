@@ -6,13 +6,15 @@
  * interpolates configuration hands a credential to anyone who pressed Test.
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors";
 import {
   defineEmailProvider,
   describeProviderFailure,
+  type RegisteredEmailProvider,
 } from "../provider-definition";
+import { getEmailProviderRegistry } from "../services/email-provider-registry";
 
 const SECRET = "sk_live_a_real_looking_key";
 
@@ -287,5 +289,93 @@ describe("a message id built out of a credential", () => {
       success: true,
       messageId: "<abc123@mail.example.com>",
     });
+  });
+});
+
+describe("a provider that never passed through the authoring helper", () => {
+  const KEY = "sk-live-must-never-be-stored";
+
+  /**
+   * `RegisteredEmailProvider` is a structural type, and `contributes.emailProviders`
+   * accepts it — so a JavaScript plugin or a hand-built object reaches the
+   * registry with its own `createAdapterFrom` and none of the containment
+   * `defineEmailProvider` applies.
+   */
+  const handBuilt: RegisteredEmailProvider = {
+    type: "hand-built",
+    label: "Hand built",
+    configFields: [
+      { name: "apiKey", label: "API Key", kind: "password", secret: true },
+    ],
+    validateConfig: () => {},
+    createAdapterFrom: (input: unknown) => {
+      const config = input as { apiKey: string };
+      return {
+        send: () =>
+          Promise.resolve({ success: true, messageId: `id-${config.apiKey}` }),
+      };
+    },
+    hasConnectionTest: false,
+  };
+
+  afterEach(() => {
+    getEmailProviderRegistry().reset();
+  });
+
+  it("has its message id contained by the registry", async () => {
+    const registry = getEmailProviderRegistry();
+    registry.register(handBuilt);
+
+    const result = await registry
+      .create("hand-built", { apiKey: KEY })
+      .send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" });
+
+    expect(result.messageId).toBeUndefined();
+  });
+
+  it("has its thrown credential contained by the registry", async () => {
+    const registry = getEmailProviderRegistry();
+    registry.register({
+      ...handBuilt,
+      type: "hand-built-thrower",
+      createAdapterFrom: (input: unknown) => {
+        const config = input as { apiKey: string };
+        return {
+          send: () =>
+            Promise.reject(new Error(`rejected key ${config.apiKey}`)),
+        };
+      },
+    });
+
+    const error = await registry
+      .create("hand-built-thrower", { apiKey: KEY })
+      .send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" })
+      .then(
+        () => undefined,
+        (thrown: unknown) => thrown
+      );
+
+    expect(NextlyError.is(error)).toBe(true);
+    expect((error as NextlyError).publicMessage).not.toContain(KEY);
+  });
+
+  it("leaves an ordinary hand-built message id alone", async () => {
+    // The control. Without it the two above would pass on a registry that had
+    // stopped returning message ids or started swallowing every send.
+    const registry = getEmailProviderRegistry();
+    registry.register({
+      ...handBuilt,
+      type: "hand-built-clean",
+      createAdapterFrom: () => ({
+        send: () =>
+          Promise.resolve({ success: true, messageId: "<ok@mail.test>" }),
+      }),
+    });
+
+    await expect(
+      registry
+        .create("hand-built-clean", { apiKey: KEY })
+        .send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" })
+    ).resolves.toEqual({ success: true, messageId: "<ok@mail.test>" });
   });
 });

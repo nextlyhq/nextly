@@ -22,10 +22,11 @@ import { getDialectTables } from "../../database/index";
 import { getCoreSchema, getCoreTableNames } from "../index";
 
 /**
- * Both registries take the same dialect names.
+ * The dialect identifiers all three registries take.
  *
- * Worth stating, because assuming they differed is how an earlier version of
- * this file threw on PostgreSQL and reported only the other two.
+ * Spelled once so every assertion below runs against the same set: `getCoreSchema`
+ * throws on a name it does not know, and a single mistyped dialect would skip a
+ * row rather than fail one.
  */
 const DIALECTS = ["postgresql", "mysql", "sqlite"] as const;
 

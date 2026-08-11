@@ -261,9 +261,15 @@ describe("a provider deleted while its send is in flight", () => {
           failed = true;
           return {
             values: () =>
+              // The shape better-sqlite3 actually produces, so `toDbError`
+              // classifies it as `fk-violation` — the only kind this retry is
+              // allowed to act on.
               Promise.reject(
-                new Error(
-                  "FOREIGN KEY constraint failed: email_deliveries.provider_id"
+                Object.assign(
+                  new Error(
+                    "FOREIGN KEY constraint failed: email_deliveries.provider_id"
+                  ),
+                  { code: "SQLITE_CONSTRAINT_FOREIGNKEY" }
                 )
               ),
           };
@@ -329,6 +335,50 @@ describe("a provider deleted while its send is in flight", () => {
     const [row] = await service.list();
     expect(row?.providerId).toBe("22222222-2222-2222-2222-222222222222");
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("does not clear the reference for a failure that is not the key", async () => {
+    // A deadlock, a timeout or a lost connection has nothing to do with the
+    // provider reference. Retrying without it would quietly weaken every row
+    // written during a database hiccup.
+    const db = drizzle({ client: sqlite });
+    let failed = false;
+    const flaky = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property !== "insert") {
+          return Reflect.get(target, property, receiver) as unknown;
+        }
+        return (table: unknown) => {
+          if (failed) return target.insert(table as never);
+          failed = true;
+          return {
+            values: () =>
+              Promise.reject(
+                Object.assign(new Error("connection lost"), {
+                  code: "ECONNRESET",
+                })
+              ),
+          };
+        };
+      },
+    }) as ReturnType<typeof drizzle>;
+
+    const service = new EmailDeliveryService(makeAdapter(flaky), logger);
+    await service.record({
+      to: RECIPIENT,
+      providerId: "33333333-3333-3333-3333-333333333333",
+      providerType: "smtp",
+      status: "sent",
+    });
+
+    // No retry at all: nothing written, and the failure reported as itself.
+    const rows = await new EmailDeliveryService(makeAdapter(db), logger).list();
+    expect(rows).toHaveLength(0);
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      "Failed to record an email delivery",
+      expect.objectContaining({ providerType: "smtp" })
+    );
   });
 
   it("reports the original failure when the retry fails too", async () => {

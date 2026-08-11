@@ -382,5 +382,22 @@ export interface EmailProviderAdapter {
      * bytes — adapters forward to their provider's format.
      */
     attachments?: ResolvedAttachment[];
-  }): Promise<{ success: boolean; messageId?: string }>;
+  }): Promise<{
+    success: boolean;
+    messageId?: string;
+    /**
+     * Addresses the provider refused, when it says so per recipient.
+     *
+     * SMTP answers `RCPT TO` one address at a time, so a server can accept the
+     * message for some recipients and reject it for others while the send as a
+     * whole succeeds. Without this the delivery log records every recipient as
+     * `sent`, and a lookup would claim someone received a message that never
+     * went to them — the one question that table exists to answer.
+     *
+     * Optional, because most API providers report a single outcome for the
+     * message and have nothing per-recipient to say. Absent means "no
+     * per-recipient detail", not "none rejected".
+     */
+    rejected?: string[];
+  }>;
 }
