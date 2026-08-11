@@ -3914,6 +3914,70 @@ describe("PageRenderer", () => {
       expect(artifact.css).toContain("color: teal");
     });
 
+    it("withholds a drawless container's slot children too", async () => {
+      // A block that draws nothing places NONE of its slot children, so the
+      // compiler holds the whole subtree back — and each of those descendants
+      // answers "I draw" about itself. Skipping only the container would append
+      // every child's rules under a parent that never rendered.
+      const artifact = resolvePageStyles(
+        doc(
+          node("a", "test/drawless", {
+            props: { draw: false },
+            slots: {
+              children: [node("child", "test/text", { props: { value: "x" } })],
+            },
+          }),
+          node("b", "test/text", { props: { value: "y" } })
+        ),
+        {
+          css: ".nx-b { color: teal }",
+          classes: { a: "nx-a", child: "nx-child", b: "nx-b" },
+          gated: {
+            a: ".nx-a { background-image: url(/unpainted.png) }",
+            child: ".nx-child { background-image: url(/child-asset.png) }",
+          },
+        },
+        undefined,
+        createBlockResolver([
+          drawless as AnyBlockDefinition,
+          text as AnyBlockDefinition,
+        ])
+      );
+
+      expect(artifact.css).not.toContain("unpainted.png");
+      expect(artifact.css).not.toContain("child-asset.png");
+      expect(artifact.css).toContain("color: teal");
+    });
+
+    it("keeps the children of a container that DOES draw", async () => {
+      // The control for the case above: pruning a subtree is only right when the
+      // container is the one that drew nothing.
+      const artifact = resolvePageStyles(
+        doc(
+          node("a", "test/drawless", {
+            props: { draw: true },
+            slots: {
+              children: [node("child", "test/text", { props: { value: "x" } })],
+            },
+          })
+        ),
+        {
+          css: "",
+          classes: { a: "nx-a", child: "nx-child" },
+          gated: {
+            child: ".nx-child { background-image: url(/child-asset.png) }",
+          },
+        },
+        undefined,
+        createBlockResolver([
+          drawless as AnyBlockDefinition,
+          text as AnyBlockDefinition,
+        ])
+      );
+
+      expect(artifact.css).toContain("child-asset.png");
+    });
+
     it("still gets the rules of a node that DOES draw", async () => {
       // The control. Without it the assertion above would pass on a resolver
       // that appends nothing at all, which would leave every gated node on every

@@ -12,6 +12,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import type { BlockResolver } from "./resolver";
+import { pruneDrawlessNodes } from "./visibility";
 
 /**
  * A page's compiled stylesheet and the class each node was assigned.
@@ -325,26 +326,30 @@ function withGatedRules(
   const entries = readableGatedRules(styles);
   if (entries === undefined || styles.css === undefined) return styles;
   const appended: string[] = [];
-  walkNodes(document.nodes, node => {
-    // A node still in the tree can still be one that draws nothing, and this is
-    // the only place that can tell. Surviving the visibility prune is what earns
-    // a gated entry back; a block answering that these props draw nothing has
-    // not earned it, and appending its rules here would put back exactly what
-    // holding them per node was for.
-    //
-    // Asked HERE rather than left to the caller because this function is
-    // exported and the documented direct flow — `prepareDocumentForRead` then
-    // this — has no pass that removes such a node. A consumer following it would
-    // otherwise publish the rules while the block drew nothing, with no way to
-    // prevent it.
-    //
-    // The failure direction is the safe one: `declaresNoMarkup` answers "draws"
-    // for anything short of an explicit `true`, so a block that cannot be asked
-    // keeps its styling.
-    if (declaresNoMarkup(node, type => blocks.get(type))) return;
-    const rules = entries[node.id];
+  // Which nodes have EARNED their rules back. Surviving the visibility prune is
+  // one half; the other is that the block did not answer that these props draw
+  // nothing, because appending such a node's rules would put back exactly what
+  // holding them per node was for.
+  //
+  // Asked HERE rather than left to the caller because this function is exported
+  // and the documented direct flow — `prepareDocumentForRead` then this — has no
+  // pass that removes such a node. A consumer following it would otherwise
+  // publish the rules while the block drew nothing, with no way to prevent it.
+  //
+  // Through the PRUNE rather than a per-node test, because the answer is not
+  // per-node: a block that draws nothing places none of its slot children, so
+  // the compiler holds the whole subtree back and those descendants each answer
+  // "I draw" about themselves. Testing each node alone would skip the container
+  // and append every child under it. One walk, one rule, no way for the two to
+  // disagree about a subtree.
+  //
+  // The failure direction is the safe one: `declaresNoMarkup` answers "draws"
+  // for anything short of an explicit `true`, so a block that cannot be asked
+  // keeps its styling.
+  for (const id of documentNodeIds(pruneDrawlessNodes(document, blocks))) {
+    const rules = entries[id];
     if (isUsableGatedEntry(rules)) appended.push(rules);
-  });
+  }
   if (appended.length === 0) return styles;
   // An empty main sheet is joined without a leading newline. `css` is legitimately
   // empty whenever every styled node was gated — a page whose only styling lives
