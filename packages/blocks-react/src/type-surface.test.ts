@@ -33,7 +33,9 @@ import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+
+import { buildPackage } from "../vitest.global-setup";
 
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -419,6 +421,15 @@ function reachableTypes(
 }
 
 describe("the published type surface", () => {
+  // Global setup builds once per process, which covers a cold start and not a
+  // watch session: the process outlives every edit, so a rerun after changing
+  // the public surface would read the artifact built before it. Rebuilding per
+  // run costs a Turbo cache hit and makes the assertions describe the source on
+  // disk rather than whenever the process happened to start.
+  beforeAll(() => {
+    buildPackage();
+  }, 300_000);
+
   // The parsers are the part of this test that can fail SILENTLY: a form they
   // miss reports an absence that is not there, or an obligation that is not
   // required. Each case below pins one form the bundler emits — a plain named

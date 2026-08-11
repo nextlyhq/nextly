@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
- * Build this package before any suite is collected.
+ * Build this package before any suite is COLLECTED.
  *
  * Several suites here assert against the BUILT declarations rather than the
  * source, because the questions they ask — what an entry exports, what a
@@ -11,18 +11,21 @@ import { fileURLToPath } from "node:url";
  * that is absent fails them at import time and a `dist` that merely predates
  * the source certifies a surface nobody has.
  *
- * **Global setup rather than a suite's own `beforeAll`, because a hook is too
- * late.** Vitest collects suites in parallel, so sibling suites import the
- * package while one suite's hook is still building — on a clean checkout they
- * fail to resolve before the build they depend on has finished.
+ * **Global setup, because collection is concurrent.** Sibling suites import
+ * this package while any one suite's own hook would still be building, so on a
+ * tree with no `dist` they fail to resolve before that build finishes. Only a
+ * stage that completes before collection starts covers them.
  *
- * **Run unconditionally rather than skipped when Turbo appears to have built
- * already.** `TURBO_HASH` says a Turbo task is running, never that it was a
- * task carrying this package's build edge: `test:watch` has no such edge, so
- * treating the variable as proof skips the only build that would have
- * happened. Under a task that did build, this is a cache hit costing
- * milliseconds — cheaper than a heuristic that is wrong in one direction and
- * silent about it.
+ * It runs ONCE per process, which is the whole of what it guarantees: the
+ * declarations are current when the run begins. Keeping them current across a
+ * watch session's reruns is the job of {@link buildPackage} at the suite that
+ * reads them.
+ *
+ * Unconditional, with no attempt to detect a build that already happened. The
+ * signals available say a Turbo task is running, never that it was one
+ * carrying this package's build edge, and a precondition derived from a nearby
+ * signal is wrong silently. Where the build did already run this is a cache
+ * hit costing milliseconds.
  *
  * Through Turbo rather than `tsup` directly: the declaration build resolves
  * `@nextlyhq/blocks-engine`, so invoking the bundler on a tree where that
@@ -30,6 +33,20 @@ import { fileURLToPath } from "node:url";
  * run build` carries the `^build` edge, so the dependency is built first.
  */
 export default function setup(): void {
+  buildPackage();
+}
+
+/**
+ * Rebuild this package's declarations, surfacing the compiler's own output.
+ *
+ * Exported so a suite asserting against `dist` can call it per run. Under
+ * `vitest --watch` the process outlives every edit: global setup has already
+ * finished and Turbo's build edge fires only before the process starts, so an
+ * edit to the public surface would otherwise be checked against the artifact
+ * built before it — reporting a pass or a failure that describes neither the
+ * old code nor the new.
+ */
+export function buildPackage(): void {
   const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
   try {
