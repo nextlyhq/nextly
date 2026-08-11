@@ -59,7 +59,7 @@ export interface AccessOptions {
  *
  * Spread this rather than listing the fields inline: an operation that forwards
  * `user` but not `authenticatedScope` compiles, runs, and silently authorizes
- * the key as its owner. `no-inline-access-options.test.ts` fails the build if a
+ * the key as its owner. `access-options-seam.test.ts` fails the build if a
  * namespace hand-writes them instead.
  */
 export function accessOptions(config: DirectAPIConfig): AccessOptions {
