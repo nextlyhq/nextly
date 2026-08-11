@@ -288,7 +288,14 @@ export function EmailProviderForm({
           // stricter one, on every save from then on. The reset above has
           // already applied it to every field nobody typed into, so the
           // configuration on screen is put back as it was.
-          form.resetField("configuration", { defaultValue: held });
+          //
+          // `setValue`, so the baseline keeps holding the record's own
+          // configuration and what is restored keeps DIFFERING from it. A
+          // `resetField` here would make these values the baseline, and the
+          // moment the record moved to the type already on screen the two
+          // would agree, no branch would restore anything, and the next
+          // reconcile would replace an edit still in progress.
+          form.setValue("configuration", held, { shouldDirty: true });
         } else if (typeBefore !== provider.type) {
           // The record moved to another type while the form sat open and
           // nobody here had chosen one, so the record's configuration is the
@@ -328,24 +335,6 @@ export function EmailProviderForm({
         return;
       }
 
-      // The record is unchanged and this type was registered all along, but a
-      // descriptor can still declare MORE than it did when the form opened. A
-      // field added by a deployment would otherwise hold nothing while its
-      // control renders an empty state, so the control disagrees with what a
-      // save would produce.
-      //
-      // Written one path at a time, and only where the form holds nothing:
-      // replacing the whole configuration would clear the dirty marks on every
-      // other field, and reconciling keeps only what is still marked dirty.
-      for (const missing of missingDeclaredFields(
-        form.getValues("configuration"),
-        provider,
-        descriptor
-      )) {
-        form.resetField(configFieldPath(missing.field), {
-          defaultValue: missing.value,
-        });
-      }
       return;
     }
 
@@ -356,6 +345,42 @@ export function EmailProviderForm({
     };
     form.reset(providerToFormValues(provider, descriptor));
   }, [provider, isEdit, descriptors, form]);
+
+  // Give every field the SELECTED provider declares a value, whether or not
+  // the form has been anywhere near a record.
+  //
+  // The catalog refetches on mount and on window focus, so a deployment that
+  // adds a configuration field to a provider type already in use arrives while
+  // forms are open. Nothing about the RECORD changed, so no amount of
+  // reconciling against one reaches this: a create form has no record to
+  // reconcile against, and an edit form carrying an unsaved type change is
+  // showing a provider its record is not. Both would leave the new field
+  // holding nothing while its control renders an empty state — a switch
+  // drawing a position the payload does not carry.
+  //
+  // The record supplies starting values only while it describes the provider
+  // on screen; otherwise the descriptor's own defaults do, exactly as they
+  // would in a form opened now. Field names are shared across providers, so
+  // seeding from a record of another type would carry its setting into a form
+  // where nobody chose it.
+  //
+  // Written one path at a time, and only where the form holds nothing, so a
+  // descriptor that RENAMES a field rather than adding one cannot arrive at an
+  // occupied path and overwrite work in progress.
+  useEffect(() => {
+    if (!selectedDescriptor) return;
+    const source =
+      provider && provider.type === selectedType ? provider : undefined;
+    for (const missing of missingDeclaredFields(
+      form.getValues("configuration"),
+      source,
+      selectedDescriptor
+    )) {
+      form.resetField(configFieldPath(missing.field), {
+        defaultValue: missing.value,
+      });
+    }
+  }, [selectedDescriptor, selectedType, provider, form]);
 
   // Select the first registered provider once the catalog arrives. The form is
   // built before the request finishes, so without this a newly added provider

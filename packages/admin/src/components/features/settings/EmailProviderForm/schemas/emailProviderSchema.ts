@@ -786,17 +786,24 @@ export function hasStoredSecret(
  * rather than adding one otherwise arrives at an occupied path and overwrites
  * work in progress.
  *
- * Starting values are DERIVED from the same function that fills a form when it
- * opens, so a field added while one is open holds exactly what opening it now
- * would have shown. Deciding that here a second time is how the two come to
- * disagree about a default nobody changed.
+ * Starting values are DERIVED from the same two functions that fill a form when
+ * it opens, so a field added while one is open holds exactly what opening it
+ * now would have shown. Deciding that here a second time is how the two come to
+ * disagree about a default nobody changed — and the two differ on purpose: an
+ * edit shows blank for a field its record has no value for, while a create
+ * pre-fills the declared default.
+ *
+ * `provider` is omitted for a form with no record to draw from: a create form,
+ * or an edit form showing a type its record is not.
  */
 export function missingDeclaredFields(
   held: Record<string, unknown>,
-  provider: EmailProviderRecord,
+  provider: EmailProviderRecord | undefined,
   descriptor?: EmailProviderDescriptor
 ): Array<{ field: EmailProviderConfigField; value: unknown }> {
-  const hydrated = providerToFormValues(provider, descriptor).configuration;
+  const hydrated = provider
+    ? providerToFormValues(provider, descriptor).configuration
+    : emptyConfiguration(descriptor);
   const missing: Array<{ field: EmailProviderConfigField; value: unknown }> =
     [];
 

@@ -338,6 +338,71 @@ describe("the same provider, changed by someone else while the form is open", ()
     );
   });
 
+  it("keeps configuration typed under a picked type across TWO reconciles", async () => {
+    // Two refetches, not one. The first arrives while the record still holds
+    // the old type, so the configuration on screen is restored as not
+    // belonging to the record. The second arrives after the record has moved
+    // to the type the operator had already picked — the types now agree, so
+    // nothing restores anything, and whatever stopped differing from the
+    // form's baseline in between is replaced by the record's values.
+    //
+    // A single-refetch test cannot see this: it passes whether or not the
+    // restore preserved the difference that makes the value survive.
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[ACME, OTHER_WITH_FIELD]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: OTHER_WITH_FIELD.label })
+    );
+
+    const input = regionInput();
+    if (!input) throw new Error("expected the region field to render");
+    await user.clear(input);
+    await user.type(input, "typed-for-other");
+
+    // First refetch: an unrelated change, record still the old type.
+    rerender(
+      <EmailProviderForm
+        mode="edit"
+        provider={{
+          ...STORED,
+          fromName: "Changed Elsewhere",
+          updatedAt: "2026-02-02T00:00:00.000Z",
+        }}
+        descriptors={[ACME, OTHER_WITH_FIELD]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    // Second refetch: the record has moved to the type already on screen.
+    rerender(
+      <EmailProviderForm
+        mode="edit"
+        provider={{
+          ...STORED,
+          type: "other",
+          fromName: "Changed Elsewhere",
+          configuration: { region: "from-the-server" },
+          updatedAt: "2026-02-03T00:00:00.000Z",
+        }}
+        descriptors={[ACME, OTHER_WITH_FIELD]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    expect(regionInput()?.value).toBe("typed-for-other");
+  });
+
   it("reconciles a change that carries the SAME timestamp", async () => {
     // MySQL stores `updated_at` as `datetime` with no fractional seconds, so
     // two writes inside one second come back indistinguishable. Keying on the
@@ -524,6 +589,152 @@ describe("a descriptor that gains a field while the form is open", () => {
     );
 
     expect((await submittedPayload(submitted))?.configuration).toMatchObject({
+      sandbox: true,
+    });
+  });
+
+  /** The OTHER type, declaring one field more than `OTHER_WITH_FIELD`. */
+  const OTHER_PLUS: EmailProviderDescriptor = {
+    type: "other",
+    label: "Other",
+    capabilities: {},
+    configFields: [
+      { name: "region", label: "Region", kind: "text", required: true },
+      { name: "sandbox", label: "Sandbox", kind: "boolean", default: true },
+    ],
+  };
+
+  it("initialises it for the type ON SCREEN, not the stored one", async () => {
+    // The operator has picked a type and not saved it, so the form is showing
+    // a provider the record is not. A field added to THAT type is the one that
+    // needs initialising; reconciling against the record's descriptor instead
+    // leaves it unset, and the switch draws a position the payload does not
+    // carry.
+    const user = userEvent.setup();
+    const submitted: EmailProviderPayload[] = [];
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[ACME, OTHER_WITH_FIELD]}
+        isPending={false}
+        onSubmit={payload => submitted.push(payload)}
+      />
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: OTHER_WITH_FIELD.label })
+    );
+
+    const input = regionInput();
+    if (!input) throw new Error("expected the region field to render");
+    await user.clear(input);
+    await user.type(input, "typed-for-other");
+
+    rerender(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[ACME, OTHER_PLUS]}
+        isPending={false}
+        onSubmit={payload => submitted.push(payload)}
+      />
+    );
+
+    expect((await submittedPayload(submitted))?.configuration).toMatchObject({
+      region: "typed-for-other",
+      sandbox: true,
+    });
+  });
+
+  it("starts it from the DESCRIPTOR when the record is another provider", async () => {
+    // A form showing a type its record is not. The record may still hold a
+    // value at the new field's path — field names are shared across providers,
+    // `apiKey` being declared by both built-in API ones — and seeding from it
+    // would carry one provider's setting into another's form, where nobody
+    // chose it and a save would persist it.
+    //
+    // The stored value has to DISAGREE with the declared default for the two
+    // sources to be distinguishable at all: stored `false` against a
+    // descriptor default of `true`.
+    const user = userEvent.setup();
+    const submitted: EmailProviderPayload[] = [];
+    const storedWithSandbox: EmailProviderRecord = {
+      ...STORED,
+      configuration: { region: "eu-west-1", sandbox: false },
+    };
+
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="edit"
+        provider={storedWithSandbox}
+        descriptors={[ACME, OTHER_WITH_FIELD]}
+        isPending={false}
+        onSubmit={payload => submitted.push(payload)}
+      />
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: OTHER_WITH_FIELD.label })
+    );
+
+    const input = regionInput();
+    if (!input) throw new Error("expected the region field to render");
+    await user.type(input, "typed-for-other");
+
+    rerender(
+      <EmailProviderForm
+        mode="edit"
+        provider={storedWithSandbox}
+        descriptors={[ACME, OTHER_PLUS]}
+        isPending={false}
+        onSubmit={payload => submitted.push(payload)}
+      />
+    );
+
+    // The new provider's declared default, not the old provider's stored value.
+    expect((await submittedPayload(submitted))?.configuration).toMatchObject({
+      sandbox: true,
+    });
+  });
+
+  it("initialises it on a CREATE form too", async () => {
+    // A create form is open across the same deployment and has no record at
+    // all, so a rule that reconciles against one never runs for it.
+    const user = userEvent.setup();
+    const submitted: EmailProviderPayload[] = [];
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="create"
+        descriptors={[ACME]}
+        isPending={false}
+        onSubmit={payload => submitted.push(payload)}
+      />
+    );
+
+    const name = document.querySelector<HTMLInputElement>('input[name="name"]');
+    const fromEmail = document.querySelector<HTMLInputElement>(
+      'input[name="fromEmail"]'
+    );
+    const region = regionInput();
+    if (!name || !fromEmail || !region) {
+      throw new Error("expected the create form's fields to render");
+    }
+    await user.type(name, "New Provider");
+    await user.type(fromEmail, "hello@example.com");
+    await user.type(region, "eu-west-1");
+
+    rerender(
+      <EmailProviderForm
+        mode="create"
+        descriptors={[ACME_PLUS]}
+        isPending={false}
+        onSubmit={payload => submitted.push(payload)}
+      />
+    );
+
+    expect((await submittedPayload(submitted))?.configuration).toMatchObject({
+      region: "eu-west-1",
       sandbox: true,
     });
   });
