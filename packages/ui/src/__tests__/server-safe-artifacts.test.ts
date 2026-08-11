@@ -538,6 +538,12 @@ describe("restricting to the oldest supported Node", () => {
   it("names a post-floor global that reappeared", () => {
     // Asked BETWEEN imports. An artifact that installs `navigator` puts it back for everything
     // evaluated afterwards, and those entries then pass against a runtime no consumer has.
+    //
+    // The fixture is one name per Node version that added one above the `engines` floor of 20.19:
+    // `navigator` in 21, `WebSocket` unflagged in 22.4, and `Iterator`, `Float16Array` and
+    // `SuppressedError` in 24. Each is present on the build machine and absent on the oldest
+    // runtime a consumer may use, which is the whole reason the scope is restricted before an
+    // artifact is imported.
     expect(
       floorGlobalsPresent({
         navigator: {},
