@@ -1605,3 +1605,134 @@ describe("a REQUIRED field whose stored value the control cannot show", () => {
     ).toBe(false);
   });
 });
+
+describe("a stored value that predates a tightened constraint", () => {
+  const FORM = {
+    name: "A",
+    type: "acme",
+    fromEmail: "a@b.com",
+    fromName: "",
+    isDefault: false,
+    isActive: true,
+  };
+
+  function withField(
+    field: EmailProviderDescriptor["configFields"][number]
+  ): EmailProviderDescriptor {
+    return {
+      type: "acme",
+      label: "Acme",
+      capabilities: {},
+      configFields: [field],
+    };
+  }
+
+  function recordWith(configuration: Record<string, unknown>) {
+    return {
+      id: "p1",
+      name: "A",
+      type: "acme",
+      fromEmail: "a@b.com",
+      fromName: null,
+      configuration,
+      isDefault: false,
+      isActive: true,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+  }
+
+  it("does not block a rename when maxLength was lowered", () => {
+    // A provider upgrade tightens the bound while its own parser keeps
+    // accepting what is already stored. Applying the new bound to that value
+    // makes the provider unrenameable and undeactivatable until someone
+    // replaces a field they never meant to touch.
+    const descriptor = withField({
+      name: "label",
+      label: "Label",
+      kind: "text",
+      required: true,
+      constraints: { maxLength: 8 },
+    });
+    const stored = { label: "a-legacy-value-2026" };
+    const values = providerToFormValues(recordWith(stored), descriptor);
+
+    expect(
+      buildProviderSchema(descriptor, stored).safeParse({
+        ...values,
+        name: "Renamed",
+      }).success
+    ).toBe(true);
+  });
+
+  it("does not block a rename when a numeric bound was lowered", () => {
+    // The same class on the other kind of bound, which the text branch's
+    // exemption cannot reach.
+    const descriptor = withField({
+      name: "port",
+      label: "Port",
+      kind: "number",
+      required: true,
+      constraints: { min: 1, max: 100 },
+    });
+    const stored = { port: 9999 };
+    const values = providerToFormValues(recordWith(stored), descriptor);
+
+    expect(
+      buildProviderSchema(descriptor, stored).safeParse({
+        ...values,
+        name: "Renamed",
+      }).success
+    ).toBe(true);
+  });
+
+  it("still applies both bounds to a REPLACEMENT", () => {
+    // The control. Grandfathering what is stored must not turn the bound off:
+    // a value the operator types is a new choice and the descriptor governs it.
+    const text = withField({
+      name: "label",
+      label: "Label",
+      kind: "text",
+      required: true,
+      constraints: { maxLength: 8 },
+    });
+    expect(
+      buildProviderSchema(text, { label: "a-legacy-value-2026" }).safeParse({
+        ...FORM,
+        configuration: { label: "another-too-long-value" },
+      }).success
+    ).toBe(false);
+
+    const numeric = withField({
+      name: "port",
+      label: "Port",
+      kind: "number",
+      required: true,
+      constraints: { min: 1, max: 100 },
+    });
+    expect(
+      buildProviderSchema(numeric, { port: 9999 }).safeParse({
+        ...FORM,
+        configuration: { port: 8888 },
+      }).success
+    ).toBe(false);
+  });
+
+  it("still applies both bounds on a CREATE, where nothing is stored", () => {
+    // The other control: no stored value means nothing to grandfather.
+    const numeric = withField({
+      name: "port",
+      label: "Port",
+      kind: "number",
+      required: true,
+      constraints: { min: 1, max: 100 },
+    });
+
+    expect(
+      buildProviderSchema(numeric).safeParse({
+        ...FORM,
+        configuration: { port: 9999 },
+      }).success
+    ).toBe(false);
+  });
+});

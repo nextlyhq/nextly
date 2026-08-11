@@ -127,7 +127,8 @@ function fieldSchema(
               ? `${field.label} is required`
               : `${field.label} must be a number`,
         }),
-        field
+        field,
+        storedValue
       );
       return z.preprocess(
         toNumberOrAbsent,
@@ -201,6 +202,16 @@ function fieldSchema(
           return;
         }
 
+        // The value already in the database passes whatever the descriptor
+        // now says. It is the provider's own stored configuration and its
+        // parser is the authority on whether it is still acceptable — the
+        // descriptor only describes what a REPLACEMENT may be. Without this, a
+        // provider upgrade that lowers `maxLength` makes every stored value
+        // longer than the new bound unrenameable and undeactivatable.
+        //
+        // The same exemption the select branch makes for a legacy choice.
+        if (storedValue === value) return;
+
         if (maxLength !== undefined && value.length > maxLength) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
@@ -233,17 +244,34 @@ function toNumberOrAbsent(value: unknown): unknown {
 /** Apply the descriptor's numeric bounds, naming the field in each message. */
 function applyNumericBounds(
   base: z.ZodNumber,
-  field: EmailProviderConfigField
-): z.ZodNumber {
-  let schema = base;
+  field: EmailProviderConfigField,
+  /** What this field currently holds, exempt from bounds it predates. */
+  storedValue?: unknown
+): z.ZodTypeAny {
   const { min, max } = field.constraints ?? {};
-  if (min !== undefined) {
-    schema = schema.min(min, `${field.label} must be at least ${min}`);
-  }
-  if (max !== undefined) {
-    schema = schema.max(max, `${field.label} must be at most ${max}`);
-  }
-  return schema;
+  if (min === undefined && max === undefined) return base;
+
+  // A refinement rather than `.min`/`.max`, because those reject before any
+  // exemption can run — and a stored value has to survive a bound tightened
+  // after it was written, exactly as a stored string and a legacy select
+  // choice do. The provider's own parser stays the authority on what is
+  // acceptable; the descriptor describes what a REPLACEMENT may be.
+  return base.superRefine((value, ctx) => {
+    if (storedValue === value) return;
+
+    if (min !== undefined && value < min) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${field.label} must be at least ${min}`,
+      });
+    }
+    if (max !== undefined && value > max) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${field.label} must be at most ${max}`,
+      });
+    }
+  });
 }
 
 /**
