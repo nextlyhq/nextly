@@ -66,9 +66,13 @@ const ALLOWED_RUNTIME_IMPORTS = [
   // and `/blocks` is the built-in catalogue, which nothing here needs yet.
   "@nextlyhq/blocks-react",
   "@nextlyhq/ui",
-  "@nextlyhq/plugin-sdk",
-  // The one sanctioned route to admin components. Named on its own because the
-  // rule is per specifier: `plugin-sdk/testing` is a different promise entirely.
+  // The `/admin` subpath ONLY, and not the SDK root. The root re-exports runtime
+  // values from `nextly` (`export { definePlugin } from "nextly"`), which that
+  // package's build leaves external, so importing it loads the CMS runtime this
+  // guard exists to keep out. `/admin` re-exports from `@nextlyhq/admin` alone
+  // and is the one sanctioned route to admin components. Nothing here imports
+  // the root today; when the editor needs SDK types, add a type-only route
+  // deliberately rather than widening this entry back.
   "@nextlyhq/plugin-sdk/admin",
 ];
 
@@ -92,12 +96,21 @@ const ALLOWED_IN_TESTS = [
  */
 const UNRESOLVABLE_SPECIFIER = "<unresolvable-specifier>";
 
+/**
+ * Extensions the bundler will follow, and therefore the ones this guard must read.
+ *
+ * Not just `.ts`/`.tsx`. A TypeScript entry can side-effect-import `./bridge.js`, and tsup
+ * bundles it; a scan restricted to TypeScript would walk past the one file free to import
+ * anything, with the typecheck none the wiser because `allowJs` is off.
+ */
+const BUNDLED_MODULE = /\.(?:tsx?|jsx?|mjs|cjs)$/;
+
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) out.push(...sourceFiles(full));
-    else if (/\.tsx?$/.test(entry.name)) out.push(full);
+    else if (BUNDLED_MODULE.test(entry.name)) out.push(full);
   }
   return out;
 }
@@ -181,6 +194,14 @@ function importsOfSource(text: string, fileName = "module.ts"): string[] {
     ts.forEachChild(node, visit);
   };
   visit(source);
+
+  // `/// <reference types="pkg" />` is not part of the node tree, so `forEachChild` never
+  // reaches it. The parser puts it here instead, and it is a dependency on that package's
+  // types exactly as an `import type` is.
+  for (const directive of source.typeReferenceDirectives) {
+    found.push(directive.fileName);
+  }
+
   return found;
 }
 
@@ -238,6 +259,14 @@ describe("reading a module's imports", () => {
     expect(importsOfSource(`const a = require("@nextlyhq/admin");`)).toEqual([
       "@nextlyhq/admin",
     ]);
+  });
+
+  it("sees a triple-slash type reference, which is not in the node tree at all", () => {
+    // The parser stores these on `typeReferenceDirectives`, so a visitor built on
+    // `forEachChild` cannot reach one however carefully it is written.
+    expect(
+      importsOfSource(`/// <reference types="@nextlyhq/admin" />\nexport {};`)
+    ).toEqual(["@nextlyhq/admin"]);
   });
 
   it("sees a typeof-import type query, which no call expression covers", () => {
@@ -309,7 +338,6 @@ describe("what the allowlist admits", () => {
       "@nextlyhq/blocks-engine",
       "@nextlyhq/blocks-react",
       "@nextlyhq/ui",
-      "@nextlyhq/plugin-sdk",
     ]) {
       expect(isAllowed(specifier, false)).toBe(true);
     }
@@ -324,6 +352,14 @@ describe("what the allowlist admits", () => {
     // specifier would have admitted it on the strength of the root entry being allowed.
     expect(isAllowed("@nextlyhq/blocks-react/next", false)).toBe(false);
     expect(isAllowed("@nextlyhq/blocks-react/blocks", false)).toBe(false);
+  });
+
+  it("refuses the SDK root, which re-exports runtime values from nextly", () => {
+    // `@nextlyhq/plugin-sdk` re-exports `definePlugin` from `nextly`, and the SDK build leaves
+    // `nextly` external, so the root drags the CMS runtime into the editor graph. The `/admin`
+    // subpath re-exports from `@nextlyhq/admin` alone and stays allowed.
+    expect(isAllowed("@nextlyhq/plugin-sdk", false)).toBe(false);
+    expect(isAllowed("@nextlyhq/plugin-sdk/admin", false)).toBe(true);
   });
 
   it("refuses other subpaths of an allowed package", () => {
