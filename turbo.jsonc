@@ -286,6 +286,11 @@
         "src/**/*.{ts,tsx}",
         "src/**/*.test.{ts,tsx}",
         "src/**/*.spec.{ts,tsx}",
+        // JavaScript is a test input too. A bundler follows a side-effect import
+        // into a `.js` sibling and ships it, and a guard that reads those files
+        // is cached against a hash that never saw them — so the check would be
+        // skipped in exactly the commit that changed what it checks.
+        "src/**/*.{js,jsx,mjs,cjs}",
         // Some tests read CSS at runtime (e.g. the token-contrast check parses
         // theme.css), so CSS is a real test input; without it a CSS-only change
         // could reuse a cached pass and skip the assertion.
