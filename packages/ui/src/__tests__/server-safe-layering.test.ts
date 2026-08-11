@@ -778,7 +778,9 @@ function analyze(source: string, fileName: string): Analysis {
       node.argumentExpression !== undefined &&
       ts.isStringLiteral(node.argumentExpression) &&
       BROWSER_GLOBALS.has(node.argumentExpression.text) &&
-      node.questionDotToken === undefined &&
+      // The `?.` in `globalThis?.["document"]` protects `globalThis`, which always exists — not
+      // the missing property. Whether the chain really short-circuits is decided by what USES the
+      // result, so that question is left to `usedAsValue` rather than answered here.
       usedAsValue(node) &&
       !guardedByTypeof(node, node.argumentExpression.text)
     ) {
@@ -1529,6 +1531,22 @@ describe("reading a module", () => {
         export const x = 1;
       `).specifiers
     ).toEqual(["react"]);
+  });
+
+  it("reads an optional access on globalThis by what uses it", () => {
+    // `globalThis` always exists, so `?.` there protects nothing: the read of the missing property
+    // still happens and `.body` still dereferences `undefined`.
+    expect(
+      read(`export const b = globalThis?.["document"].body;`).globals
+    ).toEqual(["document"]);
+    // The controls: a bare optional access evaluates to undefined, and an optional chain that
+    // continues really does short-circuit.
+    expect(read(`export const d = globalThis?.["document"];`).globals).toEqual(
+      []
+    );
+    expect(
+      read(`export const b = globalThis?.["document"]?.body;`).globals
+    ).toEqual([]);
   });
 
   it("does not report an enum member referenced by its neighbour", () => {
