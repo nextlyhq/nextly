@@ -465,3 +465,86 @@ describe("email provider activity", () => {
     );
   });
 });
+
+describe("an update over a configuration nobody can decrypt", () => {
+  let sqlite: Database.Database;
+  let service: EmailProviderService;
+  let providerId: string;
+
+  beforeEach(async () => {
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    container.register("activityLogService", () => ({
+      logActivity: (input: LogActivityInput) => {
+        logged.push(input);
+        return Promise.resolve();
+      },
+    }));
+    const created = await service.createProvider(INPUT, ACTOR);
+    providerId = created.id;
+
+    // What a NEXTLY_SECRET rotation leaves behind: a value that is still a
+    // string and no longer decrypts. `decryptConfiguration` answers `{}` for
+    // it, which is also what an empty configuration looks like.
+    //
+    // Written as JSON, because the column is a JSON text column and Drizzle
+    // parses it before the service sees it — raw text here throws in the
+    // driver and the test never reaches the branch it is about.
+    sqlite
+      .prepare("update email_providers set configuration = ? where id = ?")
+      .run(
+        JSON.stringify("not-a-ciphertext-this-will-not-decrypt"),
+        providerId
+      );
+    logged.length = 0;
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    getEmailProviderRegistry().reset();
+    container.clear();
+    vi.clearAllMocks();
+  });
+
+  it("reports the configuration as changed when it is replaced", async () => {
+    await service.updateProvider(
+      providerId,
+      {
+        configuration: {
+          host: "smtp.example.com",
+          port: 587,
+          secure: true,
+          auth: { user: "postmaster", pass: "a-new-password" },
+        },
+      },
+      ACTOR
+    );
+
+    // Without the readability flag this diffs against `{}` and — for a patch
+    // that happened to merge to `{}` too — reports nothing at all. Here it is
+    // the honest answer either way: an unreadable preimage cannot support the
+    // claim that nothing changed.
+    expect(logged[0]?.metadata).toMatchObject({
+      changedFields: ["configuration"],
+    });
+  });
+
+  it("still reports nothing for a rename over a READABLE configuration", async () => {
+    // The control. Without it the case above would pass on a service that had
+    // started reporting a configuration change on every save — which is the
+    // false-alarm bug an earlier round removed.
+    const readable = await service.createProvider(
+      { ...INPUT, name: "Readable" },
+      ACTOR
+    );
+    logged.length = 0;
+
+    await service.updateProvider(readable.id, { name: "Renamed" }, ACTOR);
+
+    expect(logged[0]?.metadata).toMatchObject({ changedFields: ["name"] });
+  });
+});

@@ -184,16 +184,37 @@ export class EmailProviderService extends BaseService {
   private decryptConfiguration(
     stored: Record<string, unknown> | string
   ): Record<string, unknown> {
+    return this.readConfiguration(stored).config;
+  }
+
+  /**
+   * Decrypt, and say whether it worked.
+   *
+   * `decryptConfiguration` answers `{}` for an unreadable value, which is the
+   * right thing for a READ -- a provider whose ciphertext no longer decrypts
+   * must still be listable, maskable and deletable rather than becoming a row
+   * nobody can act on. It is the wrong thing for a COMPARISON: `{}` is also
+   * what a genuinely empty configuration looks like, so a diff against an
+   * unreadable preimage concludes nothing changed at the moment it is least
+   * entitled to. Callers about to make a claim take this form and ask.
+   */
+  private readConfiguration(stored: Record<string, unknown> | string): {
+    config: Record<string, unknown>;
+    readable: boolean;
+  } {
     if (!this.encryptionSecret || typeof stored !== "string") {
-      return stored as Record<string, unknown>;
+      return { config: stored as Record<string, unknown>, readable: true };
     }
     try {
-      return JSON.parse(decrypt(stored, this.encryptionSecret));
+      return {
+        config: JSON.parse(decrypt(stored, this.encryptionSecret)),
+        readable: true,
+      };
     } catch {
       this.logger.warn(
         "Failed to decrypt provider configuration — returning empty object"
       );
-      return {};
+      return { config: {}, readable: false };
     }
   }
 
@@ -642,9 +663,16 @@ export class EmailProviderService extends BaseService {
         // and nothing else. An entry that says "type" while the credentials
         // beneath it were discarded is worse than no entry: it is a record
         // that reads as harmless.
+        //
+        // An UNREADABLE preimage counts as a change on its own. `{}` is what
+        // this returns both for an empty configuration and for a ciphertext
+        // that no longer decrypts -- after a `NEXTLY_SECRET` rotation, say --
+        // and the second is precisely when a credential is being discarded.
+        // Reading the fallback as "there was nothing there" would file the
+        // loss as a type change and nothing more.
+        const previous = this.readConfiguration(currentRow.configuration);
         configurationChanged =
-          Object.keys(this.decryptConfiguration(currentRow.configuration))
-            .length > 0;
+          !previous.readable || Object.keys(previous.config).length > 0;
       }
     }
 
@@ -658,9 +686,11 @@ export class EmailProviderService extends BaseService {
     // and do nothing.
     const unsetPaths = this.readUnsetPaths(data.unsetConfiguration);
     if (data.configuration !== undefined || unsetPaths.length > 0) {
-      const existingConfig = this.decryptConfiguration(
-        currentRow.configuration
-      );
+      // Read through `readConfiguration`, not `decryptConfiguration`: the diff
+      // below has to tell an empty stored configuration from one that no
+      // longer decrypts, and both arrive as `{}`.
+      const existing = this.readConfiguration(currentRow.configuration);
+      const existingConfig = existing.config;
       const incomingConfig = this.stripMaskedConfigValues(
         data.configuration ?? {}
       );
@@ -697,7 +727,13 @@ export class EmailProviderService extends BaseService {
       // Nothing is decrypted for this. Both values are already in memory --
       // `existingConfig` two statements above and `mergedConfig` beside it --
       // because the update path had to read one and build the other.
+      //
+      // An unreadable preimage is a change by itself, for the reason given in
+      // the type-change branch: comparing against the `{}` fallback would
+      // report "unchanged" for a save that replaced a credential nobody could
+      // read with one they can.
       configurationChanged =
+        !existing.readable ||
         JSON.stringify(existingConfig) !== JSON.stringify(mergedConfig);
 
       updateData.configuration = this.encryptConfiguration(mergedConfig);
