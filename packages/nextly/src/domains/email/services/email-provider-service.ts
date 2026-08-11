@@ -937,12 +937,45 @@ export class EmailProviderService extends BaseService {
 
     const now = new Date();
 
+    // Which providers are losing the default, read before the statement below
+    // clears it. A promotion changes two rows, and afterwards nothing in the
+    // record distinguishes the provider that was displaced from one that was
+    // never the default at all -- so the trail could say what took over and
+    // never what it took over from. Selected as a list rather than one row
+    // because a broken state with two defaults must be recorded as it is,
+    // not narrowed to whichever came back first.
+    const displaced = await this.db
+      .select({
+        id: this.emailProviders.id,
+        name: this.emailProviders.name,
+        type: this.emailProviders.type,
+      })
+      .from(this.emailProviders)
+      .where(eq(this.emailProviders.isDefault, true));
+
     // Unset any existing default first, then set the new one
 
     await this.db
       .update(this.emailProviders)
       .set({ isDefault: false, updatedAt: now })
       .where(eq(this.emailProviders.isDefault, true));
+
+    // Recorded here rather than after the promotion, because this is where it
+    // happened: the demotion stands whether or not the promotion below finds
+    // its row. The provider being promoted is skipped -- a client retry
+    // demotes and re-promotes the same row, and its final state is the state
+    // it started in.
+    for (const previous of displaced) {
+      if (previous.id === id) continue;
+      await this.recordActivity({
+        action: "update",
+        providerId: previous.id,
+        providerName: previous.name,
+        providerType: previous.type,
+        changedFields: ["isDefault"],
+        actor,
+      });
+    }
 
     const promotion = await this.db
       .update(this.emailProviders)

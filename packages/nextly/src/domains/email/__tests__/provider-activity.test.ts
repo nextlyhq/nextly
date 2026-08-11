@@ -474,6 +474,61 @@ describe("email provider activity", () => {
       expect.objectContaining({ action: "create" })
     );
   });
+
+  describe("the provider a promotion displaces", () => {
+    it("is recorded alongside the one promoted", async () => {
+      // A promotion changes two rows. Recording only the winner leaves a trail
+      // that says what took over and never what it took over from — and after a
+      // second promotion nothing distinguishes the provider that held the
+      // default from one that never did.
+      const first = await service.createProvider(
+        { ...INPUT, name: "First", isDefault: true },
+        ACTOR
+      );
+      const second = await service.createProvider(
+        { ...INPUT, name: "Second" },
+        ACTOR
+      );
+      logged.length = 0;
+
+      await service.setDefault(second.id, ACTOR);
+
+      const entries = logged.filter(entry => entry.action === "update");
+      expect(entries.map(entry => entry.entryId)).toEqual([
+        first.id,
+        second.id,
+      ]);
+      for (const entry of entries) {
+        expect(entry.metadata).toMatchObject({ changedFields: ["isDefault"] });
+      }
+    });
+
+    it("records nothing extra when the promoted provider was already default", async () => {
+      // The control. A client retry demotes and re-promotes the same row, whose
+      // final state is the state it started in — recording a displacement for it
+      // would manufacture an event out of a no-op, which is the property the
+      // promotion entry already has.
+      const only = await service.createProvider(
+        { ...INPUT, name: "Only", isDefault: true },
+        ACTOR
+      );
+      logged.length = 0;
+
+      await service.setDefault(only.id, ACTOR);
+
+      expect(logged).toHaveLength(0);
+    });
+
+    it("records only the promotion when nothing was default", async () => {
+      const created = await service.createProvider(INPUT, ACTOR);
+      logged.length = 0;
+
+      await service.setDefault(created.id, ACTOR);
+
+      expect(logged).toHaveLength(1);
+      expect(logged[0]?.entryId).toBe(created.id);
+    });
+  });
 });
 
 describe("an update over a configuration nobody can decrypt", () => {
