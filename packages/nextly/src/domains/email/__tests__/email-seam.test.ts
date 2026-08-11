@@ -687,19 +687,51 @@ describe("a message id built out of the message body", () => {
     expect(result.messageId).toBeUndefined();
   });
 
-  it("leaves an ordinary id alone when the body shares only words", async () => {
-    // The control. An id legitimately contains a date and a hostname, and a
-    // message legitimately contains the sender's name — comparing short runs
-    // would delete real ids for every message that happened to use the word.
+  it("leaves an ordinary id alone", async () => {
+    // The control. A real provider's Message-ID shares words with prose — a
+    // date, a hostname — and comparing those would delete legitimate ids for
+    // every message that happened to use one.
     const service = echoing("<20260811.abc123@mail.acmemail.test>");
 
     const result = await service.send({
       to: "a@b.com",
       subject: "Your Acmemail receipt",
-      html: "<p>Sent 20260811 via mail.acmemail.test</p>",
+      html: "<p>Thanks for your order. Your receipt is attached.</p>",
     });
 
     expect(result.messageId).toBe("<20260811.abc123@mail.acmemail.test>");
+  });
+
+  it("is withheld when a long span of it appears in the body, innocent or not", async () => {
+    // The trade, pinned so it is a decision rather than a surprise. A body
+    // naming the provider's own mail host repeats eighteen characters of the
+    // id, and the id is withheld even though nothing sensitive was shared.
+    // The asymmetry is the argument: this costs a correlation convenience,
+    // while the case it exists for costs a single-use token its single use.
+    const service = echoing("<20260811.abc123@mail.acmemail.test>");
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Your Acmemail receipt",
+      html: "<p>Sent via mail.acmemail.test</p>",
+    });
+
+    expect(result.messageId).toBeUndefined();
+  });
+
+  it("is withheld when the id repeats a UUID-shaped token", async () => {
+    // A token is not always one unbroken run. A UUID is five short groups, so
+    // a rule keyed on the longest alphanumeric run ignored it entirely.
+    const uuid = "550e8400-e29b-41d4-a716-446655440000";
+    const service = echoing(`sent-${uuid}`);
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Confirm your address",
+      html: `<a href="https://x.test/confirm?t=${uuid}">Confirm</a>`,
+    });
+
+    expect(result.messageId).toBeUndefined();
   });
 
   it("leaves an id alone when nothing of it appears in the message", async () => {

@@ -126,16 +126,52 @@ export function storableError(message: string): string {
 }
 
 /**
- * The shortest run of identifier characters worth treating as an echo.
+ * The shortest candidate worth comparing against the message that was sent.
  *
- * A message id is split on punctuation and each run compared against the
- * message that was sent, so the floor decides what counts as "the same value"
- * rather than a coincidence. Password-reset and verification tokens here are
- * `randomBytes(32).toString("hex")` — 64 characters — so sixteen catches them
- * with room to spare while sitting far above any word that appears in both an
- * identifier and English prose.
+ * Password-reset and verification tokens here are
+ * `randomBytes(32).toString("hex")` — 64 characters — and a UUID is 36. Sixteen
+ * catches both with room to spare while sitting above the words an identifier
+ * and English prose legitimately share.
  */
-const MIN_ECHOED_RUN = 16;
+const MIN_ECHOED_LENGTH = 16;
+
+/**
+ * Every distinctive piece of an identifier, as it is written.
+ *
+ * A token is not always one unbroken run: a UUID is five short groups, and a
+ * segmented licence key is worse. Requiring a single long alphanumeric run
+ * therefore missed exactly the values most likely to be sensitive.
+ *
+ * Candidates are runs of ORIGINAL text — every contiguous span of segments,
+ * separators included — rather than the identifier with its punctuation
+ * stripped out. Stripping makes unrelated neighbours adjacent, so an id ending
+ * `@mail.example.test` would match any body containing `mail.example.test` in
+ * any other punctuation, and ordinary ids would start disappearing. Comparing
+ * spans as written keeps a match meaning "this exact text appears in both".
+ */
+function echoCandidates(messageId: string): string[] {
+  const segments = messageId.split(/[^A-Za-z0-9]+/).filter(part => part !== "");
+  if (segments.length === 0) return [];
+
+  const candidates: string[] = [];
+  let cursor = 0;
+  const offsets = segments.map(segment => {
+    const at = messageId.indexOf(segment, cursor);
+    cursor = at + segment.length;
+    return at;
+  });
+
+  for (let first = 0; first < segments.length; first += 1) {
+    for (let last = first; last < segments.length; last += 1) {
+      const span = messageId.slice(
+        offsets[first],
+        offsets[last] + segments[last].length
+      );
+      if (span.length >= MIN_ECHOED_LENGTH) candidates.push(span);
+    }
+  }
+  return candidates;
+}
 
 /**
  * Whether a message id repeats something the message itself carried.
@@ -150,12 +186,12 @@ const MIN_ECHOED_RUN = 16;
  *
  * Asked in this direction on purpose. The id is short and the body is not, so
  * "does the id contain the body" answers nothing; what is detectable is a
- * distinctive run FROM the id turning up in what was sent.
+ * distinctive piece OF the id turning up in what was sent.
  *
- * Runs shorter than the floor are ignored rather than compared, because an id
- * legitimately contains words — a provider name, a date — that prose contains
- * too, and comparing those would delete ordinary ids for every message that
- * happened to use the same word.
+ * The trade is deliberate and one-sided: an id that shares sixteen characters
+ * with the message is withheld even when the overlap is innocent — a hostname
+ * the body also names, say. That costs a correlation convenience. Keeping it
+ * costs a single-use token its single use.
  */
 export function messageIdEchoesPayload(
   messageId: string | undefined,
@@ -163,15 +199,15 @@ export function messageIdEchoesPayload(
 ): boolean {
   if (messageId === undefined) return false;
 
-  const runs = messageId
-    .split(/[^A-Za-z0-9]+/)
-    .filter(run => run.length >= MIN_ECHOED_RUN);
-  if (runs.length === 0) return false;
+  const candidates = echoCandidates(messageId);
+  if (candidates.length === 0) return false;
 
   return texts.some(text => {
     if (text === undefined || text === "") return false;
     const haystack = text.toLowerCase();
-    return runs.some(run => haystack.includes(run.toLowerCase()));
+    return candidates.some(candidate =>
+      haystack.includes(candidate.toLowerCase())
+    );
   });
 }
 

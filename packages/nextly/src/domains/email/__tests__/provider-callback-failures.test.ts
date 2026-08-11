@@ -480,6 +480,118 @@ describe("a credential inside the provider's own error text", () => {
   });
 });
 
+describe("a credential the parser DERIVED from the stored one", () => {
+  const STORED_KEY = "sk-live-stored-form-of-the-key";
+
+  /** What `z.string().transform(v => btoa(v))` produces: a reversible secret. */
+  function encodingProvider() {
+    return defineEmailProvider<{ apiKey: string }>({
+      type: "encoder",
+      label: "Encoder",
+      configFields: [
+        { name: "apiKey", label: "API Key", kind: "password", secret: true },
+      ],
+      parseConfig: input => ({
+        apiKey: Buffer.from((input as { apiKey: string }).apiKey).toString(
+          "base64"
+        ),
+      }),
+      createAdapter: config => ({
+        // The adapter holds the ENCODED key and builds its id out of it.
+        send: () =>
+          Promise.resolve({
+            success: true,
+            messageId: `id-${config.apiKey}`,
+          }),
+      }),
+    });
+  }
+
+  it("does not reach the caller inside a message id", async () => {
+    // The stored form and the effective form share no substring, so a
+    // containment reading only the stored configuration compares the wrong
+    // value -- and Base64 is reversible, so what escapes IS the credential.
+    const adapter = encodingProvider().createAdapterFrom({
+      apiKey: STORED_KEY,
+    });
+
+    const result = await adapter.send({
+      to: "a@b.com",
+      from: "c@d.com",
+      subject: "x",
+      html: "y",
+    });
+
+    expect(result.messageId).toBeUndefined();
+  });
+
+  it("does not reach the failure log either", async () => {
+    const provider = defineEmailProvider<{ apiKey: string }>({
+      type: "encoder",
+      label: "Encoder",
+      configFields: [
+        { name: "apiKey", label: "API Key", kind: "password", secret: true },
+      ],
+      parseConfig: input => ({
+        apiKey: Buffer.from((input as { apiKey: string }).apiKey).toString(
+          "base64"
+        ),
+      }),
+      createAdapter: config => ({
+        send: () => {
+          throw new Error(`rejected key ${config.apiKey}`);
+        },
+      }),
+    });
+
+    const encoded = Buffer.from(STORED_KEY).toString("base64");
+    try {
+      await provider
+        .createAdapterFrom({ apiKey: STORED_KEY })
+        .send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" });
+      throw new Error("the adapter was expected to fail");
+    } catch (error) {
+      const described = JSON.stringify(describeProviderFailure(error));
+      expect(described).not.toContain(encoded);
+      expect(described).toContain("rejected key");
+    }
+  });
+
+  it("still returns an ordinary id from a parser that adds keys", async () => {
+    // The control that decides the shape of this fix. A parser filling in
+    // defaults produces a configuration carrying keys the descriptor does not
+    // declare, and treating that as unmatchable would withhold every id from
+    // every provider that has a default.
+    const provider = defineEmailProvider<{ apiKey: string; region: string }>({
+      type: "defaulting-shape",
+      label: "Defaulting",
+      configFields: [
+        { name: "apiKey", label: "API Key", kind: "password", secret: true },
+      ],
+      parseConfig: input => ({
+        apiKey: (input as { apiKey: string }).apiKey,
+        region: "eu-west-1",
+      }),
+      createAdapter: () => ({
+        send: () =>
+          Promise.resolve({
+            success: true,
+            messageId: "<abc123@mail.example.com>",
+          }),
+      }),
+    });
+
+    await expect(
+      provider
+        .createAdapterFrom({ apiKey: STORED_KEY })
+        .send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" })
+    ).resolves.toEqual({
+      success: true,
+      messageId: "<abc123@mail.example.com>",
+    });
+  });
+});
+
 describe("a credential the parser supplied rather than the store", () => {
   function defaultingProvider(fallback: string) {
     return defineEmailProvider<{ apiKey: string }>({

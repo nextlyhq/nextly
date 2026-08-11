@@ -492,8 +492,43 @@ export function defineEmailProvider<TConfig>(
     },
     // Parses AND builds, so the typed value never escapes the closure that
     // knows its type. Nothing here catches: the containment above does it.
-    createAdapterFrom: (input: unknown): EmailProviderAdapter =>
-      definition.createAdapter(parse(input)),
+    createAdapterFrom: (input: unknown): EmailProviderAdapter => {
+      const config = parse(input);
+      const adapter = definition.createAdapter(config);
+
+      // Needles from the configuration the ADAPTER actually holds, which is
+      // the only place they exist. `containProviderCallbacks` wraps this from
+      // the outside and can only see the STORED input, so a parser that
+      // derives a credential -- Base64-encoding a key, deriving a token --
+      // leaves it comparing a value the adapter never used. Here the parsed
+      // form is in scope, so the effective credential is compared too.
+      //
+      // Its `comparable` list only. The parsed shape legitimately carries keys
+      // the descriptor does not declare -- a parser filling in defaults is the
+      // ordinary case -- and taking `hasUnmatchable` from it would withhold
+      // every id from every provider whose parser adds a key. The fail-closed
+      // policy stays with the stored input, where an undeclared leaf really is
+      // a credential nobody described.
+      const effective = declaredSecretValues(definition.configFields, config);
+      const fromParsed = {
+        comparable: effective.comparable,
+        hasUnmatchable: false,
+      };
+
+      return {
+        ...adapter,
+        send: async options => {
+          try {
+            return withoutLeakedSecrets(
+              await adapter.send(options),
+              fromParsed
+            );
+          } catch (error) {
+            throw containedFailure(error, fromParsed);
+          }
+        },
+      };
+    },
     testConnectionFrom: probe
       ? (input: unknown) => probe(parse(input))
       : undefined,
