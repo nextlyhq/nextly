@@ -20,19 +20,65 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const appDir = resolve(here, "../../app");
 
-const ADMIN_STYLESHEET = "@nextlyhq/admin/style.css";
+/**
+ * Every stylesheet an admin-scoped route needs, not just the package one.
+ *
+ * Checking a single stylesheet certified the gallery route as styled while it
+ * was still missing two: `densities.css` keys on the `data-density` attribute
+ * the preview panels carry, and `harness.css` is what carries a theme's
+ * declared font and radius into primitives that read neither on their own. A
+ * route with only the package stylesheet renders every theme at the base
+ * metrics in the default face -- which is precisely the axes the themes were
+ * shortlisted on.
+ */
+const REQUIRED_STYLESHEETS = [
+  "@nextlyhq/admin/style.css",
+  "theme-lab/densities.css",
+  "theme-lab/harness.css",
+];
 
 /** The class the admin's component rules and tokens are scoped beneath. */
 const ADMIN_SCOPE = "nextly-admin";
 
-/** Relative import specifiers, which are the ones resolvable on disk. */
-const RELATIVE_IMPORT =
-  /(?:^|\n)\s*import\s+(?:[^"';]*?from\s*)?["'](\.[^"']*)["']/g;
+/**
+ * Import specifiers, read from the parsed module rather than matched in text.
+ *
+ * Searching the source for a stylesheet's name counted any MENTION as an
+ * import, and the route's own comment explaining why it imports those
+ * stylesheets names all three -- so deleting a real import left the guard
+ * green while the route lost the styles.
+ *
+ * A regex that strips comments first would trade that for a worse failure: if
+ * the stripper ever eats a real declaration, the guard passes while blind,
+ * which is the direction a check must never fail in. The compiler's tree
+ * carries no comments to confuse and no stripping step to get wrong, and
+ * `typescript` is already a devDependency here.
+ */
+function importSpecifiers(file: string, source: string): string[] {
+  const parsed = ts.createSourceFile(
+    file,
+    source,
+    ts.ScriptTarget.Latest,
+    /* setParentNodes */ false,
+    file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  );
+
+  const found: string[] = [];
+  for (const statement of parsed.statements) {
+    // Side-effect imports (`import "x.css"`) and value imports alike; both are
+    // ImportDeclaration, and a stylesheet is always the former.
+    if (!ts.isImportDeclaration(statement)) continue;
+    const specifier = statement.moduleSpecifier;
+    if (ts.isStringLiteral(specifier)) found.push(specifier.text);
+  }
+  return found;
+}
 
 const CANDIDATE_SUFFIXES = ["", ".tsx", ".ts", "/index.tsx", "/index.ts"];
 
@@ -46,21 +92,29 @@ function resolveImport(fromFile: string, specifier: string): string | null {
   return null;
 }
 
-/** Every module a page reaches through relative imports, including itself. */
-function moduleGraph(entry: string): string[] {
-  const seen = new Set<string>();
+/**
+ * Every module a page reaches through relative imports, including itself.
+ *
+ * Also parsed rather than matched: a commented-out relative import would
+ * otherwise pull a module into the graph that the route does not actually
+ * reach, which widens the set the rule below reads and can make an unimported
+ * route look styled.
+ */
+function moduleGraph(entry: string): Array<{ file: string; source: string }> {
+  const seen = new Map<string, string>();
   const queue = [entry];
   while (queue.length > 0) {
     const file = queue.pop() as string;
     if (seen.has(file)) continue;
-    seen.add(file);
     const source = readFileSync(file, "utf8");
-    for (const match of source.matchAll(RELATIVE_IMPORT)) {
-      const target = resolveImport(file, match[1] as string);
+    seen.set(file, source);
+    for (const specifier of importSpecifiers(file, source)) {
+      if (!specifier.startsWith(".")) continue;
+      const target = resolveImport(file, specifier);
       if (target && !seen.has(target)) queue.push(target);
     }
   }
-  return [...seen];
+  return [...seen].map(([file, source]) => ({ file, source }));
 }
 
 /** Every app route that has a page. */
@@ -82,7 +136,7 @@ function pages(): Array<{ route: string; entry: string }> {
 interface Route {
   route: string;
   scoped: boolean;
-  loads: boolean;
+  missing: string[];
 }
 
 // A className, not a mention: the scope name appears in prose too, including
@@ -92,11 +146,17 @@ interface Route {
 const AS_CLASS = new RegExp(`["'\`][^"'\`]*\\b${ADMIN_SCOPE}\\b[^"'\`]*["'\`]`);
 
 const ROUTES: Route[] = pages().map(({ route, entry }) => {
-  const sources = moduleGraph(entry).map(file => readFileSync(file, "utf8"));
+  const modules = moduleGraph(entry);
+  // Specifiers, not source text. `theme-lab/densities.css` is matched as a
+  // SUFFIX because the route reaches it by a relative path whose depth
+  // depends on where the importing file sits.
+  const imported = modules.flatMap(m => importSpecifiers(m.file, m.source));
   return {
     route: `/${route}`,
-    scoped: sources.some(text => AS_CLASS.test(text)),
-    loads: sources.some(text => text.includes(ADMIN_STYLESHEET)),
+    scoped: modules.some(m => AS_CLASS.test(m.source)),
+    missing: REQUIRED_STYLESHEETS.filter(
+      sheet => !imported.some(spec => spec === sheet || spec.endsWith(sheet))
+    ),
   };
 });
 
@@ -124,16 +184,18 @@ describe("admin-scoped routes load the admin stylesheet", () => {
     ).toEqual(["/theme-lab"]);
   });
 
-  it("loads the stylesheet wherever admin-scoped UI renders", () => {
-    const missing = ROUTES.filter(r => r.scoped && !r.loads).map(r => r.route);
+  it("loads every required stylesheet wherever admin-scoped UI renders", () => {
+    const missing = ROUTES.filter(r => r.scoped && r.missing.length > 0).map(
+      r => `${r.route} is missing ${r.missing.join(", ")}`
+    );
 
     expect(
       missing.sort(),
-      `This route renders UI scoped to the admin class but never imports ` +
-        `\`${ADMIN_STYLESHEET}\`. Nothing throws: the components render with ` +
-        `no tokens and no component rules, which reads as a broken layout ` +
-        `rather than a missing import. Import the stylesheet in the route's ` +
-        `page.`
+      `This route renders UI scoped to the admin class but does not import ` +
+        `every stylesheet that scope needs. Nothing throws: components render ` +
+        `with no tokens, or at the base density in the default face, which ` +
+        `reads as a design difference rather than a missing import. Import ` +
+        `the listed stylesheets in the route's page.`
     ).toEqual([]);
   });
 });

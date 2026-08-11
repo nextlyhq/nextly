@@ -98,19 +98,33 @@ console.log(
     "unread".padStart(8)
 );
 
+// One row per MODE, not per theme.
+//
+// A single row counted near-gate pairings across both modes while every
+// structural column beside it described `theme.light` alone. A theme whose
+// fragile pairings all came from dark mode therefore had them attributed to a
+// light palette that did not produce them, and its dark palette's structure --
+// the thing that would explain them -- appeared nowhere. The table's whole
+// purpose is relating margin pressure to palette structure, and that pairing
+// was wrong for exactly the rows worth reading.
 for (const theme of [...NEXTLY_THEMES, ...TWEAKCN_THEMES]) {
   const rs = measureTheme(theme, css);
-  const nearGate = rs.filter(r => r.margin >= 0 && r.margin < 0.25).length;
-  const steps = lightnessSteps(theme.light);
-  const range = steps.length > 1 ? steps[steps.length - 1] - steps[0] : 0;
-  const density = range > 0 ? steps.length / range : 0;
-  console.log(
-    theme.id.padEnd(24) +
-      String(nearGate).padStart(10) +
-      String(steps.length).padStart(9) +
-      range.toFixed(3).padStart(9) +
-      density.toFixed(1).padStart(13) +
-      String(chromaSpend(theme.light)).padStart(9) +
-      String(unreadable(theme.light)).padStart(8)
-  );
+  for (const mode of ["light", "dark"]) {
+    const nearGate = rs.filter(
+      r => r.mode === mode && r.margin >= 0 && r.margin < 0.25
+    ).length;
+    const tokens = theme[mode];
+    const steps = lightnessSteps(tokens);
+    const range = steps.length > 1 ? steps[steps.length - 1] - steps[0] : 0;
+    const density = range > 0 ? steps.length / range : 0;
+    console.log(
+      `${theme.id}/${mode}`.padEnd(24) +
+        String(nearGate).padStart(10) +
+        String(steps.length).padStart(9) +
+        range.toFixed(3).padStart(9) +
+        density.toFixed(1).padStart(13) +
+        String(chromaSpend(tokens)).padStart(9) +
+        String(unreadable(tokens)).padStart(8)
+    );
+  }
 }

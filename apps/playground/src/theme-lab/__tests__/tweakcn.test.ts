@@ -1,23 +1,34 @@
 import { describe, expect, it } from "vitest";
 
 import { describePreset } from "../../../scripts/tweakcn-description.mjs";
+import { TWEAKCN_SHORTLIST } from "../../../scripts/tweakcn-shortlist.mjs";
 import { themeToCss } from "../generate-css";
 import { TWEAKCN_THEMES } from "../themes/tweakcn.generated";
 
 // The checked-in file carries the SHORTLIST, not the full registry: the
-// importer still knows every published preset, and re-running it restores
-// any of them, but what ships in the lab is the five under comparison. The
-// ids are pinned individually so a wrong deletion (or an accidental
-// re-import of the full set) fails by name rather than by count alone.
+// importer still knows every published preset, and re-running it narrows to
+// the ones under comparison.
+//
+// The expected ids are READ from the importer's shortlist rather than
+// restated here. Restating them meant the generator and the test each held
+// their own copy, and the generator's copy did not exist at all -- the
+// narrowing was done by hand-deleting from the generated file, so
+// regenerating restored every preset and this test was the only thing that
+// noticed. A test that spells out the answer independently cannot catch the
+// two going out of step; it just becomes the second place to edit.
 describe("tweakcn presets", () => {
   it("carries exactly the shortlisted presets", () => {
-    expect(TWEAKCN_THEMES.map(theme => theme.id).sort()).toEqual([
-      "tweakcn-claude",
-      "tweakcn-modern-minimal",
-      "tweakcn-twitter",
-      "tweakcn-vercel",
-      "tweakcn-violet-bloom",
-    ]);
+    expect(TWEAKCN_THEMES.map(theme => theme.id).sort()).toEqual(
+      [...TWEAKCN_SHORTLIST].sort()
+    );
+  });
+
+  it("has a shortlist that narrows something", () => {
+    // Comparing a list against itself passes for any content, including
+    // empty. This is the fixture check that keeps the assertion above from
+    // meaning nothing if the shortlist is ever emptied or the import breaks.
+    expect(TWEAKCN_SHORTLIST.length).toBeGreaterThan(1);
+    expect(TWEAKCN_THEMES.length).toBe(TWEAKCN_SHORTLIST.length);
   });
 
   it("marks every preset as third-party", () => {
