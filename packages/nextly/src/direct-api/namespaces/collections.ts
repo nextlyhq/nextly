@@ -68,6 +68,11 @@ export async function find<TSlug extends CollectionSlug>(
     richTextFormat: config.richTextFormat,
     overrideAccess: config.overrideAccess,
     user: config.user,
+    // Same reason as the by-id read: a scoped API key is authoritative on its
+    // own grants, and without this the check resolves the key OWNER's RBAC
+    // instead — bypass included. An option on the shared config that only one
+    // operation honoured would be a security claim the other reads do not keep.
+    authenticatedScope: config.actor,
     // i18n M4: forward the content locale + fallback so localized fields resolve.
     locale: config.locale,
     fallbackLocale: config.fallbackLocale,
@@ -408,6 +413,11 @@ export async function count(
     where: args.where,
     overrideAccess: config.overrideAccess,
     user: config.user,
+    // Same reason as the by-id read: a scoped API key is authoritative on its
+    // own grants, and without this the check resolves the key OWNER's RBAC
+    // instead — bypass included. An option on the shared config that only one
+    // operation honoured would be a security claim the other reads do not keep.
+    authenticatedScope: config.actor,
     // i18n M4: parity with find() so locale-scoped counts match.
     locale: config.locale,
     fallbackLocale: config.fallbackLocale,
