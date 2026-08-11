@@ -90,13 +90,33 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
 
-      - name: Cache Turbo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # Restore only. The matching save runs at the end of the job, gated on the
+      # job having succeeded.
+      #
+      # `actions/cache` saves in a post step that runs however the job ended, so a
+      # run cancelled mid-build — which `cancel-in-progress` above makes routine —
+      # can publish a `.turbo` holding a task entry whose recorded outputs are
+      # incomplete. A later run restores it, reports `cache hit, replaying logs`,
+      # and lays down a `dist/` missing files the rest of the build imports. The
+      # symptom is `Cannot find module '.../dist/chunk-<hash>.mjs'` in a package
+      # nobody changed.
+      #
+      # Re-running cannot clear it: the key is the commit SHA, so a second attempt
+      # scores an exact hit on the same entry. Splitting restore from save is the
+      # supported way to make the save conditional (`save-always` was deprecated
+      # for this).
+      #
+      # The `v2-` prefix retires every entry written under the old scheme in one
+      # step. Cache keys are immutable and `restore-keys` prefers the newest match,
+      # so entries already poisoned would otherwise keep being selected until they
+      # aged out.
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .turbo
-          key: turbo-${{ runner.os }}-${{ github.sha }}
+          key: turbo-v2-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
-            turbo-${{ runner.os }}-
+            turbo-v2-${{ runner.os }}-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -135,6 +155,16 @@ jobs:
           TEST_MYSQL_URL: mysql://root:nextly@127.0.0.1:3306/nextly_test
           TURBO_CACHE_DIR: .turbo
 
+      # Only a job that finished its work publishes what it learned. A cancelled or
+      # failed run leaves the cache as it found it, so nothing it half-built can be
+      # restored by a later one.
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.sha }}
+
   # sqlite runs in-process against a throwaway file, so this job declares no
   # `services:` at all. Keeping it out of the matrix above means it never pulls
   # the postgres/mysql images it would not connect to, which removes its only
@@ -161,13 +191,33 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
 
-      - name: Cache Turbo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # Restore only. The matching save runs at the end of the job, gated on the
+      # job having succeeded.
+      #
+      # `actions/cache` saves in a post step that runs however the job ended, so a
+      # run cancelled mid-build — which `cancel-in-progress` above makes routine —
+      # can publish a `.turbo` holding a task entry whose recorded outputs are
+      # incomplete. A later run restores it, reports `cache hit, replaying logs`,
+      # and lays down a `dist/` missing files the rest of the build imports. The
+      # symptom is `Cannot find module '.../dist/chunk-<hash>.mjs'` in a package
+      # nobody changed.
+      #
+      # Re-running cannot clear it: the key is the commit SHA, so a second attempt
+      # scores an exact hit on the same entry. Splitting restore from save is the
+      # supported way to make the save conditional (`save-always` was deprecated
+      # for this).
+      #
+      # The `v2-` prefix retires every entry written under the old scheme in one
+      # step. Cache keys are immutable and `restore-keys` prefers the newest match,
+      # so entries already poisoned would otherwise keep being selected until they
+      # aged out.
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .turbo
-          key: turbo-${{ runner.os }}-${{ github.sha }}
+          key: turbo-v2-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
-            turbo-${{ runner.os }}-
+            turbo-v2-${{ runner.os }}-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -181,3 +231,13 @@ jobs:
           pnpm turbo test:integration --filter=@nextlyhq/adapter-sqlite --filter=nextly --filter=@nextlyhq/plugin-page-builder
         env:
           TURBO_CACHE_DIR: .turbo
+
+      # Only a job that finished its work publishes what it learned. A cancelled or
+      # failed run leaves the cache as it found it, so nothing it half-built can be
+      # restored by a later one.
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.sha }}
