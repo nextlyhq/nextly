@@ -63,10 +63,22 @@ than trusting any single marker.
      find it.** `git grep` exits 1 for "no lines selected" and for "the
      pathspec matched no files" alike, so a mistyped or since-renamed `<path>`
      certifies the removal without ever reading the file. Run the same command
-     against the commit's PREIMAGE first — `<mergeCommit>^` or `<headRefOid>^`
-     — and require a hit there. That is the positive control, and without it
-     this branch is the one place in the procedure that passes by finding
-     nothing.
+     against `<headRefOid>^` and require a hit: that proves the path resolves
+     and the marker is real.
+
+     **But that control validates the INSTRUMENT, not the outcome, and for a
+     removal it cannot validate the outcome at all.** If the text was added
+     earlier in the same PR and removed later, `<mergeCommit>^` — the state
+     `main` was in before the merge — never contained it, so its absence
+     afterwards is guaranteed whether or not the removal landed. Neither
+     preimage separates "the removal merged" from "the text was never there".
+     Absence is simply not a witness here.
+
+     So for a removal, use the control to prove the search works, then prove
+     the outcome with the DELTA in step 3: the removal hunk must appear in
+     `git diff <mergeBase>..<mergeCommit> -- <path>`. That is a positive
+     observation of the change landing rather than an inference from nothing
+     being found.
 
    - it changed a file mode, a binary, or a rename → text search cannot see it.
 

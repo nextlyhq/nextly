@@ -125,13 +125,17 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 - A test that passes both with and without the fix is worse than no test: the
   next reader takes the green as coverage. **Repair it first.** Usually the
   fixture never reaches the mechanism or the assertion is satisfied by absence,
-  and both are fixable — deleting is right only when the behaviour is genuinely
-  covered elsewhere, or the test asserts something the code no longer does.
-  Deleting the ONLY attempted coverage for a behaviour trades a misleading green
-  for no signal at all, which is not an improvement. When you do delete, say in
-  the file that remains where the behaviour IS covered; this is the deliberate
-  removal the count rule exempts, so state the drop rather than letting it look
-  like a suite that went missing.
+  and both are fixable. Deleting the ONLY attempted coverage for a behaviour
+  trades a misleading green for no signal at all, which is not an improvement.
+  Deletion is right in two cases, and they need different notes:
+  - **redundant** — the behaviour is genuinely covered elsewhere. Say in the
+    file that remains WHERE, so the next reader can follow it.
+  - **obsolete** — the code no longer does the thing. There is no remaining
+    file, and demanding one would force a false coverage comment. Say what
+    behaviour was removed and in which change instead.
+
+  Either way this is the deliberate removal the count rule exempts, so state the
+  drop rather than letting it look like a suite that went missing.
 
 ## Conventions (enforced; violations will be rejected in review)
 
