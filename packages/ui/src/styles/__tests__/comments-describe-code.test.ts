@@ -156,12 +156,12 @@ const META_REFERENCES: Array<[RegExp, string]> = [
   // Kept narrow on purpose. "the fix is" and "fixes" are ordinary and stay
   // legal; only a fix described as arriving in parts is caught.
   //
-  // "attempt" was tried here and removed. It cannot be separated from
-  // legitimate algorithmic prose -- "the first attempt to connect uses IPv6"
-  // describes runtime behaviour, not an edit, and this repository already
-  // uses that wording to explain an implementation. A pattern that fires on
-  // good comments gets the whole check switched off, which costs more than
-  // the narration it would have caught.
+  // "attempt" does not belong here: it cannot be separated from legitimate
+  // algorithmic prose. "The first attempt to connect uses IPv6" describes
+  // runtime behaviour rather than an edit, and this repository uses that
+  // wording to explain an implementation. A pattern that fires on good
+  // comments costs more than the narration it catches, because a check people
+  // believe is wrong gets switched off entirely.
   [/\b(first|second|third) half of (a|the) fix\b/i, "an edit sequence"],
 ];
 
@@ -187,6 +187,10 @@ interface Violation {
   text: string;
 }
 
+/** A comment line with its markers removed, so two can be joined as prose. */
+const strip = (line: string): string =>
+  line.replace(/^\s*(\/\*+|\*\/|\/\/|\*)\s*/, "").replace(/\s*\*\/\s*$/, "");
+
 function violationsIn(path: string): Violation[] {
   const found: Violation[] = [];
   const source = readFileSync(resolve(repo, path), "utf8");
@@ -197,9 +201,25 @@ function violationsIn(path: string): Violation[] {
     // own and reports its own line number. Reporting the line the comment
     // OPENS on would point a reader at the top of a doc block and leave them
     // to find the offending sentence.
-    span.text.split("\n").forEach((text, offset) => {
+    const lines = span.text.split("\n");
+    lines.forEach((text, offset) => {
+      // Each line is also joined with the one after it, with comment markers
+      // stripped, because prose wraps and a pattern is not a line. A sentence
+      // ending "half of a" and continuing "fix" on the next line expresses
+      // exactly what these patterns exist to catch, and matching per line
+      // alone lets any phrase escape by falling across a line break -- an
+      // escape hatch that opens by accident, whenever a comment is reflowed.
+      //
+      // The pair is searched but the FIRST line is reported, so a reader lands
+      // on where the phrase starts rather than where it happened to break.
+      const next = lines[offset + 1];
+      const joined =
+        next === undefined
+          ? text
+          : `${strip(text)} ${strip(next)}`.replace(/\s+/g, " ");
+
       for (const [pattern, kind] of META_REFERENCES) {
-        if (!pattern.test(text)) continue;
+        if (!pattern.test(text) && !pattern.test(joined)) continue;
         found.push({
           where: `${path}:${span.line + offset}`,
           kind,

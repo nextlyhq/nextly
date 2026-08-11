@@ -167,9 +167,10 @@ const DASHBOARD_EVIDENCE = [
   // is satisfied by whichever of the two requests succeeded -- including the
   // case where the sidebar loaded and this widget is showing its error.
   //
-  // Counting occurrences on a loaded page is what missed this: it measures
-  // one moment, and uniqueness of rendered text is not an invariant when two
-  // independently-fetched components can produce the same label.
+  // Uniqueness of rendered text is not an invariant when two independently
+  // fetched components can produce the same label, so counting occurrences on
+  // a loaded page cannot establish it -- a count describes the render it
+  // observed, not every render.
   {
     text: "Homepage",
     within: 'section[aria-labelledby="dashboard-singles-heading"]',
