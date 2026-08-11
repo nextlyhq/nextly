@@ -729,8 +729,8 @@ export class FieldGroupSchemaService {
           code: "UNIQUE_NOT_ENFORCEABLE_ON_DIALECT",
           message:
             `"${name}" is marked unique, but ${this.dialect} cannot enforce uniqueness on a ` +
-            `${type} column. Give it a maximum length so it becomes a bounded string, or ` +
-            `remove the unique flag.`,
+            `${type} column. Store the value in a short-variant text field, which becomes a ` +
+            `bounded VARCHAR the server can key, or remove the unique flag.`,
         },
       ],
       logContext: { tableName, field: name, type, dialect: this.dialect },

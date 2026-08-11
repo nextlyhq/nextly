@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../../errors";
 import { DynamicCollectionSchemaService } from "../../../../dynamic-collections/services/dynamic-collection-schema-service";
+import { uniquenessCanBeAnIndex } from "../../../services/index-name";
 import { buildDesiredTableFromFields } from "../build-from-fields";
 
 type Dialect = "postgresql" | "mysql" | "sqlite";
@@ -127,7 +128,32 @@ describe("uniqueness a dialect cannot enforce", () => {
     expect(reported[0]).toContain("fields.sku");
     expect(reported[0]).toContain("UNIQUE_NOT_ENFORCEABLE_ON_DIALECT");
     // A refusal that does not say what to do instead is only a wall.
-    expect(reported[0]).toMatch(/maximum length|remove the unique flag/);
+    expect(reported[0]).toContain("remove the unique flag");
+    expect(reported[0]).toContain("short-variant text field");
+  });
+
+  it("names a remedy the column mapper can actually deliver", () => {
+    // The remedy has to be checked against the mapper, not just read. A maximum length is the
+    // intuitive advice and it is inert: only the short text variant reaches a bounded VARCHAR,
+    // while every unkeyable type stays TEXT/JSON however it is bounded. A message naming an
+    // ineffective remedy sends the user to change a setting that cannot resolve the refusal.
+    const service = new DynamicCollectionSchemaService(undefined, "mysql");
+
+    const shortText = service.mapFieldTypeToSQL(
+      "text",
+      undefined,
+      { variant: "short" },
+      { maxLength: 120 }
+    );
+    expect(shortText).toMatch(/^varchar\(/i);
+    expect(uniquenessCanBeAnIndex(shortText, "mysql")).toBe(true);
+
+    for (const type of ["textarea", "richText", "code", "json", "chips"]) {
+      const bounded = service.mapFieldTypeToSQL(type, undefined, undefined, {
+        maxLength: 120,
+      });
+      expect(uniquenessCanBeAnIndex(bounded, "mysql")).toBe(false);
+    }
   });
 
   it("is allowed on a dialect that CAN enforce it", () => {
