@@ -146,9 +146,13 @@ export function EmailProviderForm({
     [selectedDescriptor]
   );
 
-  // Which record this form has already been populated from. Hydration happens
-  // ONCE per provider, not on every change to its inputs.
-  const hydratedFor = useRef<string | null>(null);
+  // Which record this form has already been populated from, and whether the
+  // catalog had a descriptor for it at the time. Hydration happens ONCE per
+  // provider, not on every change to its inputs — but a hydration that had no
+  // descriptor filled in none of the configuration, so it is not finished.
+  const hydratedFor = useRef<{ id: string; hadDescriptor: boolean } | null>(
+    null
+  );
 
   // Repopulate once the record and the catalog have both arrived: both are
   // fetched, and whichever lands second decides which fields can be filled in.
@@ -165,9 +169,33 @@ export function EmailProviderForm({
     // without one would fill the form from the record alone and then never run
     // again, leaving every configuration field empty.
     if (!descriptor && descriptors.length === 0) return;
-    if (hydratedFor.current === provider.id) return;
 
-    hydratedFor.current = provider.id;
+    const hydrated = hydratedFor.current;
+    if (hydrated?.id === provider.id) {
+      // Already populated, and populated from a descriptor — nothing a later
+      // catalog can add.
+      if (hydrated.hadDescriptor || !descriptor) return;
+
+      // The catalog answered "not registered" when this form opened and
+      // answers otherwise now: the plugin was reinstalled while the tab sat
+      // open. The configuration half was filled from a descriptor that did
+      // not exist, so its fields are empty while the form is editable again —
+      // a required credential reads as missing, and an optional blank submits
+      // as a deliberate removal of what is stored.
+      hydratedFor.current = { id: provider.id, hadDescriptor: true };
+      // Only the configuration is replaced. The identity fields were filled
+      // from the record and belong to whoever has the form open.
+      form.reset({
+        ...form.getValues(),
+        configuration: providerToFormValues(provider, descriptor).configuration,
+      });
+      return;
+    }
+
+    hydratedFor.current = {
+      id: provider.id,
+      hadDescriptor: descriptor !== undefined,
+    };
     form.reset(providerToFormValues(provider, descriptor));
   }, [provider, isEdit, descriptors, form]);
 
