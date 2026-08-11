@@ -299,12 +299,23 @@ function declaredSecretValues(
           ? String(current)
           : undefined;
     if (scalar === undefined || scalar.length === 0) continue;
-    // A secret of one to three characters matches almost any identifier, so
-    // comparing against it would delete every message id this provider
-    // returns. It cannot be compared safely and it cannot be ignored either --
-    // it is recorded as UNMATCHABLE, and the caller drops the id outright.
-    if (scalar.length < 4) hasUnmatchable = true;
-    else comparable.push(scalar);
+    // Both the stored form and its trimmed form. A parser is free to normalise
+    // what it is handed -- `z.string().trim()` is the ordinary way to write a
+    // credential field -- and the adapter then closes over the trimmed value
+    // while this only ever sees what was stored. Comparing the stored form
+    // alone lets `"  key  "` be returned inside `id-key`, which is the whole
+    // disclosure this exists to stop.
+    for (const needle of new Set([scalar, scalar.trim()])) {
+      if (needle.length === 0) continue;
+      // A secret of one to three characters matches almost any identifier, so
+      // comparing against it would delete every message id this provider
+      // returns. It cannot be compared safely and it cannot be ignored either
+      // -- it is recorded as UNMATCHABLE, and the caller drops the id
+      // outright. Applied per needle, so a credential that is long only
+      // because of its whitespace is treated as the short one it really is.
+      if (needle.length < 4) hasUnmatchable = true;
+      else comparable.push(needle);
+    }
   }
 
   return { comparable, hasUnmatchable };
@@ -333,7 +344,13 @@ function withoutLeakedSecrets(
   // longer credential.
   if (secrets.hasUnmatchable) return { ...result, messageId: undefined };
 
-  if (!secrets.comparable.some(secret => messageId.includes(secret))) {
+  // Case-insensitive, for the same reason the trimmed form is compared: a
+  // parser that lowercases a hex token leaves the adapter holding a value this
+  // never saw. An id that carries the credential in any casing is dropped.
+  const haystack = messageId.toLowerCase();
+  if (
+    !secrets.comparable.some(secret => haystack.includes(secret.toLowerCase()))
+  ) {
     return result;
   }
   return { ...result, messageId: undefined };
@@ -534,9 +551,16 @@ function normalizeProviderFailure(
  * returned as it is. That is what makes enforcing at both ends safe.
  *
  * The secrets are read from the configuration this adapter was built FROM,
- * which is the stored value rather than the provider's parsed form. That is the
- * right side: a parser may coerce a port to a number, but a credential is the
- * string it was given.
+ * because the parsed form never leaves `createAdapterFrom` -- the erased
+ * definition returns an adapter, not the value it parsed. The adapter can
+ * therefore hold a credential in a shape this never saw, so the stored string
+ * and its trimmed form are both compared and the comparison ignores case,
+ * which covers the normalisations a credential field ordinarily receives.
+ *
+ * A parser that transforms a credential further -- encodes it, or derives a
+ * token from it -- is outside what any comparison here can reach. Closing that
+ * needs the parsed value, which is a change to the provider contract rather
+ * than to this wrapper.
  */
 export function containProviderCallbacks(
   provider: RegisteredEmailProvider

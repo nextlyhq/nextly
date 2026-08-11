@@ -1,8 +1,9 @@
 /**
  * Email domain DI registrations.
  *
- * Registers the three email services (provider, template, orchestration)
- * so that both direct API callers and the dispatcher can resolve them.
+ * Registers the four email services (delivery, provider, template,
+ * orchestration) so that both direct API callers and the dispatcher can
+ * resolve them.
  */
 
 import { EmailErrorCode } from "../../domains/email/errors";

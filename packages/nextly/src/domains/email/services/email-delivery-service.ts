@@ -153,7 +153,7 @@ export class EmailDeliveryService extends BaseService {
   }
 
   /**
-   * Record every recipient of one message, in a single statement.
+   * Record every recipient of one message.
    *
    * A message with copied recipients produces one row per address, because the
    * question the table answers is asked about a PERSON and a person copied on

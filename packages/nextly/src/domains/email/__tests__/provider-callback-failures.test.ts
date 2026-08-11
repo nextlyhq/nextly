@@ -292,6 +292,97 @@ describe("a message id built out of a credential", () => {
   });
 });
 
+describe("a credential the parser normalised on the way in", () => {
+  /**
+   * The adapter closes over the PARSED configuration while containment reads
+   * the stored one, so the two disagree the moment a parser changes the value
+   * — and `z.string().trim()` is the ordinary way to declare a credential
+   * field.
+   */
+  function normalisingProvider(normalise: (raw: string) => string) {
+    return defineEmailProvider<{ apiKey: string }>({
+      type: "normaliser",
+      label: "Normaliser",
+      configFields: [
+        { name: "apiKey", label: "API Key", kind: "password", secret: true },
+      ],
+      parseConfig: input => ({
+        apiKey: normalise((input as { apiKey: string }).apiKey),
+      }),
+      createAdapter: config => ({
+        send: () =>
+          Promise.resolve({
+            success: true,
+            messageId: `id-${config.apiKey}`,
+          }),
+      }),
+    });
+  }
+
+  it("is caught when the parser trimmed it", async () => {
+    const adapter = normalisingProvider(raw => raw.trim()).createAdapterFrom({
+      apiKey: "  sk-live-trimmed-away  ",
+    });
+
+    await expect(
+      adapter.send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" })
+    ).resolves.toEqual({ success: true, messageId: undefined });
+  });
+
+  it("is caught when the parser changed its case", async () => {
+    const adapter = normalisingProvider(raw =>
+      raw.toLowerCase()
+    ).createAdapterFrom({ apiKey: "SK-LIVE-SHOUTED-KEY" });
+
+    await expect(
+      adapter.send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" })
+    ).resolves.toEqual({ success: true, messageId: undefined });
+  });
+
+  it("drops the id when trimming leaves too little to compare", async () => {
+    // The stored value is long enough to compare and the credential the
+    // adapter holds is not, so the id cannot be checked either way.
+    const adapter = normalisingProvider(raw => raw.trim()).createAdapterFrom({
+      apiKey: "        ab        ",
+    });
+
+    await expect(
+      adapter.send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" })
+    ).resolves.toEqual({ success: true, messageId: undefined });
+  });
+
+  it("still leaves an ordinary id alone", async () => {
+    // The control. Comparing more forms of the credential must not start
+    // deleting ids that carry none of them.
+    const provider = defineEmailProvider<{ apiKey: string }>({
+      type: "normaliser",
+      label: "Normaliser",
+      configFields: [
+        { name: "apiKey", label: "API Key", kind: "password", secret: true },
+      ],
+      parseConfig: input => ({
+        apiKey: (input as { apiKey: string }).apiKey.trim(),
+      }),
+      createAdapter: () => ({
+        send: () =>
+          Promise.resolve({
+            success: true,
+            messageId: "<abc123@mail.example.com>",
+          }),
+      }),
+    });
+
+    await expect(
+      provider
+        .createAdapterFrom({ apiKey: "  sk-live-untouched-id  " })
+        .send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" })
+    ).resolves.toEqual({
+      success: true,
+      messageId: "<abc123@mail.example.com>",
+    });
+  });
+});
+
 describe("a provider that never passed through the authoring helper", () => {
   const KEY = "sk-live-must-never-be-stored";
 
