@@ -262,6 +262,9 @@ importers:
       '@nextlyhq/admin':
         specifier: workspace:*
         version: link:../packages/admin
+      '@nextlyhq/builder':
+        specifier: workspace:*
+        version: link:../packages/builder
       '@nextlyhq/eslint-config':
         specifier: workspace:*
         version: link:../packages/eslint-config

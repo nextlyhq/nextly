@@ -41,3 +41,21 @@
  * than with a constant nothing reads yet.
  */
 export const BUILDER_PACKAGE_NAME = "@nextlyhq/builder" as const;
+
+/**
+ * The one mapping between the canvas frame and the host page.
+ *
+ * Exported because the acceptance harness measures against the SAME arithmetic
+ * the editor positions with. A browser test carrying its own copy certifies its
+ * own stale copy, and would keep passing through exactly the correction it
+ * exists to catch.
+ */
+export {
+  FrameGeometryError,
+  pointToCanvas,
+  pointToHost,
+  rectToHost,
+  type FrameGeometry,
+  type Point,
+  type Rect,
+} from "./geometry";

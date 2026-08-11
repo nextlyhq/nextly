@@ -1,58 +1,69 @@
+/**
+ * The canvas↔host mapping the acceptance tests measure against.
+ *
+ * **Adapts the editor's own mapping rather than restating it.** The arithmetic
+ * lives once, in `@nextlyhq/builder`, and this file only changes the call shape:
+ * these helpers take `(value, frameOrigin, scale)` because that is how a
+ * Playwright test has the numbers to hand — origin from the frame element's
+ * box, scale read off the page — while the editor holds them together as one
+ * `FrameGeometry`.
+ *
+ * The reason it is an adapter and not a copy is what the tests are FOR. A
+ * browser harness carrying its own arithmetic certifies its own arithmetic: the
+ * two agree on the day they are written, and the first correction to either
+ * makes the acceptance suite validate a stale copy while reporting that the
+ * editor is fine. That failure is invisible, because both sides are
+ * individually self-consistent.
+ *
+ * A consequence worth knowing before it surprises someone: a frame that cannot
+ * describe a mapping — a zero, negative or non-finite scale — now THROWS rather
+ * than returning `NaN` coordinates, because that is what the editor's mapping
+ * does. A test measuring an unrendered element gets an error naming the problem
+ * instead of an assertion failure about numbers that were never meaningful.
+ */
+import {
+  pointToCanvas,
+  pointToHost,
+  rectToHost,
+  type FrameGeometry,
+} from "@nextlyhq/builder";
+
 import type { Point, Rect } from "./driver";
+
+/** The two numbers a Playwright test has, in the shape the editor's mapping takes. */
+function frame(frameOrigin: Point, scale: number): FrameGeometry {
+  return { origin: frameOrigin, scale };
+}
 
 /**
  * Convert a point inside the canvas frame to the host document's coordinates.
  *
- * Kept as a pure function so it can be tested against browser-reported
- * geometry rather than inferred from whether an overlay happens to look right.
- *
- * A frame-local point is scaled by whatever transform the frame carries and
- * then offset by the frame's own position in the host. The scale term is not
- * optional: a canvas offering zoom-to-fit is exactly the case dnd-kit #1706
- * covered, and omitting it puts the overlay progressively further out the
- * further a point sits from the frame's transform origin.
+ * The scale term is not optional: a canvas offering zoom-to-fit is exactly the
+ * case dnd-kit #1706 covered, and omitting it puts the overlay progressively
+ * further out the further a point sits from the frame's transform origin.
  */
 export function mapFramePointToHost(
   framePoint: Point,
   frameOrigin: Point,
   scale = 1
 ): Point {
-  return {
-    x: frameOrigin.x + framePoint.x * scale,
-    y: frameOrigin.y + framePoint.y * scale,
-  };
+  return pointToHost(framePoint, frame(frameOrigin, scale));
 }
 
-/**
- * The inverse: a host point expressed in the canvas's own coordinates.
- *
- * Both directions are needed and neither is optional. Drawing an overlay in
- * parent chrome maps canvas -> host; deciding which block sits under the
- * pointer maps host -> canvas. A canvas that implements only one ends up
- * open-coding the other at the call site, which is how the two drift apart.
- */
+/** Convert a host-document point back into the canvas frame's coordinates. */
 export function mapHostPointToFrame(
   hostPoint: Point,
   frameOrigin: Point,
   scale = 1
 ): Point {
-  return {
-    x: (hostPoint.x - frameOrigin.x) / scale,
-    y: (hostPoint.y - frameOrigin.y) / scale,
-  };
+  return pointToCanvas(hostPoint, frame(frameOrigin, scale));
 }
 
-/** The same mapping for a rect, so an indicator can be drawn in parent chrome. */
+/** Convert a rectangle inside the frame to the host document's coordinates. */
 export function mapFrameRectToHost(
   frameRect: Rect,
   frameOrigin: Point,
   scale = 1
 ): Rect {
-  const topLeft = mapFramePointToHost(frameRect, frameOrigin, scale);
-  return {
-    x: topLeft.x,
-    y: topLeft.y,
-    width: frameRect.width * scale,
-    height: frameRect.height * scale,
-  };
+  return rectToHost(frameRect, frame(frameOrigin, scale));
 }

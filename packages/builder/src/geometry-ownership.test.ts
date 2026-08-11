@@ -17,7 +17,7 @@
  * would slip past a search for the dotted form.
  */
 import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import ts from "typescript";
@@ -28,8 +28,24 @@ const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 /** Extensions the bundler follows, and therefore the ones this guard must read. */
 const BUNDLED_MODULE = /\.(?:tsx?|jsx?|mjs|cjs)$/;
 
-/** The one module allowed to convert between the frame and the host. */
+/**
+ * The one module allowed to convert between the frame and the host, matched by
+ * its exact file name.
+ *
+ * By basename EQUALITY rather than by suffix. `endsWith("geometry.ts")` also
+ * exempts `overlay-geometry.ts` and `nested/frame-geometry.ts` — precisely the
+ * names a second implementation would be given — so a guard written that way
+ * admits the case it exists to refuse.
+ */
 const GEOMETRY_MODULE = "geometry.ts";
+
+/** This file, which necessarily names the reads it is looking for. */
+const OWN_TEST = "geometry-ownership.test.ts";
+
+/** Whether a path IS the named module, rather than merely ending with its name. */
+function isModule(file: string, name: string): boolean {
+  return basename(file) === name;
+}
 
 /**
  * Reads that cross the frame, and are therefore the ones to own in one place.
@@ -93,14 +109,26 @@ describe("geometry crosses the frame in one place", () => {
 
   it("finds no cross-frame read outside the geometry module", () => {
     const offenders = files
-      .filter(file => !file.endsWith(GEOMETRY_MODULE))
-      .filter(file => !file.endsWith("geometry-ownership.test.ts"))
+      .filter(file => !isModule(file, GEOMETRY_MODULE))
+      .filter(file => !isModule(file, OWN_TEST))
       .flatMap(file => {
         const reads = crossFrameReads(readFileSync(file, "utf8"), file);
         return reads.map(read => `${relative(SRC_DIR, file)} reads ${read}`);
       });
 
     expect(offenders).toEqual([]);
+  });
+
+  it("exempts the geometry module by name, not by suffix", () => {
+    // The allowance has to be exactly as wide as the thing allowed. A suffix
+    // test also exempts `overlay-geometry.ts` and `nested/frame-geometry.ts`,
+    // which are the names a second implementation would actually be given — so
+    // the guard would wave through the duplicate it exists to catch.
+    expect(isModule("/a/b/geometry.ts", GEOMETRY_MODULE)).toBe(true);
+    expect(isModule("/a/b/overlay-geometry.ts", GEOMETRY_MODULE)).toBe(false);
+    expect(isModule("/a/nested/frame-geometry.ts", GEOMETRY_MODULE)).toBe(
+      false
+    );
   });
 
   it("can see a cross-frame read when there is one", () => {
