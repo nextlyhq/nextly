@@ -118,18 +118,75 @@ const route = createContentRoute({
   buildMetadata: entry => buildMetadata(entry),
 });
 
+export const generateMetadata = route.generateMetadata;
+export default route.ContentPage;
+```
+
+`createContentRoute` reads **access-enforced** content: the collections' read
+rules decide, so the answer depends on who is asking and the page renders per
+request. It deliberately returns no `generateStaticParams` — Next classifies a
+route as static because that export exists, and a route that must render
+dynamically cannot also claim to be static.
+
+When the content in those collections is public, say so and the route
+pre-renders:
+
+```tsx
+// app/[[...slug]]/page.tsx
+import { createPublicContentRoute, buildMetadata } from "nextly/runtime";
+
+const route = createPublicContentRoute({
+  collections: ["pages"],
+  render: entry => <Page entry={entry} />,
+  buildMetadata: entry => buildMetadata(entry),
+});
+
 export const generateStaticParams = route.generateStaticParams;
 export const generateMetadata = route.generateMetadata;
 export const dynamicParams = true;
 export default route.ContentPage;
 ```
 
-It resolves a path across the configured collections (first match wins), calls
-`notFound()` on a genuine miss or a reserved path (`/admin`, `/api`, `/_next`,
-`/static`, and metadata files like `sitemap.xml`), and pre-renders published
-paths in `generateStaticParams`. Access-restricted collections are skipped by
-the static scan (they have no public paths to pre-render) and enforced per
-request instead. `status` and `overrideAccess` behave as in `resolveContent`.
+A public route reads trusted, so its reads are cacheable and its paths
+pre-renderable. It refuses `draft` and `staticParamsLimit: 0` at construction —
+both would force the render dynamic while the route still told Next it was
+static. Use `createContentRoute` for preview or for a site that pre-renders
+nothing.
+
+Both factories resolve a path across the configured collections (first match
+wins) and call `notFound()` on a genuine miss or a reserved path (`/admin`,
+`/api`, `/_next`, `/static`, and metadata files like `sitemap.xml`). `status`
+behaves as in `resolveContent`.
+
+**Which factory you call decides whether access rules are consulted at all, so
+choose it per collection set, not per preference.**
+
+- `createContentRoute` reads **enforced**. A rule-less collection still renders;
+  a stored member-only or role-based one is hidden from these anonymous
+  requests.
+- `createPublicContentRoute` reads **trusted** — access rules are not consulted,
+  on the resolved read and on the `generateStaticParams` scan alike. That is
+  what makes its reads cacheable and its paths pre-renderable, and it means
+  **every collection you list must be public**. A restricted collection listed
+  here has its entries read trusted and its paths pre-rendered into public HTML.
+
+> ⚠️ **The trust does not stop at the collections you list.** At the default
+> `depth: 1`, a populated relationship is expanded with the same trusted
+> posture — access rules bypassed, and lifecycle widened to include drafts. So a
+> page in a public collection can embed a draft or access-restricted row from a
+> **related** collection, and this route pre-renders that page into a static
+> artifact. Publishing it that way cannot be taken back by unpublishing the
+> source row.
+>
+> Until this is resolved, treat every collection a public route's pages
+> **populate** as being as exposed as the ones it lists. Use
+> `createContentRoute`, or set `depth: 0`, where that is not acceptable.
+
+**The route factories take no `overrideAccess` option** — unlike
+`resolveContent`, which still does, because a page calling it directly knows who
+is asking. Two settings that had to agree is what produced a route behaving
+differently depending on whether the database had rows in it when the build ran;
+for a route, the posture is now the name of the function you call.
 
 This route always resolves **anonymously** — its config is captured once at
 module scope, so it cannot carry a per-request user. For a route that renders
@@ -177,9 +234,12 @@ could edit the document, so a request this returns `true` for is read trusted.
 Put the check inside that function — a verified preview cookie, a session — and
 never in a query parameter a visitor controls.
 
-`generateStaticParams` ignores `draft` entirely: it runs at build time, where
-there is no visitor to gate, and a draft baked into a static path would be
-published to everyone.
+`draft` belongs to `createContentRoute` only. `createPublicContentRoute` refuses
+it at construction: a draft read is never cacheable, so it marks the render
+dynamic — while the public route's `generateStaticParams` tells Next the route
+is static, and a dynamic marking inside a static render is an error. Preview and
+pre-rendering are not compatible on one route; mount previewable paths on a
+dynamic one.
 
 A literal `draft: true` is accepted for a route mounted behind your own auth. It
 means **every** visitor sees unpublished content, which is almost never what a

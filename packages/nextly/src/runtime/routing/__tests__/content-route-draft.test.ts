@@ -13,7 +13,7 @@ import type {
   FindByIDArgs,
 } from "../../../direct-api/types/collections";
 import type { ListResult } from "../../../direct-api/types/shared";
-import { createContentRoute } from "../content-route";
+import { createContentRoute, createPublicContentRoute } from "../content-route";
 import type { ResolvedContext } from "../content-route";
 import type { ContentEntry, NextlyContentReader } from "../resolve-content";
 
@@ -70,6 +70,27 @@ function routeWith(
   draft?: boolean | (() => boolean | Promise<boolean>)
 ) {
   return createContentRoute({
+    collections: ["pages"],
+    nextly: reader,
+    render: (entry: ContentEntry) => entry,
+    buildMetadata: (entry: ContentEntry) => ({ title: String(entry.id) }),
+    ...(draft === undefined ? {} : { draft }),
+  });
+}
+
+/**
+ * The same route, declared public — the only shape that pre-renders.
+ *
+ * Separate from `routeWith` because the two postures differ in what they read
+ * with, not only in what they return: a public route reads TRUSTED. Tests about
+ * resolution keep the enforced default; tests about pre-rendering must use this
+ * one, because an enforced route has no `generateStaticParams` to call.
+ */
+function publicRouteWith(
+  reader: NextlyContentReader,
+  draft?: boolean | (() => boolean | Promise<boolean>)
+) {
+  return createPublicContentRoute({
     collections: ["pages"],
     nextly: reader,
     render: (entry: ContentEntry) => entry,
@@ -250,7 +271,7 @@ describe("the content route's draft decision", () => {
     // its own resolver answers with `notFound()`, while the slugs it does serve
     // stayed absent from the scan and fell back to rendering on demand.
     const { reader, calls } = stubReader();
-    const route = createContentRoute({
+    const route = createPublicContentRoute({
       collections: ["pages"],
       nextly: reader,
       locale: "fr",
@@ -270,16 +291,51 @@ describe("the content route's draft decision", () => {
     expect(calls.every(call => call.locale === "fr")).toBe(true);
   });
 
-  it("never pre-renders draft paths", async () => {
-    // `generateStaticParams` runs at build time, where there is no visitor and
-    // no preview. Baking a draft into a static path would publish it to
-    // everyone, permanently, with no request to gate it.
+  it("cannot be asked to pre-render a route that also serves drafts", () => {
+    // The guarantee used to be behavioural — `generateStaticParams` scanned
+    // published only, so a draft never reached a built path. It is now
+    // structural: a draft read is never cacheable and marks the render dynamic,
+    // while a public route's `generateStaticParams` tells Next it is static, so
+    // the pair is refused where it is written. Stronger than the old assertion,
+    // because it removes the combination rather than relying on the scan to
+    // behave correctly inside it.
+    const { reader } = stubReader();
+
+    expect(() => publicRouteWith(reader, true)).toThrow(/cannot serve drafts/i);
+  });
+
+  it("cannot be asked to pre-render a route that builds no paths", () => {
+    // `staticParamsLimit: 0` asks for a static route with nothing to build. The
+    // generator returns `[]` — accepted by standard App Router builds, rejected
+    // outright by Next 16 Cache Components — so the contradiction is refused
+    // where it is written rather than at build time.
+    const { reader } = stubReader();
+
+    expect(() =>
+      createPublicContentRoute({
+        collections: ["pages"],
+        nextly: reader,
+        render: (entry: ContentEntry) => entry,
+        staticParamsLimit: 0,
+      })
+    ).toThrow(/pre-render nothing/i);
+  });
+
+  it("pre-renders published paths only, and reads them trusted", async () => {
+    // What survives of the old test: the scan itself. A public route has no
+    // draft to widen with, so `status` is the only thing keeping an unpublished
+    // entry out of a built path.
     const { reader, calls, byIdCalls } = stubReader();
 
-    await routeWith(reader, true).generateStaticParams();
+    await publicRouteWith(reader).generateStaticParams();
 
     expect(byIdCalls).toHaveLength(0);
     expect(calls.every(call => call.status === "published")).toBe(true);
-    expect(calls.every(call => call.overrideAccess === false)).toBe(true);
+    // Trusted, and that is the posture the ROUTE declared rather than a default
+    // it inherited: only a public route pre-renders, and public means the
+    // collections' read rules are not consulted. The draft guarantee does not
+    // rest on access enforcement — it rests on `status`, asserted above, which
+    // is what keeps an unpublished entry out of a built path.
+    expect(calls.every(call => call.overrideAccess === true)).toBe(true);
   });
 });

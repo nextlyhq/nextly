@@ -19,7 +19,7 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { createContentRoute } from "../content-route";
+import { createContentRoute, createPublicContentRoute } from "../content-route";
 import { resolveContent } from "../resolve-content";
 import type { ContentEntry } from "../resolve-content";
 
@@ -47,6 +47,30 @@ function route(
       }) => boolean | Promise<boolean>)
 ) {
   return createContentRoute({
+    collections: ["pages"],
+    nextly,
+    render: (entry: ContentEntry) => entry,
+    ...(draft === undefined ? {} : { draft }),
+  });
+}
+
+/**
+ * The same route, declared public — the only shape that pre-renders.
+ *
+ * An access-enforced route answers per visitor, so it has no set of paths to
+ * build and is handed no `generateStaticParams`. A test about pre-rendering has
+ * to say which posture it is testing.
+ */
+function publicRoute(
+  nextly: TestNextly["nextly"],
+  draft?:
+    | boolean
+    | ((context: {
+        collection: string;
+        slug: string;
+      }) => boolean | Promise<boolean>)
+) {
+  return createPublicContentRoute({
     collections: ["pages"],
     nextly,
     render: (entry: ContentEntry) => entry,
@@ -170,7 +194,11 @@ describe("createContentRoute + draft layers (integration)", () => {
       data: { slug: "unreleased", title: "Unreleased", status: "draft" },
     });
 
-    const params = await route(current.nextly, true).generateStaticParams();
+    // No `draft` — a public route refuses it, because a draft read is never
+    // cacheable and would mark a render Next has classified static. The
+    // guarantee that survives is the one this test was always really about:
+    // `status` is what keeps an unpublished entry out of a built path.
+    const params = await publicRoute(current.nextly).generateStaticParams();
 
     expect(params).toContainEqual({ slug: ["about"] });
     expect(params).not.toContainEqual({ slug: ["unreleased"] });

@@ -11,7 +11,7 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { createContentRoute } from "../content-route";
+import { createContentRoute, createPublicContentRoute } from "../content-route";
 import type { ContentEntry } from "../resolve-content";
 
 const pages = () =>
@@ -33,6 +33,22 @@ function route(nextly: TestNextly["nextly"]) {
     nextly,
     render: (entry: ContentEntry) => ({ title: entry.title }),
     buildMetadata: (entry: ContentEntry) => ({ title: String(entry.title) }),
+  });
+}
+
+/**
+ * The same route, declared public.
+ *
+ * Only a public route pre-renders, so only a public route is handed a
+ * `generateStaticParams` — an access-enforced one answers per visitor and has
+ * no set of paths to build. Kept separate from `route` rather than folded into
+ * it so the tests that exercise resolution keep the default posture.
+ */
+function publicRoute(nextly: TestNextly["nextly"]) {
+  return createPublicContentRoute({
+    collections: ["pages"],
+    nextly,
+    render: (entry: ContentEntry) => ({ title: entry.title }),
   });
 }
 
@@ -105,7 +121,7 @@ describe("createContentRoute (integration)", () => {
     current = await createTestNextly({ collections: [pages()] });
     await seed(current.nextly);
 
-    const params = await route(current.nextly).generateStaticParams();
+    const params = await publicRoute(current.nextly).generateStaticParams();
     expect(params).toContainEqual({ slug: ["about"] });
     expect(params).toContainEqual({ slug: ["contact"] });
     expect(params).not.toContainEqual({ slug: ["secret"] });
@@ -121,22 +137,57 @@ describe("createContentRoute (integration)", () => {
       data: { slug: "admin", title: "Admin", status: "published" },
     });
 
-    const params = await route(current.nextly).generateStaticParams();
+    const params = await publicRoute(current.nextly).generateStaticParams();
     expect(params).not.toContainEqual({ slug: ["admin"] });
     expect(params).toContainEqual({ slug: ["about"] });
   });
 
-  it("returns no static params when the limit is non-positive", async () => {
+  it("refuses a public route that would pre-render nothing", async () => {
+    current = await createTestNextly({ collections: [pages()] });
+    // `staticParamsLimit: 0` asks for a static route that builds no paths. The
+    // generator would return `[]` — accepted by standard App Router builds and
+    // rejected outright by Next 16 Cache Components — so the contradiction is
+    // refused where it is stated rather than at build time.
+    expect(() =>
+      createPublicContentRoute({
+        collections: ["pages"],
+        nextly: current!.nextly,
+        render: (entry: ContentEntry) => ({ title: entry.title }),
+        staticParamsLimit: 0,
+      })
+    ).toThrow(/pre-render nothing/i);
+  });
+
+  it("refuses a public route that also serves drafts", async () => {
+    current = await createTestNextly({ collections: [pages()] });
+    // A draft read is never cacheable, so it marks the render dynamic — while a
+    // public route's `generateStaticParams` tells Next the route is static. That
+    // is the same contradiction the split exists to remove, arriving through a
+    // different option, so it is refused rather than left to 500 per request.
+    expect(() =>
+      createPublicContentRoute({
+        collections: ["pages"],
+        nextly: current!.nextly,
+        render: (entry: ContentEntry) => ({ title: entry.title }),
+        draft: true,
+      })
+    ).toThrow(/cannot serve drafts/i);
+  });
+
+  it("still pre-renders nothing on a DYNAMIC route with a zero limit", async () => {
     current = await createTestNextly({ collections: [pages()] });
     await seed(current.nextly);
-    // A `0` limit disables pre-rendering — every path renders on demand.
-    const params = await createContentRoute({
+    // The dynamic factory has no `generateStaticParams` to disable, so a zero
+    // limit is simply not a thing it can contradict. Asserted so the guard above
+    // is not read as "zero limits are illegal" — they are illegal only where a
+    // route has claimed it is static.
+    const route = createContentRoute({
       collections: ["pages"],
       nextly: current.nextly,
       render: (entry: ContentEntry) => ({ title: entry.title }),
       staticParamsLimit: 0,
-    }).generateStaticParams();
-    expect(params).toEqual([]);
+    });
+    expect("generateStaticParams" in route).toBe(false);
   });
 
   it("renders a resolved entry via the render callback", async () => {

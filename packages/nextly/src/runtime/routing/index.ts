@@ -19,9 +19,14 @@ export { isReservedPath } from "./reserved-paths";
 // a canonical, a link between entries — has to agree with the route or it names
 // a path the route does not serve, and re-deriving the rule is how the two come
 // to disagree.
-export { createContentRoute, slugToStaticParam } from "./content-route";
+export {
+  createContentRoute,
+  createPublicContentRoute,
+  slugToStaticParam,
+} from "./content-route";
 export type {
   ContentRoute,
+  StaticContentRoute,
   ContentRouteArgs,
   ContentRouteConfig,
   RenderContext,

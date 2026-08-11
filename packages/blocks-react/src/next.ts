@@ -29,6 +29,7 @@ import type {
 import type { Metadata } from "next";
 import {
   createContentRoute,
+  createPublicContentRoute,
   getNextly,
   nextlyTags,
   slugToStaticParam,
@@ -36,6 +37,7 @@ import {
 import type {
   ContentEntry,
   ContentRoute,
+  StaticContentRoute,
   ContentRouteConfig,
   NextlyContentReader,
   RenderContext,
@@ -678,6 +680,7 @@ function mediaResolver(
  */
 function entryPathResolver(
   config: BlocksPageConfig,
+  isPublic: boolean,
   reader: NextlyContentReader,
   budget: QueryBudget
 ): (collection: string, id: string) => Promise<string | null> {
@@ -702,7 +705,10 @@ function entryPathResolver(
   // slug this lookup has not found yet — so only the unconditional form
   // widens, and the conditional form stays on the safe published read.
   const alwaysDraft = config.draft === true;
-  const overrideAccess = alwaysDraft || (config.overrideAccess ?? false);
+  // The route's own posture, handed in: a public route reads trusted, so a
+  // reference lookup on that route must too, or a page resolves an href its
+  // own renderer would refuse.
+  const overrideAccess = alwaysDraft || isPublic;
   // An EXPLICIT status wins over draft widening, because that is the order
   // `createContentRoute` resolves in: it passes the configured status through
   // to `resolveContent`, where it beats the draft widening. Forcing `all`
@@ -870,27 +876,32 @@ function entryPathResolver(
  * Turn a collection of block documents into rendered pages.
  *
  * The composition `createContentRoute` was built to carry: it resolves a path
- * to an entry and owns `generateStaticParams`, `generateMetadata` and the
- * not-found decisions, and this fills in the render with the block renderer
- * over a context wired to the CMS.
+ * to an entry and owns `generateMetadata` and the not-found decisions, and this
+ * fills in the render with the block renderer over a context wired to the CMS.
  *
  * Wire the result into `app/[[...slug]]/page.tsx`:
  *
  * ```tsx
- * const { ContentPage, generateMetadata, generateStaticParams } =
+ * const { ContentPage, generateMetadata } =
  *   createBlocksPage({ collections: ["pages"], field: "content" });
  *
- * export { generateMetadata, generateStaticParams };
+ * export { generateMetadata };
  * export default ContentPage;
  * ```
+ *
+ * There is no `generateStaticParams` here, and its absence is the contract:
+ * access rules decide who may read, so the answer depends on the visitor and no
+ * path can be pre-rendered. For public content, {@link createPublicBlocksPage}
+ * reads trusted and returns one to export.
  *
  * Draft preview needs no argument here. `createContentRoute` owns the `draft`
  * decision and this passes it through untouched, so a preview arrives as an
  * ordinary entry that happens to be the pending one.
  */
-export function createBlocksPage(
-  config: BlocksPageConfig
-): ContentRoute<ReactElement> {
+function blocksRouteConfig(
+  config: BlocksPageConfig,
+  isPublic: boolean
+): ContentRouteConfig<ReactElement> {
   const {
     field,
     blocks,
@@ -908,7 +919,7 @@ export function createBlocksPage(
     ...routeConfig
   } = config;
 
-  return createContentRoute<ReactElement>({
+  return {
     ...routeConfig,
     // The page is tagged for the records its BLOCKS read, not only for the
     // collection it was resolved from. The media and entry-path resolvers read
@@ -966,6 +977,7 @@ export function createBlocksPage(
       const resolveMedia = mediaResolver(config, readerFor(config), budget);
       const resolveEntryPath = entryPathResolver(
         config,
+        isPublic,
         readerFor(config),
         budget
       );
@@ -1007,5 +1019,32 @@ export function createBlocksPage(
           : { hostPolicy: config.hostPolicy }),
       });
     },
-  });
+  };
+}
+
+/**
+ * A blocks page over ACCESS-ENFORCED content — the secure default.
+ *
+ * Returns no `generateStaticParams`, because an enforced route answers per
+ * visitor and has no set of paths to build. See
+ * {@link createContentRoute} for why offering one anyway is a defect rather
+ * than an unused convenience.
+ */
+export function createBlocksPage(
+  config: BlocksPageConfig
+): ContentRoute<ReactElement> {
+  return createContentRoute<ReactElement>(blocksRouteConfig(config, false));
+}
+
+/**
+ * A blocks page over PUBLIC content: trusted reads, cacheable, pre-renderable.
+ *
+ * Returns `generateStaticParams` for the route file to export.
+ */
+export function createPublicBlocksPage(
+  config: BlocksPageConfig
+): StaticContentRoute<ReactElement> {
+  return createPublicContentRoute<ReactElement>(
+    blocksRouteConfig(config, true)
+  );
 }
