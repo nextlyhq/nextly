@@ -13,7 +13,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { findInvalidSlotEntries, repairInvalidSlot } from "../invalid-slots";
+import {
+  declaredSlotNames,
+  findInvalidSlotEntries,
+  repairInvalidSlot,
+} from "../invalid-slots";
 import { createBlockRegistry, defaultBlockRegistry } from "../registry";
 import {
   dropSlots,
@@ -78,7 +82,7 @@ describe("finding blocks in a slot nothing declares", () => {
     expect(entries.length).toBeGreaterThan(0);
 
     const repaired = entries.reduce(
-      (tree, entry) => repairInvalidSlot(tree, entry),
+      (tree, entry) => repairInvalidSlot(tree, entry, defaultBlockRegistry),
       root
     );
 
@@ -104,9 +108,17 @@ describe("finding blocks in a slot nothing declares", () => {
       })
     ).toContain("has no slot");
 
-    const bySlot = removeFromSlot(root, root.id, "gone", only.id);
-    // The property goes, not just the key: an empty map is itself refused on a non-container.
-    expect(bySlot.slots).toBeUndefined();
+    const bySlot = removeFromSlot(
+      root,
+      root.id,
+      "gone",
+      only.id,
+      declaredSlotNames(root, root.id, defaultBlockRegistry)
+    );
+    // The stale key goes and the DECLARED one stays. The canvas builds a drop zone per stored key,
+    // so a container left holding none would render no drop target and stop accepting blocks —
+    // worst on the page root, whose declared slot is the whole page.
+    expect(bySlot.slots).toEqual({ default: [] });
     expect(
       validateDocument(doc(bySlot), defaultBlockRegistry, {
         allowUnknown: true,
@@ -121,7 +133,13 @@ describe("finding blocks in a slot nothing declares", () => {
     const second = heading("Second");
     const root = withSlots("core/container", { legacy: [first, second] });
 
-    const after = removeFromSlot(root, root.id, "legacy", first.id);
+    const after = removeFromSlot(
+      root,
+      root.id,
+      "legacy",
+      first.id,
+      declaredSlotNames(root, root.id, defaultBlockRegistry)
+    );
     expect(after.slots?.legacy?.map(n => n.id)).toEqual([second.id]);
   });
 
@@ -163,7 +181,13 @@ describe("finding blocks in a slot nothing declares", () => {
 
     // And the claim that made it safe to stop there: removing the one entry leaves a document
     // the validator accepts, nested undeclared slot and all.
-    const repaired = removeFromSlot(root, root.id, "gone", outer.id);
+    const repaired = removeFromSlot(
+      root,
+      root.id,
+      "gone",
+      outer.id,
+      declaredSlotNames(root, root.id, defaultBlockRegistry)
+    );
     expect(
       validateDocument(doc(repaired), defaultBlockRegistry, {
         allowUnknown: true,
@@ -195,7 +219,12 @@ describe("finding blocks in a slot nothing declares", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.kind).toBe("empty-slot");
 
-    const repaired = removeSlot(root, root.id, "legacy");
+    const repaired = removeSlot(
+      root,
+      root.id,
+      "legacy",
+      declaredSlotNames(root, root.id, defaultBlockRegistry)
+    );
     expect(
       validateDocument(doc(repaired), defaultBlockRegistry, {
         allowUnknown: true,

@@ -22,7 +22,7 @@
  */
 import { declaredSlotsOf } from "./block-structure";
 import type { BlockRegistry } from "./registry";
-import { dropSlots, removeFromSlot, removeSlot } from "./tree";
+import { dropSlots, findNode, removeFromSlot, removeSlot } from "./tree";
 import type { BlockNode } from "./types";
 
 /** Where a fault sits, and how to say so to someone who cannot click on it. */
@@ -212,19 +212,39 @@ export function findInvalidSlotEntries(
  */
 export function repairInvalidSlot(
   root: BlockNode,
-  entry: InvalidSlotEntry
+  entry: InvalidSlotEntry,
+  registry: BlockRegistry
 ): BlockNode {
+  const declared = declaredSlotNames(root, entry.parentId, registry);
   switch (entry.kind) {
     case "block":
       return removeFromSlot(
         root,
         entry.parentId,
         entry.slotName,
-        entry.node.id
+        entry.node.id,
+        declared
       );
     case "empty-slot":
-      return removeSlot(root, entry.parentId, entry.slotName);
+      return removeSlot(root, entry.parentId, entry.slotName, declared);
     case "stray-slots":
       return dropSlots(root, entry.parentId);
   }
+}
+
+/**
+ * The slot names a node's definition declares, for settling its slots after a repair.
+ *
+ * `undefined` when nothing in this build describes the type, which is the same "leave it alone"
+ * answer the validator gives such a block. Exported because the editor's reducer has to settle the
+ * same way the core does, and deriving it twice is how the two would come to disagree.
+ */
+export function declaredSlotNames(
+  root: BlockNode,
+  parentId: string,
+  registry: BlockRegistry
+): readonly string[] | undefined {
+  const parent = findNode(root, parentId);
+  if (!parent) return undefined;
+  return declaredFor(parent, registry)?.map(spec => spec.name);
 }

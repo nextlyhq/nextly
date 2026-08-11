@@ -3,6 +3,7 @@
  * core tree ops, with bounded undo/redo history. Defaults for new nodes come from the
  * block registry — never a hard-coded list.
  */
+import { declaredSlotNames } from "../../core/invalid-slots";
 import type { MotionConfig } from "../../core/motion";
 import { defaultBlockRegistry } from "../../core/registry";
 import {
@@ -204,11 +205,24 @@ export function editorReducer(
     case "REMOVE_SLOT":
     case "DROP_SLOTS":
     case "REMOVE_FROM_SLOT": {
+      // The same slot names the core settles by, from the same registry: a container has to keep
+      // a home for every slot it declares or the canvas draws no drop zone for it.
+      const declared = declaredSlotNames(
+        root,
+        action.parentId,
+        defaultBlockRegistry
+      );
       const next =
         action.type === "REMOVE_FROM_SLOT"
-          ? removeFromSlot(root, action.parentId, action.slot, action.id)
+          ? removeFromSlot(
+              root,
+              action.parentId,
+              action.slot,
+              action.id,
+              declared
+            )
           : action.type === "REMOVE_SLOT"
-            ? removeSlot(root, action.parentId, action.slot)
+            ? removeSlot(root, action.parentId, action.slot, declared)
             : dropSlots(root, action.parentId);
       // The discarded block was never on the canvas, so the author's selection is unrelated to it
       // and clearing it unconditionally would take away work they can see. It only has to go when

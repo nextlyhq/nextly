@@ -87,17 +87,31 @@ export function removeNode(root: BlockNode, id: string): BlockNode {
 }
 
 /**
- * Attach a slots map to a node, dropping the property entirely when nothing is left in it.
+ * Settle a node's slots after a repair: keep the homes it declares, drop the property otherwise.
  *
- * An empty `slots` object is not the same as no slots. Validation refuses ANY slots object on a
- * block whose definition is not a container, before it looks at a single key, so a repair that
- * emptied the map but left it in place would swap one refusal for another and report success.
+ * Two opposite mistakes are possible once a stale key is removed, and each breaks something the
+ * other fixes.
+ *
+ * Leaving an empty map behind breaks the WRITE path: validation refuses any slots object on a
+ * block whose definition is not a container, before it looks at a single key, so the page would
+ * still be refused with nothing left to remove.
+ *
+ * Deleting the property breaks the CANVAS: the editor builds a drop zone per STORED key, so a
+ * container left holding no keys draws no drop target and stops accepting blocks — worst on the
+ * page root, whose declared slot is the whole page.
+ *
+ * So a declared slot is restored as an empty array, and the property is dropped only when nothing
+ * declares anything. `declared` is required rather than optional because a caller that forgets it
+ * silently gets the canvas-breaking half.
  */
 function withSlots(
   node: BlockNode,
-  slots: Record<string, BlockNode[]>
+  slots: Record<string, BlockNode[]>,
+  declared: readonly string[] | undefined
 ): BlockNode {
-  if (Object.keys(slots).length > 0) return { ...node, slots };
+  const settled = { ...slots };
+  for (const name of declared ?? []) settled[name] ??= [];
+  if (Object.keys(settled).length > 0) return { ...node, slots: settled };
   const next = { ...node };
   delete next.slots;
   return next;
@@ -116,7 +130,8 @@ export function removeFromSlot(
   root: BlockNode,
   parentId: string,
   slot: string,
-  id: string
+  id: string,
+  declared: readonly string[] | undefined
 ): BlockNode {
   return mapTree(root, n => {
     if (n.id !== parentId || !n.slots) return n;
@@ -124,7 +139,7 @@ export function removeFromSlot(
     const slots = { ...n.slots };
     if (remaining.length > 0) slots[slot] = remaining;
     else delete slots[slot];
-    return withSlots(n, slots);
+    return withSlots(n, slots, declared);
   });
 }
 
@@ -137,13 +152,14 @@ export function removeFromSlot(
 export function removeSlot(
   root: BlockNode,
   parentId: string,
-  slot: string
+  slot: string,
+  declared: readonly string[] | undefined
 ): BlockNode {
   return mapTree(root, n => {
     if (n.id !== parentId || !n.slots) return n;
     const slots = { ...n.slots };
     delete slots[slot];
-    return withSlots(n, slots);
+    return withSlots(n, slots, declared);
   });
 }
 
@@ -154,7 +170,7 @@ export function removeSlot(
  * no individual name to remove — an empty map is refused exactly as a full one is.
  */
 export function dropSlots(root: BlockNode, parentId: string): BlockNode {
-  return mapTree(root, n => (n.id === parentId ? withSlots(n, {}) : n));
+  return mapTree(root, n => (n.id === parentId ? withSlots(n, {}, []) : n));
 }
 
 /** True if `id` is `ancestorId` itself or nested anywhere inside it. */

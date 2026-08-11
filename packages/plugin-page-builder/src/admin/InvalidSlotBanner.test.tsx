@@ -104,7 +104,11 @@ describe("the repair banner", () => {
 
     for (const entry of entries) {
       const viaEditor = editorReducer(initialState(broken), removalFor(entry));
-      const viaCore = repairInvalidSlot(broken.root, entry);
+      const viaCore = repairInvalidSlot(
+        broken.root,
+        entry,
+        defaultBlockRegistry
+      );
       expect(viaEditor.document.root).toEqual(viaCore);
     }
   });
