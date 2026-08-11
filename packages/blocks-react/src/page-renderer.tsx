@@ -106,8 +106,14 @@ export interface PageRendererProps {
  *
  * Wiring it needs the stored artifact to be able to drop ONE node's rules,
  * which is what `CompiledPageCss.gated` already does for condition-gated nodes.
- * Until a draws-nothing node can travel that path, the declaration is carried
- * by the contract and read by nothing here.
+ * Until a draws-nothing node can travel that path, this pass does not consult
+ * the declaration.
+ *
+ * It is consulted ELSEWHERE, and the distinction is worth keeping straight: the
+ * block boundary reads it to decide whether a node's `cssId` and attributes may
+ * be refused, which is a question about one node's own output and costs nothing
+ * when the answer is wrong in the safe direction. This pass decides what reaches
+ * the STYLESHEET, where being wrong blanks the page.
  *
  * The rest are NOT knowable here, and deliberately so: whether a block throws,
  * returns something unrenderable, or renders a given slot at all is only
