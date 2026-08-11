@@ -155,8 +155,14 @@ const META_REFERENCES: Array<[RegExp, string]> = [
   //
   // Kept narrow on purpose. "the fix is" and "fixes" are ordinary and stay
   // legal; only a fix described as arriving in parts is caught.
+  //
+  // "attempt" was tried here and removed. It cannot be separated from
+  // legitimate algorithmic prose -- "the first attempt to connect uses IPv6"
+  // describes runtime behaviour, not an edit, and this repository already
+  // uses that wording to explain an implementation. A pattern that fires on
+  // good comments gets the whole check switched off, which costs more than
+  // the narration it would have caught.
   [/\b(first|second|third) half of (a|the) fix\b/i, "an edit sequence"],
-  [/\b(first|second) attempt (at|to)\b/i, "an edit sequence"],
 ];
 
 function walk(dir: string, found: string[] = []): string[] {

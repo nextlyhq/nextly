@@ -154,18 +154,26 @@ const SEEDED_FIRST_NAME = "Dev";
 const DASHBOARD_EVIDENCE = [
   // The current-user request. `WelcomeHeader` says "Welcome, there" when it
   // fails, so the NAME is what separates loaded from failed.
-  `Welcome, ${SEEDED_FIRST_NAME}`,
+  { text: `Welcome, ${SEEDED_FIRST_NAME}` },
   // The dashboard stats. `CollectionQuickLinks` shows "Connection Error"
   // instead; a seeded collection name can only render on success.
-  "Posts",
-  // The singles request, which is separate again. `SinglesQuickLinks` shows
-  // "Couldn't load singles." on failure, and the playground registers three,
-  // so a configured single's label proves that request resolved.
+  { text: "Posts" },
+  // The singles request, which is separate again -- `SinglesQuickLinks` shows
+  // "Couldn't load singles." on failure.
   //
-  // Verified unique on the page: "Homepage" renders once, inside this
-  // widget's card and in no navigation, so satisfying it cannot come from
-  // somewhere the widget's failure would not affect.
-  "Homepage",
+  // SCOPED to the widget's own landmark, and that is the whole point. The
+  // sidebar's `DynamicSingleNav` renders the same labels from a SEPARATE
+  // query (`["singles", "sidebar-all"]`), so a page-wide wait for "Homepage"
+  // is satisfied by whichever of the two requests succeeded -- including the
+  // case where the sidebar loaded and this widget is showing its error.
+  //
+  // Counting occurrences on a loaded page is what missed this: it measures
+  // one moment, and uniqueness of rendered text is not an invariant when two
+  // independently-fetched components can produce the same label.
+  {
+    text: "Homepage",
+    within: 'section[aria-labelledby="dashboard-singles-heading"]',
+  },
 ];
 
 const SCREEN_READY = {
@@ -198,8 +206,8 @@ const SCREEN_READY = {
     // silently, and a check that quietly stops covering something is the
     // failure mode this whole readiness map exists to avoid. A seeded
     // collection name can only render once the stats request has succeeded.
-    for (const required of DASHBOARD_EVIDENCE) {
-      await waitForVisibleText(page, required);
+    for (const { text, within } of DASHBOARD_EVIDENCE) {
+      await waitForVisibleText(page, text, undefined, within);
     }
   },
   collections: async page => {
@@ -239,8 +247,14 @@ async function waitForNoSkeletons(page) {
  * present anywhere in the DOM -- see the `DataTableView` note above for why
  * a plain `getByText(...).first()` isn't safe on these screens.
  */
-async function waitForVisibleText(page, textOrPattern, options) {
-  await page
+async function waitForVisibleText(page, textOrPattern, options, withinSelector) {
+  // `within` scopes the search to one region. Page-wide is the right default
+  // for text only one component renders, and wrong for a label two
+  // independently-fetched components can both produce: the readiness check
+  // would then be satisfied by whichever succeeded, while the other showed
+  // its error panel in the frame being captured.
+  const root = withinSelector ? page.locator(withinSelector) : page;
+  await root
     .getByText(textOrPattern, options)
     .and(page.locator(":visible"))
     .first()
