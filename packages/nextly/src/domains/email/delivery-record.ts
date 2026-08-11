@@ -212,14 +212,50 @@ export function isRecognisedMessageId(messageId: string | undefined): boolean {
  */
 export function messageIdWithoutRecipients(
   messageId: string | undefined,
-  mailboxes: readonly string[]
+  mailboxes: readonly string[],
+  /**
+   * Other values this message carried that the caller did not choose to
+   * publish — today, the filenames of its attachments.
+   *
+   * An adapter is handed the attachments alongside the recipients, so an
+   * identifier can be built out of a filename as easily as out of an address,
+   * and a filename is often the most identifying thing in a message:
+   * `2026-tax-return-mobeen.pdf` says more than the body does. Known values,
+   * so this is the same exact comparison the mailboxes get rather than a guess
+   * about the shape of the id.
+   */
+  literals: readonly string[] = []
 ): string | null {
   if (messageId === undefined) return null;
   const haystack = messageId.toLowerCase();
+
+  // Long enough to mean something. A filename of three characters matches too
+  // much, exactly as a short local part does.
+  const carriesLiteral = literals.some(literal => {
+    const needle = literal.trim().toLowerCase();
+    return needle.length > 3 && haystack.includes(needle);
+  });
+  if (carriesLiteral) return null;
+
+  // The whole mailbox AND its local part. A provider building an identifier
+  // out of an address rarely keeps the domain -- `id-hidden-auditor` is the
+  // natural thing to write -- and the local part is the identifying half: an
+  // `email.beforeSend` filter can add a BCC the caller never wrote, so the
+  // domain may be shared with everyone while the local part names the person.
+  //
+  // Still an exact comparison against values that are KNOWN, not a guess about
+  // the shape of the id. A local part of three characters or fewer is skipped:
+  // it matches too much to mean anything, and dropping every id that happens
+  // to contain `bob` would cost the field for nothing.
   const carriesOne = mailboxes.some(mailbox => {
     const needle = mailbox.trim().toLowerCase();
-    return needle !== "" && haystack.includes(needle);
+    if (needle === "") return false;
+    if (haystack.includes(needle)) return true;
+
+    const localPart = needle.slice(0, needle.lastIndexOf("@"));
+    return localPart.length > 3 && haystack.includes(localPart);
   });
+
   return carriesOne ? null : messageId;
 }
 

@@ -514,14 +514,16 @@ export class EmailService extends BaseService {
       // Two ways an id can carry something it should not: out of the envelope,
       // and out of the body. The adapter is handed both.
       // Kept only if it is SHAPED like an identifier, and then only if it
-      // carries none of the addresses this message went to. The shape rule
-      // stands in for the question that has no exact answer -- whether the id
-      // was built out of the message -- and the recipient check answers the
-      // one that does, by comparing against values that are known.
+      // carries nothing this message was built from that is KNOWN here. The
+      // shape rule stands in for the question that has no exact answer --
+      // whether the id came out of the body -- while the addresses and the
+      // attachment filenames are values in scope, so those are compared
+      // exactly rather than guessed at.
       const safeMessageId = isRecognisedMessageId(result.messageId)
         ? messageIdWithoutRecipients(
             result.messageId,
-            recipients.map(recipient => recipient.to)
+            recipients.map(recipient => recipient.to),
+            (resolvedAttachments ?? []).map(attachment => attachment.filename)
           )
         : null;
 

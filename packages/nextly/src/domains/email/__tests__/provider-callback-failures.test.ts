@@ -51,10 +51,15 @@ describe("a provider callback that throws", () => {
     expect(NextlyError.is(thrown)).toBe(true);
     const publicMessage = NextlyError.is(thrown) ? thrown.publicMessage : "";
     expect(publicMessage).not.toContain(SECRET);
-    // The positive control: the original survives as the logged cause, so
-    // normalising the response has not destroyed the operator's diagnostic.
+    // The diagnostic survives as the logged cause so normalising the response
+    // has not destroyed the operator's reason — with the declared credential
+    // taken out of it. `createAdapter` receives the DECRYPTED configuration,
+    // and `describeProviderFailure` walks this chain into the process log, so
+    // a cause holding the raw key would put it there.
     const cause = NextlyError.is(thrown) ? thrown.cause : undefined;
-    expect(cause instanceof Error ? cause.message : "").toContain(SECRET);
+    const causeText = cause instanceof Error ? cause.message : "";
+    expect(causeText).not.toContain(SECRET);
+    expect(causeText).toContain("Cannot build transport for key");
   });
 
   it("does not put a REJECTED testConnection's message in front of a caller", async () => {

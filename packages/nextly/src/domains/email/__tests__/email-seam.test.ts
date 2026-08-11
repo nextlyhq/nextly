@@ -891,3 +891,67 @@ describe("a message id built to cost us something", () => {
     expect(result.messageId).toBe(`<${"a".repeat(300)}@m.test>`);
   });
 });
+
+describe("a message id built out of something the caller did not publish", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetFilterRegistry();
+  });
+
+  afterEach(() => {
+    resetFilterRegistry();
+  });
+
+  function returning(messageId: string) {
+    const { service } = buildSend();
+    (service as unknown as { createAdapterFromRecord: unknown })[
+      "createAdapterFromRecord"
+    ] = () => ({ send: () => Promise.resolve({ success: true, messageId }) });
+    return service;
+  }
+
+  it("withholds one carrying a hidden recipient's local part", async () => {
+    // The domain may be shared with everyone on the message; the local part is
+    // what names the person. A provider building an id out of an address
+    // rarely keeps the domain, and an `email.beforeSend` filter can add a BCC
+    // the caller never wrote — so this is an address the caller cannot
+    // already know.
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: Record<string, unknown>) => ({
+        ...payload,
+        bcc: ["hidden-auditor@example.com"],
+      })
+    );
+    const service = returning("id-hidden-auditor");
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(result.messageId).toBeUndefined();
+  });
+
+  it("keeps one that merely shares a common short word", async () => {
+    // The control for the length floor. Dropping every id containing `bob`
+    // would cost the field for nothing.
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: Record<string, unknown>) => ({
+        ...payload,
+        bcc: ["bob@example.com"],
+      })
+    );
+    const service = returning("bobsled-42");
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(result.messageId).toBe("bobsled-42");
+  });
+});

@@ -231,10 +231,16 @@ function hasUndeclaredLeaf(
  * masks every configuration leaf for exactly that reason — so containment
  * fails closed here too.
  */
+/** What containment knows about a provider's declared credentials. */
+interface DeclaredSecretValues {
+  comparable: string[];
+  hasUnmatchable: boolean;
+}
+
 function declaredSecretValues(
   fields: ReadonlyArray<EmailProviderConfigField>,
   config: unknown
-): { comparable: string[]; hasUnmatchable: boolean } {
+): DeclaredSecretValues {
   if (config === null || typeof config !== "object") {
     return { comparable: [], hasUnmatchable: false };
   }
@@ -503,16 +509,22 @@ export function defineEmailProvider<TConfig>(
       // leaves it comparing a value the adapter never used. Here the parsed
       // form is in scope, so the effective credential is compared too.
       //
-      // Its `comparable` list only. The parsed shape legitimately carries keys
-      // the descriptor does not declare -- a parser filling in defaults is the
-      // ordinary case -- and taking `hasUnmatchable` from it would withhold
-      // every id from every provider whose parser adds a key. The fail-closed
-      // policy stays with the stored input, where an undeclared leaf really is
-      // a credential nobody described.
+      //
+      // The stored side is read too, and BOTH sets of needles are compared.
+      // The outer wrapper passes a `NextlyError` through untouched, so once
+      // this one normalises a failure the outer policy no longer runs -- and
+      // an inner containment carrying only half the needles would quietly
+      // become the whole of it.
       const effective = declaredSecretValues(definition.configFields, config);
-      const fromParsed = {
-        comparable: effective.comparable,
-        hasUnmatchable: false,
+      const stored = declaredSecretValues(definition.configFields, input);
+      const fromParsed: DeclaredSecretValues = {
+        comparable: [...stored.comparable, ...effective.comparable],
+        // From the STORED side alone. A parser filling in defaults produces
+        // keys the descriptor never declared, and treating that as
+        // unmatchable would withhold every id from every provider that has a
+        // default; an undeclared leaf in what was STORED really is a
+        // credential nobody described.
+        hasUnmatchable: stored.hasUnmatchable,
       };
 
       return {
@@ -524,7 +536,17 @@ export function defineEmailProvider<TConfig>(
               fromParsed
             );
           } catch (error) {
-            throw containedFailure(error, fromParsed);
+            // Normalised here rather than thrown contained. The wrapper around
+            // this one passes a `NextlyError` through untouched, on the
+            // reading that a provider chose it deliberately -- so throwing a
+            // bare contained value would make it the error the caller sees,
+            // in place of the sentence naming which provider failed.
+            throw normalizeProviderFailure(
+              definition.type,
+              error,
+              "send",
+              fromParsed
+            );
           }
         },
       };
@@ -590,11 +612,9 @@ const REDACTED_SECRET = "[secret]";
  */
 function containedFailure(
   error: unknown,
-  secrets: { comparable: readonly string[]; hasUnmatchable: boolean }
-): unknown {
-  // A deliberate `NextlyError` carries a public message its author chose, and
-  // rewriting it would discard field paths a provider set on purpose.
-  if (!(error instanceof Error) || NextlyError.is(error)) return error;
+  secrets: DeclaredSecretValues
+): Error | undefined {
+  if (!(error instanceof Error)) return undefined;
 
   const texts: string[] = [];
   let current: unknown = error;
@@ -608,9 +628,12 @@ function containedFailure(
   // Nothing here can say which text is safe, so none of it is kept -- the same
   // answer the message id gets when its credentials cannot be compared.
   if (secrets.hasUnmatchable) {
-    return new Error(
-      "Provider diagnostics were withheld: this provider's credentials cannot be checked for in its own text."
-    );
+    return new NextlyError({
+      code: "INTERNAL_ERROR",
+      publicMessage:
+        "Provider diagnostics were withheld: this provider's credentials cannot be checked for in its own text.",
+      logContext: { reason: "provider-diagnostic-unmatchable" },
+    });
   }
 
   // Case-insensitively, for the same reason the message id is compared that
@@ -631,14 +654,30 @@ function containedFailure(
     }
     text = out + text.slice(cursor);
   }
-  return new Error(text);
+  // A `NextlyError`, not a bare one: this value is attached as the `cause` of
+  // the error the wrapper throws, and everything constructed as an error in
+  // this package is a `NextlyError`. Its sentence is the provider's own
+  // diagnostic with the declared credentials taken out, which is what the
+  // failure log is for -- the caller sees the OUTER error's message, never
+  // this one.
+  return new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: text,
+    logContext: { reason: "provider-diagnostic" },
+  });
 }
 
 function normalizeProviderFailure(
   type: string,
   error: unknown,
-  stage: "createAdapter" | "testConnection" | "send"
+  stage: "createAdapter" | "testConnection" | "send",
+  secrets: DeclaredSecretValues
 ): unknown {
+  // A provider that threw a `NextlyError` deliberately chose its own public
+  // sentence and field paths; passing it through is the point. Containment is
+  // applied to everything else, HERE rather than at the call sites, so a
+  // contained cause can never be handed back into this check and mistaken for
+  // that deliberate error.
   if (NextlyError.is(error)) return error;
   // Constructed rather than `NextlyError.internal()`, which fixes its own
   // public sentence: naming the provider is what tells an operator which of
@@ -647,7 +686,7 @@ function normalizeProviderFailure(
   return new NextlyError({
     code: "INTERNAL_ERROR",
     publicMessage: `The "${type}" email provider failed. Check the server logs for the reason.`,
-    cause: error instanceof Error ? error : undefined,
+    cause: containedFailure(error, secrets),
     logContext: { providerType: type, stage },
   });
 }
@@ -686,14 +725,23 @@ export function containProviderCallbacks(
   return {
     ...provider,
     createAdapterFrom: (input: unknown): EmailProviderAdapter => {
+      // Read BEFORE the callback runs. Building the adapter is itself a stage
+      // that can throw a credential -- `createAdapter` receives the decrypted
+      // configuration -- so containment cannot wait until after it succeeds.
+      const secrets = declaredSecretValues(provider.configFields, input);
+
       let adapter: EmailProviderAdapter;
       try {
         adapter = provider.createAdapterFrom(input);
       } catch (error) {
-        throw normalizeProviderFailure(provider.type, error, "createAdapter");
+        throw normalizeProviderFailure(
+          provider.type,
+          error,
+          "createAdapter",
+          secrets
+        );
       }
 
-      const secrets = declaredSecretValues(provider.configFields, input);
       return {
         ...adapter,
         send: async options => {
@@ -703,8 +751,9 @@ export function containProviderCallbacks(
           } catch (error) {
             throw normalizeProviderFailure(
               provider.type,
-              containedFailure(error, secrets),
-              "send"
+              error,
+              "send",
+              secrets
             );
           }
           return withoutLeakedSecrets(result, secrets);
@@ -714,13 +763,17 @@ export function containProviderCallbacks(
     ...(probe
       ? {
           testConnectionFrom: async (input: unknown) => {
+            // The probe holds the decrypted configuration exactly as `send`
+            // does, and `testProvider` writes its cause into the process log.
+            const secrets = declaredSecretValues(provider.configFields, input);
             try {
               return await probe(input);
             } catch (error) {
               throw normalizeProviderFailure(
                 provider.type,
                 error,
-                "testConnection"
+                "testConnection",
+                secrets
               );
             }
           },
