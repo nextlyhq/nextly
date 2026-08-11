@@ -416,6 +416,11 @@ function buildRoute<TNode>(
         // silent no-op that makes preview look broken. The authorization that
         // justifies this lives in the `draft` decision itself.
         overrideAccess: overrideAccess || draft,
+        // ...but only for as long as the grant is answering this path. What the
+        // route itself authorized travels alongside, so the published-only
+        // fall-through can hand the widening back instead of reading every row
+        // in the collection as a trusted caller.
+        callerOverrideAccess: overrideAccess,
       });
       if (!entry) continue;
       // No identity check here, deliberately. Both halves a grant has to
