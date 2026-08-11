@@ -1451,9 +1451,28 @@ export class CollectionRelationshipService extends BaseService {
     }
     if (trustsTarget(access, targetCollection)) return rows;
     if (rows.length === 0) return rows;
-    // System entities carry no stored collection rules; their secrets are
-    // stripped by name during redaction instead.
-    if (isSystemEntity(targetCollection)) return rows;
+    if (isSystemEntity(targetCollection)) {
+      // A system entity carries no stored collection rules, so the enforced
+      // path below has nothing to evaluate: its secrets are stripped by name
+      // during redaction and the row is returned.
+      //
+      // That is the right answer for a caller with no bypass — it is what a
+      // direct read would give. It is the WRONG answer for a caller that holds
+      // a bypass and REFUSED this target: the bound means "read this as the
+      // audience would", and this audience is anonymous, while a direct read of
+      // `users` requires the `read-users` permission. With no policy to fall
+      // back to there is nothing to enforce, so the only reading that honours
+      // the refusal is to withhold the rows.
+      //
+      // Gated on holding a bypass as well as on the refusal, because an
+      // enforced route supplies an empty bound and its ordinary reads must keep
+      // returning the rows a direct read would.
+      const refused =
+        access.overrideAccess === true &&
+        access.trusted !== undefined &&
+        !access.trusted(targetCollection);
+      return refused ? [] : rows;
+    }
 
     const accessService = this.resolveAccessService();
 

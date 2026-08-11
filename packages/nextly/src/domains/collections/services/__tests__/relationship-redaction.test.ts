@@ -65,6 +65,55 @@ function adapterReturning(row: Record<string, unknown> | null) {
 }
 
 describe("relationship expansion secret redaction", () => {
+  it("withholds a system-entity row a bounded caller refused", async () => {
+    // A system entity has no stored collection rules, so the enforced path has
+    // nothing to evaluate — the row is normally returned with its secrets
+    // stripped. That is right for a caller with no bypass and wrong for one
+    // that holds a bypass and did not name this target: the bound means "read
+    // this as the audience would", and an anonymous audience cannot read
+    // `users` at all. Stripping the password hash leaves email and name.
+    const service = new CollectionRelationshipService(
+      adapterReturning({
+        id: "u1",
+        email: "a@b.co",
+        name: "Ada",
+        password_hash: "$2b$12$storedhashstoredhashstored",
+      }),
+      silentLogger(),
+      {} as never,
+      {} as never
+    );
+
+    const related = await service.fetchRelatedEntry("users", "u1", {
+      enforceCollectionAccess: true,
+      overrideAccess: true,
+      trusted: () => false,
+      trustedIsSet: undefined,
+    } as never);
+
+    expect(related).toBeNull();
+  });
+
+  it("still returns a system-entity row for a caller with no bypass", async () => {
+    // The positive control, and it is load-bearing: without it the check above
+    // passes for a change that withholds system entities from EVERY enforced
+    // read, which is every ordinary page that populates an author.
+    const service = new CollectionRelationshipService(
+      adapterReturning({ id: "u1", email: "a@b.co" }),
+      silentLogger(),
+      {} as never,
+      {} as never
+    );
+
+    const related = await service.fetchRelatedEntry("users", "u1", {
+      enforceCollectionAccess: true,
+      overrideAccess: false,
+      trusted: () => false,
+    } as never);
+
+    expect(related).toMatchObject({ id: "u1", email: "a@b.co" });
+  });
+
   it("strips the users password hash from an expanded system-entity relation", async () => {
     const service = new CollectionRelationshipService(
       adapterReturning({
