@@ -108,6 +108,13 @@ interface CreateDdlPlan {
  */
 interface DynamicSchemaResolver {
   registerDynamicSchema?: (name: string, table: unknown) => void;
+  /**
+   * Forget the table, so the next lookup rebuilds it.
+   *
+   * Optional because a caller may hold a resolver older than the method. Where it is absent the
+   * failure path leaves the previous registration alone, which is what this code did before.
+   */
+  retractDynamicSchema?: (name: string) => void;
 }
 
 /**
@@ -616,20 +623,22 @@ export class SingleMetadataService {
           adapter,
         });
       } catch (companionError) {
-        // The main table changed and the companion did not, so the shape that is TRUE right now is
-        // the new field set under the PREVIOUS localization. Binding either end whole would be
-        // wrong in one direction: `isLocalized` omits translatable columns an enable has not moved
-        // yet, and leaving the old registration in place omits the column the ALTER just added.
+        // 🔴 The shape is RETRACTED here, never rebound, because nothing at this level knows what
+        // the table now looks like.
         //
-        // Something has to be bound rather than nothing, because `ensure-runtime-table.ts` adopts a
-        // registration it did not make instead of rebuilding, and the registry has no way to
-        // invalidate one table — so a stale entry survives until a restart either way.
-        await this.registerUpdatedRuntimeSchema(
-          input,
-          plan,
-          adapter,
-          input.wasLocalized
-        );
+        // A reconcile that fails has stopped somewhere inside a sequence that moves columns between
+        // the main table and its companion, and where it stopped decides the answer. Binding the
+        // DESIRED shape is wrong when an enable never moved the columns; binding the PREVIOUS one
+        // is wrong when a disable had already restored them and failed afterwards, clearing its
+        // transition marker; binding nothing is wrong when the main ALTER added a column. Each of
+        // those is correct for one stopping point and wrong for another, and the stopping point is
+        // not observable from out here.
+        //
+        // Retracting is the one claim that is always correct: this is no longer describable from
+        // here. `ensureSingleRuntimeTable` then rebuilds on the next touch, and its rebuild branch
+        // PROBES the database for where the translatable columns physically live — which is the
+        // fact every one of those guesses was standing in for.
+        this.retractRuntimeSchema(adapter, tableName);
         this.logger.error(
           `[Singles] Companion reconcile failed for "${tableName}": ${
             companionError instanceof Error
@@ -709,6 +718,24 @@ export class SingleMetadataService {
         this.logger.error(`[Singles] Migration SQL was: ${plan.migrationSQL}`);
       }
       return "failed";
+    }
+  }
+
+  /**
+   * Forget the main table's registered shape, so the next read rebuilds it from the database.
+   *
+   * Best-effort in the same way the registration is: a resolver that cannot retract leaves the
+   * previous entry in place, which is where this path was before the method existed.
+   */
+  private retractRuntimeSchema(
+    adapter: DrizzleAdapter,
+    tableName: string
+  ): void {
+    const resolver = (
+      adapter as unknown as { tableResolver?: DynamicSchemaResolver }
+    ).tableResolver;
+    if (resolver && typeof resolver.retractDynamicSchema === "function") {
+      resolver.retractDynamicSchema(tableName);
     }
   }
 

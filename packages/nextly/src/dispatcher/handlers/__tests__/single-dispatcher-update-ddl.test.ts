@@ -32,6 +32,8 @@ const executed: string[] = [];
 
 /** Every main-table shape the apply bound, in order, so registration timing is observable. */
 const registeredShapes = vi.fn();
+/** Every table the apply retracted, so the recovery path is observable rather than inferred. */
+const retractedTables = vi.fn();
 
 /**
  * The adapter surface an update touches.
@@ -62,7 +64,10 @@ function makeAdapter(
     // Present so runtime registration is OBSERVABLE. The create-side sibling omits it deliberately
     // to skip re-registration; here the order of that call against the companion reconcile is the
     // property under test, so it has to be visible.
-    tableResolver: { registerDynamicSchema: registeredShapes },
+    tableResolver: {
+      registerDynamicSchema: registeredShapes,
+      retractDynamicSchema: retractedTables,
+    },
     // The companion reconcile reaches the database through Drizzle rather than `executeQuery`, so
     // its own statements are NOT visible in `executed`. That is why the flag-only assertion below
     // is phrased as "no statement naming the MAIN table" rather than "no statements at all": the
@@ -109,16 +114,20 @@ vi.mock("../../../domains/schema/pipeline/live-table-facts", () => ({
 }));
 
 /**
- * A failure raised by the companion reconcile, injected per test.
+ * A failure raised by the companion reconcile, injected per test, on either side of the real call.
  *
- * The real module runs unless a test sets this, so every other case still exercises it. What this
- * stands in for is the tail of a localization DISABLE: the reconcile restores the translations,
- * archives them and DROPS the companion table, and only then clears the transition marker — which
- * refuses a slug containing a dot and raises a `NextlyError`. By that point the schema has already
- * changed, which is the property under test; reproducing the dotted slug end to end would pin the
- * one path that reaches it rather than the rule that governs all of them.
+ * `when: "before"` stands for a reconcile that stopped at its first statement — an enable whose
+ * companion CREATE was rejected, so nothing moved. `when: "after"` stands for one that completed
+ * its DDL and failed on the tail: a disable restores the columns, archives them, DROPS the
+ * companion, and only then clears the transition marker, which refuses a dotted slug.
+ *
+ * Both are needed because they leave the table in OPPOSITE states, and a double that can only
+ * produce one of them cannot show that the recovery treats them alike.
  */
-const companionFailure: { error: unknown } = { error: undefined };
+const companionFailure: { error: unknown; when: "before" | "after" } = {
+  error: undefined,
+  when: "after",
+};
 vi.mock(
   "../../../domains/singles/services/reconcile-single-companion",
   async () => {
@@ -225,6 +234,7 @@ async function runUpdate(
     mainTableExists?: boolean;
     tableHasRows?: boolean;
     companionFailure?: unknown;
+    companionFailureWhen?: "before" | "after";
     onStatement?: (sql: string) => void;
   } = {}
 ) {
@@ -236,8 +246,10 @@ async function runUpdate(
   } = options;
   executed.length = 0;
   registeredShapes.mockClear();
+  retractedTables.mockClear();
   liveTableHasRows.value = tableHasRows;
   companionFailure.error = options.companionFailure;
+  companionFailure.when = options.companionFailureWhen ?? "after";
   adapter = makeAdapter(dialect, { mainTableExists, onStatement });
   const registry = wireRegistry(options.existing ?? existingSingle());
   const result = await dispatchSingles(
@@ -385,56 +397,37 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
     expect(written?.migrationStatus).toBe("failed");
   });
 
-  it("binds the shape the main table actually has when the companion fails mid-enable", async () => {
-    // 🔴 A failed companion leaves the two halves in DIFFERENT states, and the runtime shape is
-    // composed from both: the main table holds the new field set, while the translatable columns
-    // have not moved off it. Binding the shape the save ASKED for would omit columns that are
-    // still physically there.
-    //
-    // Something must be bound rather than nothing: `ensure-runtime-table.ts` adopts a registration
-    // it did not make instead of rebuilding, and the registry cannot invalidate one table, so a
-    // stale entry survives to the next restart either way.
-    const { written } = await runUpdate(
-      { localized: true },
-      {
-        existing: existingSingle({ localized: false }),
-        companionFailure: new Error("companion CREATE TABLE rejected"),
-      }
-    );
+  it.each([
+    ["before its DDL ran", "before" as const],
+    ["after its DDL completed", "after" as const],
+  ])(
+    "retracts the runtime shape when the companion fails %s",
+    async (_label, when) => {
+      // 🔴 The recovery RETRACTS rather than rebinding, and these two cases are why. A reconcile
+      // that stops at its first statement leaves the translatable columns on main; one that stops
+      // on its tail — a disable that restored the columns, dropped the companion and then failed
+      // clearing its transition marker — leaves them somewhere else entirely. Every fixed shape is
+      // correct for one of these and wrong for the other, and which one happened is not observable
+      // from outside the reconcile.
+      //
+      // Retracting is the claim that holds for both: no longer describable from here. The rebuild
+      // in `ensure-runtime-table.ts` then PROBES the database for where the columns physically
+      // live, which is the fact any bound shape would have been guessing.
+      const { written } = await runUpdate(
+        { localized: true },
+        {
+          existing: existingSingle({ localized: false }),
+          companionFailure: new Error("companion reconcile rejected"),
+          companionFailureWhen: when,
+        }
+      );
 
-    expect(written?.migrationStatus).toBe("failed");
-    expect(registeredShapes).toHaveBeenCalledTimes(1);
-    const table = registeredShapes.mock.calls[0][1] as Record<string, unknown>;
-    // `heading` is a text field, so it translates by default. It is still on main because the
-    // enable never completed, and the bound shape has to say so.
-    expect(Object.keys(table)).toContain("heading");
-  });
-
-  it("binds the new columns when a localized single's own ALTER succeeded", async () => {
-    // The other half of the same rule, and the case that ordering alone cannot fix. An
-    // already-localized single edits a NON-translatable field: the main ALTER adds the column, then
-    // the companion fails. Binding nothing leaves the resolver on a shape without the column the
-    // ALTER just added, and reads drop it until a restart.
-    const { written } = await runUpdate(
-      {
-        fields: [
-          { name: "heading", type: "text" },
-          { name: "count", type: "number" },
-        ],
-      },
-      {
-        existing: existingSingle({
-          localized: true,
-          fields: [{ name: "heading", type: "text" }],
-        }),
-        companionFailure: new Error("companion ALTER rejected"),
-      }
-    );
-
-    expect(written?.migrationStatus).toBe("failed");
-    const table = registeredShapes.mock.calls[0][1] as Record<string, unknown>;
-    expect(Object.keys(table)).toContain("count");
-  });
+      expect(written?.migrationStatus).toBe("failed");
+      expect(retractedTables).toHaveBeenCalledWith("single_page");
+      // Binding anything here would be adopted by the next reader instead of rebuilt.
+      expect(registeredShapes).not.toHaveBeenCalled();
+    }
+  );
 
   it("binds the runtime shape once the companion has taken", async () => {
     // The control. Without it, an apply that never registered at all would satisfy the case above
@@ -448,6 +441,9 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
 
     expect(written?.migrationStatus).toBe("applied");
     expect(registeredShapes).toHaveBeenCalledTimes(1);
+    // The control's other half: a service that retracted unconditionally would satisfy both cases
+    // above while throwing away the rebinding every successful save depends on.
+    expect(retractedTables).not.toHaveBeenCalled();
   });
 
   it("leaves a failed single failed when the save only describes a change to it", async () => {
