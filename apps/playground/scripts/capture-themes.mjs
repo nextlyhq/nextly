@@ -256,13 +256,31 @@ let shotCount = 0;
 const written = [];
 
 for (const theme of themes) {
+  // An explicit `--screens` outranks the abbreviated default for reference
+  // themes. That default exists to keep an unattended full run short, which is
+  // a reason to shorten what nobody asked for -- not a reason to drop a screen
+  // somebody named. Intersecting the two instead produced an empty set for
+  // `--only tweakcn-vercel --screens users`: a run that captured nothing,
+  // exited zero, and listed the theme in its manifest.
   let screens =
-    theme.group === "tweakcn" && !captureAllTweakcn
+    theme.group === "tweakcn" && !captureAllTweakcn && !onlyScreens
       ? BRIEF_SCREENS
       : FULL_SCREENS;
   if (onlyScreens) {
     const wanted = new Set(onlyScreens);
     screens = screens.filter(([name]) => wanted.has(name));
+  }
+
+  // A theme with nothing to capture is a run producing no evidence for it, and
+  // the loop below would report success having taken no screenshot. The line
+  // above should make this unreachable; it is asserted rather than assumed
+  // because the failure it guards is silent by construction.
+  if (screens.length === 0) {
+    console.error(
+      `capture-themes: no screens selected for "${theme.id}" -- the run would ` +
+        `produce no evidence for it while reporting success.`
+    );
+    process.exit(1);
   }
 
   const dir = resolvePath(outRoot, theme.id);
