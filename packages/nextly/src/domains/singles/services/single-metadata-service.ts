@@ -108,6 +108,95 @@ interface CreateDdlPlan {
  */
 interface DynamicSchemaResolver {
   registerDynamicSchema?: (name: string, table: unknown) => void;
+  /**
+   * Forget the table, so the next lookup rebuilds it.
+   *
+   * Optional because a caller may hold a resolver older than the method. Where it is absent the
+   * failure path leaves the previous registration alone, which is what this code did before.
+   */
+  retractDynamicSchema?: (name: string) => void;
+}
+
+/**
+ * A schema change to an existing Single, with everything the caller has already decided.
+ *
+ * The caller owns every rejection: the locked-single check, the field-payload validation, the
+ * retention-without-toggle rejection and the localization-config gate all run before this is
+ * built. What arrives here is a change that is allowed to proceed.
+ *
+ * The two flag pairs are passed rather than derived because only the caller can tell them apart.
+ * `hasStatus`/`isLocalized` are what the single is being saved AS, `wasStatus`/`wasLocalized` what
+ * it currently IS, and an undefined toggle in the request body means "leave alone" — which reads
+ * as the previous value, not as `false`.
+ */
+export interface UpdateSingleSchemaInput {
+  slug: string;
+  existing: DynamicSingleRecord;
+  /**
+   * The registry columns to write, minus `migrationStatus`, which this service owns.
+   *
+   * Passed through rather than rebuilt: the caller has already normalised the version-retention,
+   * revalidation and webhook toggles into the resolved configs the runtime readers test, and
+   * re-deriving them here would be a second implementation of that normalisation.
+   */
+  updateData: Record<string, unknown>;
+  /** The new field list, or undefined when the save changes only flags. */
+  fields?: FieldDefinition[];
+  isLocalized: boolean;
+  wasLocalized: boolean;
+  hasStatus: boolean;
+  wasStatus: boolean;
+  /**
+   * Whether the request SET the Draft/Published toggle, as opposed to leaving it alone.
+   *
+   * Not derivable from `hasStatus !== wasStatus`: saving the toggle at the value it already holds
+   * is a request that reaches the companion, because provisioning is idempotent and a single whose
+   * companion `_status` never got created is repaired by exactly that save. Collapsing the two
+   * would turn the repair into a no-op.
+   */
+  statusRequested: boolean;
+}
+
+/** The updated row, and the status the caller reports back to the user. */
+export interface UpdateSingleSchemaResult {
+  record: DynamicSingleRecord;
+  migrationStatus: SingleMigrationStatus;
+}
+
+/**
+ * The schema work an update has to do, decided before any statement runs.
+ *
+ * One plan covers both shapes of update. A field change renders statements; a save that only flips
+ * Internationalization or Draft/Published renders none but still has companion work, and modelling
+ * that as an empty statement list rather than as a second execution path is what keeps the two
+ * from drifting: they share one apply, one status vocabulary and one failure contract.
+ */
+interface UpdateDdlPlan {
+  /** Statements to run. Empty for a save that changes only flags. */
+  migrationSQL: string;
+  /** The field list the table holds once this plan has run. */
+  fields: FieldDefinition[];
+  /** The field list the table holds now. The companion reconcile diffs against it. */
+  previousFields: FieldDefinition[];
+  /**
+   * Whether the statements describe the WHOLE table rather than a change to it.
+   *
+   * Only a plan that rebuilds the table from the desired spec re-establishes every artifact it
+   * needs — the columns, the indexes, the junction tables. An ALTER describes a delta and says
+   * nothing about anything it does not mention, which is why it cannot vouch for a table whose
+   * create failed part way.
+   */
+  describesWholeTable: boolean;
+  /**
+   * Whether this plan owns `migration_status`.
+   *
+   * A field change does: the column records how far the schema change got, and an app with no
+   * adapter registered leaves it `pending` for the migration runner to pick up later. A flag-only
+   * save does not — with no adapter there is nothing to provision and nothing was asked of the
+   * main table's schema, so the previous status is left exactly as it was rather than being
+   * overwritten with a verdict about a migration that was never requested.
+   */
+  ownsMigrationStatus: boolean;
 }
 
 export class SingleMetadataService {
@@ -223,6 +312,484 @@ export class SingleMetadataService {
       await this.registry.deleteSingle(slug, { force: true });
     } catch (error) {
       if (!NextlyError.isNotFound(error)) throw error;
+    }
+  }
+
+  /**
+   * Apply a schema change to an existing Single and write the registry row that describes it.
+   *
+   * The same three phases as `createSingle`, and for the same reason: a lock has to cover the
+   * table change and the row write together, and it can only do that where both halves live.
+   *
+   * 🔴 The phase boundary is what decides whether a failure is raised or recorded, and it replaces
+   * a `migrationBegan` flag the request handler carried. Everything that can reject — reading the
+   * live table, asking the generator for statements — happens in the PLAN, where the schema is
+   * still exactly as it was and the caller's field list has not been saved. Once APPLY starts, a
+   * statement may already have run, so a failure is a partly-applied migration that must be
+   * recorded rather than a request that never began.
+   */
+  async updateSingleSchema(
+    input: UpdateSingleSchemaInput
+  ): Promise<UpdateSingleSchemaResult> {
+    // 1. PLAN. May reject; nothing is persisted and no statement has run.
+    const plan = await this.planUpdate(input);
+
+    // The status the response reports. A save with no schema work at all keeps whatever the last
+    // migration reached, because this request neither confirmed nor changed it.
+    let migrationStatus = input.existing.migrationStatus;
+    const updateData = { ...input.updateData };
+
+    if (plan) {
+      // 2. APPLY. Returns a status rather than throwing, except for a refusal (see below).
+      const applied = await this.applyUpdateDdl(input, plan);
+      if (applied !== undefined) {
+        updateData.migrationStatus = applied;
+        migrationStatus = applied;
+      }
+    }
+
+    // 3. RECORD, with the outcome already known.
+    const record = await this.registry.updateSingle(input.slug, updateData, {
+      source: "ui",
+    });
+
+    return { record, migrationStatus };
+  }
+
+  /**
+   * Work out what the schema change has to do, reading the live table but changing nothing.
+   *
+   * Returns null when the save asks nothing of the schema: no field change, no Internationalization
+   * transition, and no Draft/Published save on a single that has a companion to keep in step.
+   *
+   * Allowed to throw, and that is the point. The generator is a validator as well as a renderer —
+   * it refuses a required column with no value for the rows already there, or a referenced column
+   * SQLite cannot detach — and refusing here, before the apply, is what leaves the table untouched
+   * and the caller's field list unsaved.
+   */
+  private async planUpdate(
+    input: UpdateSingleSchemaInput
+  ): Promise<UpdateDdlPlan | null> {
+    const {
+      existing,
+      fields,
+      isLocalized,
+      wasLocalized,
+      hasStatus,
+      wasStatus,
+      statusRequested,
+    } = input;
+    const previousFields = (existing.fields ??
+      []) as unknown as FieldDefinition[];
+
+    if (fields === undefined) {
+      // A save with no field change still has companion work when the single is crossing the
+      // Internationalization boundary, or when Draft/Published is saved on a single that is
+      // localized in either state — that toggle ADDs or DROPs the companion's own `_status`.
+      // Without this the flag persisted while the physical schema stayed as it was, stranding
+      // data in the table the new flag says it does not live in.
+      const needsCompanionWork =
+        isLocalized !== wasLocalized ||
+        (statusRequested && (isLocalized || wasLocalized));
+      if (!needsCompanionWork) return null;
+      return {
+        migrationSQL: "",
+        fields: previousFields,
+        previousFields,
+        describesWholeTable: false,
+        ownsMigrationStatus: false,
+      };
+    }
+
+    const adapter = this.adapter;
+    const tableName = existing.tableName;
+    const { DynamicCollectionSchemaService } = await import(
+      "../../dynamic-collections/services/dynamic-collection-schema-service"
+    );
+    const schemaService = new DynamicCollectionSchemaService(
+      undefined,
+      this.dialect
+    );
+
+    // With no adapter there is no live table to read and no statement to run. The row still
+    // records `pending`, which is what the migration runner looks for.
+    if (!adapter) {
+      return {
+        migrationSQL: "",
+        fields,
+        previousFields,
+        describesWholeTable: false,
+        ownsMigrationStatus: true,
+      };
+    }
+
+    // Create or alter is decided HERE, not in the apply, because it is a question about the
+    // database's current state and the apply is past the point where questions are safe to ask.
+    // A table missing because an earlier create failed is rebuilt rather than altered into
+    // nothing.
+    if (!(await adapter.tableExists(tableName))) {
+      return {
+        // i18n: a fresh (re)create omits translatable columns when localized; they belong to the
+        // companion.
+        migrationSQL: schemaService.generateMigrationSQL(tableName, fields, {
+          isSingle: true,
+          hasStatus,
+          localized: isLocalized,
+        }),
+        fields,
+        previousFields,
+        // The table is absent, so this renders it in full: every column, index and junction table
+        // the desired spec asks for.
+        describesWholeTable: true,
+        ownsMigrationStatus: true,
+      };
+    }
+
+    const alterInput = await this.normalizeFieldsForAlter(
+      previousFields,
+      fields,
+      isLocalized || wasLocalized
+    );
+
+    // Whether a required column can be added without a value for the rows already there, and
+    // which columns a foreign key or an index references, are facts about the live table. The
+    // generator refuses an edit these rule out, which is why they are read before the apply.
+    const db = adapter.getDrizzle();
+    const liveDialect = adapter.getCapabilities().dialect;
+    const [tableHasAnyRows, foreignKeysByColumn, indexNames] =
+      await this.readLiveTableFacts(db, liveDialect, tableName);
+
+    return {
+      migrationSQL: schemaService.generateAlterTableMigration(
+        tableName,
+        alterInput.oldFields,
+        alterInput.newFields,
+        {
+          wasStatus,
+          hasStatus,
+          tableHasRows: tableHasAnyRows,
+          foreignKeysByColumn,
+          indexNames,
+        }
+      ),
+      fields,
+      previousFields,
+      describesWholeTable: false,
+      ownsMigrationStatus: true,
+    };
+  }
+
+  /**
+   * The two field lists the ALTER diff compares, normalised to describe the same table.
+   *
+   * Two adjustments, and both exist because the stored field list and the physical table are not
+   * the same thing:
+   *
+   * - The physical table always carries `title`, `slug` and `updated_at`, which the generators add
+   *   and the stored definitions may not mention. Without them the diff plans an ADD COLUMN for
+   *   columns that already exist. They are matched by the COLUMN a field becomes rather than by
+   *   its name: a field named `Title` already owns the `title` column, and prepending the system
+   *   one beside it would hand the diff two fields for one column.
+   * - i18n: translatable columns live on the companion whenever the single is localized in either
+   *   state, so they are dropped from both sides — the main-table diff must never ADD or DROP
+   *   them. `reconcileSingleCompanion` owns that side.
+   */
+  private async normalizeFieldsForAlter(
+    previousFields: FieldDefinition[],
+    newFields: FieldDefinition[],
+    omitLocalizedColumns: boolean
+  ): Promise<{ oldFields: FieldDefinition[]; newFields: FieldDefinition[] }> {
+    const { resolveLocalizedFieldNames } = await import(
+      "../../i18n/classify-fields"
+    );
+    const { columnsDeclaredBy } = await import(
+      "../../schema/services/field-column-descriptor"
+    );
+
+    // `localized: false` for the same reason the synthetic declarations carry it: these are
+    // main-table system columns, and text-like fields localize by default. Without it the filter
+    // below strips them from a localized single's ALTER input, so the diff stops seeing the
+    // `title`/`slug` the table already has and plans them as additions.
+    const systemFields: FieldDefinition[] = [
+      { name: "title", type: "text", required: true, localized: false },
+      { name: "slug", type: "text", required: true, localized: false },
+    ];
+    const updatedAt: FieldDefinition = {
+      name: "updatedAt",
+      type: "date",
+      required: false,
+    };
+
+    const omitLocalized = (fields: FieldDefinition[]): FieldDefinition[] => {
+      if (!omitLocalizedColumns) return fields;
+      const localizedNames = new Set(resolveLocalizedFieldNames(fields, true));
+      return fields.filter(f => !localizedNames.has(f.name));
+    };
+
+    const normalize = (fields: FieldDefinition[]): FieldDefinition[] => {
+      const forAlter = omitLocalized(fields);
+      const declared = columnsDeclaredBy(forAlter);
+      return [
+        ...systemFields.filter(sf => !declared.has(sf.name)),
+        ...forAlter,
+        updatedAt,
+      ];
+    };
+
+    return {
+      oldFields: normalize(previousFields),
+      newFields: normalize(newFields),
+    };
+  }
+
+  /** The live-table facts the ALTER generator needs, read in one round trip. */
+  private async readLiveTableFacts(
+    db: unknown,
+    dialect: "postgresql" | "mysql" | "sqlite",
+    tableName: string
+  ): Promise<[boolean, Map<string, string[]>, Set<string>]> {
+    const { readForeignKeyColumns, readIndexNames, tableHasRows } =
+      await import("../../schema/pipeline/live-table-facts");
+    return Promise.all([
+      tableHasRows(db, dialect, tableName),
+      readForeignKeyColumns(db, dialect, tableName),
+      readIndexNames(db, dialect, tableName),
+    ]);
+  }
+
+  /**
+   * Run the plan, reporting how far it got.
+   *
+   * Returns undefined when the plan owns no status — a flag-only save with no adapter registered
+   * asked nothing of the main table's schema, so overwriting the previous verdict with one about a
+   * migration that was never requested would be a claim this apply cannot make.
+   *
+   * 🔴 Never throws once it has begun. The PHASE decides that, not the error type: from here on a
+   * statement may already have run, and raising would skip the row write and leave the registry
+   * describing storage that no longer matches it. Refusals are the plan's job, which is where
+   * raising is free because nothing has been touched yet.
+   */
+  private async applyUpdateDdl(
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan
+  ): Promise<SingleMigrationStatus | undefined> {
+    const adapter = this.adapter;
+    const tableName = input.existing.tableName;
+
+    if (!adapter) {
+      this.logger.warn(
+        "[Singles] No adapter registered, migration not executed"
+      );
+      return plan.ownsMigrationStatus ? "pending" : undefined;
+    }
+
+    try {
+      if (plan.migrationSQL) {
+        // The shared runner, not a private copy: it owns both the splitting rule and the tolerance
+        // that makes re-running over half-applied schema the repair case rather than a dead end.
+        await applyMigrationStatements(adapter, plan.migrationSQL);
+      }
+
+      // Observed, not assumed, and it covers the rebuild case as well as the alter: a plan that
+      // created the table has to find it afterwards for "applied" to mean anything.
+      if (!(await adapter.tableExists(tableName))) {
+        this.logger.error(
+          `[Singles] Table "${tableName}" not found after migration update`
+        );
+        return "failed";
+      }
+
+      // 🔴 Past this point the MAIN table holds `plan.fields`. The companion may or may not follow,
+      // and the two halves are what the runtime shape is composed from — so from here the position
+      // in this method is the evidence for which state is true, and no flag is needed to track it.
+      //
+      // i18n: provision or alter the companion for the field set being saved — CREATE and seed the
+      // default locale from main on enable, restore and archive on disable, ADD/DROP columns as
+      // translatable fields change. Reported as a failed migration rather than thrown: the main
+      // table is already in its new shape, and the row describing it is what makes a retry possible.
+      const { reconcileSingleCompanion } = await import(
+        "./reconcile-single-companion"
+      );
+      try {
+        await reconcileSingleCompanion({
+          slug: input.slug,
+          tableName,
+          oldFields: plan.previousFields,
+          newFields: plan.fields,
+          localized: input.isLocalized,
+          wasLocalized: input.wasLocalized,
+          status: input.hasStatus,
+          wasStatus: input.wasStatus,
+          adapter,
+        });
+      } catch (companionError) {
+        // 🔴 The shape is RETRACTED here, never rebound, because nothing at this level knows what
+        // the table now looks like.
+        //
+        // A reconcile that fails has stopped somewhere inside a sequence that moves columns between
+        // the main table and its companion, and where it stopped decides the answer. Binding the
+        // DESIRED shape is wrong when an enable never moved the columns; binding the PREVIOUS one
+        // is wrong when a disable had already restored them and failed afterwards, clearing its
+        // transition marker; binding nothing is wrong when the main ALTER added a column. Each of
+        // those is correct for one stopping point and wrong for another, and the stopping point is
+        // not observable from out here.
+        //
+        // Retracting is the one claim that is always correct: this is no longer describable from
+        // here. `ensureSingleRuntimeTable` then rebuilds on the next touch, and its rebuild branch
+        // PROBES the database for where the translatable columns physically live — which is the
+        // fact every one of those guesses was standing in for.
+        this.retractRuntimeSchema(adapter, tableName);
+        this.logger.error(
+          `[Singles] Companion reconcile failed for "${tableName}": ${
+            companionError instanceof Error
+              ? companionError.message
+              : String(companionError)
+          }`
+        );
+        return "failed";
+      }
+
+      // 🔴 Registered only once the companion has been reconciled, never before it.
+      //
+      // The shape this binds is derived from what the single is being saved AS, so on a
+      // localization ENABLE it omits the translatable columns — which are still physically on the
+      // main table until the companion has taken them. Bind it first and a companion CREATE that
+      // then fails leaves the resolver describing a main table that does not exist in that shape,
+      // and `ensureSingleRuntimeTable` treats a registration it did not make as owned by whoever
+      // made it, so it adopts this one instead of rebuilding. Reads and writes would drop those
+      // fields until a restart.
+      //
+      // Leaving the previous shape in place on failure is the safe direction: it is at worst stale
+      // in the same way it was before the save, and the lazy rebuild can still correct it.
+      await this.registerUpdatedRuntimeSchema(
+        input,
+        plan,
+        adapter,
+        input.isLocalized
+      );
+
+      // 🔴 Only a plan that describes the WHOLE table may clear a durable `failed`.
+      //
+      // A create that got its `CREATE TABLE` through and then failed on an index or a junction
+      // table leaves the table PRESENT but incomplete. Every later save takes the alter branch,
+      // and an ALTER describes a delta: it re-establishes nothing it does not mention, so an
+      // unrelated field edit can run plenty of statements without going anywhere near the missing
+      // artifact. Neither "the table exists" nor "something ran" is evidence the schema is whole,
+      // and the durable verdict is the only record that it is not.
+      //
+      // The rebuild branch is the exception because it renders the table from the desired spec in
+      // full, so reaching the end of it does mean every artifact was asked for.
+      //
+      // ⚠️ Known cost, accepted: a create that built the main table and failed only its COMPANION
+      // can never clear this, because every retry finds the table present and so takes the alter
+      // branch, even when the retry's reconcile succeeds and the schema is now complete. Clearing
+      // it correctly needs both halves established, and `migration_status` is one bit — it records
+      // that a migration failed, not which half. Verifying the live table against the desired spec
+      // is the answer, and until something does, holding a stale `failed` is the safer error: it is
+      // visible and blocks nothing, where a wrong `applied` hides an unenforced constraint until a
+      // write fails.
+      if (
+        input.existing.migrationStatus === "failed" &&
+        !plan.describesWholeTable
+      ) {
+        this.logger.warn(
+          `[Singles] "${tableName}" is recorded as a failed migration and this save only ` +
+            `describes a change to it, so its status is left as failed`
+        );
+        return "failed";
+      }
+
+      return "applied";
+    } catch (error) {
+      // 🔴 Everything inside this block is recorded, including a `NextlyError`, and the error TYPE
+      // is deliberately not consulted.
+      //
+      // The tempting rule is "a refusal propagates whatever phase it arrives from", on the grounds
+      // that recording one as `failed` would save a field list the table never took. It is the
+      // wrong rule here, because by this point the schema may already have changed and raising
+      // skips the row write entirely — which leaves the registry describing storage that no longer
+      // matches it. Disabling localization is the reachable case: `reconcileSingleCompanion`
+      // restores the translations, archives them and DROPS the companion, and only then clears the
+      // transition marker, which refuses a slug containing a dot. Raise there and the companion is
+      // gone while the row still says the single is localized, so every later read targets a table
+      // that no longer exists — silently, and with nothing left to describe the state.
+      //
+      // Recording is strictly better once a statement has run: `failed` is visible, accurate and
+      // retryable, where a raise leaves an inconsistency nothing reports. Refusals belong in the
+      // PLAN, which runs before any of this and raises exactly as before; that is what the phase
+      // split is for, and it is the only place where raising costs nothing.
+      this.logger.error(
+        `[Singles] Migration execution failed for "${tableName}": ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      if (plan.migrationSQL) {
+        this.logger.error(`[Singles] Migration SQL was: ${plan.migrationSQL}`);
+      }
+      return "failed";
+    }
+  }
+
+  /**
+   * Forget the main table's registered shape, so the next read rebuilds it from the database.
+   *
+   * Best-effort in the same way the registration is: a resolver that cannot retract leaves the
+   * previous entry in place, which is where this path was before the method existed.
+   */
+  private retractRuntimeSchema(
+    adapter: DrizzleAdapter,
+    tableName: string
+  ): void {
+    const resolver = (
+      adapter as unknown as { tableResolver?: DynamicSchemaResolver }
+    ).tableResolver;
+    if (resolver && typeof resolver.retractDynamicSchema === "function") {
+      resolver.retractDynamicSchema(tableName);
+    }
+  }
+
+  /**
+   * Rebind the main table to the running server so the next read sees its new column shape.
+   *
+   * Best-effort, like the create path's: the registry is rebuilt from the database on the next
+   * boot, so a failure costs a restart rather than the migration.
+   */
+  private async registerUpdatedRuntimeSchema(
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan,
+    adapter: DrizzleAdapter,
+    /**
+     * Where the translatable columns physically live RIGHT NOW, which is not always what the save
+     * asked for: an enable that failed its companion leaves them on the main table. Passed rather
+     * than read from `input.isLocalized` so the caller states what it observed instead of what it
+     * intended.
+     */
+    localized: boolean
+  ): Promise<void> {
+    try {
+      const { generateRuntimeSchema } = await import(
+        "../../schema/services/runtime-schema-generator"
+      );
+      const { table } = generateRuntimeSchema(
+        input.existing.tableName,
+        plan.fields,
+        adapter.getCapabilities().dialect,
+        // i18n: the main runtime table omits translatable columns for a localized single, matching
+        // where those columns physically are.
+        { status: input.hasStatus, localized }
+      );
+      const resolver = (
+        adapter as unknown as { tableResolver?: DynamicSchemaResolver }
+      ).tableResolver;
+      if (resolver && typeof resolver.registerDynamicSchema === "function") {
+        resolver.registerDynamicSchema(input.existing.tableName, table);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `[Singles] Runtime schema registration failed for "${input.existing.tableName}": ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
   }
 

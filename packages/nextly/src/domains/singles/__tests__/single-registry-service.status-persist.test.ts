@@ -16,10 +16,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 
 import { SingleRegistryService } from "../services/single-registry-service";
 
-import {
-  createMockAdapter,
-  createSilentLogger,
-} from "./single-test-helpers";
+import { createMockAdapter, createSilentLogger } from "./single-test-helpers";
 
 function createCtx() {
   const adapter = createMockAdapter();
@@ -160,6 +157,74 @@ describe("SingleRegistryService.updateSingle — status persistence", () => {
       unknown
     >;
     expect(updateData.status).toBe(0);
+  });
+
+  /**
+   * An outcome the caller OBSERVED is a different thing from the `"pending"` the row falls back to.
+   *
+   * `migration_status` used to be written only inside the `data.fields` branch, and only when the
+   * field hash or the status flag had changed. That gate exists to stop a metadata-only sync
+   * flagging a migration nobody asked for — a rule about the DEFAULT — but it also discarded a
+   * status the caller passed explicitly, which is not a guess: `SingleMetadataService` has run the
+   * statements and confirmed the table by the time it hands one over.
+   *
+   * These assert the row the adapter is actually handed, not an argument a double merged, because
+   * the gate lives here and a service-level test cannot see it.
+   */
+  it("records an explicitly supplied migration status when the fields did not change", async () => {
+    // 🔴 The rebuild path, and the reason this matters. A single whose create failed carries
+    // `migration_status: 'failed'`; re-saving it sends the SAME fields, so the hash matches and the
+    // gate is closed. The one save able to repair it could never record that it had.
+    mockSelectOne(dbRow({ locked: 0, schema_hash: "hash-1" }));
+    ctx.adapter.update.mockResolvedValue([dbRow()]);
+
+    await ctx.service.updateSingle("site-settings", {
+      fields: [{ name: "heading", type: "text" }],
+      schemaHash: "hash-1",
+      migrationStatus: "applied",
+    } as unknown as Parameters<typeof ctx.service.updateSingle>[1]);
+
+    const updateData = ctx.adapter.update.mock.calls[0][1] as Record<
+      string,
+      unknown
+    >;
+    expect(updateData.migration_status).toBe("applied");
+    // The gate still owns `schema_version`: nothing physical changed, so it must not bump.
+    expect("schema_version" in updateData).toBe(false);
+  });
+
+  it("records an explicitly supplied migration status when the save carries no fields", async () => {
+    // A flag-only save never reached the gate at all, so its companion provisioning went
+    // unrecorded however it turned out.
+    mockSelectOne(dbRow({ locked: 0 }));
+    ctx.adapter.update.mockResolvedValue([dbRow()]);
+
+    await ctx.service.updateSingle("site-settings", {
+      localized: true,
+      migrationStatus: "applied",
+    } as unknown as Parameters<typeof ctx.service.updateSingle>[1]);
+
+    const updateData = ctx.adapter.update.mock.calls[0][1] as Record<
+      string,
+      unknown
+    >;
+    expect(updateData.migration_status).toBe("applied");
+  });
+
+  it("still leaves migration status alone when the caller states none", async () => {
+    // The control. Without it, a registry that wrote `migration_status` unconditionally would
+    // satisfy both cases above while reintroducing the spurious pending cycle the gate exists to
+    // prevent.
+    mockSelectOne(dbRow({ locked: 0 }));
+    ctx.adapter.update.mockResolvedValue([dbRow()]);
+
+    await ctx.service.updateSingle("site-settings", { label: "New Label" });
+
+    const updateData = ctx.adapter.update.mock.calls[0][1] as Record<
+      string,
+      unknown
+    >;
+    expect("migration_status" in updateData).toBe(false);
   });
 
   it("does not include status in the update when caller omits it", async () => {
