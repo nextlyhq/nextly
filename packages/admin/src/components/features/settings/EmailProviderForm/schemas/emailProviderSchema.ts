@@ -385,6 +385,17 @@ function initialFieldValue(field: EmailProviderConfigField): unknown {
 }
 
 /**
+ * Controls whose value is a string, both in the input and in the schema built
+ * for it. A select belongs here as much as a text field does: its options are
+ * declared as strings and it matches the current value against them.
+ */
+const STRING_BACKED_KINDS: ReadonlyArray<EmailProviderConfigField["kind"]> = [
+  "text",
+  "password",
+  "select",
+];
+
+/**
  * A stored value in the runtime type its control renders.
  *
  * The server validates the PARSED configuration and stores the object it was
@@ -395,18 +406,40 @@ function initialFieldValue(field: EmailProviderConfigField): unknown {
  * would appear as a blank field: the operator sees a valid setting missing,
  * and a save either unsets it or is blocked.
  *
- * Only the number control needs this. A text, password or select field renders
- * whatever string it is given, and a boolean is read as `value === true`.
- * Anything unparsable is passed through untouched so the field shows what is
- * actually stored rather than silently becoming empty.
+ * It runs in both directions, because coercion does. A parser written as
+ * `z.coerce.string()` accepts `1` and the number is what gets stored, under a
+ * field the descriptor declares as text or select — where a select compares
+ * its option values by identity and shows as unselected, and the generated
+ * schema is `z.string()`, so every unrelated edit is refused until the
+ * operator re-picks a value they already chose.
+ *
+ * Only a scalar is converted. Anything unparsable, and any object or array, is
+ * passed through untouched so the field shows what is actually stored rather
+ * than silently becoming empty or "[object Object]".
+ *
+ * The boolean control is deliberately left out. It is read as `value === true`,
+ * so a stored `"false"` renders as off — but `z.coerce.boolean()` is a
+ * truthiness conversion under which that same `"false"` is TRUE, and any
+ * mapping chosen here could contradict the provider's own parser. A guess is
+ * worse than the disagreement it would hide.
  */
 function storedValueForControl(
   field: EmailProviderConfigField,
   value: unknown
 ): unknown {
-  if (field.kind !== "number" || typeof value !== "string") return value;
-  const asNumber = Number(value);
-  return value.trim() !== "" && Number.isFinite(asNumber) ? asNumber : value;
+  if (field.kind === "number") {
+    if (typeof value !== "string") return value;
+    const asNumber = Number(value);
+    return value.trim() !== "" && Number.isFinite(asNumber) ? asNumber : value;
+  }
+
+  if (!STRING_BACKED_KINDS.includes(field.kind)) return value;
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? String(value) : value;
+  }
+  return typeof value === "bigint" || typeof value === "boolean"
+    ? String(value)
+    : value;
 }
 
 /**

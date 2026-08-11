@@ -792,6 +792,15 @@ describe("a stored value whose type the provider's parser coerced", () => {
     configFields: [
       { name: "host", label: "Host", kind: "text", required: true },
       { name: "retries", label: "Retries", kind: "number" },
+      {
+        name: "region",
+        label: "Region",
+        kind: "select",
+        options: [
+          { value: "1", label: "Primary" },
+          { value: "2", label: "Secondary" },
+        ],
+      },
     ],
   };
 
@@ -829,5 +838,26 @@ describe("a stored value whose type the provider's parser coerced", () => {
       retries: "many",
       host: "h",
     });
+  });
+
+  it("reaches a select as the string its options are written in", () => {
+    // The mirror image: `z.coerce.string()` accepts `1` from a REST or Direct
+    // API caller and the number is what gets stored. Radix compares option
+    // values by identity, so the select would show as unselected while a
+    // stored choice sits behind it — and the generated schema is `z.string()`,
+    // so any unrelated edit is refused until the operator re-picks a value
+    // they already chose.
+    expect(open({ host: "h", region: 1 })).toMatchObject({ region: "1" });
+  });
+
+  it("reaches a text control as a string", () => {
+    expect(open({ host: 25 })).toMatchObject({ host: "25" });
+  });
+
+  it("leaves a structured value on a string control alone", () => {
+    // The control. Stringifying anything at all would turn a stored object
+    // into "[object Object]" and offer it back as a value to save.
+    const nested = { a: 1 };
+    expect(open({ host: nested })).toMatchObject({ host: nested });
   });
 });
