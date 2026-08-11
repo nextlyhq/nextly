@@ -574,13 +574,19 @@ function EmailProviderTable() {
           onSelect: () => handleSetDefault(provider),
         });
       }
-      actions.push({
-        id: "test",
-        label: "Send Test",
-        icon: <Send className="h-4 w-4" />,
-        isDisabled: () => isTesting,
-        onSelect: () => handleTest(provider),
-      });
+      // Same gate as Set Default. `testProvider` reaches the registry for the
+      // stored type and can only fail for one that is gone, and the read-only
+      // fallback exists so an orphaned row can be INSPECTED and deleted --
+      // offering an action that cannot succeed contradicts that.
+      if (descriptorsByType.has(provider.type)) {
+        actions.push({
+          id: "test",
+          label: "Send Test",
+          icon: <Send className="h-4 w-4" />,
+          isDisabled: () => isTesting,
+          onSelect: () => handleTest(provider),
+        });
+      }
       actions.push({
         id: "delete",
         label: "Delete",

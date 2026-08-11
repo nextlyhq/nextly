@@ -958,3 +958,63 @@ describe("select options a plugin got wrong", () => {
     expect(withOptions([{ value: "eu", label: "Europe" }])).not.toThrow();
   });
 });
+
+describe("a flag whose type is wrong", () => {
+  const base = {
+    type: "fixture",
+    label: "Fixture",
+    parseConfig: (input: unknown) => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  };
+
+  it("refuses a stringy secret", () => {
+    // The dangerous case, because it LOOKS right. Every rule tests
+    // `secret === true`, so `"true"` reads as unset: the field is treated as
+    // public and `maskConfiguration` serves the credential in the clear.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          {
+            name: "apiKey",
+            label: "API Key",
+            kind: "password",
+            secret: "true",
+          } as unknown as EmailProviderConfigField,
+        ],
+      })
+    ).toThrow(/non-boolean `secret`/);
+  });
+
+  it("refuses a stringy required", () => {
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          {
+            name: "host",
+            label: "Host",
+            kind: "text",
+            required: "yes",
+          } as unknown as EmailProviderConfigField,
+        ],
+      })
+    ).toThrow(/non-boolean `required`/);
+  });
+
+  it("accepts real booleans and omitted flags", () => {
+    // The control: the rule must not reject the shape every real provider uses.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          { name: "host", label: "Host", kind: "text", required: true },
+          { name: "apiKey", label: "Key", kind: "password", secret: true },
+          { name: "note", label: "Note", kind: "text" },
+        ],
+      })
+    ).not.toThrow();
+  });
+});

@@ -783,3 +783,51 @@ describe("opening an existing provider whose optional field was never set", () =
     });
   });
 });
+
+describe("a stored value whose type the provider's parser coerced", () => {
+  const descriptor: EmailProviderDescriptor = {
+    type: "acme-mail",
+    label: "Acme Mail",
+    capabilities: {},
+    configFields: [
+      { name: "host", label: "Host", kind: "text", required: true },
+      { name: "retries", label: "Retries", kind: "number" },
+    ],
+  };
+
+  function open(configuration: Record<string, unknown>) {
+    return providerToFormValues(
+      {
+        id: "1",
+        name: "Acme",
+        type: "acme-mail",
+        fromEmail: "a@b.com",
+        fromName: null,
+        configuration,
+        isDefault: false,
+        isActive: true,
+        createdAt: "",
+        updatedAt: "",
+      },
+      descriptor
+    ).configuration;
+  }
+
+  it("reaches the number control as a number", () => {
+    // A parser written as `z.coerce.number()` accepts `"3"` from a REST or
+    // Direct API caller, and the service stores the object it was given. The
+    // number input renders only a runtime number, so the stored setting would
+    // otherwise show as a blank field the operator never emptied.
+    expect(open({ host: "h", retries: "3" })).toMatchObject({ retries: 3 });
+  });
+
+  it("leaves an unparsable value alone", () => {
+    // The control, twice over: a value that is not a number is shown as it is
+    // stored rather than silently becoming empty, and a string field is never
+    // touched by this at all.
+    expect(open({ host: "h", retries: "many" })).toMatchObject({
+      retries: "many",
+      host: "h",
+    });
+  });
+});

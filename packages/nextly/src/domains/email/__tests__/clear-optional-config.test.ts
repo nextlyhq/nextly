@@ -299,3 +299,65 @@ describe("clearing the last value under a nested branch", () => {
     expect(Object.keys(stored.configuration)).toEqual(["endpoint"]);
   });
 });
+
+describe("a non-secret field whose value looks like the mask", () => {
+  let sqlite: Database.Database;
+  let service: EmailProviderService;
+
+  const bulletProvider = defineEmailProvider({
+    type: "bullets",
+    label: "Bullets",
+    configFields: [
+      { name: "apiKey", label: "Key", kind: "password", secret: true },
+      { name: "label", label: "Label", kind: "text" },
+    ],
+    parseConfig: input => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  });
+
+  beforeEach(() => {
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(bulletProvider);
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    getEmailProviderRegistry().reset();
+  });
+
+  it("is stored, not mistaken for an untouched credential", async () => {
+    // Stripping keyed on the VALUE alone: `••••••••` is a string a non-secret
+    // text field may legitimately hold, and dropping it there discards a real
+    // edit while reporting success.
+    const created = await service.createProvider({
+      name: "Bullets",
+      type: "bullets",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { apiKey: "k-1", label: "before" },
+      isDefault: false,
+      isActive: true,
+    });
+
+    await service.updateProvider(created.id, {
+      configuration: { label: "••••••••" },
+    });
+
+    const stored = await service.getProviderDecrypted(created.id);
+    expect(stored.configuration).toMatchObject({ label: "••••••••" });
+    // The control: the same value at a DECLARED secret path is still stripped,
+    // so echoing back the mask still means "leave this credential alone".
+    await service.updateProvider(created.id, {
+      configuration: { apiKey: "••••••••" },
+    });
+    const after = await service.getProviderDecrypted(created.id);
+    expect(after.configuration).toMatchObject({ apiKey: "k-1" });
+  });
+});

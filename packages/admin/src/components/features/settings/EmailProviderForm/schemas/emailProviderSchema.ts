@@ -385,6 +385,31 @@ function initialFieldValue(field: EmailProviderConfigField): unknown {
 }
 
 /**
+ * A stored value in the runtime type its control renders.
+ *
+ * The server validates the PARSED configuration and stores the object it was
+ * given, so a provider whose parser coerces — `z.coerce.number()` accepts
+ * `"3"` from a REST or Direct API caller — leaves a string under a field the
+ * descriptor declares as a number. `ProviderConfigFields` renders a number
+ * input only for a value whose runtime type is `number`, so the stored value
+ * would appear as a blank field: the operator sees a valid setting missing,
+ * and a save either unsets it or is blocked.
+ *
+ * Only the number control needs this. A text, password or select field renders
+ * whatever string it is given, and a boolean is read as `value === true`.
+ * Anything unparsable is passed through untouched so the field shows what is
+ * actually stored rather than silently becoming empty.
+ */
+function storedValueForControl(
+  field: EmailProviderConfigField,
+  value: unknown
+): unknown {
+  if (field.kind !== "number" || typeof value !== "string") return value;
+  const asNumber = Number(value);
+  return value.trim() !== "" && Number.isFinite(asNumber) ? asNumber : value;
+}
+
+/**
  * What an EDIT shows for a field the stored configuration does not have.
  *
  * Blank, not the descriptor's default. A default is what to PRE-FILL when
@@ -452,7 +477,9 @@ export function providerToFormValues(
     writeAtPath(
       configuration,
       path,
-      value === undefined ? hydratedFieldValue(field) : value
+      value === undefined
+        ? hydratedFieldValue(field)
+        : storedValueForControl(field, value)
     );
   }
 

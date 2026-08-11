@@ -360,6 +360,39 @@ function assertDeclarationsCanBeHonoured(
 }
 
 /**
+ * Reject metadata whose TYPE is wrong, before anything reads its value.
+ *
+ * Every rule in this file tests `field.secret === true` and
+ * `field.required === true`, which is correct for a boolean and silently wrong
+ * for anything else: `secret: "true"` is not `true`, so the field is treated as
+ * PUBLIC — `declaredSecretPaths` omits it while `declaredConfigPaths` still
+ * recognises it, and `maskConfiguration` then returns the credential in clear
+ * text to anyone who can read providers.
+ *
+ * `configFields` is a structural type, so a JavaScript plugin or a hand-built
+ * object reaches registration with whatever it wrote. A truthy string is the
+ * dangerous case precisely because it looks right.
+ */
+function assertFlagsAreBoolean(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  const flags: Array<[string, unknown]> = [
+    ["secret", field.secret],
+    ["required", field.required],
+  ];
+
+  for (const [name, value] of flags) {
+    if (value === undefined || typeof value === "boolean") continue;
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" gives the field "${field.name}" a non-boolean \`${name}\` (${typeof value}). Only \`true\` marks a field, so any other value reads as unset — for \`secret\` that means the credential is served in the clear.`,
+      logContext: { type, field: field.name, flag: name, kind: typeof value },
+    });
+  }
+}
+
+/**
  * Reject a default that its own field would refuse.
  *
  * A form initialises from the default and validates against the same
@@ -684,6 +717,9 @@ export function assertConfigFieldsAreUsable(
     // unrenderable kind would report the wrong problem.
     assertKindIsRenderable(type, field);
     assertFieldNameIsWalkable(type, field);
+    // Before every rule that reads a flag, so a wrong TYPE is reported as
+    // itself rather than as the rule that silently read it as unset.
+    assertFlagsAreBoolean(type, field);
     // Before every rule that reads `secret`: a credential declared on a
     // control that cannot hold one is the more fundamental mistake, and
     // reporting a rule about its default first would send the author to the

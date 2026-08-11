@@ -306,18 +306,36 @@ export class EmailProviderService extends BaseService {
     return value !== null && typeof value === "object" && !Array.isArray(value);
   }
 
+  /**
+   * Drop the mask a client echoes back for a credential it did not touch.
+   *
+   * Restricted to paths the provider DECLARED secret. The value is the only
+   * signal otherwise, and `••••••••` is a string a non-secret text field may
+   * legitimately hold — dropping it there discards a real edit and reports
+   * success, so the operator sees the old value survive a save they made.
+   *
+   * `secretPaths` is null when no definition is available (an uninstalled
+   * plugin, or a provider that shipped no field metadata). Nothing is stripped
+   * then: with no way to tell a credential from a value, keeping what the
+   * caller sent is the choice that cannot silently lose an edit, and the
+   * provider's own parser still decides whether the result is usable.
+   */
   private stripMaskedConfigValues(
-    config: Record<string, unknown>
+    config: Record<string, unknown>,
+    secretPaths: ReadonlySet<string> | null,
+    pathPrefix = ""
   ): Record<string, unknown> {
     const cleaned: Record<string, unknown> = {};
 
     for (const [key, value] of Object.entries(config)) {
-      if (value === MASKED_VALUE) {
+      const path = pathPrefix ? `${pathPrefix}.${key}` : key;
+
+      if (value === MASKED_VALUE && secretPaths?.has(path)) {
         continue;
       }
 
       if (this.isPlainObject(value)) {
-        cleaned[key] = this.stripMaskedConfigValues(value);
+        cleaned[key] = this.stripMaskedConfigValues(value, secretPaths, path);
       } else {
         cleaned[key] = value;
       }
@@ -644,7 +662,10 @@ export class EmailProviderService extends BaseService {
       // because the submitted API key is exactly what the old shape lacks.
       const submitted =
         data.configuration !== undefined
-          ? this.stripMaskedConfigValues(data.configuration)
+          ? this.stripMaskedConfigValues(
+              data.configuration,
+              this.declaredSecretPaths(data.type as string)
+            )
           : {};
       getEmailProviderRegistry()
         .get(data.type as string)
@@ -692,7 +713,8 @@ export class EmailProviderService extends BaseService {
       const existing = this.readConfiguration(currentRow.configuration);
       const existingConfig = existing.config;
       const incomingConfig = this.stripMaskedConfigValues(
-        data.configuration ?? {}
+        data.configuration ?? {},
+        this.declaredSecretPaths(effectiveType)
       );
       // Across a type change the stored configuration belongs to the previous
       // provider, so it is discarded rather than merged into the new shape.
