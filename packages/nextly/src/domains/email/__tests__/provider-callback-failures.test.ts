@@ -496,3 +496,63 @@ describe("a credential that is not a string", () => {
     ).resolves.toEqual({ success: true, messageId: "<20260811@mail.test>" });
   });
 });
+
+describe("a provider that declares no field metadata", () => {
+  afterEach(() => {
+    getEmailProviderRegistry().reset();
+  });
+
+  it("has its message ids dropped, because nothing can say what is secret", async () => {
+    // `configFields: []` is supported — a provider may store configuration
+    // without describing it. An empty list is an absence of information, not a
+    // statement that nothing is secret, and the service masks every leaf for
+    // exactly that reason. Containment fails closed the same way.
+    const registry = getEmailProviderRegistry();
+    registry.register(
+      defineEmailProvider<{ apiKey: string }>({
+        type: "no-metadata",
+        label: "No metadata",
+        configFields: [],
+        parseConfig: input => input as { apiKey: string },
+        createAdapter: config => ({
+          send: () =>
+            Promise.resolve({
+              success: true,
+              messageId: `id-${config.apiKey}`,
+            }),
+        }),
+      })
+    );
+
+    const result = await registry
+      .create("no-metadata", { apiKey: "sk-live-secret-value" })
+      .send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" });
+
+    expect(result.messageId).toBeUndefined();
+  });
+
+  it("keeps them when there is no configuration to protect", async () => {
+    // The control. No fields AND no stored configuration means there is no
+    // credential in scope, so the id is not withheld — the rule keys on having
+    // something to protect and no way to identify it, not on the empty list.
+    const registry = getEmailProviderRegistry();
+    registry.register(
+      defineEmailProvider({
+        type: "no-metadata-no-config",
+        label: "No metadata, no config",
+        configFields: [],
+        parseConfig: () => ({}),
+        createAdapter: () => ({
+          send: () =>
+            Promise.resolve({ success: true, messageId: "<ok@mail.test>" }),
+        }),
+      })
+    );
+
+    await expect(
+      registry
+        .create("no-metadata-no-config", {})
+        .send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" })
+    ).resolves.toEqual({ success: true, messageId: "<ok@mail.test>" });
+  });
+});

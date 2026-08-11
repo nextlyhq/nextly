@@ -398,3 +398,107 @@ describe("a provider deleted while its send is in flight", () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 });
+
+describe("a message with more recipients than one statement can carry", () => {
+  let sqlite: Database.Database;
+  let service: EmailDeliveryService;
+
+  beforeEach(() => {
+    sqlite = new Database(":memory:");
+    createDeliveriesTable(sqlite);
+    service = new EmailDeliveryService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    vi.clearAllMocks();
+  });
+
+  /** Counts the INSERT statements a call issues, so chunking is observable. */
+  function countingDb(db: ReturnType<typeof drizzle>): {
+    db: ReturnType<typeof drizzle>;
+    statements: () => number;
+  } {
+    let count = 0;
+    const proxy = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property !== "insert") {
+          return Reflect.get(target, property, receiver) as unknown;
+        }
+        return (table: unknown) => {
+          count += 1;
+          return target.insert(table as never);
+        };
+      },
+    }) as ReturnType<typeof drizzle>;
+    return { db: proxy, statements: () => count };
+  }
+
+  it("writes them in bounded statements rather than one", async () => {
+    // Row COUNT alone cannot show this: SQLite in memory accepts 130 rows in a
+    // single statement happily, so a test asserting only the total passes with
+    // chunking removed. The statement count is the mechanism.
+    const base = drizzle({ client: sqlite });
+    const counted = countingDb(base);
+    const chunked = new EmailDeliveryService(makeAdapter(counted.db), logger);
+
+    await chunked.recordAll(
+      Array.from({ length: 130 }, (_, index) => ({
+        to: `person-${index}@example.com`,
+        providerType: "smtp",
+        status: "sent" as const,
+      }))
+    );
+
+    expect(counted.statements()).toBe(3);
+    // And the control on the other side: one ordinary send is still one
+    // statement, so chunking has not made every write expensive.
+    const single = countingDb(base);
+    await new EmailDeliveryService(makeAdapter(single.db), logger).recordAll([
+      { to: RECIPIENT, providerType: "smtp", status: "sent" },
+    ]);
+    expect(single.statements()).toBe(1);
+  });
+
+  it("records every one of them", async () => {
+    // One `values()` over an unbounded list exceeds a dialect's bind-parameter
+    // ceiling, and this recorder swallows its own failures — so the message
+    // would be dispatched and lose EVERY row.
+    const recipients = Array.from({ length: 130 }, (_, index) => ({
+      to: `person-${index}@example.com`,
+      recipientKind: index === 0 ? ("to" as const) : ("bcc" as const),
+      providerType: "smtp",
+      status: "sent" as const,
+    }));
+
+    await service.recordAll(recipients);
+
+    const rows = await service.list({ limit: 500 });
+    expect(rows).toHaveLength(130);
+    // Every address findable, not merely the right count — a chunk written
+    // with the wrong ids or a duplicated slice would still total 130.
+    const found = await service.list({ recipient: "person-129@example.com" });
+    expect(found).toHaveLength(1);
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it("shares one timestamp across every chunk", async () => {
+    // The rows describe a single send. Chunking is a statement-size detail and
+    // must not become visible as a spread of creation times.
+    await service.recordAll(
+      Array.from({ length: 130 }, (_, index) => ({
+        to: `p${index}@example.com`,
+        providerType: "smtp",
+        status: "sent" as const,
+      }))
+    );
+
+    const distinct = sqlite
+      .prepare("select distinct created_at from email_deliveries")
+      .all();
+    expect(distinct).toHaveLength(1);
+  });
+});

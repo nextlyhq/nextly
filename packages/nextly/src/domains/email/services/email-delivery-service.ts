@@ -35,6 +35,16 @@ import {
   type EmailDeliveryStatus,
 } from "../delivery-record";
 
+/**
+ * Rows per insert statement.
+ *
+ * Chosen against the tightest dialect rather than the roomiest: SQLite's
+ * default bind-parameter ceiling is the low limit, and each row binds a dozen
+ * columns. Small enough to stay well inside it, large enough that an ordinary
+ * send is still one statement.
+ */
+const INSERT_CHUNK_SIZE = 50;
+
 type EmailDeliveriesTable =
   | typeof emailDeliveriesPg
   | typeof emailDeliveriesMysql
@@ -146,6 +156,36 @@ export class EmailDeliveryService extends BaseService {
     // batch a second time under new keys -- one send, two sets of rows.
     const ids = inputs.map(() => randomUUID());
 
+    // Written in bounded chunks. One `values()` over an unbounded recipient
+    // list exceeds a dialect's bind-parameter or statement-size limit, and
+    // this method swallows its own failures by design -- so a message with a
+    // large BCC list would be dispatched and then lose EVERY row. Each chunk
+    // fails, retries and reports on its own, so one oversized or unlucky slice
+    // cannot take the rest of the batch with it.
+    for (let start = 0; start < inputs.length; start += INSERT_CHUNK_SIZE) {
+      const end = start + INSERT_CHUNK_SIZE;
+      await this.insertChunk(
+        inputs.slice(start, end),
+        ids.slice(start, end),
+        now
+      );
+    }
+  }
+
+  /**
+   * One bounded slice of a batch: insert it, and recover the one way that can
+   * be recovered.
+   *
+   * Per chunk rather than per batch, because the provider retry rewrites the
+   * rows it was given. Retrying a whole batch after a later chunk failed would
+   * re-insert the ids an earlier chunk had already committed, and collide on
+   * the primary key.
+   */
+  private async insertChunk(
+    inputs: EmailDeliveryInput[],
+    ids: string[],
+    now: Date
+  ): Promise<void> {
     try {
       await this.insertRows(inputs, ids, now, true);
     } catch (error) {
@@ -153,29 +193,23 @@ export class EmailDeliveryService extends BaseService {
       // to `email_providers`, and an administrator deleting a provider while
       // its send is in flight leaves `providerId` pointing at a row that is
       // gone by the time this runs. `ON DELETE SET NULL` only protects rows
-      // that already existed.
+      // that already existed. The message WAS sent, so losing its row to the
+      // provider's absence would make the log's completeness depend on nobody
+      // editing settings during a send.
       //
-      // The message WAS sent, so losing its row to the provider's absence
-      // would make the log's completeness depend on nobody editing settings
-      // during a send. Retried once without the reference: `provider_type`
-      // beside it keeps every row meaningful without the join, which is the
-      // same reason MySQL carries no key here at all.
       // ONLY a foreign-key violation. Any other failure -- a deadlock, a
       // timeout, a lost connection -- has nothing to do with the provider
       // reference, and retrying without it would clear a reference whose
       // provider still exists, quietly weakening every row written during a
       // database hiccup.
       if (toDbError(this.dialect, error).kind !== "fk-violation") {
-        this.logger.error("Failed to record an email delivery", {
-          providerType: inputs[0]?.providerType,
-          status: inputs[0]?.status,
-          recipientCount: inputs.length,
-          message: error instanceof Error ? error.message : String(error),
-        });
+        this.reportInsertFailure(inputs, error);
         return;
       }
 
       try {
+        // `provider_type` beside it keeps every row meaningful without the
+        // join, which is the same reason MySQL carries no key here at all.
         await this.insertRows(inputs, ids, now, false);
         this.logger.warn(
           "Recorded an email delivery without its provider reference",
@@ -189,13 +223,21 @@ export class EmailDeliveryService extends BaseService {
         // Fall through to the original failure, which is the one worth
         // reporting: the retry failing too means the cause was never the key.
       }
-      this.logger.error("Failed to record an email delivery", {
-        providerType: inputs[0]?.providerType,
-        status: inputs[0]?.status,
-        recipientCount: inputs.length,
-        message: error instanceof Error ? error.message : String(error),
-      });
+      this.reportInsertFailure(inputs, error);
     }
+  }
+
+  /** One shape for a lost chunk, so the two report sites cannot diverge. */
+  private reportInsertFailure(
+    inputs: EmailDeliveryInput[],
+    error: unknown
+  ): void {
+    this.logger.error("Failed to record an email delivery", {
+      providerType: inputs[0]?.providerType,
+      status: inputs[0]?.status,
+      recipientCount: inputs.length,
+      message: error instanceof Error ? error.message : String(error),
+    });
   }
 
   /**

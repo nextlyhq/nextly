@@ -198,8 +198,13 @@ export interface RegisteredEmailProvider {
  *
  * A value of one to three characters cannot be compared safely: it matches
  * almost any identifier, so using it as a needle would delete every message id
- * the provider returns. It is reported separately rather than dropped, because
- * ignoring it is what let a short PIN travel.
+ * the provider returns. It is reported as UNMATCHABLE rather than skipped, and
+ * the caller drops the id instead of trying to match it.
+ *
+ * A provider that declares NO fields is the same case. An empty list is an
+ * absence of information, not a statement that nothing is secret — the service
+ * masks every configuration leaf for exactly that reason — so containment
+ * fails closed here too.
  */
 function declaredSecretValues(
   fields: ReadonlyArray<EmailProviderConfigField>,
@@ -208,6 +213,17 @@ function declaredSecretValues(
   if (config === null || typeof config !== "object") {
     return { comparable: [], hasUnmatchable: false };
   }
+
+  // No metadata and a configuration to protect: nothing here can say which
+  // leaf is a credential, so no message id from this provider can be trusted.
+  // `declaredSecretPaths` reaches the same conclusion and masks everything.
+  if (fields.length === 0) {
+    return {
+      comparable: [],
+      hasUnmatchable: Object.keys(config).length > 0,
+    };
+  }
+
   const comparable: string[] = [];
   let hasUnmatchable = false;
 

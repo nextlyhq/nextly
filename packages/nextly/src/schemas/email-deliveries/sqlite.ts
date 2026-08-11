@@ -4,7 +4,8 @@
  * See `./postgres.ts` for what this table deliberately does not hold — the
  * recipient's address, the rendered subject, the body — and for why the retry
  * columns are present and inert. SQLite differences: `text` for every string,
- * `integer { mode: "timestamp" }` for datetimes.
+ * `integer { mode: "timestamp_ms" }` for datetimes, which keeps the
+ * milliseconds the recorder supplies rather than truncating to whole seconds.
  *
  * @module schemas/email-deliveries/sqlite
  */
