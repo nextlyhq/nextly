@@ -66,6 +66,18 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 - Some unit suites have a known pre-existing failing baseline. NEVER add to
   it: run the tests for the area you touch before and after your change, and
   fix any new failure you introduce.
+- A test is only evidence once you have seen it FAIL for the intended reason.
+  Break the code, confirm the intended test fails, restore. A break that stops
+  compilation proves nothing, and the test count must not drop. After changing
+  a test, re-run its break: a fix to the test is a change to the experiment.
+- Ask what ELSE would make a test pass. If anything other than the property
+  under test produces the same green, it is not covering that property yet —
+  a fixture that never reaches the mechanism, an unregistered type that falls
+  through to a default, an assertion satisfied by absence. Add the positive
+  control that makes the mechanism's presence observable.
+- A test that passes both with and without the fix is worse than no test:
+  the next reader takes the green as coverage. Delete it, and say in the file
+  that remains where the behaviour IS covered.
 
 ## Conventions (enforced; violations will be rejected in review)
 
@@ -99,6 +111,17 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 - Admin styling is token-driven: use `--nx-*` custom properties (defined for
   light AND dark in `packages/ui/src/styles/theme.css`). Zero hardcoded
   colors, and every visual change must work in both modes.
+- One question has ONE implementation. When a narrower view of something is
+  needed, DERIVE it from the richer one; never compute it alongside. Two
+  functions that agree today drift, and the drift is silent because both look
+  correct. This has produced defects in five unrelated packages.
+- A guard that cannot fire is still cheap; a guard added later is not.
+  Unreachability is a property of the current call graph, not of the code, and
+  the call graph changes underneath you. "This cannot happen" is a reason the
+  guard costs nothing, never a reason to omit it.
+- A documented rule with nothing enforcing it is not a control, and filing a
+  task is not installing one. If the correct path and the easy path differ,
+  the rule will be broken by someone who knows it.
 
 ## Changesets and releases
 
