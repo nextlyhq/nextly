@@ -22,12 +22,13 @@ on:
 permissions:
   contents: read
 
-# Scoped to pull requests for the same reason as the CI workflow: on `main`
-# `github.ref` is one string for every push, so each merge cancelled the
-# previous commit's run and left a required check reporting `cancelled`.
+# Keyed per commit on `main` for the same reason as the CI workflow: a shared
+# `github.ref` group cancelled the previous commit's run on every merge, and
+# switching cancellation off is not enough — a group holds one running and one
+# pending run, so a third merge displaces the second while it is still queued.
 concurrency:
-  group: integration-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: integration-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: true
 
 jobs:
   integration:

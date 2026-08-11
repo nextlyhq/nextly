@@ -15,16 +15,22 @@ permissions:
 # Superseding is right for a branch under review and wrong for `main`.
 #
 # On a pull request a new push makes the previous run's verdict irrelevant, so
-# cancelling it saves minutes and loses nothing. On `main` every commit is a
-# distinct artifact somebody will later ask "was that green?" about, and
-# `github.ref` is the same string for every push there — so each merge cancelled
-# the previous commit's run. With several lanes merging, most `main` commits
-# never reached a verdict at all, and a REQUIRED check that reports `cancelled`
-# is indistinguishable from one that failed. That trains people to merge past
-# red, which is the actual cost.
+# every push shares one group and cancels the last: minutes saved, nothing lost.
+#
+# On `main` every commit is a distinct artifact somebody will later ask "was that
+# green?" about, so each push gets a group of its OWN. Sharing a `github.ref`
+# group there cancelled the previous commit's run on every merge, and a REQUIRED
+# check reporting `cancelled` is indistinguishable from one that failed — which
+# trains people to merge past red.
+#
+# The group has to differ per commit rather than the cancellation merely being
+# switched off. A group holds at most one running AND one pending run, so with
+# three merges in quick succession the third displaces the second while it is
+# still queued: the middle commit ends up cancelled regardless of
+# `cancel-in-progress`. Keyed by `github.sha`, there is nothing to displace.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: true
 
 jobs:
   ci:
