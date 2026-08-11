@@ -26,6 +26,20 @@ decision to call it. Only sharing the entry point does.
 
 `src/layering.test.ts` enforces two boundaries as a build failure:
 
+**The strongest enforcement is not the scan.** `@nextlyhq/admin` is in no
+dependency field of this package, and pnpm's `node_modules` is not hoisted, so it
+does not resolve here at all — verified, `MODULE_NOT_FOUND`. Every spelling of a
+direct admin import therefore fails to build, including spellings TypeScript has
+not shipped yet. A test asserts the manifest stays that way, which is complete by
+construction in a way a syntax scan can never be.
+
+The scan is the second layer: it fails at test time naming the rule, rather than
+at build time with a resolution error, and it is the **only** enforcement for the
+subpath policy below — `blocks-react/next`, the `plugin-sdk` root and
+`plugin-sdk/testing` all resolve perfectly, because their packages are legitimate
+dependencies. The graph has nothing to say about which _entry_ of a dependency is
+allowed.
+
 1. **Never `@nextlyhq/admin` directly.** Admin is reached only through
    `@nextlyhq/plugin-sdk/admin`, a curated facade where every export is named
    individually and carries a stability tag. A direct import bypasses the facade
