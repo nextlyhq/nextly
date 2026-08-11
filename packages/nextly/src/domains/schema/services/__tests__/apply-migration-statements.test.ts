@@ -80,6 +80,22 @@ describe("applyMigrationStatements", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("runs nothing for a diff that rendered only a comment", async () => {
+    // A diff with no operations still renders a header comment, so a non-empty SQL string is not
+    // a non-empty migration. Worth pinning because that asymmetry is what makes "the SQL is not
+    // empty" the wrong way to ask whether anything reached the database — a guard written that way
+    // never fires, and reads as though it does.
+    const adapter = runner({});
+
+    await expect(
+      applyMigrationStatements(
+        adapter,
+        "-- Update dynamic collection: single_page"
+      )
+    ).resolves.toBeUndefined();
+    expect(adapter.executed).toEqual([]);
+  });
+
   /**
    * 🔴 The edge that makes the tolerance safe. This is a row conflict from an INSERT..SELECT during
    * a table rebuild, and its wording is one word away from the index case above. Swallowed, the
