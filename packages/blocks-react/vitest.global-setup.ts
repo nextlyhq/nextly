@@ -14,9 +14,11 @@ import { fileURLToPath } from "node:url";
  * **Stopping is all it does, and that is the whole design.** Freshness belongs
  * to the build system: `turbo.json` makes `test` depend on this package's own
  * `build` and names `dist/**` among its inputs, so an edit to anything the
- * declarations are emitted from rebuilds and re-runs. Every documented path
- * into this suite — `pnpm test`, `turbo run test`, CI — arrives through that
- * edge with the artifact already current.
+ * declarations are emitted from rebuilds and re-runs. `pnpm test`, `turbo run
+ * test` and CI all arrive through that edge with the artifact already current.
+ * What is checked here is the path that bypasses it — a direct `vitest`, or
+ * `pnpm --filter @nextlyhq/blocks-react test`, which runs the package script
+ * without turbo's graph.
  *
  * Building here as well looked like belt-and-braces and was not. `turbo run
  * build --filter=@nextlyhq/blocks-react` carries the `^build` edge, so it
@@ -28,39 +30,52 @@ import { fileURLToPath } from "node:url";
  * missing chunk in code nobody changed. One package's convenience cannot be
  * bought by deleting another package's build output underneath it.
  *
- * What is left is the case the build edge does not reach: someone running
- * `vitest` directly against a tree that was never built. That now ends in one
- * clear sentence naming the command to run, which is a cost worth paying —
- * a single legible failure, once, in place of a nondeterministic one somewhere
- * else.
+ * **Absent is checked; STALE is not, and cannot usefully be.** A `dist` older
+ * than the source it describes would pass here and let the suites read an
+ * artifact that agrees with itself while the source has moved. Modification
+ * times cannot close that: Turbo restores a cached `dist` with the timestamp of
+ * the restore, so any later touch of a source file — a checkout, a branch
+ * switch, a formatter — makes the source newer than an artifact whose content is
+ * current. Measured on this package: a cache-restored `dist/index.d.ts` at
+ * `…57.173` against an unchanged `src/index.ts` at `…57.691`. A timestamp guard
+ * would refuse to run on a correct tree, which is a worse failure than the rare
+ * one it prevents, and deciding freshness exactly means re-implementing Turbo's
+ * hashing. Turbo stays the authority, through the `test` -> `build` edge.
  *
  * The entries are read from `package.json` rather than listed here, so this
  * checks exactly what the suites resolve and cannot drift from it as entries
  * are added.
  */
 export default function setup(): void {
-  const packageRoot = join(dirname(fileURLToPath(import.meta.url)));
+  const packageRoot = dirname(fileURLToPath(import.meta.url));
   const manifest = JSON.parse(
     readFileSync(join(packageRoot, "package.json"), "utf8")
   ) as { name?: string; exports?: Record<string, { types?: string }> };
+  const name = manifest.name ?? "@nextlyhq/blocks-react";
+  // Scoped through `turbo run` directly rather than the root `build` script,
+  // which already carries `--filter=./packages/*`. Turbo's filters are
+  // ADDITIVE, so `pnpm build --filter <name>` selects 23 package builds rather
+  // than this one's subtree — advice that would clean unrelated packages' `dist`
+  // is the behaviour this file exists to stop recommending.
+  const recovery = `pnpm exec turbo run build --filter=${name}`;
 
-  const missing = Object.entries(manifest.exports ?? {})
+  const declarations = Object.entries(manifest.exports ?? {})
     .map(([subpath, entry]) => ({ subpath, types: entry?.types }))
     .filter(
       (entry): entry is { subpath: string; types: string } =>
         typeof entry.types === "string"
     )
-    .filter(entry => !existsSync(resolve(packageRoot, entry.types)))
+    .map(entry => ({ ...entry, file: resolve(packageRoot, entry.types) }));
+
+  const missing = declarations
+    .filter(entry => !existsSync(entry.file))
     .map(entry => `${entry.subpath} (${entry.types})`);
-
-  if (missing.length === 0) return;
-
-  const name = manifest.name ?? "@nextlyhq/blocks-react";
-  throw new Error(
-    `${name} has no built declarations for ${missing.join(", ")}.\n` +
-      `Several suites here assert against the emitted artifact, so there is ` +
-      `nothing for them to read.\n` +
-      `Run \`pnpm build --filter ${name}\`, or use \`pnpm test\` / ` +
-      `\`turbo run test\`, which build first.`
-  );
+  if (missing.length > 0) {
+    throw new Error(
+      `${name} has no built declarations for ${missing.join(", ")}.\n` +
+        `Several suites here assert against the emitted artifact, so there is ` +
+        `nothing for them to read.\n` +
+        `Run \`${recovery}\`, or use \`pnpm test\` / \`turbo run test\`, which build first.`
+    );
+  }
 }
