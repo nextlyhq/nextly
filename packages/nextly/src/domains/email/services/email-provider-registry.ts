@@ -17,6 +17,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import {
   MAX_EMAIL_PROVIDER_TYPE_LENGTH,
   assertConfigFieldsAreUsable,
+  assertProviderTextIsRenderable,
   emailProviderTypeTooLong,
   type RegisteredEmailProvider,
 } from "../provider-definition";
@@ -43,6 +44,11 @@ class EmailProviderRegistry {
     // boundary every provider actually crosses: RegisteredEmailProvider is a
     // structural type, so a JavaScript plugin or a hand-built object reaches
     // registration without passing through the authoring helper.
+    //
+    // Text before everything, because the rules below call `.trim()` and
+    // `.length` on the type and the admin renders the rest of these strings
+    // straight into the page.
+    assertProviderTextIsRenderable(provider);
     // An empty id is indistinguishable from an unselected value in a
     // descriptor-driven picker, and the Direct API would persist a row carrying
     // it even though the REST schema rejects the same value.

@@ -360,6 +360,83 @@ function assertDeclarationsCanBeHonoured(
 }
 
 /**
+ * How one text property is allowed to be absent or blank.
+ *
+ * - `"required"` — must be a non-empty string. Blank is refused because the
+ *   value is a label somewhere: a control with no name, or a picker entry that
+ *   cannot be told from its neighbours.
+ * - `"identifier"` — must be a string, and emptiness belongs to another rule
+ *   that reports it better than "empty" would.
+ * - `"optional"` — may be omitted; if present it has to be a string.
+ */
+type TextRequirement = "required" | "identifier" | "optional";
+
+/**
+ * Reject descriptor text that is not text.
+ *
+ * A descriptor is the only part of a provider that crosses to the browser, and
+ * the admin renders these values directly: `help` and `senderGuidance` become
+ * React children, where a non-string throws and takes the settings page down
+ * with it, and `label` is called as a string while building a select's
+ * validation message. A descriptor is also structural, so a JavaScript plugin
+ * or a hand-built object supplies whatever it wrote.
+ *
+ * Refused where the descriptor is published rather than where it is rendered:
+ * the admin cannot say which install shipped the bad value, and by then the
+ * only symptom is a blank page.
+ */
+function assertTextIsRenderable(
+  type: string,
+  subject: string,
+  entries: ReadonlyArray<[key: string, value: unknown, rule: TextRequirement]>
+): void {
+  for (const [key, value, rule] of entries) {
+    if (value === undefined && rule === "optional") continue;
+
+    if (typeof value !== "string") {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Email provider "${type}" gives ${subject} a non-string \`${key}\` (${value === null ? "null" : typeof value}). Descriptor text is rendered by the admin as it arrives, so a value that is not a string breaks the page that would have shown it.`,
+        logContext: { type, subject, key, valueType: typeof value },
+      });
+    }
+
+    if (rule === "required" && value.trim().length === 0) {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Email provider "${type}" gives ${subject} an empty \`${key}\`. It is what names this in the admin, so nothing else identifies it once it is blank.`,
+        logContext: { type, subject, key },
+      });
+    }
+  }
+}
+
+/**
+ * Every text property a descriptor publishes about the provider itself.
+ *
+ * Exported for the same reason the field rules are: `RegisteredEmailProvider`
+ * is structural, so the registry is a second door into the admin and checking
+ * only the authoring helper would leave it open.
+ */
+export function assertProviderTextIsRenderable(provider: {
+  type: string;
+  label: string;
+  description?: string;
+  docsUrl?: string;
+  senderGuidance?: string;
+}): void {
+  assertTextIsRenderable(String(provider.type), "the provider", [
+    // Before the rules that read `.trim()` and `.length` off it. Emptiness is
+    // left to the registry, whose message for it says more than "empty".
+    ["type", provider.type, "identifier"],
+    ["label", provider.label, "required"],
+    ["description", provider.description, "optional"],
+    ["docsUrl", provider.docsUrl, "optional"],
+    ["senderGuidance", provider.senderGuidance, "optional"],
+  ]);
+}
+
+/**
  * Reject metadata whose TYPE is wrong, before anything reads its value.
  *
  * Every rule in this file tests `field.secret === true` and
@@ -713,7 +790,17 @@ export function assertConfigFieldsAreUsable(
   fields: ReadonlyArray<EmailProviderConfigField>
 ): void {
   for (const field of fields) {
-    // Kind first: every rule below reads it, and a rule that switches on an
+    // Text first, because `name` is how every rule below says WHICH field it
+    // means and the walkability rule splits it: a non-string name otherwise
+    // surfaces as `field.name.split is not a function`, which names neither
+    // the plugin nor the field.
+    assertTextIsRenderable(type, `the field "${String(field.name)}"`, [
+      ["name", field.name, "identifier"],
+      ["label", field.label, "required"],
+      ["help", field.help, "optional"],
+      ["placeholder", field.placeholder, "optional"],
+    ]);
+    // Then kind: every rule below reads it, and a rule that switches on an
     // unrenderable kind would report the wrong problem.
     assertKindIsRenderable(type, field);
     assertFieldNameIsWalkable(type, field);
@@ -830,6 +917,8 @@ export function describeProviderFailure(error: unknown): {
 export function defineEmailProvider<TConfig>(
   definition: EmailProviderDefinition<TConfig>
 ): RegisteredEmailProvider {
+  assertProviderTextIsRenderable(definition);
+
   if (definition.type.length > MAX_EMAIL_PROVIDER_TYPE_LENGTH) {
     throw emailProviderTypeTooLong(definition.type);
   }

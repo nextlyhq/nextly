@@ -1018,3 +1018,155 @@ describe("a flag whose type is wrong", () => {
     ).not.toThrow();
   });
 });
+
+describe("descriptor text that is not text", () => {
+  const base = {
+    type: "fixture",
+    label: "Fixture",
+    parseConfig: (input: unknown) => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  };
+
+  /**
+   * Written through a cast for the same reason the option-shape fixtures are:
+   * these values arrive from a JavaScript plugin or a hand-built object, so
+   * the compiler is not what stands between them and the admin.
+   */
+  function withField(field: Record<string, unknown>) {
+    return () =>
+      defineEmailProvider({
+        ...base,
+        configFields: [field as unknown as EmailProviderConfigField],
+      });
+  }
+
+  it("refuses a non-string help message", () => {
+    // The admin renders `help` as a child (`description={field.help}`), where
+    // an object throws and takes the whole settings page with it.
+    expect(
+      withField({ name: "apiKey", label: "API Key", kind: "text", help: {} })
+    ).toThrow(/non-string `help`/);
+  });
+
+  it("refuses a non-string label", () => {
+    // `field.label.toLowerCase()` builds the select's validation message, so a
+    // non-string label fails while the form is being validated rather than at
+    // the boundary that published it.
+    expect(withField({ name: "apiKey", label: 42, kind: "text" })).toThrow(
+      /non-string `label`/
+    );
+  });
+
+  it("refuses a non-string placeholder", () => {
+    expect(
+      withField({
+        name: "apiKey",
+        label: "API Key",
+        kind: "text",
+        placeholder: ["a"],
+      })
+    ).toThrow(/non-string `placeholder`/);
+  });
+
+  it("refuses a non-string field name", () => {
+    // Every other rule interpolates the name to say WHICH field it means, and
+    // the walkability rule splits it. Identity is checked before all of them.
+    expect(withField({ name: 7, label: "Seven", kind: "text" })).toThrow(
+      /non-string `name`/
+    );
+  });
+
+  it("refuses a blank label", () => {
+    // Renders an unlabelled control whose own validation messages then read
+    // " is required".
+    expect(withField({ name: "apiKey", label: "   ", kind: "text" })).toThrow(
+      /empty `label`/
+    );
+  });
+
+  it("refuses non-string text on the provider itself", () => {
+    // `senderGuidance` is rendered as a child exactly as `help` is, so the
+    // rule covers the provider's own strings and not only its fields'.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        senderGuidance: { note: "verify a domain" },
+        configFields: [],
+      } as unknown as Parameters<typeof defineEmailProvider>[0])
+    ).toThrow(/non-string `senderGuidance`/);
+  });
+
+  it("accepts the text every real provider writes", () => {
+    // The control: strings, and omitted optional ones, must still pass.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        description: "A fixture",
+        senderGuidance: "Verify your domain first.",
+        configFields: [
+          {
+            name: "apiKey",
+            label: "API Key",
+            kind: "password",
+            secret: true,
+            help: "Found in the dashboard.",
+            placeholder: "re_...",
+          },
+          { name: "note", label: "Note", kind: "text" },
+        ],
+      })
+    ).not.toThrow();
+  });
+});
+
+describe("descriptor text rules hold at the registry boundary too", () => {
+  let registry: ReturnType<typeof getEmailProviderRegistry>;
+
+  beforeEach(() => {
+    registry = getEmailProviderRegistry();
+    registry.reset();
+  });
+
+  afterEach(() => {
+    registry.reset();
+  });
+
+  it("refuses a non-string help message on a hand-built provider", () => {
+    expect(() =>
+      registry.register({
+        type: "hand-built",
+        label: "Hand Built",
+        configFields: [
+          {
+            name: "apiKey",
+            label: "API Key",
+            kind: "text",
+            help: {},
+          } as unknown as EmailProviderConfigField,
+        ],
+        validateConfig: () => {},
+        createAdapterFrom: () => ({
+          send: () => Promise.resolve({ success: true, messageId: "x" }),
+        }),
+        hasConnectionTest: false,
+      })
+    ).toThrow(/non-string `help`/);
+  });
+
+  it("refuses a non-string label on the provider itself", () => {
+    expect(() =>
+      registry.register({
+        type: "hand-built",
+        label: 42,
+        configFields: [],
+        validateConfig: () => {},
+        createAdapterFrom: () => ({
+          send: () => Promise.resolve({ success: true, messageId: "x" }),
+        }),
+        hasConnectionTest: false,
+      } as unknown as RegisteredEmailProvider)
+    ).toThrow(/non-string `label`/);
+  });
+});
