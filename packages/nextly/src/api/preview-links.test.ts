@@ -189,17 +189,30 @@ describe("mintPreviewLink", () => {
     expect(body.item).toBeUndefined();
   });
 
-  it("asks the edit question about the ROW, without claiming the route already did", async () => {
+  it("asks the edit question about the row the READ settled on", async () => {
+    // A `beforeOperation` hook may rewrite the id, and the read resolves it
+    // before fetching. The bearer's own read runs that same hook and lands on
+    // the same row, so authorizing the id the request NAMED would judge a
+    // different row than the token delivers: editable row A mapped to
+    // readable-but-uneditable row B passes read(B) plus update(A), while the
+    // token hands out B.
+    getEntry.mockResolvedValue({
+      success: true,
+      statusCode: 200,
+      data: { id: "rewritten-by-hook" },
+    });
+
     await mintPreviewLink(post({ collection: "pages", entryId: "7" }));
 
     expect(canUpdateEntry).toHaveBeenCalledWith(
       expect.objectContaining({
         collectionName: "pages",
-        entryId: "7",
-        // The mint route authorized `update` on the COLLECTION, which is one
-        // granularity coarser than this question. Passing `true` would tell the
-        // gate a row-level check had already run when only the coarse one had.
-        routeAuthorized: false,
+        entryId: "rewritten-by-hook",
+        // The route already ran the coarse `update` gate for this collection,
+        // and this flag skips ONLY that. The stored owner-only/role/custom rules
+        // still evaluate against the loaded document, which is what decides the
+        // row-level question.
+        routeAuthorized: true,
       })
     );
   });

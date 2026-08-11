@@ -98,17 +98,33 @@ export async function assertEntryPreviewable(
   // published entry and would otherwise mint a credential exposing that
   // author's unpublished edits.
   //
-  // `routeAuthorized: false` deliberately. The mint route authorized `update`
-  // on the COLLECTION, which is one granularity coarser than this question, so
-  // the gate is asked to run in full rather than told it already ran. The
-  // caller's identity and key scope are supplied, so a scoped API key is judged
-  // on its own grant here as well and re-running costs a verdict, not a
-  // rejection.
+  // The id the READ settled on, not the one the request named. A collection's
+  // `beforeOperation` hook may rewrite the id, and the read resolves it before
+  // fetching; the bearer's own read will run that hook and land on the same row.
+  // Authorizing the raw id would judge a different row than the token delivers —
+  // editable row A mapped to readable-but-uneditable row B passes read(B) plus
+  // update(A) while the token hands out B.
+  const readRow: unknown = read.data;
+  const resolvedId =
+    readRow !== null &&
+    typeof readRow === "object" &&
+    "id" in readRow &&
+    (typeof readRow.id === "string" || typeof readRow.id === "number")
+      ? String(readRow.id)
+      : entryId;
+
+  // `routeAuthorized: true`: the mint route already ran
+  // `requireRouteCollectionAccess(req, "update", collection)`, and this flag
+  // skips ONLY that coarse RBAC/code-access gate. The stored owner-only,
+  // role-based and custom rules still evaluate against the loaded document with
+  // the real user, which is the part that answers this question. Passing `false`
+  // would repeat a lookup the route just performed and, for a scoped key, resolve
+  // it a second way for no gain.
   const mayEdit = await collections.canUpdateEntry({
     collectionName: collection,
-    entryId,
+    entryId: resolvedId,
     user,
-    routeAuthorized: false,
+    routeAuthorized: true,
     authenticatedScope: actor,
   });
 
