@@ -1,0 +1,24 @@
+// Type-checks the test files that `tsconfig.json` excludes.
+//
+// Without this, no test file in this package was ever type-checked, and vitest
+// does not type-check either. That gap is not cosmetic: a test can assert
+// against a value whose type makes the assertion impossible, and it stays green
+// because the annotation is stripped rather than evaluated. Verified by stub —
+// widening a type a test asserted on left the assertion passing.
+//
+// Node types are scoped HERE and nowhere else. `tsconfig.json` pins
+// `types: []` so that `@types/node`, which these tests need, cannot reach the
+// browser components this package publishes.
+//
+// Every test file compiles today, so there is no opt-out list. If one is ever
+// needed, it belongs here as a list that shrinks: removing an entry is an
+// improvement, adding one is a regression worth arguing for in review.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*"],
+  "exclude": ["dist", "node_modules"]
+}
