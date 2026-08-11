@@ -3,24 +3,31 @@
   "extends": ["//"],
   "tasks": {
     "test": {
-      // The type-surface guard reads this package's OWN bundled declarations:
-      // the export forms it checks are produced by the declaration bundler, so
+      // Several suites here read this package's OWN bundled declarations: the
+      // export forms they check are produced by the declaration bundler, so
       // there is nothing to assert against until the package is built. The root
       // task depends on `^build`, which builds dependencies and not this
       // package, and `dist/**` is not a root test input — so without this the
       // suite either finds no `dist` at all or reads declarations produced
       // before the source change.
       //
-      // This makes turbo do that build, in order, and cache it. Runs turbo
-      // never sees — `pnpm --filter @nextlyhq/blocks-react test` and the watch
-      // and UI entry points — are covered instead by the suite's own
-      // `beforeAll`, which rebuilds the declarations itself.
+      // This makes turbo do that build, in order, and cache it. It is not the
+      // only guarantee: `vitest.global-setup.ts` builds too, so the entry
+      // points turbo never sees are covered as well.
       "dependsOn": ["$TURBO_EXTENDS$", "build"],
       // `$TURBO_EXTENDS$` keeps the root inputs in sync rather than restating
-      // them; `dist/**` is appended because the artifact this suite asserts
-      // against is a real input to it, and a cached pass that ignored it would
-      // survive a change to what the bundler emits.
+      // them; `dist/**` is appended because the artifact these suites assert
+      // against is a real input to them, and a cached pass that ignored it
+      // would survive a change to what the bundler emits.
       "inputs": ["$TURBO_EXTENDS$", "dist/**", "tsup.config.ts"]
+    },
+    "test:watch": {
+      // The same build edge as `test`. A watch run reads the same declarations,
+      // and a task that inherited the root definition alone would start against
+      // whatever `dist` happened to be on disk.
+      "dependsOn": ["$TURBO_EXTENDS$", "build"],
+      "cache": false,
+      "persistent": true
     }
   }
 }

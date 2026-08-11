@@ -28,16 +28,14 @@
  *
  * @module type-surface.test
  */
-import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const REPO_ROOT = join(PACKAGE_ROOT, "..", "..");
 
 /**
  * The sentinel each entry is pinned against — see the assertion for why.
@@ -212,6 +210,38 @@ function engineTypesIn(source: string): Set<string> {
  * read for the same reason — any form missed reports an absence that is not
  * there.
  */
+/**
+ * The engine types a declaration RE-EXPORTS, keyed by their name in the engine.
+ *
+ * **An obligation is discharged by the type, and a name is only a proxy for
+ * one.** This package declares its own `BlockRenderArgs` — a one-parameter
+ * React specialization pinned to `PageContext` — while the engine's takes two
+ * and leaves the context open. A check that accepted any export of a matching
+ * name would report that obligation satisfied while a consumer annotating
+ * `BlockDefinition<Props, CustomContext>` still had no way to write its render
+ * argument down.
+ *
+ * Keyed by the ORIGINAL name because that is what the obligation is expressed
+ * in: a re-export may rename freely, and `BlockRenderArgs as EngineBlockRenderArgs`
+ * still supplies the engine type a consumer needs.
+ */
+function engineReExports(declaration: string): Set<string> {
+  const names = new Set<string>();
+
+  for (const block of declaration.matchAll(
+    /export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]@nextlyhq\/blocks-engine['"]/g
+  )) {
+    for (const clause of block[1]!.split(",")) {
+      const trimmed = clause.trim().replace(/^type\s+/, "");
+      if (trimmed === "") continue;
+      const original = trimmed.split(/\s+as\s+/)[0]?.trim();
+      if (original !== undefined && original !== "") names.add(original);
+    }
+  }
+
+  return names;
+}
+
 function exportedNames(declaration: string): Set<string> {
   const names = new Set<string>();
 
@@ -388,55 +418,14 @@ function reachableTypes(
   return reached;
 }
 
-/** `stdout`/`stderr` off a failed `execFileSync`, without assuming its shape. */
-function streamText(error: unknown, key: "stdout" | "stderr"): string {
-  if (typeof error !== "object" || error === null || !(key in error)) return "";
-  const value: unknown = Reflect.get(error, key);
-  if (typeof value === "string") return value;
-  if (value instanceof Uint8Array) return Buffer.from(value).toString("utf8");
-  return "";
-}
-
 describe("the published type surface", () => {
-  beforeAll(() => {
-    // Turbo declares this package's `build` as a dependency of its `test` task,
-    // so under Turbo the declarations on disk are current and rebuilding here
-    // only repeats work Turbo has already hashed. `TURBO_HASH` is injected into
-    // every task Turbo runs and is absent from a direct `vitest` invocation —
-    // which is precisely the run that carries no build edge and would otherwise
-    // assert against a `dist` predating the source.
-    // Non-empty, not merely present: an exported-but-empty `TURBO_HASH` comes
-    // from a shell, never from Turbo, and reading it as "Turbo ran the build"
-    // skips the rebuild in exactly the run that has no build edge.
-    if ((process.env.TURBO_HASH ?? "") !== "") return;
-
-    try {
-      // Through Turbo, not `tsup` here. The declaration build resolves
-      // `@nextlyhq/blocks-engine`, so invoking the bundler directly on a tree
-      // where that package has not been built fails with TS2307 before any
-      // declarations exist. `turbo run build` carries the `^build` edge, so the
-      // dependency is built first and its result is cached.
-      execFileSync(
-        "pnpm",
-        ["exec", "turbo", "run", "build", "--filter=@nextlyhq/blocks-react"],
-        { cwd: REPO_ROOT, stdio: "pipe" }
-      );
-    } catch (error) {
-      // Compiler diagnostics are the only thing that makes a failure here
-      // actionable, and a discarded stream reduces every cause to the same
-      // opaque non-zero exit.
-      const output = `${streamText(error, "stdout")}${streamText(error, "stderr")}`;
-      throw new Error(
-        `building @nextlyhq/blocks-react failed:\n${output.trim()}`
-      );
-    }
-  }, 300_000);
-
   // The parsers are the part of this test that can fail SILENTLY: a form they
   // miss reports an absence that is not there, or an obligation that is not
-  // required. Three earlier detectors were wrong in exactly these ways — a
-  // grep over source (meaningless against `export *`), a parser blind to
-  // `export type { }`, and one reading the LEFT of `as` in a re-export.
+  // required. Each case below pins one form the bundler emits — a plain named
+  // import, an inline `type` modifier, an alias whose meaningful side differs
+  // between imports and exports, a `export type { } from`, a direct
+  // `export interface`, and a specifier from another package, which owes
+  // nothing.
   it("reads every form the bundler emits", () => {
     expect([
       ...engineTypesIn(
@@ -509,7 +498,16 @@ describe("the published type surface", () => {
       ).toBe(true);
     }
 
-    const rootExports = exportsBySubpath.get(ROOT_SUBPATH) ?? new Set<string>();
+    // Satisfaction is judged on RE-EXPORTS of the engine, not on the entry's
+    // whole export list: a local declaration sharing a name discharges nothing.
+    const engineBySubpath = new Map<string, Set<string>>(
+      entries.map(entry => [
+        entry.subpath,
+        engineReExports(readFileSync(entry.declaration, "utf8")),
+      ])
+    );
+
+    const rootExports = engineBySubpath.get(ROOT_SUBPATH) ?? new Set<string>();
     const missing: Record<string, string[]> = {};
 
     for (const entry of entries) {
@@ -521,8 +519,7 @@ describe("the published type surface", () => {
         `no engine types derived for the "${entry.subpath}" entry`
       ).toBeGreaterThan(0);
 
-      const reachable =
-        exportsBySubpath.get(entry.subpath) ?? new Set<string>();
+      const reachable = engineBySubpath.get(entry.subpath) ?? new Set<string>();
       const unreachable = [...required]
         .filter(name => !reachable.has(name) && !rootExports.has(name))
         .sort();
@@ -543,7 +540,7 @@ describe("the published type surface", () => {
     expect(declarations.has("BindingBase")).toBe(true);
     expect(exported.has("BindingBase")).toBe(false);
 
-    const rootExports = exportedNames(
+    const rootExports = engineReExports(
       readFileSync(
         entryPoints().find(entry => entry.subpath === ROOT_SUBPATH)!
           .declaration,

@@ -109,6 +109,13 @@ export type { PrepareDocumentArgs } from "./prepare-document";
  * import a host already has the package for.
  */
 export type {
+  // Renamed, because this package declares its own `BlockRenderArgs`: a
+  // one-parameter React specialization pinned to `PageContext`, which is what a
+  // block written against `ReactBlockDefinition` receives. The engine's takes a
+  // second parameter and leaves the context open, so a consumer annotating
+  // `BlockDefinition<Props, CustomContext>` needs THIS one and cannot reach it
+  // under a name already taken by a narrower type.
+  BlockRenderArgs as EngineBlockRenderArgs,
   AnyBlockDefinition,
   Binding,
   BindingFormat,
