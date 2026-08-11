@@ -108,13 +108,36 @@ export function specifiersIn(source, fileName) {
   // The local names that MEAN `createRequire`, resolved from the import rather than assumed to be
   // spelled that way: `import { createRequire as cr } from "node:module"` makes `cr` the factory,
   // and the build preserves the alias.
-  const factories = new Set(["createRequire"]);
+  // Seeded from IMPORTS only. A bare `createRequire` was assumed to be Node's, which made an
+  // unrelated local helper of that name into a module loader and rejected an artifact with no
+  // dependency at all. The name proves nothing; where it came from does.
+  const factories = new Set();
+  const namespaces = new Set();
   const collectFactories = node => {
+    // ImportSpecifier sits under NamedImports under ImportClause under the declaration.
+    const from = node.parent?.parent?.parent?.moduleSpecifier;
+    const fromNodeModule =
+      from !== undefined &&
+      ts.isStringLiteral(from) &&
+      (from.text === "node:module" || from.text === "module");
     if (
       ts.isImportSpecifier(node) &&
+      fromNodeModule &&
       (node.propertyName ?? node.name).text === "createRequire"
     ) {
       factories.add(node.name.text);
+    }
+    // `import * as mod from "node:module"` makes `mod.createRequire` the factory, and only that
+    // namespace's.
+    if (ts.isNamespaceImport(node)) {
+      const spec = node.parent?.parent?.moduleSpecifier;
+      if (
+        spec !== undefined &&
+        ts.isStringLiteral(spec) &&
+        (spec.text === "node:module" || spec.text === "module")
+      ) {
+        namespaces.add(node.name.text);
+      }
     }
     ts.forEachChild(node, collectFactories);
   };
@@ -124,7 +147,10 @@ export function specifiersIn(source, fileName) {
   const namesFactory = node => {
     if (ts.isIdentifier(node)) return factories.has(node.text);
     return (
-      ts.isPropertyAccessExpression(node) && node.name.text === "createRequire"
+      ts.isPropertyAccessExpression(node) &&
+      node.name.text === "createRequire" &&
+      ts.isIdentifier(node.expression) &&
+      namespaces.has(node.expression.text)
     );
   };
 
@@ -330,9 +356,37 @@ export function packageOfInput(input) {
   // package's own root belongs to something else.
   if (input.startsWith("../")) {
     const parts = input.split("/").filter(part => part !== "..");
-    return parts[0] ?? null;
+    const directory = parts[0] ?? null;
+    if (directory === null) return null;
+    // The DIRECTORY is not the package's identity: `../admin-css/` is `@nextlyhq/admin-css`, and
+    // an allow-list entry has to be the name the manifest declares, or it would never match — and
+    // would stop matching again the day the same dependency is externalised and arrives under
+    // `node_modules/@nextlyhq/admin-css`. Read the manifest rather than inferring from the path.
+    return manifestName(directory) ?? directory;
   }
   return null;
+}
+
+/**
+ * The name a sibling workspace package declares, or null when it cannot be read.
+ *
+ * Resolved from this package's own root, which is where the bundler's relative input paths are
+ * anchored. Memoised because one artifact can carry many inputs from the same package.
+ */
+const manifestNames = new Map();
+function manifestName(directory) {
+  if (manifestNames.has(directory)) return manifestNames.get(directory);
+  let name = null;
+  try {
+    const manifest = JSON.parse(
+      readFileSync(join(DIST, "..", "..", directory, "package.json"), "utf8")
+    );
+    if (typeof manifest.name === "string") name = manifest.name;
+  } catch {
+    name = null;
+  }
+  manifestNames.set(directory, name);
+  return name;
 }
 
 /**

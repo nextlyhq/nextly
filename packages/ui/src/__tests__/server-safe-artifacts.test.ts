@@ -53,10 +53,17 @@ describe("reading an artifact's specifiers", () => {
         export const react = createRequire(import.meta.url)("react");
       `)
     ).toEqual(["node:module", "react"]);
-    // The namespaced spelling too.
-    expect(read(`const r = mod.createRequire(u)("react-dom");`)).toEqual([
-      "react-dom",
-    ]);
+    // The namespaced spelling too, when the namespace is the one Node's built-in was imported
+    // under — and only then.
+    expect(
+      read(`
+        import * as mod from "node:module";
+        export const r = mod.createRequire(import.meta.url)("react-dom");
+      `)
+    ).toEqual(["node:module", "react-dom"]);
+    expect(
+      read(`export const r = other.createRequire(u)("react-dom");`)
+    ).toEqual([]);
   });
 
   it("sees a loader stored under a name before it is used", () => {
@@ -75,10 +82,11 @@ describe("reading an artifact's specifiers", () => {
     // Emitted output is not written in source order, so the declaration can follow the call.
     expect(
       read(`
+        import { createRequire } from "node:module";
         export const react = load("react");
         const load = createRequire(import.meta.url);
       `)
-    ).toEqual(["react"]);
+    ).toEqual(["node:module", "react"]);
   });
 
   it("follows a loader handed on under another name", () => {
@@ -92,6 +100,18 @@ describe("reading an artifact's specifiers", () => {
         export const react = third("react");
       `)
     ).toEqual(["node:module", "react"]);
+  });
+
+  it("does not treat a local helper of the same name as the loader", () => {
+    // The name proves nothing; where it came from does. A module defining its own `createRequire`
+    // has no dependency on Node's, and reading one in would reject an artifact that imports
+    // nothing at all.
+    expect(
+      read(`
+        const createRequire = (base) => (name) => base + name;
+        export const x = createRequire("")("react-dom");
+      `)
+    ).toEqual([]);
   });
 
   it("does not treat an unrelated function as a loader", () => {
@@ -331,7 +351,12 @@ describe("reading what the build bundled", () => {
   it("names a workspace package, which has no node_modules in its path", () => {
     // pnpm links a workspace dependency, so the bundler records its real location. Treating every
     // non-`node_modules` path as first-party made a whole sibling package invisible.
-    expect(packageOfInput("../admin-css/src/index.mjs")).toBe("admin-css");
+    // The DIRECTORY is not the package's identity: an allow-list entry has to be the name the
+    // manifest declares, or it could never match — and would stop matching again the day the same
+    // dependency is externalised and arrives under `node_modules/@nextlyhq/admin-css`.
+    expect(packageOfInput("../admin-css/src/index.mjs")).toBe(
+      "@nextlyhq/admin-css"
+    );
     expect(packageOfInput("src/lib/utils.ts")).toBeNull();
   });
 
