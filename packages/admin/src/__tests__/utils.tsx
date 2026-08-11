@@ -1,3 +1,4 @@
+import { ShortcutProvider } from "@nextlyhq/ui";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, RenderOptions, RenderResult } from "@testing-library/react";
 import { ReactElement, ReactNode } from "react";
@@ -27,7 +28,12 @@ interface CustomRenderOptions extends Omit<RenderOptions, "wrapper"> {
 
 /**
  * Custom render function that wraps components with necessary providers
- * Includes QueryClient provider for TanStack Query hooks
+ *
+ * Includes QueryClient for TanStack Query hooks, and the shortcut provider that owns the
+ * application's single keydown listener: a component registering a shortcut needs an owner to
+ * register WITH, exactly as one running a query needs a client, and the admin shell mounts both.
+ * Attached to `null` so no listener touches the shared jsdom document — a suite that dispatched a
+ * key would otherwise reach every component an earlier test left mounted.
  */
 export function renderWithProviders(
   ui: ReactElement,
@@ -37,7 +43,9 @@ export function renderWithProviders(
 
   function Wrapper({ children }: { children: ReactNode }): ReactElement {
     return (
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      <QueryClientProvider client={queryClient}>
+        <ShortcutProvider target={null}>{children}</ShortcutProvider>
+      </QueryClientProvider>
     );
   }
 
