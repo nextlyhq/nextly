@@ -1050,19 +1050,13 @@ export function createPublicBlocksPage(
 }
 
 /**
- * The SEO types this entry's own API is written in terms of.
+ * `BlockSeoContribution` and `BlockSeoImage` are NOT re-exported here even
+ * though `DerivedPageSeo` extends the first and this entry's SEO derivation is
+ * their only consumer.
  *
- * `DerivedPageSeo` extends `BlockSeoContribution`, and a block declares one
- * from its `seo()` hook — so both appear in what a caller of
- * `createBlocksPage` reads and a block author writes, while originating in
- * `@nextlyhq/blocks-engine`. That package is a DEPENDENCY here rather than a
- * peer, so a host cannot import them itself.
- *
- * `BlockSeoImage` travels with them: it is the union a contribution's `image`
- * is written in, and its whole purpose is to carry provenance a bare string
- * discards — which a caller can only honour if it can name the type.
+ * They are exported from the package root instead, which resolves without the
+ * `next` and `nextly` peers this entry's declarations import. A caller of
+ * `createBlocksPage` can always reach the root; a block author on a standalone
+ * install could not reach this entry, and two import paths for one type costs
+ * more than the one path both audiences already have.
  */
-export type {
-  BlockSeoContribution,
-  BlockSeoImage,
-} from "@nextlyhq/blocks-engine";
