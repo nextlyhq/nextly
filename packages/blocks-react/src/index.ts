@@ -79,3 +79,88 @@ export type { PageStyles, ResolveStyleOptions } from "./styles";
 export { pruneHiddenNodes } from "./visibility";
 export { prepareDocumentForRead } from "./prepare-document";
 export type { PrepareDocumentArgs } from "./prepare-document";
+
+/**
+ * The engine types this package's own options are written in terms of.
+ *
+ * **A package that names a type in its public API owes that type to its
+ * callers.** These originate in `@nextlyhq/blocks-engine`, which is a
+ * DEPENDENCY of this package rather than a peer — so a host installing
+ * `@nextlyhq/blocks-react` does not have it as a direct dependency and cannot
+ * import from it. A type that reaches the built `.d.ts` in a parameter
+ * position while no export statement names it leaves a host able to SEE the
+ * name it is required to pass with no way to write it down.
+ *
+ * **The set is CLOSED, which is why it is larger than the names this package's
+ * own signatures mention.** An exported type is only as writable as its parts:
+ * a host handed `BlockDefinition` can name it and still be unable to write
+ * down the `supports` object it must pass, or the `seo()` return it must
+ * produce. Every type reachable from one exported here is therefore exported
+ * too, so annotating any PART of the surface needs no second package.
+ *
+ * `/next` re-exports none of these. Its declarations import the `next` and
+ * `nextly` peers, so a standalone install cannot load that entry at all; this
+ * one imports nothing but the engine and resolves wherever the package does.
+ *
+ * `nextly`'s own types are deliberately NOT re-exported here. `nextly` is a
+ * PEER dependency, so a host has installed it directly and should name
+ * `ContentEntry`, `RenderContext` and the route shapes from `nextly/runtime`
+ * where they live. Two import paths for one type is a worse cost than one
+ * import a host already has the package for.
+ */
+export type {
+  // Renamed, because this package declares its own `BlockRenderArgs`: a
+  // one-parameter React specialization pinned to `PageContext`, which is what a
+  // block written against `ReactBlockDefinition` receives. The engine's takes a
+  // second parameter and leaves the context open, so a consumer annotating
+  // `BlockDefinition<Props, CustomContext>` needs THIS one and cannot reach it
+  // under a name already taken by a narrower type.
+  BlockRenderArgs as EngineBlockRenderArgs,
+  AnyBlockDefinition,
+  Binding,
+  BindingFormat,
+  BlockDefinition,
+  BlockDocument,
+  BlockEditorMeta,
+  BlockExample,
+  BlockMigrationInfo,
+  BlockNode,
+  BlockRenderResult,
+  BlockSeoContribution,
+  BlockSeoImage,
+  BlockSupportValue,
+  BlockSupports,
+  BlockVariation,
+  BreakpointDef,
+  BreakpointId,
+  BreakpointSet,
+  CompiledPageCss,
+  ComponentPath,
+  Condition,
+  DocumentFormatVersion,
+  DocumentKind,
+  DocumentLimits,
+  DocumentSettings,
+  IssueCode,
+  IssueSeverity,
+  MayFetchUrl,
+  MigrateFn,
+  MigrationMap,
+  MigrationSource,
+  NamedClass,
+  NodeStyles,
+  NodeVisibility,
+  PropSchema,
+  RemotePattern,
+  RemotePatternInput,
+  SlotLock,
+  SlotSpec,
+  StyleCompileContext,
+  StyleOrigin,
+  StyleState,
+  StyleTraceEntry,
+  StyleValue,
+  StyleValues,
+  TokenRef,
+  ValidationIssue,
+} from "@nextlyhq/blocks-engine";
