@@ -9,6 +9,8 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { getPackagesSync } from "@manypkg/get-packages";
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PACKAGES_DIR = join(REPO_ROOT, "packages");
 const PRE_STATE_PATH = join(REPO_ROOT, ".changeset", "pre.json");
@@ -79,6 +81,53 @@ export function readPreState() {
 }
 
 /**
+ * The workspace as the release tooling sees it, in two lists that are NOT the
+ * same and must not be swapped:
+ *
+ * - `all` — every package Changesets resolves, private ones included. This is
+ *   what a `fixed` entry is expanded against, so a pattern here has to match
+ *   against exactly this list or the group this repository checks is not the
+ *   group the release builds.
+ * - `underPackagesDir` — those sitting directly in `packages/`. This is what the
+ *   group is supposed to CONTAIN, which is a different question: `apps/*` is in
+ *   the workspace and deliberately outside the release train.
+ *
+ * Both come from one walk rather than two, because they only mean anything
+ * relative to each other: enumerated separately they could disagree about which
+ * packages exist, and every comparison below would then be reading two different
+ * workspaces.
+ *
+ * Resolved by `@manypkg/get-packages` rather than by reading a directory or a
+ * workspace file, because that is the library Changesets itself enumerates
+ * through — so what expands here and what expands at release time agree by
+ * construction. The distinction is not academic in this repository: the root
+ * manifest carries a `workspaces` field, which that library prefers over
+ * `pnpm-workspace.yaml`, so the two files describe different sets and only one
+ * of them is the one Changesets acts on.
+ *
+ * A package whose manifest has no `name` throws rather than being skipped: it is
+ * a member of the workspace that no list here can report on, and dropping it
+ * would make every check below quietly answer a smaller question.
+ */
+export function getWorkspacePackages() {
+  const { packages } = getPackagesSync(REPO_ROOT);
+  const all = [];
+  const underPackagesDir = [];
+
+  for (const entry of packages) {
+    const name = entry.packageJson.name;
+    all.push(name);
+    if (dirname(entry.dir) === PACKAGES_DIR) underPackagesDir.push(name);
+  }
+
+  const byName = (a, b) => a.localeCompare(b);
+  return {
+    all: all.sort(byName),
+    underPackagesDir: underPackagesDir.sort(byName),
+  };
+}
+
+/**
  * Every workspace package that `changeset publish` is expected to push to npm:
  * the contents of `packages/*` minus anything marked private. Private packages
  * still belong to the Changesets `fixed` group (their internal versions track the
@@ -88,28 +137,6 @@ export function readPreState() {
  * A manifest that exists but cannot be parsed is an error rather than a silent
  * skip: dropping it here would also drop it from every check below.
  */
-/**
- * Every package name under `packages/`, private ones included.
- *
- * Deliberately wider than {@link getReleaseManifest}, which answers "what do we
- * publish". Changesets versions private workspace packages too unless told
- * otherwise, so the set it has to be told about is every package in the
- * directory rather than only the publishable ones — and a checker comparing the
- * `fixed` group against the narrower list would report the config-only packages
- * as errors on every run.
- */
-export function getWorkspacePackageNames() {
-  const names = [];
-  for (const entry of readdirSync(PACKAGES_DIR, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const manifestPath = join(PACKAGES_DIR, entry.name, "package.json");
-    if (!existsSync(manifestPath)) continue;
-    const pkg = readJson(manifestPath);
-    if (typeof pkg.name === "string") names.push(pkg.name);
-  }
-  return names.sort((a, b) => a.localeCompare(b));
-}
-
 export function getReleaseManifest() {
   const manifest = [];
 
