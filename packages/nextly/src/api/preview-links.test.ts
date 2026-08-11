@@ -210,15 +210,20 @@ describe("mintPreviewLink", () => {
   });
 
   it("does not mint when the gate refuses", async () => {
+    // The error the real gate throws, not a stand-in. `throwAuthError` raises
+    // `NextlyError.forbidden`, which the handler renders as 403; a bare `Error`
+    // is an unrecognised failure and renders as 500. Both are >= 400, so a
+    // range assertion over a stand-in passes whether the refusal is reported
+    // as a refusal or as a crash.
     (
       requireRouteCollectionAccess as ReturnType<typeof vi.fn>
-    ).mockRejectedValueOnce(new Error("forbidden"));
+    ).mockRejectedValueOnce(NextlyError.forbidden());
 
     const response = await mintPreviewLink(
       post({ collection: "pages", entryId: "7" })
     );
 
-    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(response.status).toBe(403);
     // The gate has to run BEFORE the token exists, not merely before it is
     // returned: a token that was signed and then discarded is still a token.
     expect(getGeneration).not.toHaveBeenCalled();
@@ -322,14 +327,14 @@ describe("revokePreviewLinks", () => {
 
   it("does not revoke when the gate refuses", async () => {
     (requireRoutePermission as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      new Error("forbidden")
+      NextlyError.forbidden()
     );
 
     const response = await revokePreviewLinks(
       post({}, "http://x/api/nextly/preview-links/revoke")
     );
 
-    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(response.status).toBe(403);
     expect(revokeAll).not.toHaveBeenCalled();
   });
 
