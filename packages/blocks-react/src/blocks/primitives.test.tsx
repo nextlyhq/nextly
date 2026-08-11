@@ -1178,21 +1178,52 @@ describe("declared empty output", () => {
     expect(definition.rendersNothing?.(props as never)).toBe(expected);
   });
 
-  it("agrees with what the render actually produces", () => {
+  it("agrees with what the render actually produces", async () => {
     // The declaration and the render are written separately on purpose, so this
-    // is the assertion that stops them drifting: for every case above, a block
-    // that SAYS it draws nothing must actually draw nothing.
-    for (const [definition, props] of [
-      [image, {}],
-      [image, { src: "javascript:alert(1)" }],
-      [embed, {}],
-      [embed, { src: "javascript:alert(1)" }],
-    ] as const) {
-      expect(definition.rendersNothing?.(props as never)).toBe(true);
+    // is the assertion that stops them drifting.
+    //
+    // The stakes changed when the boundary began CONSULTING the declaration. It
+    // used to be carried and unread, so drift cost nothing; now a block that
+    // says it draws nothing is exempted from the node-fields diagnostic, and a
+    // wrong declaration silently drops the anchor the author asked for. So every
+    // case is checked in BOTH directions, and through the real render rather
+    // than through one of the two blocks.
+    const declaredEmpty = [
+      { label: "image with nothing", definition: image, props: {} },
+      {
+        label: "image with a refused scheme",
+        definition: image,
+        props: { src: "javascript:alert(1)" },
+      },
+      { label: "embed with nothing", definition: embed, props: {} },
+      {
+        label: "embed with a refused scheme",
+        definition: embed,
+        props: { src: "javascript:alert(1)" },
+      },
+    ] as const;
+
+    for (const { label, definition, props } of declaredEmpty) {
+      expect(definition.rendersNothing?.(props as never), label).toBe(true);
     }
+
+    // Every one of them, rendered. `core/image` is asynchronous, which is why it
+    // was the one this assertion previously skipped.
+    expect(html(await renderImage(args({})))).toBe("");
+    expect(html(await renderImage(args({ src: "javascript:alert(1)" })))).toBe(
+      ""
+    );
     expect(html(renderEmbed(args({})))).toBe("");
     expect(
       html(renderEmbed(args({ src: "javascript:alert(1)", title: "t" })))
     ).toBe("");
+
+    // And the other direction: a block with usable input must NOT declare empty,
+    // or a drawing block would be exempted from the diagnostic it needs.
+    expect(image.rendersNothing?.({ src: "/a.png" } as never)).toBe(false);
+    expect(image.rendersNothing?.({ mediaId: "m1" } as never)).toBe(false);
+    expect(embed.rendersNothing?.({ src: "https://e.com/v" } as never)).toBe(
+      false
+    );
   });
 });
