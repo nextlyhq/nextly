@@ -1,8 +1,11 @@
 import {
+  declaresNoMarkup,
   isConditionGated,
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
+
+import type { BlockResolver } from "./resolver";
 
 /**
  * Whether a node is shown regardless of the entry it renders against.
@@ -46,12 +49,38 @@ export function isUnconditional(node: BlockNode): boolean {
  * allocates nothing.
  */
 export function pruneHiddenNodes(document: BlockDocument): BlockDocument {
+  return pruneNodes(document, isUnconditional);
+}
+
+/**
+ * Removes every node `keep` rejects, and its subtree with it.
+ *
+ * Three passes drop nodes from a tree before it is read, for three different
+ * reasons — a visibility condition, a block that declares its props draw
+ * nothing, and a node that will resolve to a placeholder. What they drop differs;
+ * HOW they drop it must not, because the caller compares the result by IDENTITY
+ * to decide whether a stored stylesheet still describes the tree that renders. A
+ * pass that returned a fresh document when it had removed nothing would read as
+ * a repair and withhold the sheet, and one that returned its input after
+ * removing something would publish rules for markup that is gone.
+ *
+ * Dropping the subtree is not a shortcut in any of the three. A node that is not
+ * served places none of the children it was holding, so leaving them behind
+ * would keep rules for markup that had nowhere to appear.
+ *
+ * Returns the ORIGINAL document when nothing was removed, so the ordinary page
+ * allocates nothing.
+ */
+export function pruneNodes(
+  document: BlockDocument,
+  keep: (node: BlockNode) => boolean
+): BlockDocument {
   let changed = false;
 
   const prune = (nodes: BlockNode[]): BlockNode[] => {
     const kept: BlockNode[] = [];
     for (const node of nodes) {
-      if (!isUnconditional(node)) {
+      if (!keep(node)) {
         changed = true;
         continue;
       }
@@ -76,4 +105,20 @@ export function pruneHiddenNodes(document: BlockDocument): BlockDocument {
 
   const nodes = prune(document.nodes);
   return changed ? { ...document, nodes } : document;
+}
+
+/**
+ * Whether a block has declared that this node's props make it draw nothing.
+ *
+ * The declaration is computed from stored props, so it is knowable before any
+ * block runs — which is what lets the stylesheet decision use it. It is asked
+ * through the engine's own rule rather than restated, for the reason
+ * {@link isUnconditional} gives: the style compiler asks the same question about
+ * the same node, and two implementations of it are two answers that can drift.
+ */
+export function drawsNothing(
+  node: BlockNode,
+  resolver: BlockResolver
+): boolean {
+  return declaresNoMarkup(node, type => resolver.get(type));
 }
