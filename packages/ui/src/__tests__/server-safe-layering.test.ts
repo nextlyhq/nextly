@@ -213,6 +213,9 @@ function analyze(source: string, fileName: string): Analysis {
     ts.isForInStatement(node) ||
     ts.isForOfStatement(node) ||
     ts.isCatchClause(node) ||
+    // An enum's initializers resolve against its own members: `enum E { window = 1, width =
+    // window }` reads the member, not the global.
+    ts.isEnumDeclaration(node) ||
     ts.isClassDeclaration(node) ||
     ts.isClassExpression(node) ||
     ts.isModuleDeclaration(node) ||
@@ -244,7 +247,10 @@ function analyze(source: string, fileName: string): Analysis {
       ts.isNamespaceImport(node) ||
       // `import Node = require("./safe")` emits a real local binding, so a later `Node.value` is
       // the module's own rather than the DOM one.
-      ts.isImportEqualsDeclaration(node);
+      ts.isImportEqualsDeclaration(node) ||
+      // A member is a binding within its enum, which is what an initializer beside it resolves
+      // against.
+      ts.isEnumMember(node);
     if (!named || node.name === undefined || !ts.isIdentifier(node.name)) {
       return undefined;
     }
@@ -368,6 +374,20 @@ function analyze(source: string, fileName: string): Analysis {
     ts.isIdentifier(node) &&
     node.text === "globalThis" &&
     !declaredAt(node, "globalThis");
+
+  /**
+   * Whether a node is a wrapper TypeScript erases, leaving what it wraps in its place.
+   *
+   * Defined once because it is needed in three places — seeing whether an access is used, whether
+   * a function is invoked, and unwrapping a guard condition — and a second copy of the list is how
+   * the angle-bracket form came to be handled in one of them and not the others.
+   */
+  const isErasedWrapper = (node: ts.Node): boolean =>
+    ts.isParenthesizedExpression(node) ||
+    ts.isNonNullExpression(node) ||
+    ts.isAsExpression(node) ||
+    ts.isSatisfiesExpression(node) ||
+    ts.isTypeAssertionExpression(node);
 
   /** Whether a condition subtree asks `typeof <name>`, which is the SSR guard. */
   const mentionsTypeof = (condition: ts.Node, name: string): boolean => {
@@ -502,15 +522,7 @@ function analyze(source: string, fileName: string): Analysis {
     // and every one of them disappears at runtime: `(globalThis.document!).body` dereferences
     // exactly as the bare spelling does.
     let value: ts.Node = access;
-    while (
-      value.parent &&
-      (ts.isParenthesizedExpression(value.parent) ||
-        ts.isNonNullExpression(value.parent) ||
-        ts.isAsExpression(value.parent) ||
-        ts.isSatisfiesExpression(value.parent) ||
-        // The angle-bracket assertion `<T>expr`, erased exactly as `as T` is.
-        ts.isTypeAssertionExpression(value.parent))
-    ) {
+    while (value.parent && isErasedWrapper(value.parent)) {
       value = value.parent;
     }
     const outer = value.parent;
@@ -794,13 +806,7 @@ function analyze(source: string, fileName: string): Analysis {
       let invoked: ts.Node = node;
       // Parentheses AND the erased TypeScript wrappers — `!`, `as T`, `satisfies T` — all sit
       // between a function expression and the call that invokes it, and all disappear at runtime.
-      while (
-        invoked.parent &&
-        (ts.isParenthesizedExpression(invoked.parent) ||
-          ts.isNonNullExpression(invoked.parent) ||
-          ts.isAsExpression(invoked.parent) ||
-          ts.isSatisfiesExpression(invoked.parent))
-      ) {
+      while (invoked.parent && isErasedWrapper(invoked.parent)) {
         invoked = invoked.parent;
       }
       const parent = invoked.parent;
@@ -885,6 +891,8 @@ function resolveLocal(fromFile: string, specifier: string): string | null {
     `${base}.ts`,
     `${base}.jsx`,
     `${base}.js`,
+    `${base}.css`,
+    `${base}.json`,
     // BEFORE the `.ts` collapse: with both `helper.ts` and `helper.mts` present, esbuild resolves
     // `./helper.mjs` to the `.mts`. Probing the collapsed form first would follow a different file
     // than the bundler does.
@@ -899,6 +907,8 @@ function resolveLocal(fromFile: string, specifier: string): string | null {
     path.join(base, "index.ts"),
     path.join(base, "index.jsx"),
     path.join(base, "index.js"),
+    path.join(base, "index.css"),
+    path.join(base, "index.json"),
   ]) {
     if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
   }
@@ -1521,6 +1531,35 @@ describe("reading a module", () => {
     ).toEqual(["react"]);
   });
 
+  it("does not report an enum member referenced by its neighbour", () => {
+    // `width = window` resolves to the member declared above it, which TypeScript emits as the
+    // enum's own value. Rejecting this would rule out an ordinary enum for using an ordinary word.
+    expect(
+      read(`export enum E { window = 1, width = window }`).globals
+    ).toEqual([]);
+    // And the members stay INSIDE it. A member named after a global must not excuse a read beyond
+    // the enum, which is what makes this a scope rather than a set of names.
+    expect(
+      read(`
+        export enum E { window = 1 }
+        export const w = window.innerWidth;
+      `).globals
+    ).toEqual(["window"]);
+  });
+
+  it("sees through an angle-bracket assertion wherever one can appear", () => {
+    // The same erasure has to be seen in both places that unwrap: where a value is USED, and
+    // where a function is INVOKED. They used to carry separate copies of the list.
+    expect(
+      read(`export const b = (<{ body: unknown }>globalThis.document).body;`)
+        .globals
+    ).toEqual(["document"]);
+    expect(
+      read(`export const w = (<() => number>(() => window.innerWidth))();`)
+        .globals
+    ).toEqual(["window"]);
+  });
+
   it("sees through an angle-bracket type assertion", () => {
     // `<T>expr` is erased exactly as `as T` is, so the dereference underneath it still throws.
     expect(
@@ -1736,6 +1775,24 @@ describe("resolving a local import", () => {
       "entry.ts",
       "helper.js",
     ]);
+  });
+
+  it("resolves a reached asset by implicit extension", () => {
+    // `.css` and `.json` are in esbuild's implicit-extension list. Missing them left the specifier
+    // unresolved, and an unresolved RELATIVE specifier is recorded as an external package.
+    const dir = mkdtempSync(path.join(os.tmpdir(), "nx-layering-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    writeFileSync(path.join(dir, "helper.css"), ".window { color: red; }\n");
+    const entry = path.join(dir, "entry.ts");
+    writeFileSync(entry, 'import "./helper";\nexport const x = 1;\n');
+
+    const { files, packages } = reach(entry);
+    expect([...packages.keys()]).toEqual([]);
+    expect(files.map(({ file }) => path.basename(file)).sort()).toEqual([
+      "entry.ts",
+      "helper.css",
+    ]);
+    expect(files.flatMap(({ analysis }) => analysis.globals)).toEqual([]);
   });
 
   it("resolves a directory index written as JavaScript", () => {
