@@ -274,36 +274,46 @@ function violationsInSource(
   const lines = commentLines(commentsIn(source, allowLineComments));
 
   lines.forEach((current, index) => {
-    // Each line is also searched joined to the one after it, with comment
-    // markers stripped, because prose wraps and a pattern is not a line. A
-    // sentence ending "half of a" and continuing "fix" below expresses exactly
-    // what these patterns exist to catch, and matching per line alone lets any
-    // phrase escape through a line break -- an escape hatch that opens by
-    // accident, whenever a comment is reflowed.
+    // Each line is searched joined to the WHOLE uninterrupted run that follows
+    // it, with comment markers stripped, because prose wraps and a pattern is
+    // not a line. Matching per line lets any phrase escape through a line
+    // break -- an escape hatch that opens by accident whenever a comment is
+    // reflowed.
     //
-    // Two lines join only where the prose is UNINTERRUPTED: they are adjacent,
-    // the first runs to the end of its line, and the second begins with its
-    // comment. Physical adjacency alone is not continuity -- two trailing
-    // comments on consecutive statements have code between them, and joining
-    // those turns two innocent remarks into a phrase neither of them made.
+    // The run is what makes that airtight, and a PAIR does not: a pair only
+    // sees a phrase that breaks once, so "second" / "half of a" / "fix" across
+    // three lines walks through a rule that joins two, and every further wrap
+    // is another way out. Accumulating the run removes the limit rather than
+    // raising it, so the number of breaks stops mattering.
+    //
+    // A run continues only where the prose is UNINTERRUPTED: adjacent lines,
+    // the earlier reaching the end of its line, the later beginning with its
+    // comment. Physical adjacency is not continuity -- two trailing comments
+    // on consecutive statements have code between them, and joining those
+    // turns two innocent remarks into a phrase neither of them made.
     //
     // A rule that invents its own violations gets switched off faster than one
     // that misses some, so both directions are pinned below.
-    //
-    // The pair is searched but the FIRST line is reported, so a reader lands
-    // on where the phrase starts rather than where it happened to break.
-    const next = lines[index + 1];
-    const continues =
-      next !== undefined &&
-      next.line === current.line + 1 &&
-      current.endsLine &&
-      next.startsLine;
-    const joined = continues
-      ? `${strip(current.text)} ${strip(next.text)}`.replace(/\s+/g, " ")
-      : current.text;
+    const parts = [strip(current.text)];
+    for (let j = index; ; j++) {
+      const here = lines[j];
+      const after = lines[j + 1];
+      if (here === undefined || after === undefined) break;
+      if (after.line !== here.line + 1) break;
+      if (!here.endsLine || !after.startsLine) break;
+      parts.push(strip(after.text));
+    }
+    const joined = parts.join(" ").replace(/\s+/g, " ");
+
+    // Every line of a run searches the same tail, so requiring the match to
+    // BEGIN inside this line's own text keeps the report on the line a reader
+    // should open, instead of repeating one phrase against every line above
+    // it. A blank comment line has nothing to start on and matches nothing.
+    const ownLength = (parts[0] as string).length;
 
     for (const [pattern, kind] of META_REFERENCES) {
-      if (!pattern.test(current.text) && !pattern.test(joined)) continue;
+      const match = pattern.exec(joined);
+      if (match === null || match.index >= ownLength) continue;
       found.push({
         where: `${label}:${current.line}`,
         kind,
@@ -420,6 +430,38 @@ describe("comments describe the code, not the process", () => {
     // next is a new thought and not a continuation.
     expect(
       kinds(["const a = /* phase */ 1;", "// 2 of the run"].join("\n"))
+    ).toEqual([]);
+
+    // THREE lines, and four. A rule that joins a line to its single successor
+    // catches neither, and each further wrap would be another way out -- so
+    // what is pinned here is that the count of breaks does not matter.
+    expect(
+      kinds(["// this is the second", "// half of a", "// fix"].join("\n"))
+    ).toEqual(["x.ts:1 an edit sequence"]);
+    expect(
+      kinds(
+        ["/**", " * this is the second", " * half of", " * a fix", " */"].join(
+          "\n"
+        )
+      )
+    ).toEqual(["x.ts:2 an edit sequence"]);
+
+    // A run is searched from every line in it, so the phrase must be reported
+    // ONCE, against the line it starts on -- not against each line above it.
+    expect(
+      kinds(["// nothing here", "// or here", "// see task 24"].join("\n"))
+    ).toEqual(["x.ts:3 a task number"]);
+
+    // Interrupting the run still stops it, however long the run is.
+    expect(
+      kinds(
+        [
+          "// this is the second",
+          "// half of a",
+          "const a = 1;",
+          "// fix",
+        ].join("\n")
+      )
     ).toEqual([]);
   });
 
