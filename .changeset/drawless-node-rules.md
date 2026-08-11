@@ -21,6 +21,7 @@
 "@nextlyhq/prettier-config": patch
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
+"@nextlyhq/builder": patch
 ---
 
 Stop publishing the rules of a block that draws nothing.
