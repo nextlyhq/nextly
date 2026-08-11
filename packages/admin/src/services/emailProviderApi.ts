@@ -54,6 +54,14 @@ export interface EmailProviderConfigField {
   /** Credential. Never carries a value; read back masked. */
   secret?: boolean;
   constraints?: { min?: number; max?: number; maxLength?: number };
+  /**
+   * What a blank value means for this optional field.
+   *
+   * `"omit"` (the default) drops the key, which is what a parser written as
+   * `z.string().min(1).optional()` accepts. `"empty"` sends `""`, for a key
+   * nested inside a required object whose parser demands it exist.
+   */
+  blankAs?: "omit" | "empty";
 }
 
 /** What a provider can do, so the UI never offers what it cannot honour. */

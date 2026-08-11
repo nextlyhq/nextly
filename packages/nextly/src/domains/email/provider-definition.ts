@@ -91,6 +91,28 @@ export interface EmailProviderConfigField {
    * these three keys should express it in `parseConfig` alone.
    */
   constraints?: { min?: number; max?: number; maxLength?: number };
+  /**
+   * What a BLANK value means for this field, when the field is optional.
+   *
+   * A client editing a stored provider can express three things about an
+   * optional field — leave it, set it, remove it — and a blank input has to be
+   * mapped onto one of them. Which one is right depends entirely on how the
+   * provider's own parser is written, and nothing else in the descriptor says:
+   *
+   * - `"omit"` (the default) suits `z.string().min(1).optional()` and
+   *   `z.enum(...).optional()`, which accept an absent key and reject `""`.
+   * - `"empty"` suits a key nested inside a REQUIRED object, where the parser
+   *   demands the key exist and decides for itself what an empty value means.
+   *   The built-in SMTP provider is the live example: `auth` is required and
+   *   its `user`/`pass` may be empty for a loopback sink, so omitting them
+   *   fails with "expected string, received undefined" for the one setup this
+   *   repository documents.
+   *
+   * Declared rather than guessed, for the same reason `secret` is: a client
+   * cannot read `parseConfig`, and the two shapes are indistinguishable from
+   * the outside. Ignored for a required field, which can never be blank.
+   */
+  blankAs?: "omit" | "empty";
 }
 
 /** What a provider can do, so a UI never offers what it cannot honour. */
@@ -426,6 +448,40 @@ function assertKindIsRenderable(
   });
 }
 
+/**
+ * Reject numeric metadata that cannot survive the wire.
+ *
+ * A descriptor is served as JSON, and `JSON.stringify` turns `Infinity`,
+ * `-Infinity` and `NaN` into `null`. A client then reads a present limit whose
+ * value is `null`, and `value.length > null` is `value.length > 0` — so
+ * `maxLength: Infinity`, declared to mean "no limit", rejects every non-empty
+ * string and makes a required field impossible to submit.
+ *
+ * Refused at registration rather than coerced, because a provider author
+ * writing `Infinity` means "unbounded" and the way to say that is to omit the
+ * key. Silently dropping it would work and teach nothing.
+ */
+function assertNumericMetadataIsFinite(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  const candidates: Array<[string, number | undefined]> = [
+    ["constraints.min", field.constraints?.min],
+    ["constraints.max", field.constraints?.max],
+    ["constraints.maxLength", field.constraints?.maxLength],
+    ["default", typeof field.default === "number" ? field.default : undefined],
+  ];
+
+  for (const [key, value] of candidates) {
+    if (value === undefined || Number.isFinite(value)) continue;
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" gives the field "${field.name}" a non-finite ${key} (${String(value)}). Descriptors are served as JSON, where that becomes null and reads as a real limit. Omit the key to mean "no limit".`,
+      logContext: { type, field: field.name, key, value: String(value) },
+    });
+  }
+}
+
 /** Reject a text length no value can satisfy. */
 function assertTextLengthIsSatisfiable(
   type: string,
@@ -478,6 +534,10 @@ export function assertConfigFieldsAreUsable(
     // unrenderable kind would report the wrong problem.
     assertKindIsRenderable(type, field);
     assertFieldNameIsWalkable(type, field);
+    // Before the satisfiability rules, which compare these numbers: `NaN`
+    // fails every comparison silently, so a bound of `NaN` would pass
+    // "min <= max" and be reported as fine.
+    assertNumericMetadataIsFinite(type, field);
     assertTextLengthIsSatisfiable(type, field);
     assertDefaultMatchesKind(type, field);
     assertSelectIsChoosable(type, field);

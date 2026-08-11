@@ -628,3 +628,109 @@ describe("a credential shorter than the mask that stands in for it", () => {
     ).toContain("at most 4 characters");
   });
 });
+
+describe("an optional credential nobody touched", () => {
+  const descriptor: EmailProviderDescriptor = {
+    type: "acme-mail",
+    label: "Acme Mail",
+    capabilities: {},
+    configFields: [
+      { name: "host", label: "Host", kind: "text", required: true },
+      {
+        name: "auth.pass",
+        label: "Password",
+        kind: "password",
+        secret: true,
+      },
+    ],
+  };
+
+  it("is neither sent nor unset", () => {
+    // The form carries the server's mask for an untouched credential. Echoing
+    // it back is what "leave this alone" means, and dropping it from the
+    // payload is how that is spelled on the wire — but dropping it must not
+    // then read as an emptied field, or an ordinary rename deletes the
+    // password.
+    const values: ProviderFormValues = {
+      ...defaultFormValues(descriptor),
+      configuration: { host: "smtp.acme.test", auth: { pass: MASKED_SECRET } },
+    };
+
+    const payload = formValuesToPayload(values, descriptor, {
+      host: "smtp.acme.test",
+      auth: { pass: MASKED_SECRET },
+    });
+
+    expect(payload.unsetConfiguration).toBeUndefined();
+    // The control: a credential the user DID clear still asks for removal, so
+    // this is not a test that passes because clearing stopped working.
+    const cleared = formValuesToPayload(
+      {
+        ...values,
+        configuration: { host: "smtp.acme.test", auth: { pass: "" } },
+      },
+      descriptor,
+      { host: "smtp.acme.test", auth: { pass: MASKED_SECRET } }
+    );
+    expect(cleared.unsetConfiguration).toEqual(["auth.pass"]);
+  });
+});
+
+describe("a blank field the provider wants sent as an empty string", () => {
+  // The built-in SMTP shape: `auth` is required and its two keys are plain
+  // strings, empty only for a loopback sink. Omitting them fails the parser
+  // with "expected string, received undefined" — for the one setup those
+  // fields were declared optional to allow.
+  const descriptor: EmailProviderDescriptor = {
+    type: "smtp",
+    label: "SMTP",
+    capabilities: {},
+    configFields: [
+      { name: "host", label: "Host", kind: "text", required: true },
+      { name: "auth.user", label: "User", kind: "text", blankAs: "empty" },
+      {
+        name: "auth.pass",
+        label: "Password",
+        kind: "password",
+        secret: true,
+        blankAs: "empty",
+      },
+    ],
+  };
+
+  it("keeps the empty strings and the branch that holds them", () => {
+    const values: ProviderFormValues = {
+      ...defaultFormValues(descriptor),
+      configuration: { host: "localhost", auth: { user: "", pass: "" } },
+    };
+
+    const payload = formValuesToPayload(values, descriptor);
+
+    expect(payload.configuration).toEqual({
+      host: "localhost",
+      auth: { user: "", pass: "" },
+    });
+    expect(payload.unsetConfiguration).toBeUndefined();
+  });
+
+  it("still omits a blank field that did not ask for this", () => {
+    // The control. Without it the assertion above would pass on a payload
+    // that had simply stopped omitting anything, which is the bug the
+    // omission behaviour exists to fix.
+    const plain: EmailProviderDescriptor = {
+      ...descriptor,
+      configFields: [
+        { name: "host", label: "Host", kind: "text", required: true },
+        { name: "note", label: "Note", kind: "text" },
+      ],
+    };
+    const values: ProviderFormValues = {
+      ...defaultFormValues(plain),
+      configuration: { host: "localhost", note: "" },
+    };
+
+    expect(formValuesToPayload(values, plain).configuration).toEqual({
+      host: "localhost",
+    });
+  });
+});

@@ -388,6 +388,10 @@ export class EmailProviderService extends BaseService {
       const leaf = segments.pop();
       if (leaf === undefined) continue;
 
+      // Every branch walked, so an emptied one can be removed on the way back
+      // out.
+      const branches: Array<{ parent: Record<string, unknown>; key: string }> =
+        [];
       let branch: Record<string, unknown> = result;
       let reachable = true;
       for (const segment of segments) {
@@ -396,9 +400,30 @@ export class EmailProviderService extends BaseService {
           reachable = false;
           break;
         }
+        branches.push({ parent: branch, key: segment });
         branch = next;
       }
-      if (reachable) delete branch[leaf];
+      if (!reachable) continue;
+
+      delete branch[leaf];
+
+      // A branch left holding nothing is removed too. Clearing the last value
+      // under `credentials` otherwise leaves `{ credentials: {} }`, and a
+      // parser written as `credentials: z.object({...}).optional()` accepts an
+      // absent object and rejects an empty one -- so the field could not be
+      // cleared at all. Innermost first, because emptying one can empty its
+      // own parent.
+      //
+      // A provider that needs the branch to survive says so with
+      // `blankAs: "empty"` on its fields, which keeps them out of this list
+      // entirely rather than relying on an empty object being preserved.
+      for (let index = branches.length - 1; index >= 0; index -= 1) {
+        const entry = branches[index];
+        if (entry === undefined) break;
+        const value = entry.parent[entry.key];
+        if (!this.isPlainObject(value) || Object.keys(value).length > 0) break;
+        delete entry.parent[entry.key];
+      }
     }
     return result;
   }

@@ -193,10 +193,18 @@ export function EmailProviderForm({
       form.reset({
         ...form.getValues(),
         type,
-        configuration: emptyConfiguration(next),
+        // Coming BACK to the type the record is stored as restores what the
+        // record holds, rather than a blank form. Blanking it would leave the
+        // original type selected with its credential gone: a required one
+        // could not be saved without retyping a secret nobody meant to change,
+        // and an optional one would read as a deliberate removal.
+        configuration:
+          provider && provider.type === type
+            ? providerToFormValues(provider, next).configuration
+            : emptyConfiguration(next),
       });
     },
-    [descriptors, form]
+    [descriptors, form, provider]
   );
 
   if (descriptorsLoading) {

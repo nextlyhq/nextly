@@ -219,3 +219,83 @@ describe("clearing an optional configuration value", () => {
     ).rejects.toThrow();
   });
 });
+
+describe("clearing the last value under a nested branch", () => {
+  let sqlite: Database.Database;
+  let service: EmailProviderService;
+
+  /**
+   * A parser written the way a provider author naturally would for an optional
+   * group: the object is absent or complete. It ACCEPTS no `credentials` key
+   * and REJECTS an empty one, which is what makes the branch matter.
+   */
+  const nestedProvider = defineEmailProvider({
+    type: "nested",
+    label: "Nested",
+    configFields: [
+      { name: "endpoint", label: "Endpoint", kind: "text", required: true },
+      { name: "credentials.key", label: "Key", kind: "password", secret: true },
+    ],
+    parseConfig: input => {
+      const config = input as {
+        endpoint?: unknown;
+        credentials?: unknown;
+      };
+      if (typeof config.endpoint !== "string") {
+        throw new Error("endpoint is required");
+      }
+      if (config.credentials !== undefined) {
+        const group = config.credentials as { key?: unknown };
+        if (typeof group.key !== "string" || group.key === "") {
+          throw new Error(
+            "credentials.key is required when credentials is present"
+          );
+        }
+      }
+      return config as Record<string, unknown>;
+    },
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  });
+
+  beforeEach(() => {
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(nestedProvider);
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    getEmailProviderRegistry().reset();
+  });
+
+  it("removes the branch as well as the leaf", async () => {
+    const created = await service.createProvider({
+      name: "Nested",
+      type: "nested",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: {
+        endpoint: "https://api.test",
+        credentials: { key: "k" },
+      },
+      isDefault: false,
+      isActive: true,
+    });
+
+    // Leaving `{ credentials: {} }` behind would fail the parser above, so the
+    // field could not be cleared at all — the update would report the removal
+    // as invalid.
+    await service.updateProvider(created.id, {
+      unsetConfiguration: ["credentials.key"],
+    });
+
+    const stored = await service.getProviderDecrypted(created.id);
+    expect(Object.keys(stored.configuration)).toEqual(["endpoint"]);
+  });
+});

@@ -141,10 +141,15 @@ export const smtpDefinition: RegisteredEmailProvider = defineEmailProvider({
     // declaring it here would make a catalog-driven client refuse exactly the
     // Mailpit setup this repository documents. The parser stays authoritative
     // and reports the missing credential against `configuration.auth.*`.
+    // `blankAs: "empty"` on both: `smtpSchema` requires `auth` and declares
+    // its two keys as plain strings, so a client that omits a blank credential
+    // sends a configuration the parser rejects with "expected string, received
+    // undefined" -- for exactly the loopback setup these fields exist to allow.
     {
       name: "auth.user",
       label: "SMTP Username",
       kind: "text",
+      blankAs: "empty",
       help: "Account used to authenticate against the server. May be left empty only for a local sink such as Mailpit.",
     },
     {
@@ -152,6 +157,7 @@ export const smtpDefinition: RegisteredEmailProvider = defineEmailProvider({
       label: "SMTP Password",
       kind: "password",
       secret: true,
+      blankAs: "empty",
       help: "May be left empty only for a local sink such as Mailpit.",
     },
   ],

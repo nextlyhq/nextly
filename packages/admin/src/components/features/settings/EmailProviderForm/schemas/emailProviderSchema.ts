@@ -563,13 +563,22 @@ export function formValuesToPayload(
   descriptor?: EmailProviderDescriptor,
   stored?: Record<string, unknown>
 ): EmailProviderPayload {
-  // Untouched credentials are dropped first, so a mask never reaches the
-  // clear check and is never mistaken for an emptied field.
-  const { configuration, unsetConfiguration } = separateClearedOptionalFields(
-    withoutUntouchedSecrets(values.configuration ?? {}, descriptor, stored),
-    descriptor,
-    stored
-  );
+  // Clearing is decided from what the user is LOOKING AT, before untouched
+  // credentials are dropped. An untouched credential holds the server's mask,
+  // which is plainly not empty; dropping it first removes it from the values
+  // and the clear check then sees an absent field with something stored behind
+  // it — the exact shape of a deliberate removal. Ordered the other way, an
+  // edit that only renames a provider deletes its password.
+  const { configuration: kept, unsetConfiguration } =
+    separateClearedOptionalFields(
+      values.configuration ?? {},
+      descriptor,
+      stored
+    );
+
+  // Now the masks go, which is how "leave this credential alone" is spelled on
+  // the wire: the server merges what remains over what it holds.
+  const configuration = withoutUntouchedSecrets(kept, descriptor, stored);
 
   return {
     name: values.name,
@@ -629,6 +638,11 @@ function separateClearedOptionalFields(
   for (const field of descriptor.configFields) {
     // A switch always holds a value, so it can never be "cleared".
     if (field.required === true || field.kind === "boolean") continue;
+    // The provider says a blank means an empty string here, not an absent key.
+    // Its parser demands the key exist — SMTP's `auth.user` and `auth.pass`
+    // live inside a required object — so removing it would break exactly the
+    // configuration the field was declared optional to allow.
+    if (field.blankAs === "empty") continue;
 
     const path = splitFieldPath(field.name);
     if (path === null) continue;

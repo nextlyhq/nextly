@@ -32,6 +32,28 @@ import {
 import { SecretField } from "./SecretField";
 
 /**
+ * A `SelectItem` value that stands for "no selection".
+ *
+ * Radix refuses an item whose value is the empty string, because that is how it
+ * spells "nothing chosen" internally — so an optional select rendered from
+ * options alone has no interaction that can ever clear it, and a stored choice
+ * becomes permanent however much machinery exists downstream to remove it.
+ *
+ * Derived from the descriptor's own options rather than fixed, so it cannot
+ * collide with a real value a provider declares. A fixed sentinel would be a
+ * value some provider is entitled to use, and the collision would present as a
+ * choice that silently clears the field.
+ */
+function clearSelectionValue(
+  options: ReadonlyArray<{ value: string }> | undefined
+): string {
+  const taken = new Set((options ?? []).map(option => option.value));
+  let candidate = "__nextly_none__";
+  while (taken.has(candidate)) candidate += "_";
+  return candidate;
+}
+
+/**
  * Where a descriptor field lives in the form.
  *
  * Field names are dotted PATHS, not keys. Registering `configuration.auth.pass`
@@ -169,7 +191,9 @@ function ProviderConfigField({
                       />
                     );
 
-                  case "select":
+                  case "select": {
+                    const clearValue = clearSelectionValue(field.options);
+                    const optional = field.required !== true;
                     return (
                       <Select
                         value={
@@ -177,7 +201,12 @@ function ProviderConfigField({
                             ? controller.value
                             : ""
                         }
-                        onValueChange={controller.onChange}
+                        // The sentinel is a rendering detail and never leaves
+                        // this component: the form holds the empty string,
+                        // which is what the payload reads as "cleared".
+                        onValueChange={next =>
+                          controller.onChange(next === clearValue ? "" : next)
+                        }
                         disabled={disabled}
                       >
                         <SelectTrigger>
@@ -188,6 +217,9 @@ function ProviderConfigField({
                           />
                         </SelectTrigger>
                         <SelectContent>
+                          {optional && (
+                            <SelectItem value={clearValue}>None</SelectItem>
+                          )}
                           {(field.options ?? []).map(option => (
                             <SelectItem key={option.value} value={option.value}>
                               {option.label}
@@ -196,6 +228,7 @@ function ProviderConfigField({
                         </SelectContent>
                       </Select>
                     );
+                  }
 
                   case "text":
                   case "password":
