@@ -329,28 +329,21 @@ export function readableGatedRules(
  * the stored-artifact branch never looks at the compile context, so a caller
  * could not correct it by supplying the same one again.
  *
- * A caller's function is contained rather than called directly. It is host code
- * running with no block boundary above it, on the path that decides a page's
- * stylesheet, so a throw would lose the page rather than the node — and a
- * mistakenly `async` one returns a promise that this cannot catch, whose
- * rejection Node reports as unhandled and can end the process with.
+ * The block's own declaration is the only source. A caller cannot answer this
+ * question on a block's behalf, because the answer decides which rules ship
+ * while `BlockBoundary` asks the declaration for what actually renders: a
+ * supplied predicate that disagreed would ship rules for markup that never
+ * appears, or withhold them from markup that does. One derivation, consulted by
+ * both, is the only arrangement in which those cannot disagree.
  *
- * Contained by routing it THROUGH `declaresNoMarkup` rather than by repeating
- * what that already does. A block's declaration reaches the same three hazards —
- * a throwing call, a throwing `then` getter, a deferred rejection — and two
- * implementations of one containment are two answers that can drift. The adapter
- * exists only because the two signatures differ: a declaration is asked about
- * props, a caller's predicate about the node.
+ * The declaration is contained rather than called directly — a throwing call, a
+ * throwing `then` getter, a deferred rejection — by `declaresNoMarkup`, which is
+ * the one containment the engine and this layer share.
  */
 export function drawlessTestFor(
-  blocks: BlockResolver,
-  supplied: ((node: BlockNode) => boolean) | undefined
+  blocks: BlockResolver
 ): (node: BlockNode) => boolean {
-  if (supplied === undefined) {
-    return node => declaresNoMarkup(node, type => blocks.get(type));
-  }
-  return node =>
-    declaresNoMarkup(node, () => ({ rendersNothing: () => supplied(node) }));
+  return node => declaresNoMarkup(node, type => blocks.get(type));
 }
 
 function withGatedRules(
@@ -535,7 +528,7 @@ export function resolvePageStyles(
 ): PageStyles {
   // Derived before either branch, so the read path and the compile path cannot
   // answer differently about the same document.
-  const drawsNothing = drawlessTestFor(blocks, styleContext?.drawsNothing);
+  const drawsNothing = drawlessTestFor(blocks);
 
   // An artifact naming classes for nodes this document does not contain was compiled from a
   // DIFFERENT, larger tree — which is exactly what pruning produces. Its `css` may carry those
@@ -591,9 +584,11 @@ export function resolvePageStyles(
     // republishing a page would never enable the drop, and the behaviour would
     // depend on which door the compile came through.
     //
-    // An explicit value on the caller's context outranks either, on the same
-    // terms: a host that answered the question deliberately should not have its
-    // answer replaced by one derived from a resolver it did not choose.
+    // `drawsNothing` is set LAST, so it replaces anything the caller put there.
+    // The field is how this layer states its derived answer to the compiler, not
+    // a way to be told one: the renderer asks each block's declaration for what
+    // to draw, so a supplied answer could only make the rules disagree with the
+    // markup.
     const context: StyleCompileContext = {
       ...styleContext,
       ...(styleContext.blockBases === undefined

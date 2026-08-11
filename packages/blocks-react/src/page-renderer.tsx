@@ -408,16 +408,14 @@ export function PageRenderer({
   // it would be a far larger regression than the bytes it saves. Republishing the
   // page compiles the entries and the drop starts working, with nothing to
   // invalidate by hand.
-  // Asked through the SAME derivation `resolvePageStyles` will use, so a host's
-  // own `drawsNothing` decides both. Pruning on the resolver alone would remove
-  // a node the caller had deliberately kept, and the artifact would then be read
-  // as covering a removal the caller never asked for.
+  // Asked through the SAME derivation `resolvePageStyles` will use, so what is
+  // pruned here and what the compiler gated cannot describe different nodes.
   // Only walked when a gated map could cover the drop. Without one the answer is
   // fixed — the node stays — so asking every block would run each plugin's
   // `rendersNothing` over the whole tree to reach a conclusion already known.
   // That is the standalone compile path, where the compiler holds those rules
   // back at the source and nothing here needs to.
-  const drawsNothing = drawlessTestFor(resolver, styleContext?.drawsNothing);
+  const drawsNothing = drawlessTestFor(resolver);
   const drawlessDropped =
     gatedRules === undefined
       ? visible

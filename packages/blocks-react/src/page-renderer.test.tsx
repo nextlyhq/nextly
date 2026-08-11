@@ -142,6 +142,41 @@ const drawless = defineBlock<{ draw: boolean }>({
     props.draw ? <p className={className}>drawn</p> : null,
 });
 
+/**
+ * A block whose declaration throws when asked. Style resolution runs with no
+ * block boundary above it, so a throw here must cost the node's exemption
+ * rather than the page.
+ */
+const drawlessThrows = defineBlock<{ value: string }>({
+  name: "test/drawless-throws",
+  version: 1,
+  description: "Its declaration throws.",
+  example: { props: { value: "x" } },
+  defaultProps: { value: "" },
+  rendersNothing: () => {
+    throw new Error("declaration is broken");
+  },
+  render: ({ props, className }) => <p className={className}>{props.value}</p>,
+});
+
+/**
+ * A block declared `async` by mistake. The call itself never throws — it returns
+ * a promise, so the comparison against `true` is simply false — and the REJECTION
+ * is the hazard: Node reports it as unhandled and can end the process.
+ */
+const drawlessRejects = defineBlock<{ value: string }>({
+  name: "test/drawless-rejects",
+  version: 1,
+  description: "Its declaration rejects.",
+  example: { props: { value: "x" } },
+  defaultProps: { value: "" },
+  rendersNothing: (() =>
+    Promise.reject(new Error("late"))) as unknown as (props: {
+    value: string;
+  }) => boolean,
+  render: ({ props, className }) => <p className={className}>{props.value}</p>,
+});
+
 /** A second type, so a document can lose every instance of one and keep the other. */
 const onlyHidden = defineBlock<{ value: string }>({
   name: "test/only-hidden",
@@ -3978,15 +4013,14 @@ describe("PageRenderer", () => {
       expect(artifact.css).toContain("child-asset.png");
     });
 
-    it("honours the caller's own predicate when reading a stored artifact", async () => {
-      // A sheet compiled under a caller's `drawsNothing` holds exactly the nodes
-      // THAT predicate gated. `test/text` declares nothing, so a read path
-      // recomputing from the registry alone would append its rules straight back
-      // — and the stored-artifact branch never looks at the compile context, so
-      // supplying the same one again could not correct it.
+    it("ignores a caller's predicate when reading a stored artifact", async () => {
+      // The block's declaration is the only source. `BlockBoundary` asks it for
+      // what to draw, so a caller answering differently here could only publish
+      // rules for markup that never appears — this node DOES draw, and gets its
+      // rules however the caller answers.
       const artifact = resolvePageStyles(
         doc(
-          node("a", "test/text", { props: { value: "x" } }),
+          node("a", "test/drawless", { props: { draw: true } }),
           node("b", "test/text", { props: { value: "y" } })
         ),
         {
@@ -3998,59 +4032,50 @@ describe("PageRenderer", () => {
           breakpoints: { viewport: [], container: [] },
           drawsNothing: candidate => candidate.id === "a",
         },
-        createBlockResolver([text as AnyBlockDefinition])
+        createBlockResolver([
+          drawless as AnyBlockDefinition,
+          text as AnyBlockDefinition,
+        ])
       );
 
-      expect(artifact.css).not.toContain("host-gated.png");
+      expect(artifact.css).toContain("host-gated.png");
     });
 
-    it("keeps the page when the caller's predicate throws", async () => {
-      // Host code, running with no block boundary above it, on the path that
-      // decides a page's stylesheet. A throw must cost the node's exemption, not
-      // the page.
+    it("keeps the page when a block's declaration throws", async () => {
+      // Style resolution runs with no block boundary above it, so a throw must
+      // cost the node's exemption rather than the page.
       const artifact = resolvePageStyles(
-        doc(node("a", "test/text", { props: { value: "x" } })),
+        doc(node("a", "test/drawless-throws", { props: { value: "x" } })),
         {
           css: ".nx-a { color: teal }",
           classes: { a: "nx-a" },
           gated: { a: ".nx-a { background-image: url(/host-gated.png) }" },
         },
-        {
-          breakpoints: { viewport: [], container: [] },
-          drawsNothing: () => {
-            throw new Error("host predicate is broken");
-          },
-        },
-        createBlockResolver([text as AnyBlockDefinition])
+        { breakpoints: { viewport: [], container: [] } },
+        createBlockResolver([drawlessThrows as AnyBlockDefinition])
       );
 
       // Answered "draws", so the node keeps its styling rather than losing it.
       expect(artifact.css).toContain("host-gated.png");
     });
 
-    it("contains a rejection from a caller's async predicate", async () => {
-      // A mistakenly `async drawsNothing` returns a promise, so the call itself
-      // never throws and the comparison against `true` is simply false. The
-      // REJECTION is the hazard: Node reports it as unhandled and can end the
-      // process, during style resolution, outside any block boundary.
+    it("contains a rejection from a block's async declaration", async () => {
+      // A mistakenly `async rendersNothing` returns a promise, so the call
+      // itself never throws and the comparison against `true` is simply false.
+      // The REJECTION is the hazard: Node reports it as unhandled and can end
+      // the process, during style resolution, outside any block boundary.
       const unhandled = vi.fn();
       process.on("unhandledRejection", unhandled);
       try {
         const artifact = resolvePageStyles(
-          doc(node("a", "test/text", { props: { value: "x" } })),
+          doc(node("a", "test/drawless-rejects", { props: { value: "x" } })),
           {
             css: ".nx-a { color: teal }",
             classes: { a: "nx-a" },
             gated: { a: ".nx-a { background-image: url(/host-gated.png) }" },
           },
-          {
-            breakpoints: { viewport: [], container: [] },
-            drawsNothing: (() =>
-              Promise.reject(new Error("late"))) as unknown as (
-              node: BlockNode
-            ) => boolean,
-          },
-          createBlockResolver([text as AnyBlockDefinition])
+          { breakpoints: { viewport: [], container: [] } },
+          createBlockResolver([drawlessRejects as AnyBlockDefinition])
         );
 
         // Answered "draws", so the node keeps its styling.
@@ -4064,12 +4089,11 @@ describe("PageRenderer", () => {
       }
     });
 
-    it("honours a caller's override in the PRUNE, not only in the compile", async () => {
-      // A host that answers `false` for a node its block declares drawless is
-      // keeping that node deliberately. The prune runs before `resolvePageStyles`
-      // sees the context, so a resolver-only prune would remove it first and the
-      // artifact would then be read as covering a removal the caller never asked
-      // for — its rules dropped despite the override.
+    it("drops a drawless node's rules however the caller answers", async () => {
+      // A caller answering `false` for a node its block declares drawless cannot
+      // keep that node's rules, because it cannot keep its markup: the boundary
+      // renders what the declaration says. Honouring the caller here would ship
+      // rules selecting nothing.
       const html = await renderToHtml(
         <PageRenderer
           document={doc(
@@ -4092,8 +4116,8 @@ describe("PageRenderer", () => {
         />
       );
 
-      // The caller said it draws, so its rules are appended rather than dropped.
-      expect(html).toContain("kept.png");
+      expect(html).not.toContain("kept.png");
+      // The control: the rest of the page is unaffected.
       expect(html).toContain("public body");
     });
 
@@ -4155,9 +4179,11 @@ describe("PageRenderer", () => {
       expect(artifact.css).toContain("teal");
     });
 
-    it("leaves a caller's own answer alone", async () => {
-      // A host that answered the question deliberately should not have it
-      // replaced by one derived from a resolver it did not choose.
+    it("compiles from the declaration, not from a caller's answer", async () => {
+      // The context field is how this layer states its derived answer to the
+      // compiler, not a way to be told one. A caller's value is replaced, so a
+      // sheet written through this entry gates exactly the nodes the renderer
+      // will decline to draw.
       const artifact = resolvePageStyles(
         doc(
           node("a", "test/drawless", {
@@ -4173,8 +4199,8 @@ describe("PageRenderer", () => {
         createBlockResolver([drawless as AnyBlockDefinition])
       );
 
-      expect(artifact.css).toContain("rebeccapurple");
-      expect(artifact.gated).toBeUndefined();
+      expect(artifact.css).not.toContain("rebeccapurple");
+      expect(artifact.gated?.a).toContain("rebeccapurple");
     });
   });
 
