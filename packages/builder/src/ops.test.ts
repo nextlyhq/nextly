@@ -149,25 +149,59 @@ describe("the inverse is derived from the document, not from the caller", () => 
     ]);
   });
 
-  it("names the keys a patch touched, and only those", () => {
+  it("names a removal rather than setting it to undefined", () => {
     const { applied } = roundTrip(forest(), {
       kind: "update",
       id: "a",
       patch: { customCss: ".x { color: red }" },
     });
 
-    // `undefined` rather than an omitted key: undoing an addition has to REMOVE
-    // the value, and a patch that omits the key would leave it in place.
+    // The node had no `customCss`, so undoing the addition means REMOVING it.
+    // Said as a name in `unset` rather than as `{ customCss: undefined }`,
+    // because an op is persisted and `JSON.stringify` drops an undefined value:
+    // the inverse would arrive back from a crash buffer as an empty patch and
+    // undo would leave the added value in place.
     expect(applied.inverse).toEqual({
       kind: "update",
       id: "a",
-      patch: { customCss: undefined },
+      patch: {},
+      unset: ["customCss"],
     });
-    expect(
-      Object.keys(
-        (applied.inverse as Extract<BuilderOp, { kind: "update" }>).patch
-      )
-    ).toEqual(["customCss"]);
+  });
+
+  it("keeps a prior value in the patch when there was one", () => {
+    // The other half: a field the node HELD is restored by value, and nothing
+    // is named for removal. Without this, `unset` could swallow every key and
+    // the assertion above would still pass.
+    const { applied } = roundTrip(forest(), {
+      kind: "update",
+      id: "a",
+      patch: { version: 2 },
+    });
+
+    expect(applied.inverse).toEqual({
+      kind: "update",
+      id: "a",
+      patch: { version: 1 },
+    });
+  });
+
+  it("survives being persisted, which is what an op has to do", () => {
+    // The gap the document-level round trip could not see. It serialized the
+    // resulting DOCUMENT; an op list is serialized too — a crash buffer, a
+    // queued agent edit, a replayed history — and an inverse that does not
+    // survive that is an undo that silently keeps part of what it undid.
+    const before = forest();
+    const { applied } = roundTrip(before, {
+      kind: "update",
+      id: "a",
+      patch: { customCss: ".x { color: red }" },
+    });
+
+    const persisted = JSON.parse(JSON.stringify(applied.inverse)) as BuilderOp;
+    const undone = applyOp(applied.nodes, persisted, "undo");
+
+    expect(JSON.stringify(undone.nodes)).toBe(JSON.stringify(before));
   });
 });
 
@@ -179,6 +213,27 @@ describe("an op that cannot apply", () => {
   ])("refuses rather than doing nothing: %s", (_label, op) => {
     // A silent no-op would still be recorded by the history, and its inverse
     // would then undo an edit that never happened.
+    expect(() => applyOp(forest(), op)).toThrow(OpError);
+  });
+
+  it.each<[string, BuilderOp]>([
+    [
+      "a drop back into the same slot and index",
+      {
+        kind: "move",
+        id: "b",
+        to: { parentId: "outer", slot: "main", index: 1 },
+      },
+    ],
+    [
+      "a top-level node dropped on itself",
+      { kind: "move", id: "sibling", to: { index: 1 } },
+    ],
+  ])("refuses a move that changes nothing: %s", (_label, op) => {
+    // `moveNode` removes and reinserts, so it returns a NEW forest holding the
+    // same tree — the reference changed and nothing else did. Accepting that
+    // puts an entry in the history whose undo has no visible effect, and a user
+    // pressing undo expects the last thing they SAW to come back.
     expect(() => applyOp(forest(), op)).toThrow(OpError);
   });
 

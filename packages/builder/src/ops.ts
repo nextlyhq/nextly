@@ -56,7 +56,21 @@ export type BuilderOp =
     }
   | { readonly kind: "remove"; readonly id: string }
   | { readonly kind: "move"; readonly id: string; readonly to: TreePosition }
-  | { readonly kind: "update"; readonly id: string; readonly patch: NodePatch };
+  | {
+      readonly kind: "update";
+      readonly id: string;
+      readonly patch: NodePatch;
+      /**
+       * Fields to REMOVE, named rather than set to `undefined`.
+       *
+       * An op is persisted — a crash buffer, a queued agent edit, a replayed
+       * history — and `JSON.stringify` drops a key whose value is `undefined`.
+       * So an inverse that said `{ customCss: undefined }` arrived back from
+       * storage as `{}`, and undoing an edit that ADDED a field left the field
+       * in place. A list of names survives the round trip because it is data.
+       */
+      readonly unset?: readonly string[];
+    };
 
 /**
  * An op that could not be applied to the document it was given.
@@ -119,6 +133,13 @@ function assertUnlocked(node: BlockNode, verb: string): void {
   }
 }
 
+/** Whether two locations name the same parent, slot and index. */
+function samePlace(a: NodeLocation, b: NodeLocation): boolean {
+  return (
+    a.parent?.id === b.parent?.id && a.slot === b.slot && a.index === b.index
+  );
+}
+
 /** Where a located node sits, in the shape an op addresses. */
 function positionOf(location: NodeLocation): TreePosition {
   return location.parent === undefined
@@ -141,12 +162,20 @@ function positionOf(location: NodeLocation): TreePosition {
  * because a document is stored as JSON, where a key set to `undefined` and an
  * absent key are the same document.
  */
-function priorValues(node: BlockNode, patch: NodePatch): NodePatch {
-  const prior: Record<string, unknown> = {};
-  for (const key of Object.keys(patch)) {
-    prior[key] = (node as unknown as Record<string, unknown>)[key];
+function priorValues(
+  node: BlockNode,
+  keys: readonly string[]
+): { patch: NodePatch; unset: string[] } {
+  const held = node as unknown as Record<string, unknown>;
+  const patch: Record<string, unknown> = {};
+  const unset: string[] = [];
+
+  for (const key of keys) {
+    if (key in held && held[key] !== undefined) patch[key] = held[key];
+    else unset.push(key);
   }
-  return prior;
+
+  return { patch, unset };
 }
 
 /**
@@ -234,14 +263,32 @@ export function applyOp(
         throw new OpError(`move: no node with id "${op.id}" in the document.`);
       }
       if (source === "author") assertUnlocked(node, "move");
+      const moved = accepted(
+        nodes,
+        moveNode(nodes, op.id, op.to),
+        `move: the document did not accept "${op.id}" at the position given. ` +
+          `The position may name a parent the document does not hold, omit ` +
+          `the slot it needs, or sit inside the subtree being moved.`
+      );
+      // A drop where the drag began. `moveNode` removes and reinserts, so it
+      // hands back a NEW forest holding the same tree — the reference changed
+      // and nothing else did. Recording it would put an entry in the history
+      // whose undo visibly does nothing, which is worse than no entry: a user
+      // pressing undo expects the last thing they see to come back.
+      //
+      // Compared as positions rather than by serializing the forest: the
+      // question is whether this node ended up where it started, and asking it
+      // that way stays cheap on a document of any size.
+      const settled = locateNode(moved, op.id);
+      if (settled !== undefined && samePlace(location, settled)) {
+        throw new OpError(
+          `move: "${op.id}" is already at the position given, so this move ` +
+            `changes nothing. A history entry for it would undo to no visible ` +
+            `effect.`
+        );
+      }
       return {
-        nodes: accepted(
-          nodes,
-          moveNode(nodes, op.id, op.to),
-          `move: the document did not accept "${op.id}" at the position given. ` +
-            `The position may name a parent the document does not hold, omit ` +
-            `the slot it needs, or sit inside the subtree being moved.`
-        ),
+        nodes: moved,
         inverse: { kind: "move", id: op.id, to: positionOf(location) },
       };
     }
@@ -253,14 +300,39 @@ export function applyOp(
           `update: no node with id "${op.id}" in the document.`
         );
       }
+      const touched = [...Object.keys(op.patch), ...(op.unset ?? [])];
+      const before = priorValues(node, touched);
+      // `unset` becomes `undefined` only HERE, at the moment of applying. The
+      // engine's spread leaves the key present holding `undefined`, which the
+      // document sheds the next time it is serialized; the op itself never
+      // carries that value, so persisting it loses nothing.
+      const removals = Object.fromEntries(
+        (op.unset ?? []).map(key => [key, undefined])
+      ) as NodePatch;
+
       return {
-        nodes: updateNode(nodes, op.id, op.patch),
+        nodes: updateNode(nodes, op.id, { ...op.patch, ...removals }),
         inverse: {
           kind: "update",
           id: op.id,
-          patch: priorValues(node, op.patch),
+          patch: before.patch,
+          ...(before.unset.length > 0 ? { unset: before.unset } : {}),
         },
       };
+    }
+
+    default: {
+      // The discriminant is exhausted above, so TypeScript never reaches this.
+      // A JavaScript caller, a queued agent edit and a buffer written by a
+      // newer vocabulary all can: without this the switch falls through and
+      // `applyOp` returns `undefined`, which the caller meets as an opaque
+      // property access on nothing rather than as the refusal this module
+      // promises.
+      const unreachable: never = op;
+      throw new OpError(
+        `unknown op kind: ${JSON.stringify((unreachable as { kind?: unknown }).kind)}. ` +
+          `This document may have been edited by a newer version of the editor.`
+      );
     }
   }
 }
