@@ -192,6 +192,57 @@ function analyze(source: string, fileName: string): Analysis {
   };
   collectDeclared(tree);
 
+  /** Whether a condition subtree asks `typeof <name>`, which is the SSR guard. */
+  const mentionsTypeof = (condition: ts.Node, name: string): boolean => {
+    let found = false;
+    const look = (node: ts.Node): void => {
+      if (
+        ts.isTypeOfExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === name
+      ) {
+        found = true;
+      }
+      ts.forEachChild(node, look);
+    };
+    look(condition);
+    return found;
+  };
+
+  /**
+   * Whether this read sits on the protected side of a `typeof` guard.
+   *
+   * Walks outward looking for a conditional, an `if`, or a short-circuit whose CONDITION tests
+   * `typeof` the same name. Syntactic rather than a flow analysis, which is the honest limit: it
+   * recognises the shapes people write and would miss a guard stored in a variable first.
+   */
+  const guardedByTypeof = (identifier: ts.Identifier): boolean => {
+    for (let node: ts.Node = identifier; node.parent; node = node.parent) {
+      const parent = node.parent;
+      let condition: ts.Node | undefined;
+      if (
+        ts.isConditionalExpression(parent) &&
+        (parent.whenTrue === node || parent.whenFalse === node)
+      ) {
+        condition = parent.condition;
+      } else if (
+        ts.isIfStatement(parent) &&
+        (parent.thenStatement === node || parent.elseStatement === node)
+      ) {
+        condition = parent.expression;
+      } else if (
+        ts.isBinaryExpression(parent) &&
+        parent.right === node &&
+        (parent.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+          parent.operatorToken.kind === ts.SyntaxKind.BarBarToken)
+      ) {
+        condition = parent.left;
+      }
+      if (condition && mentionsTypeof(condition, identifier.text)) return true;
+    }
+    return false;
+  };
+
   /** Whether this identifier reads the global, rather than naming something in another position. */
   const readsTheGlobal = (node: ts.Identifier): boolean => {
     if (declared.has(node.text)) return false;
@@ -208,6 +259,10 @@ function analyze(source: string, fileName: string): Analysis {
     ) {
       return true;
     }
+
+    // `export const globals = { window }` READS the global — the shorthand is both the name and
+    // the value, so the general naming rule below would wrongly excuse it.
+    if (ts.isShorthandPropertyAssignment(parent)) return !guardedByTypeof(node);
 
     // An identifier that IS a declaration's name is not a read of anything. This covers the
     // members these globals share a spelling with — `interface Options { history }`, `type Point =
@@ -227,7 +282,11 @@ function analyze(source: string, fileName: string): Analysis {
     // `typeof window === "undefined"` is the guard that MAKES a module server-safe: it evaluates
     // to a string rather than throwing, so reporting it would punish the correct pattern.
     if (ts.isTypeOfExpression(parent)) return false;
-    return true;
+
+    // `typeof window === "undefined" ? 0 : window.innerWidth` is the standard way to write a
+    // module that is safe to import on a server, and the second read never runs there. Reporting
+    // it would reject the very pattern this check exists to encourage.
+    return !guardedByTypeof(node);
   };
 
   const visit = (node: ts.Node, insideFunction: boolean): void => {
@@ -308,9 +367,20 @@ function analyze(source: string, fileName: string): Analysis {
     })();
     const entersFunction = isFunction && !runsNow;
 
-    ts.forEachChild(node, child =>
-      visit(child, insideFunction || entersFunction)
-    );
+    ts.forEachChild(node, child => {
+      // A computed member name is evaluated when the class body runs, even though the member it
+      // names is deferred: `class C { [window.location.href]() {} }` throws on import.
+      if (ts.isComputedPropertyName(child)) return visit(child, insideFunction);
+      // An INSTANCE field initializer runs at construction, not at definition, so a server that
+      // imports the class without building one never reaches it. A static field does run.
+      const deferredField =
+        ts.isPropertyDeclaration(node) &&
+        node.initializer === child &&
+        !node.modifiers?.some(
+          modifier => modifier.kind === ts.SyntaxKind.StaticKeyword
+        );
+      visit(child, insideFunction || entersFunction || deferredField);
+    });
   };
 
   visit(tree, false);
@@ -332,9 +402,12 @@ function resolveLocal(fromFile: string, specifier: string): string | null {
     base,
     `${base}.ts`,
     `${base}.tsx`,
+    // BEFORE the `.ts` collapse: with both `helper.ts` and `helper.mts` present, esbuild resolves
+    // `./helper.mjs` to the `.mts`. Probing the collapsed form first would follow a different file
+    // than the bundler does.
+    moduleForm,
     `${swapped}.ts`,
     `${swapped}.tsx`,
-    moduleForm,
     path.join(base, "index.ts"),
     path.join(base, "index.tsx"),
   ]) {
@@ -512,6 +585,42 @@ describe("reading a module", () => {
     ).toEqual([]);
   });
 
+  it("reports a shorthand property, which reads the global", () => {
+    // `{ window }` is both the name and the value. The general naming rule would excuse it, so
+    // this is checked first.
+    expect(read(`export const globals = { window };`).globals).toEqual([
+      "window",
+    ]);
+  });
+
+  it("does not report a read behind a typeof guard", () => {
+    // The standard way to write a module that is safe to import on a server. The second read
+    // never runs there, and reporting it would reject the very pattern this encourages.
+    expect(
+      read(`
+        export const width = typeof window === "undefined" ? 0 : window.innerWidth;
+        export const has = typeof document !== "undefined" && document.title;
+      `).globals
+    ).toEqual([]);
+  });
+
+  it("reports a computed member name, which runs when the class body does", () => {
+    expect(
+      read(`export class C { [window.location.href]() { return 1; } }`).globals
+    ).toEqual(["window"]);
+  });
+
+  it("does not report an instance field initializer, but does report a static one", () => {
+    // An instance field runs at construction; a server that imports the class without building
+    // one never reaches it. A static field runs at definition.
+    expect(
+      read(`export class M { width = window.innerWidth; }`).globals
+    ).toEqual([]);
+    expect(
+      read(`export class M { static width = window.innerWidth; }`).globals
+    ).toEqual(["window"]);
+  });
+
   it("does not report a declaration member that shares a global's name", () => {
     // `location`, `history`, `navigator`, `Node`, `Element` and `Image` are ordinary words. A
     // check that only excluded property ACCESS still reported them wherever they name a member,
@@ -609,6 +718,24 @@ describe("resolving a local import", () => {
       "entry.ts",
       "helper.ts",
     ]);
+  });
+
+  it("prefers `.mts` over `.ts` for a `.mjs` specifier, as the bundler does", () => {
+    // Only observable when BOTH exist: esbuild resolves `./helper.mjs` to `helper.mts`, so probing
+    // the collapsed `.ts` form first would follow a different file than the bundle contains — and
+    // the walk would read the wrong module's imports while reporting nothing wrong.
+    const dir = mkdtempSync(path.join(os.tmpdir(), "nx-layering-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    writeFileSync(path.join(dir, "helper.ts"), "export const helper = 1;\n");
+    writeFileSync(path.join(dir, "helper.mts"), "export const helper = 2;\n");
+    const entry = path.join(dir, "entry.ts");
+    writeFileSync(entry, 'export { helper } from "./helper.mjs";\n');
+
+    expect(
+      reach(entry)
+        .files.map(({ file }) => path.basename(file))
+        .sort()
+    ).toEqual(["entry.ts", "helper.mts"]);
   });
 });
 
