@@ -18,6 +18,7 @@ import { randomUUID } from "crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, eq, desc, isNull } from "drizzle-orm";
 
+import type { RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import type { PluginEmailTemplate } from "../../../plugins/contributions";
@@ -31,6 +32,10 @@ import type {
 } from "../../../schemas/email-templates/types";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import {
+  changedTemplateFields,
+  recordTemplateActivity,
+} from "../template-activity";
 import type { EmailAttachmentInput } from "../types";
 
 import { interpolateTemplate } from "./template-engine";
@@ -147,7 +152,8 @@ export class EmailTemplateService extends BaseService {
    * @throws NextlyError DUPLICATE if slug already exists
    */
   async createTemplate(
-    data: CreateEmailTemplateInput
+    data: CreateEmailTemplateInput,
+    actor?: RequestActor | null
   ): Promise<EmailTemplateRecord> {
     this.assertLayoutMarker(data.kind ?? "template", data.htmlContent);
     const id = randomUUID();
@@ -190,7 +196,17 @@ export class EmailTemplateService extends BaseService {
       throw NextlyError.fromDatabaseError(dbErr);
     }
 
-    return this.getTemplate(id);
+    const created = await this.getTemplate(id);
+    // Recorded after the insert commits, so a trail that cannot be written
+    // never turns a template that exists into a reported failure.
+    await recordTemplateActivity({
+      action: "create",
+      templateId: created.id,
+      templateName: created.name,
+      templateKind: created.kind,
+      actor,
+    });
+    return created;
   }
 
   /**
@@ -254,7 +270,8 @@ export class EmailTemplateService extends BaseService {
    */
   async updateTemplate(
     id: string,
-    data: UpdateEmailTemplateInput
+    data: UpdateEmailTemplateInput,
+    actor?: RequestActor | null
   ): Promise<EmailTemplateRecord> {
     const existing = await this.getTemplate(id);
 
@@ -301,7 +318,24 @@ export class EmailTemplateService extends BaseService {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
-    return this.getTemplate(id);
+    const updated = await this.getTemplate(id);
+    // Compared against the row as it was, so an update that submitted every
+    // field but moved none produces no entry. `updatedAt` is excluded: it moves
+    // on every write by definition and would make every no-op look like a
+    // change.
+    const { updatedAt: _ignored, ...touched } = updateData;
+    await recordTemplateActivity({
+      action: "update",
+      templateId: updated.id,
+      templateName: updated.name,
+      templateKind: updated.kind,
+      changedFields: changedTemplateFields(
+        existing as unknown as Record<string, unknown>,
+        touched
+      ),
+      actor,
+    });
+    return updated;
   }
 
   /**
@@ -314,7 +348,7 @@ export class EmailTemplateService extends BaseService {
    *
    * @throws NextlyError BUSINESS_RULE_VIOLATION if deleting the default layout
    */
-  async deleteTemplate(id: string): Promise<void> {
+  async deleteTemplate(id: string, actor?: RequestActor | null): Promise<void> {
     let template: EmailTemplateRecord | null = null;
     try {
       template = await this.getTemplate(id);
@@ -343,6 +377,17 @@ export class EmailTemplateService extends BaseService {
     await this.db
       .delete(this.emailTemplates)
       .where(eq(this.emailTemplates.id, id));
+
+    // The name is read from the row fetched above: after the delete there is
+    // nothing left to label the entry with, and an unlabelled row is the one
+    // whose subject a reader can never recover.
+    await recordTemplateActivity({
+      action: "delete",
+      templateId: id,
+      templateName: template.name,
+      templateKind: template.kind,
+      actor,
+    });
   }
 
   // ============================================================

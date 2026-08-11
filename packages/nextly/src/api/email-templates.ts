@@ -22,6 +22,7 @@
 
 import { z } from "zod";
 
+import { actorFromAuthContext } from "../auth/request-actor";
 import { container } from "../di";
 import { getCachedNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
@@ -116,7 +117,7 @@ export const GET = withErrorHandler(
  */
 export const POST = withErrorHandler(
   async (request: Request): Promise<Response> => {
-    await requireRouteAnyPermission(request, [
+    const auth = await requireRouteAnyPermission(request, [
       { action: "create", resource: "email-templates" },
       { action: "manage", resource: "email-templates" },
     ]);
@@ -132,7 +133,10 @@ export const POST = withErrorHandler(
     }
 
     const service = await getEmailTemplateService();
-    const template = await service.createTemplate(validated);
+    const template = await service.createTemplate(
+      validated,
+      actorFromAuthContext(auth)
+    );
 
     return respondMutation("Email template created.", template, {
       status: 201,
