@@ -124,8 +124,15 @@ export const emailDeliveriesPg = pgTable(
      */
     error: text("error"),
 
-    /** The provider's own id for the message, when it returned one. */
-    messageId: varchar("message_id", { length: 255 }),
+    /**
+     * The provider's own id for the message, when it returned one.
+     *
+     * Unbounded, because the adapter contract accepts any string and a bounded
+     * column would make a longer one a write error — which `record()` swallows
+     * by design, so a message that WAS dispatched would end up with no row at
+     * all. The log must not be the thing that decides a send is unrecordable.
+     */
+    messageId: text("message_id"),
 
     /**
      * Which retention window governs this row. Present from the first
@@ -143,6 +150,11 @@ export const emailDeliveriesPg = pgTable(
   t => [
     // "Did this address receive anything, and when" — the support question,
     // answered by hashing the address the operator was given.
+    // The unfiltered read — "what happened recently", and the default this
+    // service serves. Every other index below leads with a different column,
+    // so none of them can order the whole table; without this one the default
+    // list degrades to a full scan and sort as the log grows.
+    index("email_deliveries_created_idx").on(t.createdAt),
     index("email_deliveries_recipient_idx").on(t.recipientHash, t.createdAt),
     // "What is failing right now", and the retention scan, which walks one
     // status oldest-first.

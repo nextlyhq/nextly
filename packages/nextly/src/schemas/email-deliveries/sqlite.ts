@@ -57,6 +57,11 @@ export const emailDeliveriesSqlite = sqliteTable(
       .$defaultFn(() => new Date()),
   },
   t => [
+    // The unfiltered read — "what happened recently", and the default this
+    // service serves. Every other index below leads with a different column,
+    // so none of them can order the whole table; without this one the default
+    // list degrades to a full scan and sort as the log grows.
+    index("email_deliveries_created_idx").on(t.createdAt),
     index("email_deliveries_recipient_idx").on(t.recipientHash, t.createdAt),
     index("email_deliveries_status_created_idx").on(t.status, t.createdAt),
     index("email_deliveries_provider_idx").on(t.providerId, t.createdAt),
