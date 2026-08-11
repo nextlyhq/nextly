@@ -205,10 +205,8 @@
     "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/telemetry": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
-    "@rollup/plugin-alias": "^6.0.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/mime-types": "^3.0.1",
     "@types/node": "^20.19.17",
     "@types/nodemailer": "^7.0.9",
     "@types/pg": "^8.15.5",
@@ -250,8 +248,7 @@
     }
   },
   "optionalDependencies": {
-    "better-sqlite3": "^9.0.0 || ^10.0.0 || ^11.0.0 || ^12.0.0",
-    "ntsuspend": "^1.0.2"
+    "better-sqlite3": "^9.0.0 || ^10.0.0 || ^11.0.0 || ^12.0.0"
   },
   "dependencies": {
     "@clack/prompts": "^1.1.0",
@@ -259,7 +256,6 @@
     "@nextlyhq/adapter-drizzle": "workspace:*",
     "@sanity/diff-match-patch": "^3.2.0",
     "bcryptjs": "^3.0.2",
-    "chokidar": "^5.0.0",
     "commander": "^14.0.2",
     "dequal": "^2.0.3",
     "dotenv": "^17.2.2",
@@ -268,9 +264,7 @@
     "esbuild": "^0.28.1",
     "file-type": "^21",
     "isomorphic-dompurify": "^2",
-    "jiti": "^2.6.1",
     "jose": "^6.2.2",
-    "mime-types": "^3.0.2",
     "nodemailer": "^9.0.1",
     "picocolors": "^1.1.1",
     "safe-regex2": "^5.1.1",
