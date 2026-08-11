@@ -22,9 +22,12 @@ on:
 permissions:
   contents: read
 
+# Scoped to pull requests for the same reason as the CI workflow: on `main`
+# `github.ref` is one string for every push, so each merge cancelled the
+# previous commit's run and left a required check reporting `cancelled`.
 concurrency:
   group: integration-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   integration:

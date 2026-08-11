@@ -12,9 +12,19 @@ on:
 permissions:
   contents: read
 
+# Superseding is right for a branch under review and wrong for `main`.
+#
+# On a pull request a new push makes the previous run's verdict irrelevant, so
+# cancelling it saves minutes and loses nothing. On `main` every commit is a
+# distinct artifact somebody will later ask "was that green?" about, and
+# `github.ref` is the same string for every push there — so each merge cancelled
+# the previous commit's run. With several lanes merging, most `main` commits
+# never reached a verdict at all, and a REQUIRED check that reports `cancelled`
+# is indistinguishable from one that failed. That trains people to merge past
+# red, which is the actual cost.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ci:
