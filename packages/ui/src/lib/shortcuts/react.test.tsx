@@ -337,6 +337,48 @@ describe("a provider nested inside another", () => {
     expect(said).toBe("");
   });
 
+  it("reports options that disagree between DETACHED providers too", () => {
+    // The per-target registry is a WeakMap keyed by the target, and `null` is not a key — so two
+    // nested providers that attach nothing have no entry to compare against. They still share a
+    // manager, and the inner one's options are still ignored, so the case that loses something
+    // has to be caught through the parent instead.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    resetDevWarnings();
+
+    const view = render(
+      <ShortcutProvider isApple={false} target={null}>
+        <ShortcutProvider isApple target={null}>
+          <span />
+        </ShortcutProvider>
+      </ShortcutProvider>
+    );
+    const said = warn.mock.calls.map(c => String(c[0])).join(" ");
+    warn.mockRestore();
+    view.unmount();
+
+    expect(said).toContain("different options");
+  });
+
+  it("says nothing when two detached providers agree", () => {
+    // The control: a self-contained component nesting inside a host that also attaches nothing is
+    // the supported composition, and must stay silent.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    resetDevWarnings();
+
+    const view = render(
+      <ShortcutProvider isApple={false} target={null}>
+        <ShortcutProvider isApple={false} target={null}>
+          <Bind keys="Escape" run={vi.fn()} options={{ name: "inner" }} />
+        </ShortcutProvider>
+      </ShortcutProvider>
+    );
+    const said = warn.mock.calls.map(c => String(c[0])).join(" ");
+    warn.mockRestore();
+    view.unmount();
+
+    expect(said).toBe("");
+  });
+
   it("still reports options that disagree", () => {
     // The control, and the case that genuinely loses something: the inner options ARE ignored,
     // so someone would otherwise be left wondering why they had no effect.
