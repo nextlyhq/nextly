@@ -279,7 +279,14 @@ function analyze(source: string, fileName: string): Analysis {
           if (holdsHoistedVars(scope) && !ts.isFunctionLike(child)) {
             const hoisted = (inner: ts.Node): void => {
               ts.forEachChild(inner, grandchild => {
-                if (ts.isFunctionLike(grandchild)) return;
+                // A static block owns its `var` declarations the way a function does: they do not
+                // hoist past it to the scope around the class.
+                if (
+                  ts.isFunctionLike(grandchild) ||
+                  ts.isClassStaticBlockDeclaration(grandchild)
+                ) {
+                  return;
+                }
                 if (
                   ts.isVariableDeclaration(grandchild) &&
                   isHoisted(grandchild)
@@ -569,6 +576,17 @@ function analyze(source: string, fileName: string): Analysis {
     if (ts.isBindingElement(parent) && parent.propertyName === node) {
       return false;
     }
+    // A statement LABEL is not a read: `window: for (;;) { break window; }` names a jump target,
+    // and the label sits in a `label` property rather than any of the `name` positions above.
+    if (
+      (ts.isLabeledStatement(parent) ||
+        ts.isBreakStatement(parent) ||
+        ts.isContinueStatement(parent)) &&
+      parent.label === node
+    ) {
+      return false;
+    }
+
     // `import { window as viewport } from "./safe"` puts `window` in `propertyName`, which the
     // `name` rule above does not cover — it names the export being imported, not the global.
     if (
@@ -1390,6 +1408,32 @@ describe("reading a module", () => {
       read(`
         export class C {
           static { const window = {}; void window; }
+          static width = window.innerWidth;
+        }
+      `).globals
+    ).toEqual(["window"]);
+  });
+
+  it("does not report a statement label that shares a global's name", () => {
+    // A label names a jump target, not a value, in all three positions it can appear.
+    // At MODULE scope, where a read would actually be reported — inside a function the walker
+    // skips globals anyway, so a wrapped fixture would pass without reaching this rule.
+    expect(
+      read(`
+        window: for (;;) { break window; }
+        location: for (;;) { continue location; }
+        export const ok = 1;
+      `).globals
+    ).toEqual([]);
+  });
+
+  it("keeps a static block's var inside it too", () => {
+    // `var` hoists out of a plain block but NOT out of a static block, which owns its var scope
+    // the way a function does. The field initialiser beside it reads the ambient global.
+    expect(
+      read(`
+        export class C {
+          static { var window = {}; void window; }
           static width = window.innerWidth;
         }
       `).globals
