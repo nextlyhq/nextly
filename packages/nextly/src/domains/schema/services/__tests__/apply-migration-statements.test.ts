@@ -58,15 +58,12 @@ describe("applyMigrationStatements", () => {
       [index]: new Error("Duplicate key name 'idx_single_page_created_at'"),
     });
 
-    // The count includes the tolerated statement: it was dispatched, and a caller asking "did
-    // anything reach the database" is owed a yes. Asserting the number rather than merely that it
-    // resolves is what makes "keeps going" observable from the return value as well as the log.
     await expect(
       applyMigrationStatements(
         adapter,
         `${index}\n--> statement-breakpoint\nSELECT 1`
       )
-    ).resolves.toBe(2);
+    ).resolves.toBeUndefined();
 
     // The statement AFTER the tolerated one still ran: tolerating must not abandon the migration.
     expect(adapter.executed).toContain("SELECT 1");
@@ -78,14 +75,16 @@ describe("applyMigrationStatements", () => {
       [create]: new Error("Table 'single_page' already exists"),
     });
 
-    await expect(applyMigrationStatements(adapter, create)).resolves.toBe(1);
+    await expect(
+      applyMigrationStatements(adapter, create)
+    ).resolves.toBeUndefined();
   });
 
-  it("counts no statements for a diff that rendered only a comment", async () => {
-    // 🔴 What the count exists for. A diff with no operations still renders a header comment, so
-    // the SQL string is non-empty while nothing runs — and a caller that inferred "something
-    // happened" from the string would claim a schema it never touched. `SingleMetadataService`
-    // asks this before deciding it may clear a durable `failed` verdict.
+  it("runs nothing for a diff that rendered only a comment", async () => {
+    // A diff with no operations still renders a header comment, so a non-empty SQL string is not
+    // a non-empty migration. Worth pinning because that asymmetry is what makes "the SQL is not
+    // empty" the wrong way to ask whether anything reached the database — a guard written that way
+    // never fires, and reads as though it does.
     const adapter = runner({});
 
     await expect(
@@ -93,7 +92,7 @@ describe("applyMigrationStatements", () => {
         adapter,
         "-- Update dynamic collection: single_page"
       )
-    ).resolves.toBe(0);
+    ).resolves.toBeUndefined();
     expect(adapter.executed).toEqual([]);
   });
 

@@ -418,11 +418,10 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
     expect(registeredShapes).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves a failed single failed when the save ran no statements against it", async () => {
+  it("leaves a failed single failed when the save only describes a change to it", async () => {
     // A create that got its `CREATE TABLE` through and then failed on an index leaves the table
-    // PRESENT but incomplete. Re-saving unchanged fields takes the alter branch, emits nothing, and
-    // finds the table there — so confirming existence would report a schema this save never
-    // inspected, and would overwrite the one durable record that something is wrong.
+    // PRESENT but incomplete. Every later save takes the alter branch, and an ALTER re-establishes
+    // nothing it does not mention, so the missing artifact stays missing.
     const { sql, written } = await runUpdate(
       { fields: [{ name: "heading", type: "text" }] },
       { existing: existingSingle({ migrationStatus: "failed" }) }
@@ -430,6 +429,42 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
 
     expect(sql).not.toMatch(/ALTER TABLE/i);
     expect(written?.migrationStatus).toBe("failed");
+  });
+
+  it("leaves a failed single failed even when its alter runs statements", async () => {
+    // 🔴 The case "did anything run?" gets wrong, and the reason the rule asks what the plan
+    // DESCRIBES instead. An unrelated field edit against the same incomplete table emits a real
+    // ALTER and runs it — plenty of statements, none of them anywhere near the index that never
+    // got created. Counting statements would clear the one durable record that something is wrong.
+    const { sql, written } = await runUpdate(
+      {
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "subtitle", type: "text" },
+        ],
+      },
+      { existing: existingSingle({ migrationStatus: "failed" }) }
+    );
+
+    expect(sql, "the alter really did run").toMatch(/ALTER TABLE/i);
+    expect(written?.migrationStatus).toBe("failed");
+  });
+
+  it("clears a failed single when the save rebuilds the whole table", async () => {
+    // The control, and the case the rule must NOT block: the table is absent, so the plan renders
+    // it from the desired spec in full — every column, index and junction table. Reaching the end
+    // of that does mean the schema is whole, which is what makes the repair recordable at all.
+    // Without this, a rule that simply never cleared `failed` would satisfy both cases above.
+    const { sql, written } = await runUpdate(
+      { fields: [{ name: "heading", type: "text" }] },
+      {
+        existing: existingSingle({ migrationStatus: "failed" }),
+        mainTableExists: false,
+      }
+    );
+
+    expect(sql).toMatch(/CREATE TABLE/i);
+    expect(written?.migrationStatus).toBe("applied");
   });
 
   it("records a database failure rather than raising it, once a statement has run", async () => {

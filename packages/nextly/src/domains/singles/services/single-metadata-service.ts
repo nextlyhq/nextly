@@ -172,6 +172,15 @@ interface UpdateDdlPlan {
   /** The field list the table holds now. The companion reconcile diffs against it. */
   previousFields: FieldDefinition[];
   /**
+   * Whether the statements describe the WHOLE table rather than a change to it.
+   *
+   * Only a plan that rebuilds the table from the desired spec re-establishes every artifact it
+   * needs — the columns, the indexes, the junction tables. An ALTER describes a delta and says
+   * nothing about anything it does not mention, which is why it cannot vouch for a table whose
+   * create failed part way.
+   */
+  describesWholeTable: boolean;
+  /**
    * Whether this plan owns `migration_status`.
    *
    * A field change does: the column records how far the schema change got, and an app with no
@@ -380,6 +389,7 @@ export class SingleMetadataService {
         migrationSQL: "",
         fields: previousFields,
         previousFields,
+        describesWholeTable: false,
         ownsMigrationStatus: false,
       };
     }
@@ -401,6 +411,7 @@ export class SingleMetadataService {
         migrationSQL: "",
         fields,
         previousFields,
+        describesWholeTable: false,
         ownsMigrationStatus: true,
       };
     }
@@ -420,6 +431,9 @@ export class SingleMetadataService {
         }),
         fields,
         previousFields,
+        // The table is absent, so this renders it in full: every column, index and junction table
+        // the desired spec asks for.
+        describesWholeTable: true,
         ownsMigrationStatus: true,
       };
     }
@@ -453,6 +467,7 @@ export class SingleMetadataService {
       ),
       fields,
       previousFields,
+      describesWholeTable: false,
       ownsMigrationStatus: true,
     };
   }
@@ -561,20 +576,11 @@ export class SingleMetadataService {
       return plan.ownsMigrationStatus ? "pending" : undefined;
     }
 
-    // How many statements actually reached the database, which is NOT the same question as
-    // whether `migrationSQL` is a non-empty string: a diff with no operations still renders a
-    // header comment. What this apply may claim about the main table afterwards depends on the
-    // former.
-    let statementsRun = 0;
-
     try {
       if (plan.migrationSQL) {
         // The shared runner, not a private copy: it owns both the splitting rule and the tolerance
         // that makes re-running over half-applied schema the repair case rather than a dead end.
-        statementsRun = await applyMigrationStatements(
-          adapter,
-          plan.migrationSQL
-        );
+        await applyMigrationStatements(adapter, plan.migrationSQL);
       }
 
       // Observed, not assumed, and it covers the rebuild case as well as the alter: a plan that
@@ -619,15 +625,24 @@ export class SingleMetadataService {
       // in the same way it was before the save, and the lazy rebuild can still correct it.
       await this.registerUpdatedRuntimeSchema(input, plan, adapter);
 
-      // A plan that rendered no main-table statements never touched the main table, so it cannot
-      // vouch for one. A create that got its `CREATE TABLE` through and then failed on an index or
-      // a junction table leaves the table PRESENT but incomplete; re-saving unchanged fields takes
-      // the alter branch, emits nothing, and finds the table there. Confirming existence is not
-      // confirming the schema, so the durable verdict stands until something actually repairs it.
-      if (statementsRun === 0 && input.existing.migrationStatus === "failed") {
+      // 🔴 Only a plan that describes the WHOLE table may clear a durable `failed`.
+      //
+      // A create that got its `CREATE TABLE` through and then failed on an index or a junction
+      // table leaves the table PRESENT but incomplete. Every later save takes the alter branch,
+      // and an ALTER describes a delta: it re-establishes nothing it does not mention, so an
+      // unrelated field edit can run plenty of statements without going anywhere near the missing
+      // artifact. Neither "the table exists" nor "something ran" is evidence the schema is whole,
+      // and the durable verdict is the only record that it is not.
+      //
+      // The rebuild branch is the exception because it renders the table from the desired spec in
+      // full, so reaching the end of it does mean every artifact was asked for.
+      if (
+        input.existing.migrationStatus === "failed" &&
+        !plan.describesWholeTable
+      ) {
         this.logger.warn(
-          `[Singles] "${tableName}" is recorded as a failed migration and this save ran no ` +
-            `statements against it, so its status is left as failed`
+          `[Singles] "${tableName}" is recorded as a failed migration and this save only ` +
+            `describes a change to it, so its status is left as failed`
         );
         return "failed";
       }
