@@ -74,9 +74,9 @@ describe("the omission this exists for", () => {
   });
 
   it("catches the one-package gap a new group member leaves", () => {
-    // The exact shape reviewers caught twice: a frontmatter generated from the
-    // config BEFORE a package joined the group, so it is complete against the
-    // config it was written from and short against the current one.
+    // The shape a growing group produces: a frontmatter generated from the config
+    // BEFORE a package joined it, so it is complete against the config it was
+    // written from and short against the current one.
     const beforeBuilder = changeset([
       ["nextly", "patch"],
       ["@nextlyhq/ui", "patch"],

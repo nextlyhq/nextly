@@ -156,7 +156,12 @@ jobs:
           # the same filter `@changesets/read` applies. A `grep` here would be a
           # second answer, and it would differ from the release tooling on a
           # lowercase `readme.md` or a hidden `.template.md`.
-          touched="$(git diff --name-only --diff-filter=ACMR HEAD^1 HEAD -- '.changeset/*.md')"
+          #
+          # The pathspec excludes subdirectories because git matches `*` across
+          # `/` while `@changesets/read` lists `.changeset` non-recursively — so
+          # a file under `.changeset/archive/` is something the release never
+          # reads, and checking it would fail a pull request over a note.
+          touched="$(git diff --name-only --diff-filter=ACMR HEAD^1 HEAD -- '.changeset/*.md' ':(exclude).changeset/*/**')"
           printf '%s\n' "$touched" | node scripts/release/check-changesets.mjs
 
       # Enforce the design-token theming contract in the admin + plugin packages
