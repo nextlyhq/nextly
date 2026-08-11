@@ -210,12 +210,12 @@ enforced already. The bound still applies when a **draft grant** is active,
 because that turns the bypass on for one request: a preview scoped to a single
 document must not populate drafts from every collection the page reaches.
 
-> **A route that both expands relations and bounds them is not cached.** The
-> targets your bound rejects are read against their own stored policies, and a
-> policy change writes no row — so no cache tag fires, and a cached page would
-> keep serving what the policy now hides. That is the same trade an enforced
-> read already makes. At `depth: 0`, the default, nothing is reached and the
-> read caches as before.
+> **Cached pages are point-in-time copies.** A public route pre-renders, so a
+> target whose read policy tightens after the build is not reflected until that
+> page is revalidated — and the same is true of the page's own content, bound or
+> not. Name the related collections in `tags` so a write to one busts the page,
+> and use `revalidate` as a time-based safety net for a policy change, which
+> writes no row and therefore busts no tag.
 
 **`createPublicContentRoute` defaults to `depth: 0`** — no relation expansion at
 all — so a route that never populates anything cannot be surprised by any of

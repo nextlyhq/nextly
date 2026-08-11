@@ -466,10 +466,15 @@ export async function resolveContent(
       // an explicit-format call can't reuse an inherited-shape cache entry.
       options.richTextFormat ?? "inherit",
       // The bound changes which related rows come back, so two routes that
-      // differ only in what they trust must not share an entry. "unbounded" is
-      // a distinct value from an empty set: one trusts everything it reaches,
-      // the other trusts nothing.
-      trustedNames === undefined ? "unbounded" : trustedNames.join(","),
+      // differ only in what they trust must not share an entry.
+      //
+      // JSON rather than a join, because the encoding has to be INJECTIVE over
+      // an unvalidated string array: `["a", "b"]` and `["a,b"]` join to the
+      // same text while trusting different sets, and any sentinel string is a
+      // legal collection slug that a one-element array could collide with.
+      // `JSON.stringify` distinguishes all three — `null` for an unbounded read
+      // cannot be produced by any array.
+      JSON.stringify(trustedNames ?? null),
     ],
     // Trusted reads don't depend on an access decision, so tag-only busting is
     // safe; an explicit positive `revalidate` adds a time-based safety net, and

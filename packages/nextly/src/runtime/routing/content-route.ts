@@ -171,9 +171,12 @@ export interface ContentRouteConfig<TNode> {
    *
    * Setting this on a public route enables expansion, bounded by
    * {@link ContentRouteConfig.trustedCollections}: a target outside that set is
-   * read as a visitor would read it, and no target's drafts are admitted. A
-   * public route that expands is also not cached, because the rejected targets
-   * are judged by stored policies that no content-tag bust can invalidate.
+   * read as a visitor would read it, and no target's drafts are admitted.
+   *
+   * A pre-rendered page is a point-in-time copy of everything it read, so a
+   * target's policy tightening after the build does not reach it — the same is
+   * true of the page's own content, and the remedy is the same: revalidate.
+   * Name the related collections in `tags` so a write to one busts this page.
    */
   depth?: number;
   /**
@@ -207,8 +210,12 @@ export interface ContentRouteConfig<TNode> {
    * Trusting a collection says its published content may be shown; nothing
    * here can widen a lifecycle.
    *
-   * Ignored by `createContentRoute`, which reads enforced already and has no
-   * bypass to bound.
+   * **`createContentRoute` uses it too, on preview reads.** Its ordinary reads
+   * are enforced, where the bound decides nothing — but a draft grant turns the
+   * bypass on for that request, and the bound is what keeps a preview scoped to
+   * what it previews rather than populating drafts from every collection the
+   * page reaches. Set it on a preview route for the same reason a public one
+   * does; leaving it out uses the route's own `collections`.
    */
   trustedCollections?: string[];
   /** A booted Nextly instance (defaults to `getNextly()`). */
@@ -527,12 +534,13 @@ function buildRoute<TNode>(
         try {
           result = await nextly.find({
             collection,
-            // The route's own depth, not the Direct API's default. This scan is
-            // a TRUSTED read on a public route, so an inherited expansion depth
-            // pulls related rows — draft ones included — through their nested
-            // hooks at build time, for a query that wants one column. It is the
-            // same posture the render and metadata reads carry; a scan that
-            // opted out of it would be the one read on the route that did not.
+            // The route's own depth, not the Direct API's default. This scan
+            // wants one column, so any expansion it inherits is work done for
+            // nothing — related rows pulled through their nested hooks at build
+            // time and discarded. It carries the route's depth rather than
+            // opting out so the scan reads under the same posture as the render
+            // and metadata reads; a scan that resolved a different set of paths
+            // than the route serves would be worse than a slow one.
             depth,
             // Lifecycle-aware publish scope — a no-op on status-less collections.
             status,
