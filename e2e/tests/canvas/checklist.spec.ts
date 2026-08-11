@@ -321,15 +321,27 @@ test("[informational] point 9: the library's Insert button adds a block", async 
 });
 
 /**
- * Marked failing because Escape does not cancel the drag: it leaves the editor.
+ * The editor survives Escape mid-drag. It did not always.
  *
- * Measured immediately after the keypress:
- *   {"url":".../admin/collections/pages","hasEditor":false}
+ * The admin shell used to treat Escape as "go back", and mid-drag that
+ * navigated out of the entry editor and unmounted the canvas, measured as
+ * `{"hasEditor":false}`. It no longer does, since the admin's keydown owners
+ * moved onto the shared shortcut manager.
  *
- * The admin shell treats Escape as "go back", so mid-drag it navigates out of
- * the entry editor and unmounts the canvas entirely. Point 12 asks for a
- * cancelled drag and an unchanged tree; what happens is an abandoned editing
- * session. The v2 canvas must claim Escape while a drag is in flight.
+ * Escape also cancels the drag itself, from a handler this repository does not
+ * own: `dragSensors` includes `@dnd-kit/dom`'s `PointerSensor`, which handles
+ * Escape for the duration of a pointer drag and ends the operation with
+ * `canceled: true`, and `EditorSurface.onDragEnd` returns early on that flag so
+ * no drop is planned.
+ *
+ * Two separate parties, then: the sensor cancels the drag, the admin stays put.
+ * This test covers the second, 12b covers the tree staying unmutated, and
+ * neither observes the sensor's own cancellation.
+ *
+ * The URL is asserted alongside the editor because navigation starts before the
+ * unmount lands: `navigateTo` changes the location synchronously while the
+ * router defers its event, so reading `hasEditor` on its own can still see the
+ * old DOM and pass while the route has already moved.
  */
 test("[acceptance] point 12a: Escape keeps the editor mounted", async ({
   page,
@@ -338,6 +350,8 @@ test("[acceptance] point 12a: Escape keeps the editor mounted", async ({
   const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
   const driver = createPocDriver(page);
   await driver.mountTree(fixture);
+
+  const urlBeforeEscape = page.url();
 
   await startLibraryDrag(driver);
   for (let step = 0; step < 30; step++) await driver.moveBy(0, 8);
@@ -349,11 +363,14 @@ test("[acceptance] point 12a: Escape keeps the editor mounted", async ({
     description: JSON.stringify(state),
   });
 
-  // The single known gap, isolated so nothing else rides on it.
-  test.fail(
-    true,
-    "the admin shell claims Escape and navigates out of the editor"
-  );
+  // Both, because either alone can pass while the other has already gone wrong:
+  // the editor can still be in the DOM one tick after navigation began, and a
+  // stable URL says nothing about whether the canvas unmounted for another
+  // reason.
+  expect(
+    state.url,
+    `Escape started navigating away: ${JSON.stringify(state)}`
+  ).toBe(urlBeforeEscape);
   expect(
     state.hasEditor,
     `Escape left the editor: ${JSON.stringify(state)}`
@@ -368,11 +385,11 @@ test("[acceptance] point 12b: Escape does not mutate the tree", async ({
   const driver = createPocDriver(page);
   await driver.mountTree(fixture);
 
-  // The STORED document is the subject, not the canvas. Escape currently
-  // navigates out of the editor, so a canvas read would be unavailable exactly
-  // on the path most likely to have persisted something — and skipping the
-  // check there would leave "navigated away AND saved a deletion" untested,
-  // which is the worst version of this defect.
+  // The STORED document is the subject, not the canvas. A canvas read depends on
+  // the editor still being mounted, so making it the only check would skip
+  // exactly the path most likely to have persisted something — leaving
+  // "navigated away AND saved a deletion" untested, the worst version of this
+  // defect. The stored read holds whatever the editor does.
   const before = await readStoredBlockIds(request, fixture.entryId);
   expect(before, "the seeded document must have blocks").not.toEqual([]);
 
@@ -403,11 +420,11 @@ test("[acceptance] point 12b: Escape does not mutate the tree", async ({
     before
   );
 
-  // The live tree is only readable while the editor is mounted, which is why
-  // the stored read above is unconditional rather than replaced. Escape
-  // currently navigates out, so this branch does not execute today; the
-  // annotation records that so a green result is not mistaken for one that
-  // exercised it.
+  // The live tree is only readable while the editor is mounted, which is why the
+  // stored read above is unconditional rather than replaced. Point 12a asserts
+  // the editor now survives Escape, so this branch is expected to run — the
+  // annotation records whether it actually did, so a green result that skipped
+  // it is still distinguishable from one that exercised it.
   test.info().annotations.push({
     type: "canvas-compared",
     description: String(hasEditor),
