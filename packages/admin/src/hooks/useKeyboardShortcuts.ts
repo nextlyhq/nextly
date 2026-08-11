@@ -3,21 +3,23 @@
 /**
  * Keyboard Shortcuts Hook
  *
- * Provides keyboard shortcut handling for the admin application.
- * Includes context-specific hooks for entry list and entry form pages.
+ * Registers admin shortcuts with the shared shortcut manager in `@nextlyhq/ui`, which owns the
+ * application's single `keydown` listener.
  *
- * Features:
- * - Callback ref pattern to avoid stale closures
- * - Automatic filtering of input elements
- * - Modifier key support (Ctrl, Shift, Alt, Meta)
- * - Conditional shortcut activation
- * - Repeat key prevention
+ * ## Why this is an adapter rather than a listener
+ *
+ * Each instance of this hook used to add its OWN listener to `document`. That is the arrangement
+ * the manager exists to remove: `stopPropagation()` does not stop other listeners on the same
+ * node, so when two of them wanted a key both ran, and which one "won" was decided by mount order
+ * — something no developer chose. Precedence now comes from the component tree.
+ *
+ * The exported hooks keep the shape they had, so callers did not change. What changed underneath
+ * is that a shortcut is a declaration handed to one owner rather than a listener of its own.
  *
  * @module hooks/useKeyboardShortcuts
- * @since 1.0.0
  */
 
-import { useEffect, useCallback, useRef, useLayoutEffect } from "react";
+import { useShortcuts, type ShortcutBinding } from "@nextlyhq/ui";
 
 // ============================================================================
 // Types
@@ -41,6 +43,15 @@ export interface Shortcut {
   description: string;
   /** Optional condition for enabling the shortcut */
   when?: () => boolean;
+  /**
+   * Whether this fires while the user is typing in a field. Defaults to false.
+   *
+   * The manager's own default is true for modifier-led bindings, which is wrong for a shortcut
+   * whose combination a text field already owns: `mod+a` means "select this text" inside an input
+   * and must not select every row in the list behind it. So the default here is the conservative
+   * one and each shortcut that genuinely belongs to the application opts in.
+   */
+  whenTyping?: boolean;
 }
 
 /**
@@ -49,8 +60,8 @@ export interface Shortcut {
 export interface UseKeyboardShortcutsOptions {
   /** Whether shortcuts are enabled (default: true) */
   enabled?: boolean;
-  /** Allow shortcuts to fire repeatedly when key is held (default: false) */
-  allowRepeat?: boolean;
+  /** Identifies the layer in diagnostics and in a shortcuts help panel. */
+  name?: string;
 }
 
 /**
@@ -90,59 +101,23 @@ export interface EntryFormShortcutsOptions {
 }
 
 // ============================================================================
-// Helper Functions
+// Translation
 // ============================================================================
 
 /**
- * Check if the event target is a text input element.
- * Shortcuts should not fire when the user is typing.
+ * Render a shortcut as the key spec the manager parses.
+ *
+ * `ctrl` becomes `mod`, not `ctrl`: this hook has always treated `ctrl: true` as "Control OR
+ * Command", which is exactly what `mod` resolves to per platform. Emitting a literal `ctrl` would
+ * stop every shortcut working on macOS.
  */
-function isTextInputElement(target: EventTarget | null): boolean {
-  if (!target || !(target instanceof HTMLElement)) {
-    return false;
-  }
-
-  const tagName = target.tagName.toUpperCase();
-
-  // Check for input fields (except buttons and checkboxes)
-  if (tagName === "INPUT") {
-    const inputType = (target as HTMLInputElement).type?.toLowerCase();
-    const nonTextInputTypes = [
-      "button",
-      "submit",
-      "reset",
-      "checkbox",
-      "radio",
-      "file",
-      "image",
-      "hidden",
-    ];
-    return !nonTextInputTypes.includes(inputType);
-  }
-
-  // Check for textarea and contentEditable
-  if (tagName === "TEXTAREA") {
-    return true;
-  }
-
-  if (target.isContentEditable) {
-    return true;
-  }
-
-  return false;
-}
-
-/**
- * Check if the key matches, handling case-insensitivity for letter keys.
- */
-function keyMatches(eventKey: string, shortcutKey: string): boolean {
-  // Handle special keys exactly
-  if (shortcutKey.length > 1) {
-    return eventKey === shortcutKey;
-  }
-
-  // Handle letter keys case-insensitively
-  return eventKey.toLowerCase() === shortcutKey.toLowerCase();
+export function toKeySpec(shortcut: Shortcut): string {
+  const parts: string[] = [];
+  if (shortcut.ctrl) parts.push("mod");
+  if (shortcut.alt) parts.push("alt");
+  if (shortcut.shift) parts.push("shift");
+  parts.push(shortcut.key);
+  return parts.join("+");
 }
 
 // ============================================================================
@@ -152,103 +127,38 @@ function keyMatches(eventKey: string, shortcutKey: string): boolean {
 /**
  * Hook for registering and handling keyboard shortcuts.
  *
- * Uses the callback ref pattern to avoid stale closure issues without
- * requiring consumers to memoize their callbacks.
+ * Bindings are rebuilt on every render and handed to the manager, which is what keeps their
+ * closures fresh — a caller does not need to memoize its callbacks or hold values in refs.
  *
  * @param shortcuts - Array of shortcut configurations
  * @param options - Hook options
  *
  * @example
  * ```tsx
- * useKeyboardShortcuts([
- *   {
- *     key: "s",
- *     ctrl: true,
- *     action: handleSave,
- *     description: "Save entry",
- *   },
- *   {
- *     key: "Escape",
- *     action: handleCancel,
- *     description: "Cancel and go back",
- *   },
- * ]);
+ * useKeyboardShortcuts(
+ *   [
+ *     { key: "s", ctrl: true, action: handleSave, description: "Save entry" },
+ *     { key: "Escape", action: handleCancel, description: "Cancel and go back" },
+ *   ],
+ *   { name: "entry-form" }
+ * );
  * ```
  */
 export function useKeyboardShortcuts(
   shortcuts: Shortcut[],
   options: UseKeyboardShortcutsOptions = {}
 ): void {
-  const { enabled = true, allowRepeat = false } = options;
+  const { enabled = true, name = "admin" } = options;
 
-  // Use callback ref pattern to always have fresh references
-  const shortcutsRef = useRef(shortcuts);
-  useLayoutEffect(() => {
-    shortcutsRef.current = shortcuts;
-  });
+  const bindings: ShortcutBinding[] = shortcuts.map(shortcut => ({
+    keys: toKeySpec(shortcut),
+    description: shortcut.description,
+    run: shortcut.action,
+    when: shortcut.when,
+    whenTyping: shortcut.whenTyping ?? false,
+  }));
 
-  const handleKeyDown = useCallback(
-    (event: KeyboardEvent) => {
-      // Don't trigger shortcuts when disabled
-      if (!enabled) {
-        return;
-      }
-
-      // Don't trigger shortcuts when typing in text inputs
-      if (isTextInputElement(event.target)) {
-        return;
-      }
-
-      // Don't trigger on repeated key events (key held down) unless allowed
-      if (event.repeat && !allowRepeat) {
-        return;
-      }
-
-      const currentShortcuts = shortcutsRef.current;
-
-      for (const shortcut of currentShortcuts) {
-        // Check key match
-        if (!keyMatches(event.key, shortcut.key)) {
-          continue;
-        }
-
-        // Check modifier keys
-        // Support both Ctrl and Cmd (Meta) for cross-platform compatibility
-        const ctrlMatch = shortcut.ctrl
-          ? event.ctrlKey || event.metaKey
-          : !event.ctrlKey && !event.metaKey;
-        const shiftMatch = !!shortcut.shift === event.shiftKey;
-        const altMatch = !!shortcut.alt === event.altKey;
-
-        if (!ctrlMatch || !shiftMatch || !altMatch) {
-          continue;
-        }
-
-        // Check conditional activation
-        if (shortcut.when && !shortcut.when()) {
-          continue;
-        }
-
-        // All conditions met - execute the action
-        event.preventDefault();
-        event.stopPropagation();
-        shortcut.action();
-        return;
-      }
-    },
-    [enabled, allowRepeat]
-  );
-
-  useEffect(() => {
-    if (!enabled) {
-      return;
-    }
-
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [handleKeyDown, enabled]);
+  useShortcuts(bindings, { name, enabled });
 }
 
 // ============================================================================
@@ -263,21 +173,8 @@ export function useKeyboardShortcuts(
  * - /: Focus search
  * - Ctrl+A: Select all entries
  * - Delete: Delete selected entries (when has selection)
- * - ?: Show keyboard shortcuts help
  *
  * @param options - Entry list shortcut options
- *
- * @example
- * ```tsx
- * useEntryListShortcuts({
- *   onNew: () => navigate("/create"),
- *   onSearch: () => searchInputRef.current?.focus(),
- *   onSelectAll: () => table.toggleAllRowsSelected(true),
- *   onDelete: () => setDeleteDialogOpen(true),
- *   onShowHelp: () => setHelpOpen(true),
- *   hasSelection: selectedRows.length > 0,
- * });
- * ```
  */
 export function useEntryListShortcuts({
   onNew,
@@ -287,12 +184,9 @@ export function useEntryListShortcuts({
   hasSelection,
   enabled = true,
 }: EntryListShortcutsOptions): void {
-  // Store hasSelection in ref to avoid stale closure
-  const hasSelectionRef = useRef(hasSelection);
-  useLayoutEffect(() => {
-    hasSelectionRef.current = hasSelection;
-  });
-
+  // Read directly rather than through refs. The bindings are rebuilt each render and handed to
+  // the manager, so `hasSelection` is already the current value by the time `when` runs; the refs
+  // this hook used to keep existed only because a long-lived listener captured its closure once.
   const shortcuts: Shortcut[] = [
     {
       key: "n",
@@ -306,6 +200,8 @@ export function useEntryListShortcuts({
       description: "Focus search",
     },
     {
+      // Deliberately NOT `whenTyping`. Inside a text field this combination selects the text, and
+      // taking it to select every row would break editing in the field the user is looking at.
       key: "a",
       ctrl: true,
       action: onSelectAll,
@@ -315,11 +211,11 @@ export function useEntryListShortcuts({
       key: "Delete",
       action: onDelete,
       description: "Delete selected entries",
-      when: () => hasSelectionRef.current,
+      when: () => hasSelection,
     },
   ];
 
-  useKeyboardShortcuts(shortcuts, { enabled });
+  useKeyboardShortcuts(shortcuts, { enabled, name: "entry-list" });
 }
 
 /**
@@ -328,20 +224,8 @@ export function useEntryListShortcuts({
  * Shortcuts:
  * - Ctrl+S: Save entry (when form is dirty and not submitting)
  * - Escape: Cancel and go back
- * - ?: Show keyboard shortcuts help
  *
  * @param options - Entry form shortcut options
- *
- * @example
- * ```tsx
- * useEntryFormShortcuts({
- *   onSave: form.handleSubmit(onSubmit),
- *   onCancel: () => navigate(-1),
- *   onShowHelp: () => setHelpOpen(true),
- *   isDirty: form.formState.isDirty,
- *   isSubmitting: form.formState.isSubmitting,
- * });
- * ```
  */
 export function useEntryFormShortcuts({
   onSave,
@@ -350,29 +234,27 @@ export function useEntryFormShortcuts({
   isSubmitting = false,
   enabled = true,
 }: EntryFormShortcutsOptions): void {
-  // Store state values in refs to avoid stale closures
-  const isDirtyRef = useRef(isDirty);
-  const isSubmittingRef = useRef(isSubmitting);
-
-  useLayoutEffect(() => {
-    isDirtyRef.current = isDirty;
-    isSubmittingRef.current = isSubmitting;
-  });
-
   const shortcuts: Shortcut[] = [
     {
       key: "s",
       ctrl: true,
       action: onSave,
       description: "Save entry",
-      when: () => isDirtyRef.current && !isSubmittingRef.current,
+      when: () => isDirty && !isSubmitting,
+      // The one shortcut that fires mid-sentence. Save is the command a person reaches for
+      // WITHOUT leaving the field they are editing, and refusing it there is the behaviour people
+      // report as the shortcut being broken.
+      whenTyping: true,
     },
     {
+      // Escape stays out of fields: it is how a menu, a popover or a composition session is
+      // dismissed, and cancelling the whole form out from under one of those is not what the
+      // keystroke meant.
       key: "Escape",
       action: onCancel,
       description: "Cancel and go back",
     },
   ];
 
-  useKeyboardShortcuts(shortcuts, { enabled });
+  useKeyboardShortcuts(shortcuts, { enabled, name: "entry-form" });
 }

@@ -537,7 +537,14 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
             const className = cn(
               "flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative focus:outline-none",
               isSelected
-                ? "bg-muted text-sidebar-accent-foreground"
+                ? // `sidebar-accent` rather than `muted`: it is the surface
+                  // `sidebar-accent-foreground` is declared against. Pairing
+                  // the sidebar's ink with a surface from another scale is a
+                  // combination no theme declares, so the contrast suite --
+                  // which asserts each token against its declared partner --
+                  // never checks it, and it goes unreadable in any theme that
+                  // does not happen to survive the mismatch.
+                  "bg-sidebar-accent text-sidebar-accent-foreground"
                 : "text-muted-foreground hover-unified"
             );
 

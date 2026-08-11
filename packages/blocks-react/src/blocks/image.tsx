@@ -12,7 +12,7 @@
  *
  * @module blocks/image
  */
-import { defineBlock } from "@nextlyhq/blocks-engine";
+import { defineBlock, isFetchableUrl } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
@@ -41,15 +41,46 @@ export async function renderImage({
   props,
   className,
   ctx,
+  hostPolicy,
 }: BlockRenderArgs<ImageProps>): Promise<ReactElement | null> {
   const mediaId = text(props.mediaId);
   // A resolver that throws must not take the page with it: media lives behind
   // a network call for a signed-URL host, and one unreachable image is not a
   // reason to lose the article around it.
-  const resolved =
+  const record =
     mediaId === "" ? null : await ctx.resolveMedia(mediaId).catch(() => null);
 
-  const src = resolved?.url ?? url(props.src);
+  // A candidate has to clear BOTH filters, and both are asked before the two are
+  // chosen between rather than after.
+  //
+  // Both, because they refuse different things: the scheme filter refuses a
+  // value that could execute, the host list refuses one this site will not fetch
+  // from. A resolver is trusted code, but the value it returns came out of a
+  // media record a person filled in, so it is input in the same sense the typed
+  // prop is — checking one position of that pair and not the other lets a value
+  // through unfiltered.
+  //
+  // Before, because selecting first and filtering after means a library image
+  // the site will not load beats a perfectly good typed URL and then takes the
+  // whole block down with it: the author is left with nothing over a setting
+  // they cannot see, while the fallback they wrote sits unused. Filtering first
+  // renders the first candidate actually allowed, which is what a fallback is
+  // for and what the link-preview path does with the same pair.
+  const patterns = hostPolicy?.remotePatterns;
+  const fetchable = (value: unknown): string | undefined => {
+    const safe = url(value);
+    if (safe === undefined) return undefined;
+    return patterns === undefined || isFetchableUrl(safe, patterns)
+      ? safe
+      : undefined;
+  };
+
+  // A record whose url either filter refused is dropped WHOLE, not just for its
+  // url. Its alt text and intrinsic size describe the asset that was refused, so
+  // keeping them beside the fallback announces one image to a screen reader
+  // while reserving the other one's space.
+  const usable = fetchable(record?.url) === undefined ? null : record;
+  const src = fetchable(usable?.url) ?? fetchable(props.src);
   // Nothing to show. An `<img>` with no `src` still requests the current page
   // in some browsers, so render nothing rather than a broken element.
   if (src === undefined) return null;
@@ -71,7 +102,7 @@ export async function renderImage({
     ? ""
     : isAuthoredText(props.alt)
       ? text(props.alt)
-      : (resolved?.alt ?? "");
+      : (usable?.alt ?? "");
   const caption = text(props.caption);
 
   const image = (
@@ -82,8 +113,8 @@ export async function renderImage({
       loading={oneOf(props.loading, IMAGE_LOADING, "lazy")}
       // Intrinsic dimensions reserve the space before the file arrives, which
       // is what stops the text below it jumping when it loads.
-      {...(resolved?.width === undefined ? {} : { width: resolved.width })}
-      {...(resolved?.height === undefined ? {} : { height: resolved.height })}
+      {...(usable?.width === undefined ? {} : { width: usable.width })}
+      {...(usable?.height === undefined ? {} : { height: usable.height })}
       {...(decorative ? { role: "presentation" } : {})}
     />
   );

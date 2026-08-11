@@ -15,18 +15,21 @@
  */
 import {
   deriveSeoFromDocument,
+  isFetchableUrl,
   DOCUMENT_FORMAT_VERSION,
 } from "@nextlyhq/blocks-engine";
 import type {
   BlockDocument,
   BlockSeoContribution,
   DocumentLimits,
+  RemotePatternInput,
   SeoImageCandidate,
   StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 import type { Metadata } from "next";
 import {
   createContentRoute,
+  createPublicContentRoute,
   getNextly,
   nextlyTags,
   slugToStaticParam,
@@ -34,6 +37,7 @@ import {
 import type {
   ContentEntry,
   ContentRoute,
+  StaticContentRoute,
   ContentRouteConfig,
   NextlyContentReader,
   RenderContext,
@@ -41,6 +45,7 @@ import type {
 import type { ReactElement, ReactNode } from "react";
 import { createElement } from "react";
 
+import { url } from "./blocks/props";
 import { createStandaloneContext } from "./context";
 import type {
   BlockHostPolicy,
@@ -312,7 +317,18 @@ async function derivePageSeo(
   resolveMedia: (id: string) => Promise<ResolvedMedia | null>,
   slug: string,
   limits: DocumentLimits | undefined,
-  styleContext: StyleCompileContext | undefined
+  styleContext: StyleCompileContext | undefined,
+  /**
+   * The host's fetch list, applied to the preview image exactly as the renderer
+   * applies it to the picture on the page.
+   *
+   * A link preview is a THIRD fetching channel, and the easiest one to forget:
+   * the image never appears in the document's markup, so a page that correctly
+   * refuses to render an unlisted host would still publish that host in its
+   * Open Graph tags, where every crawler and chat client that unfurls the link
+   * then fetches it.
+   */
+  remotePatterns: readonly RemotePatternInput[] | undefined
 ): Promise<DerivedPageSeo> {
   const resolver = blocks ?? registeredBlocks();
   // Spread rather than assigned, so an unaddressable slug OMITS the key instead
@@ -340,7 +356,11 @@ async function derivePageSeo(
     type => resolver.get(type),
     isUnconditional
   );
-  const image = await firstUsableImage(imageCandidates, resolveMedia);
+  const image = await firstUsableImage(
+    imageCandidates,
+    resolveMedia,
+    remotePatterns
+  );
   return image === undefined
     ? { ...text, ...canonical }
     : { ...text, ...canonical, image };
@@ -426,9 +446,44 @@ function usableMedia(media: ResolvedMedia | null): boolean {
 
 async function firstUsableImage(
   candidates: SeoImageCandidate[] | undefined,
-  resolveMedia: (id: string) => Promise<ResolvedMedia | null>
+  resolveMedia: (id: string) => Promise<ResolvedMedia | null>,
+  remotePatterns: readonly RemotePatternInput[] | undefined
 ): Promise<string | undefined> {
-  const list = candidates ?? [];
+  // A candidate the host would not fetch is not usable, whichever route
+  // produced it: a URL written on the block and a URL a media record resolved
+  // to are the same kind of value here, exactly as they are in `core/image`.
+  // BOTH filters, in the order the renderer applies them. The host list alone
+  // is not the whole rule: a resolver can return `javascript:alert(1)` from a
+  // media record a person filled in, and a site with no `remotePatterns` would
+  // then publish it as the link preview while the page correctly refuses to
+  // render it. `url()` is the same scheme guard every block prop passes through.
+  // Returns the value as the guard NORMALISED it, not merely whether it passed.
+  // `url()` trims, and the renderer publishes the trimmed form — so answering
+  // yes/no here and then emitting the original would put a different string in
+  // the link preview than in the page, which is the disagreement this filter was
+  // added to remove.
+  const usable = (value: string): string | undefined => {
+    const safe = url(value);
+    if (safe === undefined) return undefined;
+    return remotePatterns === undefined || isFetchableUrl(safe, remotePatterns)
+      ? safe
+      : undefined;
+  };
+  // A refused direct URL is removed from the LIST rather than rejected where it
+  // is reached, so scanning simply continues to the next candidate in document
+  // order. Rejecting it at the point of use would stop the search at a value
+  // that was never going to be published.
+  const list: SeoImageCandidate[] = [];
+  for (const candidate of candidates ?? []) {
+    if (candidate.kind !== "url") {
+      list.push(candidate);
+      continue;
+    }
+    const safe = usable(candidate.value);
+    // Kept in its NORMALISED form, so the value that reaches the tag is the one
+    // the guard actually approved rather than the one it was handed.
+    if (safe !== undefined) list.push({ kind: "url", value: safe });
+  }
 
   for (let start = 0; start < list.length; start += MEDIA_LOOKUP_BATCH) {
     const batch = list.slice(start, start + MEDIA_LOOKUP_BATCH);
@@ -463,7 +518,12 @@ async function firstUsableImage(
     // took whichever finished first would describe a different picture.
     for (const lookup of pending) {
       const media = await lookup;
-      if (media !== null) return media.url;
+      // The resolved URL cannot be filtered up front, because nothing knows it
+      // until the record is read. A refused one falls through to the next
+      // candidate exactly as an unresolvable one does.
+      if (media === null) continue;
+      const safe = usable(media.url);
+      if (safe !== undefined) return safe;
     }
     if (direct !== -1) return batch[direct]?.value;
   }
@@ -646,6 +706,7 @@ function mediaResolver(
  */
 function entryPathResolver(
   config: BlocksPageConfig,
+  isPublic: boolean,
   reader: NextlyContentReader,
   budget: QueryBudget
 ): (collection: string, id: string) => Promise<string | null> {
@@ -670,7 +731,10 @@ function entryPathResolver(
   // slug this lookup has not found yet — so only the unconditional form
   // widens, and the conditional form stays on the safe published read.
   const alwaysDraft = config.draft === true;
-  const overrideAccess = alwaysDraft || (config.overrideAccess ?? false);
+  // The route's own posture, handed in: a public route reads trusted, so a
+  // reference lookup on that route must too, or a page resolves an href its
+  // own renderer would refuse.
+  const overrideAccess = alwaysDraft || isPublic;
   // An EXPLICIT status wins over draft widening, because that is the order
   // `createContentRoute` resolves in: it passes the configured status through
   // to `resolveContent`, where it beats the draft widening. Forcing `all`
@@ -838,27 +902,32 @@ function entryPathResolver(
  * Turn a collection of block documents into rendered pages.
  *
  * The composition `createContentRoute` was built to carry: it resolves a path
- * to an entry and owns `generateStaticParams`, `generateMetadata` and the
- * not-found decisions, and this fills in the render with the block renderer
- * over a context wired to the CMS.
+ * to an entry and owns `generateMetadata` and the not-found decisions, and this
+ * fills in the render with the block renderer over a context wired to the CMS.
  *
  * Wire the result into `app/[[...slug]]/page.tsx`:
  *
  * ```tsx
- * const { ContentPage, generateMetadata, generateStaticParams } =
+ * const { ContentPage, generateMetadata } =
  *   createBlocksPage({ collections: ["pages"], field: "content" });
  *
- * export { generateMetadata, generateStaticParams };
+ * export { generateMetadata };
  * export default ContentPage;
  * ```
+ *
+ * There is no `generateStaticParams` here, and its absence is the contract:
+ * access rules decide who may read, so the answer depends on the visitor and no
+ * path can be pre-rendered. For public content, {@link createPublicBlocksPage}
+ * reads trusted and returns one to export.
  *
  * Draft preview needs no argument here. `createContentRoute` owns the `draft`
  * decision and this passes it through untouched, so a preview arrives as an
  * ordinary entry that happens to be the pending one.
  */
-export function createBlocksPage(
-  config: BlocksPageConfig
-): ContentRoute<ReactElement> {
+function blocksRouteConfig(
+  config: BlocksPageConfig,
+  isPublic: boolean
+): ContentRouteConfig<ReactElement> {
   const {
     field,
     blocks,
@@ -876,7 +945,7 @@ export function createBlocksPage(
     ...routeConfig
   } = config;
 
-  return createContentRoute<ReactElement>({
+  return {
     ...routeConfig,
     // The page is tagged for the records its BLOCKS read, not only for the
     // collection it was resolved from. The media and entry-path resolvers read
@@ -909,7 +978,8 @@ export function createBlocksPage(
               ),
               context.slug,
               limits,
-              styleContext
+              styleContext,
+              config.hostPolicy?.remotePatterns
             );
             return metadata(entry, context, derived);
           },
@@ -933,6 +1003,7 @@ export function createBlocksPage(
       const resolveMedia = mediaResolver(config, readerFor(config), budget);
       const resolveEntryPath = entryPathResolver(
         config,
+        isPublic,
         readerFor(config),
         budget
       );
@@ -974,5 +1045,44 @@ export function createBlocksPage(
           : { hostPolicy: config.hostPolicy }),
       });
     },
-  });
+  };
 }
+
+/**
+ * A blocks page over ACCESS-ENFORCED content — the secure default.
+ *
+ * Returns no `generateStaticParams`, because an enforced route answers per
+ * visitor and has no set of paths to build. See
+ * {@link createContentRoute} for why offering one anyway is a defect rather
+ * than an unused convenience.
+ */
+export function createBlocksPage(
+  config: BlocksPageConfig
+): ContentRoute<ReactElement> {
+  return createContentRoute<ReactElement>(blocksRouteConfig(config, false));
+}
+
+/**
+ * A blocks page over PUBLIC content: trusted reads, cacheable, pre-renderable.
+ *
+ * Returns `generateStaticParams` for the route file to export.
+ */
+export function createPublicBlocksPage(
+  config: BlocksPageConfig
+): StaticContentRoute<ReactElement> {
+  return createPublicContentRoute<ReactElement>(
+    blocksRouteConfig(config, true)
+  );
+}
+
+/**
+ * `BlockSeoContribution` and `BlockSeoImage` are NOT re-exported here even
+ * though `DerivedPageSeo` extends the first and this entry's SEO derivation is
+ * their only consumer.
+ *
+ * They are exported from the package root instead, which resolves without the
+ * `next` and `nextly` peers this entry's declarations import. A caller of
+ * `createBlocksPage` can always reach the root; a block author on a standalone
+ * install could not reach this entry, and two import paths for one type costs
+ * more than the one path both audiences already have.
+ */

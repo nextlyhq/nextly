@@ -113,16 +113,40 @@ function pruneKnownPlaceholders(
       // for markup nobody receives. The SEO walk already refuses to descend
       // into them; this makes the tree itself say so, once, for every reader.
       const declared = resolver.get(node.type)?.slots ?? {};
+      const slotKeys = Object.keys(node.slots);
       let slotsChanged = false;
       const slots: Record<string, BlockNode[]> = {};
-      for (const [name, children] of Object.entries(node.slots)) {
-        if (!(name in declared)) {
-          slotsChanged = true;
-          continue;
-        }
+      // Iterated in DECLARATION order, not stored order. The renderer asks for
+      // its slots by calling `renderSlot` once per declaration, so declaration
+      // order is the order the page presents — and this tree is documented as
+      // the render-equivalent one. Emitting stored order instead leaves the
+      // tree's own key order describing a page nobody is served, and makes two
+      // documents that render identically compare as different.
+      for (const name of Object.keys(declared)) {
+        const children = node.slots[name];
+        // Declared but never stored. Left ABSENT rather than added as an empty
+        // array: this pass repairs what a reader would mis-render, and a slot
+        // with no children renders nothing whether the key is there or not.
+        // Adding it would rewrite every document that omits an optional slot.
+        if (children === undefined) continue;
         const next = walk(children);
         if (next !== children) slotsChanged = true;
         slots[name] = next;
+      }
+      // Undeclared slots are dropped by never being visited above, so the
+      // change is detected by comparing what survived against what was stored.
+      // Counting is enough: every surviving name came from `declared`, so an
+      // equal count means the same set.
+      if (Object.keys(slots).length !== Object.keys(node.slots).length) {
+        slotsChanged = true;
+      }
+      // A reorder is a change even when nothing was dropped or rewritten.
+      // Without this a stored order that merely DIFFERS from the declaration
+      // would compute the reordered object and then discard it.
+      else if (
+        Object.keys(slots).some((name, index) => name !== slotKeys[index])
+      ) {
+        slotsChanged = true;
       }
       if (slotsChanged) changed = true;
       kept.push(slotsChanged ? { ...node, slots } : node);

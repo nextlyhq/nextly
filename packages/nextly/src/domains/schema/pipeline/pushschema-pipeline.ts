@@ -25,6 +25,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
 
 import { getDialectTablesForPush } from "../../../database/index";
+import { NextlyError } from "../../../errors";
 import {
   getCachedSnapshot,
   getLiveSnapshot,
@@ -57,6 +58,7 @@ import {
 import { diffSnapshots } from "./diff/diff";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
 import type { Operation, NextlySchemaSnapshot } from "./diff/types";
+import { describePrecondition } from "./errors";
 // Index restore uses the all-dialect templates, not ddl-emitter/: that module
 // is the PostgreSQL fast path and throws for the dialect this exists for.
 import {
@@ -913,6 +915,11 @@ export class PushSchemaPipeline {
         try {
           await preResExecutor(tx, resolvedOps, dialect);
         } catch (err) {
+          // A refusal is not a failed statement. The pre-resolution phase can decline to start —
+          // when the stored values would not survive a conversion, for instance — and that answer
+          // carries the column, the reason and what to do about it. Wrapping it as a DDL failure
+          // replaces all of that with a generic message about a statement that never ran.
+          if (NextlyError.isValidation(err)) throw err;
           throw new DdlExecutionError(
             err instanceof Error ? err.message : String(err),
             err
@@ -1328,7 +1335,17 @@ export class PushSchemaPipeline {
       };
     } catch (err) {
       const code = this.classifyErrorCode(err);
-      const message = err instanceof Error ? err.message : String(err);
+      // A refused precondition carries its subject in the payload, not in the message: the
+      // validation factory sets a deliberately generic public message. Reading `err.message` here
+      // would report the correct CODE with no indication of which column, which is the half of the
+      // answer the operator cannot act on. Presentation comes from the shared describer so this
+      // result and `classifyError`'s cannot drift.
+      const described = NextlyError.isValidation(err)
+        ? describePrecondition(err)
+        : undefined;
+      const message =
+        described?.message ??
+        (err instanceof Error ? err.message : String(err));
       await this.deps.migrationJournal.recordEnd(journalId, {
         success: false,
         statementsExecuted: 0,
@@ -1354,8 +1371,8 @@ export class PushSchemaPipeline {
         renamesApplied: 0,
         error: {
           code,
-          message: err instanceof Error ? err.message : String(err),
-          details: err,
+          message,
+          details: described ? described.details : err,
         },
       };
     }
@@ -1555,6 +1572,8 @@ export class PushSchemaPipeline {
   }
 
   private classifyErrorCode(err: unknown): string {
+    // Before the DDL branch: nothing ran, and saying so is the whole value of the distinction.
+    if (NextlyError.isValidation(err)) return "PRECONDITION_FAILED";
     if (err instanceof PushSchemaError) return "PUSHSCHEMA_FAILED";
     if (err instanceof DdlExecutionError) return "DDL_EXECUTION_FAILED";
     // PromptDispatcher signals - distinguish "user said no" from "no TTY

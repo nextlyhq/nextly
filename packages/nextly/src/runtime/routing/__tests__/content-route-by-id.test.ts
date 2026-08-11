@@ -30,6 +30,8 @@ interface Row extends Record<string, unknown> {
   id: string;
   slug: string;
   status: string;
+  /** Stands for a stored read rule that an anonymous caller does not satisfy. */
+  restricted?: boolean;
 }
 
 function stubReader(rows: Row[]): {
@@ -51,6 +53,10 @@ function stubReader(rows: Row[]): {
       // than reproducible.
       const items = rows
         .filter(row => row.slug === slug)
+        // What an enforced read does: a row the caller cannot see is not
+        // returned. `overrideAccess` short-circuits that constraint, so a query
+        // carrying it sees restricted rows too.
+        .filter(row => args.overrideAccess === true || row.restricted !== true)
         .filter(row => args.status === "all" || row.status === "published")
         .sort((left, right) => left.id.localeCompare(right.id))
         .slice(0, 1);
@@ -135,6 +141,29 @@ describe("a preview grant that names an entry", () => {
 
     expect(entry.id).toBe("here");
     expect(entry._isWorkingDraft).toBeUndefined();
+  });
+
+  it("withdraws the widened trust when the grant does not answer this path", async () => {
+    // The grant names an entry that lives somewhere else, so the by-id read
+    // cannot answer `/a` and the resolver falls through to a published-only
+    // read. That fall-through inherits the trust the draft decision forced on,
+    // so it must give it back: the widening exists to reach the NAMED entry,
+    // and once the grant misses, a preview link is just an anonymous request.
+    // Leaving it on turns one document-scoped grant into a collection-wide
+    // read that ignores the collection's own access rules.
+    const { reader, calls } = stubReader([
+      { id: "granted", slug: "somewhere-else", status: "draft" },
+      { id: "members-only", slug: "a", status: "published", restricted: true },
+    ]);
+
+    await expect(
+      routeFor(reader, "granted").ContentPage(params)
+    ).rejects.toThrow();
+
+    // And the reason it was not served is the enforced read, not luck: the
+    // fall-through query must carry the caller's own access, not the grant's.
+    const fallThrough = calls.at(-1);
+    expect(fallThrough?.overrideAccess).toBe(false);
   });
 
   it("falls back to published when the grant names a deleted entry", async () => {

@@ -9,6 +9,7 @@
  * @packageDocumentation
  */
 
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
@@ -20,6 +21,7 @@ import type {
   Permission,
   Role,
   SingleDefinition,
+  UserContext,
 } from "../types/index";
 
 /**
@@ -58,6 +60,61 @@ export function directApiActor(
 ): RequestActor | undefined {
   const id = mergeConfig(defaultConfig, args).user?.id;
   return id ? { type: "user", id } : undefined;
+}
+
+/**
+ * Every field a service needs to decide whether this caller may see a row.
+ */
+export interface AccessOptions {
+  user?: UserContext;
+  overrideAccess?: boolean;
+  authenticatedScope?: AuthenticatedScope;
+}
+
+/**
+ * The access-bearing fields of a Direct API call, as one spreadable object.
+ *
+ * `user` says WHO is calling; `authenticatedScope` says what kind of caller and
+ * which grants the API KEY itself carries, which is what stops an update-only
+ * key from reading on the strength of its owner's permissions. The two travel
+ * together because a service that receives one without the other judges a
+ * scoped key by its owner — the exact leak this exists to close.
+ *
+ * Spread this rather than listing the fields inline: an operation that forwards
+ * `user` but not `authenticatedScope` compiles, runs, and silently authorizes
+ * the key as its owner. `access-options-seam.test.ts` fails the build if a
+ * namespace hand-writes them instead.
+ */
+export function accessOptions(config: DirectAPIConfig): AccessOptions {
+  return {
+    user: config.user,
+    overrideAccess: config.overrideAccess,
+    authenticatedScope: config.actor,
+  };
+}
+
+/**
+ * The same three fields, for one namespace operation calling another.
+ *
+ * A nested Direct API call re-enters `mergeConfig`, so anything the caller
+ * leaves out is filled from the instance defaults — and `overrideAccess`
+ * defaults to `true`. An operation that omits these does not inherit the
+ * caller's restrictions, it discards them: a key scoped to update a row could
+ * update it under its own grants and then read the result back with access
+ * checks off entirely, past field redaction it was never allowed to see.
+ *
+ * Distinct from `accessOptions` because the boundary is different. A service
+ * takes the caller's scope as `authenticatedScope`; a Direct API operation
+ * takes it as `actor` and translates it itself.
+ */
+export function callerAccess(
+  config: DirectAPIConfig
+): Pick<DirectAPIConfig, "user" | "overrideAccess" | "actor"> {
+  return {
+    user: config.user,
+    overrideAccess: config.overrideAccess,
+    actor: config.actor,
+  };
 }
 
 /**

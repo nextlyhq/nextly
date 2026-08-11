@@ -85,14 +85,25 @@ Everything else the barrel exports, including: `Accordion`, `Alert`, `AlertDialo
 `Avatar`, `Card`, `Collapsible`, `Command`, `ContextMenu` and its family, `Popover`,
 `Progress`, `ResizablePanelGroup`/`ResizablePanel`/`ResizableHandle`, `Separator`,
 `Skeleton`, `Slider`, `Spinner`, `Table` and its family, `TableSearch`, `TableSkeleton`,
-`TreeView`, the table state components, the layout primitives (`Stack`, `Grid`, `Stat`) and
-`Toaster`.
+`TreeView`, the table state components, the layout primitives (`Stack`, `Grid`, `Stat`),
+`Toaster` and the shortcut manager (`ShortcutProvider`, `ShortcutScope`, `useShortcuts`,
+`useShortcutManager`, `useActiveShortcuts`, `createShortcutManager`, `parseKeys`).
 
 `Slider` (with `SliderThumbProps`) joins them for the inspector: a bounded numeric property — opacity, blur radius,
 letter spacing, a colour's alpha — is the single most repeated control in an editing surface,
 and a hand-rolled one gets pointer capture, step rounding and the per-thumb ARIA pattern wrong
 quietly. Its `value` is an array even for one thumb, which is what makes a range slider the
 same component rather than a second one.
+
+The shortcut manager is the third editor-shell primitive, and the one that cannot live in a
+plugin at all: its whole purpose is to be the only listener, so a plugin shipping its own copy
+would recreate the ambiguity it exists to remove. It is a peer dependency of correctness for
+any surface with a keyboard grammar.
+
+Single-listener behaviour is a property a surface OPTS INTO by registering through the manager.
+Existing `document` and `window` handlers keep working and keep competing with each other until
+they adopt it; the manager stands down for a key another owner has already claimed, but it
+cannot arbitrate between two listeners that never told it they exist.
 
 The context menu and the resizable split are the editor-shell primitives: an editor needs
 a right-click menu and draggable regions, and both belong in the kit rather than inside

@@ -2,7 +2,7 @@
 // `toast` comes from @nextlyhq/ui, not sonner directly: the Toaster mounted
 // below is ui's, and sonner keeps its queue in module state, so a toast
 // published into admin's own bundled copy would never reach that Toaster.
-import { PortalProvider, toast } from "@nextlyhq/ui";
+import { PortalProvider, ShortcutProvider, toast } from "@nextlyhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import type React from "react";
 import { Suspense, lazy, useEffect, useState } from "react";
@@ -160,7 +160,15 @@ const RootLayout = (): React.ReactElement => {
   return (
     <ThemeProvider>
       <RestartProvider>
-        <AdminAppContent />
+        {/*
+          The admin's one keydown listener, and the root of the shortcut layer stack. It sits
+          above everything so precedence follows the component tree: a dialog or an editor canvas
+          registers deeper and therefore outranks the shell without either naming a number the
+          other has to stay clear of.
+        */}
+        <ShortcutProvider>
+          <AdminAppContent />
+        </ShortcutProvider>
       </RestartProvider>
     </ThemeProvider>
   );

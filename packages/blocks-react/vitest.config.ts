@@ -17,5 +17,9 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    // Several suites assert against the BUILT declarations, and suites are
+    // collected in parallel — so the build has to finish before collection
+    // starts rather than inside any one suite's hook. See the setup file.
+    globalSetup: ["./vitest.global-setup.ts"],
   },
 });

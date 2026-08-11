@@ -198,9 +198,11 @@ export function FieldEditorSheet({
             </Button>
           ) : (
             <>
-              {/* Footer order is primary-action-first per Task 7-2 spec:
-                  the Add field / Apply button renders to the LEFT of Cancel,
-                  with the whole footer left-aligned. */}
+              {/* Primary action first: the Add field / Apply button renders to
+                  the LEFT of Cancel, with the whole footer left-aligned. The
+                  sheet's content is left-aligned too, so the confirming action
+                  sits where the eye already is and where tab order reaches it
+                  before the escape hatch. */}
               <Button onClick={() => onApply(draft)}>
                 {mode === "create" ? "Add field" : "Apply"}
               </Button>
@@ -225,9 +227,9 @@ export function FieldEditorSheet({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            {/* Solid emphasis fill so white on-color text stays AA in dark mode. */}
+            {/* The `-solid` emphasis fill, paired with an on-color ink that flips: `text-destructive-foreground` is white on the light fill (5.00:1) and BLACK on the lighter dark-mode fill (6.90:1). One ink cannot clear 4.5:1 on both, which is why the token flips rather than the fill compensating. */}
             <AlertDialogAction
-              className="bg-destructive-solid text-destructive-foreground hover:bg-destructive-700"
+              className="bg-destructive-solid text-destructive-foreground hover:bg-destructive-600"
               onClick={() => {
                 setConfirmDeleteOpen(false);
                 onDelete();

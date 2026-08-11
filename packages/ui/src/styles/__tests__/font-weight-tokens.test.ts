@@ -87,7 +87,16 @@ function ruleDeclarations(source: string, selector: string) {
   const out = new Map<string, string>();
   postcss.parse(source).walkRules(rule => {
     if (rule.selector !== selector) return;
-    rule.walkDecls(decl => out.set(decl.prop, decl.value.trim()));
+    // A statement body, not an expression one. postcss types this callback
+    // `(decl, index) => false | void` and treats a returned `false` as "stop
+    // walking", so returning the Map both fails the signature and makes the
+    // walk's continuation depend on the truthiness of a value that has nothing
+    // to do with it. It happens to be truthy, which is why nothing was wrong
+    // on screen -- and a check whose completeness rests on that is one edit
+    // away from silently reading a partial rule.
+    rule.walkDecls(decl => {
+      out.set(decl.prop, decl.value.trim());
+    });
   });
   return out;
 }

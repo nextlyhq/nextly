@@ -178,9 +178,12 @@ export function SidebarNavigationItem({
                       isActive={isSubActive}
                       className={cn(
                         "transition-none", // No transition
-                        isSubActive
-                          ? "bg-primary/5! text-sidebar-accent-foreground! font-medium hover:bg-primary/5! hover:text-sidebar-accent-foreground!"
-                          : "hover-unified"
+                        // Weight only: the button already fills an active row
+                        // with `sidebar-accent` and inks it with the matching
+                        // `sidebar-accent-foreground`. Overriding the fill here
+                        // while keeping that ink paints text against a surface
+                        // it was never declared for.
+                        isSubActive ? "font-medium" : "hover-unified"
                       )}
                     >
                       <Link href={sub.href}>

@@ -621,6 +621,47 @@ describe("createBlocksPage", () => {
     expect(seen?.image).toBe("/fallback.png");
   });
 
+  it("does not publish an executable url a media record resolved to", async () => {
+    // The link preview is a fetching surface of its own, and with no
+    // `remotePatterns` configured the scheme guard is the only thing between a
+    // media record a person filled in and the tag every crawler unfurls. The
+    // page already refuses to render this; metadata has to agree, and it has to
+    // carry on to the next candidate rather than stopping at the refused one.
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "1",
+          type: "core/image",
+          version: 1,
+          props: {
+            mediaId: "55555555-5555-4555-8555-555555555555",
+            src: "/safe-fallback.png",
+          },
+        },
+      ],
+    };
+    let seen: DerivedPageSeo | undefined;
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader({ slug: "about", content: page }),
+      blocks: coreResolver(),
+      resolveMedia: async () => ({ url: "javascript:alert(1)", alt: "bad" }),
+      metadata: (_e, _c, derived) => {
+        seen = derived;
+        return {};
+      },
+    });
+
+    await route.generateMetadata({ params: { slug: ["about"] } });
+
+    expect(seen?.image).not.toContain("javascript:");
+    // Carried on to the candidate that IS usable rather than giving up.
+    expect(seen?.image).toBe("/safe-fallback.png");
+  });
+
   it("treats a scheme-less relative src as a URL, not a media id", async () => {
     // `assets/hero.png` renders fine through the block, so sending it to the
     // media collection would miss and drop the preview image.

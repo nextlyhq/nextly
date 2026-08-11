@@ -1,5 +1,7 @@
 import { defineConfig } from "tsup";
 
+import { serverSafeBuildEntries } from "./scripts/published-entries.mjs";
+
 // Left to the consumer rather than bundled: React and Radix keep component
 // state and portals in module-level stores, so a second copy inside this
 // bundle would not share that state with the host app's copy. lucide-react,
@@ -27,19 +29,10 @@ export default defineConfig({
   // Named so the output stays flat: with plain paths tsup mirrors the source
   // tree from the common root and emits `dist/lib/utils.*`, which would not
   // match the exports map.
-  entry: {
-    // Builds with a "named and default exports together" warning, and that is
-    // the intended shape rather than an oversight. A preset is consumed as a
-    // value, so `require()` has to return it; CommonJS cannot express a
-    // default-only module without `module.exports =`, which makes the emitted
-    // declarations disagree with the runtime and trips attw's
-    // FalseExportDefault — a rule CI does NOT ignore. Silencing the warning
-    // with `output.exports` would change that shape back. See the export at the
-    // foot of the entry for the same reasoning beside the code.
-    "tailwind-preset": "src/tailwind-preset.ts",
-    utils: "src/lib/utils.ts",
-    color: "src/lib/color/index.ts",
-  },
+  // Read from the export-map derivation rather than declared here, so a subpath's source is
+  // stated once. When this config owned it and the surface snapshot kept a copy, retargeting an
+  // entry left the snapshot comparing the old barrel while the new one shipped unchecked.
+  entry: serverSafeBuildEntries(),
   format: ["esm", "cjs"],
   dts: true,
   clean: false,

@@ -409,3 +409,95 @@
   outline: 2px solid var(--nx-ring);
   outline-offset: 1px;
 }
+
+/* ------------------------------------------------- undeclared-slot repair */
+/*
+ * The bar sits between the toolbar and the three panes rather than inside the canvas column:
+ * the problem belongs to the document, not to one pane, and the 3-column grid would otherwise
+ * have to give up width to say so. `--nx-warning-foreground on --nx-warning` is a checked
+ * contrast pairing, so it holds in both modes without a hardcoded colour.
+ */
+.nx-pb-repair {
+  border-bottom: 1px solid var(--nx-border);
+  background: var(--nx-warning);
+  color: var(--nx-warning-foreground);
+}
+
+.nx-pb-repair-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+}
+
+.nx-pb-repair-text {
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.nx-pb-repair-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.nx-pb-repair-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.nx-pb-repair-dismiss:hover {
+  background: color-mix(in srgb, var(--nx-warning-foreground) 15%, transparent);
+}
+.nx-pb-repair-dismiss:focus-visible {
+  outline: 2px solid var(--nx-warning-foreground);
+  outline-offset: 1px;
+}
+
+/* The rows carry the admin's own surface so the themed buttons on them read normally. */
+.nx-pb-repair-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--nx-card);
+  color: var(--nx-card-foreground);
+  border-top: 1px solid var(--nx-border);
+  max-height: 220px;
+  overflow: auto;
+}
+
+.nx-pb-repair-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+}
+.nx-pb-repair-item + .nx-pb-repair-item {
+  border-top: 1px solid var(--nx-border-subtle);
+}
+
+.nx-pb-repair-item-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.nx-pb-repair-item-name {
+  font-weight: 600;
+}
+
+.nx-pb-repair-item-where {
+  color: var(--nx-muted-foreground);
+  margin-left: 6px;
+}

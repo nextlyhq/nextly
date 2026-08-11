@@ -20,7 +20,9 @@ export function MaintenancePage() {
         </div>
 
         {/* Badge */}
-        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium bg-warning-50 text-warning-700 mb-6 border border-warning-200/50">
+        {/* Dark counterparts, matching the Badge component's pairing: a pale
+            fill with darkened ink is only legible on a light page. */}
+        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium bg-warning-50 text-warning-700 dark:bg-warning-900 dark:text-warning-100 mb-6 border border-warning-200/50">
           <Settings className="h-3 w-3 animate-spin duration-[3000ms]" />
           Maintenance Mode
         </div>
