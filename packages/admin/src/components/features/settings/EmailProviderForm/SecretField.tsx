@@ -4,7 +4,7 @@ import { Input } from "@nextlyhq/ui";
 import { useRef, useState } from "react";
 import type { Control, FieldPath } from "react-hook-form";
 
-import { Eye, EyeOff } from "@admin/components/icons";
+import { Eye, EyeOff, X } from "@admin/components/icons";
 import {
   FormControl,
   FormField,
@@ -51,6 +51,7 @@ export function SecretField({
   control,
   disabled,
   storedSecret,
+  clearable,
 }: {
   label: string;
   placeholder?: string;
@@ -60,6 +61,13 @@ export function SecretField({
   disabled?: boolean;
   /** Whether the server returned a mask for this field — a credential exists. */
   storedSecret: boolean;
+  /**
+   * Whether removing the stored credential is something the field can express.
+   *
+   * False for a required credential, where an empty value is a validation
+   * error rather than an instruction to the server.
+   */
+  clearable?: boolean;
 }) {
   const [visible, setVisible] = useState(false);
   // Set by the first keystroke and never cleared while the form is open. After
@@ -84,9 +92,16 @@ export function SecretField({
         const isMaskedPlaceholder =
           storedSecret && !replaced && isMaskedSecret(currentValue);
 
+        // Offered only over a stored credential, since it is the stored one
+        // this removes. Once the field holds something typed, emptying it is
+        // already expressible with the keyboard.
+        const showClear = clearable === true && isMaskedPlaceholder;
+
         const helperText = isMaskedPlaceholder
           ? (description ? `${description} ` : "") +
-            "Existing secret is configured. Focus and type a new value to replace it."
+            (showClear
+              ? "Existing secret is configured. Focus and type a new value to replace it, or remove it."
+              : "Existing secret is configured. Focus and type a new value to replace it.")
           : description;
 
         // Blanked for TYPING, not for submitting. Focusing shows an empty box
@@ -117,7 +132,7 @@ export function SecretField({
                     type={visible ? "text" : "password"}
                     placeholder={placeholder}
                     autoComplete="off"
-                    className="pr-10"
+                    className={showClear ? "pr-20" : "pr-10"}
                     disabled={disabled}
                     value={displayValue}
                     onFocus={() => setEditing(true)}
@@ -133,6 +148,30 @@ export function SecretField({
                       field.onBlur();
                     }}
                   />
+                  {showClear && (
+                    <button
+                      type="button"
+                      className="absolute right-10 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-destructive transition-colors"
+                      disabled={disabled}
+                      onClick={() => {
+                        // The keyboard cannot express this. The field shows
+                        // itself as empty while the form holds the mask, so
+                        // Backspace over the displayed blank changes no value
+                        // and fires no `onChange` — leaving an operator who
+                        // wants the credential GONE with no gesture that says
+                        // so. This is that gesture.
+                        setReplaced(true);
+                        field.onChange("");
+                        // The button is about to stop rendering, so focus has
+                        // to be put somewhere deliberate rather than dropped
+                        // onto the document.
+                        inputRef.current?.focus();
+                      }}
+                      aria-label="Remove stored value"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
                   <button
                     type="button"
                     tabIndex={-1}

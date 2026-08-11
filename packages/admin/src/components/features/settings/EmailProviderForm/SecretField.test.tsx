@@ -21,9 +21,11 @@ import { SecretField } from "./SecretField";
 function Harness({
   initialValue,
   storedSecret,
+  clearable,
 }: {
   initialValue: string;
   storedSecret: boolean;
+  clearable?: boolean;
 }) {
   const form = useForm<ProviderFormValues>({
     defaultValues: {
@@ -45,6 +47,7 @@ function Harness({
           name="configuration.apiKey"
           label="API Key"
           storedSecret={storedSecret}
+          clearable={clearable}
         />
         {/* What the FORM holds, which is what a submit would carry — distinct
             from what the input displays while it is being edited. */}
@@ -155,5 +158,72 @@ describe("submitting without ever leaving the credential field", () => {
     await user.type(secretInput(), "a-new-credential");
 
     expect(currentFormValue()).toBe("a-new-credential");
+  });
+});
+
+describe("removing a stored credential rather than replacing it", () => {
+  it("puts an empty value in the form when the remove control is used", async () => {
+    // The field shows itself as empty while the form holds the mask, so
+    // Backspace over that blank changes no value and fires no `onChange`.
+    // Without a gesture of its own, an operator can replace a stored optional
+    // credential and never remove one.
+    const user = userEvent.setup();
+    render(<Harness initialValue={MASKED_SECRET} storedSecret clearable />);
+
+    await user.click(
+      screen.getByRole("button", { name: /remove stored value/i })
+    );
+
+    // An empty optional value is what the payload builder reads as a removal;
+    // the mask is what it reads as "leave this alone".
+    expect(currentFormValue()).toBe("");
+    expect(secretInput().value).toBe("");
+  });
+
+  it("proves the keyboard alone cannot do it", async () => {
+    // The control for the case above. If this ever starts passing, the remove
+    // control has stopped being the only route and the test above is no longer
+    // testing what it says.
+    const user = userEvent.setup();
+    render(<Harness initialValue={MASKED_SECRET} storedSecret clearable />);
+
+    await user.click(secretInput());
+    await user.keyboard("{Backspace}{Backspace}{Delete}");
+
+    expect(currentFormValue()).toBe(MASKED_SECRET);
+  });
+
+  it("is not offered for a credential that cannot be empty", () => {
+    // A required credential has no empty state to be put into, so an affordance
+    // for it would only ever produce a validation error.
+    render(<Harness initialValue={MASKED_SECRET} storedSecret />);
+
+    expect(
+      screen.queryByRole("button", { name: /remove stored value/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("is not offered when nothing is stored", () => {
+    render(<Harness initialValue="" storedSecret={false} clearable />);
+
+    expect(
+      screen.queryByRole("button", { name: /remove stored value/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("stops offering it once the credential has been removed", async () => {
+    // Focus would otherwise be dropped onto the document when the button it
+    // sits on stops rendering.
+    const user = userEvent.setup();
+    render(<Harness initialValue={MASKED_SECRET} storedSecret clearable />);
+
+    await user.click(
+      screen.getByRole("button", { name: /remove stored value/i })
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /remove stored value/i })
+    ).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(secretInput());
   });
 });

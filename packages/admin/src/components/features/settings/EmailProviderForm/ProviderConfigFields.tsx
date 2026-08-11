@@ -139,6 +139,10 @@ function ProviderConfigField({
         description={field.help}
         disabled={disabled}
         storedSecret={storedSecret}
+        // A required credential has no empty state to be put into: removing it
+        // is a validation error rather than an instruction, so the affordance
+        // that expresses removal is offered only where it can be carried out.
+        clearable={field.required !== true}
       />
     );
   }
