@@ -16,6 +16,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 import { publishedEntries } from "../../scripts/published-entries.mjs";
@@ -40,29 +41,47 @@ const PKG_ROOT = path.join(
 const ALLOWED_PACKAGES = new Set(["clsx", "tailwind-merge"]);
 
 /**
- * Strip comments before reading specifiers.
+ * Every module specifier a source names, read from the PARSED syntax tree.
  *
- * Doc comments here legitimately contain `import … from "@nextlyhq/ui/tailwind-preset"` as usage
- * examples, and matching the raw text reports them as real imports — which it did, naming a
- * package the entry does not actually reach.
+ * Parsed rather than matched, because the regex version had to strip comments first and that
+ * stripping fails OPEN: an unclosed comment marker inside a template literal swallows everything
+ * up to the next terminator, removing real imports rather than adding noise. It also reported a
+ * usage example inside a doc comment as a genuine reach. The tree carries no comments to confuse,
+ * and covers every form without one pattern per syntax — static, type-only, re-export, side-effect,
+ * dynamic import, require, and import-equals.
  */
-function stripComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
-}
+function specifiers(source: string, fileName: string): string[] {
+  const tree = ts.createSourceFile(
+    fileName,
+    source,
+    ts.ScriptTarget.Latest,
+    true
+  );
+  const found: string[] = [];
 
-/** Every specifier a module imports or re-exports, including type-only positions. */
-function specifiers(raw: string): string[] {
-  const source = stripComments(raw);
-  return [
-    ...source.matchAll(
-      /(?:^|\n)\s*(?:import|export)[\s\S]*?from\s*["']([^"']+)["']/g
-    ),
-    ...source.matchAll(/(?:^|\n)\s*import\s*["']([^"']+)["']/g),
-    ...source.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g),
-    ...source.matchAll(/\brequire\s*\(\s*["']([^"']+)["']\s*\)/g),
-  ].map(match => match[1]!);
+  const record = (node: ts.Node | undefined): void => {
+    if (node && ts.isStringLiteral(node)) found.push(node.text);
+  };
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      record(node.moduleSpecifier);
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference)
+    ) {
+      record(node.moduleReference.expression);
+    } else if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const isDynamicImport = callee.kind === ts.SyntaxKind.ImportKeyword;
+      const isRequire = ts.isIdentifier(callee) && callee.text === "require";
+      if (isDynamicImport || isRequire) record(node.arguments[0]);
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  visit(tree);
+  return found;
 }
 
 /** Resolve a relative specifier the way the bundler does, or `null` if it names a package. */
@@ -104,7 +123,7 @@ function reach(entry: string): {
     files.push(file);
 
     const source = readFileSync(file, "utf8");
-    for (const specifier of specifiers(source)) {
+    for (const specifier of specifiers(source, file)) {
       const local = resolveLocal(file, specifier);
       if (local) {
         queue.push(local);
@@ -119,6 +138,76 @@ function reach(entry: string): {
 const SERVER_SAFE = publishedEntries()
   .filter(entry => entry.serverSafe)
   .map(entry => [entry.subpath, path.join(PKG_ROOT, entry.source)] as const);
+
+describe("reading the specifiers a module names", () => {
+  const read = (source: string): string[] => specifiers(source, "probe.ts");
+
+  it("covers every import form, including the ones no single pattern catches", () => {
+    expect(
+      read(`
+        import a from "static";
+        import type { B } from "type-only";
+        import "side-effect";
+        export { c } from "re-export";
+        export * from "star";
+        const d = await import("dynamic");
+        const e = require("required");
+        import f = require("equals");
+      `).sort()
+    ).toEqual([
+      "dynamic",
+      "equals",
+      "re-export",
+      "required",
+      "side-effect",
+      "star",
+      "static",
+      "type-only",
+    ]);
+  });
+
+  it("does not report an example inside a doc comment", () => {
+    // The first version of this check did, because it matched raw text: the usage example in
+    // `tailwind-preset.ts` was reported as a package that entry reaches.
+    expect(
+      read(`
+        /**
+         * @example
+         * import uiPreset from "@nextlyhq/ui/tailwind-preset";
+         */
+        import { real } from "actually-imported";
+      `)
+    ).toEqual(["actually-imported"]);
+  });
+
+  it("still sees an import after a template holding an unclosed comment marker", () => {
+    // The reason this is parsed rather than matched, and the shape that matters. A non-greedy
+    // comment regex handles a CLOSED marker pair inside a template correctly, so that case proves
+    // nothing. An UNCLOSED one runs on to the next terminator anywhere in the file — the doc
+    // comment below — and deletes the import between them. That failure REMOVES evidence rather
+    // than adding noise, so the guard would pass while blind to everything the module imports.
+    expect(
+      read(
+        [
+          "const css = `a { /* width: 0 }`;",
+          'import { real } from "after-template";',
+          "/** A doc comment, whose terminator a regex would pair with the template's. */",
+        ].join("\n")
+      )
+    ).toEqual(["after-template"]);
+  });
+
+  it("is not confused by comment markers inside a string", () => {
+    expect(
+      read(
+        [
+          'const url = "//cdn.example.com/x";',
+          'import { real } from "after-string";',
+        ].join("\n")
+      )
+    ).toEqual(["after-string"]);
+  });
+});
 
 describe("what a server-safe entry point reaches", () => {
   it("has server-safe entries to check", () => {
