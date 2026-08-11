@@ -21,6 +21,7 @@ import type {
 
 import type { NextlyContext } from "./context";
 import {
+  accessOptions,
   buildMutationMessage,
   createErrorFromSingleResult,
   mergeConfig,
@@ -42,8 +43,7 @@ export async function findSingle<TSlug extends SingleSlug>(
     // field falls back to the default language, and a rule keyed on it sees
     // `undefined` when it is dropped here.
     fallbackLocale: config.fallbackLocale,
-    user: config.user,
-    overrideAccess: config.overrideAccess,
+    ...accessOptions(config),
     context: config.context,
   });
 
@@ -87,8 +87,7 @@ export async function updateSingle<TSlug extends SingleSlug>(
   const { result, warnings } = await collectingWarnings(() =>
     ctx.singleEntryService.update(args.slug, args.data, {
       locale: config.locale,
-      user: config.user,
-      overrideAccess: config.overrideAccess,
+      ...accessOptions(config),
       context: config.context,
       disableRevalidate: config.disableRevalidate,
     })
@@ -129,8 +128,7 @@ export async function findSingles(
         depth: config.depth,
         locale: config.locale,
         fallbackLocale: config.fallbackLocale,
-        user: config.user,
-        overrideAccess: config.overrideAccess,
+        ...accessOptions(config),
         context: config.context,
       });
 

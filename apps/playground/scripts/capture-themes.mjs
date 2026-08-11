@@ -131,9 +131,61 @@ const READY_TIMEOUT = 20_000;
  * for collections/users/builder would leave that corner of the frame stale
  * even though the table itself is ready.
  */
+/**
+ * The first name the dev seed gives its user (`scripts/seed.ts`: "Dev User").
+ *
+ * `WelcomeHeader` renders `getFirstName(user?.name)`, which is "there" when
+ * the user request failed. Waiting for THIS name is what separates a loaded
+ * dashboard from a failed one.
+ */
+const SEEDED_FIRST_NAME = "Dev";
+
+/**
+ * Text that can only be on the dashboard once its data has loaded, one entry
+ * per independent request.
+ *
+ * The widgets fetch separately and fail separately, each replacing its own
+ * skeleton with its own error panel, so proving one request succeeded proves
+ * nothing about the others. `Welcome, Dev` comes from the current-user
+ * request; `Posts` is a seeded collection rendered by `CollectionQuickLinks`
+ * from the dashboard stats, which is the request whose failure shows
+ * "Connection Error" in the captured frame.
+ */
+const DASHBOARD_EVIDENCE = [`Welcome, ${SEEDED_FIRST_NAME}`, "Posts"];
+
 const SCREEN_READY = {
   dashboard: async page => {
     await waitForNoSkeletons(page);
+    // A skeleton count of zero is not evidence of a loaded dashboard. When a
+    // request fails, widgets REPLACE their skeletons with an error state, so
+    // the count reaches zero either way and a failed dashboard is captured as
+    // though it were a good one. Every other screen here asserts something
+    // positive; this one did not, which made it the only route where a red
+    // screen could pass as evidence.
+    //
+    // The seeded user's NAME, not merely a greeting. `WelcomeHeader` falls
+    // back to "Welcome, there" when the user request fails, so a pattern that
+    // accepts any word accepts precisely the failure this check exists to
+    // reject -- it matched the error state as readily as the good one.
+    //
+    // Coupled to `scripts/seed.ts` on purpose: the greeting can only say this
+    // once that user has been fetched. If the seed's name changes, this fails
+    // loudly rather than quietly widening back to "any dashboard".
+    //
+    // One assertion per DATA FAMILY, because the widgets fail independently.
+    // The greeting covers the current-user request only; `CollectionQuickLinks`
+    // has its own request and its own error state ("Connection Error"), which
+    // also replaces a skeleton, so a dashboard could satisfy the greeting and
+    // still be captured with an error panel in it.
+    //
+    // Positive content rather than a list of error strings. Enumerating the
+    // failure copy means a widget that adds new copy escapes the list
+    // silently, and a check that quietly stops covering something is the
+    // failure mode this whole readiness map exists to avoid. A seeded
+    // collection name can only render once the stats request has succeeded.
+    for (const required of DASHBOARD_EVIDENCE) {
+      await waitForVisibleText(page, required);
+    }
   },
   collections: async page => {
     await waitForNoSkeletons(page);
@@ -234,7 +286,56 @@ if (onlyIds) {
   themes = themes.filter(t => wanted.has(t.id));
 }
 
-const browser = await chromium.launch();
+// Installing the `playwright` package does not install its browser, and the
+// repository's only `playwright install` instruction is scoped to the e2e
+// package. So on a fresh checkout the documented capture command died inside
+// Playwright with "Executable doesn't exist", which reads as a broken script
+// rather than a missing one-time setup step.
+//
+// Checked before launching so the message names the fix. `executablePath()`
+// resolves the path Playwright WOULD use without launching anything, so this
+// costs nothing when the browser is present.
+const chromiumPath = chromium.executablePath();
+if (!existsSync(chromiumPath)) {
+  throw new Error(
+    `capture-themes: Chromium is not installed. \`pnpm install\` fetches the ` +
+      `playwright package but not its browsers.\n\n` +
+      `  pnpm --filter playground exec playwright install chromium\n\n` +
+      `Expected it at: ${chromiumPath}`
+  );
+}
+
+// `pnpm install` installs the playwright PACKAGE, not its browsers, and the
+// only `playwright install` instruction in this repo is scoped to the e2e
+// package. So on a fresh checkout the documented capture command died with
+// Playwright's own "Executable doesn't exist" message, which names a browser
+// path and leaves the reader to work out that a separate provisioning step
+// exists and which package to run it from.
+//
+// Not auto-installed: that is a ~150MB download this script would trigger
+// without being asked. Naming the exact command is the useful half.
+let browser;
+try {
+  browser = await chromium.launch();
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  // ONLY the missing-executable case. Playwright prefixes every launch
+  // failure with `browserType.launch`, so matching that relabelled a missing
+  // host library or a sandbox denial as "Chromium is not installed" and sent
+  // the reader to reinstall a browser that was already there -- replacing a
+  // true error with a confident false one, which is worse than the raw
+  // message this was meant to improve on.
+  if (!message.includes("Executable doesn't exist")) throw error;
+  throw new Error(
+    `capture-themes: Chromium is not installed. \`pnpm install\` provides the ` +
+      `playwright package but not its browsers.\n\n` +
+      `  pnpm --filter playground exec playwright install chromium\n\n` +
+      `On a bare Linux host, add the system libraries too:\n\n` +
+      `  pnpm --filter playground exec playwright install --with-deps chromium\n\n` +
+      `Then re-run \`pnpm --filter playground theme:capture\`.\n\n` +
+      `Original error: ${message.split("\n")[0]}`
+  );
+}
 const context = await browser.newContext({
   viewport: { width: 1440, height: 900 },
 });
@@ -244,6 +345,43 @@ const page = await context.newPage();
 // every subsequent capture -- there is no login form to drive.
 await page.goto(`${BASE}/admin`);
 await page.waitForLoadState("load");
+
+// Hide the theme-lab switcher for the whole run. The admin layout mounts it
+// unconditionally and it is fixed at the maximum z-index, so every
+// full-viewport screenshot had it burned into the bottom-right corner --
+// covering the UI these captures exist to compare, in every artifact.
+//
+// `addInitScript` rather than a one-off style tag: the script drives client
+// navigations and reloads between themes, and a tag added to one document
+// does not survive them, which would leave the switcher back in later shots
+// while the early ones looked clean.
+await context.addInitScript(() => {
+  const hide = () => {
+    const style = document.createElement("style");
+    style.textContent = "[data-theme-lab-switcher]{display:none !important}";
+    document.head.appendChild(style);
+  };
+  if (document.head) hide();
+  else document.addEventListener("DOMContentLoaded", hide, { once: true });
+});
+await page.reload();
+await page.waitForLoadState("load");
+
+// A hidden control and an absent one look identical in a screenshot, and only
+// one of them means the rule landed. Fail loudly here rather than produce a
+// run of artifacts that silently kept the overlay.
+const switcherHidden = await page.evaluate(() => {
+  const el = document.querySelector("[data-theme-lab-switcher]");
+  if (!el) return "absent";
+  return getComputedStyle(el).display === "none" ? "hidden" : "visible";
+});
+if (switcherHidden !== "hidden") {
+  throw new Error(
+    `capture-themes: expected the theme-lab switcher to be hidden before ` +
+      `capturing, but it is "${switcherHidden}". An "absent" result means the ` +
+      `marker attribute moved and the overlay would return unnoticed.`
+  );
+}
 
 let shotCount = 0;
 /** Paths this run wrote, relative to the output root, for the manifest. */

@@ -11,18 +11,21 @@
       // suite either finds no `dist` at all or reads declarations produced
       // before the source change.
       //
-      // This makes turbo do that build, in order, and cache it. It is not the
-      // only guarantee: `vitest.global-setup.ts` builds too, so the entry
-      // points turbo never sees are covered as well.
+      // This makes turbo do that build, in order, and cache it. It is the ONLY
+      // thing that builds them: `vitest.global-setup.ts` refuses to start when
+      // the declarations are missing rather than producing them, because a
+      // build launched from inside collection rebuilds this package's whole
+      // dependency tree while sibling suites are importing from it.
       "dependsOn": ["$TURBO_EXTENDS$", "build"],
       // `$TURBO_EXTENDS$` keeps the root inputs in sync rather than restating
       // them; `dist/**` is appended because the artifact these suites assert
       // against is a real input to them, and a cached pass that ignored it
       // would survive a change to what the bundler emits.
-      // `vitest.global-setup.ts` is named because it IS the build precondition
-      // these suites rely on: a change to it changes what they assert against,
-      // and the root inputs cover `vitest.config.ts` alone — so without it a
-      // cached pass survives an edit to the setup and the run never happens.
+      // `vitest.global-setup.ts` is named because it decides whether these
+      // suites run at all: a change to what it accepts changes whether a given
+      // tree is allowed to assert anything, and the root inputs cover
+      // `vitest.config.ts` alone — so without it a cached pass survives an edit
+      // to the setup and the run never happens.
       "inputs": [
         "$TURBO_EXTENDS$",
         "dist/**",

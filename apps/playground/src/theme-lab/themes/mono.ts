@@ -62,6 +62,19 @@ export const MONO: ThemeDefinition = {
     ring: "var(--nx-primary)",
     "focus-ring": "var(--nx-primary)",
     "shadow-color": "oklch(0 0 0)",
+    // Stated, not derived. Mono is the unchanged control, so its charts must
+    // be the shipped ones: deriving them from Mono's own status roles moved
+    // the baseline (shipped chart-3 is 0.6273, Mono's success is 0.53), and a
+    // capture would then read a chart difference as a candidate's doing when
+    // the control had shifted underneath it. Pinned against theme.css by
+    // `chart-tokens.test.ts` -- a copy, but a copy a test compares, which is
+    // the best available here because these are static data the browser reads
+    // rather than something that can resolve from the stylesheet at runtime.
+    "chart-1": "var(--nx-primary)",
+    "chart-2": "oklch(0.7399 0.1277 209.34)",
+    "chart-3": "oklch(0.6273 0.17 149.2)",
+    "chart-4": "oklch(0.7686 0.1646 70.11)",
+    "chart-5": "oklch(0.6368 0.2078 25.33)",
     "sidebar-background": "oklch(1 0 0)",
     "sidebar-foreground": "oklch(0.372 0.0392 257.3)",
     "sidebar-primary": "oklch(0.2079 0.0399 265.73)",
@@ -125,6 +138,13 @@ export const MONO: ThemeDefinition = {
     // MONO.dark must be complete on its own.
     "focus-ring": "var(--nx-primary)",
     "shadow-color": "oklch(0 0 0)",
+    // The shipped dark charts. Only chart-3 differs from light, lightened for
+    // the dark surface the same way the other status greens are.
+    "chart-1": "var(--nx-primary)",
+    "chart-2": "oklch(0.7399 0.1277 209.34)",
+    "chart-3": "oklch(0.7229 0.1921 149.58)",
+    "chart-4": "oklch(0.7686 0.1646 70.11)",
+    "chart-5": "oklch(0.6368 0.2078 25.33)",
     "sidebar-background": "oklch(0.1358 0.0163 262.71)",
     "sidebar-foreground": "oklch(0.9838 0.0035 247.86)",
     "sidebar-primary": "oklch(0.9838 0.0035 247.86)",
