@@ -36,6 +36,7 @@ import { encrypt, decrypt } from "../../../utils/encryption";
 // signature on createAdapterFromProvider satisfies consistent-type-imports.
 import {
   isRecognisedMessageId,
+  mailboxOf,
   messageIdWithoutRecipients,
   type EmailDeliveryInput,
 } from "../delivery-record";
@@ -753,8 +754,15 @@ export class EmailProviderService extends BaseService {
       // the ordinary send path applies to its primary recipient. Reporting the
       // message-level result would let the Test button say a provider works
       // when the one address it tried was rejected.
+      //
+      // Compared as MAILBOXES. A caller may write `Jane <jane@example.com>`,
+      // and SMTP reports its refusal as the bare address -- so comparing the
+      // strings as written never matches, and the Test button reports success
+      // for the one recipient the provider refused.
+      const testMailbox = mailboxOf(to);
       const accepted = (result.rejected ?? []).every(
-        address => address.trim().toLowerCase() !== to.trim().toLowerCase()
+        address =>
+          mailboxOf(address).toLowerCase() !== testMailbox.toLowerCase()
       );
       const delivered = result.success && accepted;
 
@@ -762,21 +770,16 @@ export class EmailProviderService extends BaseService {
       // reason is a row that says only "something went wrong", and a
       // successful one without the provider's message id cannot be matched
       // against the provider's own record of it.
-      await this.recordTestDelivery(to, provider, {
+      await this.recordTestDelivery(testMailbox, provider, {
         status: delivered ? "sent" : "failed",
-        // Contained here as it is on the ordinary send path. A provider may
-        // build its identifier out of the address it was handed, and the test
-        // destination is a recipient like any other -- storing it verbatim
-        // would put the address beside the hash that exists to avoid holding
-        // it.
-        // Both containments the ordinary send path applies. The test body
-        // interpolates the provider's name, so a provider building its id out
-        // of what it was handed carries message content into the row -- the
-        // same disclosure, reached by the shorter path.
-        // Same two questions the ordinary send path asks, in the same order:
-        // a shape core recognises, then none of this message's recipients.
+        // The same two questions the ordinary send path asks, in the same
+        // order: a shape core recognises, then none of this message's
+        // recipients. A provider may build its identifier out of the address
+        // it was handed, and the test destination is a recipient like any
+        // other -- storing it verbatim would put the address beside the hash
+        // that exists to avoid holding it.
         messageId: isRecognisedMessageId(result.messageId)
-          ? messageIdWithoutRecipients(result.messageId, [to])
+          ? messageIdWithoutRecipients(result.messageId, [testMailbox])
           : null,
         error: delivered
           ? null

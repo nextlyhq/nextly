@@ -1114,3 +1114,75 @@ describe("a credential the descriptor does not mention", () => {
     ).resolves.toEqual({ success: true, messageId: "<ok@mail.test>" });
   });
 });
+
+describe("a diagnostic whose case folding changes its length", () => {
+  const KEY = "SK-LIVE-SECRET-VALUE";
+
+  function throwing(message: string) {
+    return defineEmailProvider<{ apiKey: string }>({
+      type: "folding",
+      label: "Folding",
+      configFields: [
+        { name: "apiKey", label: "API Key", kind: "password", secret: true },
+      ],
+      parseConfig: input => input as { apiKey: string },
+      createAdapter: () => ({
+        send: () => {
+          throw new Error(message);
+        },
+      }),
+    });
+  }
+
+  async function described(message: string) {
+    try {
+      await throwing(message)
+        .createAdapterFrom({ apiKey: KEY })
+        .send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" });
+      throw new Error("the adapter was expected to fail");
+    } catch (error) {
+      return JSON.stringify(describeProviderFailure(error));
+    }
+  }
+
+  it("redacts the credential however far the fold shifts", async () => {
+    // `İ` lowercases to TWO code units, so an index found in a lowercased copy
+    // does not address the original. Redacting by that index shifts the
+    // replacement forward, and past enough of them it clears the credential
+    // entirely and leaves the whole secret in what `email.failed` logs.
+    // Measured before the fix: 5 leaked `SK-LI`, 25 leaked all of it.
+    for (const count of [0, 5, 25, 60]) {
+      const described_ = await described(
+        `${"İ".repeat(count)} rejected ${KEY}`
+      );
+      expect(described_, `with ${count} folding characters`).not.toContain(KEY);
+    }
+  });
+
+  it("keeps the diagnostic around the credential", async () => {
+    // The control: this must stay a redaction rather than becoming a blanket
+    // withholding, or the log loses the reason it exists for.
+    const described_ = await described(`535 rejected ${KEY} for user`);
+
+    expect(described_).toContain("535 rejected");
+    expect(described_).toContain("for user");
+    expect(described_).not.toContain(KEY);
+  });
+
+  it("does not scale with the number of occurrences", async () => {
+    // A provider quoting a large remote error body back repeats the credential
+    // many times. Lowercasing the whole diagnostic once per match made the
+    // work grow with the count — 4,000 occurrences cost 98ms before, on a
+    // path a caller can provoke.
+    const many = Array.from({ length: 4000 }, () => KEY).join(" padding ");
+
+    const started = Date.now();
+    const described_ = await described(many);
+    const elapsed = Date.now() - started;
+
+    expect(described_).not.toContain(KEY);
+    // Generous against the quadratic form, so this fails on the shape of the
+    // algorithm rather than on a slow machine.
+    expect(elapsed).toBeLessThan(50);
+  });
+});

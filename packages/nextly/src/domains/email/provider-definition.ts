@@ -592,6 +592,27 @@ export interface EmailProviderDescriptor {
 const REDACTED_SECRET = "[secret]";
 
 /**
+ * Every occurrence of one literal, whatever its case.
+ *
+ * The literal is escaped before it becomes a pattern: a credential may contain
+ * characters a regular expression reads as syntax, and an unescaped one either
+ * matches the wrong text or throws while building.
+ *
+ * A pattern rather than a hand-rolled scan over `toLowerCase()`, for two
+ * reasons that both bite in production. Case folding can CHANGE LENGTH -- `İ`
+ * lowercases to two code units -- so an index found in a folded copy does not
+ * address the original, and enough of them ahead of a credential shift the
+ * replacement clear of it and leave the whole secret in the text. And a folded
+ * copy taken per match makes the work grow with the number of matches, so a
+ * provider quoting a large remote error body back turns the failure path into
+ * a stall. Matching over the ORIGINAL string keeps offsets exact by having
+ * none, and one pass is one pass.
+ */
+function caseInsensitivePattern(literal: string): RegExp {
+  return new RegExp(literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+}
+
+/**
  * A provider's own diagnostic, with its declared credentials taken out.
  *
  * A thrown error is the longest route a credential has out of a provider: the
@@ -644,15 +665,7 @@ function containedFailure(
   let text = texts.join(": ");
   for (const secret of secrets.comparable) {
     if (secret.length === 0) continue;
-    let out = "";
-    let cursor = 0;
-    for (;;) {
-      const at = text.toLowerCase().indexOf(secret.toLowerCase(), cursor);
-      if (at === -1) break;
-      out += text.slice(cursor, at) + REDACTED_SECRET;
-      cursor = at + secret.length;
-    }
-    text = out + text.slice(cursor);
+    text = text.replace(caseInsensitivePattern(secret), REDACTED_SECRET);
   }
   // A `NextlyError`, not a bare one: this value is attached as the `cause` of
   // the error the wrapper throws, and everything constructed as an error in

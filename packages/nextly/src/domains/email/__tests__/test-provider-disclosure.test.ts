@@ -539,3 +539,91 @@ describe("a test-send id built out of the test message itself", () => {
     expect(recorded[0]?.messageId).toBeNull();
   });
 });
+
+describe("a test recipient the caller wrote with a display name", () => {
+  let sqlite: Database.Database;
+  let service: EmailProviderService;
+  let providerId: string;
+
+  /** Accepts the message and refuses the address, as SMTP reports it: bare. */
+  const refusingProvider = defineEmailProvider<{ apiKey: string }>({
+    type: "display-refusing",
+    label: "Refusing",
+    configFields: [
+      { name: "apiKey", label: "API Key", kind: "password", secret: true },
+    ],
+    parseConfig: input => input as { apiKey: string },
+    createAdapter: () => ({
+      send: (options: { to: string }) =>
+        Promise.resolve({
+          success: true,
+          messageId: "msg-1",
+          // The MAILBOX, which is the form a server answers `RCPT TO` in.
+          rejected: [options.to.replace(/^.*<|>.*$/g, "")],
+        }),
+    }),
+  });
+
+  beforeEach(async () => {
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(refusingProvider);
+    const created = await service.createProvider({
+      name: "Refusing",
+      type: "display-refusing",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { apiKey: SECRET },
+      isDefault: false,
+      isActive: true,
+    });
+    providerId = created.id;
+  });
+
+  afterEach(() => {
+    getEmailProviderRegistry().reset();
+    sqlite.close();
+  });
+
+  it("is matched against the refusal despite the display name", async () => {
+    // A caller may write `Jane <jane@example.com>` and SMTP answers with the
+    // bare address, so comparing the strings as written never matches — and
+    // the Test button reports success for the one recipient that was refused.
+    const outcome = await service.testProvider(
+      providerId,
+      "Jane <jane@example.com>"
+    );
+
+    expect(outcome.success).toBe(false);
+    expect(outcome.error).toMatch(/refused the test recipient/i);
+  });
+
+  it("still reports success when nothing was refused", async () => {
+    // The control: normalising both sides must not make every test fail.
+    getEmailProviderRegistry().reset();
+    getEmailProviderRegistry().register(
+      defineEmailProvider<{ apiKey: string }>({
+        type: "display-refusing",
+        label: "Refusing",
+        configFields: [
+          { name: "apiKey", label: "API Key", kind: "password", secret: true },
+        ],
+        parseConfig: input => input as { apiKey: string },
+        createAdapter: () => ({
+          send: () => Promise.resolve({ success: true, messageId: "msg-1" }),
+        }),
+      })
+    );
+
+    const outcome = await service.testProvider(
+      providerId,
+      "Jane <jane@example.com>"
+    );
+
+    expect(outcome.success).toBe(true);
+  });
+});
