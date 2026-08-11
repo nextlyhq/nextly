@@ -793,6 +793,81 @@ describe("through the boundary", () => {
     expect(html).not.toContain("data-nx-block-placeholder");
   });
 
+  it("asks the declaration before the render, not after", async () => {
+    // The contract says this answer is about the STORED props. A block that
+    // mutates its own props while building output would otherwise be judged on
+    // what the render left behind — declaring itself empty while holding
+    // elements, and taking the node's anchor down with it.
+    const mutating = defineBlock({
+      name: "test/mutates-its-props",
+      version: 1,
+      description: "Mutates props while rendering.",
+      example: { props: {} },
+      rendersNothing: (props: { drawn?: boolean }) => props.drawn !== true,
+      render: ({ props }) => {
+        (props as { drawn?: boolean }).drawn = true;
+        return <>{null}</>;
+      },
+    });
+    const stream = await renderToReadableStream(
+      <BlockBoundary
+        node={{
+          id: "n1",
+          type: "test/mutates-its-props",
+          version: 1,
+          props: {},
+          cssId: "anchor",
+        }}
+        context={context()}
+        blocks={createBlockResolver([mutating as AnyBlockDefinition])}
+        classes={{ n1: "nx-node" }}
+      />
+    );
+    const html = await new Response(stream).text();
+
+    // Answered from the props as STORED — `drawn` absent, so it declared empty
+    // — rather than from the object the render mutated on its way past.
+    expect(html).not.toContain("data-nx-block-placeholder");
+  });
+
+  it("contains a declaration that answers with a rejecting promise", async () => {
+    // A JavaScript plugin can write `async rendersNothing`. The answer is not a
+    // boolean, so it declares nothing — but an unhandled rejection would take
+    // the process down under Node's default `--unhandled-rejections=throw`,
+    // after this boundary has already returned.
+    const asyncDeclaration = defineBlock({
+      name: "test/async-declaration",
+      version: 1,
+      description: "Declares with a promise that rejects.",
+      example: { props: {} },
+      rendersNothing: (() =>
+        Promise.reject(new Error("hostile async declaration"))) as unknown as (
+        props: object
+      ) => boolean,
+      render: () => <>{null}</>,
+    });
+    const stream = await renderToReadableStream(
+      <BlockBoundary
+        node={{
+          id: "n1",
+          type: "test/async-declaration",
+          version: 1,
+          props: {},
+          cssId: "anchor",
+        }}
+        context={context()}
+        blocks={createBlockResolver([asyncDeclaration as AnyBlockDefinition])}
+        classes={{ n1: "nx-node" }}
+      />
+    );
+    const html = await new Response(stream).text();
+
+    // A non-boolean answer is no declaration, so the wrapper root keeps its
+    // diagnostic; the rejection is handled rather than left to the process.
+    expect(html).toContain('data-nx-block-placeholder="invalid-output"');
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+
   it("ignores a declaration that throws rather than losing the page", async () => {
     // It is plugin code, called outside the render's own try/catch. A throw here
     // means no declaration, not an error.

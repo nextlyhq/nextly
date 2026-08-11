@@ -143,44 +143,27 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
 }
 
 /**
- * Whether React draws this value as nothing at all.
+ * Whether this value is one this renderer can see draws nothing.
  *
- * The set is exact rather than a nullish check: `false` is what the ordinary
- * conditional form `enabled && <div />` yields when disabled, and an empty
- * string is what a cleared text value becomes. `0` is deliberately absent —
- * React renders it as the character zero, so it is output with a root.
+ * Answers ONLY for output this renderer owns, and that limit is the design
+ * rather than an omission. `normalizeRenderable` materialises an iterable a
+ * block returns into a fresh array, so what arrives here is the very object
+ * React will render and no author code runs to produce it.
  *
- * A LIST counts when every member does, which includes the empty list, and any
- * iterable is a list: `normalizeRenderable` materialises an iterable a block
- * RETURNS, but a fragment's children are borrowed JSX validated where they lie,
- * so a `Set` or a generator arrives here as itself. React draws an empty one as
- * nothing either way.
+ * The set of primitives is exact rather than a nullish check: `false` is what
+ * the ordinary conditional form `enabled && <div />` yields when disabled, and
+ * an empty string is what a cleared text value becomes. `0` is deliberately
+ * absent — React renders it as the character zero, which is real output with no
+ * element to carry the node's fields.
  *
- * Walked with a `for...of` inside a try rather than `Array.prototype.every`.
- * `every` is author-controllable — an array can carry its own — and calling it
- * would run plugin code at a point OUTSIDE the block render's containment,
- * where a throw costs the whole page instead of one block. React never calls it
- * to draw an array, so nothing is lost by not calling it either. The iteration
- * is bounded for the same reason the normalizer bounds its own: a borrowed
- * iterable is not obliged to end.
+ * An array is walked BY INDEX, which is how React reads one. Following an
+ * array's own `Symbol.iterator` would answer a question React never asks, and a
+ * custom one can disagree with the indexed contents.
  *
- * A TRANSPARENT WRAPPER counts when its children do, for the same reason one
- * level up. The set is the normalizer's — fragments, `StrictMode`, `Profiler`,
- * `Activity`, `Suspense` and context providers — shared rather than copied, so
- * a wrapper cannot be walked to validate its children in one place and
- * misreported as output in the other. `Suspense` belongs despite its fallback:
- * the fallback draws only while children are pending, and structurally empty
- * children cannot suspend, while a child that can suspend is not empty and is
- * answered by the recursion. A hidden `Activity` is empty whatever it holds.
- *
- * `<>{items.map(...)}</>` draws no element of its own, so an empty one is the
- * third spelling of the same decision. A COMPONENT is never opened: React hands
- * it children as an ordinary prop, which it may ignore or render around, so
- * judging those would call a working block empty on the strength of a prop it
- * never used.
- *
- * Takes `unknown` rather than `ReactNode` so a fragment's children can be read
- * off an element's props and passed straight back in without a cast.
+ * Anything reached through an element the block built is NOT judged here. Its
+ * children, its props and any iterator inside it belong to the author and are
+ * read again by React after this returns, so nothing read from them can be
+ * relied on. A block that draws nothing from such a root declares it instead.
  */
 function rendersNothing(output: unknown, budget = { left: 10_000 }): boolean {
   // A LIST this renderer owns. `normalizeRenderable` materialises an iterable a
@@ -278,11 +261,11 @@ function nodeRootReason(
   //
   // Deliberately NOT by opening what the block returned. A wrapper's children, a
   // provider's `value`, an element's `key` and `ref`, an iterable's iterator —
-  // every one of them is author-controllable, and judging emptiness from them
-  // means granting an exemption on a reading React need not repeat. Five
-  // separate holes were found that way, two of which killed the page rather than
-  // the block. A block that legitimately draws nothing from a wrapper root says
-  // so through `rendersNothing`, which cannot vary.
+  // every one of them is author-controllable, and React reads them AGAIN after
+  // this returns. An exemption granted on a reading React need not repeat is one
+  // the author can invalidate afterwards, so it is not granted at all. A block
+  // that legitimately draws nothing from a wrapper root says so through
+  // `rendersNothing`, which is computed from props and cannot vary.
   if (declaresNothing || rendersNothing(output)) return null;
   const named = hasCssId ? "`cssId`" : "attributes";
   // A primitive or a list, on the other hand, is real output with no single
@@ -487,6 +470,28 @@ export function BlockBoundary({
 
   const className = classNameFor(node, classes);
 
+  // Asked BEFORE the block renders, of the STORED props, which is what the
+  // contract in `blocks-engine` says this answer is about. Asking afterwards
+  // reads whatever the render left behind: a block that mutates its own props
+  // while building its output would be judged on the mutated object and could
+  // declare itself empty while holding elements.
+  //
+  // Contained, because it is plugin code running outside the render's own
+  // try/catch. A declaration that throws is no declaration rather than the
+  // page's error. A non-boolean answer is likewise no declaration — and a
+  // THENABLE one gets a handler attached, because a rejection nobody is
+  // listening for takes down the process under Node's default
+  // `--unhandled-rejections=throw`.
+  let declaresNothing = false;
+  try {
+    const declared: unknown = definition.rendersNothing?.(node.props);
+    declaresNothing = declared === true;
+    if (isThenable(declared))
+      void Promise.resolve(declared).catch(() => undefined);
+  } catch {
+    declaresNothing = false;
+  }
+
   let output: unknown;
   try {
     output = definition.render({
@@ -532,16 +537,6 @@ export function BlockBoundary({
   // not-a-promise and falls into the checked path, where it becomes this
   // block's placeholder. A predicate that could raise would do so out here,
   // past the try block above, and take the page with it.
-  // Asked of the DEFINITION and the node's props, before anything is rendered,
-  // and contained because it is plugin code: a declaration that throws is simply
-  // no declaration rather than the page's error.
-  let declaresNothing = false;
-  try {
-    declaresNothing = definition.rendersNothing?.(node.props) === true;
-  } catch {
-    declaresNothing = false;
-  }
-
   if (!isThenable(output)) {
     return checkedOutput(output, node, fallback, true, declaresNothing);
   }
