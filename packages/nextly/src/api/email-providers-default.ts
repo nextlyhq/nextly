@@ -14,6 +14,7 @@
  * @module api/email-providers-default
  */
 
+import { actorFromAuthContext } from "../auth/request-actor";
 import { container } from "../di";
 import { getCachedNextly } from "../init";
 import type { EmailProviderService } from "../services/email/email-provider-service";
@@ -50,7 +51,12 @@ async function getEmailProviderService(): Promise<EmailProviderService> {
  */
 export const PATCH = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
-    await requireRouteAnyPermission(request, [
+    // The permission check already RESOLVES the caller; this handler used to
+    // discard it. These standalone handlers are a published surface an app may
+    // mount instead of the catch-all dispatcher, so without the actor every
+    // provider mutation through them recorded nothing -- the trail would have
+    // covered one supported REST surface and not the other.
+    const auth = await requireRouteAnyPermission(request, [
       { action: "update", resource: "email-providers" },
       { action: "manage", resource: "email-providers" },
     ]);
@@ -58,7 +64,7 @@ export const PATCH = withErrorHandler(
     const { id } = await context.params;
     const service = await getEmailProviderService();
 
-    const provider = await service.setDefault(id);
+    const provider = await service.setDefault(id, actorFromAuthContext(auth));
 
     // Set-default is a non-CRUD mutation (no new resource, just a flag
     // flip). Match the dispatcher route's wire shape so REST + dispatcher

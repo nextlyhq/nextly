@@ -9,6 +9,7 @@
  * @packageDocumentation
  */
 
+import type { RequestActor } from "../../auth/request-actor";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
 import type { RequestContext } from "../../shared/types/index";
@@ -35,6 +36,28 @@ export function mergeConfig<T extends DirectAPIConfig>(
     ...defaultConfig,
     ...args,
   };
+}
+
+/**
+ * The acting identity a Direct API call carries, if it carries one.
+ *
+ * `DirectAPIConfig.user` is how a caller says who this operation is for --
+ * required whenever `overrideAccess` is false, and available whenever the
+ * caller knows. Forwarding it is what lets a write through this API be
+ * attributed like a write through the admin, instead of the trail silently
+ * covering one supported surface and not the other.
+ *
+ * Absent means absent: a call that names nobody records nothing, rather than
+ * being attributed to a placeholder. Per-operation config wins over the
+ * instance default, matching `mergeConfig`, so a single call can act as
+ * someone without reconfiguring the instance.
+ */
+export function directApiActor(
+  defaultConfig: DirectAPIConfig,
+  args: DirectAPIConfig
+): RequestActor | undefined {
+  const id = mergeConfig(defaultConfig, args).user?.id;
+  return id ? { type: "user", id } : undefined;
 }
 
 /**

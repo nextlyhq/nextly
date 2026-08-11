@@ -18,6 +18,7 @@ import { randomUUID } from "crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq, desc } from "drizzle-orm";
 
+import type { RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import { env } from "../../../lib/env";
@@ -34,6 +35,12 @@ import { BaseService } from "../../../shared/base-service";
 import { encrypt, decrypt } from "../../../utils/encryption";
 // Pull adapter type into a normal `import type` declaration so the return
 // signature on createAdapterFromProvider satisfies consistent-type-imports.
+import { affectedRowCount } from "../../auth/services/auth-service";
+import {
+  changedProviderFields,
+  recordProviderActivity,
+  type EmailProviderActivityInput,
+} from "../provider-activity";
 import { describeProviderFailure } from "../provider-definition";
 import type { EmailProviderAdapter } from "../types";
 
@@ -177,16 +184,37 @@ export class EmailProviderService extends BaseService {
   private decryptConfiguration(
     stored: Record<string, unknown> | string
   ): Record<string, unknown> {
+    return this.readConfiguration(stored).config;
+  }
+
+  /**
+   * Decrypt, and say whether it worked.
+   *
+   * `decryptConfiguration` answers `{}` for an unreadable value, which is the
+   * right thing for a READ -- a provider whose ciphertext no longer decrypts
+   * must still be listable, maskable and deletable rather than becoming a row
+   * nobody can act on. It is the wrong thing for a COMPARISON: `{}` is also
+   * what a genuinely empty configuration looks like, so a diff against an
+   * unreadable preimage concludes nothing changed at the moment it is least
+   * entitled to. Callers about to make a claim take this form and ask.
+   */
+  private readConfiguration(stored: Record<string, unknown> | string): {
+    config: Record<string, unknown>;
+    readable: boolean;
+  } {
     if (!this.encryptionSecret || typeof stored !== "string") {
-      return stored as Record<string, unknown>;
+      return { config: stored as Record<string, unknown>, readable: true };
     }
     try {
-      return JSON.parse(decrypt(stored, this.encryptionSecret));
+      return {
+        config: JSON.parse(decrypt(stored, this.encryptionSecret)),
+        readable: true,
+      };
     } catch {
       this.logger.warn(
         "Failed to decrypt provider configuration — returning empty object"
       );
-      return {};
+      return { config: {}, readable: false };
     }
   }
 
@@ -465,7 +493,12 @@ export class EmailProviderService extends BaseService {
    * in a transaction to ensure only one default exists.
    */
   async createProvider(
-    data: CreateEmailProviderInput
+    data: CreateEmailProviderInput,
+    /**
+     * Who performed this, for the audit trail. Optional so an internal or
+     * seeded write needs no ceremony; those produce no entry by design.
+     */
+    actor?: RequestActor | null
   ): Promise<EmailProviderRecord> {
     // Reject an unregistered type and an unusable configuration BEFORE the
     // insert. Without this a row stores happily and fails only when something
@@ -511,7 +544,39 @@ export class EmailProviderService extends BaseService {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
+    // Recorded after the insert commits and before the read, so a trail entry
+    // cannot exist for a provider that was never stored.
+    await this.recordActivity({
+      action: "create",
+      providerId: id,
+      providerName: data.name,
+      providerType: data.type,
+      actor,
+    });
+
     return this.getProvider(id);
+  }
+
+  /**
+   * Record a provider mutation, and never let recording break the mutation.
+   *
+   * The write has already committed by the time this runs. `recordActivity`
+   * swallows its own failures for that reason, and this wrapper is the place
+   * that turns one into a log line -- a trail that quietly stops being written
+   * should be visible somewhere.
+   */
+  private async recordActivity(
+    input: EmailProviderActivityInput
+  ): Promise<void> {
+    try {
+      await recordProviderActivity(input);
+    } catch (error) {
+      this.logger.error("Failed to record email provider activity", {
+        providerId: input.providerId,
+        action: input.action,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -552,11 +617,15 @@ export class EmailProviderService extends BaseService {
    */
   async updateProvider(
     id: string,
-    data: UpdateEmailProviderInput
+    data: UpdateEmailProviderInput,
+    actor?: RequestActor | null
   ): Promise<EmailProviderRecord> {
     const currentRow = await this.getRawProvider(id);
 
     const now = new Date();
+    // Whether the merged configuration differs from the stored one, decided
+    // before encryption where the two are comparable.
+    let configurationChanged = false;
     const updateData: Record<string, unknown> = {
       updatedAt: now,
     };
@@ -588,6 +657,22 @@ export class EmailProviderService extends BaseService {
       // "a type change replaces rather than merges" is supposed to prevent.
       if (data.configuration === undefined) {
         updateData.configuration = this.encryptConfiguration(submitted);
+        // This branch REPLACES the stored configuration without the caller
+        // having sent one, so the diff below -- which only runs when
+        // `data.configuration` is present -- would have reported a type change
+        // and nothing else. An entry that says "type" while the credentials
+        // beneath it were discarded is worse than no entry: it is a record
+        // that reads as harmless.
+        //
+        // An UNREADABLE preimage counts as a change on its own. `{}` is what
+        // this returns both for an empty configuration and for a ciphertext
+        // that no longer decrypts -- after a `NEXTLY_SECRET` rotation, say --
+        // and the second is precisely when a credential is being discarded.
+        // Reading the fallback as "there was nothing there" would file the
+        // loss as a type change and nothing more.
+        const previous = this.readConfiguration(currentRow.configuration);
+        configurationChanged =
+          !previous.readable || Object.keys(previous.config).length > 0;
       }
     }
 
@@ -601,9 +686,11 @@ export class EmailProviderService extends BaseService {
     // and do nothing.
     const unsetPaths = this.readUnsetPaths(data.unsetConfiguration);
     if (data.configuration !== undefined || unsetPaths.length > 0) {
-      const existingConfig = this.decryptConfiguration(
-        currentRow.configuration
-      );
+      // Read through `readConfiguration`, not `decryptConfiguration`: the diff
+      // below has to tell an empty stored configuration from one that no
+      // longer decrypts, and both arrive as `{}`.
+      const existing = this.readConfiguration(currentRow.configuration);
+      const existingConfig = existing.config;
       const incomingConfig = this.stripMaskedConfigValues(
         data.configuration ?? {}
       );
@@ -630,11 +717,31 @@ export class EmailProviderService extends BaseService {
         .get(effectiveType)
         .validateConfig(mergedConfig);
 
+      // Compared BEFORE encryption. Encryption is randomised -- a fresh salt
+      // and IV per call -- so two encryptions of identical configuration never
+      // match, and comparing ciphertexts reported a credential change on every
+      // save the form made, including one that touched nothing but the name.
+      // A false credential-change alert is worse in an audit trail than no
+      // entry: it is noise on the one signal the trail exists for.
+      //
+      // Nothing is decrypted for this. Both values are already in memory --
+      // `existingConfig` two statements above and `mergedConfig` beside it --
+      // because the update path had to read one and build the other.
+      //
+      // An unreadable preimage is a change by itself, for the reason given in
+      // the type-change branch: comparing against the `{}` fallback would
+      // report "unchanged" for a save that replaced a credential nobody could
+      // read with one they can.
+      configurationChanged =
+        !existing.readable ||
+        JSON.stringify(existingConfig) !== JSON.stringify(mergedConfig);
+
       updateData.configuration = this.encryptConfiguration(mergedConfig);
     }
     if (data.isActive !== undefined) updateData.isActive = data.isActive;
     if (data.isDefault !== undefined) updateData.isDefault = data.isDefault;
 
+    let updatedRows: number;
     try {
       if (data.isDefault === true) {
         // Unset any existing default first, then apply all updates to this provider
@@ -643,17 +750,13 @@ export class EmailProviderService extends BaseService {
           .update(this.emailProviders)
           .set({ isDefault: false, updatedAt: now })
           .where(eq(this.emailProviders.isDefault, true));
-
-        await this.db
-          .update(this.emailProviders)
-          .set(updateData)
-          .where(eq(this.emailProviders.id, id));
-      } else {
-        await this.db
-          .update(this.emailProviders)
-          .set(updateData)
-          .where(eq(this.emailProviders.id, id));
       }
+
+      const result = await this.db
+        .update(this.emailProviders)
+        .set(updateData)
+        .where(eq(this.emailProviders.id, id));
+      updatedRows = affectedRowCount(result, this.dialect);
     } catch (error) {
       // DbError → NextlyError; spec §13.8 keeps the public message generic and
       // tucks the dialect-specific code into logContext via fromDatabaseError.
@@ -661,6 +764,57 @@ export class EmailProviderService extends BaseService {
       // is preserved (otherwise PG 23505 collapses to INTERNAL_ERROR).
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
+
+    // A delete can land between the read above and this statement, and the
+    // update then matches nothing. Recording the requested fields anyway would
+    // leave a durable entry claiming a change to a row that no longer exists,
+    // moments before `getProvider` reports it absent. Every dialect counts
+    // MATCHED rows here, not modified ones, so a request that genuinely
+    // rewrites nothing still reaches the trail.
+    if (updatedRows === 0) return this.getProvider(id);
+
+    // Field NAMES only, and `configuration` counted as one name rather than by
+    // its inner paths: naming `auth.pass` in a widely-readable row says which
+    // credential changed, which is a detail about the secret in a place the
+    // secret is not supposed to reach.
+    await this.recordActivity({
+      action: "update",
+      providerId: id,
+      providerName: data.name ?? currentRow.name,
+      providerType: effectiveType,
+      changedFields: [
+        // Built from the fields this service RECOGNISES, never by spreading
+        // the request body. `data` is a cast over parsed JSON, so an unknown
+        // key -- `{"notAProviderField": true}` -- is ignored by every write
+        // above and would otherwise be reported as a changed field, putting a
+        // request-controlled string into a widely readable audit row and
+        // claiming a change that never happened.
+        ...changedProviderFields(
+          {
+            name: currentRow.name,
+            type: currentRow.type,
+            fromEmail: currentRow.fromEmail,
+            fromName: currentRow.fromName,
+            isDefault: currentRow.isDefault,
+            isActive: currentRow.isActive,
+          },
+          {
+            ...(data.name !== undefined ? { name: data.name } : {}),
+            ...(data.type !== undefined ? { type: data.type } : {}),
+            ...(data.fromEmail !== undefined
+              ? { fromEmail: data.fromEmail }
+              : {}),
+            ...(data.fromName !== undefined ? { fromName: data.fromName } : {}),
+            ...(data.isDefault !== undefined
+              ? { isDefault: data.isDefault }
+              : {}),
+            ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+          }
+        ),
+        ...(configurationChanged ? ["configuration"] : []),
+      ],
+      actor,
+    });
 
     return this.getProvider(id);
   }
@@ -674,7 +828,7 @@ export class EmailProviderService extends BaseService {
    *
    * @throws NextlyError BUSINESS_RULE_VIOLATION if provider is the default
    */
-  async deleteProvider(id: string): Promise<void> {
+  async deleteProvider(id: string, actor?: RequestActor | null): Promise<void> {
     let row;
     try {
       row = await this.getRawProvider(id);
@@ -704,9 +858,27 @@ export class EmailProviderService extends BaseService {
       });
     }
 
-    await this.db
+    const result = await this.db
       .delete(this.emailProviders)
       .where(eq(this.emailProviders.id, id));
+
+    // Two deletes of the same provider can both read the row before either
+    // statement runs; the second affects nothing and must not attribute a
+    // deletion to whoever sent it. The method stays idempotent -- both callers
+    // still succeed -- but only the one that actually removed the row is
+    // recorded as having done so.
+    if (affectedRowCount(result, this.dialect) === 0) return;
+
+    // Recorded from the row read before the delete, because after it there is
+    // nothing left to name. A deleted provider's entry is the one whose
+    // subject the reader can no longer recover any other way.
+    await this.recordActivity({
+      action: "delete",
+      providerId: id,
+      providerName: row.name,
+      providerType: row.type,
+      actor,
+    });
   }
 
   /**
@@ -717,8 +889,11 @@ export class EmailProviderService extends BaseService {
    *
    * @throws NextlyError NOT_FOUND if provider doesn't exist
    */
-  async setDefault(id: string): Promise<EmailProviderRecord> {
-    await this.getRawProvider(id);
+  async setDefault(
+    id: string,
+    actor?: RequestActor | null
+  ): Promise<EmailProviderRecord> {
+    const row = await this.getRawProvider(id);
 
     const now = new Date();
 
@@ -729,10 +904,36 @@ export class EmailProviderService extends BaseService {
       .set({ isDefault: false, updatedAt: now })
       .where(eq(this.emailProviders.isDefault, true));
 
-    await this.db
+    const promotion = await this.db
       .update(this.emailProviders)
       .set({ isDefault: true, updatedAt: now })
       .where(eq(this.emailProviders.id, id));
+
+    // The provider can be deleted between the read above and this statement,
+    // in which case nothing was promoted. Recording it anyway would put a
+    // promotion in the trail for a provider that never became the default --
+    // the one claim this entry exists to make.
+    if (affectedRowCount(promotion, this.dialect) === 0) {
+      return this.getProvider(id);
+    }
+
+    // An `update` touching `isDefault`, because that is what it is. Promotion
+    // decides which provider sends every unrouted message, so it is the change
+    // most worth attributing and the least visible in the record it otherwise
+    // leaves -- one boolean, on two rows.
+    await this.recordActivity({
+      action: "update",
+      providerId: id,
+      providerName: row.name,
+      providerType: row.type,
+      // A client retry promotes a provider that is already the default. The
+      // final state is identical, so claiming `isDefault` changed manufactures
+      // an audit event out of a no-op. An empty list is what the recorder
+      // reads as "nothing moved", and it writes no row at all for one -- the
+      // same answer the update path beside this one gets.
+      changedFields: row.isDefault ? [] : ["isDefault"],
+      actor,
+    });
 
     return this.getProvider(id);
   }

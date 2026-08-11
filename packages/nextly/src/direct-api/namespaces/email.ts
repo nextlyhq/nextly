@@ -47,7 +47,12 @@ import type {
 } from "../types/index";
 
 import type { NextlyContext } from "./context";
-import { isNotFoundError, mergeConfig, sliceListResult } from "./helpers";
+import {
+  directApiActor,
+  isNotFoundError,
+  mergeConfig,
+  sliceListResult,
+} from "./helpers";
 
 /**
  * `nextly.email.*` namespace — send raw or template-based emails.
@@ -171,14 +176,17 @@ export function createEmailProvidersNamespace(
     async create(
       args: CreateEmailProviderArgs
     ): Promise<MutationResult<EmailProviderRecord>> {
-      const item = await ctx.emailProviderService.createProvider({
-        name: args.data.name,
-        type: args.data.type,
-        fromEmail: args.data.fromEmail,
-        fromName: args.data.fromName,
-        configuration: args.data.configuration,
-        isDefault: args.data.isDefault,
-      });
+      const item = await ctx.emailProviderService.createProvider(
+        {
+          name: args.data.name,
+          type: args.data.type,
+          fromEmail: args.data.fromEmail,
+          fromName: args.data.fromName,
+          configuration: args.data.configuration,
+          isDefault: args.data.isDefault,
+        },
+        directApiActor(ctx.defaultConfig, args)
+      );
       return { message: "Email provider created.", item };
     },
 
@@ -187,7 +195,8 @@ export function createEmailProvidersNamespace(
     ): Promise<MutationResult<EmailProviderRecord>> {
       const item = await ctx.emailProviderService.updateProvider(
         args.id,
-        args.data
+        args.data,
+        directApiActor(ctx.defaultConfig, args)
       );
       return { message: "Email provider updated.", item };
     },
@@ -195,7 +204,10 @@ export function createEmailProvidersNamespace(
     async delete(
       args: DeleteEmailProviderArgs
     ): Promise<MutationResult<{ id: string }>> {
-      await ctx.emailProviderService.deleteProvider(args.id);
+      await ctx.emailProviderService.deleteProvider(
+        args.id,
+        directApiActor(ctx.defaultConfig, args)
+      );
       return {
         message: "Email provider deleted.",
         item: { id: args.id },
@@ -205,7 +217,10 @@ export function createEmailProvidersNamespace(
     async setDefault(
       args: SetDefaultProviderArgs
     ): Promise<EmailProviderRecord> {
-      return await ctx.emailProviderService.setDefault(args.id);
+      return await ctx.emailProviderService.setDefault(
+        args.id,
+        directApiActor(ctx.defaultConfig, args)
+      );
     },
 
     async test(
