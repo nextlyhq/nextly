@@ -418,7 +418,19 @@ export async function resolveContent(
       ? undefined
       : (name: string): boolean => trustedNames.includes(name);
 
-  const cacheable = overrideAccess && !user && !draft;
+  // A bounded read that EXPANDS has an enforced component: the targets its
+  // predicate rejects are read against their own stored policies, and this
+  // module already refuses to cache an enforced read for exactly that reason —
+  // a policy change (public -> restricted) writes no row, so no content tag
+  // busts, and the entry keeps serving rows the policy now hides.
+  //
+  // Only when it expands. At `depth: 0` — the public factory's default — no
+  // target is reached, there is no enforced component, and the read caches as
+  // before. A route that opts into expansion AND bounds it pays per-request
+  // freshness for the targets it refused to trust, which is the same trade the
+  // enforced path already makes.
+  const boundedExpansion = trustedNames !== undefined && depth > 0;
+  const cacheable = overrideAccess && !user && !draft && !boundedExpansion;
   if (!cacheable) {
     // Bypassing `unstable_cache` alone does not opt out of Next's Full Route
     // Cache, so a page rendered while a policy was public could stay statically

@@ -56,4 +56,23 @@ describe("the trust bound is part of the cache identity", () => {
         "key fragment"
     ).toBe(true);
   });
+
+  it("does not cache a bounded read that expands relations", () => {
+    // The targets a predicate REJECTS are read against their own stored
+    // policies, which is an enforced component — and this module already
+    // refuses to cache an enforced read because a policy change writes no row,
+    // busts no tag, and leaves the entry serving what the policy now hides.
+    //
+    // Scoped to expansion on purpose: at `depth: 0`, the public factory's
+    // default, no target is reached and the read caches exactly as before.
+    const text = readFileSync(RESOLVE_CONTENT, "utf8");
+    expect(
+      /boundedExpansion\s*=\s*trustedNames !== undefined && depth > 0/.test(
+        text
+      ),
+      "a bounded read that expands must not be cached, and a bounded read at " +
+        "depth 0 must still be"
+    ).toBe(true);
+    expect(text).toContain("&& !boundedExpansion");
+  });
 });

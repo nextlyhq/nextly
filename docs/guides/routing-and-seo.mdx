@@ -205,8 +205,17 @@ decision rather than an inherited one.
 > read a row; being published decides whether it is ready for anyone. Nothing in
 > this config widens a lifecycle.
 
-`createContentRoute` needs none of this. It reads enforced already, so there is
-no bypass to bound and populated relations stay access-checked.
+`createContentRoute` needs none of this for its ordinary reads — it reads
+enforced already. The bound still applies when a **draft grant** is active,
+because that turns the bypass on for one request: a preview scoped to a single
+document must not populate drafts from every collection the page reaches.
+
+> **A route that both expands relations and bounds them is not cached.** The
+> targets your bound rejects are read against their own stored policies, and a
+> policy change writes no row — so no cache tag fires, and a cached page would
+> keep serving what the policy now hides. That is the same trade an enforced
+> read already makes. At `depth: 0`, the default, nothing is reached and the
+> read caches as before.
 
 **`createPublicContentRoute` defaults to `depth: 0`** — no relation expansion at
 all — so a route that never populates anything cannot be surprised by any of
