@@ -153,7 +153,10 @@ function importsOfSource(text: string, fileName = "module.ts"): string[] {
     true
   );
   const found: string[] = [];
+  const seen = new Set<ts.Node>();
   const visit = (node: ts.Node): void => {
+    if (seen.has(node)) return;
+    seen.add(node);
     if (
       (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
       node.moduleSpecifier &&
@@ -192,6 +195,10 @@ function importsOfSource(text: string, fileName = "module.ts"): string[] {
       }
     }
     ts.forEachChild(node, visit);
+    // JSDoc hangs off a node rather than sitting under it, so `forEachChild` never enters it.
+    // In a JavaScript file that is where the types live: `@typedef {import("pkg").T}` puts an
+    // ImportTypeNode inside the comment, invisible to every branch above.
+    for (const doc of ts.getJSDocCommentsAndTags(node)) visit(doc);
   };
   visit(source);
 
@@ -267,6 +274,17 @@ describe("reading a module's imports", () => {
     expect(
       importsOfSource(`/// <reference types="@nextlyhq/admin" />\nexport {};`)
     ).toEqual(["@nextlyhq/admin"]);
+  });
+
+  it("sees an import type inside a JSDoc typedef, which JavaScript files use", () => {
+    // JSDoc is attached to a node, not nested under it, so `forEachChild` walks past the whole
+    // comment. This only became reachable once the enumerator started scanning `.js` files.
+    expect(
+      importsOfSource(
+        `/** @typedef {import("@nextlyhq/admin").Node} Node */\nexport const x = 1;`,
+        "probe.js"
+      )
+    ).toContain("@nextlyhq/admin");
   });
 
   it("sees a typeof-import type query, which no call expression covers", () => {
