@@ -1170,3 +1170,102 @@ describe("descriptor text rules hold at the registry boundary too", () => {
     ).toThrow(/non-string `label`/);
   });
 });
+
+describe("a character limit on a control that never applies one", () => {
+  const base = {
+    type: "fixture",
+    label: "Fixture",
+    parseConfig: (input: unknown) => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  };
+
+  function withField(field: EmailProviderConfigField) {
+    return () => defineEmailProvider({ ...base, configFields: [field] });
+  }
+
+  it("refuses maxLength on a select", () => {
+    // The generated form applies `maxLength` to text and password fields
+    // alone, so this one is published to every client and enforced by none.
+    expect(
+      withField({
+        name: "region",
+        label: "Region",
+        kind: "select",
+        options: [{ value: "eu", label: "Europe" }],
+        constraints: { maxLength: 2 },
+      })
+    ).toThrow(/only applied to a text or password field/);
+  });
+
+  it("refuses maxLength on a number", () => {
+    expect(
+      withField({
+        name: "port",
+        label: "Port",
+        kind: "number",
+        constraints: { maxLength: 5 },
+      })
+    ).toThrow(/only applied to a text or password field/);
+  });
+
+  it("refuses maxLength on a boolean", () => {
+    expect(
+      withField({
+        name: "secure",
+        label: "Secure",
+        kind: "boolean",
+        default: false,
+        constraints: { maxLength: 1 },
+      })
+    ).toThrow(/only applied to a text or password field/);
+  });
+
+  it("reports the kind before the length when both are wrong", () => {
+    // A zero-length select is refused by two rules. The one that names the
+    // control sends the author to the key to remove; the other sends them to
+    // argue with the number.
+    expect(
+      withField({
+        name: "region",
+        label: "Region",
+        kind: "select",
+        options: [{ value: "eu", label: "Europe" }],
+        constraints: { maxLength: 0 },
+      })
+    ).toThrow(/only applied to a text or password field/);
+  });
+
+  it("accepts maxLength where it is honoured", () => {
+    // The control: the rule must not reject the case the constraint exists for.
+    expect(
+      withField({
+        name: "apiKey",
+        label: "API Key",
+        kind: "password",
+        secret: true,
+        constraints: { maxLength: 64 },
+      })
+    ).not.toThrow();
+    expect(
+      withField({
+        name: "host",
+        label: "Host",
+        kind: "text",
+        constraints: { maxLength: 255 },
+      })
+    ).not.toThrow();
+  });
+
+  it("leaves the other constraints alone on a number", () => {
+    expect(
+      withField({
+        name: "port",
+        label: "Port",
+        kind: "number",
+        constraints: { min: 1, max: 65535 },
+      })
+    ).not.toThrow();
+  });
+});

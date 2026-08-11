@@ -742,6 +742,45 @@ function assertNumericMetadataIsFinite(
   }
 }
 
+/**
+ * Kinds whose value is a string the operator types, and so the only ones a
+ * character limit can describe. A number's blank normalises to absent and its
+ * bounds are `min`/`max`; a switch has two values; a select's value comes from
+ * the option list rather than the keyboard.
+ */
+const LENGTH_BEARING_KINDS: ReadonlyArray<EmailProviderConfigField["kind"]> = [
+  "text",
+  "password",
+];
+
+/**
+ * Reject a character limit on a control that does not apply one.
+ *
+ * The generated form enforces `maxLength` for text and password fields and
+ * nothing else, so declaring it elsewhere publishes a constraint to every
+ * client that reads the descriptor while the form it describes ignores it.
+ * The value then reaches `parseConfig`, which is free to enforce whatever it
+ * likes and rejects the submission after the round trip the hint existed to
+ * avoid.
+ *
+ * Refused rather than dropped, on the same reasoning as `blankAs` on a number:
+ * an author who wrote it meant something by it, and a limit that quietly does
+ * nothing teaches the opposite.
+ */
+function assertLengthAppliesToKind(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  if (field.constraints?.maxLength === undefined) return;
+  if (LENGTH_BEARING_KINDS.includes(field.kind)) return;
+
+  throw new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider "${type}" declares \`maxLength\` on the ${field.kind} field "${field.name}". A character limit is only applied to a text or password field, so this one is published to every client and enforced by nothing.`,
+    logContext: { type, field: field.name, kind: field.kind },
+  });
+}
+
 /** Reject a text length no value can satisfy. */
 function assertTextLengthIsSatisfiable(
   type: string,
@@ -818,6 +857,11 @@ export function assertConfigFieldsAreUsable(
     // fails every comparison silently, so a bound of `NaN` would pass
     // "min <= max" and be reported as fine.
     assertNumericMetadataIsFinite(type, field);
+    // Before satisfiability, which would report a `maxLength` of 0 on a select
+    // as a limit no value meets rather than as a limit that control never
+    // applies — sending the author to argue with the number instead of
+    // removing the key.
+    assertLengthAppliesToKind(type, field);
     assertTextLengthIsSatisfiable(type, field);
     assertDefaultMatchesKind(type, field);
     assertDefaultSatisfiesConstraints(type, field);
