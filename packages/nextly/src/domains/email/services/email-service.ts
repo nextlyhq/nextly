@@ -26,7 +26,7 @@ import type { EmailTemplateRecord } from "../../../schemas/email-templates/types
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import {
-  messageIdEchoesPayload,
+  isRecognisedMessageId,
   messageIdWithoutRecipients,
   type EmailDeliveryRecipientKind,
 } from "../delivery-record";
@@ -513,16 +513,17 @@ export class EmailService extends BaseService {
       // would destroy every RFC-form id while catching nothing else.
       // Two ways an id can carry something it should not: out of the envelope,
       // and out of the body. The adapter is handed both.
-      const safeMessageId = messageIdEchoesPayload(result.messageId, [
-        filtered.subject,
-        filtered.html,
-        filtered.text,
-      ])
-        ? null
-        : messageIdWithoutRecipients(
+      // Kept only if it is SHAPED like an identifier, and then only if it
+      // carries none of the addresses this message went to. The shape rule
+      // stands in for the question that has no exact answer -- whether the id
+      // was built out of the message -- and the recipient check answers the
+      // one that does, by comparing against values that are known.
+      const safeMessageId = isRecognisedMessageId(result.messageId)
+        ? messageIdWithoutRecipients(
             result.messageId,
             recipients.map(recipient => recipient.to)
-          );
+          )
+        : null;
 
       /**
        * Whether the message reached the address the caller addressed it to.

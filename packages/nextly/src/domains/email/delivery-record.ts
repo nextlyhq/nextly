@@ -126,111 +126,71 @@ export function storableError(message: string): string {
 }
 
 /**
- * The shortest candidate worth comparing against the message that was sent.
+ * Identifiers this will keep, by SHAPE rather than by inspecting them.
  *
- * Password-reset and verification tokens here are
- * `randomBytes(32).toString("hex")` — 64 characters — and a UUID is 36. Sixteen
- * catches both with room to spare while sitting above the words an identifier
- * and English prose legitimately share.
+ * A provider is install-supplied code holding the decrypted configuration and
+ * the whole message, so the identifier it hands back can be built out of
+ * anything it was given. Two of those risks can be checked exactly, because
+ * the values are known: the recipients, and the credentials the descriptor
+ * declares. The third cannot — "does this string contain part of the body" has
+ * no exact form, only heuristics, and a heuristic over an unbounded input
+ * space has a next gap by construction.
+ *
+ * So the third question is not asked. An identifier is kept only if it is
+ * SHAPED like one, and a value built out of the message will not be:
+ *
+ * - **RFC 5322 Message-ID** — `<local@domain>`, which is what every SMTP
+ *   server and `nodemailer` return.
+ * - **UUID** — what Resend's API returns as the email id.
+ * - **A short opaque token** — at most 24 characters of letters, digits, dot,
+ *   dash and underscore. Short enough that it cannot carry a credential worth
+ *   stealing (an API key is 32 characters and up), no `@` so it cannot carry
+ *   an address, no `+/=` so it cannot be base64, no space so it cannot be
+ *   prose. This is the shape a provider with its own id scheme uses.
+ *
+ * The trade, stated plainly because it is a real cost: a provider whose
+ * identifier is neither shape loses its correlation with its own dashboard.
+ * That is deliberate. Core cannot verify that an unrecognised shape carries
+ * nothing from the message, and a delivery row is read by more people than the
+ * message was sent to.
  */
-const MIN_ECHOED_LENGTH = 16;
+const RFC5322_MESSAGE_ID =
+  /^<[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+@[A-Za-z0-9!#$%&'*+/=?^_`{|}~.[\]-]+>$/;
+
+const UUID =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 /**
- * Longest identifier this will inspect.
- *
- * RFC 5322 caps a header line at 998 octets, so a Message-ID longer than that
- * is not one. An identifier past this bound is withheld rather than examined:
- * it is already outside the contract, and refusing it costs a correlation
- * convenience while examining it invites a provider to hand us work to do.
+ * Bounded deliberately. The length is what makes this shape safe rather than
+ * the charset: 24 characters is below any credential worth taking, and a token
+ * derived from the message would have to be shorter than the thing it came
+ * from to fit.
  */
-const MAX_INSPECTABLE_LENGTH = 998;
+const SHORT_OPAQUE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,23}$/;
 
 /**
- * Every distinctive piece of an identifier, as it is written.
+ * Longest identifier worth considering.
  *
- * A token is not always one unbroken run: a UUID is five short groups, and a
- * segmented licence key is worse. Requiring a single long alphanumeric run
- * therefore missed exactly the values most likely to be sensitive.
- *
- * Candidates are runs of ORIGINAL text — spans of whole segments, separators
- * included — rather than the identifier with its punctuation stripped out.
- * Stripping makes unrelated neighbours adjacent, so an id ending
- * `@mail.example.test` would match any body containing `mail.example.test` in
- * any other punctuation, and ordinary ids would start disappearing. Comparing
- * spans as written keeps a match meaning "this exact text appears in both".
- *
- * Only the SHORTEST qualifying span per starting segment is produced, which is
- * what keeps this linear in the number of segments. Nothing is lost: a longer
- * span beginning at the same segment contains the shortest one as a prefix, so
- * if the long span appears in the message then the short one does too. Every
- * span is a substring of some candidate here, and every candidate is a
- * substring of the identifier -- the set of texts this can detect is
- * unchanged.
+ * RFC 5322 caps a header line at 998 octets, so anything past it is not a
+ * Message-ID whatever it looks like.
  */
-function echoCandidates(messageId: string): string[] {
-  const segments = messageId.split(/[^A-Za-z0-9]+/).filter(part => part !== "");
-  if (segments.length === 0) return [];
+const MAX_MESSAGE_ID_LENGTH = 998;
 
-  let cursor = 0;
-  const offsets = segments.map(segment => {
-    const at = messageId.indexOf(segment, cursor);
-    cursor = at + segment.length;
-    return at;
-  });
-
-  const candidates: string[] = [];
-  for (let first = 0; first < segments.length; first += 1) {
-    for (let last = first; last < segments.length; last += 1) {
-      const end = offsets[last] + segments[last].length;
-      if (end - offsets[first] < MIN_ECHOED_LENGTH) continue;
-      candidates.push(messageId.slice(offsets[first], end));
-      // The shortest span from this start is enough; a longer one from here
-      // carries it as a prefix.
-      break;
-    }
+/**
+ * Whether a provider's identifier is one of the shapes core recognises.
+ *
+ * Exported so both send paths ask the same question; a shape rule enforced in
+ * one of them is a shape rule the other does not have.
+ */
+export function isRecognisedMessageId(messageId: string | undefined): boolean {
+  if (messageId === undefined || messageId.length > MAX_MESSAGE_ID_LENGTH) {
+    return false;
   }
-  return candidates;
-}
-
-/**
- * Whether a message id repeats something the message itself carried.
- *
- * An adapter is handed the subject, the HTML and the text alongside the
- * recipients, so a provider can build its identifier out of the BODY as easily
- * as out of an address — and the body of a password-reset message contains a
- * single-use token. That id is then returned to the caller, handed to every
- * after-send action, written to the process log and stored in the delivery
- * table, which turns a token with a short life into one sitting in a database
- * column.
- *
- * Asked in this direction on purpose. The id is short and the body is not, so
- * "does the id contain the body" answers nothing; what is detectable is a
- * distinctive piece OF the id turning up in what was sent.
- *
- * The trade is deliberate and one-sided: an id that shares sixteen characters
- * with the message is withheld even when the overlap is innocent — a hostname
- * the body also names, say. That costs a correlation convenience. Keeping it
- * costs a single-use token its single use.
- */
-export function messageIdEchoesPayload(
-  messageId: string | undefined,
-  texts: ReadonlyArray<string | undefined>
-): boolean {
-  if (messageId === undefined) return false;
-  // Past the bound this is not an identifier to be checked, it is a payload to
-  // be refused. Fail closed, as everywhere else containment cannot answer.
-  if (messageId.length > MAX_INSPECTABLE_LENGTH) return true;
-
-  const candidates = echoCandidates(messageId);
-  if (candidates.length === 0) return false;
-
-  return texts.some(text => {
-    if (text === undefined || text === "") return false;
-    const haystack = text.toLowerCase();
-    return candidates.some(candidate =>
-      haystack.includes(candidate.toLowerCase())
-    );
-  });
+  return (
+    RFC5322_MESSAGE_ID.test(messageId) ||
+    UUID.test(messageId) ||
+    SHORT_OPAQUE_TOKEN.test(messageId)
+  );
 }
 
 /**

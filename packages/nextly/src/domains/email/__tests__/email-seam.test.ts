@@ -634,7 +634,7 @@ describe("a send whose primary recipient was refused", () => {
   });
 });
 
-describe("a message id built out of the message body", () => {
+describe("a message id built out of the message that was sent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetFilterRegistry();
@@ -644,11 +644,8 @@ describe("a message id built out of the message body", () => {
     resetFilterRegistry();
   });
 
-  /** A single-use token, the shape `randomBytes(32).toString("hex")` produces. */
-  const TOKEN =
-    "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
-
-  function echoing(messageId: string) {
+  /** A provider that returns whatever it is told to. */
+  function returning(messageId: string) {
     const { service } = buildSend();
     (service as unknown as { createAdapterFromRecord: unknown })[
       "createAdapterFromRecord"
@@ -656,96 +653,69 @@ describe("a message id built out of the message body", () => {
     return service;
   }
 
-  it("is withheld when it repeats a token from the html", async () => {
-    // The adapter is handed the body as well as the addresses, so a provider
-    // can build an identifier out of a password-reset token as easily as out
-    // of a recipient — and that id is then returned, actioned, logged and
-    // stored, giving a single-use token a permanent home.
-    const service = echoing(`sent-${TOKEN}`);
+  it("is not stored, because it is not shaped like an identifier", async () => {
+    // The risk this exists for: a provider is handed the subject and body, and
+    // a password-reset body contains a single-use token. An id built out of
+    // that is longer and more varied than any identifier shape, so it fails
+    // the shape rule without anything having to inspect its contents.
+    const service = returning(
+      "Reset your password using code 8f3a91c4e7b20d65 right away"
+    );
 
     const result = await service.send({
       to: "a@b.com",
       subject: "Reset your password",
-      html: `<a href="https://x.test/reset?token=${TOKEN}">Reset</a>`,
+      html: "<p>Use code 8f3a91c4e7b20d65</p>",
     });
 
     expect(result.messageId).toBeUndefined();
   });
 
-  it("is withheld when it repeats a token from the text part", async () => {
-    const service = echoing(`sent-${TOKEN}`);
+  it("is not stored when the provider echoes a long token", async () => {
+    // A 64-character token is what `randomBytes(32).toString(\"hex\")` produces,
+    // which is what this repository's own reset tokens are.
+    const service = returning(`sent-${"a1b2c3d4".repeat(8)}`);
 
     const result = await service.send({
       to: "a@b.com",
-      subject: "Reset your password",
-      // The token is in the TEXT part only, so the html cannot be what
-      // catches it.
-      html: "<p>Follow the link in this message.</p>",
-      plainText: `Use ${TOKEN} to continue`,
+      subject: "Confirm",
+      html: "<p>x</p>",
     });
 
     expect(result.messageId).toBeUndefined();
   });
 
-  it("leaves an ordinary id alone", async () => {
-    // The control. A real provider's Message-ID shares words with prose — a
-    // date, a hostname — and comparing those would delete legitimate ids for
-    // every message that happened to use one.
-    const service = echoing("<20260811.abc123@mail.acmemail.test>");
-
-    const result = await service.send({
-      to: "a@b.com",
-      subject: "Your Acmemail receipt",
-      html: "<p>Thanks for your order. Your receipt is attached.</p>",
-    });
-
-    expect(result.messageId).toBe("<20260811.abc123@mail.acmemail.test>");
+  it("keeps the three shapes real providers return", async () => {
+    // The control, and the reason the rule is a shape rather than a length:
+    // these are what SMTP, Resend and a provider with its own scheme return,
+    // and all three have to survive or the field is worthless.
+    for (const id of [
+      "<20260811.abc123@mail.acmemail.test>",
+      "4ef9a417-02e9-4d39-ad75-9611e0fcc33c",
+      "sl-1",
+    ]) {
+      const result = await returning(id).send({
+        to: "a@b.com",
+        subject: "Hi",
+        html: "<p>x</p>",
+      });
+      expect(result.messageId).toBe(id);
+    }
   });
 
-  it("is withheld when a long span of it appears in the body, innocent or not", async () => {
-    // The trade, pinned so it is a decision rather than a surprise. A body
-    // naming the provider's own mail host repeats eighteen characters of the
-    // id, and the id is withheld even though nothing sensitive was shared.
-    // The asymmetry is the argument: this costs a correlation convenience,
-    // while the case it exists for costs a single-use token its single use.
-    const service = echoing("<20260811.abc123@mail.acmemail.test>");
+  it("still withholds a recognised shape that carries a recipient", async () => {
+    // The shape rule replaces the question that had no exact answer. It does
+    // not replace the one that does: the recipients are known, so they are
+    // compared exactly.
+    const service = returning("<a@b.com>");
 
     const result = await service.send({
       to: "a@b.com",
-      subject: "Your Acmemail receipt",
-      html: "<p>Sent via mail.acmemail.test</p>",
+      subject: "Hi",
+      html: "<p>x</p>",
     });
 
     expect(result.messageId).toBeUndefined();
-  });
-
-  it("is withheld when the id repeats a UUID-shaped token", async () => {
-    // A token is not always one unbroken run. A UUID is five short groups, so
-    // a rule keyed on the longest alphanumeric run ignored it entirely.
-    const uuid = "550e8400-e29b-41d4-a716-446655440000";
-    const service = echoing(`sent-${uuid}`);
-
-    const result = await service.send({
-      to: "a@b.com",
-      subject: "Confirm your address",
-      html: `<a href="https://x.test/confirm?t=${uuid}">Confirm</a>`,
-    });
-
-    expect(result.messageId).toBeUndefined();
-  });
-
-  it("leaves an id alone when nothing of it appears in the message", async () => {
-    // The second control: a long opaque id is exactly what a real provider
-    // returns, and it must survive.
-    const service = echoing("01HQ8ZK5TM9WXYZP4R7N2VBCDE");
-
-    const result = await service.send({
-      to: "a@b.com",
-      subject: "Receipt",
-      html: "<p>Thanks for your order.</p>",
-    });
-
-    expect(result.messageId).toBe("01HQ8ZK5TM9WXYZP4R7N2VBCDE");
   });
 });
 

@@ -35,7 +35,7 @@ import { encrypt, decrypt } from "../../../utils/encryption";
 // Pull adapter type into a normal `import type` declaration so the return
 // signature on createAdapterFromProvider satisfies consistent-type-imports.
 import {
-  messageIdEchoesPayload,
+  isRecognisedMessageId,
   messageIdWithoutRecipients,
   type EmailDeliveryInput,
 } from "../delivery-record";
@@ -773,9 +773,11 @@ export class EmailProviderService extends BaseService {
         // interpolates the provider's name, so a provider building its id out
         // of what it was handed carries message content into the row -- the
         // same disclosure, reached by the shorter path.
-        messageId: messageIdEchoesPayload(result.messageId, [subject, html])
-          ? null
-          : messageIdWithoutRecipients(result.messageId, [to]),
+        // Same two questions the ordinary send path asks, in the same order:
+        // a shape core recognises, then none of this message's recipients.
+        messageId: isRecognisedMessageId(result.messageId)
+          ? messageIdWithoutRecipients(result.messageId, [to])
+          : null,
         error: delivered
           ? null
           : accepted
