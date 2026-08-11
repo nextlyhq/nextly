@@ -487,7 +487,37 @@ function assertSelectIsChoosable(
 ): void {
   if (field.kind !== "select") return;
 
+  // Shape first, because everything below reads it. `configFields` is a
+  // structural type, so a JavaScript plugin or a hand-built provider reaches
+  // here with whatever it wrote: an object crashes registration on
+  // `options.some is not a function`, and `{ value: 1 }` passes silently and
+  // then cannot be selected -- the control renders strings and the generated
+  // schema validates strings, so the stored number matches no option.
+  if (field.options !== undefined && !Array.isArray(field.options)) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" gives the select field "${field.name}" an \`options\` that is not an array.`,
+      logContext: { type, field: field.name },
+    });
+  }
+
   const options = field.options ?? [];
+
+  const malformed = options.findIndex(
+    option =>
+      option === null ||
+      typeof option !== "object" ||
+      typeof option.value !== "string" ||
+      typeof option.label !== "string"
+  );
+  if (malformed !== -1) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" gives the select field "${field.name}" an option at index ${malformed} that is not \`{ value: string; label: string }\`. A non-string value cannot be selected: the control and the generated schema both work in strings.`,
+      logContext: { type, field: field.name, index: malformed },
+    });
+  }
+
   if (options.length === 0) {
     throw new NextlyError({
       code: "BUSINESS_RULE_VIOLATION",

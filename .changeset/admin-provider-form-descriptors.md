@@ -38,3 +38,16 @@ named instead of as a blank form.
 
 Also fixes the Active toggle on the edit page, which was rendered and then left
 out of the update payload, so pausing a provider silently did nothing.
+
+nextly: record who created, changed, promoted or deleted an email provider
+
+`email_providers` holds the credentials that send password-reset and
+verification mail, so an actor who can edit a provider can point every
+authentication email at a relay they control. That action previously left no
+record. Create, update, delete and promote-to-default now write an activity
+entry naming the actor, the provider and which fields changed.
+
+Names, never values: an entry carries no part of the configuration, and a
+configuration change is recorded as the single field name `configuration`
+rather than by its inner paths. An update that moved nothing writes no entry
+at all.

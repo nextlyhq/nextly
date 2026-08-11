@@ -14,6 +14,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import type { EmailProviderConfigField } from "../provider-definition";
 import {
   assertConfigFieldsAreUsable,
   defineEmailProvider,
@@ -902,5 +903,58 @@ describe("a boolean field that is required", () => {
         ],
       })
     ).not.toThrow();
+  });
+});
+
+describe("select options a plugin got wrong", () => {
+  const base = {
+    type: "fixture",
+    label: "Fixture",
+    parseConfig: (input: unknown) => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  };
+
+  /**
+   * Written through a cast because these shapes are what a JAVASCRIPT plugin
+   * or a hand-built object supplies — `configFields` is structural, so the
+   * compiler is not what stands between them and the registry.
+   */
+  function withOptions(options: unknown) {
+    return () =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          {
+            name: "region",
+            label: "Region",
+            kind: "select",
+            options,
+          } as unknown as EmailProviderConfigField,
+        ],
+      });
+  }
+
+  it("refuses options that are not an array", () => {
+    // Previously crashed registration with `options.some is not a function`,
+    // which names neither the plugin nor the field.
+    expect(withOptions({ eu: "Europe" })).toThrow(/not an array/);
+  });
+
+  it("refuses an option whose value is not a string", () => {
+    // Accepted silently before: the control renders strings and the generated
+    // schema validates strings, so the stored number matches no option and the
+    // selection cannot be retained.
+    expect(withOptions([{ value: 1, label: "One" }])).toThrow(/index 0/);
+  });
+
+  it("refuses an option with no label", () => {
+    expect(withOptions([{ value: "eu" }])).toThrow(/index 0/);
+  });
+
+  it("accepts a well-formed option list", () => {
+    // The control: the rule must not reject the shape every real provider uses.
+    expect(withOptions([{ value: "eu", label: "Europe" }])).not.toThrow();
   });
 });

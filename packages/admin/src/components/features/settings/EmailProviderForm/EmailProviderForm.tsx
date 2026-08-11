@@ -146,17 +146,29 @@ export function EmailProviderForm({
     [selectedDescriptor]
   );
 
-  // Repopulate once the record or the catalog arrives: both are fetched, and
-  // whichever lands second decides which fields can be filled in.
+  // Which record this form has already been populated from. Hydration happens
+  // ONCE per provider, not on every change to its inputs.
+  const hydratedFor = useRef<string | null>(null);
+
+  // Repopulate once the record and the catalog have both arrived: both are
+  // fetched, and whichever lands second decides which fields can be filled in.
+  //
+  // Guarded on the provider's identity rather than run on every `descriptors`
+  // change. The catalog refetches on mount and on window focus, so an unguarded
+  // reset would discard whatever the operator had typed the moment they
+  // switched tabs and came back — and a deployment adding an UNRELATED provider
+  // would do it while the form sat open.
   useEffect(() => {
-    if (provider && isEdit) {
-      form.reset(
-        providerToFormValues(
-          provider,
-          descriptors.find(entry => entry.type === provider.type)
-        )
-      );
-    }
+    if (!provider || !isEdit) return;
+    const descriptor = descriptors.find(entry => entry.type === provider.type);
+    // Waits for the descriptor when the catalog has not arrived yet: hydrating
+    // without one would fill the form from the record alone and then never run
+    // again, leaving every configuration field empty.
+    if (!descriptor && descriptors.length === 0) return;
+    if (hydratedFor.current === provider.id) return;
+
+    hydratedFor.current = provider.id;
+    form.reset(providerToFormValues(provider, descriptor));
   }, [provider, isEdit, descriptors, form]);
 
   // Select the first registered provider once the catalog arrives. The form is

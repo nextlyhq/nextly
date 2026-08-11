@@ -66,6 +66,9 @@ export function SecretField({
   // it, the value in this field is the user's own — whatever it looks like —
   // so nothing here may treat it as the server's placeholder again.
   const [replaced, setReplaced] = useState(false);
+  // The input itself, so revealing can focus it. The reveal button carries
+  // `tabIndex={-1}` and therefore never moves focus on its own.
+  const inputRef = useRef<HTMLInputElement | null>(null);
   // The mask this field started with, so it can be restored when the user
   // clears it by focusing and leaves without typing anything.
   const storedMask = useRef<string | null>(null);
@@ -105,6 +108,13 @@ export function SecretField({
                 <div className="relative">
                   <Input
                     {...field}
+                    ref={node => {
+                      // Both: React Hook Form needs its own ref for focus
+                      // management and validation, and the spread above would
+                      // otherwise be overwritten by this one.
+                      field.ref(node);
+                      inputRef.current = node;
+                    }}
                     type={visible ? "text" : "password"}
                     placeholder={placeholder}
                     autoComplete="off"
@@ -145,6 +155,13 @@ export function SecretField({
                       // user type a replacement and watch it as they do.
                       clearMaskForEditing();
                       setVisible(current => !current);
+                      // Focused deliberately. The clear above is undone by the
+                      // input's `onBlur` when nothing was typed, and this
+                      // button never blurs the input by itself — so without
+                      // this the clear has no counterpart, and a reveal
+                      // followed by a save would remove a credential the user
+                      // only wanted to look at.
+                      inputRef.current?.focus();
                     }}
                     aria-label={visible ? "Hide value" : "Show value"}
                   >

@@ -62,7 +62,18 @@ export interface UpdateEmailProviderArgs extends DirectAPIConfig {
   /** Provider ID (required) */
   id: string;
   /** Partial provider data */
-  data: Partial<CreateEmailProviderArgs["data"]>;
+  data: Partial<CreateEmailProviderArgs["data"]> & {
+    /**
+     * Configuration fields to REMOVE, by the name the provider declares.
+     *
+     * Not expressible through `Partial<...>` of the create shape, because a
+     * create has nothing to remove. Without it a typed caller can set an
+     * optional field but never clear one — a JavaScript caller could, since
+     * the namespace forwards `data` unchanged, so the capability existed and
+     * only the type withheld it.
+     */
+    unsetConfiguration?: string[];
+  };
 }
 
 /**
