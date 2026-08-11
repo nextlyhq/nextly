@@ -22,6 +22,10 @@ paths:
   - "**/*.jsonc"
   - "**/*.yaml"
   - "**/*.yml"
+  # Shell verifiers count too: `packages/nextly/scripts/phase-gate.sh` parses
+  # test, lint and type-check counts and compares them against stored baselines,
+  # which is a derived check in every sense except the language it is written in.
+  - "**/*.sh"
   - ".changeset/**"
 ---
 
@@ -65,6 +69,16 @@ Asking "does it compute the same thing" is not enough:
    The two queries look nearly identical in the source, which is why the claim
    has to be written down next to them. A universal check phrased as a witness
    hunt passes on the first agreeable row and never reads the rest.
+
+   **In SQL, `NOT P` is not the complement of `P`.** The logic is three-valued:
+   for a NULL input both `P` and `NOT P` evaluate to UNKNOWN, and `WHERE`
+   keeps only TRUE. So `WHERE NOT (price > 0) LIMIT 1` returns no row for a
+   table full of NULL prices and certifies "every price is positive" — the
+   counterexample hunt, done correctly, silently reporting the opposite of the
+   truth. Decide first whether NULL violates the claim, then write the
+   predicate that says so: `WHERE (price > 0) IS NOT TRUE` catches NULLs as
+   violations, `WHERE price IS NOT NULL AND NOT (price > 0)` excludes them
+   deliberately. Either is fine; the bare `NOT` is the one that is neither.
 
 3. **Failure semantics** — "the answer is no" and "I could not ask" are
    different outcomes. A check that reports a lock timeout as a data verdict

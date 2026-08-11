@@ -27,13 +27,18 @@ than trusting any single marker.
 
    ```
    gh pr view N --json headRefOid,mergeCommit
-   git fetch origin <mergeCommit>      # gh reports metadata; it does not fetch
+   git fetch origin <mergeCommit> <headRefOid>   # gh reports; it does not fetch
    ```
 
    `gh pr view` prints PR information and adds nothing to the local object
-   database, so probing the reported SHA without this exits with
+   database, so probing a reported SHA without this exits with
    `unable to resolve revision` — which reads as a failed verification rather
    than as a missing object.
+
+   Fetch BOTH. A squash commit does not have the PR head as an ancestor, so
+   fetching only the merge commit leaves `headRefOid` unresolvable — and step 3
+   dereferences it. Outside the PR worktree, or after the branch is deleted,
+   that is where the procedure stops.
 
    Probe that **merge commit**, never `origin/main`. Run before a fetch and
    `origin/main` is still the pre-merge ref, so every check reports loss
@@ -46,7 +51,10 @@ than trusting any single marker.
    answers the same way whether or not the commit landed. Match it as a FIXED
    string: a marker containing `.`, `[` or `*` is otherwise a pattern, and can
    match text it was never taken from.
-   - it ADDED content → `git grep -F <marker> <mergeCommit> -- <path>`; expect a hit.
+   - it ADDED content → `git grep -F -e "$marker" <mergeCommit> -- <path>`;
+     expect a hit. The `-e` is not optional: a marker beginning with `-`, which
+     a Markdown list item usually does, is otherwise parsed as an option and
+     exits 129 without checking anything.
    - it only REMOVED content → same command; expect NO hit. Grepping for ADDED
      text here finds nothing whether or not the commit landed, which reads as
      failure either way and proves nothing.
