@@ -627,3 +627,53 @@ describe("a test recipient the caller wrote with a display name", () => {
     expect(outcome.success).toBe(true);
   });
 });
+
+describe("a test send that THREW, addressed with a display name", () => {
+  it("records the mailbox, as the resolved path does", async () => {
+    // Both paths record a delivery for one destination, and the normalisation
+    // reached only the resolved one — so a thrown test stored the hash of
+    // `Jane <jane@example.com>` while every reader hashes the bare address,
+    // and the row could never be found again.
+    const recorded: Array<{ to: string }> = [];
+    const sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    const service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(chattyProvider);
+    const created = await service.createProvider({
+      name: "Chatty",
+      type: "chatty-probe",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { apiKey: SECRET },
+      isDefault: false,
+      isActive: true,
+    });
+
+    (service as unknown as { deliveries: unknown })["deliveries"] = {
+      record: (input: { to: string }) => {
+        recorded.push(input);
+        return Promise.resolve();
+      },
+      recordAll: (inputs: Array<{ to: string }>) => {
+        recorded.push(...inputs);
+        return Promise.resolve();
+      },
+    };
+    (service as unknown as { createAdapterFromProvider: unknown })[
+      "createAdapterFromProvider"
+    ] = () => ({
+      send: () => Promise.reject(new Error("the relay refused the connection")),
+    });
+
+    await service.testProvider(created.id, "Jane <jane@example.com>");
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]?.to).toBe("jane@example.com");
+
+    getEmailProviderRegistry().reset();
+    sqlite.close();
+  });
+});

@@ -696,6 +696,13 @@ export class EmailProviderService extends BaseService {
     // history for a message that was never composed.
     let dispatched = false;
 
+    // Resolved ONCE, outside the try, because both the resolved path and the
+    // catch record a delivery for it. Two derivations of one destination is
+    // how they came to disagree: the mailbox normalisation reached the first
+    // and not the second, so a thrown test send stored the hash of
+    // `Jane <jane@example.com>` while every reader hashes the bare address.
+    const testMailbox = mailboxOf(testEmail || provider.fromEmail);
+
     try {
       // Only when the caller explicitly asked to probe. Substituting a probe
       // for the send would have been silent and wrong: `api/email-providers-test.ts`
@@ -738,7 +745,9 @@ export class EmailProviderService extends BaseService {
         ? `${provider.fromName} <${provider.fromEmail}>`
         : provider.fromEmail;
 
-      // Fall back to the provider's own fromEmail when no test address is given
+      // Fall back to the provider's own fromEmail when no test address is
+      // given. Dispatched in the form the caller wrote it, which may carry a
+      // display name; `testMailbox` is what is RECORDED and compared.
       const to = testEmail || provider.fromEmail;
 
       dispatched = true;
@@ -759,7 +768,6 @@ export class EmailProviderService extends BaseService {
       // and SMTP reports its refusal as the bare address -- so comparing the
       // strings as written never matches, and the Test button reports success
       // for the one recipient the provider refused.
-      const testMailbox = mailboxOf(to);
       const accepted = (result.rejected ?? []).every(
         address =>
           mailboxOf(address).toLowerCase() !== testMailbox.toLowerCase()
@@ -806,18 +814,14 @@ export class EmailProviderService extends BaseService {
       // Anything else is a message the throw site happened to interpolate, and
       // a contributed adapter throws with decrypted configuration in scope.
       if (dispatched) {
-        await this.recordTestDelivery(
-          testEmail || provider.fromEmail,
-          provider,
-          {
-            status: "failed",
-            messageId: null,
-            // The NORMALISED message. `cause` is the provider's own error,
-            // thrown with decrypted configuration in scope, and storing it would
-            // put a credential in a database column.
-            error: describeProviderFailure(error).message,
-          }
-        );
+        await this.recordTestDelivery(testMailbox, provider, {
+          status: "failed",
+          messageId: null,
+          // The NORMALISED message. `cause` is the provider's own error,
+          // thrown with decrypted configuration in scope, and storing it would
+          // put a credential in a database column.
+          error: describeProviderFailure(error).message,
+        });
       }
 
       // Logged HERE, with the cause. Attaching an original error to a
