@@ -534,9 +534,12 @@ describe("email provider activity", () => {
         ACTOR
       );
 
+      // The create is named first because the insert lands first: the
+      // demotion follows it inside the same transaction, so the table passes
+      // from one default to one default rather than through none.
       expect(logged.map(entry => [entry.action, entry.entryId])).toEqual([
-        ["update", first.id],
         ["create", second.id],
+        ["update", first.id],
       ]);
     });
 

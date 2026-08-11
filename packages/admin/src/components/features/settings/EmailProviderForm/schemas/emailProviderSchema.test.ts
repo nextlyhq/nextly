@@ -978,7 +978,6 @@ describe("a boolean field whose stored value is not a boolean", () => {
     // without deciding what it means. Carried into the form it fails
     // `z.boolean()` and the whole form becomes unsubmittable, pointing at a
     // field the operator never touched and cannot correct without changing it.
-    const values = providerToFormValues(record({ host: "h", secure: "false" }));
     const withDescriptor = providerToFormValues(
       record({ host: "h", secure: "false" }),
       descriptor
@@ -988,7 +987,6 @@ describe("a boolean field whose stored value is not a boolean", () => {
     expect(
       buildProviderSchema(descriptor).safeParse(withDescriptor).success
     ).toBe(true);
-    expect(values.name).toBe("Acme");
   });
 
   it("leaves the stored value alone when the switch is not touched", () => {
@@ -1348,5 +1346,123 @@ describe("a select whose stored choice the provider no longer offers", () => {
         configuration: { region: "eu-west-1" },
       }).success
     ).toBe(false);
+  });
+
+  it("keeps it editable when the stored choice is not a string", () => {
+    // A provider whose parser coerces can have accepted a number through the
+    // API. Hydration renders it as `"1"` because a select control holds a
+    // string; the stored value is still `1`. Comparing the form's value
+    // against the raw one finds two different values and reports the field as
+    // an invalid choice — on an edit that never touched it, blocking the whole
+    // form over a value the operator cannot see or correct.
+    //
+    // Parsed from what `providerToFormValues` produces rather than a
+    // hand-written form object, because the disagreement is BETWEEN those two
+    // functions and a literal here would state one side of it twice.
+    const stored = { region: 1 };
+    const record: EmailProviderRecord = {
+      id: "p1",
+      name: "A",
+      type: "acme-mail",
+      fromEmail: "a@b.com",
+      fromName: null,
+      configuration: stored,
+      isDefault: false,
+      isActive: true,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    const values = providerToFormValues(record, descriptor);
+
+    expect(values.configuration.region).toBe("1");
+    expect(
+      buildProviderSchema(descriptor, stored).safeParse(values).success
+    ).toBe(true);
+  });
+
+  it("still refuses an invented choice against a non-string stored value", () => {
+    // The control. Normalising the stored value must not make the select
+    // accept anything: only the value that IS stored is grandfathered, and a
+    // number that stringifies to something else is not it.
+    const stored = { region: 1 };
+
+    expect(
+      buildProviderSchema(descriptor, stored).safeParse({
+        ...FORM,
+        configuration: { region: "2" },
+      }).success
+    ).toBe(false);
+  });
+});
+
+describe("a descriptor whose declared paths claim the same name", () => {
+  const FORM = {
+    name: "A",
+    type: "acme",
+    fromEmail: "a@b.com",
+    fromName: "",
+    isDefault: false,
+    isActive: true,
+  };
+
+  function withFields(
+    fields: EmailProviderDescriptor["configFields"]
+  ): EmailProviderDescriptor {
+    return {
+      type: "acme",
+      label: "Acme",
+      capabilities: {},
+      configFields: fields,
+    };
+  }
+
+  it("does not write the nested field onto the leaf's schema object", () => {
+    // `typeof aZodSchema === "object"`, so walking into `auth` to place
+    // `auth.pass` treats a schema instance as a plain branch and assigns a
+    // property to it. The registry refuses overlapping paths, but this file
+    // parses a server response and an older server is not bound by a rule
+    // added to the current one.
+    const schema = buildProviderSchema(
+      withFields([
+        { name: "auth", label: "Auth", kind: "text", required: true },
+        { name: "auth.pass", label: "Pass", kind: "text", required: true },
+      ])
+    );
+
+    const configuration = schema.shape.configuration as unknown as {
+      shape?: Record<string, unknown>;
+    };
+    const auth = configuration.shape?.auth;
+
+    expect(typeof auth === "object" && auth !== null && "pass" in auth).toBe(
+      false
+    );
+  });
+
+  it("keeps the first declaration whichever order they arrive in", () => {
+    // The control for the guard above: skipping the conflict must not throw
+    // the surviving field away too. Whichever path was declared first still
+    // has a schema, so the form validates the fields it can.
+    const parentFirst = buildProviderSchema(
+      withFields([
+        { name: "auth", label: "Auth", kind: "text", required: true },
+        { name: "auth.pass", label: "Pass", kind: "text", required: true },
+      ])
+    );
+    const childFirst = buildProviderSchema(
+      withFields([
+        { name: "auth.pass", label: "Pass", kind: "text", required: true },
+        { name: "auth", label: "Auth", kind: "text", required: true },
+      ])
+    );
+
+    expect(
+      parentFirst.safeParse({ ...FORM, configuration: { auth: "x" } }).success
+    ).toBe(true);
+    expect(
+      childFirst.safeParse({ ...FORM, configuration: { auth: { pass: "y" } } })
+        .success
+    ).toBe(true);
   });
 });

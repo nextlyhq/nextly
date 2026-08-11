@@ -109,9 +109,9 @@ describe("a credential made only of the characters the mask uses", () => {
     await user.click(screen.getByRole("button", { name: /show value/i }));
     await user.type(secretInput(), "brand-new-secret");
 
-    // The control for the two cases above. The mask is SELECTED on focus
-    // rather than cleared, so the field never holds "" without the user having
-    // emptied it — and typing still replaces rather than appends, which is the
+    // The control for the two cases above. Focus blanks only what is
+    // DISPLAYED, so the form never holds "" without the user having emptied it
+    // — and typing replaces the mask rather than appending to it, which is the
     // property clearing existed to provide.
     expect(secretInput().value).toBe("brand-new-secret");
   });

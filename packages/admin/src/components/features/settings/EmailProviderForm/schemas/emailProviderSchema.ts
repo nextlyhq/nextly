@@ -297,11 +297,26 @@ function assignAtPath(
   leaf: z.ZodTypeAny
 ): void {
   const [head, ...rest] = path;
+  const existing = ownProperty(tree, head);
+
   if (rest.length === 0) {
+    // Something already stands here, so two declared paths claim one place --
+    // `auth` beside `auth.pass`. Overwriting would discard whichever arrived
+    // first, and which one that is depends only on the order the descriptor
+    // happens to list them in. The first declaration keeps the place; the
+    // conflicting one is skipped, exactly as an unwalkable name is.
+    if (existing !== undefined) return;
     tree[head] = leaf;
     return;
   }
-  const existing = ownProperty(tree, head);
+
+  // A leaf already claimed this name. `typeof aZodSchema === "object"` is
+  // true, so treating it as a branch would write the nested field onto the
+  // Zod instance itself -- mutating a schema object, and hanging the result
+  // somewhere `toObjectSchema` never looks, so the nested field ends up with
+  // no schema either way.
+  if (existing instanceof z.ZodType) return;
+
   const branch: Record<string, unknown> =
     existing !== undefined && typeof existing === "object" && existing !== null
       ? (existing as Record<string, unknown>)
@@ -356,12 +371,21 @@ function configurationSchema(
   for (const field of descriptor.configFields) {
     const path = splitFieldPath(field.name);
     if (path === null) continue;
+    // Normalised through the same function the form hydrates through, so the
+    // schema compares against the representation the form actually holds. A
+    // provider whose parser coerces can have stored a number where its select
+    // now offers strings; hydration carries that in as `"1"` while the raw
+    // stored value is `1`, and an identity comparison between them says the
+    // legacy choice is a different value than the one on screen — which
+    // rejects a field nobody touched and makes the whole form unsubmittable.
     assignAtPath(
       tree,
       path,
       fieldSchema(
         field,
-        stored === undefined ? undefined : readAtPath(stored, path)
+        stored === undefined
+          ? undefined
+          : storedValueForControl(field, readAtPath(stored, path))
       )
     );
   }

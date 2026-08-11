@@ -6,6 +6,7 @@ import { useCallback } from "react";
 import {
   EMAIL_PROVIDER_FORM_ID,
   EmailProviderForm,
+  emailCatalogState,
   type EmailProviderPayload,
 } from "@admin/components/features/settings/EmailProviderForm";
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
@@ -33,6 +34,19 @@ export default function CreateEmailProviderPage() {
     isLoading: descriptorsLoading,
     error: descriptorsError,
   } = useEmailProviderTypes();
+
+  // The submit button lives outside the form and reaches it by id, so it
+  // stays clickable when the form is not there to receive it. Both states that
+  // withdraw the form have to be answered here as well: while the catalog is
+  // loading there is a skeleton, and with no catalog at all there is a fatal
+  // alert. Pressing Create against either does nothing whatsoever, which reads
+  // as a broken button rather than as a page that cannot be used yet.
+  const catalog = emailCatalogState({
+    loading: descriptorsLoading,
+    failed: descriptorsError !== null && descriptorsError !== undefined,
+    descriptors: descriptors ?? [],
+  });
+  const cannotCreate = catalog === "loading" || catalog === "unavailable";
 
   const handleSubmit = useCallback(
     (payload: EmailProviderPayload) => {
@@ -81,7 +95,7 @@ export default function CreateEmailProviderPage() {
               <Button
                 type="submit"
                 form={EMAIL_PROVIDER_FORM_ID}
-                disabled={isPending}
+                disabled={isPending || cannotCreate}
               >
                 {isPending ? (
                   <>

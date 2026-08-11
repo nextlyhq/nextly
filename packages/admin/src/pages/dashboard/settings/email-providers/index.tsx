@@ -29,6 +29,7 @@ import {
 import React, { useState, useCallback, useMemo } from "react";
 
 import { SettingsTableToolbar } from "@admin/components/features/settings";
+import { emailCatalogState } from "@admin/components/features/settings/EmailProviderForm";
 import { clearSelectionValue } from "@admin/components/features/settings/EmailProviderForm/ProviderConfigFields";
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
 import {
@@ -354,10 +355,20 @@ function EmailProviderTable() {
     data: descriptorList,
     isSuccess: isCatalogLoaded,
     isError: isCatalogError,
+    isLoading: isCatalogLoading,
     refetch: refetchCatalog,
     isFetching: isCatalogFetching,
   } = useEmailProviderTypes();
   const descriptors = useMemo(() => descriptorList ?? [], [descriptorList]);
+  // A failed request means two different things here, and the page owes a
+  // different sentence to each. Asked of the same function the form asks, so
+  // an operator moving between the table and the form is not told the catalog
+  // is unusable on one and merely stale on the other.
+  const catalog = emailCatalogState({
+    loading: isCatalogLoading,
+    failed: isCatalogError,
+    descriptors,
+  });
   const descriptorsByType = useMemo(
     () => new Map(descriptors.map(entry => [entry.type, entry])),
     [descriptors]
@@ -678,7 +689,7 @@ function EmailProviderTable() {
           from, so its absence is visible all over this page while its cause is
           not. Shown beside the table rather than in place of it: the providers
           themselves loaded, and deleting an unwanted one still works. */}
-      {isCatalogError && (
+      {catalog === "unavailable" && (
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
           <AlertTitle>Provider catalog unavailable</AlertTitle>
@@ -687,6 +698,32 @@ function EmailProviderTable() {
               Provider types could not be loaded, so this page cannot tell which
               of these are still installed. Each row falls back to its stored
               type, and the type filter has nothing to offer.
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                void refetchCatalog();
+              }}
+              disabled={isCatalogFetching}
+            >
+              {isCatalogFetching ? "Retrying..." : "Retry"}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      {/* A refresh that did not land, over descriptors already in hand. The
+          sentence above would be untrue here in every particular: the rows are
+          named from the cache, the filter is built from it, and nothing has
+          been withheld. Said without the destructive styling, because the page
+          is working and this is the one thing that is not. */}
+      {catalog === "stale" && (
+        <Alert>
+          <AlertDescription className="flex flex-wrap items-center gap-3">
+            <span>
+              Provider types could not be refreshed, so this page is using the
+              list it loaded with. A type installed or removed since then may
+              not be reflected.
             </span>
             <Button
               variant="outline"

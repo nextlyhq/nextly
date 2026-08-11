@@ -203,7 +203,11 @@ function ProviderConfigField({
         name={name}
         label={field.label}
         placeholder={field.placeholder}
-        description={field.help}
+        // The computed description, not the raw help text. A secret holding an
+        // object comes back as an object of masked leaves, which no password
+        // control can show, and the notice explaining that is the only thing
+        // telling the operator why the field looks empty.
+        description={description}
         disabled={disabled}
         storedSecret={storedSecret}
         // A required credential has no empty state to be put into: removing it

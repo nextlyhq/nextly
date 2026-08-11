@@ -6,6 +6,7 @@ import { useCallback } from "react";
 import {
   EMAIL_PROVIDER_FORM_ID,
   EmailProviderForm,
+  emailCatalogState,
   isUnregisteredProviderType,
   type EmailProviderPayload,
 } from "@admin/components/features/settings/EmailProviderForm";
@@ -180,15 +181,21 @@ export default function EditEmailProviderPage() {
   // A failed catalog with NOTHING cached is its own reason: the form renders a
   // fatal alert instead of itself, so there is no form for this button to
   // submit and an enabled Update would do nothing at all.
-  const noCatalogAtAll =
-    descriptorsError !== null &&
-    descriptorsError !== undefined &&
-    (descriptors ?? []).length === 0;
+  //
+  // A catalog that merely failed to REFRESH is not that reason. Its cached
+  // descriptors are what the form goes on to render and to disable itself
+  // from, so the same question has to be asked of them here — treating the
+  // stale state as "no answer yet" is what leaves Update enabled beneath the
+  // form's own notice that the settings cannot be edited.
+  const catalog = emailCatalogState({
+    loading: descriptorsLoading,
+    failed: descriptorsError !== null && descriptorsError !== undefined,
+    descriptors: descriptors ?? [],
+  });
 
   const cannotEdit =
-    noCatalogAtAll ||
-    (!descriptorsLoading &&
-      !descriptorsError &&
+    catalog === "unavailable" ||
+    (catalog !== "loading" &&
       isUnregisteredProviderType(provider?.type, descriptors ?? []));
 
   return (

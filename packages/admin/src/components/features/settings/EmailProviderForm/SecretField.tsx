@@ -176,6 +176,11 @@ export function SecretField({
                     type="button"
                     tabIndex={-1}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    // Disabled with the field, as the clear button beside it
+                    // is. Revealing exposes nothing the server did not send,
+                    // but the click also focuses the input, so a submitting
+                    // form would move the caret into a field it has locked.
+                    disabled={disabled}
                     onClick={() => {
                       // A stored secret cannot be revealed — the server never
                       // sent it. Focusing lets the user type a replacement and

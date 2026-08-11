@@ -16,7 +16,7 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq, desc } from "drizzle-orm";
+import { and, eq, desc, ne } from "drizzle-orm";
 
 import type { RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
@@ -111,6 +111,42 @@ type EmailProvidersTable =
   | typeof emailProvidersPg
   | typeof emailProvidersMysql
   | typeof emailProvidersSqlite;
+
+/** A provider that held the default until a handover took it away. */
+interface DisplacedDefault {
+  id: string;
+  name: string;
+  type: string;
+}
+
+/**
+ * The transaction-bound query surface a handover needs.
+ *
+ * `withTransaction` hands its callback a dialect-specific instance typed
+ * `unknown`, because naming all three would bind this file to all three driver
+ * packages. Narrowing to the two statements a handover actually issues keeps
+ * the body typed without an `any`, and keeps the fact that they must run on
+ * the TRANSACTION rather than on `this.db` in the type: on Postgres and MySQL
+ * `this.db` is a different pooled connection, so a statement sent there would
+ * commit on its own and sit outside the rollback.
+ */
+interface ProviderTransaction {
+  select<TSelection extends Record<string, unknown>>(
+    fields: TSelection
+  ): {
+    from(table: EmailProvidersTable): {
+      where(condition: unknown): Promise<DisplacedDefault[]>;
+    };
+  };
+  update(table: EmailProvidersTable): {
+    set(values: Record<string, unknown>): {
+      where(condition: unknown): Promise<unknown>;
+    };
+  };
+  insert(table: EmailProvidersTable): {
+    values(data: Record<string, unknown>): Promise<unknown>;
+  };
+}
 
 export class EmailProviderService extends BaseService {
   private emailProviders: EmailProvidersTable;
@@ -521,8 +557,10 @@ export class EmailProviderService extends BaseService {
    * Create a new email provider.
    *
    * Configuration is encrypted before storage.
-   * If `isDefault` is true, unsets the previous default provider
-   * in a transaction to ensure only one default exists.
+   *
+   * If `isDefault` is true, the insert and the demotion of the previous
+   * default are one transaction, so the table never holds two defaults and
+   * never holds none. It does not serialise two callers doing this at once.
    */
   async createProvider(
     data: CreateEmailProviderInput,
@@ -556,13 +594,20 @@ export class EmailProviderService extends BaseService {
       updatedAt: now,
     };
 
+    let displaced: DisplacedDefault[] = [];
     try {
-      if (values.isDefault) {
-        // Nothing to exclude: this provider is not in the table yet, so it
-        // cannot be among the rows losing the default.
-        await this.clearDefault(now, actor);
-      }
-      await this.db.insert(this.emailProviders).values(values);
+      // The insert and the demotion it causes are one change to the table, so
+      // they commit or they do not. Demoting first and inserting second, on
+      // separate connections, means a refused insert -- a duplicate name, a
+      // lost connection -- takes the working default away and puts nothing in
+      // its place.
+      await this.withTransaction(async txRaw => {
+        const tx = txRaw as ProviderTransaction;
+        await tx.insert(this.emailProviders).values(values);
+        if (values.isDefault) {
+          displaced = await this.demoteOtherDefaults(tx, now, id);
+        }
+      });
     } catch (error) {
       // Drizzle surfaces the driver's raw error here, so normalise it through
       // toDbError(dialect) first; otherwise NextlyError.fromDatabaseError would
@@ -579,39 +624,11 @@ export class EmailProviderService extends BaseService {
       providerType: data.type,
       actor,
     });
+    await this.recordDemotions(displaced, actor);
 
     return this.getProvider(id);
   }
 
-  /**
-   * Record a provider mutation, and never let recording break the mutation.
-   *
-   * The write has already committed by the time this runs. `recordActivity`
-   * swallows its own failures for that reason, and this wrapper is the place
-   * that turns one into a log line -- a trail that quietly stops being written
-   * should be visible somewhere.
-   */
-  /**
-   * Take the default away from whoever holds it, and say who that was.
-   *
-   * Three methods promote a provider -- `createProvider` with
-   * `isDefault: true`, `updateProvider` with the same, and `setDefault` -- and
-   * each has to clear the incumbent first. Written once because the audit half
-   * is the easy half to leave out: the demotion is a bulk statement with no id
-   * in it, so a caller that forgets produces a trail naming what took the
-   * default and nothing about what lost it, and after a second promotion the
-   * displaced provider is indistinguishable from one that was never default.
-   *
-   * The rows are read BEFORE the statement, since afterwards there is nothing
-   * left to identify. Selected as a list rather than one row because a broken
-   * state with two defaults has to be recorded as it is, not narrowed to
-   * whichever came back first.
-   *
-   * `promotedId` is the provider taking the default, when it already exists. A
-   * client retry demotes and re-promotes the same row, whose final state is
-   * the state it started in, so recording that would manufacture an event out
-   * of a no-op.
-   */
   /**
    * Refuse to promote a provider nothing can build an adapter for.
    *
@@ -640,29 +657,66 @@ export class EmailProviderService extends BaseService {
     });
   }
 
-  private async clearDefault(
+  /**
+   * Take the default away from every provider except the one that now holds it.
+   *
+   * Runs AFTER the promoting write and inside the same transaction, so the
+   * table passes from one default straight to one default. Demoting first
+   * leaves an instant with no default at all, and a promoting write that then
+   * matches nothing makes that instant permanent — a row deleted between the
+   * read and the update, or an insert the database refuses, and the
+   * installation is left unable to send anything it was not given a provider
+   * for, with nothing in the trail to say why.
+   *
+   * Returns the rows it demoted rather than recording them. An entry written
+   * from in here would claim a demotion a rollback then took back, and the
+   * trail's one job is to not say that.
+   *
+   * This settles the ORDER of a handover, not who wins a race for it. Two
+   * concurrent promotions still both commit, on MySQL and SQLite as well as
+   * Postgres, because nothing here locks the rows it read.
+   */
+  private async demoteOtherDefaults(
+    tx: ProviderTransaction,
     now: Date,
-    actor?: RequestActor | null,
-    promotedId?: string
-  ): Promise<void> {
-    const displaced = await this.db
+    promotedId: string
+  ): Promise<DisplacedDefault[]> {
+    const others = and(
+      eq(this.emailProviders.isDefault, true),
+      ne(this.emailProviders.id, promotedId)
+    );
+
+    const displaced = await tx
       .select({
         id: this.emailProviders.id,
         name: this.emailProviders.name,
         type: this.emailProviders.type,
       })
       .from(this.emailProviders)
-      .where(eq(this.emailProviders.isDefault, true));
+      .where(others);
 
-    await this.db
+    if (displaced.length === 0) return displaced;
+
+    await tx
       .update(this.emailProviders)
       .set({ isDefault: false, updatedAt: now })
-      .where(eq(this.emailProviders.isDefault, true));
+      .where(others);
 
-    // After the statement, so an entry cannot claim a demotion that never
-    // reached the database.
+    return displaced;
+  }
+
+  /**
+   * Write the trail entries for a handover, once it has committed.
+   *
+   * Separate from the statement that demoted them for the reason the entries
+   * are worth having: a durable claim that a provider stopped being the
+   * default has to outlive only the transactions that actually did it.
+   */
+  private async recordDemotions(
+    displaced: DisplacedDefault[],
+    actor?: RequestActor | null
+  ): Promise<void> {
     for (const previous of displaced) {
-      if (previous.id === promotedId) continue;
       await this.recordActivity({
         action: "update",
         providerId: previous.id,
@@ -674,6 +728,14 @@ export class EmailProviderService extends BaseService {
     }
   }
 
+  /**
+   * Record a provider mutation, and never let recording break the mutation.
+   *
+   * The write has already committed by the time this runs. `recordProviderActivity`
+   * failing is not a reason to report the write as failed, so the failure is
+   * turned into a log line instead -- a trail that quietly stops being written
+   * should be visible somewhere.
+   */
   private async recordActivity(
     input: EmailProviderActivityInput
   ): Promise<void> {
@@ -860,17 +922,24 @@ export class EmailProviderService extends BaseService {
       this.assertPromotable(id, effectiveType);
     }
 
-    let updatedRows: number;
+    let updatedRows = 0;
+    let displaced: DisplacedDefault[] = [];
     try {
-      if (data.isDefault === true) {
-        await this.clearDefault(now, actor, id);
-      }
+      // One transaction, and the promotion before the demotion inside it. A
+      // PATCH naming `isDefault: true` for a row that has since been deleted
+      // matches nothing, and demoting first would have already stripped the
+      // default from the provider still holding it.
+      await this.withTransaction(async txRaw => {
+        const tx = txRaw as ProviderTransaction;
+        const result = await tx
+          .update(this.emailProviders)
+          .set(updateData)
+          .where(eq(this.emailProviders.id, id));
+        updatedRows = affectedRowCount(result, this.dialect);
 
-      const result = await this.db
-        .update(this.emailProviders)
-        .set(updateData)
-        .where(eq(this.emailProviders.id, id));
-      updatedRows = affectedRowCount(result, this.dialect);
+        if (updatedRows === 0 || data.isDefault !== true) return;
+        displaced = await this.demoteOtherDefaults(tx, now, id);
+      });
     } catch (error) {
       // DbError → NextlyError; spec §13.8 keeps the public message generic and
       // tucks the dialect-specific code into logContext via fromDatabaseError.
@@ -886,6 +955,8 @@ export class EmailProviderService extends BaseService {
     // MATCHED rows here, not modified ones, so a request that genuinely
     // rewrites nothing still reaches the trail.
     if (updatedRows === 0) return this.getProvider(id);
+
+    await this.recordDemotions(displaced, actor);
 
     // Field NAMES only, and `configuration` counted as one name rather than by
     // its inner paths: naming `auth.pass` in a widely-readable row says which
@@ -997,8 +1068,10 @@ export class EmailProviderService extends BaseService {
   /**
    * Set a provider as the default.
    *
-   * Unsets the previous default in a transaction to ensure
-   * only one default provider exists at any time.
+   * The promotion and the demotion of the previous default are one
+   * transaction, so a promotion that matches nothing cannot leave the
+   * installation with no default at all. It does not serialise two callers
+   * promoting different providers at the same time.
    *
    * @throws NextlyError NOT_FOUND if provider doesn't exist
    */
@@ -1023,20 +1096,34 @@ export class EmailProviderService extends BaseService {
 
     const now = new Date();
 
-    await this.clearDefault(now, actor, id);
+    // Promote first, then demote, both inside one transaction. The provider
+    // can be deleted between the read above and this statement, in which case
+    // nothing is promoted -- and demoting first would already have taken the
+    // default away from the provider that was correctly holding it, leaving
+    // the installation with none at all.
+    let promoted = false;
+    let displaced: DisplacedDefault[] = [];
+    await this.withTransaction(async txRaw => {
+      const tx = txRaw as ProviderTransaction;
+      const promotion = await tx
+        .update(this.emailProviders)
+        .set({ isDefault: true, updatedAt: now })
+        .where(eq(this.emailProviders.id, id));
 
-    const promotion = await this.db
-      .update(this.emailProviders)
-      .set({ isDefault: true, updatedAt: now })
-      .where(eq(this.emailProviders.id, id));
+      promoted = affectedRowCount(promotion, this.dialect) > 0;
+      if (!promoted) return;
 
-    // The provider can be deleted between the read above and this statement,
-    // in which case nothing was promoted. Recording it anyway would put a
-    // promotion in the trail for a provider that never became the default --
-    // the one claim this entry exists to make.
-    if (affectedRowCount(promotion, this.dialect) === 0) {
+      displaced = await this.demoteOtherDefaults(tx, now, id);
+    });
+
+    // Recording a promotion that matched no row would put a claim in the trail
+    // for a provider that never became the default -- the one claim this entry
+    // exists to make.
+    if (!promoted) {
       return this.getProvider(id);
     }
+
+    await this.recordDemotions(displaced, actor);
 
     // An `update` touching `isDefault`, because that is what it is. Promotion
     // decides which provider sends every unrouted message, so it is the change

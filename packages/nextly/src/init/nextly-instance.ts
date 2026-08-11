@@ -748,7 +748,9 @@ export interface Nextly {
     delete: (
       args: DeleteEmailProviderArgs
     ) => Promise<MutationResult<{ id: string }>>;
-    setDefault: (args: SetDefaultProviderArgs) => Promise<EmailProviderRecord>;
+    setDefault: (
+      args: SetDefaultProviderArgs
+    ) => Promise<MutationResult<EmailProviderRecord>>;
     test: (
       args: TestEmailProviderArgs
     ) => Promise<{ success: boolean; error?: string }>;

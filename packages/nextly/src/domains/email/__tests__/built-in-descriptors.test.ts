@@ -1532,6 +1532,17 @@ describe("a capability whose value is not a boolean", () => {
     expect(withCapabilities("all")).toThrow(/not an object/);
   });
 
+  it("refuses an ARRAY, which `typeof` calls an object", () => {
+    // `Object.entries([true])` yields the pair `["0", true]`, so an array of
+    // booleans satisfies the per-value check and registers. The descriptor
+    // then spreads it and publishes `{ "0": true }` — a capability with a
+    // numeric name that no client reads and no provider meant to declare.
+    expect(withCapabilities([true])).toThrow(/not an object/);
+    // An empty array has no entries to check at all, so nothing downstream
+    // would ever look at it twice.
+    expect(withCapabilities([])).toThrow(/not an object/);
+  });
+
   it("accepts real booleans, and no capabilities at all", () => {
     // The control: the shape every real provider writes must still register.
     expect(

@@ -119,9 +119,13 @@ export function useEmailProvider(
 /**
  * useEmailProviderTypes — the provider catalog this installation can configure.
  *
- * Cached for the session rather than refetched per form: the registry is fixed
- * once the server boots, so the only thing that changes it is a redeploy, which
- * reloads the admin anyway.
+ * Held for five minutes and refreshed on mount and on window focus. The
+ * registry is fixed once the server boots, so navigating between the provider
+ * screens costs no requests — but a redeploy changes it under a tab that is
+ * already open, and nothing in that tab would otherwise hear about it.
+ *
+ * A refresh that fails keeps the descriptors already fetched, so the surfaces
+ * reading this have a state where the catalog is both usable and stale.
  */
 export function useEmailProviderTypes(
   options?: Omit<

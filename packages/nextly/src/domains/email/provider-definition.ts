@@ -475,10 +475,19 @@ function assertCapabilitiesAreBoolean(provider: {
   const capabilities = provider.capabilities;
   if (capabilities === undefined) return;
 
-  if (capabilities === null || typeof capabilities !== "object") {
+  // An array is caught by name rather than by `typeof`, which answers
+  // "object" for one. Its entries would then pass the boolean loop below --
+  // `Object.entries([true])` yields `["0", true]` -- and `toDescriptor`
+  // spreads the result, publishing `{ "0": true }` as a capability no client
+  // has a name for.
+  if (
+    capabilities === null ||
+    typeof capabilities !== "object" ||
+    Array.isArray(capabilities)
+  ) {
     throw new NextlyError({
       code: "BUSINESS_RULE_VIOLATION",
-      publicMessage: `Email provider "${provider.type}" declares \`capabilities\` that is not an object (${capabilities === null ? "null" : typeof capabilities}).`,
+      publicMessage: `Email provider "${provider.type}" declares \`capabilities\` that is not an object (${capabilities === null ? "null" : Array.isArray(capabilities) ? "array" : typeof capabilities}).`,
       logContext: { type: provider.type },
     });
   }

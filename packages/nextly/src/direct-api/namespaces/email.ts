@@ -139,7 +139,9 @@ export interface EmailProvidersNamespace {
   delete(
     args: DeleteEmailProviderArgs
   ): Promise<MutationResult<{ id: string }>>;
-  setDefault(args: SetDefaultProviderArgs): Promise<EmailProviderRecord>;
+  setDefault(
+    args: SetDefaultProviderArgs
+  ): Promise<MutationResult<EmailProviderRecord>>;
   test(
     args: TestEmailProviderArgs
   ): Promise<{ success: boolean; error?: string }>;
@@ -216,11 +218,16 @@ export function createEmailProvidersNamespace(
 
     async setDefault(
       args: SetDefaultProviderArgs
-    ): Promise<EmailProviderRecord> {
-      return await ctx.emailProviderService.setDefault(
+    ): Promise<MutationResult<EmailProviderRecord>> {
+      // The same envelope every other mutation in this namespace returns.
+      // Promotion changes a row, so a caller reads the result the way it reads
+      // a create or an update rather than remembering that one of the five
+      // hands its record back bare.
+      const item = await ctx.emailProviderService.setDefault(
         args.id,
         directApiActor(ctx.defaultConfig, args)
       );
+      return { message: "Default email provider set.", item };
     },
 
     async test(

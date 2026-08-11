@@ -52,6 +52,17 @@ export interface CreateEmailProviderArgs extends DirectAPIConfig {
     configuration: Record<string, unknown>;
     /** Mark as default provider */
     isDefault?: boolean;
+    /**
+     * Whether the provider may be selected to send. Defaults to true.
+     *
+     * Declared on the CREATE shape rather than only on the update, because
+     * both services accept it and `UpdateEmailProviderArgs` derives its own
+     * fields from this one. A typed caller could otherwise neither create a
+     * provider deactivated nor deactivate one afterwards, while a JavaScript
+     * caller could do both — the namespace forwards `data` unchanged, so the
+     * capability was there and only the type withheld it.
+     */
+    isActive?: boolean;
   };
 }
 

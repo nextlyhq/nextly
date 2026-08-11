@@ -61,6 +61,44 @@ export function isUnregisteredProviderType(
   return !descriptors.some(entry => entry.type === providerType);
 }
 
+/** What the provider catalog can be used for right now. */
+export type EmailCatalogState = "loading" | "unavailable" | "stale" | "ready";
+
+/**
+ * Which of those four states the catalog is in.
+ *
+ * A failed request has two outcomes calling for opposite responses. With
+ * nothing cached there is no catalog at all, and a surface built from it would
+ * render an empty picker — which reads as "this installation has no provider
+ * types" rather than "the list could not be loaded". With descriptors already
+ * in hand the failure is a refresh that did not land: every one of them still
+ * renders and still validates, so withdrawing the page would discard whatever
+ * had been typed to fix nothing.
+ *
+ * The two are answered here rather than at each surface for the same reason
+ * `isUnregisteredProviderType` is: the form and the page framing it must reach
+ * one answer. A surface deciding separately is how an enabled Update comes to
+ * sit under a notice saying the settings cannot be edited.
+ *
+ * Loading outranks failure so a retry in flight reads as loading rather than
+ * as the error it has not yet cleared.
+ */
+export function emailCatalogState({
+  loading,
+  failed,
+  descriptors,
+}: {
+  loading?: boolean;
+  /** Whether the request for the catalog failed. */
+  failed: boolean;
+  /** Whatever descriptors are in hand, cached ones included. */
+  descriptors: EmailProviderDescriptor[];
+}): EmailCatalogState {
+  if (loading === true) return "loading";
+  if (!failed) return "ready";
+  return descriptors.length > 0 ? "stale" : "unavailable";
+}
+
 // ============================================================
 // EmailProviderForm Component
 // ============================================================
@@ -279,7 +317,13 @@ export function EmailProviderForm({
     [descriptors, form, provider]
   );
 
-  if (descriptorsLoading) {
+  const catalog = emailCatalogState({
+    loading: descriptorsLoading,
+    failed: descriptorsError !== null && descriptorsError !== undefined,
+    descriptors,
+  });
+
+  if (catalog === "loading") {
     return (
       <div className="space-y-6" aria-busy="true">
         <Skeleton className="h-12 w-full rounded-md" />
@@ -291,7 +335,7 @@ export function EmailProviderForm({
   // Fatal only when there is nothing to render FROM. A failed fetch with no
   // catalog would otherwise show an empty picker, which reads as "this
   // installation has no email providers".
-  if (descriptorsError && descriptors.length === 0) {
+  if (catalog === "unavailable") {
     return (
       <Alert variant="destructive">
         <AlertDescription>
@@ -315,10 +359,7 @@ export function EmailProviderForm({
   // that still render and still validate. Replacing the form would discard
   // whatever had been typed to fix a problem that costs nothing here, so this
   // says so and stays out of the way.
-  const staleCatalog =
-    descriptorsError !== null &&
-    descriptorsError !== undefined &&
-    descriptors.length > 0;
+  const staleCatalog = catalog === "stale";
 
   return (
     <Form {...form}>
