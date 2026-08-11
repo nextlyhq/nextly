@@ -224,6 +224,34 @@ export type IssueCode = keyof typeof ISSUE_CODES;
 const NODE_TYPE_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /**
+ * Whether a value is a well-formed node type, independent of any registry.
+ *
+ * Exported because the editor's op layer has to refuse a malformed node BEFORE
+ * it reaches the tree, and it has no registry in hand — a tree operation is not
+ * the place to require one. Asking this function is what stops that layer
+ * growing its own idea of what a type looks like: a `typeof value === "string"`
+ * check there accepts `"box"`, which this rejects, and the document would then
+ * hold a node that strict validation refuses on the next read.
+ *
+ * `validateNode` below calls it too, so there is one rule rather than two that
+ * agree today.
+ */
+export function isNodeType(value: unknown): value is string {
+  return typeof value === "string" && NODE_TYPE_RE.test(value);
+}
+
+/**
+ * Whether a value is a usable node version: a positive integer.
+ *
+ * Exported for the same reason as {@link isNodeType}, and it excludes the cases
+ * a plain `typeof value === "number"` admits — `0`, `-2.5`, `NaN` — each of
+ * which reaches storage as a version no migration can act on.
+ */
+export function isNodeVersion(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1;
+}
+
+/**
  * Node types the engine defines itself rather than blocks a registry holds.
  * They are structurally valid and resolved by their own machinery, so a
  * registry miss on one of them is not an unknown type.
@@ -661,7 +689,7 @@ function validateNode(
   }
 
   // type: namespaced slug, and — if a registry is supplied — registered.
-  if (typeof node.type !== "string" || !NODE_TYPE_RE.test(node.type)) {
+  if (!isNodeType(node.type)) {
     issues.push({
       path: pointer(path, "type"),
       code: "invalid-node-type",
@@ -685,11 +713,7 @@ function validateNode(
   }
 
   // version: positive integer.
-  if (
-    typeof node.version !== "number" ||
-    !Number.isInteger(node.version) ||
-    node.version < 1
-  ) {
+  if (!isNodeVersion(node.version)) {
     issues.push({
       path: pointer(path, "version"),
       code: "invalid-node-version",

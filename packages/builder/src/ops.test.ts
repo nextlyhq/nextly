@@ -589,6 +589,22 @@ describe("an op whose own shape is wrong", () => {
       '{"kind":"insert","node":"nope","at":{"index":0}}',
     ],
     [
+      "an inserted node whose type is not namespaced",
+      '{"kind":"insert","node":{"id":"x","type":"box","version":1,"props":{}},"at":{"index":0}}',
+    ],
+    [
+      "an inserted node whose version is zero",
+      '{"kind":"insert","node":{"id":"x","type":"core/box","version":0,"props":{}},"at":{"index":0}}',
+    ],
+    [
+      "an inserted node whose version is fractional",
+      '{"kind":"insert","node":{"id":"x","type":"core/box","version":-2.5,"props":{}},"at":{"index":0}}',
+    ],
+    [
+      "a patch setting a version the engine would refuse",
+      '{"kind":"update","id":"a","patch":{"version":0}}',
+    ],
+    [
       "a patch value of the wrong kind",
       '{"kind":"update","id":"a","patch":{"version":"bad"}}',
     ],

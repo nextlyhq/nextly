@@ -71,6 +71,14 @@ export type { NodeLocation, TreePosition } from "./tree";
 
 export { validate, ISSUE_CODES } from "./validation";
 /**
+ * The registry-independent facts about a node, exported so a caller holding no
+ * block registry can still refuse a malformed one. The editor's op layer is the
+ * caller that needs them: it must reject a bad node before the tree primitives
+ * place it, and `validate()` requires a context a tree operation has no business
+ * demanding.
+ */
+export { isNodeType, isNodeVersion } from "./validation";
+/**
  * Exported because anything holding a document read from storage has to ask the
  * same question, and the answer is subtler than it looks: the check is on the
  * PROTOTYPE, so a `Date`, a `Map` or a class instance is refused rather than

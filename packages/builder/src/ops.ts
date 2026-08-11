@@ -24,6 +24,8 @@
 
 import {
   findNode,
+  isNodeType,
+  isNodeVersion,
   isPlainRecord,
   walkNodes,
   insertNode,
@@ -95,8 +97,12 @@ const NODE_FIELDS: {
   };
 } = {
   id: { holds: isNonEmptyString, optional: false },
-  type: { holds: isNonEmptyString, optional: false },
-  version: { holds: isFiniteNumber, optional: false },
+  // The engine's own rules, asked rather than restated. A `typeof === "string"`
+  // check here accepts `"box"` and a `typeof === "number"` accepts `0` and
+  // `-2.5`, all of which strict validation refuses — so an op carrying one
+  // would enter history and leave a document that fails on the next read.
+  type: { holds: isNodeType, optional: false },
+  version: { holds: isNodeVersion, optional: false },
   props: { holds: isPlainRecord, optional: false },
   bindings: { holds: isPlainRecord, optional: true },
   slots: { holds: isSlotMap, optional: true },
@@ -166,17 +172,6 @@ function isNonEmptyString(value: unknown): boolean {
 
 function isBoolean(value: unknown): boolean {
   return typeof value === "boolean";
-}
-
-/**
- * A number that can be compared and stored.
- *
- * `NaN` and the infinities are excluded because they are numbers that survive
- * `typeof` and not `JSON.stringify` — all three serialize to `null`, so a
- * version stamp written as `Infinity` comes back as something else entirely.
- */
-function isFiniteNumber(value: unknown): boolean {
-  return typeof value === "number" && Number.isFinite(value);
 }
 
 function isStringArray(value: unknown): boolean {
