@@ -110,7 +110,9 @@ export const POST = withErrorHandler(
 
     const service = await getEmailService();
     const result = await service.send(args);
-    // Spread the service result (`{ success, messageId? }`) onto the action
+    // The service constructs its public result explicitly, so this spread
+    // carries only `{ success, messageId? }` — never a provider's own extra
+    // fields. Spread onto the action
     // body so consumers that read `messageId` and `success` keep working
     // alongside the server-authored toast string.
     return respondAction("Email queued.", { ...result });

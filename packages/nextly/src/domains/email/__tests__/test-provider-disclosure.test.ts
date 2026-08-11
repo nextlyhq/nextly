@@ -133,7 +133,9 @@ describe("testProvider disclosure", () => {
   it("keeps the detail for the operator, in the log", async () => {
     await service.testProvider(providerId, undefined, "connection");
 
-    // The control that stops the fix from being "delete the diagnostic".
+    // Withholding the detail from the CALLER must not withhold it from the
+    // operator: the message tells them to read the server log, so something
+    // has to have written one.
     const logged = vi
       .mocked(logger.warn)
       .mock.calls.map(call => JSON.stringify(call))
@@ -223,6 +225,705 @@ describe("an adapter that rejects while sending", () => {
       .mocked(logger.error)
       .mock.calls.map(call => JSON.stringify(call))
       .join("\n");
-    expect(logged).toContain(SECRET);
+    // The reason, without the credential the provider interpolated into it.
+    // The log is where the diagnostic belongs and the credential is not part
+    // of the diagnostic -- a process log is shipped to aggregators and read by
+    // more people than the configuration is.
+    expect(logged).toContain("Invalid key");
+    expect(logged).not.toContain(SECRET);
+  });
+});
+
+describe("a test that never reached the provider", () => {
+  let sqlite: Database.Database;
+  let service: EmailProviderService;
+  let providerId: string;
+
+  beforeEach(async () => {
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(chattyProvider);
+    const created = await service.createProvider({
+      name: "Chatty",
+      type: "chatty-probe",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { apiKey: SECRET },
+      isDefault: false,
+      isActive: true,
+    });
+    providerId = created.id;
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    getEmailProviderRegistry().reset();
+  });
+
+  it("records no delivery when the adapter cannot be built", async () => {
+    // The catch around a test send also covers BUILDING the adapter, which
+    // throws on its own when a plugin has been removed or stored configuration
+    // no longer constructs one. A row for either is a phantom send: history
+    // for a message that was never composed.
+    const recorded: unknown[] = [];
+    // Both methods: a test send goes through `record`, an ordinary send
+    // through `recordAll`, and a double carrying only one would make this pass
+    // for want of a method rather than for want of a row.
+    (service as unknown as { deliveries: unknown })["deliveries"] = {
+      record: (input: unknown) => {
+        recorded.push(input);
+        return Promise.resolve();
+      },
+      recordAll: (inputs: unknown[]) => {
+        recorded.push(...inputs);
+        return Promise.resolve();
+      },
+    };
+    (service as unknown as { createAdapterFromProvider: unknown })[
+      "createAdapterFromProvider"
+    ] = () => {
+      throw new Error("the plugin that provided this type is gone");
+    };
+
+    const outcome = await service.testProvider(providerId);
+
+    expect(outcome.success).toBe(false);
+    expect(recorded).toHaveLength(0);
+  });
+
+  it("does not store a test message id that carries the address", async () => {
+    // The test destination is a recipient like any other, and a provider may
+    // build its identifier out of the address it was handed. Storing it
+    // verbatim would put the address beside the hash that exists to avoid
+    // holding it.
+    const recorded: Array<{ messageId: string | null }> = [];
+    (service as unknown as { deliveries: unknown })["deliveries"] = {
+      record: (input: { messageId: string | null }) => {
+        recorded.push(input);
+        return Promise.resolve();
+      },
+      recordAll: () => Promise.resolve(),
+    };
+    (service as unknown as { createAdapterFromProvider: unknown })[
+      "createAdapterFromProvider"
+    ] = () => ({
+      send: () =>
+        Promise.resolve({
+          success: true,
+          messageId: "delivery-someone@example.com-1",
+        }),
+    });
+
+    await service.testProvider(providerId, "someone@example.com");
+
+    expect(recorded[0]?.messageId).toBeNull();
+  });
+
+  it("keeps an ordinary test message id", async () => {
+    // The control: containment is a comparison against the destination, not a
+    // blanket refusal to record ids.
+    const recorded: Array<{ messageId: string | null }> = [];
+    (service as unknown as { deliveries: unknown })["deliveries"] = {
+      record: (input: { messageId: string | null }) => {
+        recorded.push(input);
+        return Promise.resolve();
+      },
+      recordAll: () => Promise.resolve(),
+    };
+    (service as unknown as { createAdapterFromProvider: unknown })[
+      "createAdapterFromProvider"
+    ] = () => ({
+      send: () =>
+        Promise.resolve({ success: true, messageId: "<abc@mail.example.com>" }),
+    });
+
+    await service.testProvider(providerId, "someone@example.com");
+
+    expect(recorded[0]?.messageId).toBe("<abc@mail.example.com>");
+  });
+
+  it("records one when the send itself fails", async () => {
+    // The control: a recorder that never writes anything would satisfy the
+    // case above, so this pins that a send reaching the provider DOES produce
+    // a row.
+    const recorded: unknown[] = [];
+    (service as unknown as { deliveries: unknown })["deliveries"] = {
+      record: (input: unknown) => {
+        recorded.push(input);
+        return Promise.resolve();
+      },
+      recordAll: (inputs: unknown[]) => {
+        recorded.push(...inputs);
+        return Promise.resolve();
+      },
+    };
+    (service as unknown as { createAdapterFromProvider: unknown })[
+      "createAdapterFromProvider"
+    ] = () => ({
+      send: () => Promise.reject(new Error("the relay refused the connection")),
+    });
+
+    const outcome = await service.testProvider(providerId);
+
+    expect(outcome.success).toBe(false);
+    expect(recorded).toHaveLength(1);
+  });
+});
+
+describe("a test send the provider accepted and the server refused", () => {
+  let sqlite: Database.Database;
+  let service: EmailProviderService;
+  let providerId: string;
+
+  /** Accepts the message, then names the only address it was given. */
+  const refusingProvider = defineEmailProvider<{ apiKey: string }>({
+    type: "refusing-test",
+    label: "Refusing",
+    configFields: [
+      { name: "apiKey", label: "API Key", kind: "password", secret: true },
+    ],
+    parseConfig: input => input as { apiKey: string },
+    createAdapter: () => ({
+      send: (options: { to: string }) =>
+        Promise.resolve({
+          success: true,
+          messageId: "msg-1",
+          rejected: [options.to],
+        }),
+    }),
+  });
+
+  beforeEach(async () => {
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(refusingProvider);
+    const created = await service.createProvider({
+      name: "Refusing",
+      type: "refusing-test",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { apiKey: SECRET },
+      isDefault: false,
+      isActive: true,
+    });
+    providerId = created.id;
+  });
+
+  afterEach(() => {
+    getEmailProviderRegistry().reset();
+    sqlite.close();
+  });
+
+  it("is not reported as a successful test", async () => {
+    // A test has exactly one destination, so a provider that refused it
+    // delivered nothing — and the Test button exists to answer whether this
+    // provider can deliver.
+    const outcome = await service.testProvider(providerId, "nope@example.com");
+
+    expect(outcome.success).toBe(false);
+    expect(outcome.error).toMatch(/refused the test recipient/i);
+  });
+
+  it("says the address was refused rather than that the send failed", async () => {
+    // The two send an operator to different places: the provider and its
+    // credentials, or the address they typed.
+    const outcome = await service.testProvider(providerId, "nope@example.com");
+
+    expect(outcome.error).not.toMatch(/Send returned unsuccessful/);
+  });
+
+  it("still reports a test the provider accepted", async () => {
+    // The control. `rejected` naming some OTHER address says nothing about
+    // this test's destination, and must not fail it.
+    getEmailProviderRegistry().reset();
+    getEmailProviderRegistry().register(
+      defineEmailProvider<{ apiKey: string }>({
+        type: "refusing-test",
+        label: "Refusing",
+        configFields: [
+          { name: "apiKey", label: "API Key", kind: "password", secret: true },
+        ],
+        parseConfig: input => input as { apiKey: string },
+        createAdapter: () => ({
+          send: () =>
+            Promise.resolve({
+              success: true,
+              messageId: "msg-1",
+              rejected: ["someone-else@example.com"],
+            }),
+        }),
+      })
+    );
+
+    const outcome = await service.testProvider(providerId, "yes@example.com");
+
+    expect(outcome.success).toBe(true);
+  });
+});
+
+describe("a test-send id built out of the test message itself", () => {
+  let sqlite: Database.Database;
+  let service: EmailProviderService;
+  let providerId: string;
+  const recorded: Array<{ messageId: string | null }> = [];
+
+  /** Returns an id carrying a long span of the body it was handed. */
+  const echoingProvider = defineEmailProvider<{ apiKey: string }>({
+    type: "echoing-test",
+    label: "A Very Distinctive Provider Name",
+    configFields: [
+      { name: "apiKey", label: "API Key", kind: "password", secret: true },
+    ],
+    parseConfig: input => input as { apiKey: string },
+    createAdapter: () => ({
+      send: (options: { html: string }) =>
+        Promise.resolve({
+          success: true,
+          // The body interpolates the provider's name, so this is content
+          // from the message rather than an identifier of its own.
+          messageId: `sent-${options.html.slice(options.html.indexOf("<strong>") + 8, options.html.indexOf("</strong>"))}`,
+        }),
+    }),
+  });
+
+  beforeEach(async () => {
+    recorded.length = 0;
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(echoingProvider);
+    const created = await service.createProvider({
+      name: "A Very Distinctive Provider Name",
+      type: "echoing-test",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { apiKey: SECRET },
+      isDefault: false,
+      isActive: true,
+    });
+    providerId = created.id;
+    (service as unknown as { deliveries: unknown })["deliveries"] = {
+      record: (input: { messageId: string | null }) => {
+        recorded.push(input);
+        return Promise.resolve();
+      },
+      recordAll: (inputs: Array<{ messageId: string | null }>) => {
+        recorded.push(...inputs);
+        return Promise.resolve();
+      },
+    };
+  });
+
+  afterEach(() => {
+    getEmailProviderRegistry().reset();
+    sqlite.close();
+  });
+
+  it("is not stored in the delivery row", async () => {
+    // The ordinary send path keeps subject and body values out of every sink.
+    // This path checked only the recipient, so the shorter route stored what
+    // the longer one refuses.
+    await service.testProvider(providerId, "someone@example.com");
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]?.messageId).toBeNull();
+  });
+});
+
+describe("a test recipient the caller wrote with a display name", () => {
+  let sqlite: Database.Database;
+  let service: EmailProviderService;
+  let providerId: string;
+
+  /** Accepts the message and refuses the address, as SMTP reports it: bare. */
+  const refusingProvider = defineEmailProvider<{ apiKey: string }>({
+    type: "display-refusing",
+    label: "Refusing",
+    configFields: [
+      { name: "apiKey", label: "API Key", kind: "password", secret: true },
+    ],
+    parseConfig: input => input as { apiKey: string },
+    createAdapter: () => ({
+      send: (options: { to: string }) =>
+        Promise.resolve({
+          success: true,
+          messageId: "msg-1",
+          // The MAILBOX, which is the form a server answers `RCPT TO` in.
+          rejected: [options.to.replace(/^.*<|>.*$/g, "")],
+        }),
+    }),
+  });
+
+  beforeEach(async () => {
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(refusingProvider);
+    const created = await service.createProvider({
+      name: "Refusing",
+      type: "display-refusing",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { apiKey: SECRET },
+      isDefault: false,
+      isActive: true,
+    });
+    providerId = created.id;
+  });
+
+  afterEach(() => {
+    getEmailProviderRegistry().reset();
+    sqlite.close();
+  });
+
+  it("is matched against the refusal despite the display name", async () => {
+    // A caller may write `Jane <jane@example.com>` and SMTP answers with the
+    // bare address, so comparing the strings as written never matches — and
+    // the Test button reports success for the one recipient that was refused.
+    const outcome = await service.testProvider(
+      providerId,
+      "Jane <jane@example.com>"
+    );
+
+    expect(outcome.success).toBe(false);
+    expect(outcome.error).toMatch(/refused the test recipient/i);
+  });
+
+  it("still reports success when nothing was refused", async () => {
+    // The control: normalising both sides must not make every test fail.
+    getEmailProviderRegistry().reset();
+    getEmailProviderRegistry().register(
+      defineEmailProvider<{ apiKey: string }>({
+        type: "display-refusing",
+        label: "Refusing",
+        configFields: [
+          { name: "apiKey", label: "API Key", kind: "password", secret: true },
+        ],
+        parseConfig: input => input as { apiKey: string },
+        createAdapter: () => ({
+          send: () => Promise.resolve({ success: true, messageId: "msg-1" }),
+        }),
+      })
+    );
+
+    const outcome = await service.testProvider(
+      providerId,
+      "Jane <jane@example.com>"
+    );
+
+    expect(outcome.success).toBe(true);
+  });
+});
+
+describe("a test send that THREW, addressed with a display name", () => {
+  let sqlite: Database.Database;
+
+  // The registry is process-wide and the handle is not released on its own, so
+  // both go back whatever the assertions do. Left at the end of the test body,
+  // one failing expectation skips them: the registration reaches every later
+  // suite in this worker, and one failure becomes a cascade.
+  afterEach(() => {
+    getEmailProviderRegistry().reset();
+    sqlite.close();
+  });
+
+  it("records the mailbox, as the resolved path does", async () => {
+    // Both paths record a delivery for one destination, and both record the
+    // MAILBOX: every reader hashes the bare address, so a row stored under the
+    // hash of `Jane <jane@example.com>` could never be found again.
+    const recorded: Array<{ to: string }> = [];
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    const service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(chattyProvider);
+    const created = await service.createProvider({
+      name: "Chatty",
+      type: "chatty-probe",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { apiKey: SECRET },
+      isDefault: false,
+      isActive: true,
+    });
+
+    (service as unknown as { deliveries: unknown })["deliveries"] = {
+      record: (input: { to: string }) => {
+        recorded.push(input);
+        return Promise.resolve();
+      },
+      recordAll: (inputs: Array<{ to: string }>) => {
+        recorded.push(...inputs);
+        return Promise.resolve();
+      },
+    };
+    (service as unknown as { createAdapterFromProvider: unknown })[
+      "createAdapterFromProvider"
+    ] = () => ({
+      send: () => Promise.reject(new Error("the relay refused the connection")),
+    });
+
+    await service.testProvider(created.id, "Jane <jane@example.com>");
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]?.to).toBe("jane@example.com");
+  });
+});
+
+describe("a parser that changes what a credential looks like", () => {
+  afterEach(() => {
+    getEmailProviderRegistry().reset();
+  });
+
+  /**
+   * A provider whose adapter interpolates the credential it was BUILT with.
+   *
+   * `parseConfig` is what stands between the stored configuration and the
+   * adapter, so the value the adapter holds is the parser's output — and that
+   * is the only value it can put into an identifier.
+   */
+  function pinnedProvider(
+    parse: (input: unknown) => Record<string, unknown>,
+    render: (config: Record<string, unknown>) => string
+  ) {
+    return defineEmailProvider({
+      type: "pinned",
+      label: "Pinned",
+      configFields: [
+        {
+          name: "pin",
+          label: "PIN",
+          kind: "text",
+          required: true,
+          secret: true,
+        },
+      ],
+      parseConfig: parse,
+      createAdapter: config => ({
+        send: () =>
+          Promise.resolve({ success: true, messageId: render(config) }),
+      }),
+    });
+  }
+
+  it("withholds an id when parsing leaves the credential too short to compare", async () => {
+    // A numeric coercion turns `"00007"` into `7`. The stored form is five
+    // characters and compares perfectly well; the form the adapter actually
+    // holds is one character, which cannot be used as a needle without
+    // deleting every identifier that happens to contain a digit. Reading
+    // comparability from the stored side alone answers for a value nobody
+    // uses, and `id-7` goes back to the caller.
+    const provider = pinnedProvider(
+      input => ({ pin: Number((input as { pin: string }).pin) }),
+      config => `id-${String(config.pin)}`
+    );
+
+    const adapter = provider.createAdapterFrom({ pin: "00007" });
+    const result = await adapter.send({
+      to: "a@b.com",
+      from: "c@d.com",
+      subject: "s",
+      html: "<p>h</p>",
+    });
+
+    expect(result.messageId).toBeUndefined();
+  });
+
+  it("keeps an id from a provider whose parser only fills in defaults", async () => {
+    // The control, and the reason comparability is read from the parsed side
+    // while SHAPE is not. A parser adding keys the descriptor never declared
+    // is the ordinary way to write one, and treating that as unmatchable
+    // withholds every identifier from every provider that has a default.
+    const provider = pinnedProvider(
+      input => ({
+        pin: (input as { pin: string }).pin,
+        region: "us-east-1",
+        retries: 3,
+      }),
+      () => "message-id-from-the-provider"
+    );
+
+    const adapter = provider.createAdapterFrom({ pin: "8419573026" });
+    const result = await adapter.send({
+      to: "a@b.com",
+      from: "c@d.com",
+      subject: "s",
+      html: "<p>h</p>",
+    });
+
+    expect(result.messageId).toBe("message-id-from-the-provider");
+  });
+
+  /** What the log line for a failed stage actually carries. */
+  function diagnosticOf(error: unknown): string {
+    const held = error as { message?: string; cause?: unknown };
+    return JSON.stringify({
+      message: held.message,
+      cause: held.cause instanceof Error ? held.cause.message : held.cause,
+    });
+  }
+
+  it("contains a derived credential thrown while BUILDING the adapter", async () => {
+    // `createAdapter` receives the parsed configuration and objects to a
+    // credential it cannot use — the likeliest moment for a provider to quote
+    // one back. The stored needle cannot match the derived form, so the value
+    // reaches `email.failed` unless the parsed form is compared here.
+    const derived = Buffer.from("8419573026").toString("base64");
+    const provider = defineEmailProvider({
+      type: "builder",
+      label: "Builder",
+      configFields: [
+        {
+          name: "pin",
+          label: "PIN",
+          kind: "text",
+          required: true,
+          secret: true,
+        },
+      ],
+      parseConfig: input => ({
+        token: Buffer.from((input as { pin: string }).pin).toString("base64"),
+      }),
+      createAdapter: (config: { token: string }) => {
+        throw new Error(`unusable key ${config.token}`);
+      },
+    });
+
+    let diagnostic = "";
+    try {
+      provider.createAdapterFrom({ pin: "8419573026" });
+    } catch (error) {
+      diagnostic = diagnosticOf(error);
+    }
+
+    expect(diagnostic).not.toContain(derived);
+    // The control: the failure still has to be reported, and still has to say
+    // which provider and which stage. Containment that swallowed the whole
+    // diagnostic would pass the assertion above and leave nothing to debug.
+    expect(diagnostic).toContain("builder");
+  });
+
+  it("contains a derived credential a PROBE rejects with", async () => {
+    const derived = Buffer.from("8419573026").toString("base64");
+    const provider = defineEmailProvider({
+      type: "prober",
+      label: "Prober",
+      configFields: [
+        {
+          name: "pin",
+          label: "PIN",
+          kind: "text",
+          required: true,
+          secret: true,
+        },
+      ],
+      parseConfig: input => ({
+        token: Buffer.from((input as { pin: string }).pin).toString("base64"),
+      }),
+      createAdapter: () => ({
+        send: () => Promise.resolve({ success: true, messageId: "x" }),
+      }),
+      testConnection: (config: { token: string }) =>
+        Promise.reject(new Error(`probe refused ${config.token}`)),
+    });
+
+    let diagnostic = "";
+    try {
+      await provider.testConnectionFrom?.({ pin: "8419573026" });
+    } catch (error) {
+      diagnostic = diagnosticOf(error);
+    }
+
+    expect(diagnostic).not.toContain(derived);
+    expect(diagnostic).toContain("prober");
+  });
+
+  it("still lets a probe that SUCCEEDS answer", async () => {
+    // The control for both stages: containment must not turn every probe into
+    // a failure, which would pass the two assertions above.
+    const provider = defineEmailProvider({
+      type: "healthy",
+      label: "Healthy",
+      configFields: [
+        {
+          name: "pin",
+          label: "PIN",
+          kind: "text",
+          required: true,
+          secret: true,
+        },
+      ],
+      parseConfig: input => input as Record<string, unknown>,
+      createAdapter: () => ({
+        send: () => Promise.resolve({ success: true, messageId: "x" }),
+      }),
+      testConnection: () => Promise.resolve({ ok: true, detail: "reachable" }),
+    });
+
+    await expect(
+      provider.testConnectionFrom?.({ pin: "8419573026" })
+    ).resolves.toMatchObject({ ok: true, detail: "reachable" });
+  });
+
+  it("withholds an id when the parser RENAMES the credential", async () => {
+    // `{ apiKey }` becomes `{ token: base64(apiKey) }`. The declared path is
+    // empty in what the adapter holds, so nothing here produced a needle for
+    // the value it actually interpolates, while the stored form still looks
+    // perfectly matchable and cannot match the encoding.
+    const provider = pinnedProvider(
+      input => ({
+        token: Buffer.from((input as { pin: string }).pin).toString("base64"),
+      }),
+      config => `id-${String(config.token)}`
+    );
+
+    const adapter = provider.createAdapterFrom({ pin: "8419573026" });
+    const result = await adapter.send({
+      to: "a@b.com",
+      from: "c@d.com",
+      subject: "s",
+      html: "<p>h</p>",
+    });
+
+    expect(result.messageId).toBeUndefined();
+  });
+
+  it("still withholds an id that contains the parsed credential", async () => {
+    // The other control. A credential long enough to compare is compared in
+    // its EFFECTIVE form, so a parser that rewrites rather than shortens is
+    // still caught — the change above must not have replaced that check.
+    const provider = pinnedProvider(
+      input => ({
+        pin: `derived-${(input as { pin: string }).pin}`,
+      }),
+      config => `id-${String(config.pin)}`
+    );
+
+    const adapter = provider.createAdapterFrom({ pin: "8419573026" });
+    const result = await adapter.send({
+      to: "a@b.com",
+      from: "c@d.com",
+      subject: "s",
+      html: "<p>h</p>",
+    });
+
+    expect(result.messageId).toBeUndefined();
   });
 });

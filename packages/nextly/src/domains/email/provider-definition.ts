@@ -18,6 +18,15 @@ import { NextlyError } from "../../errors";
 import type { EmailProviderAdapter } from "./types";
 
 /**
+ * What an adapter's `send` resolves to.
+ *
+ * Derived from the adapter contract rather than restated, so a change to what
+ * a provider may return cannot leave the containment below checking a shape
+ * nothing produces any more.
+ */
+type EmailSendResult = Awaited<ReturnType<EmailProviderAdapter["send"]>>;
+
+/**
  * Longest provider type id that every dialect can store.
  *
  * Postgres and MySQL declare `email_providers.type` as `varchar(50)` while
@@ -181,6 +190,269 @@ export interface RegisteredEmailProvider {
 }
 
 /**
+ * Whether the configuration holds a leaf no field declares.
+ *
+ * Walked as PATHS, matching how `configFields[].name` addresses nested values
+ * (`auth.pass`), so a declared branch's children are covered by their own
+ * declarations rather than by the branch.
+ */
+function hasUndeclaredLeaf(
+  fields: ReadonlyArray<EmailProviderConfigField>,
+  config: Record<string, unknown>
+): boolean {
+  const declared = new Set(fields.map(field => field.name));
+
+  const walk = (value: unknown, prefix: string): boolean => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      return !declared.has(prefix);
+    }
+    return Object.entries(value as Record<string, unknown>).some(
+      ([key, leaf]) => walk(leaf, prefix ? `${prefix}.${key}` : key)
+    );
+  };
+
+  return Object.entries(config).some(([key, value]) => walk(value, key));
+}
+
+/**
+ * The values a provider DECLARED as credentials, read out of its configuration.
+ *
+ * Declared rather than guessed, exactly as masking does: a heuristic over key
+ * names calls `credential` public and a harmless `token` secret, and it can
+ * only ever be right about names core has seen.
+ *
+ * A value of one to three characters cannot be compared safely: it matches
+ * almost any identifier, so using it as a needle would delete every message id
+ * the provider returns. It is reported as UNMATCHABLE rather than skipped, and
+ * the caller drops the id instead of trying to match it.
+ *
+ * A provider that declares NO fields is the same case. An empty list is an
+ * absence of information, not a statement that nothing is secret — the service
+ * masks every configuration leaf for exactly that reason — so containment
+ * fails closed here too.
+ */
+/** What containment knows about a provider's declared credentials. */
+interface DeclaredSecretValues {
+  comparable: string[];
+  /** Anything at all that makes an identifier from this provider untrustworthy. */
+  hasUnmatchable: boolean;
+  /**
+   * Whether a DECLARED credential is one this configuration cannot supply a
+   * usable needle for: a boolean, a scalar too short to compare without
+   * deleting every legitimate id, or one the configuration does not hold at
+   * all.
+   *
+   * Separated from the rest because the two travel differently between the
+   * stored configuration and the parsed one. An UNDECLARED leaf describes the
+   * shape of a configuration, and a parser is entitled to change that --
+   * filling a default, deriving a working field it alone uses -- so reading it
+   * from the parsed form would withhold every id from every provider that has
+   * a default.
+   *
+   * A declared credential is different, in both directions. Missing from the
+   * STORED configuration, it is one a parser default supplied and nothing here
+   * ever saw. Missing from the PARSED configuration, the parser has moved it:
+   * `{ apiKey }` becomes `{ token: base64(apiKey) }`, and the adapter now
+   * interpolates a value the stored needle cannot match. Neither side can be
+   * trusted to have produced a comparable form of it, so both count.
+   */
+  hasUnusableSecret: boolean;
+}
+
+/**
+ * Needles covering a credential in BOTH the form it was stored in and the form
+ * the provider's own code holds.
+ *
+ * `containProviderCallbacks` wraps a registered provider from the outside and
+ * can only see the stored input, so a parser that derives a credential --
+ * Base64-encoding a key, deriving a token -- leaves it comparing a value the
+ * provider never used. Every callback that runs AFTER `parseConfig` therefore
+ * builds its needles here, where both forms are in scope.
+ *
+ * The stored side contributes every reason it has, including an UNDECLARED
+ * leaf: a value in the stored configuration that no field describes really is
+ * a credential nobody accounted for.
+ *
+ * The parsed side contributes only what it says about DECLARED credentials,
+ * because a parser is entitled to add keys of its own and counting those would
+ * withhold every identifier from every provider that fills in a default.
+ *
+ * Both ways a parser can move a declared credential out of reach are covered
+ * by that. It may shorten one -- `"00007"` becomes `7` under a numeric
+ * coercion -- leaving the provider interpolating a value too ambiguous to use
+ * as a needle while the stored form still looks matchable. Or it may rename
+ * one -- `{ apiKey }` becomes `{ token: base64(apiKey) }` -- leaving the
+ * declared path empty in what the provider holds, and the stored needle unable
+ * to match what it interpolates.
+ */
+function secretsFromBothForms(
+  fields: ReadonlyArray<EmailProviderConfigField>,
+  stored: unknown,
+  parsed: unknown
+): DeclaredSecretValues {
+  const fromStored = declaredSecretValues(fields, stored);
+  const fromParsed = declaredSecretValues(fields, parsed);
+
+  return {
+    comparable: [...fromStored.comparable, ...fromParsed.comparable],
+    hasUnmatchable: fromStored.hasUnmatchable || fromParsed.hasUnusableSecret,
+    hasUnusableSecret:
+      fromStored.hasUnusableSecret || fromParsed.hasUnusableSecret,
+  };
+}
+
+function declaredSecretValues(
+  fields: ReadonlyArray<EmailProviderConfigField>,
+  config: unknown
+): DeclaredSecretValues {
+  if (config === null || typeof config !== "object") {
+    return {
+      comparable: [],
+      hasUnmatchable: false,
+      hasUnusableSecret: false,
+    };
+  }
+
+  // No metadata and a configuration to protect: nothing here can say which
+  // leaf is a credential, so no message id from this provider can be trusted.
+  // `declaredSecretPaths` reaches the same conclusion and masks everything.
+  if (fields.length === 0) {
+    return {
+      comparable: [],
+      // Shape, not value: nothing here names a credential, so every id from
+      // this provider is untrustworthy — but a parser that adds keys to a
+      // configuration nobody described has not made it any worse.
+      hasUnmatchable: Object.keys(config).length > 0,
+      hasUnusableSecret: false,
+    };
+  }
+
+  const comparable: string[] = [];
+  let hasUnmatchable = false;
+  let hasUnusableSecret = false;
+
+  // A configuration leaf no field DECLARES is treated as secret by
+  // `maskConfiguration`, on the reasoning that absence of information has to
+  // mask more rather than less -- a credential left behind by a provider
+  // upgrade is exactly the case. Containment has to agree, or a legacy API key
+  // is withheld from every read and then handed back inside a message id.
+  //
+  // Its value is not compared, because an undeclared leaf may be anything;
+  // its mere presence makes ids from this provider untrustworthy.
+  if (hasUndeclaredLeaf(fields, config as Record<string, unknown>)) {
+    hasUnmatchable = true;
+  }
+
+  for (const field of fields) {
+    if (field.secret !== true) continue;
+    let current: unknown = config;
+    for (const segment of field.name.split(".")) {
+      if (current === null || typeof current !== "object") {
+        current = undefined;
+        break;
+      }
+      current = (current as Record<string, unknown>)[segment];
+    }
+    // Every SCALAR, not only strings. A declared credential may be a number --
+    // a numeric PIN on a `kind: "number"` field is a legal declaration -- and
+    // reading only strings hands back an empty list for exactly the provider
+    // whose credential is about to be interpolated into an identifier.
+    //
+    // A BOOLEAN credential is unmatchable rather than compared. `secret: true`
+    // is permitted on a boolean field, and its two renderings -- "true" and
+    // "false" -- appear inside ordinary identifiers often enough that using
+    // them as needles would delete legitimate message ids while catching the
+    // credential only by accident.
+    if (typeof current === "boolean") {
+      hasUnmatchable = true;
+      hasUnusableSecret = true;
+      continue;
+    }
+
+    // A declared credential ABSENT from the stored configuration is the case a
+    // parser default fires on -- `z.string().default(process.env.KEY)` fills an
+    // undefined key and the adapter then holds a credential that was never
+    // stored, so there is nothing here to compare an id against. Absence is
+    // distinguished from an empty value on purpose: a default does not fire for
+    // `""`, so the adapter holds the empty string and has no secret to leak.
+    // The built-in SMTP provider's loopback sink sends `auth.pass` as `""` and
+    // keeps its message ids because of that distinction.
+    if (current === undefined) {
+      hasUnmatchable = true;
+      hasUnusableSecret = true;
+      continue;
+    }
+
+    // An object or an array is skipped: its rendering is not what a provider
+    // would interpolate, and stringifying one produces a needle that matches
+    // nothing while looking like protection.
+    const scalar =
+      typeof current === "string"
+        ? current
+        : typeof current === "number" || typeof current === "bigint"
+          ? String(current)
+          : undefined;
+    if (scalar === undefined || scalar.length === 0) continue;
+    // Both the stored form and its trimmed form. A parser is free to normalise
+    // what it is handed -- `z.string().trim()` is the ordinary way to write a
+    // credential field -- and the adapter then closes over the trimmed value
+    // while this only ever sees what was stored. Comparing the stored form
+    // alone lets `"  key  "` be returned inside `id-key`, which is the whole
+    // disclosure this exists to stop.
+    for (const needle of new Set([scalar, scalar.trim()])) {
+      if (needle.length === 0) continue;
+      // A secret of one to three characters matches almost any identifier, so
+      // comparing against it would delete every message id this provider
+      // returns. It cannot be compared safely and it cannot be ignored either
+      // -- it is recorded as UNMATCHABLE, and the caller drops the id
+      // outright. Applied per needle, so a credential that is long only
+      // because of its whitespace is treated as the short one it really is.
+      if (needle.length < 4) {
+        hasUnmatchable = true;
+        hasUnusableSecret = true;
+      } else comparable.push(needle);
+    }
+  }
+
+  return { comparable, hasUnmatchable, hasUnusableSecret };
+}
+
+/**
+ * Drop a `messageId` that carries one of this provider's credentials.
+ *
+ * Dropped rather than redacted. A message id exists to be matched against the
+ * provider's own record of the send, and a partially rewritten one matches
+ * nothing while still looking like an identifier — so the honest outcome is
+ * that this send has no id. The row is still written, and still says the
+ * message was sent.
+ */
+function withoutLeakedSecrets(
+  result: EmailSendResult,
+  secrets: { comparable: readonly string[]; hasUnmatchable: boolean }
+): EmailSendResult {
+  const messageId = result.messageId;
+  if (typeof messageId !== "string") return result;
+
+  // A provider holding a secret too short to compare loses its message ids
+  // entirely. That is the honest trade: the id is a convenience for matching a
+  // send against the provider's own dashboard, and a credential in a database
+  // column is not recoverable. A provider that wants its ids back declares a
+  // longer credential.
+  if (secrets.hasUnmatchable) return { ...result, messageId: undefined };
+
+  // Case-insensitive, for the same reason the trimmed form is compared: a
+  // parser that lowercases a hex token leaves the adapter holding a value this
+  // never saw. An id that carries the credential in any casing is dropped.
+  const haystack = messageId.toLowerCase();
+  if (
+    !secrets.comparable.some(secret => haystack.includes(secret.toLowerCase()))
+  ) {
+    return result;
+  }
+  return { ...result, messageId: undefined };
+}
+
+/**
  * A provider failure, split into what may be shown and what must be logged.
  *
  * Normalising a provider's own error moves the useful half onto `cause`, where
@@ -286,24 +558,12 @@ export function defineEmailProvider<TConfig>(
    * to show, while a bare `Error`'s message is whatever the throw site
    * happened to interpolate.
    */
-  const normalizeCallbackFailure = (
-    error: unknown,
-    stage: "createAdapter" | "testConnection" | "send"
-  ): unknown => {
-    if (NextlyError.is(error)) return error;
-    // Constructed rather than `NextlyError.internal()`, which fixes its own
-    // public sentence: naming the provider is what tells an operator which of
-    // several configured providers failed, and the type comes from the
-    // install's own code rather than from a request.
-    return new NextlyError({
-      code: "INTERNAL_ERROR",
-      publicMessage: `The "${definition.type}" email provider failed. Check the server logs for the reason.`,
-      cause: error instanceof Error ? error : undefined,
-      logContext: { providerType: definition.type, stage },
-    });
-  };
 
-  return {
+  // Built raw, then contained. The wrapper is the same one `register()` applies
+  // to a hand-built provider, so the two cannot come to differ about what a
+  // callback is allowed to let out -- and applying it twice is harmless, which
+  // is what makes enforcing at both ends safe.
+  return containProviderCallbacks({
     type: definition.type,
     label: definition.label,
     description: definition.description,
@@ -313,47 +573,82 @@ export function defineEmailProvider<TConfig>(
     validateConfig: (input: unknown): void => {
       parse(input);
     },
+    // Parses AND builds, so the typed value never escapes the closure that
+    // knows its type. Nothing here catches: the containment above does it.
     createAdapterFrom: (input: unknown): EmailProviderAdapter => {
       const config = parse(input);
+      const fromParsed = secretsFromBothForms(
+        definition.configFields,
+        input,
+        config
+      );
+
+      // Built inside the containment, not before it. `createAdapter` receives
+      // the PARSED configuration and is as free as any other callback to write
+      // it into a message -- `throw new Error(\`bad key ${config.token}\`)\` is
+      // an easy thing to write, and construction is where a provider is most
+      // likely to object to a credential. Left outside, that throw travelled
+      // to the caller and into `email.failed` with the value intact.
       let adapter: EmailProviderAdapter;
       try {
         adapter = definition.createAdapter(config);
       } catch (error) {
-        throw normalizeCallbackFailure(error, "createAdapter");
+        throw normalizeProviderFailure(
+          definition.type,
+          error,
+          "createAdapter",
+          fromParsed
+        );
       }
 
-      // The adapter CLOSES OVER the parsed configuration, so its `send` is the
-      // longest-lived route from a credential to an error message: building it
-      // succeeds and the disclosure happens later, on a rejection nothing here
-      // would otherwise see. Wrapping the factory alone left that open.
-      //
-      // `adapter.send(...)` is called through the adapter rather than a
-      // detached reference, so a class-based implementation keeps its `this`.
       return {
         ...adapter,
         send: async options => {
           try {
-            return await adapter.send(options);
+            return withoutLeakedSecrets(
+              await adapter.send(options),
+              fromParsed
+            );
           } catch (error) {
-            throw normalizeCallbackFailure(error, "send");
+            // Normalised here rather than thrown contained. The wrapper around
+            // this one passes a `NextlyError` through untouched, on the
+            // reading that a provider chose it deliberately -- so throwing a
+            // bare contained value would make it the error the caller sees,
+            // in place of the sentence naming which provider failed.
+            throw normalizeProviderFailure(
+              definition.type,
+              error,
+              "send",
+              fromParsed
+            );
           }
         },
       };
     },
     testConnectionFrom: probe
       ? async (input: unknown) => {
-          // Awaited inside the try so a rejected promise is normalized too —
-          // returning it unawaited would leave the async half of exactly the
-          // same leak open.
+          const config = parse(input);
           try {
-            return await probe(parse(input));
+            return await probe(config);
           } catch (error) {
-            throw normalizeCallbackFailure(error, "testConnection");
+            // Contained here, where the parsed configuration is in scope. The
+            // outer wrapper contains this callback too, but only against the
+            // stored form -- and a probe is handed the parsed one, so a
+            // rejection quoting a derived credential passed that pass
+            // untouched. Running first also means the outer pass sees a
+            // `NextlyError` and leaves it alone, which is what keeps the two
+            // from disagreeing about what a probe may say.
+            throw normalizeProviderFailure(
+              definition.type,
+              error,
+              "testConnection",
+              secretsFromBothForms(definition.configFields, input, config)
+            );
           }
         }
       : undefined,
     hasConnectionTest: typeof probe === "function",
-  };
+  });
 }
 
 /**
@@ -373,6 +668,235 @@ export interface EmailProviderDescriptor {
 }
 
 /** Reduce a registered provider to what may safely leave the server. */
+/**
+ * A provider callback's failure, as it is allowed to leave the provider.
+ *
+ * A deliberately thrown `NextlyError` passes through: its `publicMessage` is an
+ * authoring decision about what is safe to show, while a bare `Error`'s message
+ * is whatever the throw site happened to interpolate — and a provider that
+ * writes its configuration into a diagnostic (`Invalid key ${apiKey}` is an
+ * easy thing to write) would otherwise hand a credential to any authenticated
+ * caller who pressed Test.
+ *
+ * The provider's own text is not lost: it is moved onto `cause`, which is what
+ * the log reads.
+ */
+/** What a declared credential is replaced with when it appears in a diagnostic. */
+export const REDACTED_SECRET = "[secret]";
+
+/**
+ * Every occurrence of one literal, whatever its case.
+ *
+ * The literal is escaped before it becomes a pattern: a credential may contain
+ * characters a regular expression reads as syntax, and an unescaped one either
+ * matches the wrong text or throws while building.
+ *
+ * A pattern rather than a hand-rolled scan over `toLowerCase()`, for two
+ * reasons that both bite in production. Case folding can CHANGE LENGTH -- `İ`
+ * lowercases to two code units -- so an index found in a folded copy does not
+ * address the original, and enough of them ahead of a credential shift the
+ * replacement clear of it and leave the whole secret in the text. And a folded
+ * copy taken per match makes the work grow with the number of matches, so a
+ * provider quoting a large remote error body back turns the failure path into
+ * a stall. Matching over the ORIGINAL string keeps offsets exact by having
+ * none, and one pass is one pass.
+ */
+function caseInsensitivePattern(literal: string): RegExp {
+  return new RegExp(literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+}
+
+/**
+ * A provider's own diagnostic, with its declared credentials taken out.
+ *
+ * A thrown error is the longest route a credential has out of a provider: the
+ * wrapper keeps it out of the response by refusing to make the message public,
+ * but `describeProviderFailure` walks the `cause` chain into the `email.failed`
+ * log line, and `Error(config.apiKey)` is an easy thing for a provider to
+ * write. A process log is shipped to aggregators and read by more people than
+ * the configuration is.
+ *
+ * Done HERE rather than at the log site because this is the only place that
+ * knows which values are credentials — the same knowledge the message-id
+ * containment beside it uses.
+ *
+ * The rest of the text survives. An SMTP status line or an API error code is
+ * the one fact worth having when a send fails, and redacting the whole
+ * diagnostic to remove a credential that may not be in it would trade a real
+ * disclosure for a permanent loss of the reason.
+ */
+function containedFailure(
+  error: unknown,
+  secrets: DeclaredSecretValues
+): Error | undefined {
+  if (!(error instanceof Error)) return undefined;
+
+  const texts: string[] = [];
+  let current: unknown = error;
+  // Bounded like the reader that consumes this: a cycle in a `cause` chain
+  // must not hang the failure path.
+  for (let depth = 0; current instanceof Error && depth < 5; depth += 1) {
+    texts.push(current.message);
+    current = current.cause;
+  }
+
+  // Nothing here can say which text is safe, so none of it is kept -- the same
+  // answer the message id gets when its credentials cannot be compared.
+  if (secrets.hasUnmatchable) {
+    return new NextlyError({
+      code: "INTERNAL_ERROR",
+      publicMessage:
+        "Provider diagnostics were withheld: this provider's credentials cannot be checked for in its own text.",
+      logContext: { reason: "provider-diagnostic-unmatchable" },
+    });
+  }
+
+  // Case-insensitively, for the same reason the message id is compared that
+  // way: a parser that lowercases a key leaves the adapter holding a spelling
+  // this never saw, and a provider quoting it back would slip past an exact
+  // match. The literal is escaped before it becomes a pattern, so a credential
+  // containing characters a regular expression would read as syntax matches
+  // itself rather than whatever they would have meant.
+  let text = texts.join(": ");
+  // LONGEST first. A provider may declare one credential that is a prefix of
+  // another -- `sk_live` beside `sk_live_REAL_SECRET` -- and redacting the
+  // short one first consumes the head of the long one, leaving its tail in the
+  // text as `[secret]_REAL_SECRET`. Replacing the longest match first cannot
+  // be undone by a shorter one, because the characters are already gone.
+  const byLengthDescending = [...secrets.comparable].sort(
+    (left, right) => right.length - left.length
+  );
+  for (const secret of byLengthDescending) {
+    if (secret.length === 0) continue;
+    text = text.replace(caseInsensitivePattern(secret), REDACTED_SECRET);
+  }
+  // A `NextlyError`, not a bare one: this value is attached as the `cause` of
+  // the error the wrapper throws, and everything constructed as an error in
+  // this package is a `NextlyError`. Its sentence is the provider's own
+  // diagnostic with the declared credentials taken out, which is what the
+  // failure log is for -- the caller sees the OUTER error's message, never
+  // this one.
+  return new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: text,
+    logContext: { reason: "provider-diagnostic" },
+  });
+}
+
+function normalizeProviderFailure(
+  type: string,
+  error: unknown,
+  stage: "createAdapter" | "testConnection" | "send",
+  secrets: DeclaredSecretValues
+): unknown {
+  // A provider that threw a `NextlyError` deliberately chose its own public
+  // sentence and field paths; passing it through is the point. Containment is
+  // applied to everything else, HERE rather than at the call sites, so a
+  // contained cause can never be handed back into this check and mistaken for
+  // that deliberate error.
+  if (NextlyError.is(error)) return error;
+  // Constructed rather than `NextlyError.internal()`, which fixes its own
+  // public sentence: naming the provider is what tells an operator which of
+  // several configured providers failed, and the type comes from the install's
+  // own code rather than from a request.
+  return new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: `The "${type}" email provider failed. Check the server logs for the reason.`,
+    cause: containedFailure(error, secrets),
+    logContext: { providerType: type, stage },
+  });
+}
+
+/**
+ * Wrap a provider's callbacks so a credential cannot leave through one.
+ *
+ * `defineEmailProvider` applies this to what it builds, and the registry
+ * applies it to everything it is handed. Both, because
+ * `RegisteredEmailProvider` is a STRUCTURAL type: a JavaScript plugin or a
+ * hand-built object reaches `register()` with its own `createAdapterFrom`, and
+ * containment that lived only in the authoring helper would protect exactly the
+ * authors least likely to need it.
+ *
+ * Applying it twice is harmless: `normalizeProviderFailure` passes a
+ * `NextlyError` through unchanged, and a message id with no credential in it is
+ * returned as it is. That is what makes enforcing at both ends safe.
+ *
+ * The secrets are read from the configuration this adapter was built FROM,
+ * because the parsed form never leaves `createAdapterFrom` -- the erased
+ * definition returns an adapter, not the value it parsed. The adapter can
+ * therefore hold a credential in a shape this never saw, so the stored string
+ * and its trimmed form are both compared and the comparison ignores case,
+ * which covers the normalisations a credential field ordinarily receives.
+ *
+ * A parser that transforms a credential further -- encodes it, or derives a
+ * token from it -- is outside what any comparison here can reach. Closing that
+ * needs the parsed value, which is a change to the provider contract rather
+ * than to this wrapper.
+ */
+export function containProviderCallbacks(
+  provider: RegisteredEmailProvider
+): RegisteredEmailProvider {
+  const probe = provider.testConnectionFrom;
+
+  return {
+    ...provider,
+    createAdapterFrom: (input: unknown): EmailProviderAdapter => {
+      // Read BEFORE the callback runs. Building the adapter is itself a stage
+      // that can throw a credential -- `createAdapter` receives the decrypted
+      // configuration -- so containment cannot wait until after it succeeds.
+      const secrets = declaredSecretValues(provider.configFields, input);
+
+      let adapter: EmailProviderAdapter;
+      try {
+        adapter = provider.createAdapterFrom(input);
+      } catch (error) {
+        throw normalizeProviderFailure(
+          provider.type,
+          error,
+          "createAdapter",
+          secrets
+        );
+      }
+
+      return {
+        ...adapter,
+        send: async options => {
+          let result: EmailSendResult;
+          try {
+            result = await adapter.send(options);
+          } catch (error) {
+            throw normalizeProviderFailure(
+              provider.type,
+              error,
+              "send",
+              secrets
+            );
+          }
+          return withoutLeakedSecrets(result, secrets);
+        },
+      };
+    },
+    ...(probe
+      ? {
+          testConnectionFrom: async (input: unknown) => {
+            // The probe holds the decrypted configuration exactly as `send`
+            // does, and `testProvider` writes its cause into the process log.
+            const secrets = declaredSecretValues(provider.configFields, input);
+            try {
+              return await probe(input);
+            } catch (error) {
+              throw normalizeProviderFailure(
+                provider.type,
+                error,
+                "testConnection",
+                secrets
+              );
+            }
+          },
+        }
+      : {}),
+  };
+}
+
 export function toDescriptor(
   provider: RegisteredEmailProvider
 ): EmailProviderDescriptor {

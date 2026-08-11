@@ -1299,8 +1299,10 @@ export class UserMutationService extends BaseService {
       // Deliberately fire-and-forget: a welcome message is a courtesy, and
       // failing user creation because it could not be delivered would be worse
       // than not sending it. Both failure shapes are logged rather than
-      // dropped, since the sender reports a provider failure as an
-      // unsuccessful result rather than by throwing.
+      // dropped, since an undelivered message comes back as an unsuccessful
+      // result rather than as a throw -- and that covers a provider that
+      // failed outright as well as one that accepted the message and refused
+      // this recipient.
       if (changes.sendWelcomeEmail && this.emailService) {
         await this.emailService
           .sendWelcomeEmail(user!.email, {
@@ -1311,7 +1313,7 @@ export class UserMutationService extends BaseService {
             if (!result.success) {
               this.logger.warn("Welcome email was not delivered", {
                 event: "user.welcome_email_failed",
-                reason: "provider reported an unsuccessful send",
+                reason: "not-delivered-to-recipient",
               });
             }
           })
