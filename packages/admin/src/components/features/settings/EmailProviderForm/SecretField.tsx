@@ -69,15 +69,11 @@ export function SecretField({
   // The input itself, so revealing can focus it. The reveal button carries
   // `tabIndex={-1}` and therefore never moves focus on its own.
   const inputRef = useRef<HTMLInputElement | null>(null);
-  // The mask this field started with, so it can be restored when the user
-  // clears it by focusing and leaves without typing anything.
-  const storedMask = useRef<string | null>(null);
-  // Whether anything was typed since the mask was cleared. This is what
-  // separates "looked at the field" from "deliberately emptied it": both leave
-  // an empty input, and restoring the mask in the second case would make an
-  // optional credential impossible to remove — the payload would omit it and
-  // the server's merge would put the old value back, reporting success.
-  const edited = useRef(false);
+  // Whether the field is showing itself as empty so the user can type over the
+  // mask. This is a DISPLAY state only — the form still holds the mask — so
+  // there is no moment at which an unsubmitted form contains an empty
+  // credential the user did not empty.
+  const [editing, setEditing] = useState(false);
 
   return (
     <FormField
@@ -93,13 +89,16 @@ export function SecretField({
             "Existing secret is configured. Focus and type a new value to replace it."
           : description;
 
-        const clearMaskForEditing = () => {
-          if (isMaskedPlaceholder) {
-            storedMask.current = currentValue;
-            edited.current = false;
-            field.onChange("");
-          }
-        };
+        // Blanked for TYPING, not for submitting. Focusing shows an empty box
+        // so a new credential replaces rather than appends, while the form
+        // still holds the mask — so every submit path, including Enter from
+        // inside the field and any button that does not move focus first,
+        // reads an untouched credential as untouched.
+        //
+        // Clearing the form value instead needed a restoration on blur, and
+        // any submit that did not blur first deleted the credential. Nothing
+        // has to be restored now, because nothing was taken away.
+        const displayValue = isMaskedPlaceholder && editing ? "" : currentValue;
 
         return (
           <FormItem className="m-0">
@@ -120,28 +119,17 @@ export function SecretField({
                     autoComplete="off"
                     className="pr-10"
                     disabled={disabled}
-                    value={currentValue}
-                    onFocus={clearMaskForEditing}
+                    value={displayValue}
+                    onFocus={() => setEditing(true)}
                     onChange={event => {
                       // Any keystroke, including the one that empties the
-                      // field, makes what is left the user's decision.
-                      edited.current = true;
+                      // field, makes what is left the user's decision — and it
+                      // is the first moment the FORM stops holding the mask.
                       setReplaced(true);
                       field.onChange(event.target.value);
                     }}
                     onBlur={() => {
-                      // Restore the mask only when the field was cleared for
-                      // editing and NOTHING was typed. Glancing at a credential
-                      // leaves it untouched; deleting one leaves it deleted.
-                      if (
-                        storedMask.current !== null &&
-                        currentValue === "" &&
-                        !edited.current
-                      ) {
-                        field.onChange(storedMask.current);
-                      }
-                      storedMask.current = null;
-                      edited.current = false;
+                      setEditing(false);
                       field.onBlur();
                     }}
                   />
@@ -151,16 +139,10 @@ export function SecretField({
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                     onClick={() => {
                       // A stored secret cannot be revealed — the server never
-                      // sent it. Clearing the mask on the first reveal lets the
-                      // user type a replacement and watch it as they do.
-                      clearMaskForEditing();
+                      // sent it. Focusing lets the user type a replacement and
+                      // watch it as they do; typing nothing leaves the stored
+                      // credential exactly as it was.
                       setVisible(current => !current);
-                      // Focused deliberately. The clear above is undone by the
-                      // input's `onBlur` when nothing was typed, and this
-                      // button never blurs the input by itself — so without
-                      // this the clear has no counterpart, and a reveal
-                      // followed by a save would remove a credential the user
-                      // only wanted to look at.
                       inputRef.current?.focus();
                     }}
                     aria-label={visible ? "Hide value" : "Show value"}

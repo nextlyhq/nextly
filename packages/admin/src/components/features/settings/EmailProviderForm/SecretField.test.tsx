@@ -46,9 +46,19 @@ function Harness({
           label="API Key"
           storedSecret={storedSecret}
         />
+        {/* What the FORM holds, which is what a submit would carry — distinct
+            from what the input displays while it is being edited. */}
+        <output data-testid="form-value">
+          {String(form.watch("configuration.apiKey") ?? "")}
+        </output>
       </form>
     </Form>
   );
+}
+
+/** The value the form would submit, as opposed to what the input shows. */
+function currentFormValue(): string {
+  return screen.getByTestId("form-value").textContent ?? "";
 }
 
 function secretInput(): HTMLInputElement {
@@ -89,15 +99,61 @@ describe("a credential made only of the characters the mask uses", () => {
     expect(input.value).toBe("••••");
   });
 
-  it("still clears the real mask on reveal", async () => {
+  it("lets a typed value replace the real mask", async () => {
     const user = userEvent.setup();
     render(<Harness initialValue={MASKED_SECRET} storedSecret />);
 
     await user.click(screen.getByRole("button", { name: /show value/i }));
+    await user.type(secretInput(), "brand-new-secret");
 
-    // The control. Without it the two assertions above would pass on a field
-    // that had simply stopped clearing anything, which would leave the user
-    // appending a new credential to a mask.
-    expect(secretInput().value).toBe("");
+    // The control for the two cases above. The mask is SELECTED on focus
+    // rather than cleared, so the field never holds "" without the user having
+    // emptied it — and typing still replaces rather than appends, which is the
+    // property clearing existed to provide.
+    expect(secretInput().value).toBe("brand-new-secret");
+  });
+
+  it("leaves the mask alone when a reveal is followed by no typing", async () => {
+    const user = userEvent.setup();
+    render(<Harness initialValue={MASKED_SECRET} storedSecret />);
+
+    await user.click(screen.getByRole("button", { name: /show value/i }));
+    await user.tab();
+
+    // The case that made clearing fragile: every submit path that does not
+    // blur first read the empty field as a deliberate removal. There is no
+    // empty window to misread now.
+    expect(secretInput().value).toBe(MASKED_SECRET);
+  });
+});
+
+describe("submitting without ever leaving the credential field", () => {
+  it("keeps the stored mask in the form", async () => {
+    // Enter from inside the field submits without firing blur. The previous
+    // design cleared the FORM value on focus and restored it on blur, so this
+    // path read an untouched credential as a deliberate removal and deleted
+    // it. The form now never holds the empty value at all.
+    const user = userEvent.setup();
+    render(<Harness initialValue={MASKED_SECRET} storedSecret />);
+
+    const input = secretInput();
+    await user.click(input);
+    // Displayed empty so typing replaces rather than appends...
+    expect(input.value).toBe("");
+
+    // ...but no blur, no restoration, and the value the form submits is the
+    // mask — which is what "leave this credential alone" means on the wire.
+    expect(currentFormValue()).toBe(MASKED_SECRET);
+  });
+
+  it("submits what was typed when the user did type", async () => {
+    // The control: the blanking must not make a real replacement invisible.
+    const user = userEvent.setup();
+    render(<Harness initialValue={MASKED_SECRET} storedSecret />);
+
+    await user.click(secretInput());
+    await user.type(secretInput(), "a-new-credential");
+
+    expect(currentFormValue()).toBe("a-new-credential");
   });
 });
