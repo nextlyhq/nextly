@@ -21,13 +21,14 @@ import type {
 import { SettingsRow } from "../SettingsRow";
 import { SettingsSection } from "../SettingsSection";
 
-import { ProviderConfigFields } from "./ProviderConfigFields";
+import { configFieldPath, ProviderConfigFields } from "./ProviderConfigFields";
 import { ProviderTypePicker } from "./ProviderTypePicker";
 import {
   buildProviderSchema,
   defaultFormValues,
   emptyConfiguration,
   formValuesToPayload,
+  missingDeclaredFields,
   providerToFormValues,
   type EmailProviderPayload,
   type ProviderFormValues,
@@ -229,8 +230,6 @@ export function EmailProviderForm({
     hadDescriptor: boolean;
     /** What the record HELD when it filled the form, not when it was written. */
     revision: string;
-    /** Which PROVIDER the configuration on screen was built for. */
-    type: string;
   } | null>(null);
 
   // Repopulate once the record and the catalog have both arrived: both are
@@ -262,29 +261,41 @@ export function EmailProviderForm({
       // which is what the identity guard exists to prevent.
       const revision = recordRevision(provider);
       if (hydrated.revision !== revision) {
-        const typeChanged = hydrated.type !== provider.type;
         hydratedFor.current = {
           id: provider.id,
           hadDescriptor: descriptor !== undefined,
           revision,
-          type: provider.type,
         };
+
+        // Which provider the configuration on screen was built for, read from
+        // the form rather than remembered beside it. The form already holds
+        // the answer, and a remembered copy is a second one that drifts.
+        const typeBefore = form.getValues("type");
+        const held = form.getValues("configuration");
 
         const next = providerToFormValues(provider, descriptor);
         form.reset(next, { keepDirtyValues: true });
 
-        // A revision that also changed the TYPE is not a newer version of the
-        // same form. Configuration typed under the old descriptor describes a
-        // provider this record is no longer, so keeping it submits an SMTP
-        // host to a Resend payload -- stored as an undeclared key by a
-        // permissive parser, or refused outright by a stricter one, on every
-        // save from then on. The identity fields are type-independent and keep
-        // whatever was typed.
-        // `resetField`, not `setValue`: the field has to stop being DIRTY as
-        // well as change value. `shouldDirty: false` leaves an existing dirty
-        // mark standing, and the next refetch's `keepDirtyValues` would then
-        // preserve this now-stale value in place of the server's newer one.
-        if (typeChanged) {
+        // A configuration belongs to the type it was built for, so whichever
+        // side owns the type owns the configuration with it.
+        const typeOnScreen = form.getValues("type");
+        if (typeOnScreen !== provider.type) {
+          // The operator picked a different type and has not saved it, so
+          // their choice survived the reset as a dirty value. The record's
+          // configuration describes a provider the form is no longer showing:
+          // keeping it submits an SMTP host to a Resend payload -- stored as
+          // an undeclared key by a permissive parser, or refused outright by a
+          // stricter one, on every save from then on. The reset above has
+          // already applied it to every field nobody typed into, so the
+          // configuration on screen is put back as it was.
+          form.resetField("configuration", { defaultValue: held });
+        } else if (typeBefore !== provider.type) {
+          // The record moved to another type while the form sat open and
+          // nobody here had chosen one, so the record's configuration is the
+          // right one now. It has to stop being DIRTY as well as change value:
+          // `shouldDirty: false` leaves an existing mark standing, and the next
+          // reconcile's `keepDirtyValues` would then preserve this now-stale
+          // value in place of the server's newer one.
           form.resetField("configuration", {
             defaultValue: next.configuration,
           });
@@ -292,28 +303,49 @@ export function EmailProviderForm({
         return;
       }
 
-      // Already populated, and populated from a descriptor — nothing a later
-      // catalog can add.
-      if (hydrated.hadDescriptor || !descriptor) return;
+      // Nothing a later catalog can offer while it still has no descriptor.
+      if (!descriptor) return;
 
-      // The catalog answered "not registered" when this form opened and
-      // answers otherwise now: the plugin was reinstalled while the tab sat
-      // open. The configuration half was filled from a descriptor that did
-      // not exist, so its fields are empty while the form is editable again —
-      // a required credential reads as missing, and an optional blank submits
-      // as a deliberate removal of what is stored.
-      hydratedFor.current = {
-        id: provider.id,
-        hadDescriptor: true,
-        revision: recordRevision(provider),
-        type: provider.type,
-      };
-      // Only the configuration is replaced. The identity fields were filled
-      // from the record and belong to whoever has the form open.
-      form.reset({
-        ...form.getValues(),
-        configuration: providerToFormValues(provider, descriptor).configuration,
-      });
+      if (!hydrated.hadDescriptor) {
+        // The catalog answered "not registered" when this form opened and
+        // answers otherwise now: the plugin was reinstalled while the tab sat
+        // open. The configuration half was filled from a descriptor that did
+        // not exist, so its fields are empty while the form is editable again —
+        // a required credential reads as missing, and an optional blank submits
+        // as a deliberate removal of what is stored.
+        hydratedFor.current = {
+          id: provider.id,
+          hadDescriptor: true,
+          revision: recordRevision(provider),
+        };
+        // Only the configuration is replaced, and through `resetField` rather
+        // than a whole-form reset. The identity fields were filled from the
+        // record and belong to whoever has the form open.
+        form.resetField("configuration", {
+          defaultValue: providerToFormValues(provider, descriptor)
+            .configuration,
+        });
+        return;
+      }
+
+      // The record is unchanged and this type was registered all along, but a
+      // descriptor can still declare MORE than it did when the form opened. A
+      // field added by a deployment would otherwise hold nothing while its
+      // control renders an empty state, so the control disagrees with what a
+      // save would produce.
+      //
+      // Written one path at a time, and only where the form holds nothing:
+      // replacing the whole configuration would clear the dirty marks on every
+      // other field, and reconciling keeps only what is still marked dirty.
+      for (const missing of missingDeclaredFields(
+        form.getValues("configuration"),
+        provider,
+        descriptor
+      )) {
+        form.resetField(configFieldPath(missing.field), {
+          defaultValue: missing.value,
+        });
+      }
       return;
     }
 
@@ -321,7 +353,6 @@ export function EmailProviderForm({
       id: provider.id,
       hadDescriptor: descriptor !== undefined,
       revision: recordRevision(provider),
-      type: provider.type,
     };
     form.reset(providerToFormValues(provider, descriptor));
   }, [provider, isEdit, descriptors, form]);
@@ -349,12 +380,12 @@ export function EmailProviderForm({
     // unusable; the name, sender address and switches are the operator's own
     // work and have nothing to do with which plugin is installed. Discarding
     // them turns a catalog refresh into lost typing.
+    // Written field by field rather than through a whole-form reset, which
+    // would make every current value the new baseline and clear the dirty
+    // marks on the identity fields this is deliberately keeping.
     const next = defaultFormValues(descriptors[0]);
-    form.reset({
-      ...form.getValues(),
-      type: next.type,
-      configuration: next.configuration,
-    });
+    form.resetField("type", { defaultValue: next.type });
+    form.resetField("configuration", { defaultValue: next.configuration });
   }, [isEdit, descriptors, form]);
 
   // Replace the configuration when the provider type changes. The two
@@ -378,19 +409,32 @@ export function EmailProviderForm({
   const handleTypeChange = useCallback(
     (type: string) => {
       const next = descriptors.find(entry => entry.type === type);
-      form.reset({
-        ...form.getValues(),
-        type,
-        // Coming BACK to the type the record is stored as restores what the
-        // record holds, rather than a blank form. Blanking it would leave the
-        // original type selected with its credential gone: a required one
-        // could not be saved without retyping a secret nobody meant to change,
-        // and an optional one would read as a deliberate removal.
-        configuration:
-          provider && provider.type === type
-            ? providerToFormValues(provider, next).configuration
-            : emptyConfiguration(next),
-      });
+      // Coming BACK to the type the record is stored as restores what the
+      // record holds, rather than a blank form. Blanking it would leave the
+      // original type selected with its credential gone: a required one could
+      // not be saved without retyping a secret nobody meant to change, and an
+      // optional one would read as a deliberate removal.
+      const configuration =
+        provider && provider.type === type
+          ? providerToFormValues(provider, next).configuration
+          : emptyConfiguration(next);
+
+      // The type is the operator's own edit, so it is marked DIRTY: a refetch
+      // reconciles with `keepDirtyValues`, which keeps only what is marked,
+      // and an unmarked selection is silently replaced by the record's. Coming
+      // back to the stored type marks nothing, because there is then nothing
+      // to preserve.
+      form.setValue("type", type, { shouldDirty: true });
+      // The configuration is DERIVED from that choice rather than typed, so it
+      // becomes the new baseline instead: nothing here is work to protect, and
+      // leaving it marked would preserve it over the record's own values on
+      // every later reconcile.
+      //
+      // Both written field by field. A whole-form reset would make every
+      // current value the new baseline, clearing the dirty marks on the
+      // identity fields — and a rename in progress would then be overwritten
+      // by the next refetch with nothing on screen to say so.
+      form.resetField("configuration", { defaultValue: configuration });
     },
     [descriptors, form, provider]
   );

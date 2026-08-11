@@ -771,6 +771,54 @@ export function hasStoredSecret(
 }
 
 /**
+ * Declared fields the configuration on screen has no value for, with what each
+ * should start as.
+ *
+ * A catalog refetch can bring a descriptor that declares MORE than the one a
+ * form was built from — a deployment adding a configuration field to a provider
+ * type already in use. The record itself has not changed, so nothing prompts a
+ * rehydrate, and the form holds nothing at the new path while its control
+ * renders an empty state: a switch reads off, a text input reads blank, and a
+ * save produces neither.
+ *
+ * Only paths holding NOTHING are reported. A field being edited, or one already
+ * carrying a stored value, is left out — a descriptor that renames a field
+ * rather than adding one otherwise arrives at an occupied path and overwrites
+ * work in progress.
+ *
+ * Starting values are DERIVED from the same function that fills a form when it
+ * opens, so a field added while one is open holds exactly what opening it now
+ * would have shown. Deciding that here a second time is how the two come to
+ * disagree about a default nobody changed.
+ */
+export function missingDeclaredFields(
+  held: Record<string, unknown>,
+  provider: EmailProviderRecord,
+  descriptor?: EmailProviderDescriptor
+): Array<{ field: EmailProviderConfigField; value: unknown }> {
+  const hydrated = providerToFormValues(provider, descriptor).configuration;
+  const missing: Array<{ field: EmailProviderConfigField; value: unknown }> =
+    [];
+
+  for (const field of descriptor?.configFields ?? []) {
+    const path = splitFieldPath(field.name);
+    if (path === null) continue;
+    if (readAtPath(held, path) !== undefined) continue;
+
+    // A stored value no control can represent is left out of a hydrated form
+    // rather than replaced by a stand-in, so there is nothing to initialise
+    // this field with either. Writing one would offer a value the operator
+    // never chose back as a value to save.
+    const value = readAtPath(hydrated, path);
+    if (value === undefined) continue;
+
+    missing.push({ field, value });
+  }
+
+  return missing;
+}
+
+/**
  * Whether a switch is showing a position its stored value did not choose.
  *
  * A value the control cannot show is left out of the form, so the control
