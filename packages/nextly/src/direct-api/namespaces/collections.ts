@@ -32,6 +32,7 @@ import type {
 
 import type { NextlyContext } from "./context";
 import {
+  accessOptions,
   buildMutationMessage,
   createErrorFromResult,
   isNotFoundError,
@@ -66,8 +67,7 @@ export async function find<TSlug extends CollectionSlug>(
     select: args.select,
     sort: args.sort,
     richTextFormat: config.richTextFormat,
-    overrideAccess: config.overrideAccess,
-    user: config.user,
+    ...accessOptions(config),
     // i18n M4: forward the content locale + fallback so localized fields resolve.
     locale: config.locale,
     fallbackLocale: config.fallbackLocale,
@@ -118,8 +118,7 @@ export async function findByID<TSlug extends CollectionSlug>(
       depth: config.depth,
       select: args.select,
       richTextFormat: config.richTextFormat,
-      overrideAccess: config.overrideAccess,
-      user: config.user,
+      ...accessOptions(config),
       // Overlay the pending working draft when the caller opts in; the service
       // still gates it on an update-capability probe.
       includeWorkingDraft: args.draft,
@@ -163,8 +162,7 @@ export async function create<TSlug extends CollectionSlug>(
     ctx.collectionsHandler.createEntry(
       {
         collectionName: args.collection,
-        overrideAccess: config.overrideAccess,
-        user: config.user,
+        ...accessOptions(config),
         // Forward the content locale so a localized write lands in the
         // requested language's companion row, not the default locale's.
         locale: config.locale,
@@ -215,8 +213,7 @@ export async function update<TSlug extends CollectionSlug>(
         {
           collectionName: args.collection,
           entryId,
-          overrideAccess: config.overrideAccess,
-          user: config.user,
+          ...accessOptions(config),
           // Forward the content locale so a localized update targets the requested
           // language's companion row, not the default locale's.
           locale: config.locale,
@@ -248,8 +245,7 @@ export async function update<TSlug extends CollectionSlug>(
           collectionName: args.collection,
           where,
           data: args.data,
-          overrideAccess: config.overrideAccess,
-          user: config.user,
+          ...accessOptions(config),
           context: config.context,
           disableRevalidate: config.disableRevalidate,
         },
@@ -328,8 +324,7 @@ export async function deleteEntry<
       ctx.collectionsHandler.deleteEntry({
         collectionName: args.collection,
         entryId,
-        overrideAccess: config.overrideAccess,
-        user: config.user,
+        ...accessOptions(config),
         context: config.context,
         disableRevalidate: config.disableRevalidate,
       })
@@ -355,8 +350,7 @@ export async function deleteEntry<
         {
           collectionName: args.collection,
           where,
-          overrideAccess: config.overrideAccess,
-          user: config.user,
+          ...accessOptions(config),
           context: config.context,
           disableRevalidate: config.disableRevalidate,
         },
@@ -401,8 +395,7 @@ export async function count(
   const result = await ctx.collectionsHandler.countEntries({
     collectionName: args.collection,
     where: args.where,
-    overrideAccess: config.overrideAccess,
-    user: config.user,
+    ...accessOptions(config),
     // i18n M4: parity with find() so locale-scoped counts match.
     locale: config.locale,
     fallbackLocale: config.fallbackLocale,
@@ -432,8 +425,7 @@ export async function bulkDelete(
     ctx.collectionsHandler.bulkDeleteEntries({
       collectionName: args.collection,
       ids: args.ids,
-      overrideAccess: config.overrideAccess,
-      user: config.user,
+      ...accessOptions(config),
       context: config.context,
       disableRevalidate: config.disableRevalidate,
     })
@@ -468,8 +460,7 @@ export async function duplicate<TSlug extends CollectionSlug>(
       collectionName: args.collection,
       entryId: args.id,
       overrides: args.overrides,
-      overrideAccess: config.overrideAccess,
-      user: config.user,
+      ...accessOptions(config),
       context: config.context,
       disableRevalidate: config.disableRevalidate,
     })

@@ -9,6 +9,7 @@
  * @packageDocumentation
  */
 
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
 import type { RequestContext } from "../../shared/types/index";
@@ -19,6 +20,7 @@ import type {
   Permission,
   Role,
   SingleDefinition,
+  UserContext,
 } from "../types/index";
 
 /**
@@ -34,6 +36,37 @@ export function mergeConfig<T extends DirectAPIConfig>(
   return {
     ...defaultConfig,
     ...args,
+  };
+}
+
+/**
+ * Every field a service needs to decide whether this caller may see a row.
+ */
+export interface AccessOptions {
+  user?: UserContext;
+  overrideAccess?: boolean;
+  authenticatedScope?: AuthenticatedScope;
+}
+
+/**
+ * The access-bearing fields of a Direct API call, as one spreadable object.
+ *
+ * `user` says WHO is calling; `authenticatedScope` says what kind of caller and
+ * which grants the API KEY itself carries, which is what stops an update-only
+ * key from reading on the strength of its owner's permissions. The two travel
+ * together because a service that receives one without the other judges a
+ * scoped key by its owner — the exact leak this exists to close.
+ *
+ * Spread this rather than listing the fields inline: an operation that forwards
+ * `user` but not `authenticatedScope` compiles, runs, and silently authorizes
+ * the key as its owner. `no-inline-access-options.test.ts` fails the build if a
+ * namespace hand-writes them instead.
+ */
+export function accessOptions(config: DirectAPIConfig): AccessOptions {
+  return {
+    user: config.user,
+    overrideAccess: config.overrideAccess,
+    authenticatedScope: config.actor,
   };
 }
 
