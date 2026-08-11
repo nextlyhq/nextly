@@ -928,8 +928,9 @@ export class EmailProviderService extends BaseService {
       providerType: row.type,
       // A client retry promotes a provider that is already the default. The
       // final state is identical, so claiming `isDefault` changed manufactures
-      // an audit event out of a no-op -- and the update path beside this one
-      // already reports nothing for a value that did not move.
+      // an audit event out of a no-op. An empty list is what the recorder
+      // reads as "nothing moved", and it writes no row at all for one -- the
+      // same answer the update path beside this one gets.
       changedFields: row.isDefault ? [] : ["isDefault"],
       actor,
     });

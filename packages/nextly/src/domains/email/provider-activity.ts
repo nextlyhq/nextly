@@ -80,6 +80,29 @@ function willRecord(
 }
 
 /**
+ * Whether this mutation moved anything worth an entry.
+ *
+ * An `update` that changed nothing still reaches here: the form submits every
+ * field whether or not the operator touched it, and promoting a provider that
+ * is already the default is an ordinary client retry. Both produce an entry the
+ * feed renders as "updated Production SMTP", which is a claim that something
+ * happened — and the whole value of this trail is that every entry means
+ * something moved.
+ *
+ * Empty is only meaningful for an update. A create and a delete carry no field
+ * list because the action already says what it did, so an absent list there is
+ * a full description rather than an empty one.
+ *
+ * Decided here rather than at each call site, because there are two of them —
+ * `updateProvider` and `setDefault` — and a comment in one claiming the other
+ * already skipped is how they came to disagree.
+ */
+function worthRecording(input: EmailProviderActivityInput): boolean {
+  if (input.action !== "update") return true;
+  return (input.changedFields?.length ?? 0) > 0;
+}
+
+/**
  * Record one provider mutation.
  *
  * Called AFTER the write commits, so it uses the standalone `logActivity`,
@@ -96,6 +119,7 @@ export async function recordProviderActivity(
   input: EmailProviderActivityInput
 ): Promise<void> {
   if (!willRecord(input.actor)) return;
+  if (!worthRecording(input)) return;
 
   let service: ActivityLogService;
   try {

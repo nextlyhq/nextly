@@ -255,7 +255,7 @@ describe("email provider activity", () => {
     });
   });
 
-  it("ignores a request key the service does not recognise", async () => {
+  it("records nothing for a request key the service does not recognise", async () => {
     // The update body is a cast over parsed JSON. An unknown key is ignored by
     // every write, so reporting it would claim a change that never happened —
     // and put a request-controlled string into a widely readable row.
@@ -270,17 +270,24 @@ describe("email provider activity", () => {
       ACTOR
     );
 
-    expect(logged[0]?.metadata).toEqual({ providerType: "smtp" });
+    // No entry at all. `data` is a cast over parsed JSON, so an unknown key is
+    // ignored by every write — and an entry the feed renders as "updated
+    // Production SMTP" for a request that wrote nothing is a claim that
+    // something happened.
+    expect(logged).toHaveLength(0);
   });
 
-  it("reports nothing changed when an update changes nothing", async () => {
+  it("records nothing when an update changes nothing", async () => {
     const created = await service.createProvider(INPUT, ACTOR);
     logged.length = 0;
 
     await service.updateProvider(created.id, { name: INPUT.name }, ACTOR);
 
-    // The control for the diff: a no-op update must not report a field.
-    expect(logged[0]?.metadata).toEqual({ providerType: "smtp" });
+    // Not a fieldless entry — no entry. The form submits every field whether
+    // or not the operator touched one, so a save that moved nothing is the
+    // ordinary case, and the feed rendering it as "updated Production SMTP"
+    // would make most entries in the trail claims about nothing.
+    expect(logged).toHaveLength(0);
   });
 
   it("records a promotion to default", async () => {
@@ -343,7 +350,10 @@ describe("email provider activity", () => {
 
     await service.setDefault(created.id, ACTOR);
 
-    expect(logged[0]?.metadata).toEqual({ providerType: "smtp" });
+    // A client retry on a provider that is already the default writes nothing,
+    // by the same rule the update path follows — decided in one place so the
+    // two cannot come to disagree.
+    expect(logged).toHaveLength(0);
   });
 
   it("records a promotion that did change something", async () => {
@@ -568,8 +578,9 @@ describe("an update over a configuration nobody can decrypt", () => {
 
     await service.updateProvider(readable.id, { configuration: {} }, ACTOR);
 
-    // No `changedFields` at all, which is how this service already reports an
-    // update that changed nothing.
-    expect(logged[0]?.metadata).toEqual({ providerType: "permissive" });
+    // Nothing moved, so nothing is recorded. That is what separates this from
+    // the two cases above it: an unreadable preimage produces an entry naming
+    // `configuration`, and a readable empty one produces no entry at all.
+    expect(logged).toHaveLength(0);
   });
 });
