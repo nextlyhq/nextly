@@ -172,10 +172,45 @@ export interface ContentRouteConfig<TNode> {
    * populated target would be read with access rules bypassed and drafts
    * included, and a public route pre-renders that into a static artifact.
    *
-   * Setting this on a public route restores expansion, and by setting it you
-   * state that the collections your pages populate are public too.
+   * Setting this on a public route restores expansion, bounded by
+   * {@link ContentRouteConfig.trustedCollections}.
    */
   depth?: number;
+  /**
+   * The collections this route's trust extends to, when it populates
+   * relationships.
+   *
+   * **Defaults to the route's own `collections`**, which is what the guide has
+   * always said this route means: the collections you list are the public ones.
+   * A page that populates a relationship reaches a collection you did NOT list
+   * — it was reached through a field — so without naming it, that target is
+   * read the way an anonymous visitor would read it: its own access rules
+   * apply, and only its published rows are returned.
+   *
+   * ```ts
+   * // Posts are public, and each one populates an author.
+   * createPublicContentRoute({
+   *   collections: ["posts"],
+   *   trustedCollections: ["posts", "authors"],
+   *   depth: 1,
+   *   render: ...,
+   * });
+   * ```
+   *
+   * **This only ever narrows.** Listing a collection here cannot grant more
+   * than the route already holds; omitting one means its rows are judged by
+   * their own rules rather than skipped wholesale.
+   *
+   * **Trusting a collection does NOT admit its drafts.** A public route
+   * pre-renders, so an unpublished row pulled in through a relationship is
+   * written to a static artifact and outlives the row being unpublished.
+   * Trusting a collection says its published content may be shown; nothing
+   * here can widen a lifecycle.
+   *
+   * Ignored by `createContentRoute`, which reads enforced already and has no
+   * bypass to bound.
+   */
+  trustedCollections?: string[];
   /** A booted Nextly instance (defaults to `getNextly()`). */
   nextly?: NextlyContentReader;
   /**
@@ -371,6 +406,19 @@ function buildRoute<TNode>(
 
   const collections = [...new Set(config.collections)];
 
+  // The set this route's bypass may reach, defaulting to the collections it
+  // serves — which is what the guide has always claimed this config means.
+  // Built once, at construction: the answer cannot vary per request, and a
+  // predicate rebuilt per read is a place for the two to disagree.
+  //
+  // `undefined` for an enforced route, deliberately. There the reads carry no
+  // bypass to bound, and supplying a predicate would imply one exists.
+  const trusted = ((): ((collection: string) => boolean) | undefined => {
+    if (!isPublic) return undefined;
+    const allowed = new Set(config.trustedCollections ?? collections);
+    return name => allowed.has(name);
+  })();
+
   const getInstance = (): NextlyContentReader => config.nextly ?? getNextly();
 
   /** Whether this request may see unpublished edits at one collection + slug. */
@@ -433,6 +481,10 @@ function buildRoute<TNode>(
         // fall-through can hand the widening back instead of reading every row
         // in the collection as a trusted caller.
         callerOverrideAccess: overrideAccess,
+        // The bound travels with the grant. Every read `resolveContent` issues
+        // carries it — including the by-id re-read a draft grant triggers,
+        // which is a separate entry point into the same expansion.
+        trusted,
       });
       if (!entry) continue;
       // No identity check here, deliberately. Both halves a grant has to
@@ -492,6 +544,12 @@ function buildRoute<TNode>(
             limit: MAX_STATIC_PARAMS_PER_PAGE,
             page,
             overrideAccess,
+            // The same bound as the render read, and the entry point most
+            // easily missed: this scan calls `find` DIRECTLY rather than going
+            // through `resolveContent`, so a fix applied only there leaves the
+            // pre-rendering path — the one that writes a static artifact —
+            // reading every populated target trusted.
+            trusted,
             // The build-time scan is anonymous — pass an explicit `undefined`
             // so it can't inherit a default user configured on the reader.
             user: undefined,

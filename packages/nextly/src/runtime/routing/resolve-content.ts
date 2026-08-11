@@ -144,6 +144,18 @@ export interface ResolveContentOptions {
    */
   overrideAccess?: boolean;
   /**
+   * Which collections that trust may reach as relationships are expanded.
+   *
+   * A route lists the collections it SERVES; a page populating a relationship
+   * reaches one it did not list. Without this, every populated target inherits
+   * the route's bypass. Named collections are read trusted; the rest are read
+   * as a visitor would read them.
+   *
+   * Only ever narrows, and never admits a target's drafts — see
+   * `ContentRouteConfig.trustedCollections`.
+   */
+  trusted?: (collection: string) => boolean;
+  /**
    * What the CALLER authorized, before a draft decision widened it.
    *
    * A route forces `overrideAccess` on so a granted entry can be reached at
@@ -249,6 +261,7 @@ export async function resolveContent(
       sort: "id",
       depth,
       overrideAccess: callerOverrideAccess,
+      trusted: options.trusted,
       user,
       ...(options.richTextFormat
         ? { richTextFormat: options.richTextFormat }
@@ -274,6 +287,7 @@ export async function resolveContent(
             draft: true,
             depth,
             overrideAccess,
+            trusted: options.trusted,
             user,
             ...(options.richTextFormat
               ? { richTextFormat: options.richTextFormat }
@@ -307,6 +321,7 @@ export async function resolveContent(
         depth,
         // Enforce the collection's read policy unless the caller opts out.
         overrideAccess,
+        trusted: options.trusted,
         // Pass the user explicitly (even `undefined`) so an anonymous read
         // CLEARS any default user configured on the reader instead of merging
         // over it — otherwise a reader booted with a default identity would make
@@ -346,6 +361,7 @@ export async function resolveContent(
           draft: true,
           depth,
           overrideAccess,
+          trusted: options.trusted,
           user,
           ...(options.richTextFormat
             ? { richTextFormat: options.richTextFormat }

@@ -169,28 +169,48 @@ choose it per collection set, not per preference.**
   what makes its reads cacheable and its paths pre-renderable, and it means
   **every collection you list must be public**. A restricted collection listed
   here has its entries read trusted and its paths pre-rendered into public HTML.
+  That statement is now exactly true: the collections you list are the ones
+  trusted, and a relationship reaching past them is read enforced unless you
+  name it (see below).
 
-> ⚠️ **On a TRUSTED read, the trust does not stop at the collections you list.**
-> A populated relationship inherits the posture of the read that reached it — so
-> when the read is trusted, its targets are expanded with access rules bypassed
-> and lifecycle widened to include drafts.
->
-> This does **not** apply to an enforced read. `resolveContent` defaults to
-> `overrideAccess: false` and `createContentRoute` reads restricted, so their
-> populated relations stay access-checked at the default `depth: 1`. The
-> propagation reaches a trusted `resolveContent` call, a draft-authorized route
-> read, and a public route.
->
-> On a public route it is worst, because the page is pre-rendered into a static
-> artifact: publishing a draft or access-restricted row that way cannot be taken
-> back by unpublishing the source.
->
-> **`createPublicContentRoute` therefore defaults to `depth: 0`** — no relation
-> expansion — so the exposure is something a site opts into rather than
-> inherits. Setting `depth` yourself re-enables it, and by doing so you are
-> stating that the collections your pages populate are public too.
->
-> That default bounds the blast radius; it does not fix the propagation.
+### What a populated relationship is read as
+
+A page often populates a relationship — a post reaching its author, a page
+reaching its hero image. That target is a collection you did **not** list: it
+was reached through a field.
+
+**`createPublicContentRoute` reads those targets as a visitor would**, unless
+you say otherwise. Their own access rules apply, and only their published rows
+come back. Name the ones your pages populate to have them read trusted too:
+
+```ts
+export const { ContentPage, generateMetadata, generateStaticParams } =
+  createPublicContentRoute({
+    collections: ["posts"],
+    // Posts populate an author; authors are public too.
+    trustedCollections: ["posts", "authors"],
+    depth: 1,
+    render: (entry) => <Post entry={entry} />,
+  });
+```
+
+`trustedCollections` defaults to the `collections` you listed, so a route that
+populates nothing needs no extra config, and one that does gets an explicit
+decision rather than an inherited one.
+
+> **Trusting a collection does not admit its drafts.** A public route
+> pre-renders, so an unpublished row pulled in through a relationship is written
+> into a static artifact and stays there after the row is unpublished —
+> unpublishing cannot take back a page already built. Trust decides *who* may
+> read a row; being published decides whether it is ready for anyone. Nothing in
+> this config widens a lifecycle.
+
+`createContentRoute` needs none of this. It reads enforced already, so there is
+no bypass to bound and populated relations stay access-checked.
+
+**`createPublicContentRoute` defaults to `depth: 0`** — no relation expansion at
+all — so a route that never populates anything cannot be surprised by any of
+this. Set `depth` when your pages do populate relations.
 
 **The route factories take no `overrideAccess` option** — unlike
 `resolveContent`, which still does, because a page calling it directly knows who
