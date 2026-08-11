@@ -196,13 +196,10 @@ function analyze(source: string, fileName: string): Analysis {
   const readsTheGlobal = (node: ts.Identifier): boolean => {
     if (declared.has(node.text)) return false;
     const parent = node.parent;
-    // `export type Root = HTMLElement` names a TYPE. TypeScript erases the annotation, so nothing
-    // reads the global at runtime and reporting it would reject declaration-only code.
-    if (ts.isTypeReferenceNode(parent) || ts.isTypeQueryNode(parent))
-      return false;
-    // `globalThis.document` reaches the same global through a property. `globalThis` exists on a
-    // server while `document` does not, so the read still throws while naming nothing the bare
-    // identifier check would see.
+
+    // Checked BEFORE the naming rule below, which would otherwise swallow it: `document` here is
+    // the `name` of a property access, and it is exactly the read that matters. `globalThis`
+    // exists on a server while `document` does not, so this still throws.
     if (
       ts.isPropertyAccessExpression(parent) &&
       parent.name === node &&
@@ -211,16 +208,24 @@ function analyze(source: string, fileName: string): Analysis {
     ) {
       return true;
     }
-    // `shape.window` and `{ window: 1 }` name a property, not the global.
-    if (ts.isPropertyAccessExpression(parent) && parent.name === node) {
-      return false;
-    }
-    if (ts.isPropertyAssignment(parent) && parent.name === node) return false;
+
+    // An identifier that IS a declaration's name is not a read of anything. This covers the
+    // members these globals share a spelling with — `interface Options { history }`, `type Point =
+    // { location: string }`, an enum member, a class property, a parameter — as well as
+    // `shape.window` and `{ window: 1 }`. Written as one rule over `name` rather than a list of
+    // node kinds, because the list was three entries long and already missing the rest.
+    if ("name" in parent && parent.name === node) return false;
     if (ts.isBindingElement(parent) && parent.propertyName === node) {
       return false;
     }
-    // `typeof window === "undefined"` is the guard that MAKES a module server-safe: it evaluates to
-    // a string rather than throwing, so reporting it would punish the correct pattern.
+
+    // `export type Root = HTMLElement` names a TYPE. TypeScript erases the annotation, so nothing
+    // reads the global at runtime and reporting it would reject declaration-only code.
+    if (ts.isTypeReferenceNode(parent) || ts.isTypeQueryNode(parent))
+      return false;
+
+    // `typeof window === "undefined"` is the guard that MAKES a module server-safe: it evaluates
+    // to a string rather than throwing, so reporting it would punish the correct pattern.
     if (ts.isTypeOfExpression(parent)) return false;
     return true;
   };
@@ -503,6 +508,21 @@ describe("reading a module", () => {
         const location = "home";
         import { history } from "./router";
         export const where = location + history;
+      `).globals
+    ).toEqual([]);
+  });
+
+  it("does not report a declaration member that shares a global's name", () => {
+    // `location`, `history`, `navigator`, `Node`, `Element` and `Image` are ordinary words. A
+    // check that only excluded property ACCESS still reported them wherever they name a member,
+    // rejecting valid server-safe code for describing a shape.
+    expect(
+      read(`
+        export interface Options { history: boolean; location: string }
+        export type Point = { location: string };
+        export enum Kind { Image = 1 }
+        export class Box { navigator = 1; }
+        export function move(location: string) { return location; }
       `).globals
     ).toEqual([]);
   });
