@@ -531,6 +531,61 @@ export interface EmailProviderDescriptor {
  * The provider's own text is not lost: it is moved onto `cause`, which is what
  * the log reads.
  */
+/** What a declared credential is replaced with when it appears in a diagnostic. */
+const REDACTED_SECRET = "[secret]";
+
+/**
+ * A provider's own diagnostic, with its declared credentials taken out.
+ *
+ * A thrown error is the longest route a credential has out of a provider: the
+ * wrapper keeps it out of the response by refusing to make the message public,
+ * but `describeProviderFailure` walks the `cause` chain into the `email.failed`
+ * log line, and `Error(config.apiKey)` is an easy thing for a provider to
+ * write. A process log is shipped to aggregators and read by more people than
+ * the configuration is.
+ *
+ * Done HERE rather than at the log site because this is the only place that
+ * knows which values are credentials — the same knowledge the message-id
+ * containment beside it uses.
+ *
+ * The rest of the text survives. An SMTP status line or an API error code is
+ * the one fact worth having when a send fails, and redacting the whole
+ * diagnostic to remove a credential that may not be in it would trade a real
+ * disclosure for a permanent loss of the reason.
+ */
+function containedFailure(
+  error: unknown,
+  secrets: { comparable: readonly string[]; hasUnmatchable: boolean }
+): unknown {
+  // A deliberate `NextlyError` carries a public message its author chose, and
+  // rewriting it would discard field paths a provider set on purpose.
+  if (!(error instanceof Error) || NextlyError.is(error)) return error;
+
+  const texts: string[] = [];
+  let current: unknown = error;
+  // Bounded like the reader that consumes this: a cycle in a `cause` chain
+  // must not hang the failure path.
+  for (let depth = 0; current instanceof Error && depth < 5; depth += 1) {
+    texts.push(current.message);
+    current = current.cause;
+  }
+
+  // Nothing here can say which text is safe, so none of it is kept -- the same
+  // answer the message id gets when its credentials cannot be compared.
+  if (secrets.hasUnmatchable) {
+    return new Error(
+      "Provider diagnostics were withheld: this provider's credentials cannot be checked for in its own text."
+    );
+  }
+
+  let text = texts.join(": ");
+  for (const secret of secrets.comparable) {
+    if (secret.length === 0) continue;
+    text = text.split(secret).join(REDACTED_SECRET);
+  }
+  return new Error(text);
+}
+
 function normalizeProviderFailure(
   type: string,
   error: unknown,
@@ -598,7 +653,11 @@ export function containProviderCallbacks(
           try {
             result = await adapter.send(options);
           } catch (error) {
-            throw normalizeProviderFailure(provider.type, error, "send");
+            throw normalizeProviderFailure(
+              provider.type,
+              containedFailure(error, secrets),
+              "send"
+            );
           }
           return withoutLeakedSecrets(result, secrets);
         },

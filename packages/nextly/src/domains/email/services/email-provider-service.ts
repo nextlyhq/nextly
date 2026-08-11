@@ -55,6 +55,15 @@ const MASKED_VALUE = "••••••••";
  */
 const SEND_RETURNED_UNSUCCESSFUL = "Send returned unsuccessful";
 
+/**
+ * What a provider means when it accepts the message and refuses the address.
+ *
+ * Distinct from the sentence above because the two send an operator to
+ * different places: one is the provider or its credentials, the other is the
+ * address typed into the test dialog.
+ */
+const TEST_RECIPIENT_REFUSED = "The provider refused the test recipient";
+
 // ============================================================
 // Input Types
 // ============================================================
@@ -738,24 +747,42 @@ export class EmailProviderService extends BaseService {
         html: `<p>This is a test email from your <strong>${provider.name}</strong> email provider.</p><p>If you received this, your provider is configured correctly.</p>`,
       });
 
+      // A test has exactly one destination, so a provider that accepted the
+      // message and refused THAT address delivered nothing -- the same reading
+      // the ordinary send path applies to its primary recipient. Reporting the
+      // message-level result would let the Test button say a provider works
+      // when the one address it tried was rejected.
+      const accepted = (result.rejected ?? []).every(
+        address => address.trim().toLowerCase() !== to.trim().toLowerCase()
+      );
+      const delivered = result.success && accepted;
+
       // The whole result, not a boolean. A failed test whose row carries no
       // reason is a row that says only "something went wrong", and a
       // successful one without the provider's message id cannot be matched
       // against the provider's own record of it.
       await this.recordTestDelivery(to, provider, {
-        status: result.success ? "sent" : "failed",
+        status: delivered ? "sent" : "failed",
         // Contained here as it is on the ordinary send path. A provider may
         // build its identifier out of the address it was handed, and the test
         // destination is a recipient like any other -- storing it verbatim
         // would put the address beside the hash that exists to avoid holding
         // it.
         messageId: messageIdWithoutRecipients(result.messageId, [to]),
-        error: result.success ? null : SEND_RETURNED_UNSUCCESSFUL,
+        error: delivered
+          ? null
+          : accepted
+            ? SEND_RETURNED_UNSUCCESSFUL
+            : TEST_RECIPIENT_REFUSED,
       });
 
       return {
-        success: result.success,
-        error: result.success ? undefined : SEND_RETURNED_UNSUCCESSFUL,
+        success: delivered,
+        error: delivered
+          ? undefined
+          : accepted
+            ? SEND_RETURNED_UNSUCCESSFUL
+            : TEST_RECIPIENT_REFUSED,
       };
     } catch (error) {
       // Logged HERE, with the cause. Attaching an original error to a

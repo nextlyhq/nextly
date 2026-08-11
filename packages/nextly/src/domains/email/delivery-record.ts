@@ -91,6 +91,19 @@ export function redactAddresses(message: string): string {
   return message.replace(ADDRESS_SHAPED, REDACTED_ADDRESS);
 }
 
+/**
+ * The retention class every delivery row is written with.
+ *
+ * Supplied by the writer rather than defaulted in the column. A string default
+ * reaches an existing installation through the core reconciler, which renders
+ * a column's default into DDL verbatim -- `DEFAULT email`, which PostgreSQL and
+ * MySQL read as an identifier and refuse, so the table that upgrade was meant
+ * to add is never created. The value belongs to one writer, so naming it here
+ * costs nothing and keeps the column free of a clause that cannot survive the
+ * trip.
+ */
+export const EMAIL_RETENTION_CLASS = "email";
+
 /** Longest error text stored. Beyond this a provider is narrating, not failing. */
 export const MAX_ERROR_LENGTH = 2000;
 

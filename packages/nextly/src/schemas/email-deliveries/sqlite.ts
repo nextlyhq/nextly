@@ -52,7 +52,7 @@ export const emailDeliveriesSqlite = sqliteTable(
     messageId: text("message_id"),
 
     /** Reserved and inert — no pass prunes this table. See the PostgreSQL module. */
-    retentionClass: text("retention_class").notNull().default("email"),
+    retentionClass: text("retention_class").notNull(),
 
     /**
      * `timestamp_ms`, not `timestamp`.

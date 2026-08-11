@@ -161,9 +161,14 @@ describe("the adapter returned by createAdapterFrom", () => {
       expect(NextlyError.is(error)).toBe(true);
       const message = NextlyError.is(error) ? error.publicMessage : "";
       expect(message).not.toContain(SECRET);
-      // The original is kept as the cause, so nothing is lost for the log.
+      // The diagnostic is kept as the cause so the log has a reason, with the
+      // declared credential taken out of it. `describeProviderFailure` walks
+      // this chain into `email.failed`, so a cause holding the raw key would
+      // put it in the process log.
       const cause = NextlyError.is(error) ? error.cause : undefined;
-      expect(cause instanceof Error ? cause.message : "").toContain(SECRET);
+      const causeText = cause instanceof Error ? cause.message : "";
+      expect(causeText).not.toContain(SECRET);
+      expect(causeText).toContain("Invalid key");
       return true;
     });
   });
@@ -380,6 +385,98 @@ describe("a credential the parser normalised on the way in", () => {
       success: true,
       messageId: "<abc123@mail.example.com>",
     });
+  });
+});
+
+describe("a credential inside the provider's own error text", () => {
+  const API_KEY = "sk-live-must-never-be-logged";
+
+  function throwingProvider(message: string) {
+    return defineEmailProvider<{ apiKey: string }>({
+      type: "leaky",
+      label: "Leaky",
+      configFields: [
+        { name: "apiKey", label: "API Key", kind: "password", secret: true },
+      ],
+      parseConfig: input => input as { apiKey: string },
+      createAdapter: () => ({
+        send: () => {
+          throw new Error(message);
+        },
+      }),
+    });
+  }
+
+  /** What the failure log would print, which is the chain plus the message. */
+  async function loggedCause(provider: RegisteredEmailProvider) {
+    const adapter = provider.createAdapterFrom({ apiKey: API_KEY });
+    try {
+      await adapter.send({
+        to: "a@b.com",
+        from: "c@d.com",
+        subject: "x",
+        html: "y",
+      });
+      throw new Error("the adapter was expected to fail");
+    } catch (error) {
+      return describeProviderFailure(error);
+    }
+  }
+
+  it("does not reach the failure log", async () => {
+    // The public message was already contained; the `cause` chain was not, and
+    // `email.failed` spreads `describeProviderFailure` straight into the line.
+    // A process log is shipped to aggregators and read by more people than the
+    // configuration is.
+    const described = await loggedCause(throwingProvider(API_KEY));
+
+    expect(JSON.stringify(described)).not.toContain(API_KEY);
+  });
+
+  it("keeps the part of the diagnostic that is not the credential", async () => {
+    // The control that stops this becoming a blanket redaction. An SMTP status
+    // line is the one fact worth having when a send fails, and losing it to
+    // remove a credential that may not be present is a bad trade.
+    const described = await loggedCause(
+      throwingProvider(`535 5.7.8 Authentication failed for ${API_KEY}`)
+    );
+
+    expect(JSON.stringify(described)).not.toContain(API_KEY);
+    expect(described.cause).toContain("535 5.7.8 Authentication failed");
+  });
+
+  it("withholds the diagnostic when the credentials cannot be checked for", async () => {
+    // A provider whose declared credential is too short to compare cannot have
+    // its text checked either, so none of it is kept -- the same answer the
+    // message id gets in that situation.
+    const provider = defineEmailProvider<{ apiKey: string }>({
+      type: "leaky",
+      label: "Leaky",
+      configFields: [
+        { name: "apiKey", label: "API Key", kind: "password", secret: true },
+      ],
+      parseConfig: input => input as { apiKey: string },
+      createAdapter: () => ({
+        send: () => {
+          throw new Error("ab is the key");
+        },
+      }),
+    });
+
+    const adapter = provider.createAdapterFrom({ apiKey: "ab" });
+    try {
+      await adapter.send({
+        to: "a@b.com",
+        from: "c@d.com",
+        subject: "x",
+        html: "y",
+      });
+      throw new Error("the adapter was expected to fail");
+    } catch (error) {
+      expect(JSON.stringify(describeProviderFailure(error))).not.toContain(
+        "ab is the key"
+      );
+    }
   });
 });
 

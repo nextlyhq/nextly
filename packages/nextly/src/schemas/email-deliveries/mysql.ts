@@ -61,9 +61,7 @@ export const emailDeliveriesMysql = mysqlTable(
     messageId: text("message_id"),
 
     /** Reserved and inert — no pass prunes this table. See the PostgreSQL module. */
-    retentionClass: varchar("retention_class", { length: 50 })
-      .notNull()
-      .default("email"),
+    retentionClass: varchar("retention_class", { length: 50 }).notNull(),
 
     /**
      * `fsp: 3` — milliseconds, not whole seconds.

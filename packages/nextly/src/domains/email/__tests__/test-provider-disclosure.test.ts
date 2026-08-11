@@ -223,7 +223,12 @@ describe("an adapter that rejects while sending", () => {
       .mocked(logger.error)
       .mock.calls.map(call => JSON.stringify(call))
       .join("\n");
-    expect(logged).toContain(SECRET);
+    // The reason, without the credential the provider interpolated into it.
+    // The log is where the diagnostic belongs and the credential is not part
+    // of the diagnostic -- a process log is shipped to aggregators and read by
+    // more people than the configuration is.
+    expect(logged).toContain("Invalid key");
+    expect(logged).not.toContain(SECRET);
   });
 });
 
@@ -365,5 +370,100 @@ describe("a test that never reached the provider", () => {
 
     expect(outcome.success).toBe(false);
     expect(recorded).toHaveLength(1);
+  });
+});
+
+describe("a test send the provider accepted and the server refused", () => {
+  let sqlite: Database.Database;
+  let service: EmailProviderService;
+  let providerId: string;
+
+  /** Accepts the message, then names the only address it was given. */
+  const refusingProvider = defineEmailProvider<{ apiKey: string }>({
+    type: "refusing-test",
+    label: "Refusing",
+    configFields: [
+      { name: "apiKey", label: "API Key", kind: "password", secret: true },
+    ],
+    parseConfig: input => input as { apiKey: string },
+    createAdapter: () => ({
+      send: (options: { to: string }) =>
+        Promise.resolve({
+          success: true,
+          messageId: "msg-1",
+          rejected: [options.to],
+        }),
+    }),
+  });
+
+  beforeEach(async () => {
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(refusingProvider);
+    const created = await service.createProvider({
+      name: "Refusing",
+      type: "refusing-test",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { apiKey: SECRET },
+      isDefault: false,
+      isActive: true,
+    });
+    providerId = created.id;
+  });
+
+  afterEach(() => {
+    getEmailProviderRegistry().reset();
+    sqlite.close();
+  });
+
+  it("is not reported as a successful test", async () => {
+    // A test has exactly one destination, so a provider that refused it
+    // delivered nothing — and the Test button exists to answer whether this
+    // provider can deliver.
+    const outcome = await service.testProvider(providerId, "nope@example.com");
+
+    expect(outcome.success).toBe(false);
+    expect(outcome.error).toMatch(/refused the test recipient/i);
+  });
+
+  it("says the address was refused rather than that the send failed", async () => {
+    // The two send an operator to different places: the provider and its
+    // credentials, or the address they typed.
+    const outcome = await service.testProvider(providerId, "nope@example.com");
+
+    expect(outcome.error).not.toMatch(/Send returned unsuccessful/);
+  });
+
+  it("still reports a test the provider accepted", async () => {
+    // The control. `rejected` naming some OTHER address says nothing about
+    // this test's destination, and must not fail it.
+    getEmailProviderRegistry().reset();
+    getEmailProviderRegistry().register(
+      defineEmailProvider<{ apiKey: string }>({
+        type: "refusing-test",
+        label: "Refusing",
+        configFields: [
+          { name: "apiKey", label: "API Key", kind: "password", secret: true },
+        ],
+        parseConfig: input => input as { apiKey: string },
+        createAdapter: () => ({
+          send: () =>
+            Promise.resolve({
+              success: true,
+              messageId: "msg-1",
+              rejected: ["someone-else@example.com"],
+            }),
+        }),
+      })
+    );
+
+    const outcome = await service.testProvider(providerId, "yes@example.com");
+
+    expect(outcome.success).toBe(true);
   });
 });

@@ -28,6 +28,7 @@ import { emailDeliveriesSqlite } from "../../../schemas/email-deliveries/sqlite"
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import {
+  EMAIL_RETENTION_CLASS,
   hashRecipient,
   storableError,
   type EmailDeliveryInput,
@@ -296,6 +297,7 @@ export class EmailDeliveryService extends BaseService {
         recipientKind: input.recipientKind ?? "to",
         status: input.status,
         attemptCount: 1,
+        retentionClass: EMAIL_RETENTION_CLASS,
         error: input.error ? storableError(input.error) : null,
         messageId: input.messageId ?? null,
         // One timestamp for the whole message: the rows describe a single

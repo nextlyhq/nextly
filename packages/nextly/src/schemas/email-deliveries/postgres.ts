@@ -157,9 +157,7 @@ export const emailDeliveriesPg = pgTable(
      * column imply otherwise — an operator reading a labelled retention class
      * would reasonably conclude something enforces it, and nothing does.
      */
-    retentionClass: varchar("retention_class", { length: 50 })
-      .notNull()
-      .default("email"),
+    retentionClass: varchar("retention_class", { length: 50 }).notNull(),
 
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
