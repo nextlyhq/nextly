@@ -3,12 +3,21 @@
 The visual page-builder editor: the shell, the canvas, and the op store that
 everything in it either produces or reads.
 
+<<<<<<< HEAD
 **The editor itself has not landed.** What ships today is the frame geometry —
 the one mapping between the canvas frame and the host page — plus the package
 name constant. See [Public surface](#public-surface). The package was created
 ahead of the editor so its name could be claimed on npm: trusted publishing
 cannot perform a package's first publish, and the bootstrap script will not
 claim a name that is not already a workspace package.
+=======
+**The editor itself has not landed.** What ships today is the op store — the
+vocabulary every edit is expressed in, and the function that applies one — plus
+the package name constant. See [Public surface](#public-surface). The package
+was created ahead of the editor so its name could be claimed on npm: trusted
+publishing cannot perform a package's first publish, and the bootstrap script
+will not claim a name that is not already a workspace package.
+>>>>>>> 81bca7cf4 (docs(builder): describe what the package now ships and how to build it)
 
 ## What this package is not
 
@@ -75,6 +84,7 @@ which packages a host loaded. The name and not the version: a version literal in
 source would be stale one release after it was written, because every release
 bumps this package in lockstep with its siblings.
 
+<<<<<<< HEAD
 ### Frame geometry
 
 The canvas renders inside an iframe while the editor's chrome — insertion
@@ -122,11 +132,41 @@ exercised without a browser and the DOM reads stay at the edge. The e2e
 acceptance suite adapts these rather than restating them: a browser harness
 carrying its own copy certifies its own copy, and would keep passing through
 exactly the correction it exists to catch.
+=======
+`applyOp(nodes, op)` — apply one edit to a forest, returning the new forest and
+the op that undoes it. Every change to a document goes through it: the canvas,
+the layers panel, the inspector and an agent all produce ops and nothing else,
+which is what makes undo, autosave, crash restore and edit review one mechanism
+rather than four.
+
+`BuilderOp` — the whole edit vocabulary: `insert`, `remove`, `move`, `update`.
+Ops address nodes by id, never by path, because a path describes the tree at the
+moment it was written and any edit above it invalidates one.
+
+`OpError` — thrown when an op cannot apply. A refusal rather than a silent
+no-op: the caller is a history, so an op that quietly did nothing would still be
+recorded and its inverse would undo an edit that never happened.
+
+`AppliedOp`, `NodePatch` — the result shape and the fields an `update` may
+carry. `NodePatch` is read off the engine's own signature rather than restated.
+>>>>>>> 81bca7cf4 (docs(builder): describe what the package now ships and how to build it)
 
 ## Development
 
-Run these from this directory (`packages/builder`), not the repository root —
-turbo swallows the summary line at the root.
+Dependencies must be built first. This package resolves
+`@nextlyhq/blocks-engine` through its published entry, which is `dist/`, so on a
+clean checkout **`test`, `check-types` and `lint` all fail** until it exists —
+`test` in the way worth knowing about, reporting a resolution error and a
+reduced test count rather than an obvious stop.
+
+```bash
+# Once, and again after changing a dependency. Builds only what this
+# package depends on, not the whole repository.
+pnpm --filter @nextlyhq/builder^... build
+```
+
+Then, from this directory (`packages/builder`) rather than the repository root —
+turbo swallows the summary line at the root:
 
 ```bash
 pnpm run test          # vitest, including the layering guard
@@ -135,6 +175,12 @@ pnpm run check-types   # tsc --noEmit; unlike some packages here, this DOES
 pnpm run lint          # eslint --max-warnings 0; a single warning fails
 pnpm run build         # tsup
 ```
+
+`pnpm turbo test --filter=@nextlyhq/builder` builds dependencies itself, because
+the `test` task declares `dependsOn: ["^build"]`. `check-types` and `lint` do
+not — they are configured build-free repo-wide, which holds for packages that
+import no workspace sibling and stopped holding for this one when it took its
+first dependency on the engine.
 
 ## Peer dependencies
 

@@ -22,11 +22,12 @@
  * predicate would not have prevented that, because sharing a predicate does not
  * share the decision to call it; only sharing the entry point does.
  *
- * **Public surface so far**: {@link BUILDER_PACKAGE_NAME}, and the frame
- * geometry below. The editor itself is not exported yet — the package was
- * created ahead of it so its name could be claimed on npm, because trusted
- * publishing cannot perform a package's first publish and the bootstrap script
- * will not claim a name that is not already a workspace package.
+ * **Public surface so far**: {@link BUILDER_PACKAGE_NAME}, the frame geometry,
+ * and the op store below — {@link applyOp}, {@link OpError} and the op
+ * vocabulary. The editor shell and canvas are not exported yet. The package was
+ * created ahead of them so its name could be claimed on npm: trusted publishing
+ * cannot perform a package's first publish, and the bootstrap script will not
+ * claim a name that is not already a workspace package.
  *
  * @module @nextlyhq/builder
  */
