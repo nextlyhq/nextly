@@ -20,6 +20,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -45,9 +46,39 @@ const REQUIRED_STYLESHEETS = [
 /** The class the admin's component rules and tokens are scoped beneath. */
 const ADMIN_SCOPE = "nextly-admin";
 
-/** Relative import specifiers, which are the ones resolvable on disk. */
-const RELATIVE_IMPORT =
-  /(?:^|\n)\s*import\s+(?:[^"';]*?from\s*)?["'](\.[^"']*)["']/g;
+/**
+ * Import specifiers, read from the parsed module rather than matched in text.
+ *
+ * Searching the source for a stylesheet's name counted any MENTION as an
+ * import, and the route's own comment explaining why it imports those
+ * stylesheets names all three -- so deleting a real import left the guard
+ * green while the route lost the styles.
+ *
+ * A regex that strips comments first would trade that for a worse failure: if
+ * the stripper ever eats a real declaration, the guard passes while blind,
+ * which is the direction a check must never fail in. The compiler's tree
+ * carries no comments to confuse and no stripping step to get wrong, and
+ * `typescript` is already a devDependency here.
+ */
+function importSpecifiers(file: string, source: string): string[] {
+  const parsed = ts.createSourceFile(
+    file,
+    source,
+    ts.ScriptTarget.Latest,
+    /* setParentNodes */ false,
+    file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  );
+
+  const found: string[] = [];
+  for (const statement of parsed.statements) {
+    // Side-effect imports (`import "x.css"`) and value imports alike; both are
+    // ImportDeclaration, and a stylesheet is always the former.
+    if (!ts.isImportDeclaration(statement)) continue;
+    const specifier = statement.moduleSpecifier;
+    if (ts.isStringLiteral(specifier)) found.push(specifier.text);
+  }
+  return found;
+}
 
 const CANDIDATE_SUFFIXES = ["", ".tsx", ".ts", "/index.tsx", "/index.ts"];
 
@@ -61,21 +92,29 @@ function resolveImport(fromFile: string, specifier: string): string | null {
   return null;
 }
 
-/** Every module a page reaches through relative imports, including itself. */
-function moduleGraph(entry: string): string[] {
-  const seen = new Set<string>();
+/**
+ * Every module a page reaches through relative imports, including itself.
+ *
+ * Also parsed rather than matched: a commented-out relative import would
+ * otherwise pull a module into the graph that the route does not actually
+ * reach, which widens the set the rule below reads and can make an unimported
+ * route look styled.
+ */
+function moduleGraph(entry: string): Array<{ file: string; source: string }> {
+  const seen = new Map<string, string>();
   const queue = [entry];
   while (queue.length > 0) {
     const file = queue.pop() as string;
     if (seen.has(file)) continue;
-    seen.add(file);
     const source = readFileSync(file, "utf8");
-    for (const match of source.matchAll(RELATIVE_IMPORT)) {
-      const target = resolveImport(file, match[1] as string);
+    seen.set(file, source);
+    for (const specifier of importSpecifiers(file, source)) {
+      if (!specifier.startsWith(".")) continue;
+      const target = resolveImport(file, specifier);
       if (target && !seen.has(target)) queue.push(target);
     }
   }
-  return [...seen];
+  return [...seen].map(([file, source]) => ({ file, source }));
 }
 
 /** Every app route that has a page. */
@@ -107,12 +146,16 @@ interface Route {
 const AS_CLASS = new RegExp(`["'\`][^"'\`]*\\b${ADMIN_SCOPE}\\b[^"'\`]*["'\`]`);
 
 const ROUTES: Route[] = pages().map(({ route, entry }) => {
-  const sources = moduleGraph(entry).map(file => readFileSync(file, "utf8"));
+  const modules = moduleGraph(entry);
+  // Specifiers, not source text. `theme-lab/densities.css` is matched as a
+  // SUFFIX because the route reaches it by a relative path whose depth
+  // depends on where the importing file sits.
+  const imported = modules.flatMap(m => importSpecifiers(m.file, m.source));
   return {
     route: `/${route}`,
-    scoped: sources.some(text => AS_CLASS.test(text)),
+    scoped: modules.some(m => AS_CLASS.test(m.source)),
     missing: REQUIRED_STYLESHEETS.filter(
-      sheet => !sources.some(text => text.includes(sheet))
+      sheet => !imported.some(spec => spec === sheet || spec.endsWith(sheet))
     ),
   };
 });

@@ -232,6 +232,21 @@ export function ThemePreviewCard({
                the panel -- a gallery that claims to show both modes and
                shows one. */
             data-theme-sync="off"
+            /* What ACTIVATES `harness.css` on this panel. Every rule there is
+               written `.nextly-admin[data-theme]`, deliberately, so nothing
+               applies until a theme is selected -- which meant the panels,
+               carrying `nextly-admin` but no `data-theme`, kept the default
+               face and `rounded-none` while their inline variables held the
+               theme's font and radius. The tokens were right and unread.
+               Importing the stylesheet was necessary and not sufficient.
+
+               Safe alongside the inline tokens: this also matches the
+               generated `.nextly-admin[data-theme="id"]` block, but an inline
+               custom property outranks it, so the panel still shows exactly
+               the definition this card was given. And `useThemeLab` selects
+               admin roots with `:not([data-theme-preview])`, so marking a
+               theme here cannot be mistaken for the applied selection. */
+            data-theme={theme.id}
             /* `nextly-admin` brings the ui components' base styles; `dark`
                is what their dark-mode variants key off. The inline vars then
                decide every token those styles read. */

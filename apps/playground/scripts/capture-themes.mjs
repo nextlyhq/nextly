@@ -131,6 +131,15 @@ const READY_TIMEOUT = 20_000;
  * for collections/users/builder would leave that corner of the frame stale
  * even though the table itself is ready.
  */
+/**
+ * The first name the dev seed gives its user (`scripts/seed.ts`: "Dev User").
+ *
+ * `WelcomeHeader` renders `getFirstName(user?.name)`, which is "there" when
+ * the user request failed. Waiting for THIS name is what separates a loaded
+ * dashboard from a failed one.
+ */
+const SEEDED_FIRST_NAME = "Dev";
+
 const SCREEN_READY = {
   dashboard: async page => {
     await waitForNoSkeletons(page);
@@ -141,9 +150,15 @@ const SCREEN_READY = {
     // positive; this one did not, which made it the only route where a red
     // screen could pass as evidence.
     //
-    // The greeting carries the signed-in user's name from the API, so it can
-    // only render after that request succeeded.
-    await waitForVisibleText(page, /Welcome, \w/);
+    // The seeded user's NAME, not merely a greeting. `WelcomeHeader` falls
+    // back to "Welcome, there" when the user request fails, so a pattern that
+    // accepts any word accepts precisely the failure this check exists to
+    // reject -- it matched the error state as readily as the good one.
+    //
+    // Coupled to `scripts/seed.ts` on purpose: the greeting can only say this
+    // once that user has been fetched. If the seed's name changes, this fails
+    // loudly rather than quietly widening back to "any dashboard".
+    await waitForVisibleText(page, `Welcome, ${SEEDED_FIRST_NAME}`);
   },
   collections: async page => {
     await waitForNoSkeletons(page);

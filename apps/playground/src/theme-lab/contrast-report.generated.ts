@@ -17,9 +17,9 @@ export const CONTRAST_REPORT: Record<string, number> = {
   mono: 0,
   sand: 0,
   signal: 0,
-  "tweakcn-claude": 34,
+  "tweakcn-claude": 32,
   "tweakcn-modern-minimal": 33,
-  "tweakcn-twitter": 36,
+  "tweakcn-twitter": 35,
   "tweakcn-vercel": 1,
   "tweakcn-violet-bloom": 30,
 };

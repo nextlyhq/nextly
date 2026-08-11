@@ -75,8 +75,23 @@ const { parseThemeTokens } = await import(
 );
 const shippedTokens = parseThemeTokens(themeCss);
 
-/** The token roles a tweakcn preset cannot supply, taken from the theme. */
+/**
+ * The token roles a tweakcn preset cannot supply, taken from the theme.
+ *
+ * The status roles belong here for the same reason the syntax palette does:
+ * shadcn has no success or warning concept, so every preset was carrying a
+ * hand-written copy that had drifted -- light `success` emitted at `0.53`
+ * against the theme's `0.4981`, `warning` at `0.565` against `0.529`. That is
+ * worse than it sounds now that the chart slots derive FROM these roles: the
+ * drift reached the dashboard, in the part of the palette every preset is
+ * supposed to share verbatim.
+ */
 const BORROWED_FROM_THEME = [
+  "success",
+  "success-solid",
+  "success-foreground",
+  "warning",
+  "warning-foreground",
   "highlight",
   "highlight-foreground",
   "code-bg",
@@ -122,18 +137,8 @@ function derive(src, mode) {
   return {
     "page-background": src.muted ?? src.background,
     "destructive-solid": src.destructive,
-    success:
-      mode === "light" ? "oklch(0.53 0.17 149.2)" : "oklch(0.6 0.1921 149.58)",
-    "success-solid":
-      mode === "light"
-        ? "oklch(0.53 0.17 149.2)"
-        : "oklch(0.5225 0.1921 149.58)",
-    "success-foreground": "oklch(1 0 0)",
-    warning:
-      mode === "light"
-        ? "oklch(0.565 0.1646 70.11)"
-        : "oklch(0.7686 0.1646 70.11)",
-    "warning-foreground": "oklch(0.2079 0.0399 265.73)",
+    // The status roles are NOT written here. They come from theme.css via
+    // SHIPPED below, because a hand-written copy is a copy that drifts.
     "border-subtle": `color-mix(in srgb, ${src.border}, transparent 60%)`,
     "border-strong": `color-mix(in srgb, ${src.border}, ${mixToward} 25%)`,
     "shadow-color": src["shadow-color"] ?? "oklch(0 0 0)",
