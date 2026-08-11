@@ -25,6 +25,7 @@ import { getBaseUrl } from "../../../lib/get-base-url";
 import type { EmailTemplateRecord } from "../../../schemas/email-templates/types";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import type { EmailDeliveryRecipientKind } from "../delivery-record";
 import { EmailErrorCode } from "../errors";
 import { describeProviderFailure } from "../provider-definition";
 import type {
@@ -81,6 +82,46 @@ const SLUG_TO_TEMPLATE_KEY: Record<
 // ============================================================
 // Email Service
 // ============================================================
+
+/**
+ * Every address a message actually went to, with the line it was on.
+ *
+ * The delivery log answers questions about a PERSON, and a person copied on a
+ * message received it exactly as the primary recipient did — so recording only
+ * `to` would answer "no record" for someone holding the message in their
+ * inbox. The adapter is handed `cc` and `bcc`, so these are addresses that were
+ * really dispatched to rather than ones that were merely requested.
+ *
+ * Read from the FILTERED payload, because `email.beforeSend` may add or remove
+ * recipients and the log has to describe what was sent, not what was asked for.
+ *
+ * Duplicates are collapsed: the same address on two lines is one mailbox, and
+ * two rows would double every count taken from this table.
+ */
+function deliveryRecipients(payload: {
+  to: string;
+  cc?: string[];
+  bcc?: string[];
+}): Array<{ to: string; recipientKind: EmailDeliveryRecipientKind }> {
+  const seen = new Set<string>();
+  const recipients: Array<{
+    to: string;
+    recipientKind: EmailDeliveryRecipientKind;
+  }> = [];
+
+  const add = (address: string, recipientKind: EmailDeliveryRecipientKind) => {
+    const key = address.trim().toLowerCase();
+    if (key === "" || seen.has(key)) return;
+    seen.add(key);
+    recipients.push({ to: address, recipientKind });
+  };
+
+  add(payload.to, "to");
+  for (const address of payload.cc ?? []) add(address, "cc");
+  for (const address of payload.bcc ?? []) add(address, "bcc");
+
+  return recipients;
+}
 
 export class EmailService extends BaseService {
   constructor(
@@ -412,15 +453,17 @@ export class EmailService extends BaseService {
       // long enough for the request to be torn down loses the record of a
       // message the provider has already accepted. Writing first means the row
       // exists whatever a plugin does afterwards.
-      await this.deliveries?.record({
-        to: filtered.to,
-        providerId: resolvedProviderId ?? null,
-        providerType,
-        templateSlug: options.templateSlug ?? null,
-        status: result.success ? "sent" : "failed",
-        messageId: result.messageId ?? null,
-        error: result.success ? null : "Send returned unsuccessful",
-      });
+      await this.deliveries?.recordAll(
+        deliveryRecipients(filtered).map(recipient => ({
+          ...recipient,
+          providerId: resolvedProviderId ?? null,
+          providerType,
+          templateSlug: options.templateSlug ?? null,
+          status: result.success ? "sent" : "failed",
+          messageId: result.messageId ?? null,
+          error: result.success ? null : "Send returned unsuccessful",
+        }))
+      );
 
       // D63 action seam: ordered, isolated side-effects after a send attempt.
       await registry.runActions<EmailAfterSendValue, EmailFilterContext>(
@@ -463,26 +506,28 @@ export class EmailService extends BaseService {
       // path: a plugin handler that blocks must not be able to cost us the
       // record of an attempt. A throw here is the case where the record
       // matters most, since it is the only durable trace of the failure.
-      await this.deliveries?.record({
-        to: filtered.to,
-        providerId: resolvedProviderId ?? null,
-        providerType,
-        templateSlug: options.templateSlug ?? null,
-        status: "failed",
-        // The NORMALISED message, never the cause. `cause` is the provider's
-        // original error, and a contributed provider throws it with decrypted
-        // configuration in scope -- `Invalid key ${config.apiKey}` is an easy
-        // thing to write. Storing it would put a credential in a database
-        // column, which is the same disclosure the provider wrapper closes for
-        // responses, arriving by a longer route and persisting.
-        //
-        // Redaction cannot substitute for this: it removes address-shaped
-        // text, and an API key is not address-shaped.
-        //
-        // The cause is not lost -- the log line below records it, which is
-        // where a provider's own diagnostic belongs.
-        error: describeProviderFailure(error).message,
-      });
+      await this.deliveries?.recordAll(
+        deliveryRecipients(filtered).map(recipient => ({
+          ...recipient,
+          providerId: resolvedProviderId ?? null,
+          providerType,
+          templateSlug: options.templateSlug ?? null,
+          status: "failed" as const,
+          // The NORMALISED message, never the cause. `cause` is the provider's
+          // original error, and a contributed provider throws it with
+          // decrypted configuration in scope -- `Invalid key ${config.apiKey}`
+          // is an easy thing to write. Storing it would put a credential in a
+          // database column, which is the same disclosure the provider wrapper
+          // closes for responses, arriving by a longer route and persisting.
+          //
+          // Redaction cannot substitute for this: it removes address-shaped
+          // text, and an API key is not address-shaped.
+          //
+          // The cause is not lost -- the log line below records it, which is
+          // where a provider's own diagnostic belongs.
+          error: describeProviderFailure(error).message,
+        }))
+      );
 
       // D63 action seam: ordered, isolated side-effects after a send attempt.
       await registry.runActions<EmailAfterSendValue, EmailFilterContext>(

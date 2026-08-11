@@ -234,7 +234,7 @@ describe("EmailService — D63 filter/action seams", () => {
         "createAdapterFromRecord"
       ] = () => ({ send: adapterSend });
       (service as unknown as { deliveries: unknown })["deliveries"] = {
-        record: async () => {
+        recordAll: async () => {
           order.push("record");
         },
       };

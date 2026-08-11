@@ -26,17 +26,13 @@ export const emailDeliveriesMysql = mysqlTable(
     /**
      * No foreign key, unlike PostgreSQL and SQLite.
      *
-     * Which means a deleted provider leaves this pointing at a row that is
-     * gone, rather than being nulled. That is stated plainly because an earlier
-     * version of this comment claimed the service nulls it, and no code does —
-     * a comment describing behaviour that does not exist is worse than none,
-     * since the next reader stops looking.
+     * A deleted provider therefore leaves this pointing at a row that is gone,
+     * rather than being nulled: nothing in the service clears it, and there is
+     * no constraint here to do it instead.
      *
-     * It is survivable rather than correct: `provider_type` beside it keeps
+     * Readers must not assume it resolves. `provider_type` beside it keeps
      * every row meaningful without the join, and no read path follows this id
-     * expecting a row. Making the three dialects agree is filed rather than
-     * done here, because the honest fix is the service nulling it on delete on
-     * every dialect, not a foreign key on one more.
+     * expecting to find a provider.
      */
     providerId: varchar("provider_id", { length: 36 }),
 
@@ -45,6 +41,9 @@ export const emailDeliveriesMysql = mysqlTable(
 
     /** SHA-256 of the lowercased, trimmed recipient address, hex encoded. */
     recipientHash: varchar("recipient_hash", { length: 64 }).notNull(),
+
+    /** `to`, `cc` or `bcc` — see the PostgreSQL module for why each gets a row. */
+    recipientKind: varchar("recipient_kind", { length: 3 }).notNull(),
 
     /** `sent` or `failed`. A drain would add `pending` and `retrying`. */
     status: varchar("status", { length: 20 }).notNull(),

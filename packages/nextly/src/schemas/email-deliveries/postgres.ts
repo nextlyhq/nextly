@@ -89,6 +89,22 @@ export const emailDeliveriesPg = pgTable(
      */
     recipientHash: varchar("recipient_hash", { length: 64 }).notNull(),
 
+    /**
+     * How this recipient received the message: `to`, `cc` or `bcc`.
+     *
+     * One row per recipient, because the table's whole purpose is to answer
+     * "did this person receive it", and a copied recipient received it just as
+     * much as the primary one. Rows for a single message share a `message_id`
+     * and a `status`, which is honest rather than lossy: the provider returns
+     * one result for the message, not one per address.
+     *
+     * No column default. The recorder always supplies this, so a default would
+     * only describe rows nothing writes — and the DDL renderer emits a string
+     * default unquoted, which SQL rejects outright for a value that is also a
+     * keyword.
+     */
+    recipientKind: varchar("recipient_kind", { length: 3 }).notNull(),
+
     /** `sent` or `failed`. A drain would add `pending` and `retrying`. */
     status: varchar("status", { length: 20 }).notNull(),
 

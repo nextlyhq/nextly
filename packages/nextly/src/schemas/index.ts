@@ -264,6 +264,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "user_field_definitions",
   "email_providers",
   "email_templates",
+  "email_deliveries",
   "nextly_schema_events",
   "nextly_i18n_archive",
   "nextly_versions",

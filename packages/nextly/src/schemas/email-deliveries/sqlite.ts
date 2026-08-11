@@ -33,6 +33,9 @@ export const emailDeliveriesSqlite = sqliteTable(
     /** SHA-256 of the lowercased, trimmed recipient address, hex encoded. */
     recipientHash: text("recipient_hash").notNull(),
 
+    /** `to`, `cc` or `bcc` — see the PostgreSQL module for why each gets a row. */
+    recipientKind: text("recipient_kind").notNull(),
+
     /** `sent` or `failed`. A drain would add `pending` and `retrying`. */
     status: text("status").notNull(),
 

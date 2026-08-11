@@ -34,6 +34,7 @@ import { BaseService } from "../../../shared/base-service";
 import { encrypt, decrypt } from "../../../utils/encryption";
 // Pull adapter type into a normal `import type` declaration so the return
 // signature on createAdapterFromProvider satisfies consistent-type-imports.
+import type { EmailDeliveryInput } from "../delivery-record";
 import { describeProviderFailure } from "../provider-definition";
 import type { EmailProviderAdapter } from "../types";
 
@@ -41,6 +42,15 @@ import type { EmailDeliveryService } from "./email-delivery-service";
 import { getEmailProviderRegistry } from "./email-provider-registry";
 
 const MASKED_VALUE = "••••••••";
+
+/**
+ * What a provider means when it returns `{ success: false }` without throwing.
+ *
+ * One constant because the sentence is both returned to the caller and stored
+ * in the delivery row, and a row whose reason disagrees with what the operator
+ * was shown is worse than one with no reason at all.
+ */
+const SEND_RETURNED_UNSUCCESSFUL = "Send returned unsuccessful";
 
 // ============================================================
 // Input Types
@@ -716,11 +726,19 @@ export class EmailProviderService extends BaseService {
         html: `<p>This is a test email from your <strong>${provider.name}</strong> email provider.</p><p>If you received this, your provider is configured correctly.</p>`,
       });
 
-      await this.recordTestDelivery(to, provider, result.success, null);
+      // The whole result, not a boolean. A failed test whose row carries no
+      // reason is a row that says only "something went wrong", and a
+      // successful one without the provider's message id cannot be matched
+      // against the provider's own record of it.
+      await this.recordTestDelivery(to, provider, {
+        status: result.success ? "sent" : "failed",
+        messageId: result.messageId ?? null,
+        error: result.success ? null : SEND_RETURNED_UNSUCCESSFUL,
+      });
 
       return {
         success: result.success,
-        error: result.success ? undefined : "Send returned unsuccessful",
+        error: result.success ? undefined : SEND_RETURNED_UNSUCCESSFUL,
       };
     } catch (error) {
       // Logged HERE, with the cause. Attaching an original error to a
@@ -738,18 +756,29 @@ export class EmailProviderService extends BaseService {
         ...describeProviderFailure(error),
       });
 
+      // Only the send path. This catch is shared with the connection probe,
+      // which dispatches nothing, so recording its failure here would put a
+      // delivery in the log for a message that was never composed -- against a
+      // recipient the probe never had, since `testEmail` is optional and the
+      // row would hash an empty string.
+      //
       // A NextlyError's publicMessage is a decision about what may be shown.
       // Anything else is a message the throw site happened to interpolate, and
       // a contributed adapter throws with decrypted configuration in scope.
-      await this.recordTestDelivery(
-        testEmail || "",
-        provider,
-        false,
-        // The NORMALISED message. `cause` is the provider's own error, thrown
-        // with decrypted configuration in scope, and storing it would put a
-        // credential in a database column.
-        describeProviderFailure(error).message
-      );
+      if (mode === "send") {
+        await this.recordTestDelivery(
+          testEmail || provider.fromEmail,
+          provider,
+          {
+            status: "failed",
+            messageId: null,
+            // The NORMALISED message. `cause` is the provider's own error,
+            // thrown with decrypted configuration in scope, and storing it would
+            // put a credential in a database column.
+            error: describeProviderFailure(error).message,
+          }
+        );
+      }
 
       return {
         success: false,
@@ -771,8 +800,7 @@ export class EmailProviderService extends BaseService {
   private async recordTestDelivery(
     to: string,
     provider: EmailProviderRecord,
-    success: boolean,
-    error: string | null
+    outcome: Pick<EmailDeliveryInput, "status" | "messageId" | "error">
   ): Promise<void> {
     await this.deliveries?.record({
       to,
@@ -781,8 +809,7 @@ export class EmailProviderService extends BaseService {
       // A test carries no template. Recording one would name a message the
       // operator never chose to send.
       templateSlug: null,
-      status: success ? "sent" : "failed",
-      error,
+      ...outcome,
     });
   }
 

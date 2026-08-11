@@ -1,20 +1,25 @@
 /**
- * Every core table has to be in the bundle that CREATES tables.
+ * Every core table has to reach the two registries that are not the one it was
+ * declared in.
  *
- * There are two registries and they answer different questions.
- * `getCoreSchema()` describes tables; `getDialectTables()` is what
+ * There are THREE, and they answer different questions.
+ * `getCoreSchema()` describes tables. `getDialectTables()` is what
  * `ensureFirstRunSetup` and `reconcileCore` hand to drizzle-kit, and therefore
- * what decides whether a table exists at all.
+ * what decides whether a table exists at all. `getCoreTableNames()` is what
+ * those same callers introspect the live database with, and therefore what
+ * decides whether an existing table is SEEN.
  *
- * A table registered in the first and missed in the second looks completely
- * wired: its DDL renders, a fixture built from `getCoreSchema` creates it, and
- * every unit test passes — against a table no real installation has.
+ * Missing from the second, a table looks completely wired: its DDL renders, a
+ * fixture built from `getCoreSchema` creates it, and every unit test passes —
+ * against a table no real installation has. Missing from the third, the table
+ * is created and then absent from every live snapshot, so the drift check
+ * proposes adding it again on every run.
  */
 
 import { describe, expect, it } from "vitest";
 
 import { getDialectTables } from "../../database/index";
-import { getCoreSchema } from "../index";
+import { getCoreSchema, getCoreTableNames } from "../index";
 
 /**
  * Both registries take the same dialect names.
@@ -54,6 +59,18 @@ describe("core tables reach the bundle that creates them", () => {
     expect(missing).toEqual([]);
   });
 
+  it.each(DIALECTS)(
+    "%s reaches the names the live snapshot is read with",
+    dialect => {
+      const managed = new Set(getCoreTableNames());
+      const missing = getCoreSchema(dialect)
+        .tables.map(table => table.name)
+        .filter(name => !managed.has(name));
+
+      expect(missing).toEqual([]);
+    }
+  );
+
   it("reads real table names, not an empty set", () => {
     // The control. If the symbol lookup above stopped finding names, every
     // assertion would compare an empty list against an empty list and pass
@@ -61,5 +78,9 @@ describe("core tables reach the bundle that creates them", () => {
     const pushed = pushedTableNames("sqlite");
     expect(pushed.size).toBeGreaterThan(5);
     expect(pushed).toContain("email_providers");
+
+    // The same control for the third registry, for the same reason.
+    expect(getCoreTableNames().length).toBeGreaterThan(5);
+    expect(getCoreTableNames()).toContain("email_providers");
   });
 });

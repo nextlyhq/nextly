@@ -30,6 +30,7 @@ import {
   hashRecipient,
   storableError,
   type EmailDeliveryInput,
+  type EmailDeliveryRecipientKind,
   type EmailDeliveryStatus,
 } from "../delivery-record";
 
@@ -52,6 +53,7 @@ interface EmailDeliveryRow {
   providerType: string;
   templateSlug: string | null;
   recipientHash: string;
+  recipientKind: string;
   status: string;
   attemptCount: number;
   error: string | null;
@@ -66,6 +68,7 @@ export interface EmailDeliveryRecord {
   providerType: string;
   templateSlug: string | null;
   recipientHash: string;
+  recipientKind: EmailDeliveryRecipientKind;
   status: EmailDeliveryStatus;
   attemptCount: number;
   error: string | null;
@@ -120,26 +123,49 @@ export class EmailDeliveryService extends BaseService {
    * there would tell an operator to expect a retry that no code will perform.
    */
   async record(input: EmailDeliveryInput): Promise<void> {
+    await this.recordAll([input]);
+  }
+
+  /**
+   * Record every recipient of one message, in a single statement.
+   *
+   * A message with copied recipients produces one row per address, because the
+   * question the table answers is asked about a PERSON and a person copied on
+   * a message received it. One insert rather than one per address, so a
+   * copied-in message costs the same round trip as any other.
+   *
+   * Never throws, for the reason `record` gives.
+   */
+  async recordAll(inputs: EmailDeliveryInput[]): Promise<void> {
+    if (inputs.length === 0) return;
+
+    const now = new Date();
     try {
-      await this.db.insert(this.deliveries).values({
-        id: randomUUID(),
-        providerId: input.providerId ?? null,
-        providerType: input.providerType,
-        templateSlug: input.templateSlug ?? null,
-        // The address is hashed here and nowhere retained. Callers hand over
-        // the real one because they are sending to it; this is the boundary
-        // where it stops travelling.
-        recipientHash: hashRecipient(input.to),
-        status: input.status,
-        attemptCount: 1,
-        error: input.error ? storableError(input.error) : null,
-        messageId: input.messageId ?? null,
-        createdAt: new Date(),
-      });
+      await this.db.insert(this.deliveries).values(
+        inputs.map(input => ({
+          id: randomUUID(),
+          providerId: input.providerId ?? null,
+          providerType: input.providerType,
+          templateSlug: input.templateSlug ?? null,
+          // The address is hashed here and nowhere retained. Callers hand over
+          // the real one because they are sending to it; this is the boundary
+          // where it stops travelling.
+          recipientHash: hashRecipient(input.to),
+          recipientKind: input.recipientKind ?? "to",
+          status: input.status,
+          attemptCount: 1,
+          error: input.error ? storableError(input.error) : null,
+          messageId: input.messageId ?? null,
+          // One timestamp for the whole message: the rows describe a single
+          // send, and staggering them by microseconds would suggest otherwise.
+          createdAt: now,
+        }))
+      );
     } catch (error) {
       this.logger.error("Failed to record an email delivery", {
-        providerType: input.providerType,
-        status: input.status,
+        providerType: inputs[0]?.providerType,
+        status: inputs[0]?.status,
+        recipientCount: inputs.length,
         message: error instanceof Error ? error.message : String(error),
       });
     }
@@ -192,6 +218,7 @@ export class EmailDeliveryService extends BaseService {
       providerType: row.providerType,
       templateSlug: row.templateSlug,
       recipientHash: row.recipientHash,
+      recipientKind: row.recipientKind as EmailDeliveryRecipientKind,
       status: row.status as EmailDeliveryStatus,
       attemptCount: row.attemptCount,
       error: row.error,

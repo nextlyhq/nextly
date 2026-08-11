@@ -155,6 +155,46 @@ describe("the delivery log", () => {
     expect(rows[0]?.next_attempt_at).toBeNull();
   });
 
+  it("records one row per recipient, saying how each received it", async () => {
+    // The table answers questions about a PERSON, and someone copied on a
+    // message received it exactly as the primary recipient did. Recording only
+    // `to` would answer "no record" for someone holding the message.
+    await service.recordAll([
+      { to: RECIPIENT, providerType: "smtp", status: "sent" },
+      {
+        to: "cc@example.com",
+        recipientKind: "cc",
+        providerType: "smtp",
+        status: "sent",
+      },
+      {
+        to: "bcc@example.com",
+        recipientKind: "bcc",
+        providerType: "smtp",
+        status: "sent",
+      },
+    ]);
+
+    const rows = await service.list();
+    expect(rows).toHaveLength(3);
+    expect(rows.map(row => row.recipientKind).sort()).toEqual([
+      "bcc",
+      "cc",
+      "to",
+    ]);
+
+    // The query the whole column exists for: a copied recipient is findable
+    // by the address they were copied at.
+    const copied = await service.list({ recipient: "CC@example.com" });
+    expect(copied).toHaveLength(1);
+    expect(copied[0]?.recipientKind).toBe("cc");
+    // The control: the primary recipient is still findable, so this is not a
+    // test that passes because everything became a `cc`.
+    const primary = await service.list({ recipient: RECIPIENT });
+    expect(primary).toHaveLength(1);
+    expect(primary[0]?.recipientKind).toBe("to");
+  });
+
   it("reports a failed listing as a NextlyError, not a driver error", async () => {
     // Reading and recording are deliberately asymmetric. `record` swallows,
     // because a log that cannot be written must not fail a send. `list` is a

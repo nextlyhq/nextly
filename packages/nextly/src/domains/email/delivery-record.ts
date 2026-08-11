@@ -16,6 +16,15 @@ import { createHash } from "crypto";
 export type EmailDeliveryStatus = "sent" | "failed";
 
 /**
+ * How a recipient received the message.
+ *
+ * A copied recipient received it as much as the primary one did, and the table
+ * exists to answer "did this person receive it" — so each gets a row, and this
+ * says which line of the envelope they were on.
+ */
+export type EmailDeliveryRecipientKind = "to" | "cc" | "bcc";
+
+/**
  * Hash a recipient address for storage.
  *
  * Lowercased and trimmed first so the same mailbox hashes identically however
@@ -47,11 +56,17 @@ export function hashRecipient(address: string): string {
  *
  * - the local part may be QUOTED — `"odd user"@example.com` is valid and
  *   contains a space, so a pattern built from "non-whitespace" misses it;
+ * - a quoted local part may contain QUOTED-PAIRS — `"odd\"user"@example.com`
+ *   escapes a quote with a backslash, so a quoted alternative that stops at
+ *   the first `"` ends mid-address and leaves `"odd\` in the stored text;
  * - the domain may be an ADDRESS LITERAL — `user@[192.0.2.1]` — and may have
  *   no dot at all, as `postmaster@localhost` does on the machines most likely
  *   to be running a local relay.
  *
- * Each of those was verified to pass through the previous pattern untouched.
+ * Each of those was verified to pass through an earlier pattern untouched.
+ *
+ * The escape consumes any character except a line break, so an unterminated
+ * quote cannot make the match run past the end of the line it started on.
  *
  * The asymmetry justifies the breadth: removing something that merely
  * resembles an address costs a slightly vaguer diagnostic, while missing one
@@ -59,7 +74,7 @@ export function hashRecipient(address: string): string {
  * storing it. A status code and a reason contain no `@` and are unaffected.
  */
 const ADDRESS_SHAPED =
-  /(?:"[^"\r\n]*"|[^\s<>()[\]{},;:"]+)@(?:\[[^\]\r\n]*\]|[^\s<>()[\]{},;:"]+)/g;
+  /(?:"(?:\\[^\r\n]|[^"\\\r\n])*"|[^\s<>()[\]{},;:"]+)@(?:\[[^\]\r\n]*\]|[^\s<>()[\]{},;:"]+)/g;
 
 /** The token an address is replaced with, so the shape of the error survives. */
 export const REDACTED_ADDRESS = "[address]";
@@ -99,6 +114,8 @@ export function storableError(message: string): string {
 export interface EmailDeliveryInput {
   /** The address the message went to. Hashed here; never stored. */
   to: string;
+  /** Which line of the envelope carried that address. Defaults to `to`. */
+  recipientKind?: EmailDeliveryRecipientKind;
   /** The provider row that carried it, when a stored provider did. */
   providerId?: string | null;
   /** The registered type, kept even after the provider is gone. */
