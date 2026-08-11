@@ -331,15 +331,18 @@ test("[informational] point 9: the library's Insert button adds a block", async 
  * register through the shared shortcut manager, which holds one listener and
  * takes precedence from the component tree, so Escape no longer leaves.
  *
- * 🔴 WHAT THIS TEST DOES NOT COVER, and what nothing else covers either.
- * Point 12 asks for a CANCELLED DRAG and an unchanged tree. This asserts the
- * editor is still mounted; 12b asserts the tree is unmutated. Both pass while
- * the drag itself is never cancelled, because `plugin-page-builder` registers
- * no Escape handler at all — the admin merely stopped stealing the key, which
- * is not the same as the canvas claiming it. The blocking layer a canvas needs
- * exists (`useShortcuts([{ keys: "Escape" }], { blocking: true })`) and nothing
- * in the page builder calls it. Do not read these two greens as point 12 being
- * met.
+ * Escape DOES cancel the drag, and the handler is not in this repository.
+ * `dragSensors` includes `@dnd-kit/dom`'s `PointerSensor`, which installs its
+ * own `keydown` listener for the duration of a pointer drag and ends the
+ * operation with `canceled: true`; `EditorSurface.onDragEnd` returns early on
+ * that flag, so no drop is planned. Searching this package for "Escape" finds
+ * nothing and proves nothing — the mechanism lives in a dependency.
+ *
+ * So point 12 is met by two separate parties: the sensor cancels the drag, and
+ * the admin (since its keydown owners moved onto the shared shortcut manager)
+ * no longer navigates away from the editor while it happens. This test covers
+ * the second; 12b covers the tree staying unmutated. Neither asserts the drag's
+ * own cancellation directly, which is the assertion worth adding next.
  */
 test("[acceptance] point 12a: Escape keeps the editor mounted", async ({
   page,
