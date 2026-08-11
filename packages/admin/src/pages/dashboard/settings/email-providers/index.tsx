@@ -344,11 +344,32 @@ function EmailProviderTable() {
 
   // The registry catalog names and describes each type. Without it the table
   // could only label the providers this admin was compiled against.
-  const { data: descriptorList } = useEmailProviderTypes();
+  const {
+    data: descriptorList,
+    isSuccess: isCatalogLoaded,
+    isError: isCatalogError,
+    refetch: refetchCatalog,
+    isFetching: isCatalogFetching,
+  } = useEmailProviderTypes();
   const descriptors = useMemo(() => descriptorList ?? [], [descriptorList]);
   const descriptorsByType = useMemo(
     () => new Map(descriptors.map(entry => [entry.type, entry])),
     [descriptors]
+  );
+
+  /**
+   * Whether this type is known to have no provider behind it.
+   *
+   * An empty catalog is produced by a type that is genuinely gone AND by a
+   * catalog that failed or has not arrived, and only the first is a reason to
+   * withhold an action. Answering "unregistered" from an unanswered request
+   * takes Set Default and Send Test away from every working provider on the
+   * page, silently and with nothing to retry.
+   */
+  const typeIsKnownMissing = useCallback(
+    (providerType: string) =>
+      isCatalogLoaded && !descriptorsByType.has(providerType),
+    [isCatalogLoaded, descriptorsByType]
   );
 
   const { mutate: doDelete, isPending: isDeleting } = useDeleteEmailProvider();
@@ -566,7 +587,7 @@ function EmailProviderTable() {
       // for, AND clears the working default on the way — so the damage outlives
       // the click. The service refuses it too; this is the affordance, not the
       // rule.
-      if (!provider.isDefault && descriptorsByType.has(provider.type)) {
+      if (!provider.isDefault && !typeIsKnownMissing(provider.type)) {
         actions.push({
           id: "set-default",
           label: "Set Default",
@@ -578,7 +599,7 @@ function EmailProviderTable() {
       // stored type and can only fail for one that is gone, and the read-only
       // fallback exists so an orphaned row can be INSPECTED and deleted --
       // offering an action that cannot succeed contradicts that.
-      if (descriptorsByType.has(provider.type)) {
+      if (!typeIsKnownMissing(provider.type)) {
         actions.push({
           id: "test",
           label: "Send Test",
@@ -605,7 +626,7 @@ function EmailProviderTable() {
       // Read to decide whether Set Default is offered, so the actions have to
       // be rebuilt when the catalog arrives — otherwise the action stays
       // hidden for every row until something else invalidates them.
-      descriptorsByType,
+      typeIsKnownMissing,
     ]
   );
 
@@ -636,6 +657,33 @@ function EmailProviderTable() {
 
   return (
     <div className="space-y-4">
+      {/* The catalog is what names each type and what the type filter is built
+          from, so its absence is visible all over this page while its cause is
+          not. Shown beside the table rather than in place of it: the providers
+          themselves loaded, and deleting an unwanted one still works. */}
+      {isCatalogError && (
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Provider catalog unavailable</AlertTitle>
+          <AlertDescription className="flex flex-wrap items-center gap-3">
+            <span>
+              Provider types could not be loaded, so this page cannot tell which
+              of these are still installed. Each row falls back to its stored
+              type, and the type filter has nothing to offer.
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                void refetchCatalog();
+              }}
+              disabled={isCatalogFetching}
+            >
+              {isCatalogFetching ? "Retrying..." : "Retry"}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
       <SettingsTableToolbar
         search={
           <SearchBar
@@ -766,3 +814,7 @@ const EmailProvidersPage: React.FC = () => {
 };
 
 export default EmailProvidersPage;
+
+// The table alone, so its behaviour can be exercised without the page's
+// boundary, layout and router around it.
+export { EmailProviderTable };
