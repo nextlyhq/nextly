@@ -170,8 +170,9 @@ choose it per collection set, not per preference.**
   **every collection you list must be public**. A restricted collection listed
   here has its entries read trusted and its paths pre-rendered into public HTML.
 
-> ⚠️ **The trust does not stop at the collections you list.** At the default
-> `depth: 1`, a populated relationship is expanded with the same trusted
+> ⚠️ **The trust does not stop at the collections you list.** Wherever relation
+> expansion happens — `resolveContent` and `createContentRoute` both default to
+> `depth: 1` — a populated relationship is expanded with the same trusted
 > posture — access rules bypassed, and lifecycle widened to include drafts. So a
 > page in a public collection can embed a draft or access-restricted row from a
 > **related** collection, and this route pre-renders that page into a static

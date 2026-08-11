@@ -318,6 +318,24 @@ describe("the content route's draft decision", () => {
     expect(calls.every(call => call.depth === 0)).toBe(true);
   });
 
+  it("keeps the safe default when depth is explicitly undefined", async () => {
+    // An optional property permits an explicit `undefined`, and forwarding a
+    // config object produces one routinely. A spread overwrites with it, so a
+    // default placed BEFORE the spread is silently discarded — restoring
+    // trusted relation expansion for the caller least likely to have chosen it.
+    const { reader, calls } = stubReader();
+
+    await createPublicContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      depth: undefined,
+      render: (entry: ContentEntry) => entry,
+    }).ContentPage({ params: { slug: ["a"] } });
+
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every(call => call.depth === 0)).toBe(true);
+  });
+
   it("still expands relations when the site sets depth explicitly", async () => {
     // The default is a safe starting point, not a ceiling. A site that
     // populates relations says so, and by saying so states that those

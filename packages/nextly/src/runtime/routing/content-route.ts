@@ -622,8 +622,13 @@ export function createPublicContentRoute<TNode>(
       // This bounds the blast radius; it does not fix the propagation. That
       // still belongs where the trust is threaded, so a caller who sets `depth`
       // gets the old behaviour in full.
-      depth: 0,
+      // Normalized AFTER the spread, not defaulted before it. An optional
+      // property permits an EXPLICIT `undefined` — which forwarding a config
+      // object produces routinely — and a spread overwrites with it, so
+      // `{ depth: 0, ...config }` restores `?? 1` for exactly the caller least
+      // likely to have thought about relation expansion.
       ...config,
+      depth: config.depth ?? 0,
     },
     "public"
   );
