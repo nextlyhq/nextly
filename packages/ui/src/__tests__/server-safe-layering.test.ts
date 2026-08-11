@@ -83,6 +83,8 @@ const BROWSER_GLOBALS = new Set([
   "location",
   "matchMedia",
   "screen",
+  // The browser's own alias for the global scope. Absent from every supported Node.
+  "self",
   "getComputedStyle",
   "requestAnimationFrame",
   "cancelAnimationFrame",
@@ -389,6 +391,40 @@ function analyze(source: string, fileName: string): Analysis {
     ts.isSatisfiesExpression(node) ||
     ts.isTypeAssertionExpression(node);
 
+  /** The expression underneath any erased wrappers around it. */
+  const unwrap = (node: ts.Node): ts.Node => {
+    let inner = node;
+    while (isErasedWrapper(inner) && "expression" in inner) {
+      inner = (inner as { expression: ts.Expression }).expression;
+    }
+    return inner;
+  };
+
+  /**
+   * Whether a node IS `typeof <name>`, rather than merely containing one.
+   *
+   * `(typeof window && "object") === "object"` contains a `typeof` and proves nothing — the left
+   * side is always `"object"`, so the guarded branch runs on a server too. Only an operand that
+   * IS the `typeof`, once its wrappers are stripped, establishes the comparison's polarity.
+   */
+  const isTypeofOf = (node: ts.Node, name: string): boolean => {
+    const inner = unwrap(node);
+    if (!ts.isTypeOfExpression(inner)) return false;
+    const operand = unwrap(inner.expression);
+    // Every spelling of the same guard: `typeof document`, `typeof globalThis.document`, and
+    // `typeof globalThis["document"]`. All three evaluate to a string rather than throwing.
+    return (
+      (ts.isIdentifier(operand) && operand.text === name) ||
+      (ts.isPropertyAccessExpression(operand) &&
+        operand.name.text === name &&
+        isAmbientGlobalThis(operand.expression)) ||
+      (ts.isElementAccessExpression(operand) &&
+        isAmbientGlobalThis(operand.expression) &&
+        ts.isStringLiteral(operand.argumentExpression) &&
+        operand.argumentExpression.text === name)
+    );
+  };
+
   /** Whether a condition subtree asks `typeof <name>`, which is the SSR guard. */
   const mentionsTypeof = (condition: ts.Node, name: string): boolean => {
     let found = false;
@@ -461,7 +497,7 @@ function analyze(source: string, fileName: string): Analysis {
       operator === ts.SyntaxKind.ExclamationEqualsToken;
     if (!equal && !notEqual) return undefined;
     const sides = [node.left, node.right];
-    const typeofSide = sides.find(side => mentionsTypeof(side, name));
+    const typeofSide = sides.find(side => isTypeofOf(side, name));
     const other = sides.find(side => side !== typeofSide);
     if (typeofSide === undefined || other === undefined) return undefined;
     if (!ts.isStringLiteral(other)) return undefined;
@@ -691,7 +727,14 @@ function analyze(source: string, fileName: string): Analysis {
 
     // `typeof window === "undefined"` is the guard that MAKES a module server-safe: it evaluates
     // to a string rather than throwing, so reporting it would punish the correct pattern.
-    if (ts.isTypeOfExpression(parent)) return false;
+    // `typeof (window)` and `typeof (window as unknown)` evaluate to a string just as the bare
+    // form does, so the wrappers between the identifier and the `typeof` are stepped over.
+    let operandOf: ts.Node = node;
+    while (operandOf.parent && isErasedWrapper(operandOf.parent)) {
+      operandOf = operandOf.parent;
+    }
+    if (operandOf.parent && ts.isTypeOfExpression(operandOf.parent))
+      return false;
 
     // `typeof window === "undefined" ? 0 : window.innerWidth` is the standard way to write a
     // module that is safe to import on a server, and the second read never runs there. Reporting
@@ -872,7 +915,11 @@ const ANALYSABLE = /\.(?:[cm]?tsx?|[cm]?jsx?)$/;
 /** Resolve a relative specifier the way the bundler does, or `null` if it names a package. */
 function resolveLocal(fromFile: string, specifier: string): string | null {
   if (!specifier.startsWith(".")) return null;
-  const base = path.resolve(path.dirname(fromFile), specifier);
+  // esbuild retries resolution with any `?query` or `#fragment` suffix removed, so `./helper.ts?x`
+  // reaches `helper.ts`. Probing the suffixed path finds nothing, and an unresolved RELATIVE
+  // specifier is recorded as an external package — failing the allow-list for a local import.
+  const withoutSuffix = specifier.replace(/[?#].*$/, "");
+  const base = path.resolve(path.dirname(fromFile), withoutSuffix);
   // A TypeScript module may import `./helper.js` while the source is `helper.ts`, and the bundler
   // substitutes the extension. Probing `helper.js.ts` finds nothing, and the specifier would then
   // be recorded as an external PACKAGE, failing the allow-list for an ordinary local import.
@@ -1533,6 +1580,35 @@ describe("reading a module", () => {
     ).toEqual(["react"]);
   });
 
+  it("accepts a typeof guard written with wrappers around it", () => {
+    // `typeof (window)` evaluates to a string exactly as the bare form does, so the wrappers
+    // between the identifier and the `typeof` are stepped over rather than ending the search.
+    expect(read(`export const t = typeof (window);`).globals).toEqual([]);
+    expect(
+      read(`export const t = typeof (window as unknown);`).globals
+    ).toEqual([]);
+  });
+
+  it("requires the operand to BE a typeof, not merely contain one", () => {
+    // `(typeof window && "object") === "object"` is always true, so the guarded branch runs on a
+    // server too. A recursive search for a `typeof` anywhere in the operand called that a guard.
+    expect(
+      read(
+        `export const w = (typeof window && "object") === "object" && window.innerWidth;`
+      ).globals
+    ).toEqual(["window"]);
+    // The control: the ordinary spelling, which IS the typeof, still guards.
+    expect(
+      read(
+        `export const w = typeof window !== "undefined" && window.innerWidth;`
+      ).globals
+    ).toEqual([]);
+  });
+
+  it("reports the browser's alias for the global scope", () => {
+    expect(read(`export const scope = self;`).globals).toEqual(["self"]);
+  });
+
   it("reads an optional access on globalThis by what uses it", () => {
     // `globalThis` always exists, so `?.` there protects nothing: the read of the missing property
     // still happens and `.body` still dereferences `undefined`.
@@ -1792,6 +1868,23 @@ describe("resolving a local import", () => {
     expect(files.map(({ file }) => path.basename(file)).sort()).toEqual([
       "entry.ts",
       "helper.js",
+    ]);
+  });
+
+  it("resolves a specifier carrying a query suffix", () => {
+    // esbuild retries resolution with `?query` and `#fragment` removed. Probing the suffixed path
+    // finds nothing, and an unresolved RELATIVE specifier is recorded as an external package.
+    const dir = mkdtempSync(path.join(os.tmpdir(), "nx-layering-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    writeFileSync(path.join(dir, "helper.ts"), "export const helper = 1;\n");
+    const entry = path.join(dir, "entry.ts");
+    writeFileSync(entry, 'export { helper } from "./helper.ts?raw";\n');
+
+    const { files, packages } = reach(entry);
+    expect([...packages.keys()]).toEqual([]);
+    expect(files.map(({ file }) => path.basename(file)).sort()).toEqual([
+      "entry.ts",
+      "helper.ts",
     ]);
   });
 
