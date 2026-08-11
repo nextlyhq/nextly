@@ -172,11 +172,36 @@ function mismatchesIn(
   return found;
 }
 
+/**
+ * The blocks the rule reads, named once. The pin below and the rule itself are
+ * both driven from this list, so a block can never be measured without also
+ * being pinned: adding a mode here adds it to both. Pinning one block by hand
+ * while the rule read two is how the dark half came to pass over whatever it
+ * happened to find, including nothing.
+ */
+const MEASURED = [
+  { selector: ":root", tokens: light, mode: "light" },
+  { selector: ".dark", tokens: dark, mode: "dark" },
+] as const;
+
 describe("colour comments describe the values beside them", () => {
-  it("finds annotated tokens to check", () => {
-    // An empty scan satisfies the rule below without reading anything.
-    const { text, startLine } = blockOf(":root");
-    expect(claimsIn(text, startLine).length).toBeGreaterThan(5);
+  it("finds annotated tokens to check in every block it reads", () => {
+    // An empty scan satisfies the rule below without reading anything, and it
+    // does so silently -- a block whose annotations were dropped or whose
+    // selector moved reports as clean rather than as unread.
+    const counts = MEASURED.map(({ selector }) => {
+      const { text, startLine } = blockOf(selector);
+      return { selector, claims: claimsIn(text, startLine).length };
+    });
+
+    expect(
+      counts.filter(c => c.claims <= 5),
+      `A block the rule measures yielded almost no annotated tokens, so the ` +
+        `rule holds over an empty or near-empty set there. Either the block ` +
+        `moved, or the annotations were removed -- both make the check below ` +
+        `pass for the wrong reason. Counts: ` +
+        counts.map(c => `${c.selector}=${c.claims}`).join(", ")
+    ).toEqual([]);
   });
 
   it("resolves the claims it knows how to read", () => {
@@ -190,10 +215,9 @@ describe("colour comments describe the values beside them", () => {
   });
 
   it("names no colour the token is not", () => {
-    const mismatches = [
-      ...mismatchesIn(":root", light, "light"),
-      ...mismatchesIn(".dark", dark, "dark"),
-    ];
+    const mismatches = MEASURED.flatMap(({ selector, tokens, mode }) =>
+      mismatchesIn(selector, tokens, mode)
+    );
 
     expect(
       mismatches.map(

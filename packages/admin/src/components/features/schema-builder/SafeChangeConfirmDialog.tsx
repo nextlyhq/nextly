@@ -46,7 +46,15 @@ export function SafeChangeConfirmDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent className="max-w-md">
         <AlertDialogHeader>
-          <div className="flex items-center gap-2 text-success dark:text-success-400 mb-1">
+          {/* One semantic ink, no per-mode override. `--color-success` is
+              declared for each mode, so the "Safe change" eyebrow measures
+              5.30:1 light and 5.29:1 dark on the dialog surface. The previous
+              `success-600` base was a constant darkening of the brand green
+              that fell to 4.38:1 in dark, and the `dark:success-400` override
+              existed only to rescue it; with a per-mode base there is nothing
+              left to rescue, and dropping it keeps this eyebrow the same green
+              as every other success ink in the admin. */}
+          <div className="flex items-center gap-2 text-success mb-1">
             <CheckCircle2 className="h-4 w-4" />
             <span className="text-xs font-semibold uppercase tracking-wider">
               Safe change

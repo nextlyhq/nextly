@@ -41,8 +41,10 @@ export interface TableParams {
   filters?: FilterInfo;
 }
 
-// Server response structure (canonical wire shape). Field is `items`, not
-// `data`, matching the wire contract in spec section 5.1.
+// Server response structure (canonical wire shape). The list field is `items`,
+// never `data`: that is the envelope `respondList` emits for every paginated
+// endpoint, so a table bound to `data` would read undefined against a real
+// response. `meta` carries the pagination counters from the same envelope.
 /** @experimental */
 export interface ListResponse<TData> {
   items: TData[];

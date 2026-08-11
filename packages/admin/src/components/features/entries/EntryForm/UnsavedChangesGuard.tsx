@@ -131,6 +131,11 @@ export function UnsavedChangesGuard({
             <AlertDialogCancel onClick={cancelLeave}>
               Keep Editing
             </AlertDialogCancel>
+            {/* Hover darkens the fill by one ramp step, not two.
+                `destructive-700` drops the on-color label to 3.70:1 in dark
+                mode, under the 4.5:1 text minimum; `destructive-600` holds
+                5.67:1 dark and 5.92:1 light and still reads as a state change
+                against the resting fill. */}
             <AlertDialogAction
               onClick={confirmLeave}
               className="bg-destructive-solid text-destructive-foreground hover:bg-destructive-600"

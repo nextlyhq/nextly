@@ -101,6 +101,11 @@ export function InviteLinkPanel({
             className="shrink-0"
           >
             {copied ? (
+              // Copy confirmation uses the per-mode success ink rather than a
+              // fixed step of the green ramp: `success-600` is a constant
+              // darkening that reads at 4.38:1 on the dark surface, under the
+              // 4.5:1 text minimum. `--color-success` flips with the mode and
+              // clears AA on both (5.30:1 light, 5.29:1 dark).
               <Check className="h-4 w-4 text-success" />
             ) : (
               <Copy className="h-4 w-4" />
