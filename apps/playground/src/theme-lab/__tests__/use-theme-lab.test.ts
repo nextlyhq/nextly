@@ -129,6 +129,40 @@ describe("theme lab selection", () => {
     });
   });
 
+  it("drops the chosen flag when the stored density is gone", () => {
+    // The flag describes the density beside it. Read independently, a density
+    // this build no longer ships fell back to the default while the flag went
+    // on calling that fallback a deliberate choice -- and a chosen density is
+    // exactly what stops a theme switch applying the theme's recommendation.
+    // So the lab would show a candidate at metrics nobody picked, which is
+    // the failure this flag was introduced to prevent.
+    writeSelection({
+      theme: "sand",
+      // A density from a build that shipped one this build does not.
+      density: "roomy" as never,
+      densityChosen: true,
+    });
+
+    expect(readSelection()).toEqual({
+      theme: "sand",
+      density: DEFAULT_SELECTION.density,
+      densityChosen: false,
+    });
+  });
+
+  it("keeps the chosen flag when the stored density is still real", () => {
+    // The other direction. Clearing the flag whenever anything was unusual
+    // would discard a real choice on every read, which is the same defect
+    // pointing the other way.
+    writeSelection({ theme: "sand", density: "compact", densityChosen: true });
+
+    expect(readSelection()).toEqual({
+      theme: "sand",
+      density: "compact",
+      densityChosen: true,
+    });
+  });
+
   it("falls back to the default density for an unknown one", () => {
     // Densities are validated the same way theme ids are: the stylesheet has
     // no block for an unrecognised one, so applying it would style nothing.

@@ -90,19 +90,29 @@ export function readSelection(): Selection {
 
   try {
     const parsed = JSON.parse(raw) as Partial<Selection>;
+    // The flag describes the density beside it, so the two are read together.
+    // Deciding them independently meant a stored density that no longer
+    // exists -- from a build where it was removed or renamed -- fell back to
+    // the default while the flag went on calling that fallback a deliberate
+    // choice. Every later theme switch then refused to apply the theme's
+    // recommended density, so the lab showed a candidate at metrics nobody
+    // picked: the precise failure the flag exists to prevent, arriving
+    // through the parser instead of through the inference it replaced.
+    const storedDensity =
+      parsed.density && KNOWN_DENSITIES.has(parsed.density)
+        ? parsed.density
+        : null;
+
     return {
       theme:
         parsed.theme && KNOWN_THEMES.has(parsed.theme)
           ? parsed.theme
           : DEFAULT_SELECTION.theme,
-      density:
-        parsed.density && KNOWN_DENSITIES.has(parsed.density)
-          ? parsed.density
-          : DEFAULT_SELECTION.density,
+      density: storedDensity ?? DEFAULT_SELECTION.density,
       // Absent in anything an older build stored, which reads as "not
       // chosen" -- the safe direction: a density that was in fact chosen goes
       // back to following, rather than a following one being frozen forever.
-      densityChosen: parsed.densityChosen === true,
+      densityChosen: storedDensity !== null && parsed.densityChosen === true,
     };
   } catch {
     return DEFAULT_SELECTION;

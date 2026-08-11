@@ -292,11 +292,19 @@ try {
   browser = await chromium.launch();
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
-  if (!/Executable doesn't exist|browserType\.launch/.test(message)) throw error;
+  // ONLY the missing-executable case. Playwright prefixes every launch
+  // failure with `browserType.launch`, so matching that relabelled a missing
+  // host library or a sandbox denial as "Chromium is not installed" and sent
+  // the reader to reinstall a browser that was already there -- replacing a
+  // true error with a confident false one, which is worse than the raw
+  // message this was meant to improve on.
+  if (!message.includes("Executable doesn't exist")) throw error;
   throw new Error(
     `capture-themes: Chromium is not installed. \`pnpm install\` provides the ` +
       `playwright package but not its browsers.\n\n` +
       `  pnpm --filter playground exec playwright install chromium\n\n` +
+      `On a bare Linux host, add the system libraries too:\n\n` +
+      `  pnpm --filter playground exec playwright install --with-deps chromium\n\n` +
       `Then re-run \`pnpm --filter playground theme:capture\`.\n\n` +
       `Original error: ${message.split("\n")[0]}`
   );
