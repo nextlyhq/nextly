@@ -358,20 +358,57 @@ function analyze(source: string, fileName: string): Analysis {
    * `typeof` the same name. Syntactic rather than a flow analysis, which is the honest limit: it
    * recognises the shapes people write and would miss a guard stored in a variable first.
    */
+  /**
+   * Whether a guard condition is true exactly when the name EXISTS.
+   *
+   * `undefined` when the shape is not one this recognises, which is treated as no guard at all.
+   * The polarity is the whole point: `typeof window === "undefined" ? window.innerWidth : 0` runs
+   * the read on precisely the runtime that cannot serve it, and a check that only asked whether
+   * `typeof window` was mentioned excused it.
+   */
+  const definedWhenTrue = (
+    condition: ts.Node,
+    name: string
+  ): boolean | undefined => {
+    let node: ts.Node = condition;
+    while (ts.isParenthesizedExpression(node)) node = node.expression;
+    if (!ts.isBinaryExpression(node)) return undefined;
+    const operator = node.operatorToken.kind;
+    const equal =
+      operator === ts.SyntaxKind.EqualsEqualsEqualsToken ||
+      operator === ts.SyntaxKind.EqualsEqualsToken;
+    const notEqual =
+      operator === ts.SyntaxKind.ExclamationEqualsEqualsToken ||
+      operator === ts.SyntaxKind.ExclamationEqualsToken;
+    if (!equal && !notEqual) return undefined;
+    const sides = [node.left, node.right];
+    const typeofSide = sides.find(side => mentionsTypeof(side, name));
+    const other = sides.find(side => side !== typeofSide);
+    if (typeofSide === undefined || other === undefined) return undefined;
+    if (!ts.isStringLiteral(other)) return undefined;
+    // Compared against `"undefined"`, equality means ABSENT. Compared against any other type name
+    // — `"object"`, `"function"` — equality means present.
+    return other.text === "undefined" ? notEqual : equal;
+  };
+
   const guardedByTypeof = (read: ts.Node, name: string): boolean => {
     for (let node: ts.Node = read; node.parent; node = node.parent) {
       const parent = node.parent;
       let condition: ts.Node | undefined;
+      // Whether reaching this branch requires the condition to have been TRUE.
+      let reachedWhenTrue: boolean | undefined;
       if (
         ts.isConditionalExpression(parent) &&
         (parent.whenTrue === node || parent.whenFalse === node)
       ) {
         condition = parent.condition;
+        reachedWhenTrue = parent.whenTrue === node;
       } else if (
         ts.isIfStatement(parent) &&
         (parent.thenStatement === node || parent.elseStatement === node)
       ) {
         condition = parent.expression;
+        reachedWhenTrue = parent.thenStatement === node;
       } else if (
         ts.isBinaryExpression(parent) &&
         parent.right === node &&
@@ -379,8 +416,15 @@ function analyze(source: string, fileName: string): Analysis {
           parent.operatorToken.kind === ts.SyntaxKind.BarBarToken)
       ) {
         condition = parent.left;
+        // `a && b` reaches `b` when `a` was true; `a || b` reaches it when `a` was false.
+        reachedWhenTrue =
+          parent.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken;
       }
-      if (condition && mentionsTypeof(condition, name)) return true;
+      if (condition === undefined || reachedWhenTrue === undefined) continue;
+      const defined = definedWhenTrue(condition, name);
+      // A recognised guard protects the read only where the branch that reaches it is the one the
+      // name exists on. An unrecognised shape protects nothing.
+      if (defined !== undefined && defined === reachedWhenTrue) return true;
     }
     return false;
   };
@@ -416,7 +460,14 @@ function analyze(source: string, fileName: string): Analysis {
         ts.isCallExpression(outer)) &&
       outer.expression === value
     ) {
-      return outer.questionDotToken === undefined;
+      if (outer.questionDotToken === undefined) return true;
+      // `a?.b.c` short-circuits the whole chain, but PARENTHESES end it: `(a?.b).c` reads
+      // `.c` off the `undefined` the chain produced, and throws.
+      return (
+        outer.parent !== undefined &&
+        ts.isParenthesizedExpression(outer.parent) &&
+        usedAsValue(outer.parent)
+      );
     }
     // `new globalThis.Image()` throws for the same reason a call does, and `new` has no optional
     // form that could short-circuit it. A tagged template invokes its tag, so ``globalThis.foo`x` ``
@@ -424,6 +475,17 @@ function analyze(source: string, fileName: string): Analysis {
     if (ts.isNewExpression(outer) && outer.expression === value) return true;
     if (ts.isTaggedTemplateExpression(outer) && outer.tag === value)
       return true;
+    // `class C extends globalThis.HTMLElement {}` reads the base when the class is DEFINED, so
+    // extending `undefined` throws while the module body is still running.
+    if (
+      ts.isExpressionWithTypeArguments(outer) &&
+      outer.expression === value &&
+      outer.parent !== undefined &&
+      ts.isHeritageClause(outer.parent) &&
+      outer.parent.token === ts.SyntaxKind.ExtendsKeyword
+    ) {
+      return true;
+    }
     // Destructuring reads properties off the value, so `const { body } = globalThis.document`
     // throws on `undefined` exactly as `globalThis.document.body` does — in the declaration form
     // and in the assignment form, where the pattern parses as an object or array literal.
@@ -683,6 +745,10 @@ function analyze(source: string, fileName: string): Analysis {
       // A tagged template invokes its tag as the module evaluates, with no call parentheses to
       // recognise: ``(() => window.innerWidth)`` `` runs the body now.
       if (ts.isTaggedTemplateExpression(parent) && parent.tag === invoked) {
+        return true;
+      }
+      // `new (function () { ... })()` runs the body as the object is constructed.
+      if (ts.isNewExpression(parent) && parent.expression === invoked) {
         return true;
       }
       return ts.isCallExpression(parent) && parent.expression === invoked;
@@ -1245,6 +1311,89 @@ describe("reading a module", () => {
     expect(read("export const out = globalThis.document`x`;").globals).toEqual([
       "document",
     ]);
+  });
+
+  it("reads which side of a typeof guard the code is on", () => {
+    // The guard's POLARITY decides which branch is safe. These run the read on exactly the runtime
+    // that cannot serve it, and a check that only asked whether `typeof window` appeared nearby
+    // excused every one of them.
+    expect(
+      read(
+        `export const w = typeof window === "undefined" ? window.innerWidth : 0;`
+      ).globals
+    ).toEqual(["window"]);
+    expect(
+      read(
+        `export const w = typeof window === "undefined" && window.innerWidth;`
+      ).globals
+    ).toEqual(["window"]);
+    expect(
+      read(
+        `export const w = typeof window !== "undefined" || window.innerWidth;`
+      ).globals
+    ).toEqual(["window"]);
+  });
+
+  it("still excuses the guard written the right way round", () => {
+    // The control for the case above, in each of the four shapes.
+    expect(
+      read(
+        `export const w = typeof window !== "undefined" ? window.innerWidth : 0;`
+      ).globals
+    ).toEqual([]);
+    expect(
+      read(
+        `export const w = typeof window !== "undefined" && window.innerWidth;`
+      ).globals
+    ).toEqual([]);
+    expect(
+      read(
+        `export const w = typeof window === "undefined" || window.innerWidth;`
+      ).globals
+    ).toEqual([]);
+    expect(
+      read(`export const w = typeof window === "object" && window.innerWidth;`)
+        .globals
+    ).toEqual([]);
+  });
+
+  it("follows an optional chain that grouping has ended", () => {
+    // `a?.b.c` short-circuits the whole chain, but parentheses END it: `(a?.b).c` reads `.c` off
+    // the `undefined` the chain produced.
+    expect(
+      read(`export const n = (globalThis.document?.body).nodeName;`).globals
+    ).toEqual(["document"]);
+    // The control: without the parentheses the chain carries through and nothing throws.
+    expect(
+      read(`export const n = globalThis.document?.body.nodeName;`).globals
+    ).toEqual([]);
+  });
+
+  it("reports a function whose body runs because it is constructed", () => {
+    expect(
+      read(
+        `export const w = new (function () { return window.innerWidth; })();`
+      ).globals
+    ).toEqual(["window"]);
+  });
+
+  it("reports a class extending a globalThis property", () => {
+    expect(
+      read(`export class C extends globalThis.HTMLElement {}`).globals
+    ).toEqual(["HTMLElement"]);
+  });
+
+  it("keeps a class static block's bindings inside it", () => {
+    // A `const` in a static block is invisible to the field initialisers beside it, so the second
+    // read is the ambient global and the class throws as it is defined.
+    expect(
+      read(`
+        export class C {
+          static { const window = {}; void window; }
+          static width = window.innerWidth;
+        }
+      `).globals
+    ).toEqual(["window"]);
   });
 
   it("reports an IIFE invoked through .call", () => {
