@@ -87,6 +87,23 @@ export function removeNode(root: BlockNode, id: string): BlockNode {
 }
 
 /**
+ * Attach a slots map to a node, dropping the property entirely when nothing is left in it.
+ *
+ * An empty `slots` object is not the same as no slots. Validation refuses ANY slots object on a
+ * block whose definition is not a container, before it looks at a single key, so a repair that
+ * emptied the map but left it in place would swap one refusal for another and report success.
+ */
+function withSlots(
+  node: BlockNode,
+  slots: Record<string, BlockNode[]>
+): BlockNode {
+  if (Object.keys(slots).length > 0) return { ...node, slots };
+  const next = { ...node };
+  delete next.slots;
+  return next;
+}
+
+/**
  * Remove one child from a NAMED slot, dropping the slot itself once nothing is left in it.
  *
  * `removeNode` searches every slot and leaves the emptied key behind, which is correct for an
@@ -107,8 +124,37 @@ export function removeFromSlot(
     const slots = { ...n.slots };
     if (remaining.length > 0) slots[slot] = remaining;
     else delete slots[slot];
-    return { ...n, slots };
+    return withSlots(n, slots);
   });
+}
+
+/**
+ * Remove a whole slot from a node, contents and all.
+ *
+ * The repair for a slot nothing declares that is ALREADY empty: there is no child to address, and
+ * the slot's own name is what validation refuses.
+ */
+export function removeSlot(
+  root: BlockNode,
+  parentId: string,
+  slot: string
+): BlockNode {
+  return mapTree(root, n => {
+    if (n.id !== parentId || !n.slots) return n;
+    const slots = { ...n.slots };
+    delete slots[slot];
+    return withSlots(n, slots);
+  });
+}
+
+/**
+ * Take the whole `slots` property off a node.
+ *
+ * For a block whose definition is not a container, holding slots is itself the fault, so there is
+ * no individual name to remove — an empty map is refused exactly as a full one is.
+ */
+export function dropSlots(root: BlockNode, parentId: string): BlockNode {
+  return mapTree(root, n => (n.id === parentId ? withSlots(n, {}) : n));
 }
 
 /** True if `id` is `ancestorId` itself or nested anywhere inside it. */

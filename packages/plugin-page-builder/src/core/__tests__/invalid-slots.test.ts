@@ -13,9 +13,15 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { findInvalidSlotEntries } from "../invalid-slots";
+import { findInvalidSlotEntries, repairInvalidSlot } from "../invalid-slots";
 import { createBlockRegistry, defaultBlockRegistry } from "../registry";
-import { makeNode, removeFromSlot, removeNode } from "../tree";
+import {
+  dropSlots,
+  makeNode,
+  removeFromSlot,
+  removeNode,
+  removeSlot,
+} from "../tree";
 import { validateDocument } from "../validate";
 
 import type { BlockNode } from "../types";
@@ -72,8 +78,7 @@ describe("finding blocks in a slot nothing declares", () => {
     expect(entries.length).toBeGreaterThan(0);
 
     const repaired = entries.reduce(
-      (tree, entry) =>
-        removeFromSlot(tree, entry.parentId, entry.slotName, entry.node.id),
+      (tree, entry) => repairInvalidSlot(tree, entry),
       root
     );
 
@@ -100,7 +105,8 @@ describe("finding blocks in a slot nothing declares", () => {
     ).toContain("has no slot");
 
     const bySlot = removeFromSlot(root, root.id, "gone", only.id);
-    expect(bySlot.slots).toEqual({});
+    // The property goes, not just the key: an empty map is itself refused on a non-container.
+    expect(bySlot.slots).toBeUndefined();
     expect(
       validateDocument(doc(bySlot), defaultBlockRegistry, {
         allowUnknown: true,
@@ -173,6 +179,70 @@ describe("finding blocks in a slot nothing declares", () => {
     expect(
       findInvalidSlotEntries(root, defaultBlockRegistry).map(e => e.node.id)
     ).toEqual([first.id, second.id]);
+  });
+
+  it("reports a stale slot that is ALREADY empty, which nothing else would offer", () => {
+    // `{ legacy: [] }` is refused by name, and there is no child to hang an entry on. A finder
+    // that only walked children would report nothing while the page stayed unsaveable, which is
+    // the precise state this whole surface exists to get an author out of.
+    const root = withSlots("core/container", { legacy: [] });
+
+    expect(
+      validateDocument(doc(root), defaultBlockRegistry, { allowUnknown: true })
+    ).toContain('has no slot "legacy"');
+
+    const entries = findInvalidSlotEntries(root, defaultBlockRegistry);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.kind).toBe("empty-slot");
+
+    const repaired = removeSlot(root, root.id, "legacy");
+    expect(
+      validateDocument(doc(repaired), defaultBlockRegistry, {
+        allowUnknown: true,
+      })
+    ).toBe(true);
+  });
+
+  it("reports a leftover slots map on a block that may hold none", () => {
+    // A registered non-container is refused for holding a slots object at all, before any key is
+    // read. With no keys there is nothing narrower to remove, so the map itself is the repair.
+    const own = createBlockRegistry();
+    own.register({
+      type: "core/heading",
+      version: 1,
+      label: "H",
+      isContainer: false,
+      defaultProps: {},
+      render: () => null,
+    } as never);
+
+    const root: BlockNode = { ...heading("Leaf"), slots: {} };
+
+    expect(validateDocument(doc(root), own, { allowUnknown: true })).toContain(
+      "cannot have slots"
+    );
+
+    const entries = findInvalidSlotEntries(root, own);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.kind).toBe("stray-slots");
+
+    expect(
+      validateDocument(doc(dropSlots(root, root.id)), own, {
+        allowUnknown: true,
+      })
+    ).toBe(true);
+  });
+
+  it("leaves an UNREGISTERED block's empty slots map alone, because it saves", () => {
+    // The neighbouring case, and the one direction that must not become a report: without a
+    // registered definition the validator never reaches the container check, so an empty map on
+    // an unknown block is fine and offering to strip it would be destroying valid data.
+    const root: BlockNode = { ...makeNode("acme/not-loaded", {}), slots: {} };
+
+    expect(
+      validateDocument(doc(root), defaultBlockRegistry, { allowUnknown: true })
+    ).toBe(true);
+    expect(findInvalidSlotEntries(root, defaultBlockRegistry)).toEqual([]);
   });
 
   it("says nothing about a type this build has no structure for", () => {

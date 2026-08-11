@@ -12,8 +12,10 @@ import {
   makeNode,
   moveNode,
   reidSubtree,
+  dropSlots,
   removeFromSlot,
   removeNode,
+  removeSlot,
   updateNode,
 } from "../../core/tree";
 import type {
@@ -72,6 +74,20 @@ export type EditorAction =
    * that refuses the save.
    */
   | { type: "REMOVE_FROM_SLOT"; parentId: string; slot: string; id: string }
+  /**
+   * Discard a whole slot a block does not declare, contents and all.
+   *
+   * The repair when such a slot is already empty: validation refuses its NAME, so there is no
+   * child to address and nothing to lose by dropping it.
+   */
+  | { type: "REMOVE_SLOT"; parentId: string; slot: string }
+  /**
+   * Take the slots map off a block that may not hold one.
+   *
+   * Validation refuses any slots object on a definition that is not a container before reading a
+   * key, so once the keys are gone the empty map is still the fault and has no narrower repair.
+   */
+  | { type: "DROP_SLOTS"; parentId: string }
   | { type: "DUPLICATE"; id: string }
   | { type: "UPDATE_PROPS"; id: string; props: Record<string, unknown> }
   | {
@@ -185,13 +201,15 @@ export function editorReducer(
       return { ...commit(state, next), selectedId: null };
     }
 
+    case "REMOVE_SLOT":
+    case "DROP_SLOTS":
     case "REMOVE_FROM_SLOT": {
-      const next = removeFromSlot(
-        root,
-        action.parentId,
-        action.slot,
-        action.id
-      );
+      const next =
+        action.type === "REMOVE_FROM_SLOT"
+          ? removeFromSlot(root, action.parentId, action.slot, action.id)
+          : action.type === "REMOVE_SLOT"
+            ? removeSlot(root, action.parentId, action.slot)
+            : dropSlots(root, action.parentId);
       // The discarded block was never on the canvas, so the author's selection is unrelated to it
       // and clearing it unconditionally would take away work they can see. It only has to go when
       // the removed subtree contained it.

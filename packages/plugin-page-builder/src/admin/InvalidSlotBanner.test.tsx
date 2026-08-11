@@ -13,7 +13,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { findInvalidSlotEntries } from "../core/invalid-slots";
+import {
+  findInvalidSlotEntries,
+  repairInvalidSlot,
+} from "../core/invalid-slots";
 import { defaultBlockRegistry } from "../core/registry";
 import { makeNode } from "../core/tree";
 import { validateDocument } from "../core/validate";
@@ -71,6 +74,39 @@ describe("the repair banner", () => {
     expect(markupFor(docWith({ legacy: [heading("Only one")] }))).toContain(
       "1 block in a slot"
     );
+  });
+
+  it("shows a stale slot that is already empty, which holds no block to list", () => {
+    // The banner has to appear for a page whose only fault is a slot NAME. A surface that only
+    // ever counted blocks would render nothing here and leave the page unsaveable in silence.
+    const broken = docWith({ legacy: [] });
+
+    expect(
+      validateDocument(broken, defaultBlockRegistry, { allowUnknown: true })
+    ).toContain("has no slot");
+
+    const markup = markupFor(broken);
+    expect(markup).toContain("1 leftover");
+    expect(markup).not.toContain("1 block in a slot");
+  });
+
+  it("asks the reducer for exactly the repair the core prescribes", () => {
+    // Two switches on the same union, in two layers, which must not drift: the editor decides
+    // which ACTION a row dispatches, and the core decides which OPERATION a fault needs. Compared
+    // across every kind rather than trusted, because a wrong pairing still type-checks.
+    const broken = docWith({
+      legacy: [heading("Orphan")],
+      alsoStale: [],
+    });
+
+    const entries = findInvalidSlotEntries(broken.root, defaultBlockRegistry);
+    expect(entries.map(e => e.kind).sort()).toEqual(["block", "empty-slot"]);
+
+    for (const entry of entries) {
+      const viaEditor = editorReducer(initialState(broken), removalFor(entry));
+      const viaCore = repairInvalidSlot(broken.root, entry);
+      expect(viaEditor.document.root).toEqual(viaCore);
+    }
   });
 
   it("dispatches repairs that actually make the document save", () => {
