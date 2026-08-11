@@ -23,6 +23,10 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { CONTRAST_REPORT } from "../contrast-report.generated";
+import { NEXTLY_THEMES, TWEAKCN_THEMES } from "../themes";
+import { validateTheme } from "../validate-contrast";
+
 // The same helper the generator scripts use, typed by a sibling `.d.mts`.
 // Sharing the implementation is the point: two definitions of "the harness's
 // identity" would be free to disagree, and the disagreement would look exactly
@@ -70,5 +74,33 @@ describe("generated artifacts are stamped with the current harness", () => {
       `audit-evidence/tokens.json was measured against a different contrast ` +
         `harness than the one in the tree. Regenerate it.`
     ).toBe(current);
+  });
+
+  it("recomputes every count and gets what the report claims", () => {
+    // The stamp above covers the contrast HARNESS. The counts also depend on
+    // `theme.css`, on `validate-contrast.ts`, and on the theme definitions
+    // themselves -- none of which the hash sees, so a palette edit could leave
+    // the stamp valid while every number under it went stale.
+    //
+    // Rather than widen the hash to whatever inputs seem relevant, which is the
+    // judgement that was just wrong, this recomputes the report from source and
+    // compares. There is no set of inputs to enumerate: if a count would
+    // change, this changes with it.
+    const themeCss = readFileSync(
+      resolve(repoRoot, "packages/ui/src/styles/theme.css"),
+      "utf8"
+    );
+    const recomputed: Record<string, number> = {};
+    for (const theme of [...NEXTLY_THEMES, ...TWEAKCN_THEMES]) {
+      recomputed[theme.id] = validateTheme(theme, themeCss).length;
+    }
+
+    expect(
+      recomputed,
+      `contrast-report.generated.ts does not match what the current themes and ` +
+        `theme.css actually measure, so the switcher is showing scores for a ` +
+        `tree that no longer exists. Regenerate it with ` +
+        `\`node scripts/generate-contrast-report.mjs\`.`
+    ).toEqual({ ...CONTRAST_REPORT });
   });
 });

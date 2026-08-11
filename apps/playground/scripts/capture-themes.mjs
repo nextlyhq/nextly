@@ -199,7 +199,42 @@ function argValue(flag) {
 const onlyIds = argValue("--only")?.split(",").map(s => s.trim());
 const onlyScreens = argValue("--screens")?.split(",").map(s => s.trim());
 
-let themes = [...NEXTLY_THEMES, ...TWEAKCN_THEMES];
+const ALL_THEMES = [...NEXTLY_THEMES, ...TWEAKCN_THEMES];
+
+/**
+ * Rejects a filter value that names nothing.
+ *
+ * A filter that silently drops what it cannot match turns a typo into a
+ * quieter run: `--screens=settings,bulider` captures settings, exits zero, and
+ * writes a manifest that looks complete. The missing evidence is invisible
+ * precisely because the thing that would have reported it is the thing that
+ * was misspelled. Selecting nothing is worse still -- an empty run that
+ * reports success.
+ */
+function requireKnown(flag, requested, known) {
+  if (!requested) return;
+  const unknown = requested.filter(value => !known.includes(value));
+  if (unknown.length > 0) {
+    console.error(
+      `capture-themes: ${flag} names ${unknown.length === 1 ? "a value that does" : "values that do"} not exist: ${unknown.join(", ")}\n` +
+        `  known: ${known.join(", ")}`
+    );
+    process.exit(1);
+  }
+}
+
+requireKnown(
+  "--only",
+  onlyIds,
+  ALL_THEMES.map(theme => theme.id)
+);
+requireKnown(
+  "--screens",
+  onlyScreens,
+  FULL_SCREENS.map(([name]) => name)
+);
+
+let themes = ALL_THEMES;
 if (onlyIds) {
   const wanted = new Set(onlyIds);
   themes = themes.filter(t => wanted.has(t.id));
