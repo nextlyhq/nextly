@@ -627,46 +627,6 @@ CREATE INDEX IF NOT EXISTS "idx_dc_tags_single_pinned_tags_single_pinned" ON "dc
 CREATE INDEX IF NOT EXISTS "idx_dc_tags_single_pinned_tags_tags" ON "dc_tags_single_pinned_tags"("tags_id");"
 `;
 
-exports[`field group DDL — pinned as it is today > mysql > emits the same CREATE for a field group 1`] = `
-"-- Create component data table: comp_pinned
-CREATE TABLE IF NOT EXISTS \`comp_pinned\` (
-  \`id\` varchar(36) PRIMARY KEY NOT NULL,
-  \`_parent_id\` varchar(36) NOT NULL,
-  \`_parent_table\` VARCHAR(255) NOT NULL,
-  \`_parent_field\` VARCHAR(255) NOT NULL,
-  \`_order\` INT DEFAULT 0,
-  \`_component_type\` VARCHAR(255),
-  \`title\` TEXT NOT NULL,
-  \`slug_key\` TEXT,
-  \`short_code\` VARCHAR(120),
-  \`summary\` TEXT,
-  \`views\` INT,
-  \`rating\` DOUBLE,
-  \`published\` BOOLEAN,
-  \`published_at\` DATETIME,
-  \`payload\` JSON,
-  \`lookup_code\` TEXT,
-  \`author\` VARCHAR(36),
-  \`editors\` JSON,
-  \`tags\` VARCHAR(36),
-  \`state\` BOOLEAN DEFAULT true,
-  \`blocks\` JSON,
-  \`meta\` JSON,
-  \`created_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  \`updated_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
---> statement-breakpoint
-CREATE INDEX \`idx_comp_pinned_parent\` ON \`comp_pinned\`(\`_parent_id\`, \`_parent_table\`, \`_parent_field\`);
---> statement-breakpoint
-CREATE INDEX \`idx_comp_pinned_author\` ON \`comp_pinned\`(\`author\`);
---> statement-breakpoint
-CREATE INDEX \`idx_comp_pinned_tags\` ON \`comp_pinned\`(\`tags\`);
---> statement-breakpoint
-CREATE INDEX \`idx_comp_pinned_lookup_code\` ON \`comp_pinned\`(\`lookup_code\`);
---> statement-breakpoint
-CREATE UNIQUE INDEX \`uq_comp_pinned_slug_key\` ON \`comp_pinned\`(\`slug_key\`);"
-`;
-
 exports[`field group DDL — pinned as it is today > mysql > emits the same CREATE for a localized field group 1`] = `
 "-- Create component data table: comp_pinned
 CREATE TABLE IF NOT EXISTS \`comp_pinned\` (

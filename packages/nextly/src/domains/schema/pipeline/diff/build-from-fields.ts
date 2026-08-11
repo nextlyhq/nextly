@@ -205,19 +205,18 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
       (field.type === "relationship" || field.type === "upload") &&
       field.hasMany !== true &&
       !Array.isArray(field.relationTo);
-    if (field.unique === true) {
-      // Asked through the same rule the generators use. Where a dialect cannot key the column,
-      // they keep the uniqueness inline and write no index, so declaring one here would make
-      // every diff propose a `CREATE UNIQUE INDEX` the server refuses. The uniqueness is still
-      // enforced in that case — by the inline constraint — it simply is not an object the
-      // desired schema can name.
-      if (context.uniquenessIsIndexable(field, col)) {
-        indexes.push({
-          name: uniqueIndexNameForColumn(tableName, col),
-          columns: [col],
-          unique: true,
-        });
-      }
+    // Asked through the same rule the generators use. Where a dialect cannot key the column they
+    // keep the uniqueness inline and write no index, so declaring one here would make every diff
+    // propose a `CREATE UNIQUE INDEX` the server refuses.
+    const uniqueIsIndexable =
+      field.unique === true && context.uniquenessIsIndexable(field, col);
+
+    if (uniqueIsIndexable) {
+      indexes.push({
+        name: uniqueIndexNameForColumn(tableName, col),
+        columns: [col],
+        unique: true,
+      });
     } else if (
       (field.index === true || isSingleRelation) &&
       (context.columnIsIndexable?.(field, col) ?? true)

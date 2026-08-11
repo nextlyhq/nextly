@@ -929,6 +929,34 @@ ${allColumnDefs.join(",\n")}
             });
           }
         }
+        // Uniqueness this dialect cannot enforce is refused BEFORE any statement is generated,
+        // not attempted and left half-done. MySQL commits each DDL statement on its own, so
+        // emitting the column and then a constraint it rejects leaves the column in place
+        // WITHOUT the guarantee — and a bare column matches what the desired schema declares for
+        // an unkeyable type, so the next reconcile sees nothing wrong and the uniqueness is
+        // silently gone. There is no spelling that works here: MySQL refuses to key an unbounded
+        // TEXT/BLOB either way, and cannot index JSON at all. Saying so is the only honest
+        // outcome, and saying it first is what keeps the table untouched.
+        if (field.unique && !this.uniquenessCanBeAnIndex(type)) {
+          throw NextlyError.validation({
+            errors: [
+              {
+                path: `fields.${field.name}`,
+                code: "UNIQUE_NOT_ENFORCEABLE_ON_DIALECT",
+                message:
+                  `"${field.name}" is marked unique, but ${this.dialect} cannot enforce ` +
+                  `uniqueness on a ${field.type} column. Give it a maximum length so it becomes ` +
+                  `a bounded string, or remove the unique flag.`,
+              },
+            ],
+            logContext: {
+              tableName,
+              field: field.name,
+              type: field.type,
+              dialect: this.dialect,
+            },
+          });
+        }
         statements.push(
           `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${this.quoteIdentifier(addColName)} ${type} ${nullable} ${defaultVal};`.trim()
         );

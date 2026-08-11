@@ -1,14 +1,14 @@
 /**
  * The generators and the desired schema agree about a unique column.
  *
- * Nine review findings on the create path were instances of one thing: "is this column's
- * uniqueness a named index" was answered in three places — the CREATE statements, the ADD COLUMN
- * statements, and the desired schema the diff compares a live table against — and any two of them
- * disagreeing shows up as a reconcile that proposes an index the server refuses, once per attempt,
+ * "Is this column's uniqueness a named index" is answered by the CREATE statements, the ADD COLUMN
+ * statements, and the desired schema the diff compares a live table against. Any two of them
+ * disagreeing shows up as a reconcile proposing an index the server refuses, once per attempt,
  * indefinitely. These pin the agreement rather than any one side of it.
  */
 import { describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../../../errors";
 import { DynamicCollectionSchemaService } from "../../../../dynamic-collections/services/dynamic-collection-schema-service";
 import { buildDesiredTableFromFields } from "../build-from-fields";
 
@@ -52,6 +52,20 @@ const emittedUniqueIndexes = (
   ].map(m => m[1]);
 };
 
+/** The structured refusals a NextlyError carries, flattened for assertion. */
+function refusalMessages(run: () => unknown): string[] {
+  try {
+    run();
+  } catch (error) {
+    if (!(error instanceof NextlyError)) throw error;
+    const data = error.publicData as
+      | { errors?: { path?: string; code?: string; message?: string }[] }
+      | undefined;
+    return (data?.errors ?? []).map(e => `${e.path} ${e.code} ${e.message}`);
+  }
+  return [];
+}
+
 describe("what the desired schema declares and what the create path emits", () => {
   it.each(DIALECTS)(
     "agree for a unique column the dialect can key, on %s",
@@ -90,6 +104,40 @@ describe("what the desired schema declares and what the create path emits", () =
       expect(emittedUniqueIndexes(dialect, fields)).toEqual([
         "uq_dc_widgets_sku",
       ]);
+    }
+  });
+});
+
+describe("uniqueness a dialect cannot enforce", () => {
+  const unkeyable = [
+    { name: "sku", type: "textarea", unique: true },
+  ] as unknown as never[];
+
+  it("is refused by the collection add-column path before any DDL is generated", () => {
+    // MySQL commits each DDL statement separately, so an ADD COLUMN followed by a constraint it
+    // rejects leaves the column WITHOUT its guarantee — and a bare column is exactly what the
+    // desired schema declares for an unkeyable type, so the next reconcile finds nothing to fix
+    // and the uniqueness is gone silently. Refusing first is what keeps the table untouched.
+    const service = new DynamicCollectionSchemaService(undefined, "mysql");
+    const reported = refusalMessages(() =>
+      service.generateAlterTableMigration("dc_widgets", [], unkeyable)
+    );
+
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toContain("fields.sku");
+    expect(reported[0]).toContain("UNIQUE_NOT_ENFORCEABLE_ON_DIALECT");
+    // A refusal that does not say what to do instead is only a wall.
+    expect(reported[0]).toMatch(/maximum length|remove the unique flag/);
+  });
+
+  it("is allowed on a dialect that CAN enforce it", () => {
+    // The control: without it, a service that refused every unique add would satisfy the case
+    // above while breaking the feature.
+    for (const dialect of ["postgresql", "sqlite"] as const) {
+      const service = new DynamicCollectionSchemaService(undefined, dialect);
+      expect(() =>
+        service.generateAlterTableMigration("dc_widgets", [], unkeyable)
+      ).not.toThrow();
     }
   });
 });
