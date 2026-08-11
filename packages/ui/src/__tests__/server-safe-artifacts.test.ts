@@ -57,6 +57,39 @@ describe("reading an artifact's specifiers", () => {
     ]);
   });
 
+  it("sees a loader stored under a name before it is used", () => {
+    // The call's callee is an ordinary identifier, so nothing about the call site says it loads a
+    // module. What it was assigned makes it one.
+    expect(
+      read(`
+        import { createRequire } from "node:module";
+        const load = createRequire(import.meta.url);
+        export const react = load("react");
+      `)
+    ).toEqual(["node:module", "react"]);
+  });
+
+  it("finds a stored loader declared below its use", () => {
+    // Emitted output is not written in source order, so the declaration can follow the call.
+    expect(
+      read(`
+        export const react = load("react");
+        const load = createRequire(import.meta.url);
+      `)
+    ).toEqual(["react"]);
+  });
+
+  it("does not treat an unrelated function as a loader", () => {
+    // The control: only a name assigned FROM `createRequire` counts, or every one-argument call
+    // with a string would be read as a module load.
+    expect(
+      read(`
+        const load = (name) => name.toUpperCase();
+        export const x = load("react");
+      `)
+    ).toEqual([]);
+  });
+
   it("refuses a specifier it cannot read, rather than passing it", () => {
     // A bundler folds `"re" + "act"` to React. This does not evaluate expressions, so the honest
     // outcome is a name no allow-list can hold — which fails — not a silent skip.

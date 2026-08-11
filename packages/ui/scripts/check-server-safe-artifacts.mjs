@@ -32,15 +32,13 @@
  *
  * It is NOT enough for built-in MODULES. An artifact importing something added after the floor —
  * `node:sqlite`, say — resolves on a current build machine and fails on the floor with
- * `ERR_UNKNOWN_BUILTIN_MODULE`, and no amount of deleting globals emulates that. Closing it means
- * running this gate under the oldest supported Node rather than approximating it here; see
- * `tasks/left-tasks/205-artifact-gate-on-the-floor-node.md`.
+ * `ERR_UNKNOWN_BUILTIN_MODULE`, and no amount of deleting globals emulates that. Only running this
+ * gate under the oldest supported Node settles it; nothing here can.
  *
  * It answers IMPORT safety, not call safety. `export const cn = () => document.body` imports
  * cleanly and throws when a Server Component calls it. Catching that means analysing browser
- * globals in deferred code, which is the unbounded source-level problem this file exists to avoid
- * having to solve — recorded under "scope" in
- * `tasks/left-tasks/204-server-safe-source-scan-deferred-findings.md` rather than attempted here.
+ * globals in deferred code — every way a name can be bound, shadowed or consumed — which is the
+ * unbounded source-level problem reading the artifact exists to avoid.
  *
  * The other residual, stated rather than implied: an ALLOWED package could itself grow a React
  * dependency, and importing React under Node does not throw, so neither question would notice.
@@ -107,6 +105,24 @@ export function specifiersIn(source, fileName) {
     found.push(`<unreadable specifier: ${node.getText()}>`);
   };
 
+  // Names bound to a loader before the walk, because the call that uses one can appear above the
+  // declaration in the emitted file. `const load = createRequire(import.meta.url)` makes `load`
+  // the module loader, and a bundler leaves that opaque exactly as it leaves `createRequire`.
+  const loaders = new Set();
+  const collectLoaders = node => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer !== undefined &&
+      ts.isCallExpression(node.initializer) &&
+      namesCreateRequire(node.initializer.expression)
+    ) {
+      loaders.add(node.name.text);
+    }
+    ts.forEachChild(node, collectLoaders);
+  };
+  collectLoaders(tree);
+
   /** @param {ts.Node} node */
   const visit = node => {
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
@@ -125,7 +141,12 @@ export function specifiersIn(source, fileName) {
       // identifier and the direct check never sees it. This package uses `createRequire` itself,
       // precisely because a bundler leaves it opaque.
       const isCreatedRequire =
-        ts.isCallExpression(callee) && namesCreateRequire(callee.expression);
+        // `createRequire(import.meta.url)("react")`, invoked where it is made.
+        (ts.isCallExpression(callee) &&
+          namesCreateRequire(callee.expression)) ||
+        // `const load = createRequire(...); load("react")`, invoked through the name it was
+        // stored under.
+        (ts.isIdentifier(callee) && loaders.has(callee.text));
       if (
         (isDynamicImport || isRequire || isCreatedRequire) &&
         node.arguments.length > 0
