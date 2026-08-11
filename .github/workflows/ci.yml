@@ -164,9 +164,20 @@ jobs:
       #
       # ui / storage-s3 / storage-uploadthing have no test files yet; listed so
       # they gate automatically the moment they gain one.
+      # `--only` because the Build step above already built every package in this
+      # filter list. Without it turbo re-materialises each test's build
+      # dependencies from cache — 11 packages' `dist/` rewritten while sibling
+      # suites are already collecting against them. A test that resolves a
+      # dependency's entry mid-rewrite fails with `Cannot find module
+      # '.../dist/chunk-<hash>.mjs'` in a package the change never touched, and
+      # which package loses the race varies run to run.
+      #
+      # Safe because the filter list is a subset of `./packages/*`, which the
+      # Build step covers. A package added here but not built above would fail
+      # loudly at collection rather than silently skip.
       - name: Test
         run: >-
-          pnpm turbo test
+          pnpm turbo test --only
           --filter=@nextlyhq/blocks-engine
           --filter=@nextlyhq/blocks-react
           --filter=@nextlyhq/builder
