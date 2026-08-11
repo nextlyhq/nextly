@@ -481,3 +481,51 @@ export { Slider } from "./components/slider";
  * so they cannot be passed through the root.
  */
 export type { SliderProps, SliderThumbProps } from "./components/slider";
+
+/**
+ * @experimental One owner for the shortcuts registered through it.
+ *
+ * It is the single listener for ITS OWN bindings, and it becomes the application's single owner
+ * only once the surfaces with their own listeners adopt it. A component that still calls
+ * `addEventListener("keydown", ...)` is unaffected by anything here.
+ *
+ * The reason to adopt it: per-component `document` listeners cannot decide who owns a key —
+ * `stopPropagation` does not stop siblings on the same node, so every global handler runs and
+ * the winner is whichever component mounted first. Precedence here follows the component tree,
+ * and a blocking layer lets a drag or a modal hold the keyboard while it is up.
+ */
+export {
+  ShortcutProvider,
+  ShortcutScope,
+  useActiveShortcuts,
+  useShortcutManager,
+  useShortcuts,
+} from "./lib/shortcuts/react";
+/** @experimental The provider's props, and the options a layer registers with. */
+export type {
+  ShortcutProviderProps,
+  UseShortcutsOptions,
+} from "./lib/shortcuts/react";
+/** @experimental The binding shape, and the manager for a host that drives its own events. */
+export { createShortcutManager } from "./lib/shortcuts/manager";
+/**
+ * @experimental The types a host needs to register shortcuts and inspect what is active:
+ * `ShortcutBinding` is one shortcut, `ShortcutLayerOptions` its precedence and blocking policy,
+ * `ShortcutRegistration` the handle for updating or removing it, and `ActiveShortcut` a binding
+ * as a help panel sees it.
+ */
+export type {
+  ActiveShortcut,
+  ShortcutBinding,
+  ShortcutLayerOptions,
+  ShortcutManager,
+  ShortcutManagerOptions,
+  ShortcutRegistration,
+} from "./lib/shortcuts/manager";
+/** @experimental Key-spec parsing, for a host rendering its own shortcut hints. */
+export { parseKeys } from "./lib/shortcuts/key-spec";
+/**
+ * @experimental A parsed key spec, for rendering a shortcut hint from the same source the matcher
+ * uses rather than re-splitting the string.
+ */
+export type { KeyChord, KeySequence } from "./lib/shortcuts/key-spec";

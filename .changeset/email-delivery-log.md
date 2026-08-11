@@ -21,6 +21,7 @@
 "@nextlyhq/prettier-config": patch
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
+"@nextlyhq/builder": patch
 ---
 
 nextly: record what email was sent, and what failed

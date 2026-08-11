@@ -19,6 +19,13 @@ for all published packages. Status: alpha, all packages version in lockstep.
   documents; its root entry imports no `next/*`, no admin and no CMS runtime, so
   it is usable standalone (enforced by `src/layering.test.ts`). Next-coupled
   helpers live at the `/next` subpath.
+- `packages/builder` - the visual page-builder editor (shell, canvas, op store).
+  It reaches admin only through `plugin-sdk/admin`, and imports nothing outside a
+  short allowlist of exact specifiers - both enforced by `src/layering.test.ts`.
+  That it draws with `blocks-react` rather than a renderer of its own is a
+  review-time convention, NOT a checked one: reimplementing rendering on React
+  and `blocks-engine` imports exactly the same packages, so no import guard can
+  tell the two apart.
 - `packages/plugin-sdk` - the ONLY stable import surface for plugin authors.
 - `packages/plugin-{form-builder,page-builder}` - first-party plugins.
 - `packages/storage-{s3,vercel-blob,uploadthing}` - media storage adapters.
@@ -33,8 +40,11 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 
 ## Setup and dev loop
 
-- Requirements: Node >= 20, pnpm 9.0.0 (`packageManager` is pinned in
-  `package.json`; Corepack enforces the exact version).
+- Requirements: Node `^20.19.0 || ^22.12.0 || >=24.0.0`, pnpm 9.0.0
+  (`packageManager` is pinned in `package.json`; Corepack enforces the exact
+  version). The ranges are disjoint deliberately, mirroring what the test
+  environment supports: 20.6-20.18 and the whole 23.x line are excluded, not
+  merely untested.
 - Install: `pnpm install`.
 - Dev harness: `pnpm dev:app` starts the playground on :3000 (SQLite by
   default; `pnpm dev:postgres` / `pnpm dev:mysql` for other dialects, with
@@ -74,7 +84,7 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   `adapter-postgres`, `adapter-mysql`, `adapter-sqlite`, `adapter-drizzle`,
   `storage-s3`, `storage-vercel-blob`, `storage-uploadthing`,
   `plugin-form-builder`, `plugin-page-builder`, `plugin-seo`, `plugin-sdk`,
-  `blocks-engine`, `blocks-react`,
+  `blocks-engine`, `blocks-react`, `builder`,
   `create-nextly-app`, `eslint-config`, `prettier-config`, `tsconfig`,
   `telemetry`, `client`) plus `playground`, `root`, `ci`, `docs`, `deps`,
   `release`. Scope is optional; the subject must not start with an uppercase

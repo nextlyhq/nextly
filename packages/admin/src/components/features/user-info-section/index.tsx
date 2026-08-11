@@ -46,7 +46,10 @@ export const UserInfoSection: React.FC<UserInfoSectionProps> = ({ user }) => {
             href="/profile"
             className="flex w-full items-center space-x-2 rounded-md px-3 py-2 text-sm text-card-foreground hover:bg-accent cursor-pointer"
           >
-            <UserIcon className="h-4 w-4 text-accent" />
+            {/* Leading icon ink, not `accent`: `accent` is the hover SURFACE
+                this row is painted with, so using it here paints the icon in
+                the colour of its own background. */}
+            <UserIcon className="h-4 w-4 text-muted-foreground" />
             <div className="flex flex-col items-start">
               <span>Profile</span>
               <span className="text-xs text-muted-foreground">
@@ -75,7 +78,12 @@ export const UserInfoSection: React.FC<UserInfoSectionProps> = ({ user }) => {
             onClick={() => {
               void logout();
             }}
-            className="flex w-full items-center space-x-2 rounded-md px-3 py-2 text-sm text-destructive-400 hover:bg-destructive-500/10 hover:text-destructive-300 mt-2 cursor-pointer"
+            /* `destructive` rather than a lightened shade of it: the base
+               token is tuned to read as text in BOTH modes, where `-400` and
+               `-300` are mixed toward white and only clear their minimum on a
+               dark page. Hover is carried by the background tint, so the ink
+               does not have to move to show the state. */
+            className="flex w-full items-center space-x-2 rounded-md px-3 py-2 text-sm text-destructive hover:bg-destructive-500/10 mt-2 cursor-pointer"
           >
             <LogOut className="h-4 w-4" />
             <div className="flex flex-col items-start">

@@ -70,11 +70,12 @@ export function declaredSlotsOf(type: string): SlotSpec[] | undefined {
 }
 
 /**
- * The first migrated batch.
+ * Blocks that hold children, one constant each.
  *
  * Declared here rather than beside each `defineBlock` so this module can be imported without
  * reaching a `.tsx` file — which is the entire point: importing one block's structure must not pull
- * React in behind it.
+ * React in behind it. Each definition SPREADS its constant, so the slots a block draws and the
+ * slots the validator enforces are one statement rather than two that agree by discipline.
  */
 export const containerStructure = declareStructure({
   type: "core/container",
@@ -123,6 +124,68 @@ export const contentCarouselStructure = declareStructure({
   isContainer: true,
   slots: [{ name: "default" }],
 });
+
+/**
+ * Blocks that hold no children, declared as data in one list.
+ *
+ * `slots: []` is a statement, not an omission: a stored document can carry children under any slot
+ * name on any node, and a type with NO structure is one the validator must leave to `allowUnknown`
+ * — so before this list, junk slots on a heading or an image passed the write check whenever the
+ * registry was empty, which is the ordinary state of the config and server paths.
+ *
+ * No definition spreads these. There is nothing structural to share beyond the type name, and the
+ * correspondence is enforced from the other side: `structure-covers-the-catalog.test.ts` asserts
+ * every registered definition has a structure AND that their slot lists agree, so a block that
+ * later grows slots without moving to a container structure fails there, not silently here.
+ */
+const PLAIN_BLOCK_TYPES = [
+  "core/accordion",
+  "core/anchor",
+  "core/badge",
+  "core/button",
+  "core/button-group",
+  "core/counter",
+  "core/countdown",
+  "core/cta-card",
+  "core/divider",
+  "core/embed",
+  "core/flip-box",
+  "core/form",
+  "core/gallery",
+  "core/heading",
+  "core/hotspot",
+  "core/icon",
+  "core/icon-box",
+  "core/icon-list",
+  "core/image",
+  "core/image-box",
+  "core/image-carousel",
+  "core/list",
+  "core/logo-carousel",
+  "core/logo-cloud",
+  "core/lottie",
+  "core/map",
+  "core/paragraph",
+  "core/price-list",
+  "core/pricing-table",
+  "core/progress-bar",
+  "core/rating",
+  "core/ref",
+  "core/reviews",
+  "core/rich-text",
+  "core/slides",
+  "core/social-icons",
+  "core/spacer",
+  "core/table",
+  "core/tabs",
+  "core/testimonial",
+  "core/testimonial-carousel",
+  "core/toggle",
+  "core/video",
+] as const;
+for (const type of PLAIN_BLOCK_TYPES) {
+  declareStructure({ type, slots: [] });
+}
 
 /** Whether a node's type is one this build has structure for. */
 export function hasStructure(node: BlockNode): boolean {

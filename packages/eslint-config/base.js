@@ -146,6 +146,9 @@ export const config = [
       "**/tsup.*.config.{js,ts,mjs,cjs}",
       "**/next.config.{js,ts,mjs,cjs}",
       "**/vitest.config.{js,ts,mjs,cjs}",
+      // A global-setup file is loaded by vitest the same way its config is, so
+      // it lives outside every package's tsconfig project for the same reason.
+      "**/vitest.global-setup.{js,ts,mjs,cjs}",
       "**/vite.config.{js,ts,mjs,cjs}",
       "**/eslint.config.{js,ts,mjs,cjs}",
       "**/postcss.config.{js,ts,mjs,cjs}",

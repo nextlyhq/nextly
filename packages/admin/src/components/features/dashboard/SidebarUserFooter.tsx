@@ -120,7 +120,12 @@ export function SidebarUserFooter({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button className="w-full flex items-center gap-3 px-2 py-2 rounded-md hover-unified transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-accent">
+        {/* `ring-ring` is the focus token; `accent` is a hover surface and
+            draws the indicator at roughly the lightness of the row behind it.
+            Keyed to `focus-visible` so the ring answers the keyboard rather
+            than every mouse click, and so suppressing the native outline is
+            scoped to the case that replaces it. */}
+        <button className="w-full flex items-center gap-3 px-2 py-2 rounded-md hover-unified transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
           {/* Avatar */}
           <Avatar size="md" className="bg-primary/5 text-primary">
             <AvatarFallback>

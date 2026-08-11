@@ -112,16 +112,14 @@ describe("the write path with nothing rendered", () => {
     ).toContain("has no slot");
   });
 
-  it("has structure for EVERY block that declares a slot", () => {
-    // The property that keeps the write path honest as blocks are added. A container whose
-    // structure is not declared here answers `undefined` from `declaredSlotsOf`, which the
-    // validator correctly treats as "this build cannot say" and defers to `allowUnknown` — so a
-    // new container would silently opt itself out of the slot check rather than fail loudly.
-    //
-    // Asserted against the structure source alone, with no renderer loaded: this file cannot see
-    // the definitions, which is the point. The list is written out rather than derived, so adding
-    // a container has to be a deliberate edit here.
-    expect(Object.keys(CORE_BLOCK_STRUCTURES).sort()).toEqual([
+  it("has structure for the ENTIRE catalogue, containers and plain blocks alike", () => {
+    // The property that keeps the write path honest as blocks are added. A type with NO structure
+    // is one the validator must leave to `allowUnknown` — so a new block that skips this list opts
+    // itself out of the slot check silently. The list is written out rather than derived, so
+    // adding a block has to be a deliberate edit here; the OTHER direction — that this record
+    // matches the real registry — is what `structure-covers-the-catalog.test.ts` asserts, because
+    // only the registry can see it and this file must never load it.
+    const containers = [
       "core/columns",
       "core/container",
       "core/content-carousel",
@@ -130,14 +128,84 @@ describe("the write path with nothing rendered", () => {
       "core/off-canvas",
       "core/query-loop",
       "core/row",
-    ]);
-    // Every one of them declares at least one slot: a structure with none would be a block that
-    // cannot hold children, which belongs to a later batch and not to this list.
-    for (const type of Object.keys(CORE_BLOCK_STRUCTURES)) {
+    ];
+    const plain = [
+      "core/accordion",
+      "core/anchor",
+      "core/badge",
+      "core/button",
+      "core/button-group",
+      "core/counter",
+      "core/countdown",
+      "core/cta-card",
+      "core/divider",
+      "core/embed",
+      "core/flip-box",
+      "core/form",
+      "core/gallery",
+      "core/heading",
+      "core/hotspot",
+      "core/icon",
+      "core/icon-box",
+      "core/icon-list",
+      "core/image",
+      "core/image-box",
+      "core/image-carousel",
+      "core/list",
+      "core/logo-carousel",
+      "core/logo-cloud",
+      "core/lottie",
+      "core/map",
+      "core/paragraph",
+      "core/price-list",
+      "core/pricing-table",
+      "core/progress-bar",
+      "core/rating",
+      "core/ref",
+      "core/reviews",
+      "core/rich-text",
+      "core/slides",
+      "core/social-icons",
+      "core/spacer",
+      "core/table",
+      "core/tabs",
+      "core/testimonial",
+      "core/testimonial-carousel",
+      "core/toggle",
+      "core/video",
+    ];
+
+    expect(Object.keys(CORE_BLOCK_STRUCTURES).sort()).toEqual(
+      [...containers, ...plain].sort()
+    );
+    // A container declares at least one slot; a plain block declares EXACTLY none. `slots: []` is
+    // a statement — "children are junk here" — not an omission.
+    for (const type of containers) {
       expect(declaredSlotsOf(type)?.length ?? 0).toBeGreaterThan(0);
+    }
+    for (const type of plain) {
+      expect(declaredSlotsOf(type)).toEqual([]);
     }
   });
 
+  it("REFUSES stored children on a block that holds none", () => {
+    // A block with no structure is one the validator leaves to `allowUnknown`, so junk slots on a
+    // LEAF pass the write check whenever the registry is empty — the ordinary state of the config
+    // and server paths. `slots: []` is what refuses them.
+    const error = validateDocument(
+      doc({
+        ...makeNode("core/heading", { text: "x", level: "h2" }),
+        slots: {
+          anything: [makeNode("core/paragraph", { text: "junk" })],
+        },
+      }),
+      defaultBlockRegistry,
+      { allowUnknown: true }
+    );
+
+    expect(error).toContain("anything");
+    expect(error).toContain("core/heading");
+  });
   it("leaves a type this build has no structure for to allowUnknown", () => {
     // A block from a plugin this process has not loaded. "No structure for that type" and "that
     // block declares no such slot" look identical from the lookup and only the second is a reason

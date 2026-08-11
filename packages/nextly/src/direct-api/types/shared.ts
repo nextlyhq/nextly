@@ -8,6 +8,7 @@
  */
 
 import type { PaginationMeta } from "../../api/response-shapes";
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { HookWarning } from "../../hooks/side-effect-warnings";
 import type { RichTextOutputFormat } from "../../lib/rich-text-html";
 
@@ -405,6 +406,19 @@ export interface DirectAPIConfig {
    * and role for permission checks.
    */
   user?: UserContext;
+
+  /**
+   * The authenticated caller's own scope, when it is an API key.
+   *
+   * Distinct from `user`, which says WHO the caller is. This says what KIND of
+   * caller it is and which grants the key itself carries. A scoped key is
+   * authorized on its own stamped permissions, not its owner's, so without this
+   * an update-only key issued by a reader-plus-publisher is judged by the
+   * owner's grants and reads what it was never given.
+   *
+   * Leave unset for session and system callers; they resolve grants normally.
+   */
+  actor?: AuthenticatedScope;
 
   /**
    * Request context passed to hooks.

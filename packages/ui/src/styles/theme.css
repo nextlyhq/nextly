@@ -180,8 +180,9 @@
   --color-destructive-800: color-mix(in srgb, var(--nx-destructive), black 50%);
   --color-destructive-900: color-mix(in srgb, var(--nx-destructive), black 70%);
   --color-destructive-950: color-mix(in srgb, var(--nx-destructive), black 85%);
-  /* Saturated fill for solid buttons; distinct from the text-tuned base so
-   * white on-color text stays AA in both modes. */
+  /* Saturated fill for solid buttons, kept separate from the text-tuned base
+   * so each can be solved for its own job. The ink that lands on it is
+   * `-foreground`, which is white in light mode and black in dark. */
   --color-destructive-solid: var(--nx-destructive-solid);
   --color-destructive-foreground: var(--nx-destructive-foreground);
 
@@ -685,22 +686,23 @@
 
 :root {
   /* Base colors - using Slate neutral scale */
-  --nx-background: oklch(1 0 0);
+  --nx-background: oklch(0.99 0 0);
   /* Pure white for weightless aesthetic */
-  --nx-page-background: oklch(0.9818 0 0);
+  --nx-page-background: oklch(0.97 0 0);
   /* #f9f9f9 for page content area */
-  --nx-foreground: oklch(0.2079 0.0399 265.73);
-  /* slate-900 */
+  --nx-foreground: oklch(0 0 0);
 
   /* Component colors */
   --nx-card: oklch(1 0 0);
   /* pure white for cards to pop on off-white bg */
-  --nx-card-foreground: oklch(0.2079 0.0399 265.73);
-  /* slate-900 */
-  --nx-popover: oklch(1 0 0);
+  --nx-card-foreground: oklch(0 0 0);
+  --nx-popover: oklch(0.99 0 0);
   /* white */
-  --nx-popover-foreground: oklch(0.2079 0.0399 265.73);
-  /* slate-900 */
+  --nx-popover-foreground: oklch(0 0 0);
+  /* Table headers, table footers and the pagination bar. A surface, so it lives
+     with the other surfaces: declared next to the component that paints it, a
+     palette change would move everything around it and leave it behind. */
+  --nx-table-header-bg: oklch(1 0 0);
 
   /* Brand colors - Blue-Cyan Professional Palette */
   --nx-primary: oklch(0 0 0);
@@ -709,41 +711,41 @@
   /* white */
 
   /* Secondary colors - using slate-100 for subtle backgrounds */
-  --nx-secondary: oklch(0.9684 0.0068 247.9);
+  --nx-secondary: oklch(0.94 0 0);
   /* slate-100 */
-  --nx-secondary-foreground: oklch(0.2079 0.0399 265.73);
-  /* slate-900 */
+  --nx-secondary-foreground: oklch(0 0 0);
 
   /* Utility colors */
-  --nx-muted: oklch(0.9696 0 0);
+  --nx-muted: oklch(0.97 0 0);
   /* Darkened so muted text clears WCAG 4.5:1 on the muted surface (was 4.35:1). */
-  --nx-muted-foreground: oklch(0.54 0.0407 257.44);
-  /* slate-500 */
-  --nx-accent: oklch(0.5547 0.0407 257.44);
-  /* Slate-500 per user request #64748b */
-  --nx-accent-foreground: oklch(1 0 0);
-  /* white */
+  --nx-muted-foreground: oklch(0.44 0 0);
+  /* A hover and selection SURFACE, not ink: one step off the page, with
+     `--nx-accent-foreground` as the only thing meant to be read on it. */
+  --nx-accent: oklch(0.94 0 0);
+  --nx-accent-foreground: oklch(0 0 0);
 
   /* State colors - WCAG 2.2 AA Compliant.
    * Each status has two roles kept as separate tokens, the industry-standard
    * split (Radix/Primer): the base token is the readable TEXT color used by
    * `text-destructive` and derived shades, and `-solid` is the saturated FILL
-   * used by buttons under white on-color text. One value cannot serve both in
-   * dark mode (a fill dark enough for white text is too dark to read as text
-   * on the page), so they diverge there. */
+   * used by buttons under the on-color ink. In light mode both roles can be
+   * the same value and the ink is white. In dark mode they cannot: a fill
+   * light enough to read as text on the page is too light for white text, so
+   * success splits the fill and destructive flips its ink to black instead.
+   * The on-color token is what varies, not just the fill. */
   /* Darkened from red-500; renders as #d92c32, ~4.8:1 as text on white. */
-  --nx-destructive: oklch(0.5778 0.2078 25.33);
-  --nx-destructive-solid: oklch(0.5778 0.2078 25.33);
+  --nx-destructive: oklch(0.5661 0.19 23.03);
+  --nx-destructive-solid: oklch(0.5661 0.19 23.03);
   --nx-destructive-foreground: oklch(1 0 0);
   /* white */
   /* Darkened from green-600; renders as #00852c, ~4.8:1 as text on white. */
-  --nx-success: oklch(0.53 0.17 149.2);
+  --nx-success: oklch(0.4981 0.17 149.2);
   --nx-success-solid: oklch(0.53 0.17 149.2);
   --nx-success-foreground: oklch(1 0 0);
   /* white */
   /* Darkened from amber-500 so it reads as text on white at WCAG 4.5:1 (was
    * 2.15:1); its light shades still tint badge/alert surfaces. */
-  --nx-warning: oklch(0.565 0.1646 70.11);
+  --nx-warning: oklch(0.529 0.1646 70.11);
   --nx-warning-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 - REQUIRED for AA contrast (warning-500 on white = 3.4:1, fails AA) */
 
@@ -763,14 +765,14 @@
   --nx-code-bg: oklch(0.9761 0.0035 247.86);
   --nx-code-fg: oklch(0.2079 0.0399 265.73);
   /* Darkened slightly to clear WCAG 4.5:1 on the code surface (was 4.44:1). */
-  --nx-code-comment: oklch(0.541 0.0407 257.44);
+  --nx-code-comment: oklch(0.5264 0.0407 257.44);
   --nx-code-keyword: oklch(0.4882 0.2172 303.9);
   --nx-code-string: oklch(0.4478 0.1189 152.1);
   --nx-code-number: oklch(0.5106 0.1518 44.2);
   --nx-code-function: oklch(0.4757 0.1444 254.6);
   --nx-code-operator: oklch(0.4936 0.1418 8.4);
   /* Darkened slightly to clear WCAG 4.5:1 on the code surface (was 4.44:1). */
-  --nx-code-punctuation: oklch(0.541 0.0407 257.44);
+  --nx-code-punctuation: oklch(0.5264 0.0407 257.44);
   --nx-code-variable: oklch(0.4694 0.1173 62.3);
   --nx-code-tag: oklch(0.5054 0.1905 27.5);
   --nx-code-deleted: oklch(0.5054 0.1905 27.5);
@@ -799,12 +801,12 @@
   /* For a scrim over CONTENT rather than the page: an image's hover actions,
    * where the content beneath still has to read through. */
   --nx-overlay-soft: oklch(0 0 0 / 0.4);
-  --nx-border-subtle: oklch(0 0 0 / 0.08);
-  --nx-border: oklch(0 0 0 / 0.14);
+  --nx-border-subtle: color-mix(in srgb, oklch(0.92 0 0), transparent 60%);
+  --nx-border: oklch(0.92 0 0);
   /* Alpha raised so the composited strong border clears WCAG 3:1 / ~4:1 (was 2.11:1). */
-  --nx-border-strong: oklch(0 0 0 / 0.502);
+  --nx-border-strong: oklch(0.58 0 0);
   /* Darkened so the field border clears WCAG 3:1 on the page (was 2.32:1). */
-  --nx-input: oklch(0.6454 0.0116 286.11);
+  --nx-input: oklch(0.6154 0 0);
   --nx-ring: var(--nx-primary);
 
   /* The base colour of the elevation ramp (--shadow-sm..xl, -inner-subtle,
@@ -815,7 +817,6 @@
   /* Chart colors for data visualization */
   --nx-chart-1: var(--nx-primary);
   --nx-chart-2: oklch(0.7399 0.1277 209.34);
-  /* cyan-500 */
   --nx-chart-3: oklch(0.6273 0.17 149.2);
   /* green-600 */
   --nx-chart-4: oklch(0.7686 0.1646 70.11);
@@ -840,25 +841,25 @@
   /* white */
 
   /* Sidebar specific colors - using Slate scale */
-  --nx-sidebar-background: var(--nx-background);
+  --nx-sidebar-background: oklch(0.99 0 0);
   /* flat with the content surface; nav is separated by borders, not fill */
-  --nx-sidebar-foreground: oklch(0.372 0.0392 257.3);
-  /* slate-700 */
-  --nx-sidebar-primary: oklch(0.2079 0.0399 265.73);
-  /* slate-900 */
-  --nx-sidebar-primary-foreground: oklch(0.9838 0.0035 247.86);
+  /* Resting nav ink sits a step back from the active ink, so an active row
+   * reads as emphasised by its INK as well as its fill. The chosen palette
+   * used one value for both, which leaves the fill carrying the whole signal
+   * -- and the fill is the part a low-contrast surface weakens first. */
+  --nx-sidebar-foreground: oklch(0.44 0 0);
+  --nx-sidebar-primary: oklch(0 0 0);
+  --nx-sidebar-primary-foreground: oklch(1 0 0);
   /* slate-50 */
-  --nx-sidebar-accent: oklch(0.9684 0.0068 247.9);
+  --nx-sidebar-accent: oklch(0.94 0 0);
   /* slate-100 */
-  --nx-sidebar-accent-foreground: oklch(0.2079 0.0399 265.73);
-  /* slate-900 */
+  --nx-sidebar-accent-foreground: oklch(0 0 0);
   /* Darkened so the sidebar border clears WCAG 3:1 on its surface (was 1.23:1). */
-  --nx-sidebar-border: oklch(0.6446 0.0126 255.53);
-  /* slate-200 */
+  --nx-sidebar-border: oklch(0.63 0 0);
   --nx-sidebar-ring: var(--nx-primary);
 
   /* Data table specific colors */
-  --nx-table-row-hover: oklch(0.9848 0 0);
+  --nx-table-row-hover: oklch(0.97 0 0);
   --nx-table-row-selected: var(--nx-primary);
   --nx-table-border: var(--nx-border);
 }
@@ -866,61 +867,67 @@
 /* Dark theme overrides when using class-based theming */
 .dark {
   /* Base colors - using Slate dark scale */
-  --nx-background: oklch(0.1358 0.0163 262.71);
+  --nx-background: oklch(0 0 0);
   /* ultra deep dark background (darker than slate-950) */
-  --nx-page-background: oklch(0.1358 0.0163 262.71);
+  --nx-page-background: oklch(0.23 0 0);
   /* Matches background in dark mode */
-  --nx-foreground: oklch(0.9838 0.0035 247.86);
+  --nx-foreground: oklch(1 0 0);
   /* slate-50 */
 
   /* Component colors */
-  --nx-card: oklch(0.1916 0.0228 266.36);
+  --nx-card: oklch(0.14 0 0);
   /* raised one tonal step above --nx-background (222 47% 4%) so panels/cards
    * read as distinct surfaces in dark mode instead of merging into the page */
-  --nx-card-foreground: oklch(0.9838 0.0035 247.86);
+  --nx-card-foreground: oklch(1 0 0);
   /* slate-50 */
   /* Darkened toward the card elevation so borders, inputs, and muted text
    * placed on a popover clear their WCAG minimums (border was 2.85:1, input
    * 1.73:1); the surface was too light for its own contents. */
-  --nx-popover: oklch(0.24 0.0249 257.44);
-  /* slate-800 */
-  --nx-popover-foreground: oklch(0.9838 0.0035 247.86);
+  --nx-popover: oklch(0.18 0 0);
+  --nx-popover-foreground: oklch(1 0 0);
   /* slate-50 */
+  /* A step above the card beneath it, carrying no chroma of its own: a hue here
+     would tint the header band independently of every surface around it. */
+  --nx-table-header-bg: oklch(0.1573 0 0);
 
   /* Brand colors - Blue-Cyan Professional Palette (Dark Mode) */
   --nx-primary: oklch(1 0 0); /* High contrast White for dark mode */
-  --nx-primary-foreground: oklch(0.2079 0.0399 265.73);
-  /* slate-900 */
+  --nx-primary-foreground: oklch(0 0 0);
 
   /* Secondary colors - using slate-800 for dark backgrounds */
-  --nx-secondary: oklch(0.28 0.0369 259.97);
+  --nx-secondary: oklch(0.25 0 0);
   /* slate-800 */
-  --nx-secondary-foreground: oklch(0.9838 0.0035 247.86);
+  --nx-secondary-foreground: oklch(1 0 0);
   /* slate-50 */
 
   /* Utility colors */
-  --nx-muted: oklch(0.28 0.0369 259.97);
-  /* slate-800 */
-  --nx-muted-foreground: oklch(0.7107 0.0351 256.79);
-  /* slate-400 */
-  --nx-accent: oklch(
-    0.5547 0.0407 257.44
-  ); /* Slate-500 per user request #64748b */
+  --nx-muted: oklch(0.23 0 0);
+  --nx-muted-foreground: oklch(0.72 0 0);
+  /* The hover and selected surface: one step lighter than --nx-muted so a row
+     under the pointer separates from a merely quiet one. Neutral, not the blue
+     it was once labelled -- a tinted accent reads as a status on a surface that
+     carries none. */
+  --nx-accent: oklch(0.32 0 0);
   --nx-accent-foreground: oklch(1 0 0);
   /* white */
 
   /* State colors - WCAG 2.2 AA Compliant (Dark Mode).
    * The base token is lightened from the fill color so it reads as text on the
-   * dark page at 4.5:1; `-solid` keeps the darker fill so white on-color text
-   * on buttons still clears 4.5:1. Warning is already light enough to read on
-   * dark, so its base is unchanged here. */
+   * dark page at 4.5:1. The two statuses then resolve the on-color problem
+   * differently, because a fill light enough to read as text on a dark page is
+   * too light for white text: destructive keeps ONE value for base and fill
+   * and flips its ink to black (6.90:1), while success keeps a darker separate
+   * fill and keeps its ink white (4.80:1). Warning is already light enough to
+   * read on dark, so its base is unchanged here. */
   /* Lightened red so it reads as text at WCAG 4.5:1 on the dark page and on the
    * lighter popover surface (was 4.17:1 on the page, 4.25:1 on a popover). */
-  --nx-destructive: oklch(0.65 0.2078 25.33);
-  /* Darker red fill so white on-color button text clears 4.5:1. */
-  --nx-destructive-solid: oklch(0.5778 0.2078 25.33);
-  --nx-destructive-foreground: oklch(1 0 0);
-  /* white */
+  --nx-destructive: oklch(0.69 0.2 23.91);
+  /* Same value as the base: the button fill needs no darkening here because
+     its ink is black rather than white. */
+  --nx-destructive-solid: oklch(0.69 0.2 23.91);
+  /* Black, not white. The dark-mode fill is light enough that black on-color
+     text reads at 6.90:1 where white would fall below the minimum. */
+  --nx-destructive-foreground: oklch(0 0 0);
   /* Lightened green so it reads as text at WCAG 4.5:1 on the dark page and on
    * the lighter popover surface (was 4.17:1 on the page, 4.29:1 on a popover). */
   --nx-success: oklch(0.6 0.1921 149.58);
@@ -968,23 +975,25 @@
   --nx-overlay: oklch(0 0 0 / 0.7);
   --nx-overlay-strong: oklch(0 0 0 / 0.85);
   --nx-overlay-soft: oklch(0 0 0 / 0.5);
-  --nx-border-subtle: oklch(1 0 0 / 0.08);
-  --nx-border: oklch(1 0 0 / 0.14);
+  --nx-border-subtle: color-mix(in srgb, oklch(0.26 0 0), transparent 60%);
+  --nx-border: oklch(0.26 0 0);
   /* Alpha raised so the composited strong border clears WCAG 3:1 / ~4:1 (was 3.00:1). */
-  --nx-border-strong: oklch(1 0 0 / 0.418);
+  --nx-border-strong: oklch(0.5444 0 0);
   /* Brightened so the field border clears WCAG 3:1 on the lighter popover
    * surface as well as the page and card (was 1.73:1 on a popover). */
-  --nx-input: oklch(0.54 0.0128 285.92);
+  --nx-input: oklch(0.5445 0 0);
   --nx-ring: var(--nx-primary);
 
   /* Black in dark mode too: the ramp reads as depth against the deep surfaces
-   * rather than as a glow, which a lightened shadow colour would produce. */
+   * rather than as a glow, which a lightened shadow colour would produce.
+   * One --shadow-* ramp serves both modes and inlines a single set of
+   * color-mix opacities, so this token is the only place elevation is
+   * retuned -- overriding it resolves the whole ramp to that hue. */
   --nx-shadow-color: oklch(0 0 0);
 
   /* Chart colors for data visualization (same as light mode) */
   --nx-chart-1: var(--nx-primary);
   --nx-chart-2: oklch(0.7399 0.1277 209.34);
-  /* cyan-500 */
   --nx-chart-3: oklch(0.7229 0.1921 149.58);
   /* green-500 */
   --nx-chart-4: oklch(0.7686 0.1646 70.11);
@@ -993,7 +1002,7 @@
   /* red-500 */
 
   /* Sidebar specific colors - dark mode */
-  --nx-sidebar-background: var(--nx-background);
+  --nx-sidebar-background: oklch(0.18 0 0);
   /* flat with the content surface; nav is separated by borders, not fill */
   /* Resting nav ink, dimmed off slate-50 so it sits a step below
    * --nx-sidebar-accent-foreground the way the light pair does: the lightness
@@ -1001,22 +1010,19 @@
    * slate-900, so an active row reads as emphasised by its ink and not only by
    * its fill. Chroma and hue track the theme's other secondary ink
    * (--nx-muted-foreground) so lightness alone carries the hierarchy. */
-  --nx-sidebar-foreground: oklch(0.82 0.0351 256.79);
-  --nx-sidebar-primary: oklch(0.9838 0.0035 247.86);
+  --nx-sidebar-foreground: oklch(0.72 0 0);
+  --nx-sidebar-primary: oklch(1 0 0);
   /* slate-50 */
-  --nx-sidebar-primary-foreground: oklch(0.2079 0.0399 265.73);
-  /* slate-900 */
-  --nx-sidebar-accent: oklch(0.28 0.0369 259.97);
-  /* slate-800 */
-  --nx-sidebar-accent-foreground: oklch(0.9838 0.0035 247.86);
+  --nx-sidebar-primary-foreground: oklch(0 0 0);
+  --nx-sidebar-accent: oklch(0.32 0 0);
+  --nx-sidebar-accent-foreground: oklch(1 0 0);
   /* slate-50 */
   /* Lightened so the sidebar border clears WCAG 3:1 on its surface (was 1.19:1). */
-  --nx-sidebar-border: oklch(0.4975 0.0129 257.43);
+  --nx-sidebar-border: oklch(0.519 0 0);
   --nx-sidebar-ring: var(--nx-primary);
 
   /* Data table specific colors - dark mode */
-  --nx-table-row-hover: oklch(0.28 0.0369 259.97);
-  /* slate-800 */
+  --nx-table-row-hover: oklch(0.23 0 0);
   --nx-table-row-selected: var(--nx-primary);
   --nx-table-border: var(--nx-border);
   /* inherit the retuned white-alpha border (was a fixed faint slate) */

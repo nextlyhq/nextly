@@ -16,7 +16,15 @@
     "db:seed": "tsx --env-file=.env scripts/seed.ts",
     "dev:reset": "tsx --env-file=.env scripts/reset.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "theme:audit": "tsx scripts/audit-themes.mjs",
+    "theme:capture": "tsx scripts/capture-themes.mjs",
+    "theme:capture:setup": "playwright install chromium",
+    "theme:contrast-report": "tsx scripts/generate-contrast-report.mjs",
+    "theme:import-presets": "tsx scripts/import-tweakcn.mjs",
+    "theme:margins": "tsx scripts/audit-margins.mjs",
+    "theme:solve": "tsx scripts/solve-margin.mjs",
+    "theme:solve-lightness": "tsx scripts/solve-calm.mts"
   },
   "dependencies": {
     "@nextlyhq/adapter-drizzle": "workspace:^",
@@ -48,8 +56,12 @@
     "@types/react": "19.2.0",
     "@types/react-dom": "19.2.0",
     "better-sqlite3": "^12.5.0",
+    "culori": "^4.0.2",
     "eslint": "^9.39.1",
     "eslint-config-next": "^16.2.11",
+    "jsdom": "^27.1.0",
+    "playwright": "^1.61.1",
+    "postcss": "^8.5.6",
     "tailwindcss": "^4.3.2",
     "typescript": "^5.9.3",
     "vitest": "^4.1.0"

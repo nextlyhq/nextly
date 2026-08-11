@@ -46,6 +46,7 @@ import {
 import {
   columnTypeIsIndexable,
   indexNameForColumn,
+  uniqueIndexNameForColumn,
 } from "../../schema/services/index-name";
 import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
 
@@ -137,6 +138,85 @@ export class DynamicCollectionSchemaService {
   }
 
   /**
+   * The statement that makes a column unique, in the one spelling everything else expects.
+   *
+   * `uq_<table>_<column>` is what the desired schema declares for a unique field and what the
+   * add-column path already emits, so a column that arrives with its table and the same column
+   * added by a later edit now produce the same object. Asked in one place because the previous
+   * arrangement — inline at create, named on add — made a table's physical shape depend on WHEN
+   * the column appeared.
+   *
+   * MySQL is the exception on `IF NOT EXISTS`: it rejects the clause on CREATE INDEX rather than
+   * ignoring it.
+   */
+  private uniqueIndexSql(tableName: string, column: string): string {
+    const name = this.quoteIdentifier(
+      uniqueIndexNameForColumn(tableName, column)
+    );
+    const target = `${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(column)})`;
+    return this.dialect === "mysql"
+      ? `CREATE UNIQUE INDEX ${name} ON ${target};`
+      : `CREATE UNIQUE INDEX IF NOT EXISTS ${name} ON ${target};`;
+  }
+
+  /**
+   * Whether this dialect can carry the uniqueness as a NAMED index on this column.
+   *
+   * MySQL cannot key a `TEXT`/`BLOB` column without a length, and refuses both spellings alike —
+   * the inline constraint and the index. Such a column keeps the inline form, which fails the
+   * CREATE atomically exactly as it always has, rather than creating the table and then failing on
+   * a separate index statement MySQL has already auto-committed past.
+   *
+   * Bounding the column would make it work, and is the right answer, but it belongs in the shared
+   * column descriptor: bounding it HERE alone makes the created column disagree with the type the
+   * desired schema derives, and the next reconciliation tries to convert it back — which MySQL
+   * cannot do while a full-value unique index stands on it.
+   */
+  private uniquenessCanBeAnIndex(rendered: string): boolean {
+    // Asked through the shared indexability rule before anything local: a type the dialect cannot
+    // index AT ALL cannot carry the uniqueness as an index either. MySQL rejects an index on a
+    // JSON column, so a `json`-backed unique field belongs with the inline form for the same
+    // reason TEXT does — and answering that here rather than restating the rule keeps this from
+    // being a second opinion about which columns MySQL can key.
+    if (!columnTypeIsIndexable(rendered, this.dialect)) return false;
+    if (this.dialect !== "mysql") return true;
+    return !/\b(text|blob|longtext|mediumtext|tinytext)\b/i.test(rendered);
+  }
+
+  /**
+   * The name of the UNIQUE index the create path emits for this field, or null when it emits none.
+   *
+   * Asked by the emitter and by `plannedAttachments` alike, so a prediction of what a create
+   * artefact installs cannot disagree with what it installs. When only the emitter knew, a create
+   * that had not been deployed yet still added this index, while the edit that followed emitted a
+   * bare `DROP COLUMN` — which SQLite refuses while any index still names the column.
+   */
+  private plannedUniqueIndexName(
+    tableName: string,
+    field: FieldDefinition
+  ): string | null {
+    if (field.unique !== true || !fieldProducesColumn(field)) return null;
+    // `slug` already carries a UNIQUE index that every generated table gets
+    // unconditionally, so a field declaring `unique: true` on it would be asking for a
+    // second index over the same column. The desired schema keeps only the system one —
+    // `dedupeIndexes` discards the field-specific duplicate as logically identical — so
+    // emitting both makes a freshly created table disagree with its own snapshot, and
+    // every write maintains two identical unique indexes until a reconcile drops one.
+    if (toSnakeCase(field.name) === "slug") return null;
+    const rendered =
+      this.canonicalSlugType(field) ??
+      this.mapFieldTypeToSQL(
+        field.type,
+        field.length,
+        field.options,
+        field.validation,
+        field
+      );
+    if (!this.uniquenessCanBeAnIndex(rendered)) return null;
+    return uniqueIndexNameForColumn(tableName, toSnakeCase(field.name));
+  }
+
+  /**
    * Whether the field's column is indexed.
    *
    * A relationship is indexed whether or not the author asked: it is joined on every read that
@@ -214,6 +294,25 @@ export class DynamicCollectionSchemaService {
    *
    * Which of these the table actually has is decided by the live index list, never guessed.
    */
+  /**
+   * The names a column's UNIQUE index may carry, for the paths that REMOVE the column.
+   *
+   * Deliberately NOT part of `indexNameCandidates`. That list is also consulted when a field merely
+   * turns its `index` flag off while staying unique, and a `uq_` name in it makes that path drop the
+   * uniqueness itself — losing a guarantee the field still declares.
+   */
+  private uniqueIndexNameCandidates(
+    tableName: string,
+    column: string
+  ): string[] {
+    return [
+      ...new Set([
+        uniqueIndexNameForColumn(tableName, column),
+        `uq_${tableName}_${column}`,
+      ]),
+    ];
+  }
+
   private indexNameCandidates(tableName: string, column: string): string[] {
     const full = `idx_${tableName}_${column}`;
     const candidates = [indexNameForColumn(tableName, column), full];
@@ -353,7 +452,23 @@ export class DynamicCollectionSchemaService {
           this.mapFieldTypeToSQL(f.type, f.length, f.options, f.validation, f);
         const nullable = f.required ? "NOT NULL" : "";
 
-        const unique = this.columnIsUnique(f) ? "UNIQUE" : "";
+        // A one-to-one keeps its inline `UNIQUE`, and ONLY a one-to-one.
+        //
+        // Its cardinality has no other enforcement anywhere — no constraint, no index, no runtime
+        // check — so removing this would silently let a one-to-one hold duplicates. The declared
+        // `unique: true` case moves to a named index below; this one cannot follow it yet, because
+        // the desired schema declares a one-to-one's index as NON-unique, and emitting a unique one
+        // here would drift from that on every table carrying a one-to-one.
+        //
+        // Reconciling that means changing what the desired schema declares, which would then
+        // propose ADDING a unique index to existing one-to-one columns — a statement that fails
+        // wherever duplicates were already allowed in. That needs a precondition and a decision,
+        // not a quiet edit here.
+        const unique =
+          this.columnIsUnique(f) &&
+          (f.unique !== true || !this.uniquenessCanBeAnIndex(type))
+            ? "UNIQUE"
+            : "";
 
         const defaultVal =
           f.default !== undefined && f.default !== null
@@ -537,6 +652,23 @@ ${allColumnDefs.join(",\n")}
         );
         if (indexSql) indexStatements.push(indexSql);
       }
+    });
+
+    // Uniqueness is a NAMED index, never a column-level `UNIQUE` inside CREATE TABLE.
+    //
+    // An inline constraint is anonymous: the server names its backing index, and on SQLite that is
+    // an internal `sqlite_autoindex_*` which no statement can reference or drop. Nothing downstream
+    // can then track it — so the desired schema, which declares `uq_<table>_<column>`, disagreed
+    // with every table that had one, and the disagreement is only resolvable by rebuilding the
+    // table. It also made a `unique: true` column impossible to drop on SQLite, since the constraint
+    // outlives every index drop.
+    //
+    // The flag alone, NOT `columnIsUnique`: a one-to-one relationship is unique by cardinality, and
+    // the desired schema gives it a NON-unique index. Emitting a unique one here would be a third
+    // spelling of the same property, and the next diff would propose dropping it.
+    mainFields.forEach(f => {
+      if (this.plannedUniqueIndexName(tableName, f) === null) return;
+      indexStatements.push(this.uniqueIndexSql(tableName, toSnakeCase(f.name)));
     });
 
     // For now, we'll add it as it's a common pattern in most applications
@@ -979,6 +1111,28 @@ ${allColumnDefs.join(",\n")}
           );
         }
 
+        // The UNIQUE index, which is a separate object from the plain one above and may be present
+        // without it. SQLite refuses to drop a column an index still names, so this has to go first.
+        //
+        // On PostgreSQL the same name can belong to a CONSTRAINT rather than to a free-standing
+        // index, because the add-column path creates it with ADD CONSTRAINT. `DROP INDEX` on a
+        // constraint-owned index is refused there, and the refusal aborts the migration before the
+        // column drop that would have removed both. Dropping the constraint first covers that case
+        // and is harmless when there is none; the index drop after it covers the create path, which
+        // makes a free-standing index under the same name.
+        const uniquePresent = this.uniqueIndexNameCandidates(
+          tableName,
+          dropCol
+        ).find(name => options?.indexNames?.has(name) === true);
+        if (uniquePresent !== undefined) {
+          if (this.dialect === "postgresql") {
+            statements.push(
+              `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP CONSTRAINT IF EXISTS ${this.quoteIdentifier(uniquePresent)};`
+            );
+          }
+          statements.push(this.dropIndexSql(tableName, uniquePresent));
+        }
+
         // SQLite doesn't support IF EXISTS on DROP COLUMN
         if (this.dialect === "sqlite") {
           statements.push(
@@ -1328,6 +1482,10 @@ ${allColumnDefs.join(",\n")}
       ) {
         indexNames.add(indexNameForColumn(tableName, column));
       }
+      // The UNIQUE index is a separate object from the plain one and is emitted under its own
+      // rule, so it has to be predicted through that rule rather than inferred from this one.
+      const uniqueName = this.plannedUniqueIndexName(tableName, field);
+      if (uniqueName !== null) indexNames.add(uniqueName);
       if (field.type === "relationship" && field.options?.target) {
         foreignKeysByColumn.set(column, [`fk_${tableName}_${column}`]);
       }

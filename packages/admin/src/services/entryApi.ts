@@ -409,9 +409,9 @@ export const entryApi = {
     // Why: admin context is trusted (the route is gated by
     // requireCollectionAccess). Inject `status=all` so the server's
     // published-only default doesn't hide drafts from the admin list /
-    // count views. Mirrors the same fix `findByID` got in Task 7 PR-3 —
-    // the bug surfaced again on the list endpoint because every list
-    // query that omitted status fell through to the public default.
+    // count views. `findByID` carries the same injection for the same
+    // reason: every query that omits status falls through to the public
+    // default, so each caller has to opt out of it explicitly.
     // Public REST callers omit the param and continue to get the safe
     // published-only default. The status-filter dropdown in the entry
     // table layers a `where: {status: {equals: ...}}` clause on top of

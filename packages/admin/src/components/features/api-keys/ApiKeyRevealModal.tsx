@@ -108,7 +108,12 @@ export const ApiKeyRevealModal: React.FC<ApiKeyRevealModalProps> = ({
               className="shrink-0"
             >
               {copied ? (
-                <Check className="h-4 w-4 text-success-600" />
+                // `text-success` is the per-mode success ink, not a fixed step
+                // of the green ramp: `success-600` darkens the brand green by a
+                // constant amount, which reads at 4.38:1 on the dark surface and
+                // misses the 4.5:1 text minimum. The semantic token measures
+                // 5.30:1 light and 5.29:1 dark, so one class is legible in both.
+                <Check className="h-4 w-4 text-success" />
               ) : (
                 <Copy className="h-4 w-4" />
               )}

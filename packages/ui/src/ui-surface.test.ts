@@ -13,6 +13,10 @@
  * belong in a Node test process.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  publishedEntries,
+  sourcesBySubpath,
+} from "../scripts/published-entries.mjs";
 
 import {
   DECLARATION_ENTRIES,
@@ -27,13 +31,27 @@ import { beforeAll, describe, expect, it } from "vitest";
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = path.join(SRC, "..");
 
-/** The entry points named in the package's `exports` map. */
-const ENTRY_POINTS = [
-  "index.ts",
-  "lib/utils.ts",
-  "tailwind-preset.ts",
-  "lib/color/index.ts",
-];
+/**
+ * The SOURCE barrel behind each published entry point.
+ *
+ * Read from the same map the build config consumes, so a retarget cannot leave this comparing the
+ * previous barrel while the new one ships unchecked.
+ */
+const ENTRY_POINTS = Object.entries(sourcesBySubpath()).map(
+  ([subpath, source]) => ({ subpath, source })
+);
+
+/**
+ * `[subpath, source]` for the per-entry checks.
+ *
+ * Named by the SUBPATH rather than the file, so the snapshot records what a consumer of that
+ * subpath receives. Keyed by file, exchanging two entries' sources kept every snapshot matching
+ * the file it was named for, while the build paired each source with the other's artifact name —
+ * so the two subpaths shipped each other's API and nothing compared unequal.
+ */
+const ENTRY_CASES = ENTRY_POINTS.map(
+  entry => [entry.subpath, entry.source] as const
+);
 
 /**
  * Strip comments before any structural check. Doc comments here legitimately
@@ -48,7 +66,10 @@ function stripComments(source: string): string {
 }
 
 function sourceOf(file: string): string {
-  return stripComments(readFileSync(path.join(SRC, file), "utf8"));
+  // Resolved from the PACKAGE ROOT, because these paths are the ones the build config consumes
+  // and tsup entry paths are package-relative. Reading them from `src` instead would need a
+  // second spelling of the same path, which is what having one map is meant to prevent.
+  return stripComments(readFileSync(path.join(PKG_ROOT, file), "utf8"));
 }
 
 /**
@@ -92,7 +113,9 @@ function exportedNames(file: string): string[] {
 /** Names the barrel exports, without the kind suffix. */
 function barrelNames(): Set<string> {
   return new Set(
-    exportedNames("index.ts").map(entry => entry.replace(/ \(.*\)$/, ""))
+    exportedNames(sourcesBySubpath()["."]!).map(entry =>
+      entry.replace(/ \(.*\)$/, "")
+    )
   );
 }
 
@@ -102,7 +125,10 @@ function barrelNames(): Set<string> {
  * name in it. A group heading may sit between the tag and the clause.
  */
 function taggedPerSource(): { public: Set<string>; experimental: Set<string> } {
-  const source = readFileSync(path.join(SRC, "index.ts"), "utf8");
+  const source = readFileSync(
+    path.join(PKG_ROOT, sourcesBySubpath()["."]!),
+    "utf8"
+  );
   const tagged = { public: new Set<string>(), experimental: new Set<string>() };
 
   for (const m of source.matchAll(
@@ -164,19 +190,65 @@ function documentedPublic(): { names: string[]; files: string[] } {
 }
 
 describe("ui public export surface", () => {
-  it.each(ENTRY_POINTS)("%s surface is unchanged", file => {
+  it("has a source barrel for every published entry point", () => {
+    // Compared by IDENTITY rather than by count. A change that renames or replaces one subpath
+    // leaves the total unchanged, so a count alone would keep passing while the new entry's
+    // exports and value-versus-type kinds sat outside the snapshots — which is the coverage gap
+    // this check exists to close.
+    expect(
+      ENTRY_POINTS.map(entry => entry.subpath).sort(),
+      "the source barrels listed here and the subpaths package.json publishes have diverged; " +
+        "add or update the SOURCE barrel for the entry that changed"
+    ).toEqual(
+      publishedEntries()
+        .map(entry => entry.subpath)
+        .sort()
+    );
+  });
+
+  it.each(ENTRY_CASES)("%s surface is unchanged", (_subpath, file) => {
     expect(exportedNames(file)).toMatchSnapshot();
   });
 
   // The name/kind extractor cannot see through `export *` re-exports, so a star
   // export would add names to the public surface that the snapshots never
   // record. Fail loudly if one is introduced, so the guard stays complete.
-  it.each(ENTRY_POINTS)("%s uses only named exports (no `export *`)", file => {
-    expect(sourceOf(file)).not.toMatch(/export\s+\*/);
-  });
+  it.each(ENTRY_CASES)(
+    "%s uses only named exports (no `export *`)",
+    (_subpath, file) => {
+      expect(sourceOf(file)).not.toMatch(/export\s+\*/);
+    }
+  );
 });
 
 describe("ui STABILITY.md ledger", () => {
+  it("classifies entry points the way the ledger promises", () => {
+    // The client/server split is DECLARED, and a declaration nothing checks is a comment. The
+    // ledger names the server-safe subpaths in prose, so the two are compared in both
+    // directions: misclassifying an entry builds it with the wrong config, and the directive
+    // guard then asserts the opposite of what that artifact needs.
+    const start = ledger.indexOf("- **Server components.**");
+    expect(
+      start,
+      "STABILITY.md no longer names the server-safe subpaths"
+    ).toBeGreaterThan(-1);
+    const bullet = ledger.slice(start, ledger.indexOf("\n\n", start));
+    const promised = [...bullet.matchAll(/`@nextlyhq\/ui\/([\w./-]+)`/g)]
+      .map(match => `./${match[1]}`)
+      .sort();
+    expect(
+      promised.length,
+      "the ledger bullet named no subpaths"
+    ).toBeGreaterThan(0);
+
+    expect(
+      publishedEntries()
+        .filter(entry => entry.serverSafe)
+        .map(entry => entry.subpath)
+        .sort()
+    ).toEqual(promised);
+  });
+
   it("promises no export the barrel does not ship", () => {
     const shipped = barrelNames();
     const missing = documentedPublic().names.filter(n => !shipped.has(n));

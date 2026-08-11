@@ -15,6 +15,7 @@ import { defaultBlockRegistry } from "../core/registry";
 
 import { Canvas } from "./canvas/Canvas";
 import { Monitor, Smartphone, Tablet } from "./icons";
+import { InvalidSlotBanner } from "./InvalidSlotBanner";
 import { dragLabel } from "./logic/dragLabel";
 import { planDrop } from "./logic/dropPlan";
 import { BlockLibrary } from "./panels/BlockLibrary";
@@ -72,13 +73,26 @@ export function EditorSurface() {
             ))}
           </div>
         </div>
+        {/*
+         * Above the panes rather than inside the canvas column: the blocks it reports are not
+         * drawn on the canvas at all, so anchoring the notice to the canvas would put it beside
+         * the one place that cannot show what it is about.
+         */}
+        <InvalidSlotBanner />
         <div className="nx-pb-body">
           <aside className="nx-pb-pane nx-pb-pane--left">
             <BlockLibrary />
           </aside>
-          <main className="nx-pb-pane--center">
+          {/*
+           * A region, not a second `main`. HTML allows one non-hidden `main` per
+           * document and the admin already renders it, so a nested one is invalid
+           * markup, gives assistive technology two competing primary landmarks,
+           * and makes every strict `main` locator in the e2e suite ambiguous. The
+           * label is what keeps it a useful landmark rather than a bare wrapper.
+           */}
+          <section className="nx-pb-pane--center" aria-label="Canvas">
             <Canvas />
-          </main>
+          </section>
           <aside className="nx-pb-pane nx-pb-pane--right">
             <Inspector />
           </aside>

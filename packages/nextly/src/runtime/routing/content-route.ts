@@ -3,22 +3,26 @@
  * optional catch-all that resolves ANY path to a published content entry (the
  * pages-collection model: add an `/about` entry and it just works).
  *
- * You keep the route file; this fills the body. It returns `generateStaticParams`
- * (pre-render published paths, with `dynamicParams` handling the rest),
- * `generateMetadata`, and the page component — which resolves the path across the
- * configured collections, calls `notFound()` on a genuine miss or a reserved
- * path, and otherwise renders your component with the resolved entry.
+ * You keep the route file; this fills the body. It returns `generateMetadata`
+ * and the page component — which resolves the path across the configured
+ * collections, calls `notFound()` on a genuine miss or a reserved path, and
+ * otherwise renders your component with the resolved entry.
+ *
+ * **Static generation belongs to `createPublicContentRoute`, not to this one.**
+ * `createContentRoute` reads access-enforced content, so the answer depends on
+ * who is asking and no path can be pre-rendered; it returns no
+ * `generateStaticParams` at all. Exporting one anyway is what made Next
+ * classify an inherently dynamic route as static.
  *
  * `next`/`react` imports are TYPE-ONLY and `next/navigation` is resolved lazily,
  * so importing this never forces those onto a non-Next consumer at load.
  *
- * `generateStaticParams` returns `[]` when there is nothing to pre-render (a
- * `staticParamsLimit` of `0`, or no published slugs yet), which is valid for
- * standard App Router builds. Next 16 Cache Components is stricter: an EXPORTED
- * `generateStaticParams` must return at least one entry. Under that mode, do not
- * wire `generateStaticParams` into the route file for a no-prerender/empty-site
- * setup — export only `ContentPage` and `generateMetadata` and let paths render
- * on demand.
+ * `createPublicContentRoute`'s `generateStaticParams` returns `[]` when there is
+ * nothing to pre-render — no published slugs yet — which is valid for standard
+ * App Router builds. Next 16 Cache Components is stricter: an EXPORTED
+ * `generateStaticParams` must return at least one entry. Under that mode an
+ * empty site uses `createContentRoute`, which has no such export and renders
+ * every path on demand.
  *
  * @module runtime/routing/content-route
  */
@@ -144,8 +148,9 @@ export interface ContentRouteConfig<TNode> {
    * and means every visitor sees unpublished content at every path. It is
    * almost never what a public site wants.
    *
-   * `generateStaticParams` ignores this entirely — draft paths are never
-   * pre-rendered.
+   * `draft` belongs to this factory alone. `createPublicContentRoute` refuses
+   * it: a draft read is never cacheable, so it marks the render dynamic, while
+   * a public route's `generateStaticParams` has told Next it is static.
    *
    * @default false
    */
@@ -157,22 +162,22 @@ export interface ContentRouteConfig<TNode> {
    * `buildMetadata` as `context.locale`. Omit for the default locale.
    */
   locale?: string;
-  /** Relation depth for the resolved read (default `1`). */
+  /**
+   * Relation depth for the resolved read.
+   *
+   * **The default differs by factory, and the difference is a security one.**
+   * `createContentRoute` defaults to `1`, matching `resolveContent`.
+   * `createPublicContentRoute` defaults to `0` — a trusted read propagates both
+   * its trust and a widened lifecycle into relationship expansion, so a
+   * populated target would be read with access rules bypassed and drafts
+   * included, and a public route pre-renders that into a static artifact.
+   *
+   * Setting this on a public route restores expansion, and by setting it you
+   * state that the collections your pages populate are public too.
+   */
   depth?: number;
   /** A booted Nextly instance (defaults to `getNextly()`). */
   nextly?: NextlyContentReader;
-  /**
-   * Whether to bypass the collections' read-access rules. Defaults to `false`
-   * (enforce — the same secure default as `resolveContent`): a rule-less
-   * collection still renders, but a stored member-only/role-based collection is
-   * hidden from ANONYMOUS requests (both the resolved read and the
-   * `generateStaticParams` scan skip it), and `overrideAccess: true` reads
-   * everything trusted. This route always resolves ANONYMOUSLY — its config is
-   * captured once at module scope, so it cannot carry a per-request user. For a
-   * route that renders per-visitor member content, call `resolveContent` with
-   * the request's `user` inside your own page instead.
-   */
-  overrideAccess?: boolean;
   /**
    * Extra cache tags attached to every resolved read, so a write to a related
    * collection (a populated author, category, media) can bust the page. The
@@ -214,11 +219,33 @@ export interface ContentRouteArgs {
   params: Promise<{ slug?: string[] }> | { slug?: string[] };
 }
 
-/** What {@link createContentRoute} returns — wire these into the route file. */
+/**
+ * What a route always returns — wire these into the route file.
+ *
+ * Deliberately without `generateStaticParams`. A route reading access-enforced
+ * content answers differently per visitor, so no path it serves can be
+ * pre-rendered, and offering the function anyway is not a harmless extra: Next
+ * classifies a route as STATIC when it exports one, and every dynamic marking
+ * inside a static render is an error. Measured — an access-enforced route
+ * exporting it answered 500 on every path once its collection was empty at
+ * build time, because an empty param list left nothing to bail out and degrade
+ * the route to dynamic.
+ */
 export interface ContentRoute<TNode> {
-  generateStaticParams: () => Promise<Array<{ slug: string[] }>>;
   generateMetadata: (args: ContentRouteArgs) => Promise<Metadata>;
   ContentPage: (args: ContentRouteArgs) => Promise<TNode>;
+}
+
+/**
+ * What {@link createPublicContentRoute} returns, additionally.
+ *
+ * Present only on this shape so a route that cannot pre-render cannot export
+ * the function that claims it does. The check is the type system's rather than
+ * a runtime warning nobody reads: destructuring `generateStaticParams` from an
+ * enforced route does not compile.
+ */
+export interface StaticContentRoute<TNode> extends ContentRoute<TNode> {
+  generateStaticParams: () => Promise<Array<{ slug: string[] }>>;
 }
 
 // `next/navigation` is resolved lazily (opaque to bundlers), so importing this
@@ -329,13 +356,17 @@ export function slugToStaticParam(value: unknown): { slug: string[] } | null {
   return { slug: segments };
 }
 
-export function createContentRoute<TNode>(
-  config: ContentRouteConfig<TNode>
-): ContentRoute<TNode> {
+function buildRoute<TNode>(
+  config: ContentRouteConfig<TNode>,
+  content: "public" | "restricted"
+): StaticContentRoute<TNode> {
   const slugField = config.slugField ?? "slug";
   const status = config.status ?? "published";
   const depth = config.depth ?? 1;
-  const overrideAccess = config.overrideAccess ?? false;
+  // The secure default, unchanged: enforce unless the site says the content is
+  // public. Naming the decision does not relax it.
+  const isPublic = content === "public";
+  const overrideAccess = isPublic;
   const staticParamsLimit = config.staticParamsLimit ?? 1000;
 
   const collections = [...new Set(config.collections)];
@@ -397,6 +428,11 @@ export function createContentRoute<TNode>(
         // silent no-op that makes preview look broken. The authorization that
         // justifies this lives in the `draft` decision itself.
         overrideAccess: overrideAccess || draft,
+        // ...but only for as long as the grant is answering this path. What the
+        // route itself authorized travels alongside, so the published-only
+        // fall-through can hand the widening back instead of reading every row
+        // in the collection as a trusted caller.
+        callerOverrideAccess: overrideAccess,
       });
       if (!entry) continue;
       // No identity check here, deliberately. Both halves a grant has to
@@ -434,6 +470,13 @@ export function createContentRoute<TNode>(
         try {
           result = await nextly.find({
             collection,
+            // The route's own depth, not the Direct API's default. This scan is
+            // a TRUSTED read on a public route, so an inherited expansion depth
+            // pulls related rows — draft ones included — through their nested
+            // hooks at build time, for a query that wants one column. It is the
+            // same posture the render and metadata reads carry; a scan that
+            // opted out of it would be the one read on the route that did not.
+            depth,
             // Lifecycle-aware publish scope — a no-op on status-less collections.
             status,
             // The same locale `resolve()` reads in. Without it a localized
@@ -494,6 +537,125 @@ export function createContentRoute<TNode>(
   }
 
   return { generateStaticParams, generateMetadata, ContentPage };
+}
+
+/**
+ * A route over ACCESS-ENFORCED content — the secure default.
+ *
+ * The collections' read rules decide, so the answer depends on who is asking:
+ * no read is cacheable and no path can be pre-rendered. **It therefore returns
+ * no `generateStaticParams`, and that is the whole point.**
+ *
+ * Next classifies a route as STATIC because the export exists, and every
+ * dynamic marking inside a static render is an error. An enforced route that
+ * also exported one answered 500 on every path whenever its collection was
+ * empty at build time — an empty param list left nothing to bail out and
+ * degrade the route to dynamic, so its runtime behaviour depended on whether
+ * the database had rows in it when the build ran. Not offering the function is
+ * what makes that unrepresentable rather than merely discouraged.
+ *
+ * For public content that should be cached and pre-rendered, use
+ * {@link createPublicContentRoute}.
+ */
+export function createContentRoute<TNode>(
+  config: ContentRouteConfig<TNode>
+): ContentRoute<TNode> {
+  const { generateMetadata, ContentPage } = buildRoute(config, "restricted");
+  return { generateMetadata, ContentPage };
+}
+
+/**
+ * A route over PUBLIC content: trusted reads, cacheable, pre-renderable.
+ *
+ * Access rules are not consulted — the site has stated that everything in these
+ * collections is public — which is what makes a read cacheable and a path
+ * pre-renderable. Returns `generateStaticParams` for the route file to export.
+ *
+ * **Two functions rather than one flag, and the reason is measured.** Deciding
+ * this through an option meant the return type had to vary with a value, which
+ * costs contextual typing: every callback in the config object
+ * (`render`, `buildMetadata`, `metadata`) loses its parameter types the moment
+ * the config's type depends on an inferred generic. Choosing the posture by
+ * calling a differently-named function keeps both signatures concrete, so
+ * inference is untouched — and the name states the decision at the call site
+ * rather than burying it in a string three lines down.
+ *
+ * **Under Next 16 Cache Components, an EMPTY SITE must use
+ * {@link createContentRoute} instead.** That mode rejects an exported
+ * `generateStaticParams` that returns no entries, and this one returns `[]`
+ * whenever no configured collection holds an addressable published slug — which
+ * is every site before its first page is written. It cannot be guarded at
+ * construction: whether a collection is empty is a fact about the database at
+ * build time, not about the config, and reading it here would make module
+ * evaluation depend on a query. A site that pre-renders nothing yet wants the
+ * dynamic factory anyway; move to this one once it has content.
+ */
+export function createPublicContentRoute<TNode>(
+  config: ContentRouteConfig<TNode>
+): StaticContentRoute<TNode> {
+  // Refused at construction, not tolerated at request time. Both of these make
+  // the route dynamic while its `generateStaticParams` still tells Next it is
+  // static — the same contradiction this split exists to remove, arriving
+  // through a different option. A module-scope throw names the incompatible
+  // pair at build; the alternative is a 500 on a page whose config looked fine.
+  if (config.draft !== undefined && config.draft !== false) {
+    throw NextlyError.invalidInput({
+      message:
+        "createPublicContentRoute() cannot serve drafts. Use createContentRoute() " +
+        "with `draft` and mount previewable paths there.",
+      logContext: {
+        reason:
+          "`draft` makes every resolved read uncached, which marks the render " +
+          "dynamic — but a public route exports `generateStaticParams`, so Next " +
+          "classifies it static, and a dynamic marking inside a static render is " +
+          "an error.",
+      },
+    });
+  }
+  if (config.staticParamsLimit !== undefined && config.staticParamsLimit <= 0) {
+    throw NextlyError.invalidInput({
+      message:
+        "createPublicContentRoute() cannot pre-render nothing. Use " +
+        "createContentRoute() to render every path on demand.",
+      logContext: {
+        reason:
+          "`staticParamsLimit: 0` asks for a static route that builds no paths, so " +
+          "`generateStaticParams` returns `[]` — which standard App Router builds " +
+          "accept but Next 16 Cache Components rejects outright " +
+          "(EmptyGenerateStaticParamsError).",
+      },
+    });
+  }
+  return buildRoute(
+    {
+      // Populated relations are NOT covered by the promise this factory makes.
+      //
+      // A trusted read propagates both its trust and a widened lifecycle into
+      // relationship expansion: a populated target is read with access rules
+      // bypassed AND `status: "all"`. So at the inherited default of `depth: 1`
+      // a page in a public collection can embed a DRAFT or access-restricted
+      // row from a collection that appears nowhere in this config — and this
+      // route pre-renders that into a static artifact, which publishing cannot
+      // be taken back from.
+      //
+      // Defaulting to no expansion makes the exposure something a site OPTS
+      // INTO rather than something it inherits. A site that populates relations
+      // sets `depth` itself, and by doing so states that those collections are
+      // public too.
+      //
+      // This bounds the blast radius; it does not fix the propagation. That
+      // still belongs where the trust is threaded, so a caller who sets `depth`
+      // gets the old behaviour in full.
+      // Normalized AFTER the spread, not defaulted before it. An optional
+      // property permits an EXPLICIT `undefined` — which forwarding a config
+      // object produces routinely — and a spread overwrites with it, so
+      // `{ depth: 0, ...config }` restores `?? 1` for exactly the caller least
+      // likely to have thought about relation expansion.
+      ...config,
+      depth: config.depth ?? 0,
+    },
+    "public"
+  );
 }
 
 /** Join the optional-catch-all segments into a slug path (no leading slash). */
