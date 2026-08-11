@@ -30,8 +30,11 @@
  * `turbo.json` makes `test` depend on `build` and names `dist/**` among its
  * inputs, so an edit anywhere in the declaration's own inputs — this package's
  * sources, the engine's, the bundler config — rebuilds and re-runs. Global
- * setup adds one build before collection so a direct `vitest run` on a tree
- * with no `dist` works at all.
+ * setup does NOT build: it refuses to start when the declarations are missing,
+ * naming the command to run, because a build launched from inside collection
+ * rebuilds this package's whole dependency tree while sibling suites are
+ * importing from it. So a direct `vitest run` on a tree with no `dist` stops
+ * with one legible error rather than racing.
  *
  * Neither covers `vitest --watch`, and deliberately so. Vitest selects a suite
  * from its MODULE GRAPH, which cannot see a `.d.ts` read off disk; making it
@@ -176,7 +179,16 @@ function resolveDeclaration(
   ]) {
     if (existsSync(candidate)) return candidate;
   }
-  return undefined;
+  // A relative specifier inside an emitted declaration names another emitted
+  // declaration. Finding none means the artifact is INCOMPLETE — a build stopped
+  // after writing the entries and before their chunks — and returning
+  // `undefined` would walk a smaller graph, derive fewer required types, and
+  // read as a clean pass. Under-reporting the obligation is the one answer this
+  // suite must never give, so an unresolvable reference stops the run.
+  throw new Error(
+    `${specifier} is referenced by ${from} and no declaration for it exists. ` +
+      `These declarations are incomplete; rebuild before asserting against them.`
+  );
 }
 
 /**
