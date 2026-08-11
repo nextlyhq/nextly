@@ -34,7 +34,10 @@ import { BaseService } from "../../../shared/base-service";
 import { encrypt, decrypt } from "../../../utils/encryption";
 // Pull adapter type into a normal `import type` declaration so the return
 // signature on createAdapterFromProvider satisfies consistent-type-imports.
-import type { EmailDeliveryInput } from "../delivery-record";
+import {
+  messageIdWithoutRecipients,
+  type EmailDeliveryInput,
+} from "../delivery-record";
 import { describeProviderFailure } from "../provider-definition";
 import type { EmailProviderAdapter } from "../types";
 
@@ -741,7 +744,12 @@ export class EmailProviderService extends BaseService {
       // against the provider's own record of it.
       await this.recordTestDelivery(to, provider, {
         status: result.success ? "sent" : "failed",
-        messageId: result.messageId ?? null,
+        // Contained here as it is on the ordinary send path. A provider may
+        // build its identifier out of the address it was handed, and the test
+        // destination is a recipient like any other -- storing it verbatim
+        // would put the address beside the hash that exists to avoid holding
+        // it.
+        messageId: messageIdWithoutRecipients(result.messageId, [to]),
         error: result.success ? null : SEND_RETURNED_UNSUCCESSFUL,
       });
 

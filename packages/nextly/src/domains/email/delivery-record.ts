@@ -108,6 +108,36 @@ export function storableError(message: string): string {
     : redacted;
 }
 
+/**
+ * A provider's message id, unless it carries a recipient.
+ *
+ * The delivery table stores a hash of the recipient and never the address, and
+ * that decision is only worth anything if EVERY column beside the hash
+ * respects it. `messageId` is written by the provider, which was handed the
+ * real address, so `delivery-user@example.com` is an id a provider could
+ * plausibly return.
+ *
+ * Matched against the actual mailboxes rather than redacted by shape. An
+ * RFC 5322 Message-ID is `<local@domain>`, so a rule built on "anything with
+ * an @" would discard almost every legitimate id and protect nothing extra.
+ *
+ * Dropped rather than rewritten, for the reason the credential containment
+ * gives: a partially rewritten identifier matches nothing while still looking
+ * like one.
+ */
+export function messageIdWithoutRecipients(
+  messageId: string | undefined,
+  mailboxes: readonly string[]
+): string | null {
+  if (messageId === undefined) return null;
+  const haystack = messageId.toLowerCase();
+  const carriesOne = mailboxes.some(mailbox => {
+    const needle = mailbox.trim().toLowerCase();
+    return needle !== "" && haystack.includes(needle);
+  });
+  return carriesOne ? null : messageId;
+}
+
 /** One delivery, as the recorder is told about it. */
 export interface EmailDeliveryInput {
   /** The address the message went to. Hashed here; never stored. */

@@ -190,6 +190,31 @@ export interface RegisteredEmailProvider {
 }
 
 /**
+ * Whether the configuration holds a leaf no field declares.
+ *
+ * Walked as PATHS, matching how `configFields[].name` addresses nested values
+ * (`auth.pass`), so a declared branch's children are covered by their own
+ * declarations rather than by the branch.
+ */
+function hasUndeclaredLeaf(
+  fields: ReadonlyArray<EmailProviderConfigField>,
+  config: Record<string, unknown>
+): boolean {
+  const declared = new Set(fields.map(field => field.name));
+
+  const walk = (value: unknown, prefix: string): boolean => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      return !declared.has(prefix);
+    }
+    return Object.entries(value as Record<string, unknown>).some(
+      ([key, leaf]) => walk(leaf, prefix ? `${prefix}.${key}` : key)
+    );
+  };
+
+  return Object.entries(config).some(([key, value]) => walk(value, key));
+}
+
+/**
  * The values a provider DECLARED as credentials, read out of its configuration.
  *
  * Declared rather than guessed, exactly as masking does: a heuristic over key
@@ -226,6 +251,18 @@ function declaredSecretValues(
 
   const comparable: string[] = [];
   let hasUnmatchable = false;
+
+  // A configuration leaf no field DECLARES is treated as secret by
+  // `maskConfiguration`, on the reasoning that absence of information has to
+  // mask more rather than less -- a credential left behind by a provider
+  // upgrade is exactly the case. Containment has to agree, or a legacy API key
+  // is withheld from every read and then handed back inside a message id.
+  //
+  // Its value is not compared, because an undeclared leaf may be anything;
+  // its mere presence makes ids from this provider untrustworthy.
+  if (hasUndeclaredLeaf(fields, config as Record<string, unknown>)) {
+    hasUnmatchable = true;
+  }
 
   for (const field of fields) {
     if (field.secret !== true) continue;

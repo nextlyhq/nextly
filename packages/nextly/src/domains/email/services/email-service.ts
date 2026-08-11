@@ -25,7 +25,10 @@ import { getBaseUrl } from "../../../lib/get-base-url";
 import type { EmailTemplateRecord } from "../../../schemas/email-templates/types";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
-import type { EmailDeliveryRecipientKind } from "../delivery-record";
+import {
+  messageIdWithoutRecipients,
+  type EmailDeliveryRecipientKind,
+} from "../delivery-record";
 import { EmailErrorCode } from "../errors";
 import { describeProviderFailure } from "../provider-definition";
 import type {
@@ -82,36 +85,6 @@ const SLUG_TO_TEMPLATE_KEY: Record<
 // ============================================================
 // Email Service
 // ============================================================
-
-/**
- * A provider's message id, unless it carries a recipient.
- *
- * The delivery table stores a hash of the recipient and never the address, and
- * that decision is only worth anything if EVERY column beside the hash
- * respects it. `messageId` is written by the provider, which was handed the
- * real address, so `delivery-user@example.com` is an id a provider could
- * plausibly return.
- *
- * Matched against the actual mailboxes rather than redacted by shape. An
- * RFC 5322 Message-ID is `<local@domain>`, so a rule built on "anything with
- * an @" would discard almost every legitimate id and protect nothing extra.
- *
- * Dropped rather than rewritten, for the reason the credential containment
- * gives: a partially rewritten identifier matches nothing while still looking
- * like one.
- */
-function messageIdWithoutRecipients(
-  messageId: string | undefined,
-  mailboxes: readonly string[]
-): string | null {
-  if (messageId === undefined) return null;
-  const haystack = messageId.toLowerCase();
-  const carriesOne = mailboxes.some(mailbox => {
-    const needle = mailbox.trim().toLowerCase();
-    return needle !== "" && haystack.includes(needle);
-  });
-  return carriesOne ? null : messageId;
-}
 
 /**
  * The mailbox out of an address a caller may have written with a display name.

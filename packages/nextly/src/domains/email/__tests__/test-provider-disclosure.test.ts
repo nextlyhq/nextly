@@ -289,6 +289,57 @@ describe("a test that never reached the provider", () => {
     expect(recorded).toHaveLength(0);
   });
 
+  it("does not store a test message id that carries the address", async () => {
+    // The test destination is a recipient like any other, and a provider may
+    // build its identifier out of the address it was handed. Storing it
+    // verbatim would put the address beside the hash that exists to avoid
+    // holding it.
+    const recorded: Array<{ messageId: string | null }> = [];
+    (service as unknown as { deliveries: unknown })["deliveries"] = {
+      record: (input: { messageId: string | null }) => {
+        recorded.push(input);
+        return Promise.resolve();
+      },
+      recordAll: () => Promise.resolve(),
+    };
+    (service as unknown as { createAdapterFromProvider: unknown })[
+      "createAdapterFromProvider"
+    ] = () => ({
+      send: () =>
+        Promise.resolve({
+          success: true,
+          messageId: "delivery-someone@example.com-1",
+        }),
+    });
+
+    await service.testProvider(providerId, "someone@example.com");
+
+    expect(recorded[0]?.messageId).toBeNull();
+  });
+
+  it("keeps an ordinary test message id", async () => {
+    // The control: containment is a comparison against the destination, not a
+    // blanket refusal to record ids.
+    const recorded: Array<{ messageId: string | null }> = [];
+    (service as unknown as { deliveries: unknown })["deliveries"] = {
+      record: (input: { messageId: string | null }) => {
+        recorded.push(input);
+        return Promise.resolve();
+      },
+      recordAll: () => Promise.resolve(),
+    };
+    (service as unknown as { createAdapterFromProvider: unknown })[
+      "createAdapterFromProvider"
+    ] = () => ({
+      send: () =>
+        Promise.resolve({ success: true, messageId: "<abc@mail.example.com>" }),
+    });
+
+    await service.testProvider(providerId, "someone@example.com");
+
+    expect(recorded[0]?.messageId).toBe("<abc@mail.example.com>");
+  });
+
   it("records one when the send itself fails", async () => {
     // The control: a recorder that never writes anything would satisfy the
     // case above, so this pins that a send reaching the provider DOES produce

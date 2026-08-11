@@ -383,8 +383,8 @@ describe("a provider that never passed through the authoring helper", () => {
 describe("a credential too short to compare", () => {
   it("costs the provider its message ids", async () => {
     // A three-character secret matches almost any identifier, so using it as a
-    // needle would delete every id this provider returns. It cannot be ignored
-    // either — that is what let a short PIN travel — so the id is dropped
+    // needle would delete every id this provider returns. Ignoring it instead
+    // would let the credential appear inside one, so the id is dropped
     // whenever such a secret is declared.
     const registry = getEmailProviderRegistry();
     registry.register(
@@ -619,6 +619,76 @@ describe("a credential declared on a switch", () => {
     await expect(
       registry
         .create("bool-public", { sandbox: true })
+        .send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" })
+    ).resolves.toEqual({ success: true, messageId: "<ok@mail.test>" });
+  });
+});
+
+describe("a credential the descriptor does not mention", () => {
+  afterEach(() => {
+    getEmailProviderRegistry().reset();
+  });
+
+  it("makes the provider's message ids untrustworthy", async () => {
+    // A key left behind by a provider upgrade is undeclared, and
+    // `maskConfiguration` already withholds it on that reasoning. Containment
+    // has to agree, or the value is hidden from every read and then handed
+    // back inside an id.
+    const registry = getEmailProviderRegistry();
+    registry.register(
+      defineEmailProvider<Record<string, unknown>>({
+        type: "legacy-leftover",
+        label: "Legacy leftover",
+        configFields: [
+          { name: "apiKey", label: "API Key", kind: "password", secret: true },
+        ],
+        parseConfig: input => input as Record<string, unknown>,
+        createAdapter: config => ({
+          send: () =>
+            Promise.resolve({
+              success: true,
+              messageId: `id-${String(config.legacyKey)}`,
+            }),
+        }),
+      })
+    );
+
+    const result = await registry
+      .create("legacy-leftover", {
+        apiKey: "sk-current-value",
+        legacyKey: "sk-retained-from-an-upgrade",
+      })
+      .send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" });
+
+    expect(result.messageId).toBeUndefined();
+  });
+
+  it("leaves a fully declared configuration alone", async () => {
+    // The control: the rule keys on an UNDECLARED leaf, not on nesting or on
+    // there being more than one field.
+    const registry = getEmailProviderRegistry();
+    registry.register(
+      defineEmailProvider<Record<string, unknown>>({
+        type: "fully-declared",
+        label: "Fully declared",
+        configFields: [
+          { name: "apiKey", label: "API Key", kind: "password", secret: true },
+          { name: "auth.user", label: "User", kind: "text" },
+        ],
+        parseConfig: input => input as Record<string, unknown>,
+        createAdapter: () => ({
+          send: () =>
+            Promise.resolve({ success: true, messageId: "<ok@mail.test>" }),
+        }),
+      })
+    );
+
+    await expect(
+      registry
+        .create("fully-declared", {
+          apiKey: "sk-current-value",
+          auth: { user: "postmaster" },
+        })
         .send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" })
     ).resolves.toEqual({ success: true, messageId: "<ok@mail.test>" });
   });
