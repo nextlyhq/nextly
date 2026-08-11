@@ -1,11 +1,14 @@
 import {
   compilePageCss,
   declaresNoMarkup,
+  isFetchableUrl,
   nodeClassNames,
   walkNodes,
+  DEFAULT_LIMITS,
   type BlockDocument,
   type BlockNode,
   type CompiledPageCss,
+  type DocumentLimits,
   type RemotePatternInput,
   type NodeStyles,
   type StyleCompileContext,
@@ -480,6 +483,76 @@ export function fetchPolicyLabel(
  * impossible-looking sentinel invites.
  */
 export const UNIDENTIFIED_FETCH_POLICY = "unidentified-fetch-policy";
+
+/** What a page must be recompiled WITH, and judged BY. */
+export interface EffectiveCompile {
+  /** The context to recompile with, or `undefined` when the caller gave none. */
+  context: StyleCompileContext | undefined;
+  /** The policy label to compare a stored sheet's stamp against. */
+  fetchPolicyId: string | undefined;
+}
+
+/**
+ * Reconcile what a CALLER supplied with what the stored artifact and the host
+ * already knew.
+ *
+ * A caller's raw context is not the context to compile with, and the three
+ * differences all fail silently:
+ *
+ * - **Scope lives on the ARTIFACT, not the context.** A caller normally omits it
+ *   for exactly that reason, so compiling with the raw context rebuilds a scoped
+ *   page unscoped and lets its selectors reach another document rendered beside
+ *   it. Only a STRING is carried over: the artifact is a database record, so its
+ *   `scope` can be null or a number, and the compiler dereferences it before any
+ *   block boundary exists — a malformed one would fail the whole page rather
+ *   than render it unstyled.
+ * - **Limits come from the caller's own cap**, which preparation already honours.
+ *   Compiling against the context's caps instead retains nodes whose styles were
+ *   never written, so the document holds nodes the class map does not name.
+ * - **A sheet with no policy stamp compares equal to no policy at all.** A caller
+ *   with its own `mayFetchUrl` and no `fetchPolicyId` would therefore reuse an
+ *   unstamped sheet under a predicate that never judged it. A caller's predicate
+ *   is authoritative and opaque — nothing here can tell one such function from
+ *   another — so absent a stated identity it gets one no artifact can carry, and
+ *   every stored sheet reads as compiled under another policy. Safe rather than
+ *   fast, and a caller wanting its sheets cached says which policy its predicate
+ *   IS.
+ *
+ * One derivation for every entry point that resolves a stored page. Two would
+ * agree on the day they were written, and the drift would be a page served with
+ * another page's selectors or with URLs the current policy refuses.
+ */
+export function effectiveCompile(args: {
+  styleContext: StyleCompileContext | undefined;
+  styles: PageStyles | undefined;
+  limits: DocumentLimits | undefined;
+  remotePatterns: readonly RemotePatternInput[] | undefined;
+}): EffectiveCompile {
+  const patterns = args.remotePatterns;
+  // A caller's OWN predicate wins: it is the more specific answer, and a host
+  // that passed one deliberately should not have it replaced by one derived
+  // from the pattern list.
+  const fetchPolicyId =
+    args.styleContext?.mayFetchUrl === undefined
+      ? fetchPolicyLabel(patterns)
+      : (args.styleContext.fetchPolicyId ?? UNIDENTIFIED_FETCH_POLICY);
+  if (args.styleContext === undefined)
+    return { context: undefined, fetchPolicyId };
+  return {
+    context: {
+      ...args.styleContext,
+      limits: args.limits ?? args.styleContext.limits ?? DEFAULT_LIMITS,
+      ...(patterns === undefined || args.styleContext.mayFetchUrl !== undefined
+        ? {}
+        : { mayFetchUrl: (url: string) => isFetchableUrl(url, patterns) }),
+      ...(args.styleContext.scope === undefined &&
+      typeof args.styles?.scope === "string"
+        ? { scope: args.styles.scope }
+        : {}),
+    },
+    fetchPolicyId,
+  };
+}
 
 /** Caller-supplied policy for one style resolution. */
 export interface ResolveStyleOptions {

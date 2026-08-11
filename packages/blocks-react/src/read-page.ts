@@ -20,6 +20,7 @@
  */
 import type {
   BlockDocument,
+  RemotePatternInput,
   StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 
@@ -29,7 +30,7 @@ import type {
 } from "./prepare-document";
 import { prepareDocumentReadStages, readingViewOf } from "./prepare-document";
 import type { PageStyles } from "./styles";
-import { resolvePageStyles } from "./styles";
+import { effectiveCompile, resolvePageStyles } from "./styles";
 
 export interface ReadPageArgs extends PrepareDocumentArgs {
   /** The stylesheet artifact stored with the page, when it has one. */
@@ -42,12 +43,20 @@ export interface ReadPageArgs extends PrepareDocumentArgs {
    */
   styleContext?: StyleCompileContext;
   /**
-   * Which host-fetch policy is in force for this read.
+   * The hosts this site allows a stylesheet to fetch from.
    *
-   * Compared against the stamp the stored artifact carries; a difference means
-   * that artifact admitted `url(...)` values under rules that no longer apply.
+   * A stylesheet fetches too: `background-image: url(...)` is a request the
+   * browser makes on every page the rule applies to, so the host's list has to
+   * reach the compile as well as the blocks.
+   *
+   * The policy IDENTITY is derived from these rather than taken as a field, so
+   * it changes exactly when the policy does and there is nothing to remember to
+   * bump. A caller with its own `mayFetchUrl` states which policy that predicate
+   * is through `styleContext.fetchPolicyId`; one that does not gets an identity
+   * no artifact can carry, so every stored sheet recompiles rather than being
+   * reused under rules that never judged it.
    */
-  fetchPolicyId?: string;
+  remotePatterns?: readonly RemotePatternInput[];
 }
 
 export interface PreparedPage {
@@ -65,34 +74,42 @@ export interface PreparedPage {
  * Whether the passes changed the tree in a way a STORED stylesheet cannot
  * describe.
  *
- * Only two of the five stage boundaries count, and which two is the whole
- * content of this function:
+ * Three of the five stage boundaries count, and which three is the whole content
+ * of this function:
  *
  * - **The caps pass**, because a document over its limits is truncated, and the
  *   sheet was compiled from the untruncated one.
+ * - **Address repair**, for the reason that first looked like grounds to exclude
+ *   it. The compiler refuses to style duplicated ids at all — there is one class
+ *   for the id and no way to tell a renderer about a second — so the sheet holds
+ *   no node-local rules for EITHER. It still NAMES the id in its class map, so
+ *   the artifact reads as usable and is trusted, and the node that survived
+ *   deduplication renders carrying a class no rule targets. Recompiling against
+ *   the deduplicated tree is what styles it, because by then the id is unique.
  * - **The placeholder pass**, because a node that resolves to a placeholder is
  *   gone for every visitor until the page is republished, while the tiers it
  *   pulled into the sheet stay behind.
  *
- * The other three are excluded deliberately, and two of the exclusions are load
- * bearing rather than cosmetic:
+ * The remaining two are excluded, and both exclusions are load bearing rather
+ * than cosmetic:
  *
  * - **Migration** allocates unconditionally, so comparing it against the caps
  *   pass is true on every document ever read. Included, every page would report
  *   as repaired and every stored sheet would be withheld on the happy path.
  * - **Condition gating** is the case the per-node `gated` map was built for. Its
- *   rules travel per node and are appended for exactly the survivors, so a
- *   gated node's absence is described rather than unaccounted. Included, every
- *   page carrying a conditioned block would lose its whole stylesheet.
- * - **Address repair** drops a later duplicate of a repeated id, and the
- *   compiler refuses to style duplicated ids at all, so the sheet holds no rules
- *   for what that pass removes.
+ *   rules travel per node and are appended for exactly the survivors, so a gated
+ *   node's absence is described rather than unaccounted. Included, every page
+ *   carrying a conditioned block would lose its whole stylesheet.
  */
 function storedSheetCannotDescribe(
   document: BlockDocument,
   stages: DocumentReadStages
 ): boolean {
-  return stages.sanitized !== document || stages.prepared !== stages.deduped;
+  return (
+    stages.sanitized !== document ||
+    stages.deduped !== stages.gated ||
+    stages.prepared !== stages.deduped
+  );
 }
 
 /**
@@ -124,13 +141,23 @@ export function preparePageForRead(
     };
   }
 
+  // What a caller supplied is not what this page compiles with. Asked through
+  // the SAME derivation the renderer uses, so a page read here and the same page
+  // rendered cannot disagree about its scope, its caps or which fetch policy
+  // judged its stored sheet.
+  const compile = effectiveCompile({
+    styleContext: args.styleContext,
+    styles: args.styles,
+    limits: args.limits,
+    remotePatterns: args.remotePatterns,
+  });
   const styles = resolvePageStyles(
     stages.prepared,
     args.styles,
-    args.styleContext,
+    compile.context,
     args.resolver,
     storedSheetCannotDescribe(document, stages),
-    { fetchPolicyId: args.fetchPolicyId }
+    { fetchPolicyId: compile.fetchPolicyId }
   );
 
   // Compiled against the PREPARED tree whatever the reading view decides. The

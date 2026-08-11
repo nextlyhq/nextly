@@ -105,9 +105,19 @@ const SOURCE_MODULES: ReadonlyArray<{
     // reads through it, so a host's override cannot be honoured on one path and
     // ignored on the other. It crosses a module boundary inside this package; a
     // consumer states its answer through `styleContext.drawsNothing` instead.
+    // `effectiveCompile` reconciles a caller's context with what the stored
+    // artifact and the host already knew — the scope that lives on the artifact,
+    // the caps preparation honoured, and the identity a fetch predicate needs
+    // before a stored sheet can be judged against it. `page-renderer` and
+    // `read-page` both resolve a stored page and must not answer any of those
+    // differently, which is why it is one function rather than two.
+    // Deliberately NOT a consumer surface: publishing it would offer a third way
+    // to assemble a page by hand, and assembling by hand is precisely the path
+    // that gets this wrong. `preparePageForRead` is the consumer's answer.
     internal: [
       "UNIDENTIFIED_FETCH_POLICY",
       "drawlessTestFor",
+      "effectiveCompile",
       "isRecordedGatedEntry",
       "isUsableGatedEntry",
       "readableGatedRules",

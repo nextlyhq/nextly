@@ -7,7 +7,10 @@
  * on the happy path, with no error, which is the worse failure and the one a
  * test asserting only `css === ""` would happily certify.
  */
-import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
+import {
+  DEFAULT_LIMITS,
+  DOCUMENT_FORMAT_VERSION,
+} from "@nextlyhq/blocks-engine";
 import type {
   AnyBlockDefinition,
   BlockDocument,
@@ -18,7 +21,7 @@ import { describe, expect, it } from "vitest";
 import { defineBlock } from "./context";
 import { preparePageForRead } from "./read-page";
 import { createBlockResolver } from "./resolver";
-import { resolvePageStyles } from "./styles";
+import { UNIDENTIFIED_FETCH_POLICY, resolvePageStyles } from "./styles";
 
 /** A plugin block that declares it draws nothing for these props. */
 const drawless = defineBlock<{ draw: boolean }>({
@@ -208,6 +211,155 @@ describe("what must NOT count as a repair", () => {
 
     expect(read.styles.css).toContain("color: teal");
     expect(read.styles.css).not.toContain("crimson");
+  });
+});
+
+describe("what a page is compiled WITH", () => {
+  it("keeps the artifact's scope when a repair forces a recompile", () => {
+    // Scope lives on the artifact, so a caller normally omits it from the
+    // context. Compiling with the raw context rebuilds the page unscoped and
+    // lets its selectors reach another document rendered beside it.
+    const scoped = { ...storedSheet(), scope: "nx-s-abc" };
+
+    const read = preparePageForRead(document, {
+      resolver: withoutPlugin,
+      styles: scoped,
+      styleContext: context,
+    });
+
+    expect(read.styles.scope).toBe("nx-s-abc");
+    expect(read.styles.css).toContain("nx-s-abc");
+  });
+
+  it("compiles against the caps preparation actually used", () => {
+    // Preparation honours `limits`; the compiler reads them off the context. A
+    // raw context therefore keeps nodes whose styles were never written, so the
+    // document holds ids the class map does not name.
+    const wide: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "test/text",
+          version: 1,
+          props: { value: "one" },
+          styles: { base: { base: { color: "teal" } } },
+        },
+        {
+          id: "n2",
+          type: "test/text",
+          version: 1,
+          props: { value: "two" },
+          styles: { base: { base: { color: "crimson" } } },
+        },
+      ],
+    };
+    const limits = { ...DEFAULT_LIMITS, maxNodes: 2 };
+
+    const read = preparePageForRead(wide, {
+      resolver: withPlugin,
+      limits,
+      styleContext: context,
+    });
+
+    for (const node of read.document?.nodes ?? []) {
+      expect(read.styles.classes[node.id]).toBeTypeOf("string");
+    }
+    expect(read.styles.css).toContain("crimson");
+  });
+
+  it("refuses a sheet with no policy stamp when a predicate is in force", () => {
+    // An unstamped sheet compares equal to "no policy at all", so a caller with
+    // its own `mayFetchUrl` and no stated identity would reuse a sheet that
+    // predicate never judged. The safe answer is an identity no artifact carries.
+    const unstamped = storedSheet();
+    expect(unstamped.fetchPolicyId).toBeUndefined();
+
+    const read = preparePageForRead(document, {
+      resolver: withPlugin,
+      styles: unstamped,
+      styleContext: { ...context, mayFetchUrl: () => true },
+    });
+
+    expect(read.styles.fetchPolicyId).toBe(UNIDENTIFIED_FETCH_POLICY);
+  });
+
+  it("CONTROL: reuses the sheet when the caller states its policy identity", () => {
+    // The other direction. A caller that says which policy its predicate IS gets
+    // its stored sheet back rather than a recompile on every render for ever.
+    const stamped = resolvePageStyles(
+      document,
+      undefined,
+      { ...context, mayFetchUrl: () => true, fetchPolicyId: "policy-1" },
+      withPlugin,
+      false,
+      { fetchPolicyId: "policy-1" }
+    );
+    expect(stamped.fetchPolicyId).toBe("policy-1");
+
+    const read = preparePageForRead(document, {
+      resolver: withPlugin,
+      styles: stamped,
+      styleContext: {
+        ...context,
+        mayFetchUrl: () => true,
+        fetchPolicyId: "policy-1",
+      },
+    });
+
+    expect(read.styles.css).toBe(stamped.css);
+  });
+});
+
+describe("a document carrying duplicate node ids", () => {
+  const duplicated: BlockDocument = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: [
+      {
+        id: "dup",
+        type: "test/text",
+        version: 1,
+        props: { value: "first" },
+        styles: { base: { base: { color: "teal" } } },
+      },
+      {
+        id: "dup",
+        type: "test/text",
+        version: 1,
+        props: { value: "second" },
+        styles: { base: { base: { color: "crimson" } } },
+      },
+    ],
+  };
+
+  it("styles the node that survived, rather than trusting a sheet that styles neither", () => {
+    // The compiler cannot style two nodes sharing one class, so it styles
+    // neither — while still naming the id in its class map, which is what makes
+    // the artifact read as usable. Deduplication makes the id unique again, so a
+    // recompile is the only thing that can style what is left.
+    const stored = resolvePageStyles(
+      duplicated,
+      undefined,
+      context,
+      withPlugin
+    );
+    // Named in the class map — which is what makes the artifact read as usable —
+    // while carrying no node-local rule for either duplicate. The block-type
+    // tier is still there, so emptiness is not the property to assert.
+    expect(stored.classes.dup).toBeTypeOf("string");
+    expect(stored.css).not.toContain("teal");
+    expect(stored.css).not.toContain("crimson");
+
+    const read = preparePageForRead(duplicated, {
+      resolver: withPlugin,
+      styles: stored,
+      styleContext: context,
+    });
+
+    expect(read.document?.nodes).toHaveLength(1);
+    expect(read.styles.css).toContain("teal");
   });
 });
 

@@ -1,8 +1,6 @@
 import {
-  DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   PAGE_ROOT_CLASS,
-  isFetchableUrl,
   walkNodes,
   type BlockDocument,
   type DocumentLimits,
@@ -23,9 +21,8 @@ import {
 } from "./prepare-document";
 import { registeredBlocks, type BlockResolver } from "./resolver";
 import {
-  UNIDENTIFIED_FETCH_POLICY,
   drawlessTestFor,
-  fetchPolicyLabel,
+  effectiveCompile,
   isRecordedGatedEntry,
   readableGatedRules,
   resolvePageStyles,
@@ -405,57 +402,17 @@ export function PageRenderer({
     (drawlessInput !== visible && !drawlessCoveredByArtifact) ||
     placeholderDropped !== visible;
 
-  // Recompiling after pruning must not lose what the stored artifact and the
-  // renderer knew. `scope` lives on the artifact rather than in the compile
-  // context, and the effective limits come from the prop — so passing the raw
-  // context would rebuild a scoped page unscoped, letting its rules reach
-  // another document rendered beside it, and would repair against default caps
-  // a caller had deliberately raised.
-  const effectiveLimits = limits ?? styleContext?.limits ?? DEFAULT_LIMITS;
-  // A stylesheet fetches too. `background-image: url(...)` is a request the
-  // browser makes on every page the rule applies to, so the host's list has to
-  // reach the compile as well as the blocks — asked of the SAME list, through a
-  // predicate the engine calls, so the two channels cannot drift apart.
-  //
-  // A caller's own `mayFetchUrl` wins. It is the more specific answer, and a
-  // host that passed one deliberately should not have it replaced by one
-  // derived here.
-  const patterns = hostPolicy?.remotePatterns;
-  // The label a compiled sheet is stamped with, and the one a stored sheet is
-  // checked against. Derived from the patterns themselves so it changes exactly
-  // when they do: an editor who adds a host gets every stored sheet recompiled
-  // once, with nothing to remember to invalidate.
-  //
-  // A caller's OWN predicate is authoritative and opaque. It can encode rules no
-  // pattern list describes, and nothing here can tell one such function from
-  // another, so no label can describe it — and reusing a stored sheet across a
-  // change to it would serve CSS whose URLs were admitted by rules that no
-  // longer hold. A caller wanting its sheets cached states which policy its
-  // predicate IS, through `fetchPolicyId` on the style context. One that does
-  // not gets the safe answer rather than the fast one: an identity no artifact
-  // can carry, so every stored sheet reads as compiled under another policy.
-  const fetchPolicyId =
-    styleContext?.mayFetchUrl === undefined
-      ? fetchPolicyLabel(patterns)
-      : (styleContext.fetchPolicyId ?? UNIDENTIFIED_FETCH_POLICY);
-  const compileContext =
-    styleContext === undefined
-      ? undefined
-      : {
-          ...styleContext,
-          limits: effectiveLimits,
-          ...(patterns === undefined || styleContext.mayFetchUrl !== undefined
-            ? {}
-            : { mayFetchUrl: (url: string) => isFetchableUrl(url, patterns) }),
-          // Only a STRING scope is carried over. The artifact is a database
-          // record, so `scope` can be null or a number, and the compiler
-          // dereferences it before any block boundary exists — a malformed one
-          // would fail the whole page rather than render it unstyled.
-          ...(styleContext.scope === undefined &&
-          typeof styles?.scope === "string"
-            ? { scope: styles.scope }
-            : {}),
-        };
+  // Reconciled through the SAME derivation every entry point that resolves a
+  // stored page uses. What a caller supplies is not what a page compiles with:
+  // the scope lives on the artifact, the caps come from this prop, and a
+  // caller's own fetch predicate needs an identity before a stored sheet can be
+  // judged against it.
+  const { context: compileContext, fetchPolicyId } = effectiveCompile({
+    styleContext,
+    styles,
+    limits,
+    remotePatterns: hostPolicy?.remotePatterns,
+  });
 
   const { css, classes, scope } = resolvePageStyles(
     styleInput,
