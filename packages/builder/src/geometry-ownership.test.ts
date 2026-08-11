@@ -31,7 +31,7 @@
  * would slip past a search for the dotted form.
  */
 import { readFileSync, readdirSync } from "node:fs";
-import { basename, dirname, join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import ts from "typescript";
@@ -46,19 +46,20 @@ const BUNDLED_MODULE = /\.(?:tsx?|jsx?|mjs|cjs)$/;
  * The one module allowed to convert between the frame and the host, matched by
  * its exact file name.
  *
- * By basename EQUALITY rather than by suffix. `endsWith("geometry.ts")` also
- * exempts `overlay-geometry.ts` and `nested/frame-geometry.ts` — precisely the
- * names a second implementation would be given — so a guard written that way
- * admits the case it exists to refuse.
+ * By its RELATIVE PATH, not by any part of its name. A suffix test also exempts
+ * `overlay-geometry.ts`; a basename test still exempts `overlays/geometry.ts`.
+ * Both are names a second implementation would plausibly be given, and each
+ * narrowing let exactly one more spelling through — so the allowance is the one
+ * path itself, which no choice of filename can widen.
  */
 const GEOMETRY_MODULE = "geometry.ts";
 
 /** This file, which necessarily names the reads it is looking for. */
 const OWN_TEST = "geometry-ownership.test.ts";
 
-/** Whether a path IS the named module, rather than merely ending with its name. */
-function isModule(file: string, name: string): boolean {
-  return basename(file) === name;
+/** Whether a file IS the named module, by its path beneath `src`. */
+function isModule(file: string, relativePath: string): boolean {
+  return relative(SRC_DIR, file) === relativePath;
 }
 
 /**
@@ -133,16 +134,21 @@ describe("rectangles are read across the frame in one place", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("exempts the geometry module by name, not by suffix", () => {
+  it("exempts one path, not a family of names", () => {
     // The allowance has to be exactly as wide as the thing allowed. A suffix
     // test also exempts `overlay-geometry.ts` and `nested/frame-geometry.ts`,
     // which are the names a second implementation would actually be given — so
     // the guard would wave through the duplicate it exists to catch.
-    expect(isModule("/a/b/geometry.ts", GEOMETRY_MODULE)).toBe(true);
-    expect(isModule("/a/b/overlay-geometry.ts", GEOMETRY_MODULE)).toBe(false);
-    expect(isModule("/a/nested/frame-geometry.ts", GEOMETRY_MODULE)).toBe(
-      false
-    );
+    expect(isModule(join(SRC_DIR, "geometry.ts"), GEOMETRY_MODULE)).toBe(true);
+    expect(
+      isModule(join(SRC_DIR, "overlay-geometry.ts"), GEOMETRY_MODULE)
+    ).toBe(false);
+    // The spelling a basename test still admitted: a nested module whose file
+    // name is identical. Each narrowing left one more open, which is why the
+    // allowance is now the path rather than a shape of name.
+    expect(
+      isModule(join(SRC_DIR, "overlays", "geometry.ts"), GEOMETRY_MODULE)
+    ).toBe(false);
   });
 
   it("can see a cross-frame read when there is one", () => {
