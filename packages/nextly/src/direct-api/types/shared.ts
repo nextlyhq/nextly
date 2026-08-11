@@ -408,21 +408,15 @@ export interface DirectAPIConfig {
   user?: UserContext;
 
   /**
-   * The caller's authenticated scope, when the caller is not a session user.
+   * The authenticated caller's own scope, when it is an API key.
    *
-   * Distinct from `user`, which says WHO is calling. This says what kind of
-   * caller it is and, for an API key, which grants the KEY itself carries.
-   * A scoped key is authoritative on its own stamped scope and never on its
-   * owner's roles, so without this an access check resolves the owner's RBAC
-   * instead — including the owner's super-admin bypass, which would let an
-   * update-only key issued by an administrator act as that administrator.
+   * Distinct from `user`, which says WHO the caller is. This says what KIND of
+   * caller it is and which grants the key itself carries. A scoped key is
+   * authorized on its own stamped permissions, not its owner's, so without this
+   * an update-only key issued by a reader-plus-publisher is judged by the
+   * owner's grants and reads what it was never given.
    *
-   * Only meaningful with `overrideAccess: false`. Omit it for session and
-   * system callers, which resolve their grants the normal way.
-   *
-   * Carried through to the service layer as `authenticatedScope`; the name
-   * differs because the config describes the CALLER while the service
-   * parameter describes what it is judged on.
+   * Leave unset for session and system callers; they resolve grants normally.
    */
   actor?: AuthenticatedScope;
 

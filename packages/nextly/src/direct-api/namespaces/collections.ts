@@ -32,7 +32,9 @@ import type {
 
 import type { NextlyContext } from "./context";
 import {
+  accessOptions,
   buildMutationMessage,
+  callerAccess,
   createErrorFromResult,
   isNotFoundError,
   mergeConfig,
@@ -66,13 +68,7 @@ export async function find<TSlug extends CollectionSlug>(
     select: args.select,
     sort: args.sort,
     richTextFormat: config.richTextFormat,
-    overrideAccess: config.overrideAccess,
-    user: config.user,
-    // Same reason as the by-id read: a scoped API key is authoritative on its
-    // own grants, and without this the check resolves the key OWNER's RBAC
-    // instead — bypass included. An option on the shared config that only one
-    // operation honoured would be a security claim the other reads do not keep.
-    authenticatedScope: config.actor,
+    ...accessOptions(config),
     // i18n M4: forward the content locale + fallback so localized fields resolve.
     locale: config.locale,
     fallbackLocale: config.fallbackLocale,
@@ -123,13 +119,7 @@ export async function findByID<TSlug extends CollectionSlug>(
       depth: config.depth,
       select: args.select,
       richTextFormat: config.richTextFormat,
-      overrideAccess: config.overrideAccess,
-      user: config.user,
-      // Who is calling, as the access check needs it. Without this a scoped API
-      // key falls back to its OWNER's RBAC — including the owner's super-admin
-      // bypass — so a key holding `update-*` but not `read-*` would be judged by
-      // an account that can read. The service already knows what to do with it.
-      authenticatedScope: config.actor,
+      ...accessOptions(config),
       // Overlay the pending working draft when the caller opts in; the service
       // still gates it on an update-capability probe.
       includeWorkingDraft: args.draft,
@@ -173,8 +163,7 @@ export async function create<TSlug extends CollectionSlug>(
     ctx.collectionsHandler.createEntry(
       {
         collectionName: args.collection,
-        overrideAccess: config.overrideAccess,
-        user: config.user,
+        ...accessOptions(config),
         // Forward the content locale so a localized write lands in the
         // requested language's companion row, not the default locale's.
         locale: config.locale,
@@ -225,8 +214,7 @@ export async function update<TSlug extends CollectionSlug>(
         {
           collectionName: args.collection,
           entryId,
-          overrideAccess: config.overrideAccess,
-          user: config.user,
+          ...accessOptions(config),
           // Forward the content locale so a localized update targets the requested
           // language's companion row, not the default locale's.
           locale: config.locale,
@@ -258,8 +246,7 @@ export async function update<TSlug extends CollectionSlug>(
           collectionName: args.collection,
           where,
           data: args.data,
-          overrideAccess: config.overrideAccess,
-          user: config.user,
+          ...accessOptions(config),
           context: config.context,
           disableRevalidate: config.disableRevalidate,
         },
@@ -283,6 +270,11 @@ export async function update<TSlug extends CollectionSlug>(
     const updated = await findByID<TSlug>(ctx, {
       collection: args.collection,
       id: (bulkResult.successes[0] as { id: string }).id,
+      // The read-back is the caller's read, not the system's. Without these it
+      // re-enters `mergeConfig` and picks up the instance default of
+      // `overrideAccess: true`, handing an update-scoped caller a row it has no
+      // read grant for, with every field-level restriction skipped.
+      ...callerAccess(config),
     });
 
     if (!updated) {
@@ -338,8 +330,7 @@ export async function deleteEntry<
       ctx.collectionsHandler.deleteEntry({
         collectionName: args.collection,
         entryId,
-        overrideAccess: config.overrideAccess,
-        user: config.user,
+        ...accessOptions(config),
         context: config.context,
         disableRevalidate: config.disableRevalidate,
       })
@@ -365,8 +356,7 @@ export async function deleteEntry<
         {
           collectionName: args.collection,
           where,
-          overrideAccess: config.overrideAccess,
-          user: config.user,
+          ...accessOptions(config),
           context: config.context,
           disableRevalidate: config.disableRevalidate,
         },
@@ -411,13 +401,7 @@ export async function count(
   const result = await ctx.collectionsHandler.countEntries({
     collectionName: args.collection,
     where: args.where,
-    overrideAccess: config.overrideAccess,
-    user: config.user,
-    // Same reason as the by-id read: a scoped API key is authoritative on its
-    // own grants, and without this the check resolves the key OWNER's RBAC
-    // instead — bypass included. An option on the shared config that only one
-    // operation honoured would be a security claim the other reads do not keep.
-    authenticatedScope: config.actor,
+    ...accessOptions(config),
     // i18n M4: parity with find() so locale-scoped counts match.
     locale: config.locale,
     fallbackLocale: config.fallbackLocale,
@@ -447,8 +431,7 @@ export async function bulkDelete(
     ctx.collectionsHandler.bulkDeleteEntries({
       collectionName: args.collection,
       ids: args.ids,
-      overrideAccess: config.overrideAccess,
-      user: config.user,
+      ...accessOptions(config),
       context: config.context,
       disableRevalidate: config.disableRevalidate,
     })
@@ -483,8 +466,7 @@ export async function duplicate<TSlug extends CollectionSlug>(
       collectionName: args.collection,
       entryId: args.id,
       overrides: args.overrides,
-      overrideAccess: config.overrideAccess,
-      user: config.user,
+      ...accessOptions(config),
       context: config.context,
       disableRevalidate: config.disableRevalidate,
     })

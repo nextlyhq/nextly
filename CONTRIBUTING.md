@@ -39,7 +39,11 @@ We don't yet have a formal RFC process; significant proposals are discussed in G
 
 ### Prerequisites
 
-- Node.js >= 20.6 (Node 22 LTS recommended; the `--env-file` flag used by `pnpm db:seed` needs >= 20.6)
+- Node.js `^20.19.0 || ^22.12.0 || >=24.0.0` (Node 22 LTS recommended). The
+  ranges are disjoint on purpose: they mirror what the test environment
+  supports, so 20.6–20.18 and the 23.x line are excluded rather than merely
+  untested. `--env-file`, used by `pnpm db:seed`, needs >= 20.6 and is covered
+  by every range above.
 - pnpm >= 9
 - Docker Desktop, optional. Only needed if you want to test against PostgreSQL or MySQL via `pnpm dev:postgres` / `pnpm dev:mysql`, or run the full integration test matrix. SQLite (the default) needs none.
 

@@ -18,6 +18,15 @@
 // without this import every Button, Badge, Checkbox and Input on the page
 // renders unstyled -- a comparison of themes that shows none of them.
 import "@nextlyhq/admin/style.css";
+// The other two thirds of what a theme is. `densities.css` keys on the
+// `data-density` attribute each preview panel carries, and `harness.css` is
+// what makes a theme's declared font and radius reach the admin primitives,
+// which read neither `--font-sans` nor `--radius` on their own. Without both,
+// a direct visit to this route previews every theme at the base metrics in the
+// default face -- so Sand and Calm look here like something Apply never
+// produces, and the axes they were shortlisted on are the ones missing.
+import "../../theme-lab/densities.css";
+import "../../theme-lab/harness.css";
 
 import { NEXTLY_THEMES } from "../../theme-lab/themes";
 

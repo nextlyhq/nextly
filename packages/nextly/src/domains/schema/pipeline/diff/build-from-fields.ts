@@ -38,6 +38,7 @@ import {
 import {
   columnTypeIsIndexable,
   indexNameForColumn,
+  uniqueIndexNameForColumn,
 } from "../../services/index-name";
 
 import { indexKey } from "./index-util";
@@ -189,7 +190,7 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
       !Array.isArray(field.relationTo);
     if (field.unique === true) {
       indexes.push({
-        name: indexNameForColumn(tableName, col).replace(/^idx_/, "uq_"),
+        name: uniqueIndexNameForColumn(tableName, col),
         columns: [col],
         unique: true,
       });

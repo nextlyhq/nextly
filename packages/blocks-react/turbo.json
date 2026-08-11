@@ -1,0 +1,42 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "test": {
+      // Several suites here read this package's OWN bundled declarations: the
+      // export forms they check are produced by the declaration bundler, so
+      // there is nothing to assert against until the package is built. The root
+      // task depends on `^build`, which builds dependencies and not this
+      // package, and `dist/**` is not a root test input — so without this the
+      // suite either finds no `dist` at all or reads declarations produced
+      // before the source change.
+      //
+      // This makes turbo do that build, in order, and cache it. It is not the
+      // only guarantee: `vitest.global-setup.ts` builds too, so the entry
+      // points turbo never sees are covered as well.
+      "dependsOn": ["$TURBO_EXTENDS$", "build"],
+      // `$TURBO_EXTENDS$` keeps the root inputs in sync rather than restating
+      // them; `dist/**` is appended because the artifact these suites assert
+      // against is a real input to them, and a cached pass that ignored it
+      // would survive a change to what the bundler emits.
+      // `vitest.global-setup.ts` is named because it IS the build precondition
+      // these suites rely on: a change to it changes what they assert against,
+      // and the root inputs cover `vitest.config.ts` alone — so without it a
+      // cached pass survives an edit to the setup and the run never happens.
+      "inputs": [
+        "$TURBO_EXTENDS$",
+        "dist/**",
+        "tsup.config.ts",
+        "vitest.global-setup.ts"
+      ]
+    },
+    "test:watch": {
+      // The same build edge as `test`. A watch run reads the same declarations,
+      // and a task that inherited the root definition alone would start against
+      // whatever `dist` happened to be on disk.
+      "dependsOn": ["$TURBO_EXTENDS$", "build"],
+      "cache": false,
+      "persistent": true
+    }
+  }
+}

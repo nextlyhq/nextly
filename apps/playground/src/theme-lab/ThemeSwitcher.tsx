@@ -140,6 +140,11 @@ export function ThemeSwitcher() {
     return (
       <button
         type="button"
+        // Marks both states of this control as harness chrome rather than
+        // admin UI. The capture script hides it: this panel is fixed at the
+        // maximum z-index, so a full-viewport screenshot burns it over the
+        // corner of every artifact the captures exist to compare.
+        data-theme-lab-switcher=""
         style={{
           ...panelStyle,
           width: "auto",
@@ -156,7 +161,7 @@ export function ThemeSwitcher() {
   const failures = CONTRAST_REPORT[theme] ?? 0;
 
   return (
-    <div style={panelStyle}>
+    <div data-theme-lab-switcher="" style={panelStyle}>
       <div
         style={{
           display: "flex",

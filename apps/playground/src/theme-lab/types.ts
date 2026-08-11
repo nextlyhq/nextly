@@ -106,3 +106,25 @@ export const REQUIRED_TOKENS = [
   // because the token is not on this list.
   "table-header-bg",
 ] as const satisfies readonly string[];
+
+/**
+ * Tokens a theme MAY declare, and which are derived when it does not.
+ *
+ * The chart slots are the only ones so far. They are not required because a
+ * palette borrowed from elsewhere has no chart colours to state, and demanding
+ * five per theme would mean inventing them; `generate-css` derives those from
+ * roles every theme already declares instead. A theme that DOES state them
+ * keeps them, which is what lets the control hold the shipped values rather
+ * than a derivation of its own roles.
+ *
+ * Listed rather than merely tolerated: without this, the rule keeping stray
+ * tokens out of a theme would have to be relaxed to "anything goes", and a
+ * genuine typo would stop being caught.
+ */
+export const OPTIONAL_TOKENS = [
+  "chart-1",
+  "chart-2",
+  "chart-3",
+  "chart-4",
+  "chart-5",
+] as const satisfies readonly string[];

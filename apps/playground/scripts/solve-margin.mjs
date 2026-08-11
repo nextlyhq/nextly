@@ -11,9 +11,13 @@
  * Example: pnpm theme:solve -- mono light warning card 5.0
  */
 
-const { NEXTLY_THEMES } = await import("../src/theme-lab/themes/index.ts");
-const { TWEAKCN_THEMES } = await import(
-  "../src/theme-lab/themes/tweakcn.generated.ts"
+// Both from the barrel, which layers the accessibility corrections over the
+// generated presets. Reading the generated file directly solved against RAW
+// upstream values for any corrected preset, so the "current ratio" it reported
+// described a theme the lab never renders and its proposed replacement could
+// reinstate a value that was corrected for exactly this reason.
+const { NEXTLY_THEMES, TWEAKCN_THEMES } = await import(
+  "../src/theme-lab/themes/index.ts"
 );
 const { contrastRatio, compositeOver } = await import(
   "../../../packages/ui/src/styles/contrast/color.ts"
