@@ -333,6 +333,11 @@ function assertDefaultMatchesKind(
  * switch always holds a value, so declaring it on either is a request the form
  * cannot carry out.
  */
+/** The two spellings `blankAs` may take. */
+const BLANK_AS_VALUES: ReadonlyArray<
+  NonNullable<EmailProviderConfigField["blankAs"]>
+> = ["omit", "empty"];
+
 function assertDeclarationsCanBeHonoured(
   type: string,
   field: EmailProviderConfigField
@@ -342,6 +347,19 @@ function assertDeclarationsCanBeHonoured(
       code: "BUSINESS_RULE_VIOLATION",
       publicMessage: `Email provider "${type}" gives the credential "${field.name}" a default. A descriptor is served to any caller who can read providers, so a secret default is withheld from it — and nothing applies descriptor defaults on the server, so it would never be used. Read the fallback inside \`parseConfig\` instead.`,
       logContext: { type, field: field.name },
+    });
+  }
+
+  // A typo reads as the default. `blankAs` has two spellings and the code below
+  // tests for one of them, so `"emty"` is silently treated as `"omit"` -- and
+  // for a field whose parser demands the key exist, every blank create is then
+  // stripped and rejected by the server instead of the descriptor being named
+  // at boot. An unrecognised value is a malformed descriptor, not a preference.
+  if (field.blankAs !== undefined && !BLANK_AS_VALUES.includes(field.blankAs)) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" declares \`blankAs: "${String(field.blankAs)}"\` on the field "${field.name}". It must be ${BLANK_AS_VALUES.map(value => `"${value}"`).join(" or ")}.`,
+      logContext: { type, field: field.name, blankAs: String(field.blankAs) },
     });
   }
 

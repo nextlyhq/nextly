@@ -256,9 +256,10 @@ export function EmailProviderForm({
     );
   }
 
-  // A failed catalog fetch is reported rather than rendered as an empty picker,
-  // which would read as "this installation has no email providers".
-  if (descriptorsError) {
+  // Fatal only when there is nothing to render FROM. A failed fetch with no
+  // catalog would otherwise show an empty picker, which reads as "this
+  // installation has no email providers".
+  if (descriptorsError && descriptors.length === 0) {
     return (
       <Alert variant="destructive">
         <AlertDescription>
@@ -277,8 +278,27 @@ export function EmailProviderForm({
     provider !== undefined &&
     isUnregisteredProviderType(provider.type, descriptors);
 
+  // The catalog is refetched on mount and on window focus, so a form left open
+  // over a blip fails a fetch it never asked for while holding descriptors
+  // that still render and still validate. Replacing the form would discard
+  // whatever had been typed to fix a problem that costs nothing here, so this
+  // says so and stays out of the way.
+  const staleCatalog =
+    descriptorsError !== null &&
+    descriptorsError !== undefined &&
+    descriptors.length > 0;
+
   return (
     <Form {...form}>
+      {staleCatalog && (
+        <Alert className="mb-6">
+          <AlertDescription>
+            The list of provider types could not be refreshed, so this form is
+            using the version it loaded with. Your changes are safe; reload once
+            you have saved if a provider seems to be missing.
+          </AlertDescription>
+        </Alert>
+      )}
       <form
         id={EMAIL_PROVIDER_FORM_ID}
         onSubmit={e => {

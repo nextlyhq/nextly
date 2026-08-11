@@ -293,9 +293,7 @@ function assignAtPath(
 }
 
 /** Turn the nested plain tree of leaf schemas into nested `z.object`s. */
-function toObjectSchema(
-  tree: Record<string, unknown>
-): z.ZodType<Record<string, unknown>, Record<string, unknown>> {
+function toObjectSchema(tree: Record<string, unknown>): z.ZodTypeAny {
   const shape: Record<string, z.ZodTypeAny> = {};
   for (const [key, value] of Object.entries(tree)) {
     shape[key] =
@@ -303,7 +301,19 @@ function toObjectSchema(
         ? value
         : toObjectSchema(value as Record<string, unknown>);
   }
-  return z.object(shape);
+
+  const built = z.object(shape);
+
+  // A branch that holds nothing required is itself not required. Field paths
+  // are dotted, so `auth.user` and `auth.pass` conjure an `auth` object that
+  // no descriptor declared -- and a stored value one of its controls cannot
+  // show is left out of the form, taking the whole branch with it. Demanding
+  // the parent would then refuse an unrelated edit with a missing-`auth`
+  // error, naming a key the operator has never seen.
+  //
+  // Decided by asking the schema rather than by inspecting its members: if it
+  // accepts an empty object, nothing inside it was required.
+  return built.safeParse({}).success ? built.optional() : built;
 }
 
 /**
@@ -329,7 +339,18 @@ function configurationSchema(
     if (path === null) continue;
     assignAtPath(tree, path, fieldSchema(field));
   }
-  return toObjectSchema(tree);
+
+  // The top level is always present -- the form holds a `configuration` object
+  // whatever is in it -- so the optionality the helper adds for empty branches
+  // is not wanted here.
+  const shape: Record<string, z.ZodTypeAny> = {};
+  for (const [key, value] of Object.entries(tree)) {
+    shape[key] =
+      value instanceof z.ZodType
+        ? value
+        : toObjectSchema(value as Record<string, unknown>);
+  }
+  return z.object(shape);
 }
 
 /**
@@ -439,9 +460,18 @@ function storedValueForControl(
   value: unknown
 ): unknown {
   if (field.kind === "number") {
-    if (typeof value !== "string") return value;
+    if (typeof value === "number")
+      return Number.isFinite(value) ? value : undefined;
+    // A string is the ordinary coerced form and converts when it can. Anything
+    // else -- a boolean, an array, an object -- is a value `z.coerce.number()`
+    // accepts and this control cannot show, so it is dropped rather than
+    // carried: the input renders blank either way, and carrying it makes the
+    // generated `z.number()` refuse every unrelated edit.
+    if (typeof value !== "string") return undefined;
     const asNumber = Number(value);
-    return value.trim() !== "" && Number.isFinite(asNumber) ? asNumber : value;
+    return value.trim() !== "" && Number.isFinite(asNumber)
+      ? asNumber
+      : undefined;
   }
 
   if (field.kind === "boolean") {

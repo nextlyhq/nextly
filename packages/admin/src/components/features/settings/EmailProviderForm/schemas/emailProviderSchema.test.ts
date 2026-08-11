@@ -841,14 +841,30 @@ describe("a stored value whose type the provider's parser coerced", () => {
     expect(open({ host: "h", retries: "3" })).toMatchObject({ retries: 3 });
   });
 
-  it("leaves an unparsable value alone", () => {
-    // The control, twice over: a value that is not a number is shown as it is
-    // stored rather than silently becoming empty, and a string field is never
-    // touched by this at all.
-    expect(open({ host: "h", retries: "many" })).toMatchObject({
-      retries: "many",
-      host: "h",
-    });
+  it("leaves a value the number input cannot show out of the form", () => {
+    // A number input renders blank for "many" whatever the form holds, so
+    // carrying it buys no display and costs the whole form: the generated
+    // `z.number()` refuses it and every unrelated edit with it. Absent is how
+    // a patch says "leave this alone", which is the same answer a switch and a
+    // text control now give for a value they cannot represent.
+    const values = open({ host: "h", retries: "many" });
+    expect(values).not.toHaveProperty("retries");
+    expect(values).toMatchObject({ host: "h" });
+  });
+
+  it("drops the other shapes a coercing parser accepts", () => {
+    // `z.coerce.number()` takes all of these and stores them as given.
+    for (const stored of [true, false, [3], { n: 3 }]) {
+      expect(open({ host: "h", retries: stored })).not.toHaveProperty(
+        "retries"
+      );
+    }
+  });
+
+  it("still carries a real number and a numeric string", () => {
+    // The control: the conversion this exists for must survive.
+    expect(open({ host: "h", retries: "3" })).toMatchObject({ retries: 3 });
+    expect(open({ host: "h", retries: 5 })).toMatchObject({ retries: 5 });
   });
 
   it("reaches a select as the string its options are written in", () => {
@@ -1037,5 +1053,84 @@ describe("a boolean field whose stored value is not a boolean", () => {
     expect(
       hasUnrepresentableStoredValue({ host: 5 }, descriptor.configFields[0])
     ).toBe(false);
+  });
+});
+
+describe("a nested branch whose leaves are all optional", () => {
+  const descriptor: EmailProviderDescriptor = {
+    type: "nested",
+    label: "Nested",
+    capabilities: {},
+    configFields: [
+      { name: "host", label: "Host", kind: "text", required: true },
+      { name: "auth.label", label: "Auth label", kind: "text" },
+      { name: "auth.note", label: "Auth note", kind: "text" },
+    ],
+  };
+
+  const BLANK = {
+    name: "N",
+    type: "nested",
+    fromEmail: "a@b.com",
+    fromName: "",
+    isDefault: false,
+    isActive: true,
+  };
+
+  function open(configuration: Record<string, unknown>) {
+    return providerToFormValues(
+      {
+        id: "1",
+        name: "N",
+        type: "nested",
+        fromEmail: "a@b.com",
+        fromName: null,
+        configuration,
+        isDefault: false,
+        isActive: true,
+        createdAt: "",
+        updatedAt: "",
+      },
+      descriptor
+    ).configuration;
+  }
+
+  it("does not demand the parent when every leaf was omitted", () => {
+    // Field paths are dotted, so `auth` is an object no descriptor declared.
+    // A stored value its control cannot show is left out of the form and takes
+    // the branch with it — and a required parent would then refuse an
+    // unrelated edit with a missing-`auth` error naming a key the operator has
+    // never seen.
+    const values = {
+      ...BLANK,
+      configuration: open({
+        host: "h",
+        auth: { label: { a: 1 }, note: { b: 2 } },
+      }),
+    };
+
+    expect(values.configuration).not.toHaveProperty("auth");
+    expect(buildProviderSchema(descriptor).safeParse(values).success).toBe(
+      true
+    );
+  });
+
+  it("still demands a parent that holds something required", () => {
+    // The control. A branch is optional because nothing inside it is required,
+    // not because it is nested.
+    const withRequired: EmailProviderDescriptor = {
+      ...descriptor,
+      configFields: [
+        { name: "host", label: "Host", kind: "text", required: true },
+        { name: "auth.user", label: "User", kind: "text", required: true },
+      ],
+    };
+
+    const parsed = buildProviderSchema(withRequired).safeParse({
+      ...BLANK,
+      configuration: { host: "h" },
+    });
+
+    expect(parsed.success).toBe(false);
   });
 });

@@ -1454,3 +1454,48 @@ describe("a configFields that is not a list of fields", () => {
     ).not.toThrow();
   });
 });
+
+describe("a blankAs the descriptor spelled wrong", () => {
+  const base = {
+    type: "fixture",
+    label: "Fixture",
+    parseConfig: (input: unknown) => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  };
+
+  function withBlankAs(blankAs: unknown) {
+    return () =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          {
+            name: "note",
+            label: "Note",
+            kind: "text",
+            blankAs,
+          } as unknown as EmailProviderConfigField,
+        ],
+      });
+  }
+
+  it("refuses a typo rather than reading it as the default", () => {
+    // Only `"empty"` was tested for, so `"emty"` was silently treated as
+    // `"omit"` — and for a field whose parser demands the key exist, every
+    // blank create is then stripped and rejected by the server instead of the
+    // descriptor being named at boot.
+    expect(withBlankAs("emty")).toThrow(/must be "omit" or "empty"/);
+  });
+
+  it("refuses a value of the wrong type", () => {
+    expect(withBlankAs(true)).toThrow(/must be "omit" or "empty"/);
+  });
+
+  it("accepts both spellings, and its absence", () => {
+    // The control: the two real values and the ordinary omitted case.
+    expect(withBlankAs("omit")).not.toThrow();
+    expect(withBlankAs("empty")).not.toThrow();
+    expect(withBlankAs(undefined)).not.toThrow();
+  });
+});

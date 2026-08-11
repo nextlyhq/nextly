@@ -126,3 +126,60 @@ describe("a catalog that starts without the stored provider's type", () => {
     expect(regionInput()?.value).toBe("us-east-1");
   });
 });
+
+describe("a catalog refetch that fails over one already loaded", () => {
+  it("keeps the form usable instead of replacing it", async () => {
+    // The catalog refetches on mount and on window focus, so a form left open
+    // over a blip fails a fetch it never asked for. TanStack Query keeps the
+    // descriptors AND sets `error`, and replacing the form on the error alone
+    // discards whatever had been typed — to fix nothing, since the cached
+    // descriptor still renders and still validates.
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[ACME]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    const input = regionInput();
+    if (!input) throw new Error("the configuration field did not render");
+    await user.clear(input);
+    await user.type(input, "us-east-1");
+
+    rerender(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[ACME]}
+        descriptorsError={new Error("network")}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    // Still editable, still holding the edit, and honest about what happened.
+    expect(regionInput()?.value).toBe("us-east-1");
+    expect(screen.getByText(/could not be refreshed/i)).toBeVisible();
+  });
+
+  it("is still fatal when there is no catalog to fall back on", () => {
+    // The control. With nothing loaded the picker would be empty, which reads
+    // as "this installation has no email providers".
+    render(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[]}
+        descriptorsError={new Error("network")}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    expect(screen.getByText(/cannot be shown/i)).toBeVisible();
+  });
+});
