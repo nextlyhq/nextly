@@ -160,6 +160,53 @@ describe("reading an artifact's specifiers", () => {
     ).toEqual(["node:module", "react"]);
   });
 
+  it("sees a package named through import.meta.resolve", () => {
+    // `import.meta.resolve` is syntax rather than an import, so it names a package while the
+    // artifact's import list stays empty and the bundler records no dependency. Both spellings of
+    // the member read the same resolver.
+    expect(
+      read(`export const css = import.meta.resolve("@nextlyhq/admin-css");`)
+    ).toEqual(["@nextlyhq/admin-css"]);
+    expect(
+      read(`export const css = import.meta["resolve"]("@nextlyhq/admin-css");`)
+    ).toEqual(["@nextlyhq/admin-css"]);
+  });
+
+  it("sees a resolver guarded by a typeof check", () => {
+    // A format guard leaves the call in the ESM artifact and takes the fallback in the CJS one, so
+    // the specifier is reached on exactly one of the two outputs.
+    expect(
+      read(`
+        export const css =
+          typeof import.meta.resolve === "function"
+            ? import.meta.resolve("@nextlyhq/admin-css")
+            : null;
+      `)
+    ).toEqual(["@nextlyhq/admin-css"]);
+  });
+
+  it("resolves import.meta.resolve stored under a local name", () => {
+    // The resolver is a value, so it can be held before it is called. Requiring the call to be
+    // spelled `import.meta.resolve` at the call site misses that entirely.
+    expect(
+      read(`
+        const resolve = import.meta.resolve;
+        export const css = resolve("@nextlyhq/admin-css");
+      `)
+    ).toEqual(["@nextlyhq/admin-css"]);
+  });
+
+  it("leaves a local resolve of the artifact's own alone", () => {
+    // The control: `resolve` is an ordinary name, and only one taken FROM `import.meta` reads the
+    // module resolver. A rule keyed on the name rejects promise code that resolves no module.
+    expect(
+      read(`
+        const resolve = (name) => name.trim();
+        export const x = resolve("react");
+      `)
+    ).toEqual([]);
+  });
+
   it("refuses a specifier it cannot read, rather than passing it", () => {
     // A bundler folds `"re" + "act"` to React. This does not evaluate expressions, so the honest
     // outcome is a name no allow-list can hold — which fails — not a silent skip.

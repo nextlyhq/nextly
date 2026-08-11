@@ -153,32 +153,43 @@ export function specifiersIn(source, fileName) {
   collectFactories(tree);
 
   /**
-   * Whether an expression reads `<object>.<member>` off a binding the artifact does NOT declare,
-   * in either spelling.
+   * Whether an expression reads `<member>` off something, in either spelling.
    *
    * `a.b` and `a["b"]` are the same read, and a rule written for one of them is a rule the other
-   * walks around.
+   * walks around. Answered in one place so every member rule below inherits both spellings.
    */
-  const namesAmbientMember = (node, object, member) => {
-    if (
-      !ts.isPropertyAccessExpression(node) &&
-      !ts.isElementAccessExpression(node)
-    ) {
-      return false;
-    }
-    const named = ts.isPropertyAccessExpression(node)
-      ? node.name.text === member
-      : node.argumentExpression !== undefined &&
-        (ts.isStringLiteral(node.argumentExpression) ||
-          ts.isNoSubstitutionTemplateLiteral(node.argumentExpression)) &&
-        node.argumentExpression.text === member;
+  const readsMember = (node, member) => {
+    if (ts.isPropertyAccessExpression(node)) return node.name.text === member;
+    if (!ts.isElementAccessExpression(node)) return false;
+    const key = node.argumentExpression;
     return (
-      named &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === object &&
-      !declaredNames.has(object)
+      key !== undefined &&
+      (ts.isStringLiteral(key) || ts.isNoSubstitutionTemplateLiteral(key)) &&
+      key.text === member
     );
   };
+
+  /**
+   * Whether an expression reads `<object>.<member>` off a binding the artifact does NOT declare.
+   */
+  const namesAmbientMember = (node, object, member) =>
+    readsMember(node, member) &&
+    ts.isIdentifier(node.expression) &&
+    node.expression.text === object &&
+    !declaredNames.has(object);
+
+  /**
+   * Whether an expression reads `import.meta.resolve`.
+   *
+   * `import.meta` is syntax rather than a binding, so nothing in the artifact can shadow it and no
+   * import names it. That is what makes the resolver reachable while the import list stays empty
+   * and the bundler records no dependency for what it names.
+   */
+  const namesMetaResolve = node =>
+    readsMember(node, "resolve") &&
+    ts.isMetaProperty(node.expression) &&
+    node.expression.keywordToken === ts.SyntaxKind.ImportKeyword &&
+    node.expression.name.text === "meta";
 
   /** Whether an expression names the require factory, by local name or through a namespace. */
   const namesFactory = node => {
@@ -222,6 +233,10 @@ export function specifiersIn(source, fileName) {
         ts.isCallExpression(init) &&
         namesFactory(init.expression)
       ) {
+        loaders.add(node.name.text);
+      } else if (init !== undefined && namesMetaResolve(init)) {
+        // `const resolve = import.meta.resolve` hands the resolver on as a value, and calling it
+        // through that name names a package exactly as calling it in place does.
         loaders.add(node.name.text);
       } else if (init !== undefined && ts.isIdentifier(init)) {
         // `const again = load` hands the loader on under another name. Recorded now and resolved
@@ -273,8 +288,17 @@ export function specifiersIn(source, fileName) {
         // `const load = createRequire(...); load("react")`, invoked through the name it was
         // stored under.
         (ts.isIdentifier(callee) && loaders.has(callee.text));
+      // `import.meta.resolve("@nextlyhq/admin-css")` names a package without importing it. It
+      // needs no `node:module` import, so the guard that keeps the loader out of this package
+      // does not reach it, and a bundler records no dependency for what it names — a consumer
+      // installing only the declared dependencies gets ERR_MODULE_NOT_FOUND at runtime.
+      const isMetaResolve = namesMetaResolve(callee);
       if (
-        (isDynamicImport || isRequire || isCreatedRequire || isModuleRequire) &&
+        (isDynamicImport ||
+          isRequire ||
+          isCreatedRequire ||
+          isModuleRequire ||
+          isMetaResolve) &&
         node.arguments.length > 0
       ) {
         record(node.arguments[0]);
