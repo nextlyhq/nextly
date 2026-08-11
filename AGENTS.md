@@ -55,9 +55,16 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   with self-import errors that look real but are not.
 - Integration tests self-skip when the dialect's URL is unset. Use the root
   scripts: `pnpm test:integration:postgres17` (localhost:5435),
-  `:postgres15` (:5434), `:mysql` (:3307), `:sqlite` (no URL needed). Start
-  the databases with `pnpm docker:test`. NEVER point a TEST\_\* URL at a
-  database you did not create for the test run.
+  `:postgres15` (:5434), `:mysql` (:3307), `:sqlite` (no URL needed). NEVER
+  point a TEST\_\* URL at a database you did not create for the test run.
+- The test databases are their own containers, separate from the dev stack:
+  `docker start nextly-postgres17-test nextly-mysql-test` (add
+  `nextly-postgres15-test` for the 15 leg). `pnpm docker:test` only PROBES the
+  connection and exits 1 when it fails — it starts nothing — and `pnpm
+docker:up` brings up the DEV stack, which on a machine that already has one
+  fails with a container-name conflict. A `DBS DOWN` failure followed by a
+  start command that changes nothing reads like a broken environment; it is
+  usually just the wrong command.
 - Integration files in `packages/nextly` run sequentially on purpose
   (`fileParallelism: false`, single fork): system-table suites share fixed
   table names. Do not "fix" slow integration runs by re-enabling parallelism.
