@@ -486,6 +486,24 @@ function assertDefaultSatisfiesConstraints(
   if (value === undefined) return;
   const { min, max, maxLength } = field.constraints ?? {};
 
+  // Requiredness is a constraint the form applies too, and a blank string is
+  // the value it applies it to: the generated schema reports an empty required
+  // field as missing, so a descriptor pre-filling one opens every create form
+  // already invalid. Checked before the bounds, which a blank satisfies -- it
+  // has the right type and violates no maximum, which is exactly why it slipped
+  // through them.
+  if (
+    field.required === true &&
+    typeof value === "string" &&
+    value.trim() === ""
+  ) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" gives the required field "${field.name}" a blank default. A required field rejects a blank, so the form opens on a value it will not accept and cannot be submitted until the operator changes something nobody chose. Omit the default, or make the field optional.`,
+      logContext: { type, field: field.name },
+    });
+  }
+
   const violation =
     typeof value === "number" && min !== undefined && value < min
       ? `is below its minimum of ${min}`
@@ -743,42 +761,61 @@ function assertNumericMetadataIsFinite(
 }
 
 /**
- * Kinds whose value is a string the operator types, and so the only ones a
- * character limit can describe. A number's blank normalises to absent and its
- * bounds are `min`/`max`; a switch has two values; a select's value comes from
- * the option list rather than the keyboard.
+ * Which control each constraint describes, and the phrase naming those
+ * controls in the refusal.
+ *
+ * A character limit describes a string the operator types; a numeric bound
+ * describes a number input's value. Everything else either has no keyboard
+ * behind it (a switch), takes its value from an option list (a select), or
+ * measures the wrong quantity (`maxLength` on a number is not its magnitude).
  */
-const LENGTH_BEARING_KINDS: ReadonlyArray<EmailProviderConfigField["kind"]> = [
-  "text",
-  "password",
+const CONSTRAINT_KINDS: ReadonlyArray<{
+  key: "maxLength" | "min" | "max";
+  kinds: ReadonlyArray<EmailProviderConfigField["kind"]>;
+  applies: string;
+}> = [
+  {
+    key: "maxLength",
+    kinds: ["text", "password"],
+    applies: "text or password",
+  },
+  { key: "min", kinds: ["number"], applies: "number" },
+  { key: "max", kinds: ["number"], applies: "number" },
 ];
 
 /**
- * Reject a character limit on a control that does not apply one.
+ * Reject a constraint on a control that does not apply it.
  *
- * The generated form enforces `maxLength` for text and password fields and
- * nothing else, so declaring it elsewhere publishes a constraint to every
- * client that reads the descriptor while the form it describes ignores it.
- * The value then reaches `parseConfig`, which is free to enforce whatever it
- * likes and rejects the submission after the round trip the hint existed to
- * avoid.
+ * The generated form enforces `maxLength` in its text and password branch and
+ * `min`/`max` in its number branch, and nowhere else. Declaring one elsewhere
+ * publishes a constraint to every client that reads the descriptor while the
+ * form it describes ignores it — so the operator is allowed to enter a value
+ * the provider's own parser then rejects, after exactly the round trip the
+ * hint existed to avoid.
  *
  * Refused rather than dropped, on the same reasoning as `blankAs` on a number:
- * an author who wrote it meant something by it, and a limit that quietly does
- * nothing teaches the opposite.
+ * an author who wrote it meant something by it, and a constraint that quietly
+ * does nothing teaches the opposite.
  */
-function assertLengthAppliesToKind(
+function assertConstraintsApplyToKind(
   type: string,
   field: EmailProviderConfigField
 ): void {
-  if (field.constraints?.maxLength === undefined) return;
-  if (LENGTH_BEARING_KINDS.includes(field.kind)) return;
+  for (const { key, kinds, applies } of CONSTRAINT_KINDS) {
+    if (field.constraints?.[key] === undefined) continue;
+    if (kinds.includes(field.kind)) continue;
 
-  throw new NextlyError({
-    code: "BUSINESS_RULE_VIOLATION",
-    publicMessage: `Email provider "${type}" declares \`maxLength\` on the ${field.kind} field "${field.name}". A character limit is only applied to a text or password field, so this one is published to every client and enforced by nothing.`,
-    logContext: { type, field: field.name, kind: field.kind },
-  });
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" declares \`${key}\` on the ${field.kind} field "${field.name}". That constraint is only applied to a ${applies} field, so this one is published to every client and enforced by nothing.`,
+      logContext: {
+        type,
+        field: field.name,
+        kind: field.kind,
+        constraint: key,
+      },
+    });
+  }
 }
 
 /** Reject a text length no value can satisfy. */
@@ -828,6 +865,31 @@ export function assertConfigFieldsAreUsable(
   type: string,
   fields: ReadonlyArray<EmailProviderConfigField>
 ): void {
+  // The CONTAINER before anything in it. `configFields` is structural, so a
+  // JavaScript plugin or a hand-built object reaches here with whatever it
+  // wrote, and the loop below turns `null` into `fields is not iterable` and a
+  // null entry into `Cannot read properties of null` -- raw TypeErrors that
+  // name neither the provider nor the position, thrown from a boot path where
+  // the only thing an operator can act on is which plugin to remove.
+  if (!Array.isArray(fields)) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" declares \`configFields\` as ${fields === null ? "null" : typeof fields}. It has to be an array, even an empty one.`,
+      logContext: { type, received: fields === null ? "null" : typeof fields },
+    });
+  }
+
+  const malformed = fields.findIndex(
+    field => field === null || typeof field !== "object"
+  );
+  if (malformed !== -1) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" declares a configuration field at index ${malformed} that is not an object. Every entry has to describe one field.`,
+      logContext: { type, index: malformed },
+    });
+  }
+
   for (const field of fields) {
     // Text first, because `name` is how every rule below says WHICH field it
     // means and the walkability rule splits it: a non-string name otherwise
@@ -861,7 +923,7 @@ export function assertConfigFieldsAreUsable(
     // as a limit no value meets rather than as a limit that control never
     // applies — sending the author to argue with the number instead of
     // removing the key.
-    assertLengthAppliesToKind(type, field);
+    assertConstraintsApplyToKind(type, field);
     assertTextLengthIsSatisfiable(type, field);
     assertDefaultMatchesKind(type, field);
     assertDefaultSatisfiesConstraints(type, field);

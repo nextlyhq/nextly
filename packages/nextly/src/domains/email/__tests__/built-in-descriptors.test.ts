@@ -1269,3 +1269,188 @@ describe("a character limit on a control that never applies one", () => {
     ).not.toThrow();
   });
 });
+
+describe("a descriptor that would open the create form invalid", () => {
+  const base = {
+    type: "fixture",
+    label: "Fixture",
+    parseConfig: (input: unknown) => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  };
+
+  function withField(field: EmailProviderConfigField) {
+    return () => defineEmailProvider({ ...base, configFields: [field] });
+  }
+
+  it("refuses a blank default on a required field", () => {
+    // The blank has the right type and violates no maximum, so every bound
+    // check passes it — while the generated schema reports an empty required
+    // field as missing and refuses to submit.
+    expect(
+      withField({
+        name: "host",
+        label: "Host",
+        kind: "text",
+        required: true,
+        default: "",
+      })
+    ).toThrow(/blank default/);
+  });
+
+  it("refuses a whitespace-only default on a required field", () => {
+    expect(
+      withField({
+        name: "host",
+        label: "Host",
+        kind: "text",
+        required: true,
+        default: "   ",
+      })
+    ).toThrow(/blank default/);
+  });
+
+  it("accepts a blank default on an optional field", () => {
+    // The control. An optional field may legitimately start empty.
+    expect(
+      withField({ name: "note", label: "Note", kind: "text", default: "" })
+    ).not.toThrow();
+  });
+
+  it("accepts zero as a required number's default", () => {
+    // The second control: zero is a real value, not a blank, and a rule
+    // written on falsiness rather than on emptiness would reject it.
+    expect(
+      withField({
+        name: "retries",
+        label: "Retries",
+        kind: "number",
+        required: true,
+        default: 0,
+      })
+    ).not.toThrow();
+  });
+});
+
+describe("a numeric bound on a control that never applies one", () => {
+  const base = {
+    type: "fixture",
+    label: "Fixture",
+    parseConfig: (input: unknown) => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  };
+
+  function withField(field: EmailProviderConfigField) {
+    return () => defineEmailProvider({ ...base, configFields: [field] });
+  }
+
+  it("refuses min on a text field", () => {
+    // The form applies `min`/`max` in its number branch alone, so this is
+    // published to every descriptor reader and enforced by nothing — and if
+    // the provider's own parser enforces it, the operator learns only after
+    // submitting.
+    expect(
+      withField({
+        name: "host",
+        label: "Host",
+        kind: "text",
+        constraints: { min: 3 },
+      })
+    ).toThrow(/only applied to a number field/);
+  });
+
+  it("refuses max on a select field", () => {
+    expect(
+      withField({
+        name: "region",
+        label: "Region",
+        kind: "select",
+        options: [{ value: "eu", label: "Europe" }],
+        constraints: { max: 3 },
+      })
+    ).toThrow(/only applied to a number field/);
+  });
+
+  it("refuses min on a boolean field", () => {
+    expect(
+      withField({
+        name: "secure",
+        label: "Secure",
+        kind: "boolean",
+        default: false,
+        constraints: { min: 0 },
+      })
+    ).toThrow(/only applied to a number field/);
+  });
+
+  it("still accepts bounds where the form applies them", () => {
+    // The control, both ways round: a number keeps min/max, and text keeps
+    // maxLength.
+    expect(
+      withField({
+        name: "port",
+        label: "Port",
+        kind: "number",
+        constraints: { min: 1, max: 65535 },
+      })
+    ).not.toThrow();
+    expect(
+      withField({
+        name: "host",
+        label: "Host",
+        kind: "text",
+        constraints: { maxLength: 255 },
+      })
+    ).not.toThrow();
+  });
+});
+
+describe("a configFields that is not a list of fields", () => {
+  const base = {
+    type: "fixture",
+    label: "Fixture",
+    parseConfig: (input: unknown) => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  };
+
+  /** The shapes a JavaScript plugin can hand a structural type. */
+  function withFields(configFields: unknown) {
+    return () =>
+      defineEmailProvider({
+        ...base,
+        configFields: configFields as EmailProviderConfigField[],
+      });
+  }
+
+  it("refuses null", () => {
+    // Previously `fields is not iterable`, thrown at boot, naming neither the
+    // provider nor what was wrong with it.
+    expect(withFields(null)).toThrow(/has to be an array/);
+  });
+
+  it("refuses a non-array object", () => {
+    expect(withFields({ host: {} })).toThrow(/has to be an array/);
+  });
+
+  it("refuses an entry that is not an object", () => {
+    // Previously `Cannot read properties of null (reading 'name')`.
+    expect(withFields([null])).toThrow(/index 0/);
+    expect(
+      withFields([{ name: "a", label: "A", kind: "text" }, "host"])
+    ).toThrow(/index 1/);
+  });
+
+  it("accepts an empty list and an ordinary one", () => {
+    // The control. A provider with no configuration at all is legitimate, and
+    // an empty array must not be confused with a missing one.
+    expect(withFields([])).not.toThrow();
+    expect(
+      withFields([{ name: "host", label: "Host", kind: "text" }])
+    ).not.toThrow();
+  });
+});
