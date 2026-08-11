@@ -64,12 +64,16 @@ suite("email default handover — postgresql", () => {
   const quote = (id: string) => `"${id}"`;
 
   /**
-   * The real table, built from the production spec.
+   * The real table, created only where this run does not already have one.
    *
-   * `email_providers` is a fixed-name system table, so this suite relies on
-   * the sequential integration run for isolation rather than a prefix — and
-   * it has to be the real name, because the PostgreSQL index this exists to
-   * exercise is declared on it.
+   * `email_providers` is a fixed-name system table that the migration path and
+   * other suites also create, and `email_deliveries.provider_id` references
+   * it. Dropping it is therefore not available: PostgreSQL refuses while a
+   * dependent object exists, and forcing it with CASCADE would take that
+   * foreign key out from under whatever else runs in this sequential pass.
+   *
+   * So this creates what is missing and removes nothing. The suite isolates
+   * itself by emptying ROWS rather than by owning the schema.
    */
   beforeAll(async () => {
     adapter = createPostgresAdapter({
@@ -83,26 +87,26 @@ suite("email default handover — postgresql", () => {
       expect.fail("email_providers is absent from the core schema");
     }
 
-    await adapter.executeQuery(`DROP TABLE IF EXISTS ${quote(spec.name)}`);
     await adapter.executeQuery(
-      `CREATE TABLE ${quote(spec.name)} (\n${createTableBody(spec, quote)}\n)`
+      `CREATE TABLE IF NOT EXISTS ${quote(spec.name)} (\n${createTableBody(spec, quote)}\n)`
     );
 
     // The partial unique index is what makes the ordering matter, and it is
-    // declared in the Drizzle schema rather than in the table body — so
-    // building the table alone would produce a fixture that cannot fail the
-    // way production does.
+    // declared in the Drizzle schema rather than in the table body — so a
+    // table built from the body alone is a fixture that cannot fail the way
+    // production does. Created only if absent, because a run whose schema came
+    // from the migration path already has it.
     await adapter.executeQuery(
-      `CREATE UNIQUE INDEX email_providers_default_unique_idx ON ${quote(spec.name)} (is_default) WHERE is_default = true`
+      `CREATE UNIQUE INDEX IF NOT EXISTS email_providers_default_unique_idx ON ${quote(spec.name)} (is_default) WHERE is_default = true`
     );
 
     service = new EmailProviderService(adapter, logger);
   });
 
   afterAll(async () => {
-    await adapter.executeQuery(
-      `DROP TABLE IF EXISTS ${quote("email_providers")}`
-    );
+    // Rows, not the table. What this suite created it may empty; what it found
+    // it leaves standing for whatever else this sequential pass runs.
+    await adapter.executeQuery(`DELETE FROM ${quote("email_providers")}`);
     await adapter.disconnect();
   });
 
