@@ -109,6 +109,8 @@ export interface StyleCompileContext {
    * stores no style bytes, resetting a node is deleting its own values, and
    * improving a block's default look reaches pages that already exist.
    */
+  blockBases?: Readonly<Record<string, NodeStyles>>;
+
   /**
    * Whether a node's block declares that these props draw nothing.
    *
@@ -128,7 +130,6 @@ export interface StyleCompileContext {
    * as it did before this existed.
    */
   drawsNothing?: (node: BlockNode) => boolean;
-  blockBases?: Readonly<Record<string, NodeStyles>>;
   /**
    * The site's named classes, in any order.
    *

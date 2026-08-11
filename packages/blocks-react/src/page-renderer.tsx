@@ -412,8 +412,16 @@ export function PageRenderer({
   // own `drawsNothing` decides both. Pruning on the resolver alone would remove
   // a node the caller had deliberately kept, and the artifact would then be read
   // as covering a removal the caller never asked for.
+  // Only walked when a gated map could cover the drop. Without one the answer is
+  // fixed — the node stays — so asking every block would run each plugin's
+  // `rendersNothing` over the whole tree to reach a conclusion already known.
+  // That is the standalone compile path, where the compiler holds those rules
+  // back at the source and nothing here needs to.
   const drawsNothing = drawlessTestFor(resolver, styleContext?.drawsNothing);
-  const drawlessDropped = pruneNodes(visible, node => !drawsNothing(node));
+  const drawlessDropped =
+    gatedRules === undefined
+      ? visible
+      : pruneNodes(visible, node => !drawsNothing(node));
   const drawlessCoveredByArtifact =
     drawlessDropped !== visible &&
     gatedRules !== undefined &&
