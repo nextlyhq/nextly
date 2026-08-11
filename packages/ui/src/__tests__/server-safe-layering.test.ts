@@ -177,6 +177,12 @@ function analyze(source: string, fileName: string): Analysis {
       (ts.isVariableDeclaration(node) ||
         ts.isFunctionDeclaration(node) ||
         ts.isClassDeclaration(node) ||
+        // A NAMED class or function expression binds its own name inside itself, so the `Node` in
+        // `class Node { static self = Node }` is the class, not the DOM one. The binding is scoped
+        // to the expression while this set is file-wide, which is the same approximation the rest
+        // of this collector makes.
+        ts.isClassExpression(node) ||
+        ts.isFunctionExpression(node) ||
         // An enum creates a real runtime binding, so `export enum Node { A }` means `Node` is the
         // module's own, not the DOM one.
         ts.isEnumDeclaration(node) ||
@@ -204,19 +210,36 @@ function analyze(source: string, fileName: string): Analysis {
   };
   collectDeclared(tree);
 
+  /**
+   * Whether this expression is the AMBIENT `globalThis`, rather than something the module named
+   * `globalThis` itself.
+   *
+   * `globalThis` is an ordinary global property, not a keyword, so `const globalThis = { ... }`
+   * is legal and shadows it. Matching the spelling alone would report the properties of a plain
+   * local object as browser globals.
+   */
+  const isAmbientGlobalThis = (node: ts.Node): boolean =>
+    ts.isIdentifier(node) &&
+    node.text === "globalThis" &&
+    !declared.has("globalThis");
+
   /** Whether a condition subtree asks `typeof <name>`, which is the SSR guard. */
   const mentionsTypeof = (condition: ts.Node, name: string): boolean => {
     let found = false;
     const look = (node: ts.Node): void => {
       if (ts.isTypeOfExpression(node)) {
         const operand = node.expression;
-        // Both spellings of the same guard: `typeof document` and `typeof globalThis.document`.
+        // Every spelling of the same guard: `typeof document`, `typeof globalThis.document`, and
+        // `typeof globalThis["document"]`. All three evaluate to a string rather than throwing.
         const namesIt =
           (ts.isIdentifier(operand) && operand.text === name) ||
           (ts.isPropertyAccessExpression(operand) &&
             operand.name.text === name &&
-            ts.isIdentifier(operand.expression) &&
-            operand.expression.text === "globalThis");
+            isAmbientGlobalThis(operand.expression)) ||
+          (ts.isElementAccessExpression(operand) &&
+            isAmbientGlobalThis(operand.expression) &&
+            ts.isStringLiteral(operand.argumentExpression) &&
+            operand.argumentExpression.text === name);
         if (namesIt) found = true;
       }
       ts.forEachChild(node, look);
@@ -232,8 +255,8 @@ function analyze(source: string, fileName: string): Analysis {
    * `typeof` the same name. Syntactic rather than a flow analysis, which is the honest limit: it
    * recognises the shapes people write and would miss a guard stored in a variable first.
    */
-  const guardedByTypeof = (identifier: ts.Identifier): boolean => {
-    for (let node: ts.Node = identifier; node.parent; node = node.parent) {
+  const guardedByTypeof = (read: ts.Node, name: string): boolean => {
+    for (let node: ts.Node = read; node.parent; node = node.parent) {
       const parent = node.parent;
       let condition: ts.Node | undefined;
       if (
@@ -254,7 +277,7 @@ function analyze(source: string, fileName: string): Analysis {
       ) {
         condition = parent.left;
       }
-      if (condition && mentionsTypeof(condition, identifier.text)) return true;
+      if (condition && mentionsTypeof(condition, name)) return true;
     }
     return false;
   };
@@ -294,7 +317,32 @@ function analyze(source: string, fileName: string): Analysis {
     }
     // `new globalThis.Image()` throws for the same reason a call does, and `new` has no optional
     // form that could short-circuit it.
-    return ts.isNewExpression(outer) && outer.expression === value;
+    if (ts.isNewExpression(outer) && outer.expression === value) return true;
+    // Destructuring reads properties off the value, so `const { body } = globalThis.document`
+    // throws on `undefined` exactly as `globalThis.document.body` does — in the declaration form
+    // and in the assignment form, where the pattern parses as an object or array literal.
+    if (
+      ts.isVariableDeclaration(outer) &&
+      outer.initializer === value &&
+      ts.isBindingPattern(outer.name)
+    ) {
+      return true;
+    }
+    if (
+      ts.isBinaryExpression(outer) &&
+      outer.right === value &&
+      outer.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      (ts.isObjectLiteralExpression(outer.left) ||
+        ts.isArrayLiteralExpression(outer.left))
+    ) {
+      return true;
+    }
+    // Iterating asks the value for an iterator, so `[...globalThis.document]`,
+    // `use(...globalThis.document)` and `for (const n of globalThis.document)` all throw. Object
+    // spread does not — `{ ...undefined }` is an empty object — and needs no exclusion here,
+    // because it parses as a SpreadAssignment rather than a SpreadElement.
+    if (ts.isSpreadElement(outer)) return true;
+    return ts.isForOfStatement(outer) && outer.expression === value;
   };
 
   /** Whether this identifier reads the global, rather than naming something in another position. */
@@ -308,8 +356,7 @@ function analyze(source: string, fileName: string): Analysis {
     if (
       ts.isPropertyAccessExpression(parent) &&
       parent.name === node &&
-      ts.isIdentifier(parent.expression) &&
-      parent.expression.text === "globalThis"
+      isAmbientGlobalThis(parent.expression)
     ) {
       // The occurrence INSIDE the guard is not a read either: `typeof globalThis.document`
       // evaluates to a string rather than throwing, exactly as `typeof document` does. Here the
@@ -323,12 +370,13 @@ function analyze(source: string, fileName: string): Analysis {
       // place. Only using the value throws, so that is what decides.
       if (!usedAsValue(parent)) return false;
       // And the guarded USE is as safe as the bare-identifier form, so the same guard excuses it.
-      return !guardedByTypeof(node);
+      return !guardedByTypeof(node, node.text);
     }
 
     // `export const globals = { window }` READS the global — the shorthand is both the name and
     // the value, so the general naming rule below would wrongly excuse it.
-    if (ts.isShorthandPropertyAssignment(parent)) return !guardedByTypeof(node);
+    if (ts.isShorthandPropertyAssignment(parent))
+      return !guardedByTypeof(node, node.text);
 
     // `globalThis["document"]` is the same read spelled with brackets — the name is a string
     // literal in an element access rather than an identifier, so it is caught where the string is
@@ -389,7 +437,7 @@ function analyze(source: string, fileName: string): Analysis {
     // `typeof window === "undefined" ? 0 : window.innerWidth` is the standard way to write a
     // module that is safe to import on a server, and the second read never runs there. Reporting
     // it would reject the very pattern this check exists to encourage.
-    return !guardedByTypeof(node);
+    return !guardedByTypeof(node, node.text);
   };
 
   const visit = (node: ts.Node, insideFunction: boolean): void => {
@@ -454,13 +502,13 @@ function analyze(source: string, fileName: string): Analysis {
     if (
       !insideFunction &&
       ts.isElementAccessExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === "globalThis" &&
+      isAmbientGlobalThis(node.expression) &&
       node.argumentExpression !== undefined &&
       ts.isStringLiteral(node.argumentExpression) &&
       BROWSER_GLOBALS.has(node.argumentExpression.text) &&
       node.questionDotToken === undefined &&
-      usedAsValue(node)
+      usedAsValue(node) &&
+      !guardedByTypeof(node, node.argumentExpression.text)
     ) {
       globals.push(node.argumentExpression.text);
     }
@@ -507,6 +555,11 @@ function analyze(source: string, fileName: string): Analysis {
         ts.isCallExpression(parent.parent) &&
         parent.parent.expression === parent
       ) {
+        return true;
+      }
+      // A tagged template invokes its tag as the module evaluates, with no call parentheses to
+      // recognise: ``(() => window.innerWidth)`` `` runs the body now.
+      if (ts.isTaggedTemplateExpression(parent) && parent.tag === invoked) {
         return true;
       }
       return ts.isCallExpression(parent) && parent.expression === invoked;
@@ -904,6 +957,75 @@ describe("reading a module", () => {
       read(`export const c = (globalThis["document"] as Document).body;`)
         .globals
     ).toEqual(["document"]);
+  });
+
+  it("reports taking the value apart, not only reading through it", () => {
+    // Destructuring and iterating both ask the value for something, so each throws on `undefined`
+    // exactly as a property read does.
+    expect(
+      read(`export const { body } = globalThis.document;`).globals
+    ).toEqual(["document"]);
+    expect(
+      read(`export let body; ({ body } = globalThis.document);`).globals
+    ).toEqual(["document"]);
+    expect(
+      read(`export const all = [...globalThis.document];`).globals
+    ).toEqual(["document"]);
+    expect(
+      read(`export const n = Math.max(...globalThis.document);`).globals
+    ).toEqual(["document"]);
+    expect(
+      read(`for (const n of globalThis.document) { console.log(n); }`).globals
+    ).toEqual(["document"]);
+  });
+
+  it("does not report object spread, which tolerates undefined", () => {
+    // The control for the case above: `{ ...undefined }` is an empty object rather than a throw,
+    // so spreading into an OBJECT is safe where spreading into an array or a call is not.
+    expect(
+      read(`export const copy = { ...globalThis.document };`).globals
+    ).toEqual([]);
+  });
+
+  it("does not report a module that shadows globalThis itself", () => {
+    // `globalThis` is an ordinary global property rather than a keyword, so a module may bind the
+    // name. Its properties are then a plain object's, in either spelling.
+    expect(
+      read(`
+        const globalThis = { document: { body: 1 } };
+        export const x = globalThis.document.body;
+        export const y = globalThis["document"].body;
+      `).globals
+    ).toEqual([]);
+  });
+
+  it("applies the typeof guard to the bracket spelling too", () => {
+    // `typeof globalThis["document"]` evaluates to a string rather than throwing, so the guarded
+    // branch is as safe as the dot form's.
+    expect(
+      read(
+        `export const b = typeof globalThis["document"] === "undefined" ? 0 : globalThis["document"].body;`
+      ).globals
+    ).toEqual([]);
+  });
+
+  it("does not report a named class expression's own binding", () => {
+    // The `Node` in the initializer is the class's self-binding, which shadows the DOM global for
+    // the whole expression.
+    expect(
+      read(`export const C = class Node { static self: unknown = Node };`)
+        .globals
+    ).toEqual([]);
+  });
+
+  it("reports a function invoked as a template tag", () => {
+    // A tagged template calls its tag as the module evaluates, with no call parentheses for the
+    // direct-call check to recognise.
+    expect(
+      read(
+        "export const width = ((s: TemplateStringsArray) => window.innerWidth)``;"
+      ).globals
+    ).toEqual(["window"]);
   });
 
   it("reports an IIFE invoked through .call", () => {
