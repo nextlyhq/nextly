@@ -613,10 +613,23 @@ function containedFailure(
     );
   }
 
+  // Case-insensitively, for the same reason the message id is compared that
+  // way: a parser that lowercases a key leaves the adapter holding a spelling
+  // this never saw, and a provider quoting it back would slip past an exact
+  // match. Rebuilt by index rather than by regular expression, because a
+  // credential may contain characters a pattern would read as syntax.
   let text = texts.join(": ");
   for (const secret of secrets.comparable) {
     if (secret.length === 0) continue;
-    text = text.split(secret).join(REDACTED_SECRET);
+    let out = "";
+    let cursor = 0;
+    for (;;) {
+      const at = text.toLowerCase().indexOf(secret.toLowerCase(), cursor);
+      if (at === -1) break;
+      out += text.slice(cursor, at) + REDACTED_SECRET;
+      cursor = at + secret.length;
+    }
+    text = out + text.slice(cursor);
   }
   return new Error(text);
 }

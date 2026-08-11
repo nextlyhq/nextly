@@ -757,6 +757,12 @@ describe("a failure AFTER the provider accepted the message", () => {
 
   afterEach(() => {
     resetFilterRegistry();
+    // `clearAllMocks` clears CALLS, not implementations, and these tests
+    // install loggers that throw. Left in place they would follow the shared
+    // logger into every later test in the file.
+    vi.mocked(logger.info).mockReset();
+    vi.mocked(logger.warn).mockReset();
+    vi.mocked(logger.error).mockReset();
   });
 
   it("is not reported as a provider failure", async () => {
@@ -798,6 +804,27 @@ describe("a failure AFTER the provider accepted the message", () => {
     expect(result).toEqual({ success: true, messageId: "msg-1" });
     expect(recorded.map(row => row.status)).toEqual(["sent"]);
     expect(captured.map(value => value.success)).toEqual([true]);
+  });
+
+  it("survives a logger that throws from the recovery path too", async () => {
+    // The thing being reported may BE the logger, so a transport that threw
+    // once throws again inside the catch -- rejecting an accepted send for the
+    // second time, which is the outcome the recovery branch exists to prevent.
+    const { service } = buildSend();
+    vi.mocked(logger.info).mockImplementation(() => {
+      throw new Error("log transport is down");
+    });
+    vi.mocked(logger.error).mockImplementation(() => {
+      throw new Error("log transport is still down");
+    });
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(result).toEqual({ success: true, messageId: "msg-1" });
   });
 
   it("still reports a provider that never accepted the message", async () => {

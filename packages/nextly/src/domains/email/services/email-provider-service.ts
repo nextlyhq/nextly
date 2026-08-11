@@ -35,6 +35,7 @@ import { encrypt, decrypt } from "../../../utils/encryption";
 // Pull adapter type into a normal `import type` declaration so the return
 // signature on createAdapterFromProvider satisfies consistent-type-imports.
 import {
+  messageIdEchoesPayload,
   messageIdWithoutRecipients,
   type EmailDeliveryInput,
 } from "../delivery-record";
@@ -740,12 +741,12 @@ export class EmailProviderService extends BaseService {
       const to = testEmail || provider.fromEmail;
 
       dispatched = true;
-      const result = await adapter.send({
-        to,
-        from,
-        subject: "Nextly — Test Email",
-        html: `<p>This is a test email from your <strong>${provider.name}</strong> email provider.</p><p>If you received this, your provider is configured correctly.</p>`,
-      });
+      // Named rather than inlined, so the containment below checks the text
+      // that was actually dispatched rather than a second copy of it.
+      const subject = "Nextly — Test Email";
+      const html = `<p>This is a test email from your <strong>${provider.name}</strong> email provider.</p><p>If you received this, your provider is configured correctly.</p>`;
+
+      const result = await adapter.send({ to, from, subject, html });
 
       // A test has exactly one destination, so a provider that accepted the
       // message and refused THAT address delivered nothing -- the same reading
@@ -768,7 +769,13 @@ export class EmailProviderService extends BaseService {
         // destination is a recipient like any other -- storing it verbatim
         // would put the address beside the hash that exists to avoid holding
         // it.
-        messageId: messageIdWithoutRecipients(result.messageId, [to]),
+        // Both containments the ordinary send path applies. The test body
+        // interpolates the provider's name, so a provider building its id out
+        // of what it was handed carries message content into the row -- the
+        // same disclosure, reached by the shorter path.
+        messageId: messageIdEchoesPayload(result.messageId, [subject, html])
+          ? null
+          : messageIdWithoutRecipients(result.messageId, [to]),
         error: delivered
           ? null
           : accepted

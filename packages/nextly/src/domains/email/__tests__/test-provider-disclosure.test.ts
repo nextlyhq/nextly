@@ -467,3 +467,75 @@ describe("a test send the provider accepted and the server refused", () => {
     expect(outcome.success).toBe(true);
   });
 });
+
+describe("a test-send id built out of the test message itself", () => {
+  let sqlite: Database.Database;
+  let service: EmailProviderService;
+  let providerId: string;
+  const recorded: Array<{ messageId: string | null }> = [];
+
+  /** Returns an id carrying a long span of the body it was handed. */
+  const echoingProvider = defineEmailProvider<{ apiKey: string }>({
+    type: "echoing-test",
+    label: "A Very Distinctive Provider Name",
+    configFields: [
+      { name: "apiKey", label: "API Key", kind: "password", secret: true },
+    ],
+    parseConfig: input => input as { apiKey: string },
+    createAdapter: () => ({
+      send: (options: { html: string }) =>
+        Promise.resolve({
+          success: true,
+          // The body interpolates the provider's name, so this is content
+          // from the message rather than an identifier of its own.
+          messageId: `sent-${options.html.slice(options.html.indexOf("<strong>") + 8, options.html.indexOf("</strong>"))}`,
+        }),
+    }),
+  });
+
+  beforeEach(async () => {
+    recorded.length = 0;
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(echoingProvider);
+    const created = await service.createProvider({
+      name: "A Very Distinctive Provider Name",
+      type: "echoing-test",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { apiKey: SECRET },
+      isDefault: false,
+      isActive: true,
+    });
+    providerId = created.id;
+    (service as unknown as { deliveries: unknown })["deliveries"] = {
+      record: (input: { messageId: string | null }) => {
+        recorded.push(input);
+        return Promise.resolve();
+      },
+      recordAll: (inputs: Array<{ messageId: string | null }>) => {
+        recorded.push(...inputs);
+        return Promise.resolve();
+      },
+    };
+  });
+
+  afterEach(() => {
+    getEmailProviderRegistry().reset();
+    sqlite.close();
+  });
+
+  it("is not stored in the delivery row", async () => {
+    // The ordinary send path keeps subject and body values out of every sink.
+    // This path checked only the recipient, so the shorter route stored what
+    // the longer one refuses.
+    await service.testProvider(providerId, "someone@example.com");
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]?.messageId).toBeNull();
+  });
+});

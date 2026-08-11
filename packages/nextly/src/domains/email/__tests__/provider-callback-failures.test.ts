@@ -480,6 +480,53 @@ describe("a credential inside the provider's own error text", () => {
   });
 });
 
+describe("a credential a hand-built provider re-cased before using it", () => {
+  afterEach(() => {
+    getEmailProviderRegistry().reset();
+  });
+
+  it("is redacted from the failure text whatever its casing", async () => {
+    // `RegisteredEmailProvider` is structural, so this provider never passes
+    // through the authoring helper and the parsed-configuration needles do not
+    // exist for it -- containment has only the STORED spelling to work from.
+    // An exact-match redaction therefore misses the value the adapter used,
+    // and `describeProviderFailure` carries it into `email.failed`.
+    const registry = getEmailProviderRegistry();
+    registry.register({
+      type: "hand-caser",
+      label: "Hand Caser",
+      configFields: [
+        { name: "apiKey", label: "API Key", kind: "password", secret: true },
+      ],
+      validateConfig: () => {},
+      createAdapterFrom: (input: unknown) => {
+        const used = (input as { apiKey: string }).apiKey.toLowerCase();
+        return {
+          send: () => {
+            throw new Error(`rejected ${used}`);
+          },
+        };
+      },
+      hasConnectionTest: false,
+    });
+
+    const provider = registry.get("hand-caser");
+    if (!provider) throw new Error("the provider did not register");
+
+    try {
+      await provider
+        .createAdapterFrom({ apiKey: "SK-LIVE-SHOUTED-KEY" })
+        .send({ to: "a@b.com", from: "c@d.com", subject: "x", html: "y" });
+      throw new Error("the adapter was expected to fail");
+    } catch (error) {
+      const described = JSON.stringify(describeProviderFailure(error));
+      expect(described).not.toContain("sk-live-shouted-key");
+      // The control against a blanket redaction: the reason survives.
+      expect(described).toContain("rejected");
+    }
+  });
+});
+
 describe("a credential the parser DERIVED from the stored one", () => {
   const STORED_KEY = "sk-live-stored-form-of-the-key";
 

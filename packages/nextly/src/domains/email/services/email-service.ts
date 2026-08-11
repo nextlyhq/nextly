@@ -635,11 +635,21 @@ export class EmailService extends BaseService {
       // the action that have already gone out, and would tell an auth flow to
       // withhold a token for a mail that was sent.
       if (dispatched) {
-        this.logger.error("email.after_send_failed", {
-          event: "email.after_send_failed",
-          provider: providerType,
-          ...describeProviderFailure(error),
-        });
+        // The diagnostic is isolated because the thing it is describing may be
+        // the logger itself: a transport that threw once will throw again, and
+        // letting it do so here would reject an accepted send for the second
+        // time in the same catch -- putting back exactly the outcome this
+        // branch exists to prevent.
+        try {
+          this.logger.error("email.after_send_failed", {
+            event: "email.after_send_failed",
+            provider: providerType,
+            ...describeProviderFailure(error),
+          });
+        } catch {
+          // Nowhere left to report it: the reporter is what failed. The send
+          // stands, which is the fact that matters to the caller.
+        }
         return dispatched;
       }
 
