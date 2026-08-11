@@ -399,6 +399,50 @@ describe("what the allowlist admits", () => {
   });
 });
 
+describe("the dependency graph, which is the stronger half of the admin rule", () => {
+  // A package cannot import what it does not depend on. `@nextlyhq/admin` is in no dependency
+  // field here, and pnpm's node_modules is not hoisted, so every spelling of a direct admin
+  // import — dynamic, `require`, `import x = require`, `typeof import`, a JSDoc typedef, a
+  // triple-slash reference, in a `.js` file, cached or not — fails to RESOLVE. That is a
+  // completeness the source scan cannot claim: the scan covers the syntaxes someone thought of,
+  // this covers all of them at once, including syntaxes TypeScript has not shipped yet.
+  //
+  // The scan is still worth having. It fails at test time with a message that names the rule
+  // rather than at build time with a resolution error, and it is the ONLY enforcement for the
+  // subpath policy: `blocks-react/next`, the `plugin-sdk` root and `plugin-sdk/testing` all
+  // resolve perfectly, because their packages are legitimate dependencies — the graph has
+  // nothing to say about which ENTRY of a dependency is allowed.
+
+  const manifest: {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+    peerDependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
+  } = JSON.parse(readFileSync(join(SRC_DIR, "..", "package.json"), "utf8"));
+
+  const declared = [
+    ...Object.keys(manifest.dependencies ?? {}),
+    ...Object.keys(manifest.devDependencies ?? {}),
+    ...Object.keys(manifest.peerDependencies ?? {}),
+    ...Object.keys(manifest.optionalDependencies ?? {}),
+  ];
+
+  it("reads a manifest that actually declares things", () => {
+    // Positive control. An unparsed or empty manifest would satisfy the assertion below while
+    // proving nothing, which is the failure mode this file has already paid for once.
+    expect(declared).toContain("@nextlyhq/blocks-react");
+  });
+
+  it("does not depend on @nextlyhq/admin in any form", () => {
+    expect(
+      declared.filter(
+        name =>
+          name === "@nextlyhq/admin" || name.startsWith("@nextlyhq/admin/")
+      )
+    ).toEqual([]);
+  });
+});
+
 describe("the builder's layering contract", () => {
   const files = sourceFiles(SRC_DIR);
 
