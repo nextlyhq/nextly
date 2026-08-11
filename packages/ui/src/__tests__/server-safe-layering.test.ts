@@ -389,6 +389,22 @@ function analyze(source: string, fileName: string): Analysis {
   ): boolean | undefined => {
     let node: ts.Node = condition;
     while (ts.isParenthesizedExpression(node)) node = node.expression;
+    // `globalThis.document && globalThis.document.body` guards by TRUTHINESS, and it is safe for
+    // this spelling only: reading a property off `globalThis` yields undefined rather than
+    // throwing, so the chain short-circuits. The bare `document && document.body` is NOT
+    // equivalent — the condition itself throws a ReferenceError on a server — so only an access
+    // off the ambient `globalThis` counts.
+    if (
+      (ts.isPropertyAccessExpression(node) &&
+        node.name.text === name &&
+        isAmbientGlobalThis(node.expression)) ||
+      (ts.isElementAccessExpression(node) &&
+        isAmbientGlobalThis(node.expression) &&
+        ts.isStringLiteral(node.argumentExpression) &&
+        node.argumentExpression.text === name)
+    ) {
+      return true;
+    }
     if (!ts.isBinaryExpression(node)) return undefined;
     const operator = node.operatorToken.kind;
     const equal =
@@ -806,6 +822,14 @@ function analyze(source: string, fileName: string): Analysis {
   return { specifiers, clientDirective, jsx, globals: [...new Set(globals)] };
 }
 
+/**
+ * Files this reads as JavaScript or TypeScript.
+ *
+ * An ALLOW-list of source extensions rather than a list of asset ones to skip, so an unrecognised
+ * extension is treated as an asset and left unparsed instead of being read as a module.
+ */
+const ANALYSABLE = /\.(?:[cm]?tsx?|[cm]?jsx?)$/;
+
 /** Resolve a relative specifier the way the bundler does, or `null` if it names a package. */
 function resolveLocal(fromFile: string, specifier: string): string | null {
   if (!specifier.startsWith(".")) return null;
@@ -854,7 +878,13 @@ function reach(entry: string): {
     if (seen.has(file)) continue;
     seen.add(file);
 
-    const analysis = analyze(readFileSync(file, "utf8"), file);
+    // A reached asset is not executable JavaScript, and parsing one as TypeScript invents
+    // identifiers from its contents: a stylesheet with a `.window` selector would be reported as
+    // reading the browser global. It still counts as reached, and it can import nothing, so it is
+    // recorded with an empty analysis rather than parsed.
+    const analysis = ANALYSABLE.test(file)
+      ? analyze(readFileSync(file, "utf8"), file)
+      : { specifiers: [], clientDirective: false, jsx: false, globals: [] };
     files.push({ file, analysis });
 
     for (const specifier of analysis.specifiers) {
@@ -1428,7 +1458,36 @@ describe("reading a module", () => {
     ).toEqual(["window"]);
   });
 
-  it("does not report a statement label that shares a global's name", () => {
+  it("accepts a truthiness guard on a globalThis property", () => {
+    // Reading a property off `globalThis` yields undefined rather than throwing, so the chain
+    // short-circuits and the module is safe.
+    expect(
+      read(`export const b = globalThis.document && globalThis.document.body;`)
+        .globals
+    ).toEqual([]);
+    expect(
+      read(
+        `export const b = globalThis["document"] && globalThis["document"].body;`
+      ).globals
+    ).toEqual([]);
+  });
+
+  it("still reports the same shape written on a bare identifier", () => {
+    // `document && document.body` is NOT an equivalent guard: the condition itself throws a
+    // ReferenceError on a server, which is why the rule above is written only for an access off
+    // `globalThis`.
+    //
+    // What this pins is the verdict, not the rule's narrowness. The condition is a bare read and
+    // is reported on its own account, so widening the rule to identifiers would still leave this
+    // module reported — measured, by making that change and watching this test pass. The
+    // narrowness is a correctness argument carried by the comment on `definedWhenTrue`, and no
+    // input distinguishes it through `globals`.
+    expect(read(`export const b = document && document.body;`).globals).toEqual(
+      ["document"]
+    );
+  });
+
+  it("does not report a statement label that shares a global\'s name", () => {
     // A label names a jump target, not a value, in all three positions it can appear.
     // At MODULE scope, where a read would actually be reported — inside a function the walker
     // skips globals anyway, so a wrapped fixture would pass without reaching this rule.
@@ -1606,6 +1665,29 @@ describe("resolving a local import", () => {
     ]);
     // And the JSX in it is seen, which is the consequence that matters: the `.ts` sibling has none.
     expect(files.some(({ analysis }) => analysis.jsx)).toBe(true);
+  });
+
+  it("counts a reached stylesheet without parsing it as TypeScript", () => {
+    // A CSS file is reached and can import nothing, but it is not executable JavaScript. Parsed as
+    // TypeScript its selectors become identifiers, so a `.window` rule would be reported as
+    // reading the browser global and a valid entry rejected.
+    const dir = mkdtempSync(path.join(os.tmpdir(), "nx-layering-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    writeFileSync(
+      path.join(dir, "styles.css"),
+      ".window { color: red; }\n.document { color: blue; }\n"
+    );
+    const entry = path.join(dir, "entry.ts");
+    writeFileSync(entry, 'import "./styles.css";\nexport const x = 1;\n');
+
+    const { files, packages } = reach(entry);
+    expect([...packages.keys()]).toEqual([]);
+    expect(files.map(({ file }) => path.basename(file)).sort()).toEqual([
+      "entry.ts",
+      "styles.css",
+    ]);
+    // The point of the case: nothing in the stylesheet is read as a global.
+    expect(files.flatMap(({ analysis }) => analysis.globals)).toEqual([]);
   });
 
   it("prefers `.mts` over `.ts` for a `.mjs` specifier, as the bundler does", () => {
