@@ -519,6 +519,46 @@ describe("email provider activity", () => {
       expect(logged).toHaveLength(0);
     });
 
+    it("is recorded when a create takes the default", async () => {
+      // The demoting statement is the same one `setDefault` runs, reached by a
+      // different method. The trail has to name the row that lost the default
+      // however the promotion arrived.
+      const first = await service.createProvider(
+        { ...INPUT, name: "First", isDefault: true },
+        ACTOR
+      );
+      logged.length = 0;
+
+      const second = await service.createProvider(
+        { ...INPUT, name: "Second", isDefault: true },
+        ACTOR
+      );
+
+      expect(logged.map(entry => [entry.action, entry.entryId])).toEqual([
+        ["update", first.id],
+        ["create", second.id],
+      ]);
+    });
+
+    it("is recorded when an update takes the default", async () => {
+      const first = await service.createProvider(
+        { ...INPUT, name: "First", isDefault: true },
+        ACTOR
+      );
+      const second = await service.createProvider(
+        { ...INPUT, name: "Second" },
+        ACTOR
+      );
+      logged.length = 0;
+
+      await service.updateProvider(second.id, { isDefault: true }, ACTOR);
+
+      expect(logged.map(entry => [entry.action, entry.entryId])).toEqual([
+        ["update", first.id],
+        ["update", second.id],
+      ]);
+    });
+
     it("records only the promotion when nothing was default", async () => {
       const created = await service.createProvider(INPUT, ACTOR);
       logged.length = 0;

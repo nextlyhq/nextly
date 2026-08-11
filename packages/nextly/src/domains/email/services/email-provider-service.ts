@@ -543,17 +543,11 @@ export class EmailProviderService extends BaseService {
 
     try {
       if (values.isDefault) {
-        // Unset any existing default first, then insert the new default provider
-
-        await this.db
-          .update(this.emailProviders)
-          .set({ isDefault: false, updatedAt: now })
-          .where(eq(this.emailProviders.isDefault, true));
-
-        await this.db.insert(this.emailProviders).values(values);
-      } else {
-        await this.db.insert(this.emailProviders).values(values);
+        // Nothing to exclude: this provider is not in the table yet, so it
+        // cannot be among the rows losing the default.
+        await this.clearDefault(now, actor);
       }
+      await this.db.insert(this.emailProviders).values(values);
     } catch (error) {
       // Drizzle surfaces the driver's raw error here, so normalise it through
       // toDbError(dialect) first; otherwise NextlyError.fromDatabaseError would
@@ -582,6 +576,61 @@ export class EmailProviderService extends BaseService {
    * that turns one into a log line -- a trail that quietly stops being written
    * should be visible somewhere.
    */
+  /**
+   * Take the default away from whoever holds it, and say who that was.
+   *
+   * Three methods promote a provider -- `createProvider` with
+   * `isDefault: true`, `updateProvider` with the same, and `setDefault` -- and
+   * each has to clear the incumbent first. Written once because the audit half
+   * is the easy half to leave out: the demotion is a bulk statement with no id
+   * in it, so a caller that forgets produces a trail naming what took the
+   * default and nothing about what lost it, and after a second promotion the
+   * displaced provider is indistinguishable from one that was never default.
+   *
+   * The rows are read BEFORE the statement, since afterwards there is nothing
+   * left to identify. Selected as a list rather than one row because a broken
+   * state with two defaults has to be recorded as it is, not narrowed to
+   * whichever came back first.
+   *
+   * `promotedId` is the provider taking the default, when it already exists. A
+   * client retry demotes and re-promotes the same row, whose final state is
+   * the state it started in, so recording that would manufacture an event out
+   * of a no-op.
+   */
+  private async clearDefault(
+    now: Date,
+    actor?: RequestActor | null,
+    promotedId?: string
+  ): Promise<void> {
+    const displaced = await this.db
+      .select({
+        id: this.emailProviders.id,
+        name: this.emailProviders.name,
+        type: this.emailProviders.type,
+      })
+      .from(this.emailProviders)
+      .where(eq(this.emailProviders.isDefault, true));
+
+    await this.db
+      .update(this.emailProviders)
+      .set({ isDefault: false, updatedAt: now })
+      .where(eq(this.emailProviders.isDefault, true));
+
+    // After the statement, so an entry cannot claim a demotion that never
+    // reached the database.
+    for (const previous of displaced) {
+      if (previous.id === promotedId) continue;
+      await this.recordActivity({
+        action: "update",
+        providerId: previous.id,
+        providerName: previous.name,
+        providerType: previous.type,
+        changedFields: ["isDefault"],
+        actor,
+      });
+    }
+  }
+
   private async recordActivity(
     input: EmailProviderActivityInput
   ): Promise<void> {
@@ -765,12 +814,7 @@ export class EmailProviderService extends BaseService {
     let updatedRows: number;
     try {
       if (data.isDefault === true) {
-        // Unset any existing default first, then apply all updates to this provider
-
-        await this.db
-          .update(this.emailProviders)
-          .set({ isDefault: false, updatedAt: now })
-          .where(eq(this.emailProviders.isDefault, true));
+        await this.clearDefault(now, actor, id);
       }
 
       const result = await this.db
@@ -937,45 +981,7 @@ export class EmailProviderService extends BaseService {
 
     const now = new Date();
 
-    // Which providers are losing the default, read before the statement below
-    // clears it. A promotion changes two rows, and afterwards nothing in the
-    // record distinguishes the provider that was displaced from one that was
-    // never the default at all -- so the trail could say what took over and
-    // never what it took over from. Selected as a list rather than one row
-    // because a broken state with two defaults must be recorded as it is,
-    // not narrowed to whichever came back first.
-    const displaced = await this.db
-      .select({
-        id: this.emailProviders.id,
-        name: this.emailProviders.name,
-        type: this.emailProviders.type,
-      })
-      .from(this.emailProviders)
-      .where(eq(this.emailProviders.isDefault, true));
-
-    // Unset any existing default first, then set the new one
-
-    await this.db
-      .update(this.emailProviders)
-      .set({ isDefault: false, updatedAt: now })
-      .where(eq(this.emailProviders.isDefault, true));
-
-    // Recorded here rather than after the promotion, because this is where it
-    // happened: the demotion stands whether or not the promotion below finds
-    // its row. The provider being promoted is skipped -- a client retry
-    // demotes and re-promotes the same row, and its final state is the state
-    // it started in.
-    for (const previous of displaced) {
-      if (previous.id === id) continue;
-      await this.recordActivity({
-        action: "update",
-        providerId: previous.id,
-        providerName: previous.name,
-        providerType: previous.type,
-        changedFields: ["isDefault"],
-        actor,
-      });
-    }
+    await this.clearDefault(now, actor, id);
 
     const promotion = await this.db
       .update(this.emailProviders)
