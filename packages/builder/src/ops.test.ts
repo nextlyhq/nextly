@@ -49,7 +49,7 @@ function serialized(nodes: BlockNode[]): string {
  */
 function roundTrip(nodes: BlockNode[], op: BuilderOp) {
   const applied = applyOp(nodes, op);
-  const undone = applyOp(applied.nodes, applied.inverse, "undo");
+  const undone = applyOp(applied.nodes, applied.inverse);
   return { applied, undone };
 }
 
@@ -199,7 +199,7 @@ describe("the inverse is derived from the document, not from the caller", () => 
     });
 
     const persisted = JSON.parse(JSON.stringify(applied.inverse)) as BuilderOp;
-    const undone = applyOp(applied.nodes, persisted, "undo");
+    const undone = applyOp(applied.nodes, persisted);
 
     expect(JSON.stringify(undone.nodes)).toBe(JSON.stringify(before));
   });
@@ -319,6 +319,92 @@ describe("the patch type", () => {
   });
 });
 
+describe("an op that came back from storage", () => {
+  /** What `JSON.parse` produces, which is where these op shapes come from. */
+  function persisted(text: string): BuilderOp {
+    return JSON.parse(text) as BuilderOp;
+  }
+
+  it("cannot reach an object's machinery through a field name", () => {
+    // `Object.keys` never yields `__proto__`, but `JSON.parse` makes it an own
+    // key. Recording a prior value under that name would rewrite the
+    // accumulator's prototype instead of storing anything, and the entry would
+    // vanish from the inverse without an error.
+    expect(() =>
+      applyOp(
+        forest(),
+        persisted('{"kind":"update","id":"a","patch":{"__proto__":{"x":1}}}')
+      )
+    ).toThrow(OpError);
+  });
+
+  it("cannot strip a node's identity through unset", () => {
+    // The inverse still addresses the old id, so a removal of `id` produces an
+    // undo that cannot find what it is meant to restore.
+    expect(() =>
+      applyOp(
+        forest(),
+        persisted('{"kind":"update","id":"a","patch":{},"unset":["id"]}')
+      )
+    ).toThrow(OpError);
+  });
+
+  it("cannot remove a field every node must have", () => {
+    // `version` and `props` are patchable but not removable: a node without
+    // them is not a node, and no inverse could put one back.
+    expect(() =>
+      applyOp(
+        forest(),
+        persisted('{"kind":"update","id":"a","patch":{},"unset":["version"]}')
+      )
+    ).toThrow(OpError);
+  });
+
+  it("cannot say removal with a value that does not survive storage", () => {
+    // `{ customCss: undefined }` removes the field when applied and then
+    // serializes to `{}`, so the same op replayed after a crash does nothing.
+    // Removal has a spelling that survives; this insists on it.
+    expect(() =>
+      applyOp(forest(), {
+        kind: "update",
+        id: "a",
+        patch: { customCss: undefined },
+      })
+    ).toThrow(OpError);
+  });
+
+  it("refuses an update that writes what is already there", () => {
+    // Same invisible-history-entry problem the move branch refuses, but the
+    // reference test cannot see it: `updateNode` allocates regardless, so the
+    // values have to be compared.
+    expect(() =>
+      applyOp(forest(), { kind: "update", id: "a", patch: { version: 1 } })
+    ).toThrow(OpError);
+  });
+
+  it("refuses an unset of a field the node does not have", () => {
+    expect(() =>
+      applyOp(forest(), {
+        kind: "update",
+        id: "a",
+        unset: ["customCss"],
+        patch: {},
+      })
+    ).toThrow(OpError);
+  });
+
+  it("still accepts an ordinary persisted update", () => {
+    // The control. Every refusal above is narrow, and a guard that rejected
+    // real ops too would pass all of them while breaking the product.
+    const { nodes } = applyOp(
+      forest(),
+      persisted('{"kind":"update","id":"a","patch":{"name":"Hero"}}')
+    );
+
+    expect(JSON.stringify(nodes)).toContain("Hero");
+  });
+});
+
 describe("a node its author locked", () => {
   /** The nested child, locked. The engine's primitives do not read this flag. */
   function withLocked(): BlockNode[] {
@@ -347,39 +433,44 @@ describe("a node its author locked", () => {
     expect(() => applyOp(withLocked(), op)).toThrow(OpError);
   });
 
-  it("can be inserted, and that insert can be undone", () => {
-    // The lock is against MOVING and DELETING, which an insert is neither — so
-    // pasting a block that arrives locked has to work. The trap is on the way
-    // back: the inverse of that insert is a `remove`, and if undo were treated
-    // as a fresh author delete the store would produce an op it then refused,
-    // leaving the document one edit from a state it could not return from.
-    const before = forest();
-    const locked: BlockNode = { ...node("pasted"), locked: true };
-
-    const applied = applyOp(before, {
-      kind: "insert",
-      node: locked,
-      at: { index: 0 },
-    });
-    expect(JSON.stringify(applied.nodes)).toContain("pasted");
-
-    const undone = applyOp(applied.nodes, applied.inverse, "undo");
-    expect(JSON.stringify(undone.nodes)).toBe(JSON.stringify(before));
+  it("cannot be inserted, because that insert could not be undone", () => {
+    // The lock's own words are "move or delete", and an insert is neither — but
+    // the inverse of an insert is a REMOVE, and a locked node cannot be
+    // removed. Accepting the insert would put the document one edit from a
+    // state its own undo could not leave, so the door is the place to refuse.
+    expect(() =>
+      applyOp(forest(), {
+        kind: "insert",
+        node: { ...node("pasted"), locked: true },
+        at: { index: 0 },
+      })
+    ).toThrow(OpError);
   });
 
-  it("is still protected from an author delete after being inserted", () => {
-    // The control for the exemption above: `"undo"` relieves the store's own
-    // inverse of the lock, and must not relieve anything else. Without this,
-    // widening the exemption to every caller would look identical.
-    const applied = applyOp(forest(), {
-      kind: "insert",
-      node: { ...node("pasted"), locked: true },
-      at: { index: 0 },
-    });
-
+  it("cannot be smuggled in as a descendant either", () => {
+    // The subtree, not the root. Refusing only a locked ROOT would let the same
+    // un-undoable state arrive one level down, which is exactly how the remove
+    // check was wrong before this.
     expect(() =>
-      applyOp(applied.nodes, { kind: "remove", id: "pasted" })
+      applyOp(forest(), {
+        kind: "insert",
+        node: node("wrapper", { main: [{ ...node("inner"), locked: true }] }),
+        at: { index: 0 },
+      })
     ).toThrow(OpError);
+  });
+
+  it("cannot be deleted by deleting the container it sits in", () => {
+    // The finding this pairs with: removing an unlocked container removes its
+    // whole subtree, so a check reading only the addressed node honours the
+    // lock at the node and defeats it one level up.
+    const nested: BlockNode[] = [
+      node("outer", { main: [{ ...node("b"), locked: true }] }),
+    ];
+
+    expect(() => applyOp(nested, { kind: "remove", id: "outer" })).toThrow(
+      OpError
+    );
   });
 
   it("can still be restyled", () => {

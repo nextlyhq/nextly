@@ -86,5 +86,4 @@ export {
   type AppliedOp,
   type BuilderOp,
   type NodePatch,
-  type OpSource,
 } from "./ops";

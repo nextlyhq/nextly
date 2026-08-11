@@ -24,6 +24,7 @@
 
 import {
   findNode,
+  walkNodes,
   insertNode,
   locateNode,
   moveNode,
@@ -46,6 +47,38 @@ import {
  * inverse would be derived for an edit that did not happen.
  */
 export type NodePatch = Parameters<typeof updateNode>[2];
+
+/**
+ * Every field an update may name, as data rather than as a type.
+ *
+ * An op arrives from `JSON.parse` as often as from a compiler — this module says
+ * so itself — so the key names in a patch are untrusted input and a type cannot
+ * check them at runtime. This table is the runtime half.
+ *
+ * Its COMPLETENESS is checked by the compiler rather than by hand: the mapped
+ * type requires an entry for every key of the engine's patch contract, so a
+ * field added to `BlockNode` fails this file until it is classified. That is the
+ * difference between a table derived from the contract and a list copied out of
+ * it, which is the mistake this module already made once with `NodePatch`.
+ *
+ * `true` marks a field that may also be REMOVED. `version` and `props` are
+ * required on every node, so they may be set and never unset — a node without
+ * them is not a node.
+ */
+const PATCHABLE: { readonly [K in keyof Required<NodePatch>]: boolean } = {
+  version: false,
+  props: false,
+  bindings: true,
+  styles: true,
+  classes: true,
+  visibility: true,
+  locked: true,
+  name: true,
+  customCss: true,
+  cssId: true,
+  attributes: true,
+  migrationFailed: true,
+};
 
 /** One edit. The four shapes below are the whole vocabulary. */
 export type BuilderOp =
@@ -133,6 +166,74 @@ function assertUnlocked(node: BlockNode, verb: string): void {
   }
 }
 
+/**
+ * Refuses an op whose field names or values cannot be honoured.
+ *
+ * The document is validated all through this module — does the node exist, did
+ * the engine accept the placement — but until here the OP itself was taken on
+ * trust. It should not be: this module's own header says ops are persisted and
+ * replayed, so a `kind`, a key name and a value can all arrive from
+ * `JSON.parse` rather than from a compiler, and TypeScript is no longer in the
+ * room.
+ *
+ * Three refusals, each for a failure that is silent rather than loud:
+ *
+ * - a name outside the patch contract. `unset: ["id"]` would strip a node's
+ *   identity, and the inverse still addresses the old id — so it could not put
+ *   back what it removed.
+ * - `undefined` as a patch VALUE. It removes the field when applied and then
+ *   `JSON.stringify` drops the key, so a replayed op silently does nothing.
+ *   Removal has a spelling that survives storage, and this insists on it.
+ * - a name that is not a field at all — `__proto__`, `constructor`,
+ *   `prototype`. These reach an object's machinery rather than its data.
+ */
+function assertPatchNames(op: Extract<BuilderOp, { kind: "update" }>): void {
+  for (const [key, value] of Object.entries(op.patch)) {
+    if (!Object.hasOwn(PATCHABLE, key)) {
+      throw new OpError(
+        `update: "${key}" is not a field this op may set. Ids and types are ` +
+          `identity, children move through the structural ops, and anything ` +
+          `else named here is not part of a node.`
+      );
+    }
+    if (value === undefined) {
+      throw new OpError(
+        `update: "${key}" is set to undefined. A value that disappears when the ` +
+          `op is stored would make a replayed edit do nothing; name it in ` +
+          `\`unset\` instead, which survives being written down.`
+      );
+    }
+  }
+
+  for (const key of op.unset ?? []) {
+    if (!Object.hasOwn(PATCHABLE, key)) {
+      throw new OpError(`update: "${key}" is not a field this op may remove.`);
+    }
+    if (!PATCHABLE[key as keyof typeof PATCHABLE]) {
+      throw new OpError(
+        `update: "${key}" is required on every node and cannot be removed. A ` +
+          `node without it is not a node, and the inverse could not restore one.`
+      );
+    }
+  }
+}
+
+/**
+ * The id of a locked node anywhere in a subtree, or `undefined` if there is none.
+ *
+ * The whole subtree and not just its root, because removing a container removes
+ * everything under it. A check that read only the node an op addresses would let
+ * an author delete a locked block by deleting the column it sits in — the lock
+ * honoured at the node and defeated one level up.
+ */
+function lockedWithin(node: BlockNode): string | undefined {
+  let found: string | undefined;
+  walkNodes([node], candidate => {
+    if (found === undefined && candidate.locked === true) found = candidate.id;
+  });
+  return found;
+}
+
 /** Whether two locations name the same parent, slot and index. */
 function samePlace(a: NodeLocation, b: NodeLocation): boolean {
   return (
@@ -167,7 +268,13 @@ function priorValues(
   keys: readonly string[]
 ): { patch: NodePatch; unset: string[] } {
   const held = node as unknown as Record<string, unknown>;
-  const patch: Record<string, unknown> = {};
+  // Null prototype: a persisted op can carry `__proto__` as an own key, and
+  // assigning it on an ordinary object rewrites the prototype instead of
+  // recording a value — the entry then vanishes from the inverse silently.
+  const patch: Record<string, unknown> = Object.create(null) as Record<
+    string,
+    unknown
+  >;
   const unset: string[] = [];
 
   for (const key of keys) {
@@ -177,20 +284,6 @@ function priorValues(
 
   return { patch, unset };
 }
-
-/**
- * Who an op is acting for.
- *
- * An author lock constrains the AUTHOR. It does not constrain undo: withdrawing
- * an edit that was just made is not the author reaching for a node someone
- * locked, and treating it as one makes an op the store itself produced
- * inapplicable. The rule the two together preserve is that `applyOp` never
- * returns an inverse `applyOp` would refuse.
- *
- * Defaulted to `"author"`, so an unmarked call gets the constrained reading and
- * a caller has to say the word "undo" to be relieved of it.
- */
-export type OpSource = "author" | "undo";
 
 /** The result of applying one op: the new forest, and the op that undoes it. */
 export interface AppliedOp {
@@ -213,13 +306,24 @@ export interface AppliedOp {
  * several edits could have produced the difference, and for a move between two
  * positions holding identical nodes there is no unique answer.
  */
-export function applyOp(
-  nodes: BlockNode[],
-  op: BuilderOp,
-  source: OpSource = "author"
-): AppliedOp {
+export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
   switch (op.kind) {
     case "insert": {
+      // Refused rather than exempting the inverse from the lock. The inverse of
+      // an insert is a remove, and a remove refuses a locked subtree — so
+      // accepting this would put the document one edit from a state its own
+      // undo could not leave. The alternative was a flag saying "this remove is
+      // an undo", and a flag is a claim any caller can make: an op arrives from
+      // storage, so nothing distinguishes the store's own inverse from a
+      // forged one. Refusing at the door needs no such distinction.
+      const lockedId = lockedWithin(op.node);
+      if (lockedId !== undefined) {
+        throw new OpError(
+          `insert: "${lockedId}" arrives locked, and a locked node cannot be ` +
+            `removed — so this insert could never be undone. Unlock it before ` +
+            `adding it to the document.`
+        );
+      }
       return {
         nodes: accepted(
           nodes,
@@ -242,7 +346,15 @@ export function applyOp(
           `remove: no node with id "${op.id}" in the document.`
         );
       }
-      if (source === "author") assertUnlocked(node, "remove");
+
+      const lockedId = lockedWithin(node);
+      if (lockedId !== undefined) {
+        throw new OpError(
+          `remove: "${lockedId}" is locked and sits inside what this would ` +
+            `delete. An author locked it against deletion, and removing its ` +
+            `ancestor deletes it just as thoroughly.`
+        );
+      }
       // Both the node and where it sat, captured before it goes: neither is
       // recoverable from the forest afterwards, which is the whole reason the
       // inverse cannot be computed later.
@@ -262,7 +374,7 @@ export function applyOp(
       if (node === undefined || location === undefined) {
         throw new OpError(`move: no node with id "${op.id}" in the document.`);
       }
-      if (source === "author") assertUnlocked(node, "move");
+      assertUnlocked(node, "move");
       const moved = accepted(
         nodes,
         moveNode(nodes, op.id, op.to),
@@ -300,6 +412,7 @@ export function applyOp(
           `update: no node with id "${op.id}" in the document.`
         );
       }
+      assertPatchNames(op);
       const touched = [...Object.keys(op.patch), ...(op.unset ?? [])];
       const before = priorValues(node, touched);
       // `unset` becomes `undefined` only HERE, at the moment of applying. The
@@ -309,6 +422,25 @@ export function applyOp(
       const removals = Object.fromEntries(
         (op.unset ?? []).map(key => [key, undefined])
       ) as NodePatch;
+
+      // An update that writes what is already there. `updateNode` allocates a
+      // new forest regardless, so the reference test the structural ops rely on
+      // cannot see it — the values have to be compared. Recording it would add
+      // a history entry whose undo has no visible effect, which is the same
+      // thing the move branch refuses one case earlier.
+      const held = node as unknown as Record<string, unknown>;
+      const changesSomething = touched.some(key =>
+        (op.unset ?? []).includes(key)
+          ? held[key] !== undefined
+          : held[key] !== (op.patch as Record<string, unknown>)[key]
+      );
+      if (!changesSomething) {
+        throw new OpError(
+          `update: "${op.id}" already holds every value this op would write, ` +
+            `so it changes nothing. A history entry for it would undo to no ` +
+            `visible effect.`
+        );
+      }
 
       return {
         nodes: updateNode(nodes, op.id, { ...op.patch, ...removals }),
