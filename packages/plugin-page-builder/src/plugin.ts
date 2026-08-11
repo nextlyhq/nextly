@@ -124,6 +124,13 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
     tags: ["page-builder", "blocks", "visual-editor"],
     enabled: opts.enabled,
     admin: {
+      // How the plugin names itself wherever the admin lists it. Without this
+      // the dashboard section and the plugins list fall back to `meta.name`,
+      // which is the raw package specifier — `@nextlyhq/plugin-page-builder`
+      // shown where the form builder shows "Forms". The icon matches the Pages
+      // menu entry this plugin contributes, so one feature is not drawn two
+      // different ways in the same sidebar.
+      appearance: { icon: "Layout", label: "Page Builder" },
       description:
         "Build pages visually from blocks with drag-and-drop editing",
     },
