@@ -278,7 +278,29 @@ if (!existsSync(chromiumPath)) {
   );
 }
 
-const browser = await chromium.launch();
+// `pnpm install` installs the playwright PACKAGE, not its browsers, and the
+// only `playwright install` instruction in this repo is scoped to the e2e
+// package. So on a fresh checkout the documented capture command died with
+// Playwright's own "Executable doesn't exist" message, which names a browser
+// path and leaves the reader to work out that a separate provisioning step
+// exists and which package to run it from.
+//
+// Not auto-installed: that is a ~150MB download this script would trigger
+// without being asked. Naming the exact command is the useful half.
+let browser;
+try {
+  browser = await chromium.launch();
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!/Executable doesn't exist|browserType\.launch/.test(message)) throw error;
+  throw new Error(
+    `capture-themes: Chromium is not installed. \`pnpm install\` provides the ` +
+      `playwright package but not its browsers.\n\n` +
+      `  pnpm --filter playground exec playwright install chromium\n\n` +
+      `Then re-run \`pnpm --filter playground theme:capture\`.\n\n` +
+      `Original error: ${message.split("\n")[0]}`
+  );
+}
 const context = await browser.newContext({
   viewport: { width: 1440, height: 900 },
 });

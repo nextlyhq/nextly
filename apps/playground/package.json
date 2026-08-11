@@ -19,6 +19,7 @@
     "test:watch": "vitest",
     "theme:audit": "tsx scripts/audit-themes.mjs",
     "theme:capture": "tsx scripts/capture-themes.mjs",
+    "theme:capture:setup": "playwright install chromium",
     "theme:contrast-report": "tsx scripts/generate-contrast-report.mjs",
     "theme:import-presets": "tsx scripts/import-tweakcn.mjs",
     "theme:margins": "tsx scripts/audit-margins.mjs",
