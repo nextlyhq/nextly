@@ -1,5 +1,19 @@
 /**
- * Geometry crosses the frame in ONE module, and this is what says so.
+ * Rectangles are READ across the frame in one module, and this is what says so.
+ *
+ * ⚠️ Read the name carefully, because it is narrower than the invariant it
+ * serves. This checks where a rectangle is READ. It does NOT check where the
+ * mapping is COMPUTED: a module handed an origin and a scale can open-code
+ * `origin.x + point.x * scale` without touching the DOM at all, and nothing
+ * here would see it. A duplicate mapping added alongside this file passes every
+ * assertion below.
+ *
+ * That half is a review-time convention rather than a checked one, for the same
+ * reason the builder's "draws with `blocks-react`" rule is: arithmetic on two
+ * numbers is indistinguishable from any other arithmetic, so no scan can tell a
+ * second implementation from ordinary code. What IS checkable is the DOM read
+ * that a mapping needs its inputs from, and narrowing the guard to that leaves
+ * the door it can actually hold.
  *
  * The editor's chrome is drawn in the host document over a canvas that lives in
  * an iframe, so anything positioning an overlay has to convert between the two
@@ -98,7 +112,7 @@ function crossFrameReads(text: string, file: string): string[] {
   return found;
 }
 
-describe("geometry crosses the frame in one place", () => {
+describe("rectangles are read across the frame in one place", () => {
   const files = sourceFiles(SRC_DIR);
 
   it("has files to check", () => {

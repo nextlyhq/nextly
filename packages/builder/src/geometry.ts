@@ -11,8 +11,15 @@
  * scroll offset one of them forgot, a zoom the other did not apply — and the
  * symptom is an indicator drawn a few pixels off the gap it names. That class of
  * bug is not caught by either module's own tests, because each is correct about
- * the question it asked. A sibling test asserts that no other module in this
- * package reads a rectangle across the frame.
+ * the question it asked.
+ *
+ * How much of that is ENFORCED, stated plainly because the difference matters:
+ * a sibling test refuses a rectangle READ across the frame anywhere else in this
+ * package, and the e2e helper adapts these functions rather than restating them.
+ * Neither can stop a module that is handed an origin and a scale from
+ * open-coding the arithmetic — two numbers multiplied and added look like any
+ * other code — so that half is held at review, the same way the builder's
+ * "draws with `blocks-react`" rule is.
  *
  * The functions are pure and take plain numbers rather than DOM nodes, so the
  * mapping can be exercised without a browser and the DOM reads stay at the edge.
