@@ -110,41 +110,28 @@ export async function assertEntryPreviewable(
   // published entry and would otherwise mint a credential exposing that
   // author's unpublished edits.
   //
-  // Which row was actually read, taken from the returned document — and refused
-  // when it cannot be established.
+  // The subject is the REQUESTED id, deliberately — not one derived from the
+  // returned document. `read.data` is presentation data: `afterRead` may remove
+  // `id` or rewrite it to another row's, so no value in it can be trusted as the
+  // identity of what was fetched, and deriving the gate's subject from it
+  // authorized a row the bearer will not receive whenever a hook reshaped that
+  // field.
   //
-  // `read.data` is PRESENTATION data: it has been through `afterRead`, which the
-  // service explicitly allows to reshape the row, `id` included. So a missing or
-  // non-scalar `id` does not mean "the request id was used" — it means the row
-  // that was read is unknown here.
+  // The token signs the requested id, so that is the id whose editability is
+  // asserted here. Where a `beforeOperation` hook maps ids, the bearer's read
+  // resolves in ITS OWN context — `user` undefined, `overrideAccess: true` —
+  // which this boundary cannot observe. Closing that needs the consumption path
+  // to carry the minter's identity rather than a better guess here.
   //
-  // Falling back to the requested id would authorize a row that was never read:
-  // a `beforeOperation` hook mapping A to B, plus an `afterRead` hook dropping
-  // `id`, yields read(B) with update(A) while the token delivers B. Refusing is
-  // the only answer available that cannot be wrong, so an unidentifiable row
-  // yields no link rather than a link checked against the wrong row.
-  const readRow: unknown = read.data;
-  const resolvedId =
-    readRow !== null &&
-    typeof readRow === "object" &&
-    "id" in readRow &&
-    (typeof readRow.id === "string" || typeof readRow.id === "number")
-      ? String(readRow.id)
-      : null;
-
-  if (resolvedId === null) {
-    throw NextlyError.forbidden({
-      logContext: {
-        reason: "preview-link-row-unidentifiable",
-        collection,
-        entryId,
-      },
-    });
-  }
+  // `routeAuthorized: true`: the mint route already ran
+  // `requireRouteCollectionAccess(req, "update", collection)`, and this flag
+  // skips ONLY that coarse RBAC/code-access gate. The stored owner-only,
+  // role-based and custom rules still evaluate against the loaded document with
+  // the real user, which is the part that answers this question.
 
   const mayEdit = await collections.canUpdateEntry({
     collectionName: collection,
-    entryId: resolvedId,
+    entryId,
     user,
     routeAuthorized: true,
     authenticatedScope: actor,

@@ -197,17 +197,22 @@ describe("mintPreviewLink", () => {
     expect(body.item).toBeUndefined();
   });
 
-  it("asks the edit question about the row the READ settled on", async () => {
-    // A `beforeOperation` hook may rewrite the id, and the read resolves it
-    // before fetching. The bearer's own read runs that same hook and lands on
-    // the same row, so authorizing the id the request NAMED would judge a
-    // different row than the token delivers: editable row A mapped to
-    // readable-but-uneditable row B passes read(B) plus update(A), while the
-    // token hands out B.
+  it("asks the edit question about the id the token will sign", async () => {
+    // Two earlier tests here pinned a derived subject — the id read back from
+    // the returned document, and a refusal when that id was absent. Both were
+    // removed deliberately, not lost: `read.data` is presentation data and
+    // `afterRead` may remove `id` OR rewrite it to another row's, so no value in
+    // it identifies what was fetched. Deriving the subject from it authorized a
+    // row the bearer would not receive.
+    //
+    // The token signs the requested id, so that is what is asserted editable.
+    // The remaining gap — a `beforeOperation` hook resolving that id differently
+    // in the bearer's context, where `user` is undefined — is not closeable at
+    // this boundary and is tracked as a known limitation.
     getEntry.mockResolvedValue({
       success: true,
       statusCode: 200,
-      data: { id: "rewritten-by-hook" },
+      data: { id: "reshaped-by-afterRead" },
     });
 
     await mintPreviewLink(post({ collection: "pages", entryId: "7" }));
@@ -215,38 +220,14 @@ describe("mintPreviewLink", () => {
     expect(canUpdateEntry).toHaveBeenCalledWith(
       expect.objectContaining({
         collectionName: "pages",
-        entryId: "rewritten-by-hook",
-        // The route already ran the coarse `update` gate for this collection,
-        // and this flag skips ONLY that. The stored owner-only/role/custom rules
-        // still evaluate against the loaded document, which is what decides the
-        // row-level question.
+        // The requested id, NOT the one the returned document carries.
+        entryId: "7",
+        // The route already ran the coarse `update` gate for this collection and
+        // this flag skips only that; stored owner-only/role/custom rules still
+        // evaluate against the loaded document.
         routeAuthorized: true,
       })
     );
-  });
-
-  it("refuses when the row that was read cannot be identified", async () => {
-    // `read.data` is presentation data — it has been through `afterRead`, which
-    // the service allows to reshape the row, `id` included. A missing `id` does
-    // NOT mean the request id was used; it means the row that was read is
-    // unknown here.
-    //
-    // Falling back to the requested id would authorize a row that was never
-    // read: a `beforeOperation` hook mapping A to B plus an `afterRead` hook
-    // dropping `id` yields read(B) with update(A), while the token delivers B.
-    getEntry.mockResolvedValue({
-      success: true,
-      statusCode: 200,
-      data: { title: "afterRead stripped the id" },
-    });
-
-    const response = await mintPreviewLink(
-      post({ collection: "pages", entryId: "7" })
-    );
-
-    expect(response.status).toBe(403);
-    // And crucially the edit gate was never asked about the WRONG row.
-    expect(canUpdateEntry).not.toHaveBeenCalled();
   });
 
   it("judges an API key on the key's own grants, not its owner's", async () => {
