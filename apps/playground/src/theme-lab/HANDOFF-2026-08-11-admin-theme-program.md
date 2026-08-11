@@ -111,13 +111,30 @@ merge without CI green **and** zero unresolved.
   element to a `<div>` and keep the layout behaviour. The second is probably
   right — the `<main>` is a shadcn default, and the admin already renders its
   own landmark at `DashboardLayout.tsx:105`.
-- **`--nx-font-mono` is declared nowhere.** `theme.css` has only Tailwind's
-  `--font-mono` (~line 524), so the API playground's CodeMirror editor falls
-  back to generic monospace. Fix: declare `--nx-font-mono` alongside the other
-  shell tokens, map `--font-mono` to it in `@theme inline`, consume the `--nx-`
-  token at the call site. **Spans `packages/ui` + `packages/admin`, both
-  published — needs its own PR and a changeset.** Reaching past the token to
-  the global is the bypass the admin contract exists to prevent.
+
+### Withdrawn after measurement
+
+- **`--nx-font-mono`** was queued here as open work. It is neither open nor
+  work, and the fix it prescribed would have been wrong.
+
+  `--font-mono` **is** declared (`theme.css:524`) and the built stylesheet
+  publishes it on `:root,:host` — checked in `packages/ui/dist/styles.css`
+  rather than read off the source. `plugin-safelist.css` emits
+  `font-{sans,serif,mono}` precisely so Tailwind publishes those properties,
+  since it only outputs a theme variable something references.
+  `CodeBlock.tsx:82` already consumes `var(--font-mono, …)`; **#634 lists this
+  as a defect it closed.**
+
+  Creating `--nx-font-mono` would duplicate a Tailwind-owned name into the
+  palette namespace, which the reachability guard's own header records as the
+  cause of the original problem. The remaining asymmetry is deliberate:
+  `--font-sans` reads a `next/font` variable because Inter is loaded, and
+  `--font-mono` is a system stack because no mono face is. Revisit only if one
+  is adopted.
+
+  Recorded because it is the second failure mode of a filed task from §6:
+  accurate when written, already fixed by the time it was read, and re-filed
+  from a document rather than re-measured.
 
 ### Ruled out by the founder
 

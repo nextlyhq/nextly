@@ -48,14 +48,30 @@ A Codex _usage-limit_ reply is a fourth verdict state next to clean / findings
 / error, and a check that only looks for findings reads it as a pass. Verify
 the verdict; do not infer it.
 
-### 2. `--nx-font-mono` — its own PR, with a changeset
+### 2. `--nx-font-mono` — RESOLVED. Do not build it.
 
-Declared nowhere; `theme.css` has only Tailwind's `--font-mono` (~line 524), so
-the API playground's CodeMirror editor falls back to generic monospace.
-Declare `--nx-font-mono` with the other shell tokens, map `--font-mono` to it
-in `@theme inline`, consume the `--nx-` token at the call site. **Spans
-`packages/ui` + `packages/admin`, both published.** Reaching past the token to
-the global is the bypass the admin contract exists to prevent.
+This was queued here as open work and it is neither open nor work. Measured
+before starting:
+
+- `--font-mono` **is** declared, `theme.css:524`, and the built stylesheet
+  publishes it on `:root,:host` — verified in `packages/ui/dist/styles.css`,
+  not inferred from source.
+- `plugin-safelist.css` emits `font-{sans,serif,mono}` **specifically** so
+  Tailwind publishes those custom properties; it only outputs a theme variable
+  something references.
+- `CodeBlock.tsx:82` already consumes `var(--font-mono, …)`. Fixed in #634,
+  which lists it as a defect it closed.
+
+**Creating `--nx-font-mono` would be a defect, not a fix.** `--font-*` is
+Tailwind's namespace and `--nx-*` is the palette's; the reachability guard's
+own header records that reaching for the palette namespace for a role that
+lives in Tailwind's is what caused the original problem.
+
+The residual asymmetry is deliberate: `--font-sans` reads a `next/font`
+variable because the admin loads Inter, and `--font-mono` is a system stack
+because no mono face is loaded. Pointing it at a webfont means shipping one to
+every admin page for a handful of code surfaces. Only revisit if a mono face is
+actually adopted.
 
 ### 3. `SidebarInset` — hygiene
 
