@@ -20,15 +20,23 @@ import { describe, expect, it } from "vitest";
  *    admin's Lexical node set for inline rich text, and reaching for it directly
  *    is the shape that looks harmless at the call site.
  *
- * 2. **The builder does not re-implement rendering.** It renders documents with
- *    `@nextlyhq/blocks-react` — the same renderer that serves published pages.
- *    `plugin-page-builder` carries a renderer of its own, and the two disagree
- *    about condition gating in opposite directions.
+ * 2. **The builder does not pull in the CMS runtime.** It draws with
+ *    `@nextlyhq/blocks-react`'s root entry, which is standalone; the `/next`
+ *    subpath is the Next-coupled one and imports `nextly/runtime`. Admitting it
+ *    here would put the whole server runtime behind an editor component.
  *
- * The guard is an ALLOWLIST. A blocklist only stops what someone thought to
- * name, and the next dependency added without thought is the one that breaks the
- * promise. Adding an entry below is a deliberate act with a reason recorded
- * beside it.
+ * The guard is an ALLOWLIST of exact specifiers. A blocklist only stops what
+ * someone thought to name, and a rule written per PACKAGE rather than per
+ * specifier silently admits every subpath a package happens to publish — which
+ * is how `blocks-react/next` and `plugin-sdk/testing` would arrive. Adding an
+ * entry below is a deliberate act with a reason recorded beside it.
+ *
+ * **What this file does NOT prove.** That the canvas renders THROUGH
+ * `blocks-react` rather than reimplementing rendering on top of React and
+ * `@nextlyhq/blocks-engine` is a property of what the code does, not of what it
+ * imports, and both spellings import exactly the same packages. The allowlist
+ * makes the shortcut inconvenient; it cannot make it impossible. Treat that rule
+ * as a design constraint reviewed by people, not as one enforced here.
  */
 
 // `import.meta.dirname` only exists from Node 20.11 and the package floor is
@@ -54,9 +62,14 @@ const ALLOWED_RUNTIME_IMPORTS = [
   "react-dom",
   "react/jsx-runtime",
   "@nextlyhq/blocks-engine",
+  // The ROOT entry only. `@nextlyhq/blocks-react/next` imports `nextly/runtime`,
+  // and `/blocks` is the built-in catalogue, which nothing here needs yet.
   "@nextlyhq/blocks-react",
   "@nextlyhq/ui",
   "@nextlyhq/plugin-sdk",
+  // The one sanctioned route to admin components. Named on its own because the
+  // rule is per specifier: `plugin-sdk/testing` is a different promise entirely.
+  "@nextlyhq/plugin-sdk/admin",
 ];
 
 /** Node built-ins and test-only tooling, which never reach a consumer's bundle. */
@@ -164,6 +177,20 @@ function importsOf(file: string): string[] {
   return importsOfSource(readFileSync(file, "utf8"), file);
 }
 
+/**
+ * Whether one specifier may be imported.
+ *
+ * Exact match, deliberately. Judging by package would let any subpath in, and the subpaths are
+ * exactly where the coupling lives: `blocks-react/next` carries `nextly/runtime` and
+ * `plugin-sdk/testing` is not a production surface. A permitted subpath is written out in full.
+ */
+function isAllowed(specifier: string, inTest: boolean): boolean {
+  const allowed = inTest
+    ? [...ALLOWED_RUNTIME_IMPORTS, ...ALLOWED_IN_TESTS]
+    : ALLOWED_RUNTIME_IMPORTS;
+  return allowed.includes(specifier);
+}
+
 /** Bare package specifiers only — relative paths are this package's own code. */
 function isBare(specifier: string): boolean {
   return !specifier.startsWith(".") && !specifier.startsWith("/");
@@ -245,6 +272,55 @@ describe("reading a module's imports", () => {
   });
 });
 
+describe("what the allowlist admits", () => {
+  // Asserted on specifiers directly rather than through the file scan: the rule that matters is
+  // about subpaths no file in this package imports yet, and a contract test over real source can
+  // only demonstrate rules its own source happens to exercise.
+
+  it("admits the packages the editor is built from", () => {
+    for (const specifier of [
+      "react",
+      "react-dom",
+      "react/jsx-runtime",
+      "@nextlyhq/blocks-engine",
+      "@nextlyhq/blocks-react",
+      "@nextlyhq/ui",
+      "@nextlyhq/plugin-sdk",
+    ]) {
+      expect(isAllowed(specifier, false)).toBe(true);
+    }
+  });
+
+  it("admits the one sanctioned route to admin", () => {
+    expect(isAllowed("@nextlyhq/plugin-sdk/admin", false)).toBe(true);
+  });
+
+  it("refuses the Next-coupled renderer entry, which carries the CMS runtime", () => {
+    // `@nextlyhq/blocks-react/next` imports `nextly/runtime`. Judging by package rather than by
+    // specifier would have admitted it on the strength of the root entry being allowed.
+    expect(isAllowed("@nextlyhq/blocks-react/next", false)).toBe(false);
+    expect(isAllowed("@nextlyhq/blocks-react/blocks", false)).toBe(false);
+  });
+
+  it("refuses other subpaths of an allowed package", () => {
+    expect(isAllowed("@nextlyhq/plugin-sdk/testing", false)).toBe(false);
+    expect(isAllowed("@nextlyhq/plugin-sdk/client", false)).toBe(false);
+  });
+
+  it("refuses admin under every spelling", () => {
+    expect(isAllowed("@nextlyhq/admin", false)).toBe(false);
+    expect(isAllowed("@nextlyhq/admin/lexical", false)).toBe(false);
+  });
+
+  it("keeps test-only tooling out of shipped code", () => {
+    // The one asymmetry in the list, so it is worth pinning in both directions.
+    expect(isAllowed("vitest", true)).toBe(true);
+    expect(isAllowed("vitest", false)).toBe(false);
+    expect(isAllowed("node:fs", true)).toBe(true);
+    expect(isAllowed("node:fs", false)).toBe(false);
+  });
+});
+
 describe("the builder's layering contract", () => {
   const files = sourceFiles(SRC_DIR);
 
@@ -274,17 +350,9 @@ describe("the builder's layering contract", () => {
   it("imports only what the contract allows", () => {
     const violations: string[] = [];
     for (const file of files) {
-      const isTest = /\.test\.tsx?$/.test(file);
+      const inTest = /\.test\.tsx?$/.test(file);
       for (const specifier of importsOf(file).filter(isBare)) {
-        // Subpath imports are judged by their package, so `plugin-sdk/admin`
-        // is permitted by the `plugin-sdk` entry above.
-        const pkg = specifier.startsWith("@")
-          ? specifier.split("/").slice(0, 2).join("/")
-          : (specifier.split("/")[0] ?? specifier);
-        const allowed = isTest
-          ? [...ALLOWED_RUNTIME_IMPORTS, ...ALLOWED_IN_TESTS]
-          : ALLOWED_RUNTIME_IMPORTS;
-        if (!allowed.includes(pkg) && !allowed.includes(specifier)) {
+        if (!isAllowed(specifier, inTest)) {
           violations.push(`${file}: ${specifier}`);
         }
       }
