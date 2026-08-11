@@ -47,7 +47,6 @@ interface TestAdapter {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
-  tableExists(name: string): Promise<boolean>;
 }
 
 const DIALECTS: Array<{
