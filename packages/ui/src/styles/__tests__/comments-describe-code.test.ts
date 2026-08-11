@@ -234,6 +234,21 @@ const strip = (line: string): string =>
   line.replace(/^\s*(\/\*+|\*\/|\/\/|\*)\s*/, "").replace(/\s*\*\/\s*$/, "");
 
 /**
+ * A comment line reduced to the exact text the rule searches.
+ *
+ * The joined run and the offset that decides which line owns a match must be
+ * measured in ONE coordinate space. Collapsing whitespace after joining, while
+ * taking the offset from the raw text, makes the offset too large by however
+ * much whitespace the first line held -- so a phrase beginning on the SECOND
+ * line lands under the boundary, is charged to the first, and is then reported
+ * again when the second line is reached. Normalising each line before it is
+ * joined leaves nothing for the join to collapse, so the two agree by
+ * construction rather than by being kept in step.
+ */
+const normalize = (line: string): string =>
+  strip(line).replace(/\s+/g, " ").trim();
+
+/**
  * Every PHYSICAL comment line in the file, in source order.
  *
  * A span is a poor unit to reason in, because the two comment syntaxes span
@@ -294,16 +309,23 @@ function violationsInSource(
     //
     // A rule that invents its own violations gets switched off faster than one
     // that misses some, so both directions are pinned below.
-    const parts = [strip(current.text)];
+    // A BLANK comment line ends the paragraph. It satisfies every continuity
+    // test above -- it is adjacent, it reaches its newline, and it begins with
+    // its marker -- so without this a run reads straight across the gap
+    // between two paragraphs and builds a phrase out of the end of one and the
+    // start of the next, neither of which said it.
+    const parts = [normalize(current.text)];
     for (let j = index; ; j++) {
       const here = lines[j];
       const after = lines[j + 1];
       if (here === undefined || after === undefined) break;
       if (after.line !== here.line + 1) break;
       if (!here.endsLine || !after.startsLine) break;
-      parts.push(strip(after.text));
+      const text = normalize(after.text);
+      if (text === "") break;
+      parts.push(text);
     }
-    const joined = parts.join(" ").replace(/\s+/g, " ");
+    const joined = parts.join(" ");
 
     // Every line of a run searches the same tail, so requiring the match to
     // BEGIN inside this line's own text keeps the report on the line a reader
@@ -463,6 +485,37 @@ describe("comments describe the code, not the process", () => {
         ].join("\n")
       )
     ).toEqual([]);
+
+    // A BLANK comment line ends the paragraph. It passes every continuity test
+    // -- adjacent, reaching its newline, beginning with its marker -- so
+    // without an explicit stop a run reads across the gap and builds a phrase
+    // from the end of one paragraph and the start of the next.
+    expect(
+      kinds(
+        ["// an explanation ending in phase", "//", "// 2 starts a topic"].join(
+          "\n"
+        )
+      )
+    ).toEqual([]);
+    expect(
+      kinds(
+        [
+          "/**",
+          " * an explanation ending in phase",
+          " *",
+          " * 2 starts a topic",
+          " */",
+        ].join("\n")
+      )
+    ).toEqual([]);
+
+    // Whitespace inside a line must not move which line owns a match. This
+    // first line normalises far shorter than it reads, and a boundary measured
+    // on the raw text would charge the phrase below to it -- then report the
+    // same phrase again on the line that actually contains it.
+    expect(
+      kinds(["//    spaced     out     here", "// see task 24"].join("\n"))
+    ).toEqual(["x.ts:2 a task number"]);
   });
 
   it("has no comment pointing outside the codebase", () => {

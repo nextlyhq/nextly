@@ -113,10 +113,14 @@ for (const theme of ALL) {
     }
 
     // Does the selected nav row use the PRIMARY colour as its fill?
-    // `sidebar-accent` is the intended selected-row fill, so equality with
-    // primary means the theme routed a brand colour into a nav state: every
-    // row then reads as selected, and the one that IS selected reads as
-    // nothing in particular.
+    // `sidebar-accent` fills the row only at `data-[active=true]` and while
+    // pressed, so equality with primary means the SELECTED row is painted in
+    // the brand colour instead of a neutral sidebar surface. Rows that are not
+    // selected are unaffected -- they carry no background of their own.
+    //
+    // Reported rather than judged, like the bands above: a brand-filled
+    // selected row is a legitimate choice, and which themes make it is the
+    // thing worth being able to see.
     const navUsesPrimary =
       t["sidebar-accent"] === t.primary ||
       t["sidebar-accent"] === t["sidebar-primary"];
