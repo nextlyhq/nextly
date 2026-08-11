@@ -7,6 +7,8 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { NextlyError } from "../errors/nextly-error";
+
 vi.mock("./route-auth", () => ({
   requireRouteCollectionAccess: vi.fn(),
   requireRoutePermission: vi.fn(),
