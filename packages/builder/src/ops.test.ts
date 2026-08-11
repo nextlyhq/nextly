@@ -40,10 +40,16 @@ function serialized(nodes: BlockNode[]): string {
   return JSON.stringify(nodes);
 }
 
-/** Apply an op, then its inverse, and hand back both forests. */
+/**
+ * Apply an op as the author, then its inverse as undo, and hand back both.
+ *
+ * The inverse goes back in as `"undo"` because that is what it is. Applying it
+ * as a fresh author edit would ask the author-facing checks about an op the
+ * store derived itself, which is how an inverse becomes inapplicable.
+ */
 function roundTrip(nodes: BlockNode[], op: BuilderOp) {
   const applied = applyOp(nodes, op);
-  const undone = applyOp(applied.nodes, applied.inverse);
+  const undone = applyOp(applied.nodes, applied.inverse, "undo");
   return { applied, undone };
 }
 
@@ -284,6 +290,41 @@ describe("a node its author locked", () => {
     // the pure tree primitives do not read, which makes this module the boundary
     // that enforces it. Nothing below here will.
     expect(() => applyOp(withLocked(), op)).toThrow(OpError);
+  });
+
+  it("can be inserted, and that insert can be undone", () => {
+    // The lock is against MOVING and DELETING, which an insert is neither — so
+    // pasting a block that arrives locked has to work. The trap is on the way
+    // back: the inverse of that insert is a `remove`, and if undo were treated
+    // as a fresh author delete the store would produce an op it then refused,
+    // leaving the document one edit from a state it could not return from.
+    const before = forest();
+    const locked: BlockNode = { ...node("pasted"), locked: true };
+
+    const applied = applyOp(before, {
+      kind: "insert",
+      node: locked,
+      at: { index: 0 },
+    });
+    expect(JSON.stringify(applied.nodes)).toContain("pasted");
+
+    const undone = applyOp(applied.nodes, applied.inverse, "undo");
+    expect(JSON.stringify(undone.nodes)).toBe(JSON.stringify(before));
+  });
+
+  it("is still protected from an author delete after being inserted", () => {
+    // The control for the exemption above: `"undo"` relieves the store's own
+    // inverse of the lock, and must not relieve anything else. Without this,
+    // widening the exemption to every caller would look identical.
+    const applied = applyOp(forest(), {
+      kind: "insert",
+      node: { ...node("pasted"), locked: true },
+      at: { index: 0 },
+    });
+
+    expect(() =>
+      applyOp(applied.nodes, { kind: "remove", id: "pasted" })
+    ).toThrow(OpError);
   });
 
   it("can still be restyled", () => {

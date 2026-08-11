@@ -71,3 +71,20 @@ export {
  * `clientLeft`/`clientTop` left three call sites short by the padding.
  */
 export { frameInsetOf } from "./geometry-dom";
+
+/**
+ * The op store: the vocabulary every edit is expressed in, and how one applies.
+ *
+ * Exported from the package entry because the entry is what `tsup` builds. A
+ * module the entry does not reference is absent from `dist` however thoroughly
+ * it is tested — the tests import it by relative path and pass, while a consumer
+ * installing the package finds nothing.
+ */
+export {
+  applyOp,
+  OpError,
+  type AppliedOp,
+  type BuilderOp,
+  type NodePatch,
+  type OpSource,
+} from "./ops";

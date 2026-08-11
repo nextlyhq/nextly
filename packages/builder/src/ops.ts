@@ -149,6 +149,20 @@ function priorValues(node: BlockNode, patch: NodePatch): NodePatch {
   return prior;
 }
 
+/**
+ * Who an op is acting for.
+ *
+ * An author lock constrains the AUTHOR. It does not constrain undo: withdrawing
+ * an edit that was just made is not the author reaching for a node someone
+ * locked, and treating it as one makes an op the store itself produced
+ * inapplicable. The rule the two together preserve is that `applyOp` never
+ * returns an inverse `applyOp` would refuse.
+ *
+ * Defaulted to `"author"`, so an unmarked call gets the constrained reading and
+ * a caller has to say the word "undo" to be relieved of it.
+ */
+export type OpSource = "author" | "undo";
+
 /** The result of applying one op: the new forest, and the op that undoes it. */
 export interface AppliedOp {
   readonly nodes: BlockNode[];
@@ -170,7 +184,11 @@ export interface AppliedOp {
  * several edits could have produced the difference, and for a move between two
  * positions holding identical nodes there is no unique answer.
  */
-export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
+export function applyOp(
+  nodes: BlockNode[],
+  op: BuilderOp,
+  source: OpSource = "author"
+): AppliedOp {
   switch (op.kind) {
     case "insert": {
       return {
@@ -195,7 +213,7 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
           `remove: no node with id "${op.id}" in the document.`
         );
       }
-      assertUnlocked(node, "remove");
+      if (source === "author") assertUnlocked(node, "remove");
       // Both the node and where it sat, captured before it goes: neither is
       // recoverable from the forest afterwards, which is the whole reason the
       // inverse cannot be computed later.
@@ -215,7 +233,7 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
       if (node === undefined || location === undefined) {
         throw new OpError(`move: no node with id "${op.id}" in the document.`);
       }
-      assertUnlocked(node, "move");
+      if (source === "author") assertUnlocked(node, "move");
       return {
         nodes: accepted(
           nodes,
