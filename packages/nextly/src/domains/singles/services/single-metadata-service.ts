@@ -577,8 +577,6 @@ export class SingleMetadataService {
         return "failed";
       }
 
-      await this.registerUpdatedRuntimeSchema(input, plan, adapter);
-
       // i18n: provision or alter the companion for the field set being saved — CREATE and seed the
       // default locale from main on enable, restore and archive on disable, ADD/DROP columns as
       // translatable fields change. Reported as a failed migration rather than thrown: the main
@@ -597,6 +595,33 @@ export class SingleMetadataService {
         wasStatus: input.wasStatus,
         adapter,
       });
+
+      // 🔴 Registered only once the companion has been reconciled, never before it.
+      //
+      // The shape this binds is derived from what the single is being saved AS, so on a
+      // localization ENABLE it omits the translatable columns — which are still physically on the
+      // main table until the companion has taken them. Bind it first and a companion CREATE that
+      // then fails leaves the resolver describing a main table that does not exist in that shape,
+      // and `ensureSingleRuntimeTable` treats a registration it did not make as owned by whoever
+      // made it, so it adopts this one instead of rebuilding. Reads and writes would drop those
+      // fields until a restart.
+      //
+      // Leaving the previous shape in place on failure is the safe direction: it is at worst stale
+      // in the same way it was before the save, and the lazy rebuild can still correct it.
+      await this.registerUpdatedRuntimeSchema(input, plan, adapter);
+
+      // A plan that rendered no main-table statements never touched the main table, so it cannot
+      // vouch for one. A create that got its `CREATE TABLE` through and then failed on an index or
+      // a junction table leaves the table PRESENT but incomplete; re-saving unchanged fields takes
+      // the alter branch, emits nothing, and finds the table there. Confirming existence is not
+      // confirming the schema, so the durable verdict stands until something actually repairs it.
+      if (!plan.migrationSQL && input.existing.migrationStatus === "failed") {
+        this.logger.warn(
+          `[Singles] "${tableName}" is recorded as a failed migration and this save ran no ` +
+            `statements against it, so its status is left as failed`
+        );
+        return "failed";
+      }
 
       return "applied";
     } catch (error) {
