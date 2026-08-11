@@ -39,6 +39,7 @@ import {
   columnTypeIsIndexable,
   indexNameForColumn,
   uniqueIndexNameForColumn,
+  uniquenessCanBeAnIndex,
 } from "../../services/index-name";
 
 import { indexKey } from "./index-util";
@@ -127,6 +128,22 @@ interface CollectionIndexContext<F> {
    * it and every apply refuse it.
    */
   columnIsIndexable?: (field: F, column: string) => boolean;
+  /**
+   * Whether the column's uniqueness can be carried as a NAMED index, asked per column.
+   *
+   * Strictly narrower than `columnIsIndexable`, and a separate question: MySQL can neither index
+   * nor uniquely key a `TEXT` column without a length, so the generators keep such a column's
+   * uniqueness as an inline constraint and emit no index for it. A desired schema that declared
+   * `uq_<table>_<column>` anyway would propose creating an index no generator writes and no server
+   * accepts, once per reconcile, forever.
+   *
+   * REQUIRED, deliberately. An optional field defaulting to "yes, index it" would make a call site
+   * that forgot to supply it indistinguishable from one that answered permissively — and the
+   * permissive answer is precisely the behaviour this rule exists to remove, so forgetting would
+   * revert to the defect silently. The point of one shared rule is that there is nowhere left to
+   * forget it; an optional field with a lenient default rebuilds that place inside the option bag.
+   */
+  uniquenessIsIndexable: (field: F, column: string) => boolean;
 }
 
 /**
@@ -189,11 +206,18 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
       field.hasMany !== true &&
       !Array.isArray(field.relationTo);
     if (field.unique === true) {
-      indexes.push({
-        name: uniqueIndexNameForColumn(tableName, col),
-        columns: [col],
-        unique: true,
-      });
+      // Asked through the same rule the generators use. Where a dialect cannot key the column,
+      // they keep the uniqueness inline and write no index, so declaring one here would make
+      // every diff propose a `CREATE UNIQUE INDEX` the server refuses. The uniqueness is still
+      // enforced in that case — by the inline constraint — it simply is not an object the
+      // desired schema can name.
+      if (context.uniquenessIsIndexable(field, col)) {
+        indexes.push({
+          name: uniqueIndexNameForColumn(tableName, col),
+          columns: [col],
+          unique: true,
+        });
+      }
     } else if (
       (field.index === true || isSingleRelation) &&
       (context.columnIsIndexable?.(field, col) ?? true)
@@ -295,6 +319,11 @@ export function buildDesiredTableFromFields(
     hasCreatedByColumn: columns.some(c => c.name === "created_by"),
     columnIsIndexable: (_field, col) =>
       columnTypeIsIndexable(
+        columns.find(c => c.name === col)?.type ?? "",
+        dialect
+      ),
+    uniquenessIsIndexable: (_field, col) =>
+      uniquenessCanBeAnIndex(
         columns.find(c => c.name === col)?.type ?? "",
         dialect
       ),
@@ -560,6 +589,11 @@ export function buildDesiredTableFromComponentFields(
     ...collectionIndexSpecs(tableName, fields, {
       columnIsIndexable: (_field, col) =>
         columnTypeIsIndexable(
+          columns.find(c => c.name === col)?.type ?? "",
+          dialect
+        ),
+      uniquenessIsIndexable: (_field, col) =>
+        uniquenessCanBeAnIndex(
           columns.find(c => c.name === col)?.type ?? "",
           dialect
         ),

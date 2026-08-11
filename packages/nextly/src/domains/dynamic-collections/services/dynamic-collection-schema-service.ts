@@ -47,6 +47,7 @@ import {
   columnTypeIsIndexable,
   indexNameForColumn,
   uniqueIndexNameForColumn,
+  uniquenessCanBeAnIndex,
 } from "../../schema/services/index-name";
 import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
 
@@ -162,25 +163,18 @@ export class DynamicCollectionSchemaService {
   /**
    * Whether this dialect can carry the uniqueness as a NAMED index on this column.
    *
-   * MySQL cannot key a `TEXT`/`BLOB` column without a length, and refuses both spellings alike —
-   * the inline constraint and the index. Such a column keeps the inline form, which fails the
-   * CREATE atomically exactly as it always has, rather than creating the table and then failing on
-   * a separate index statement MySQL has already auto-committed past.
+   * Delegates to the shared rule rather than restating it. This class, the add-column path and the
+   * desired schema all decide the same thing about the same column, and a copy here that agreed on
+   * the day it was written would drift silently — both spellings look correct in isolation, and
+   * the disagreement only shows up as a diff proposing an index the generator never writes.
    *
-   * Bounding the column would make it work, and is the right answer, but it belongs in the shared
-   * column descriptor: bounding it HERE alone makes the created column disagree with the type the
-   * desired schema derives, and the next reconciliation tries to convert it back — which MySQL
-   * cannot do while a full-value unique index stands on it.
+   * Bounding a MySQL text column would make it keyable, and is the right end state, but it belongs
+   * in the shared column descriptor: bounding it HERE alone makes the created column disagree with
+   * the type the desired schema derives, and the next reconciliation tries to convert it back —
+   * which MySQL cannot do while a full-value unique index stands on it.
    */
   private uniquenessCanBeAnIndex(rendered: string): boolean {
-    // Asked through the shared indexability rule before anything local: a type the dialect cannot
-    // index AT ALL cannot carry the uniqueness as an index either. MySQL rejects an index on a
-    // JSON column, so a `json`-backed unique field belongs with the inline form for the same
-    // reason TEXT does — and answering that here rather than restating the rule keeps this from
-    // being a second opinion about which columns MySQL can key.
-    if (!columnTypeIsIndexable(rendered, this.dialect)) return false;
-    if (this.dialect !== "mysql") return true;
-    return !/\b(text|blob|longtext|mediumtext|tinytext)\b/i.test(rendered);
+    return uniquenessCanBeAnIndex(rendered, this.dialect);
   }
 
   /**
