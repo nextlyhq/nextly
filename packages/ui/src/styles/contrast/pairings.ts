@@ -340,6 +340,30 @@ const BOUNDARIES: Pairing[] = [
     kind: "ui",
     label: "input border on popover",
   },
+  // `--nx-background` is not what a page-level control is drawn on:
+  // `.admin-page-container` paints `--nx-page-background`, and in dark mode the
+  // two are 0.23 apart in lightness. Asserting only against `background`
+  // measured a control at 3.80:1 that the screen renders at 3.05:1 -- a
+  // near-threshold boundary that could not fail the suite because the suite was
+  // not looking at it. `muted` is the same story on a tinted row.
+  {
+    fg: "--nx-input",
+    bg: "--nx-page-background",
+    kind: "ui",
+    label: "input border on page container",
+  },
+  {
+    fg: "--nx-input",
+    bg: "--nx-muted",
+    kind: "ui",
+    label: "input border on muted",
+  },
+  {
+    fg: "--nx-border-strong",
+    bg: "--nx-page-background",
+    kind: "ui",
+    label: "strong border on page container",
+  },
   {
     fg: "--nx-ring",
     bg: "--nx-background",

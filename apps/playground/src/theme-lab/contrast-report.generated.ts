@@ -7,7 +7,7 @@
  * that miss WCAG AA on purpose, this measures all of them, so a tweakcn
  * preset shows its real score instead of defaulting to "pass".
  *
- * Measured against contrast source `252148c50456`
+ * Measured against contrast source `8213cea4ef92`
  * (packages/ui/src/styles/contrast). These counts are only comparable with
  * others taken against the SAME revision -- the harness deciding them is as
  * much an input as the theme is.
@@ -17,9 +17,9 @@ export const CONTRAST_REPORT: Record<string, number> = {
   mono: 0,
   sand: 0,
   signal: 0,
-  "tweakcn-claude": 29,
-  "tweakcn-modern-minimal": 28,
-  "tweakcn-twitter": 30,
-  "tweakcn-vercel": 0,
-  "tweakcn-violet-bloom": 24,
+  "tweakcn-claude": 34,
+  "tweakcn-modern-minimal": 33,
+  "tweakcn-twitter": 36,
+  "tweakcn-vercel": 1,
+  "tweakcn-violet-bloom": 30,
 };

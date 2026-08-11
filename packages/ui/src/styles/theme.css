@@ -801,9 +801,9 @@
   --nx-border-subtle: color-mix(in srgb, oklch(0.92 0 0), transparent 60%);
   --nx-border: oklch(0.92 0 0);
   /* Alpha raised so the composited strong border clears WCAG 3:1 / ~4:1 (was 2.11:1). */
-  --nx-border-strong: oklch(0.63 0 0);
+  --nx-border-strong: oklch(0.58 0 0);
   /* Darkened so the field border clears WCAG 3:1 on the page (was 2.32:1). */
-  --nx-input: oklch(0.6373 0 0);
+  --nx-input: oklch(0.6154 0 0);
   --nx-ring: var(--nx-primary);
 
   /* The base colour of the elevation ramp (--shadow-sm..xl, -inner-subtle,
@@ -968,7 +968,7 @@
   --nx-border-strong: oklch(0.5444 0 0);
   /* Brightened so the field border clears WCAG 3:1 on the lighter popover
    * surface as well as the page and card (was 1.73:1 on a popover). */
-  --nx-input: oklch(0.519 0 0);
+  --nx-input: oklch(0.5445 0 0);
   --nx-ring: var(--nx-primary);
 
   /* Black in dark mode too: the ramp reads as depth against the deep surfaces
