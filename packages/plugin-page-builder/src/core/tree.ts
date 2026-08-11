@@ -86,6 +86,31 @@ export function removeNode(root: BlockNode, id: string): BlockNode {
   });
 }
 
+/**
+ * Remove one child from a NAMED slot, dropping the slot itself once nothing is left in it.
+ *
+ * `removeNode` searches every slot and leaves the emptied key behind, which is correct for an
+ * ordinary delete: a slot the block declares exists whether or not anything sits in it. It is the
+ * wrong shape for a slot the block does NOT declare, because validation refuses the slot's NAME
+ * rather than its contents — so emptying such a slot child by child ends with a document that is
+ * still refused and has nothing left to remove.
+ */
+export function removeFromSlot(
+  root: BlockNode,
+  parentId: string,
+  slot: string,
+  id: string
+): BlockNode {
+  return mapTree(root, n => {
+    if (n.id !== parentId || !n.slots) return n;
+    const remaining = (n.slots[slot] ?? []).filter(c => c.id !== id);
+    const slots = { ...n.slots };
+    if (remaining.length > 0) slots[slot] = remaining;
+    else delete slots[slot];
+    return { ...n, slots };
+  });
+}
+
 /** True if `id` is `ancestorId` itself or nested anywhere inside it. */
 function isSelfOrDescendant(
   root: BlockNode,
