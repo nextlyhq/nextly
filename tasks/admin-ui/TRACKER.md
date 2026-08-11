@@ -8,7 +8,7 @@ An empty Branch/PR with status `open` means nobody holds it.
 
 | #   | Task                                                                                                                      | Status      | Branch/PR                                              | Key decisions                                                         | Findings                                                                                        |
 | --- | ------------------------------------------------------------------------------------------------------------------------- | ----------- | ------------------------------------------------------ | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| A   | Table & list consistency: pagination gap, search field, filters, columns, sorting, headers, CTAs, skeletons, empty states | in-progress | #689 (shell + users, plugins) · #690 (roles, webhooks) | `ListShell` over migrating onto `DataTable`, which nothing renders    | Renderer is already shared (16 surfaces on `DataTableView`); the SHELL is duplicated. See below |
+| A   | Table & list consistency: pagination gap, search field, filters, columns, sorting, headers, CTAs, skeletons, empty states | in-progress | #689 (shell + users, plugins) · #692 (roles, webhooks) | `ListShell` over migrating onto `DataTable`, which nothing renders    | Renderer is already shared (16 surfaces on `DataTableView`); the SHELL is duplicated. See below |
 | B   | Tab styling — rounded bottom border reads as a seam                                                                       | open        | —                                                      | —                                                                     | —                                                                                               |
 | C   | Official plugins should follow the design token system                                                                    | open        | —                                                      | —                                                                     | —                                                                                               |
 | D   | Sidebar logo: boxed variant, light/dark aware                                                                             | open        | —                                                      | —                                                                     | —                                                                                               |
@@ -75,7 +75,7 @@ spellings; all are inert. Only width utilities do anything.
 | Surface         | PR   |
 | --------------- | ---- |
 | users, plugins  | #689 |
-| roles, webhooks | #690 |
+| roles, webhooks | #692 |
 
 Remaining on layout B, in rough order of similarity to one already done:
 deliveries, image sizes, email templates, email providers, collections,
