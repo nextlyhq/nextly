@@ -300,14 +300,17 @@ describe("the hand-written declaration beside the module", () => {
   );
   const names = (file: string): string[] =>
     [
+      // Every exported BINDING, not only the functions. A `const` added to the module and missed
+      // in the declaration gives every TypeScript consumer `TS2305` while working at runtime, and
+      // a function-only comparison reported that as parity.
       ...readFileSync(path.join(scripts, file), "utf8").matchAll(
-        /^export function (\w+)/gm
+        /^export (?:declare )?(?:function|const|let|var|class) (\w+)/gm
       ),
     ]
       .map(match => match[1]!)
       .sort();
 
-  it("declares exactly the functions the module exports", () => {
+  it("declares exactly the bindings the module exports", () => {
     const runtime = names("published-entries.mjs");
     expect(
       runtime.length,

@@ -157,13 +157,25 @@ const DOM_ONLY_GLOBALS = ["window", "document"];
  * modern build machine and throws for a consumer on the floor. Removing them first makes the
  * evaluation answer the question the package's `engines` range actually asks.
  *
- * Deleting a name that is not there is a no-op, so a global Node adds later is covered by listing
- * it here rather than by the check first failing in the field.
+ * Deleting a name that is not there is a no-op, so a name can be listed before the Node that
+ * defines it ships, and a name Node later removes costs nothing.
+ *
+ * The failure direction is deliberate: a name MISSING from this list leaves the gate permissive —
+ * an artifact using it passes here and breaks on the floor — while a name wrongly present only
+ * makes the gate stricter than the floor requires. Erring toward permissive is right for a check
+ * wired into the build, where a false alarm blocks work that is actually fine.
  */
 const ADDED_AFTER_SUPPORTED_FLOOR = [
+  // v21.
   "navigator",
+  // Unflagged in v22; behind --experimental-websocket on the floor.
+  "WebSocket",
+  // Web storage, arriving across v22 and still flag-gated on the floor.
   "localStorage",
   "sessionStorage",
+  "Storage",
+  // Not in any release the floor covers; listed ahead of the Node that ships it.
+  "URLPattern",
 ];
 
 /**
@@ -270,6 +282,18 @@ async function main() {
           `import. Either the entry gained a client dependency, or the allow-list in ` +
           `published-entries.mjs needs a deliberate addition.`
       );
+    }
+
+    // Re-asked before EVERY import, not once at the start. These artifacts share one process, so
+    // an earlier one that installs `document` would leave a later one's module-scope read working
+    // here and failing for a consumer importing that entry point alone.
+    const leaked = domGlobalsPresent();
+    if (leaked.length > 0) {
+      problems.push(
+        `${leaked.join(", ")} appeared before ${file} was imported, so an earlier artifact ` +
+          `installed it. Nothing evaluated after that point was tested against a bare server.`
+      );
+      break;
     }
 
     // Evaluated, not merely read: this is what makes the browser-global question complete. The
