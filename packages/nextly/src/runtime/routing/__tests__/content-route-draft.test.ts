@@ -336,6 +336,19 @@ describe("the content route's draft decision", () => {
     expect(calls.every(call => call.depth === 0)).toBe(true);
   });
 
+  it("applies the route's depth to the static-params scan too", async () => {
+    // The scan is a TRUSTED read on a public route. Omitting `depth` let it
+    // inherit the Direct API's default, so the one read that runs at BUILD time
+    // — for a query that wants a single column — was the only read on the route
+    // not honouring its own no-expansion posture.
+    const { reader, calls } = stubReader();
+
+    await publicRouteWith(reader).generateStaticParams();
+
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every(call => call.depth === 0)).toBe(true);
+  });
+
   it("still expands relations when the site sets depth explicitly", async () => {
     // The default is a safe starting point, not a ceiling. A site that
     // populates relations says so, and by saying so states that those

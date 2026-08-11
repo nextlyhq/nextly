@@ -465,6 +465,13 @@ function buildRoute<TNode>(
         try {
           result = await nextly.find({
             collection,
+            // The route's own depth, not the Direct API's default. This scan is
+            // a TRUSTED read on a public route, so an inherited expansion depth
+            // pulls related rows — draft ones included — through their nested
+            // hooks at build time, for a query that wants one column. It is the
+            // same posture the render and metadata reads carry; a scan that
+            // opted out of it would be the one read on the route that did not.
+            depth,
             // Lifecycle-aware publish scope — a no-op on status-less collections.
             status,
             // The same locale `resolve()` reads in. Without it a localized
