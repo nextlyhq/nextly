@@ -140,6 +140,19 @@ const READY_TIMEOUT = 20_000;
  */
 const SEEDED_FIRST_NAME = "Dev";
 
+/**
+ * Text that can only be on the dashboard once its data has loaded, one entry
+ * per independent request.
+ *
+ * The widgets fetch separately and fail separately, each replacing its own
+ * skeleton with its own error panel, so proving one request succeeded proves
+ * nothing about the others. `Welcome, Dev` comes from the current-user
+ * request; `Posts` is a seeded collection rendered by `CollectionQuickLinks`
+ * from the dashboard stats, which is the request whose failure shows
+ * "Connection Error" in the captured frame.
+ */
+const DASHBOARD_EVIDENCE = [`Welcome, ${SEEDED_FIRST_NAME}`, "Posts"];
+
 const SCREEN_READY = {
   dashboard: async page => {
     await waitForNoSkeletons(page);
@@ -158,7 +171,21 @@ const SCREEN_READY = {
     // Coupled to `scripts/seed.ts` on purpose: the greeting can only say this
     // once that user has been fetched. If the seed's name changes, this fails
     // loudly rather than quietly widening back to "any dashboard".
-    await waitForVisibleText(page, `Welcome, ${SEEDED_FIRST_NAME}`);
+    //
+    // One assertion per DATA FAMILY, because the widgets fail independently.
+    // The greeting covers the current-user request only; `CollectionQuickLinks`
+    // has its own request and its own error state ("Connection Error"), which
+    // also replaces a skeleton, so a dashboard could satisfy the greeting and
+    // still be captured with an error panel in it.
+    //
+    // Positive content rather than a list of error strings. Enumerating the
+    // failure copy means a widget that adds new copy escapes the list
+    // silently, and a check that quietly stops covering something is the
+    // failure mode this whole readiness map exists to avoid. A seeded
+    // collection name can only render once the stats request has succeeded.
+    for (const required of DASHBOARD_EVIDENCE) {
+      await waitForVisibleText(page, required);
+    }
   },
   collections: async page => {
     await waitForNoSkeletons(page);

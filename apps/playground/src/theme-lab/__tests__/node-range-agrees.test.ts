@@ -1,19 +1,19 @@
 /**
  * Every document that states the supported Node range must state the same one.
  *
- * The range lives in `package.json` as the enforced value and is repeated in
- * two guides for humans and agents. Three copies drifted twice in a row: the
- * enforced range was corrected, `CONTRIBUTING.md` was corrected a round later,
- * and `AGENTS.md` a round after that -- each time pointing contributors at a
- * runtime the repository would refuse.
+ * `package.json` holds the enforced value -- the range a package manager
+ * actually refuses a checkout on -- and two guides repeat it in prose for
+ * humans and agents. A guide that disagrees sends its reader to a runtime the
+ * install rejects, or worse to one it accepts while the test environment does
+ * not support it.
  *
- * Nothing catches that class by reading the code, because a stale prose
- * requirement is not wrong in any way a compiler or a linter can see. It is
- * only wrong relative to another file.
+ * Prose cannot be checked by a compiler or a linter: a stale requirement is
+ * not malformed, it is merely untrue of another file. Comparing the copies is
+ * the only thing that makes the claim falsifiable.
  *
- * This test lives in the playground because the playground is why the range is
- * shaped as it is: its `jsdom` is the dependency with the disjoint-major
- * constraint, so the value is not arbitrary and the reason for it is here.
+ * This lives in the playground because the playground is why the range has the
+ * shape it has: its `jsdom` is the dependency with the disjoint-major
+ * constraint, so the value is not arbitrary and its reason is here.
  */
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";

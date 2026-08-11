@@ -133,6 +133,20 @@ const META_REFERENCES: Array<[RegExp, string]> = [
   [/\bas (requested|discussed|agreed)\b/i, "a conversation"],
   [/\bPR #\d+/i, "a pull request"],
   [/\bphase \d+\b/i, "a plan"],
+  // Review-process vocabulary: narration of when an edit happened relative to
+  // other edits. This is the shape that keeps recurring, and it is harder to
+  // see while writing than a tracker id, because it reads as helpful context
+  // -- "corrected a round later" feels like it explains something, and to
+  // anyone who was not in the review it explains nothing.
+  //
+  // The patterns require the review's own units (a ROUND, a correction round,
+  // an EARLIER finding). Ordinary words a real comment needs -- "previously",
+  // "used to", "before" -- are deliberately absent: those legitimately explain
+  // why code has its current shape, and banning them would make the check fire
+  // on good comments and get it switched off.
+  [/\ba round (later|after|earlier|ago)\b/i, "a review round"],
+  [/\bcorrection round\b/i, "a review round"],
+  [/\bthe earlier (finding|review|comment|round)\b/i, "a review"],
 ];
 
 function walk(dir: string, found: string[] = []): string[] {
