@@ -559,6 +559,81 @@ describe("email provider activity", () => {
       ]);
     });
 
+    /**
+     * Create a provider whose plugin is then removed.
+     *
+     * A BUILT-IN type cannot stand in for this: `reset()` re-seeds the built-ins,
+     * so a provider stored as `smtp` is still registered afterwards and the
+     * fixture never reaches the guard it was written for.
+     */
+    async function orphanedProvider(name: string, isDefault = false) {
+      getEmailProviderRegistry().register(
+        defineEmailProvider({
+          type: "temporary-plugin",
+          label: "Temporary",
+          parseConfig: (input: unknown) => input as Record<string, unknown>,
+          createAdapter: () => ({
+            send: () => Promise.resolve({ success: true, messageId: "x" }),
+          }),
+          configFields: [],
+        })
+      );
+      const created = await service.createProvider(
+        {
+          ...INPUT,
+          name,
+          type: "temporary-plugin" as typeof INPUT.type,
+          configuration: {},
+          isDefault,
+        },
+        ACTOR
+      );
+      // The plugin goes away; the row stays.
+      getEmailProviderRegistry().reset();
+      return created;
+    }
+
+    it("refuses a promotion through updateProvider for an orphaned type", async () => {
+      // The sibling promotion path. A catch-all PATCH or a Direct API update
+      // naming only `isDefault` reaches the same statement `setDefault` does,
+      // without ever looking the type up.
+      const created = await orphanedProvider("Orphan");
+      logged.length = 0;
+
+      await expect(
+        service.updateProvider(created.id, { isDefault: true }, ACTOR)
+      ).rejects.toThrow(/not registered on this server/);
+    });
+
+    it("leaves the existing default alone when it refuses one", async () => {
+      // The refusal has to happen before the demotion, or a rejected promotion
+      // still costs the install its working default.
+      const first = await service.createProvider(
+        { ...INPUT, name: "First", isDefault: true },
+        ACTOR
+      );
+      const orphan = await orphanedProvider("Orphan");
+      logged.length = 0;
+
+      await expect(
+        service.updateProvider(orphan.id, { isDefault: true }, ACTOR)
+      ).rejects.toThrow(/not registered on this server/);
+
+      // Nothing moved, and nothing was attributed.
+      expect(logged).toHaveLength(0);
+      const stillDefault = await service.getProvider(first.id);
+      expect(stillDefault.isDefault).toBe(true);
+    });
+
+    it("still promotes a type that IS registered", async () => {
+      // The control that keeps the guard from refusing the ordinary case.
+      const created = await service.createProvider(INPUT, ACTOR);
+
+      await expect(
+        service.updateProvider(created.id, { isDefault: true }, ACTOR)
+      ).resolves.toMatchObject({ isDefault: true });
+    });
+
     it("records only the promotion when nothing was default", async () => {
       const created = await service.createProvider(INPUT, ACTOR);
       logged.length = 0;

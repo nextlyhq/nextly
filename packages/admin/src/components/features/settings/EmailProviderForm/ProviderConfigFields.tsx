@@ -45,7 +45,7 @@ import { SecretField } from "./SecretField";
  * value some provider is entitled to use, and the collision would present as a
  * choice that silently clears the field.
  */
-function clearSelectionValue(
+export function clearSelectionValue(
   options: ReadonlyArray<{ value: string }> | undefined
 ): string {
   const taken = new Set((options ?? []).map(option => option.value));

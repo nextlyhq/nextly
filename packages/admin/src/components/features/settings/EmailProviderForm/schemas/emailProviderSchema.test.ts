@@ -805,6 +805,16 @@ describe("a stored value whose type the provider's parser coerced", () => {
     ],
   };
 
+  /** The identity half, so each assertion is about `configuration` alone. */
+  const BLANK_FORM = {
+    name: "Acme",
+    type: "acme-mail",
+    fromEmail: "a@b.com",
+    fromName: "",
+    isDefault: false,
+    isActive: true,
+  };
+
   function open(configuration: Record<string, unknown>) {
     return providerToFormValues(
       {
@@ -855,11 +865,69 @@ describe("a stored value whose type the provider's parser coerced", () => {
     expect(open({ host: 25 })).toMatchObject({ host: "25" });
   });
 
-  it("leaves a structured value on a string control alone", () => {
-    // The control. Stringifying anything at all would turn a stored object
-    // into "[object Object]" and offer it back as a value to save.
-    const nested = { a: 1 };
-    expect(open({ host: nested })).toMatchObject({ host: nested });
+  it("leaves a structured value out of the form entirely", () => {
+    // Stringifying it would turn a stored object into "[object Object]" and
+    // offer that back as a value to save, and carrying it through leaves the
+    // input blank while `z.string()` refuses every unrelated edit. An absent
+    // key is the only answer that cannot be wrong: the patch omits it and the
+    // server keeps what it holds.
+    expect(open({ host: { a: 1 } })).not.toHaveProperty("host");
+    expect(open({ host: ["a"] })).not.toHaveProperty("host");
+  });
+
+  it("says on the field that a structured value is not being shown", () => {
+    // The notice and the omission are asked of the same function, so they
+    // cannot come to disagree about which values are showable.
+    expect(
+      hasUnrepresentableStoredValue(
+        { host: { a: 1 } },
+        descriptor.configFields[0]
+      )
+    ).toBe(true);
+    expect(
+      hasUnrepresentableStoredValue({ host: "h" }, descriptor.configFields[0])
+    ).toBe(false);
+  });
+
+  it("keeps an OPTIONAL field's stored value instead of a stand-in", () => {
+    // Carried into the form the value fails `z.string()` and takes every other
+    // field down with it. Dropped, the form validates and the patch omits the
+    // key, so the server keeps what it holds rather than being sent
+    // "[object Object]".
+    const stored = { host: "h", region: { eu: true } };
+    const values = { ...BLANK_FORM, configuration: open(stored) };
+
+    expect(buildProviderSchema(descriptor).safeParse(values).success).toBe(
+      true
+    );
+    expect(
+      formValuesToPayload(values, descriptor, stored).configuration
+    ).not.toHaveProperty("region");
+  });
+
+  it("asks for a REQUIRED field the stored value cannot fill", () => {
+    // The other half, and the right answer for it: a required field whose
+    // stored value cannot be shown is reported as missing, so the operator is
+    // asked for one rather than shown a blank that silently submits.
+    const values = { ...BLANK_FORM, configuration: open({ host: { a: 1 } }) };
+
+    const parsed = buildProviderSchema(descriptor).safeParse(values);
+    expect(parsed.success).toBe(false);
+  });
+
+  it("sends a replacement the operator typed", () => {
+    // The control: dropping it must not make the field unwritable.
+    const stored = { host: { a: 1 } };
+    const payload = formValuesToPayload(
+      {
+        ...BLANK_FORM,
+        configuration: { ...open(stored), host: "typed-by-hand" },
+      },
+      descriptor,
+      stored
+    );
+
+    expect(payload.configuration).toMatchObject({ host: "typed-by-hand" });
   });
 });
 

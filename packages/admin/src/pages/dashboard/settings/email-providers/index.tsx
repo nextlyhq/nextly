@@ -29,6 +29,7 @@ import {
 import React, { useState, useCallback, useMemo } from "react";
 
 import { SettingsTableToolbar } from "@admin/components/features/settings";
+import { clearSelectionValue } from "@admin/components/features/settings/EmailProviderForm/ProviderConfigFields";
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
 import {
   AlertTriangle,
@@ -310,7 +311,12 @@ function EmailProviderTable() {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
   const [search, setSearch] = useState("");
-  const [type, setType] = useState<string>("all");
+  // `undefined` is "no filter". A hardcoded sentinel would have to be a string
+  // no provider may register, and no such string exists -- a plugin is entitled
+  // to the type `"all"`, and then choosing it would be indistinguishable from
+  // clearing the filter. The sentinel below exists only for the Select, which
+  // cannot hold an empty value, and never reaches the request.
+  const [type, setType] = useState<string | undefined>(undefined);
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
   const toggleColumn = useCallback((key: string) => {
@@ -354,6 +360,14 @@ function EmailProviderTable() {
   const descriptors = useMemo(() => descriptorList ?? [], [descriptorList]);
   const descriptorsByType = useMemo(
     () => new Map(descriptors.map(entry => [entry.type, entry])),
+    [descriptors]
+  );
+  // Derived from the catalog rather than fixed, for the reason the
+  // configuration select derives its own: any literal chosen here is a value
+  // some provider is entitled to register.
+  const allTypesValue = useMemo(
+    () =>
+      clearSelectionValue(descriptors.map(entry => ({ value: entry.type }))),
     [descriptors]
   );
 
@@ -473,10 +487,13 @@ function EmailProviderTable() {
     setPage(0);
   }, []);
 
-  const handleTypeChange = useCallback((newType: string) => {
-    setType(newType);
-    setPage(0);
-  }, []);
+  const handleTypeChange = useCallback(
+    (newType: string) => {
+      setType(newType === allTypesValue ? undefined : newType);
+      setPage(0);
+    },
+    [allTypesValue]
+  );
 
   const allColumns = useMemo<NextlyColumn<EmailProviderRecord>[]>(
     () => [
@@ -695,12 +712,15 @@ function EmailProviderTable() {
           />
         }
         filters={
-          <Select value={type} onValueChange={handleTypeChange}>
+          <Select
+            value={type ?? allTypesValue}
+            onValueChange={handleTypeChange}
+          >
             <SelectTrigger className="w-[130px] bg-background text-foreground hover:bg-accent/10">
               <SelectValue placeholder="All Types" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All Types</SelectItem>
+              <SelectItem value={allTypesValue}>All Types</SelectItem>
               {/* One entry per registered provider, so the filter can reach a
                   contributed provider that is genuinely in the table. */}
               {descriptors.map(descriptor => (

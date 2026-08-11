@@ -129,7 +129,11 @@ function fieldSchema(field: EmailProviderConfigField): z.ZodTypeAny {
 
     case "select": {
       const values = (field.options ?? []).map(option => option.value);
-      return z.string().superRefine((value, ctx) => {
+      // Optional means the KEY may be absent, matching the number branch. A
+      // stored value the control cannot show is left out of the form entirely,
+      // and a schema demanding the key would then refuse every unrelated edit
+      // on the strength of a value nobody could see.
+      const chosen = z.string().superRefine((value, ctx) => {
         if (value === "") {
           if (required) {
             ctx.addIssue({
@@ -149,6 +153,7 @@ function fieldSchema(field: EmailProviderConfigField): z.ZodTypeAny {
           });
         }
       });
+      return required ? chosen : chosen.optional();
     }
 
     case "text":
@@ -159,7 +164,7 @@ function fieldSchema(field: EmailProviderConfigField): z.ZodTypeAny {
       // A union whose members both fail reports its own generic "Invalid
       // input" and throws away the message naming the field, which is the
       // whole value of validating on the client.
-      return z.string().superRefine((value, ctx) => {
+      const bounded = z.string().superRefine((value, ctx) => {
         // A credential's stored value arrives as the server's eight-character
         // mask. That is not the credential and need not satisfy its rules: a
         // four-character PIN would otherwise be unopenable, because the mask
@@ -185,6 +190,7 @@ function fieldSchema(field: EmailProviderConfigField): z.ZodTypeAny {
           });
         }
       });
+      return required ? bounded : bounded.optional();
     }
   }
 }
@@ -413,9 +419,11 @@ const STRING_BACKED_KINDS: ReadonlyArray<EmailProviderConfigField["kind"]> = [
  * schema is `z.string()`, so every unrelated edit is refused until the
  * operator re-picks a value they already chose.
  *
- * Only a scalar is converted. Anything unparsable, and any object or array, is
- * passed through untouched so the field shows what is actually stored rather
- * than silently becoming empty or "[object Object]".
+ * Only a scalar is converted. A number a `maxLength` cannot describe stays as
+ * it is on a number control, while an object or an array under a STRING
+ * control is dropped rather than stringified -- "[object Object]" is not what
+ * is stored, and offering it back as a value to save is worse than showing
+ * nothing.
  *
  * A boolean control gets neither treatment. `z.coerce.boolean()` is a
  * truthiness conversion, under which a stored `"false"` is TRUE while every
@@ -444,9 +452,16 @@ function storedValueForControl(
   if (typeof value === "number") {
     return Number.isFinite(value) ? String(value) : value;
   }
-  return typeof value === "bigint" || typeof value === "boolean"
-    ? String(value)
-    : value;
+  if (typeof value === "bigint" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (typeof value === "string") return value;
+  // An object, an array, or a non-finite number: a control that renders a
+  // string has no way to show it, and stringifying one offers "[object
+  // Object]" back as a value to save. Dropped for the same reason a
+  // non-boolean is dropped from a switch -- an absent key leaves the stored
+  // value alone, which is the only answer that cannot be wrong.
+  return undefined;
 }
 
 /**
@@ -622,20 +637,27 @@ export function hasStoredSecret(
 /**
  * Whether a switch is showing a position its stored value did not choose.
  *
- * A boolean field holding something other than a boolean cannot be hydrated
- * without guessing, so it is left out of the form — which means the switch
- * renders off regardless of what is stored. Saying so is the difference
- * between a control the operator can read and one that quietly misreports.
+ * A value the control cannot show is left out of the form, so the control
+ * renders its empty state regardless of what is stored: a switch reads off, a
+ * text input reads blank. Saying so is the difference between a control the
+ * operator can read and one that quietly misreports.
+ *
+ * Covers a boolean holding a non-boolean, which cannot be hydrated without
+ * guessing, and an object or array under a string control, which has no
+ * rendering at all.
  */
 export function hasUnrepresentableStoredValue(
   stored: Record<string, unknown> | undefined,
   field: EmailProviderConfigField
 ): boolean {
-  if (stored === undefined || field.kind !== "boolean") return false;
+  if (stored === undefined) return false;
   const path = splitFieldPath(field.name);
   if (path === null) return false;
   const value = readAtPath(stored, path);
-  return value !== undefined && typeof value !== "boolean";
+  if (value === undefined) return false;
+  // Asked of the same function the form hydrates through, so the notice and
+  // the omission cannot come to disagree about which values are showable.
+  return storedValueForControl(field, value) === undefined;
 }
 
 /** The create/update payload these form values produce. */

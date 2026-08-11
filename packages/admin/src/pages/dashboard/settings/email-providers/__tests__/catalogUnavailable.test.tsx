@@ -144,3 +144,76 @@ describe("row actions when the provider catalog did not load", () => {
     expect(screen.queryByText(/catalog unavailable/i)).not.toBeInTheDocument();
   });
 });
+
+describe('the type filter when a plugin registers the type "all"', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useEmailProviders.mockReturnValue({
+      data: {
+        data: [PROVIDER],
+        meta: { total: 1, page: 0, limit: 10, totalPages: 1 },
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+  });
+
+  const ALL_PROVIDER: EmailProviderDescriptor = {
+    type: "all",
+    label: "All Mail Co",
+    capabilities: {},
+    configFields: [],
+  };
+
+  /** The type filter, told from the page-size select by what it displays. */
+  async function openTypeFilter(user: ReturnType<typeof userEvent.setup>) {
+    const filter = screen
+      .getAllByRole("combobox")
+      .find(box => (box.textContent ?? "").includes("All Types"));
+    if (!filter) throw new Error("the type filter did not render");
+    await user.click(filter);
+  }
+
+  it("offers it as an entry of its own, beside All Types", async () => {
+    // A plugin is entitled to the type `"all"`, and with a hardcoded sentinel
+    // its entry rendered a second item carrying the same value — so choosing
+    // it was indistinguishable from clearing the filter.
+    useEmailProviderTypes.mockReturnValue(
+      CATALOG.loaded([RESEND_DESCRIPTOR, ALL_PROVIDER])
+    );
+    const user = userEvent.setup();
+    render(<EmailProviderTable />);
+
+    await openTypeFilter(user);
+
+    expect(screen.getByRole("option", { name: "All Types" })).toBeVisible();
+    expect(screen.getByRole("option", { name: "All Mail Co" })).toBeVisible();
+  });
+
+  it("asks the server for that type when it is chosen", async () => {
+    useEmailProviderTypes.mockReturnValue(
+      CATALOG.loaded([RESEND_DESCRIPTOR, ALL_PROVIDER])
+    );
+    const user = userEvent.setup();
+    render(<EmailProviderTable />);
+
+    await openTypeFilter(user);
+    await user.click(screen.getByRole("option", { name: "All Mail Co" }));
+
+    // The control that matters: the request carries the type rather than
+    // being suppressed as "no filter".
+    expect(useEmailProviders).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: "all" })
+    );
+  });
+
+  it("sends no type at all while the filter is cleared", () => {
+    useEmailProviderTypes.mockReturnValue(CATALOG.loaded([RESEND_DESCRIPTOR]));
+    render(<EmailProviderTable />);
+
+    expect(useEmailProviders).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: undefined })
+    );
+  });
+});

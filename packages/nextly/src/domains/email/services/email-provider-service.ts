@@ -597,6 +597,34 @@ export class EmailProviderService extends BaseService {
    * the state it started in, so recording that would manufacture an event out
    * of a no-op.
    */
+  /**
+   * Refuse to promote a provider nothing can build an adapter for.
+   *
+   * Promotion decides which provider carries every unrouted message, so
+   * promoting a type whose plugin has been removed points all of them at
+   * something that fails at send time -- AND clears the working default on the
+   * way, so the damage outlives the request that caused it.
+   *
+   * Written once because two methods promote: `setDefault`, and
+   * `updateProvider` with `isDefault: true`. The second reaches the same
+   * statement through a catch-all PATCH or a Direct API update that names no
+   * configuration at all, so a guard living in the first is a guard the second
+   * does not have.
+   *
+   * Refused BEFORE anything is written, so a refusal leaves the stored default
+   * exactly as it was and there is nothing to attribute in the trail.
+   */
+  private assertPromotable(id: string, type: string): void {
+    if (getEmailProviderRegistry().has(type)) return;
+
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage:
+        "This provider's type is not registered on this server, so it cannot be made the default. Install the package that provides it first.",
+      logContext: { id, type },
+    });
+  }
+
   private async clearDefault(
     now: Date,
     actor?: RequestActor | null,
@@ -811,6 +839,12 @@ export class EmailProviderService extends BaseService {
     if (data.isActive !== undefined) updateData.isActive = data.isActive;
     if (data.isDefault !== undefined) updateData.isDefault = data.isDefault;
 
+    // Before the write, and before the demotion inside it: a refused promotion
+    // must leave the existing default alone.
+    if (data.isDefault === true) {
+      this.assertPromotable(id, effectiveType);
+    }
+
     let updatedRows: number;
     try {
       if (data.isDefault === true) {
@@ -970,14 +1004,7 @@ export class EmailProviderService extends BaseService {
     // Enforced here rather than only in the admin: the REST route and the
     // Direct API reach this method without passing the list page, and a rule
     // that lives in one caller is a rule the others do not have.
-    if (!getEmailProviderRegistry().has(row.type)) {
-      throw new NextlyError({
-        code: "BUSINESS_RULE_VIOLATION",
-        publicMessage:
-          "This provider's type is not registered on this server, so it cannot be made the default. Install the package that provides it first.",
-        logContext: { id, type: row.type },
-      });
-    }
+    this.assertPromotable(row.id, row.type);
 
     const now = new Date();
 
