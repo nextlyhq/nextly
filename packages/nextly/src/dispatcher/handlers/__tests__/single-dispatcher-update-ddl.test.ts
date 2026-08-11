@@ -45,17 +45,33 @@ function makeAdapter(
   } = {}
 ) {
   const { mainTableExists = true, onStatement } = options;
+  // Whether the main table has been CREATED during this run. The apply confirms the table exists
+  // before recording "applied", so a double answering a flat `false` would report every rebuild as
+  // failed — the test would then pass for the wrong reason, describing a create that did not work.
+  let created = false;
   return {
     dialect,
     getCapabilities: () => ({ dialect }),
     tableExists: vi.fn(async (name: string) =>
-      name.includes("_locales") ? false : mainTableExists
+      name.includes("_locales") ? false : mainTableExists || created
     ),
     selectOne: vi.fn(async (): Promise<{ id: string } | null> => null),
-    getDrizzle: vi.fn(() => ({})),
+    // The companion reconcile reaches the database through Drizzle rather than `executeQuery`, so
+    // its own statements are NOT visible in `executed`. That is why the flag-only assertion below
+    // is phrased as "no statement naming the MAIN table" rather than "no statements at all": the
+    // claim under test is that the plan rendered no migration SQL, not that the companion did
+    // nothing — the companion doing something is the reason that plan exists at all.
+    //
+    // Shaped the way node-postgres answers through Drizzle — a result object carrying `rows` —
+    // rather than a bare array, which satisfies the call and then fails inside the copy with
+    // "rows is not iterable", a failure that reads as a defect in the code under test.
+    getDrizzle: vi.fn(() => ({
+      execute: async () => ({ rows: [] }),
+    })),
     executeQuery: vi.fn(async (sql: string) => {
       executed.push(sql);
       onStatement?.(sql);
+      if (/CREATE TABLE/i.test(sql)) created = true;
       return [];
     }),
   };
@@ -78,8 +94,9 @@ vi.mock("../../../di/container", () => ({
 // The live-table facts the ALTER generator reads. Doubled because the real readers issue dialect
 // specific catalog queries against a database that is not there, and what this file is recording is
 // the statements the update EMITS, not how those facts are gathered.
+const liveTableHasRows = { value: false };
 vi.mock("../../../domains/schema/pipeline/live-table-facts", () => ({
-  tableHasRows: vi.fn(async () => false),
+  tableHasRows: vi.fn(async () => liveTableHasRows.value),
   readForeignKeyColumns: vi.fn(async () => new Map<string, string[]>()),
   readIndexNames: vi.fn(async () => new Set<string>()),
 }));
@@ -99,8 +116,8 @@ import { dispatchSingles } from "../single-dispatcher";
 const logger: Logger = {
   debug: vi.fn(),
   info: vi.fn(),
-  warn: vi.fn((...a: unknown[]) => console.log("LOGWARN", ...a)),
-  error: vi.fn((...a: unknown[]) => console.log("LOGERR", ...a)),
+  warn: vi.fn(),
+  error: vi.fn(),
 };
 
 /** The registry row an update starts from: a single that already exists and is not locked. */
@@ -168,15 +185,18 @@ async function runUpdate(
     dialect?: "postgresql" | "mysql" | "sqlite";
     existing?: Record<string, unknown>;
     mainTableExists?: boolean;
+    tableHasRows?: boolean;
     onStatement?: (sql: string) => void;
   } = {}
 ) {
   const {
     dialect = "postgresql",
     mainTableExists = true,
+    tableHasRows = false,
     onStatement,
   } = options;
   executed.length = 0;
+  liveTableHasRows.value = tableHasRows;
   adapter = makeAdapter(dialect, { mainTableExists, onStatement });
   const registry = wireRegistry(options.existing ?? existingSingle());
   const result = await dispatchSingles(
@@ -224,57 +244,79 @@ describe("updateSingleSchema — what the request forwards into the DDL", () => 
     expect(written?.migrationStatus).toBe("applied");
   });
 
-  it("emits no table statements for a save that only flips a flag", async () => {
+  it("emits no main-table statements for a save that only flips a flag", async () => {
     // The flag-only save is a plan that renders no SQL, not a second execution path. It still has
-    // companion work to do, which is why it is a plan at all rather than an early return.
-    const { sql, written } = await runUpdate({ localized: true });
+    // companion work — saving Draft/Published on a localized single ADDs or DROPs the companion's
+    // own `_status` — which is why it is a plan at all rather than an early return.
+    //
+    // 🔴 Driven by SAVING the toggle at a value it already holds. That is the case `statusRequested`
+    // exists for and the one a derived `hasStatus !== wasStatus` would collapse: provisioning is
+    // idempotent, so this save is what repairs a localized single whose companion `_status` was
+    // never created. Were it treated as a no-op the repair would silently stop happening.
+    const { sql, written } = await runUpdate(
+      { status: false },
+      { existing: existingSingle({ localized: true, status: false }) }
+    );
 
-    expect(sql).not.toMatch(/ALTER TABLE single_page\b/i);
+    expect(sql).not.toMatch(/ALTER TABLE\s+"?single_page"?\s/i);
+    expect(sql).not.toMatch(/CREATE TABLE\s+"?single_page"?\s/i);
     expect(written?.migrationStatus).toBe("applied");
   });
 
-  it("does not plan a second title column for a field that already owns one", async () => {
-    // The system columns are matched by the COLUMN each field becomes, not by its name. A field
-    // named `Title` already owns `title`, so prepending the system declaration beside it would hand
-    // the diff two fields for one column and plan an ADD COLUMN against a column that exists.
-    const { sql } = await runUpdate({
+  it("emits nothing destructive when a field group is named after a system column", async () => {
+    // A field group stores its values in its own table and declares NO column, so one named `title`
+    // must not be mistaken for the table's own `title`. The normaliser keys the system declarations
+    // on the COLUMN each field becomes rather than on its name, which is what keeps them apart.
+    //
+    // 🔴 This asserts the OUTCOME, not that mechanism, and the distinction is worth stating: keying
+    // on the name instead was measured against this same input and produced byte-identical SQL,
+    // because the generator does not DROP a system column that goes missing from the desired list.
+    // So the two keyings are indistinguishable at this seam and no assertion here can separate
+    // them — `columnsDeclaredBy` is where that choice is decidable and tested. What this does hold
+    // is the outcome a future generator could break: adding a field group beside a system column
+    // must never emit DDL against that column.
+    const { sql, written } = await runUpdate({
       fields: [
-        { name: "Title", type: "text" },
         { name: "heading", type: "text" },
+        { name: "title", type: "component", component: "seo" },
       ],
     });
 
-    expect(sql).not.toMatch(/ADD COLUMN "?title"?\s/i);
+    expect(sql).not.toMatch(/DROP COLUMN\s+"?title"?/i);
+    expect(sql).not.toMatch(/ADD COLUMN\s+"?title"?/i);
+    expect(written?.migrationStatus).toBe("applied");
   });
 });
 
 describe("updateSingleSchema — where a failure is allowed to surface", () => {
   it("raises a refusal instead of saving the fields it refused", async () => {
-    // The generator is a validator as well as a renderer: it refuses an edit it can never apply
-    // before any statement runs, and at that point the table is untouched and the caller's field
-    // list is unsaved. Recording that as `failed` would persist a schema the table does not have
-    // and report the single as having it.
-    const existing = existingSingle({
-      fields: [{ name: "heading", type: "textarea", unique: true }],
-    });
+    // The generator is a validator as well as a renderer: a REQUIRED column has no value for the
+    // rows already there, so it refuses before any statement runs. At that point the table is
+    // untouched and the caller's field list is unsaved — recording that as `failed` would persist a
+    // schema the table does not have and report the single as having it.
     let threw: unknown;
-    let registry;
+    let out;
     try {
-      ({ registry } = await runUpdate(
+      out = await runUpdate(
         {
           fields: [
-            { name: "heading", type: "textarea", unique: true },
-            { name: "body", type: "textarea", unique: true },
+            { name: "heading", type: "text" },
+            {
+              name: "author",
+              type: "relationship",
+              required: true,
+              relationTo: "users",
+            },
           ],
         },
-        { dialect: "mysql", existing }
-      ));
+        { tableHasRows: true }
+      );
     } catch (error) {
       threw = error;
     }
 
     expect(threw).toBeInstanceOf(NextlyError);
-    expect(registry).toBeUndefined();
+    expect(out, "the update did not reach its registry write").toBeUndefined();
     expect(executed, "nothing ran against the database").toEqual([]);
   });
 
