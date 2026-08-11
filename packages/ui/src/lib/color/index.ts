@@ -14,6 +14,11 @@
 export type { Rgb, Hsv, Oklch } from "./convert";
 
 /**
+ * @experimental An sRGB colour with its alpha, which a hex string can carry and `Rgb` cannot.
+ */
+export type { Rgba } from "./hex";
+
+/**
  * @experimental Conversions between the models an editing surface needs.
  *
  * `hsvToRgb`/`rgbToHsv` are the picker's own geometry — a saturation-against-value square beside
@@ -28,3 +33,12 @@ export {
   rgbToHsv,
   rgbToOklch,
 } from "./convert";
+
+/**
+ * @experimental Reading and writing the notation people type.
+ *
+ * `parseHex` answers `null` for anything that is not a colour yet, which is the ordinary state of a
+ * field someone is part-way through typing into; `toHex` omits the alpha pair when the colour is
+ * opaque, so a value reads back the way it was entered.
+ */
+export { parseHex, toHex } from "./hex";

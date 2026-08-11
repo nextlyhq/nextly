@@ -69,6 +69,16 @@ interface ShortcutContextValue {
    * different while both attached a listener to it.
    */
   target: Pick<EventTarget, "addEventListener" | "removeEventListener"> | null;
+  /**
+   * The options the manager in use was built with, as a comparable string.
+   *
+   * Carried because the per-target registry cannot answer for a DETACHED provider: it is a
+   * WeakMap keyed by the target, and `null` is not a key, so a provider that attaches nothing has
+   * no entry to compare against. Two nested detached providers describe the same event stream and
+   * share a manager exactly as two attached ones do, and an inner one passing different options
+   * loses them the same way — with nothing in the registry to notice.
+   */
+  options: string;
 }
 
 const ShortcutContext = React.createContext<ShortcutContextValue | null>(null);
@@ -228,8 +238,13 @@ export function ShortcutProvider({
   // leaves a reservation nothing will ever clean up, and the next provider on that target adopts
   // its options silently. The mismatch is reported rather than hidden, because the symptom
   // otherwise is `mod` meaning the wrong key with nothing to point at.
+  // Checked against the PARENT as well as the registry. The registry answers for a shared target;
+  // the parent answers for the nested case, including the detached one the registry cannot see.
+  const adoptedDiffers =
+    (Boolean(owner) && owner?.options !== fingerprint) ||
+    (nestedOnSameTarget && parent !== null && parent.options !== fingerprint);
   devWarnOnce(
-    !owner || owner.options === fingerprint,
+    !adoptedDiffers,
     "ShortcutProvider: another provider is already listening on this target with different " +
       "options, so the ones passed here are being ignored. Managers are shared per target; give " +
       "the providers matching options, or a target of their own."
@@ -294,8 +309,8 @@ export function ShortcutProvider({
   // provider still outranks what surrounds it.
   const depth = nestedOnSameTarget && parent ? parent.depth : 0;
   const value = React.useMemo(
-    () => ({ manager, depth, target: resolvedTarget }),
-    [manager, depth, resolvedTarget]
+    () => ({ manager, depth, target: resolvedTarget, options: fingerprint }),
+    [manager, depth, resolvedTarget, fingerprint]
   );
   return (
     <ShortcutContext.Provider value={value}>
@@ -323,8 +338,11 @@ export function ShortcutScope({
       manager: parent.manager,
       depth: parent.depth + 1,
       target: parent.target,
+      // Inherited: a scope raises precedence, it does not build a manager, so the options in force
+      // are still the ones the provider above it used.
+      options: parent.options,
     }),
-    [parent.manager, parent.depth, parent.target]
+    [parent.manager, parent.depth, parent.target, parent.options]
   );
   return (
     <ShortcutContext.Provider value={value}>

@@ -6,6 +6,7 @@ import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import { coreBlocks } from "./blocks";
+import { defineBlock } from "./context";
 import { prepareDocumentForRead } from "./prepare-document";
 import { createBlockResolver } from "./resolver";
 
@@ -151,5 +152,84 @@ describe("prepareDocumentForRead", () => {
     });
 
     expect(prepared?.nodes.map(node => node.props.text)).toEqual(["Real"]);
+  });
+
+  describe("slot order", () => {
+    /**
+     * Two slots, so declaration order and stored order can disagree.
+     *
+     * Written here rather than borrowed from the catalogue because every core
+     * block declares exactly one slot, and a single-slot fixture cannot tell
+     * the two orders apart — it would pass whichever order the code emitted.
+     */
+    const panel = defineBlock({
+      name: "test/panel",
+      version: 1,
+      description: "Two slots, so the two orders can disagree.",
+      example: { props: {} },
+      slots: { header: {}, footer: {} },
+      render: () => null,
+    });
+
+    const resolver = createBlockResolver([...coreBlocks, panel]);
+
+    function panelWith(slots: Record<string, BlockNode[]>): BlockDocument {
+      return {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [{ id: "1", type: "test/panel", version: 1, props: {}, slots }],
+      };
+    }
+
+    it("emits slots in the order the definition declares them", () => {
+      // The renderer asks for its slots by calling `renderSlot` once per
+      // declaration, so declaration order is the order the page presents. A
+      // tree documented as render-equivalent that carried stored order would
+      // describe a page nobody is served.
+      const prepared = prepareDocumentForRead(
+        panelWith({
+          footer: [heading("2", "Bottom")],
+          header: [heading("3", "Top")],
+        }),
+        { resolver }
+      );
+
+      expect(Object.keys(prepared?.nodes[0]?.slots ?? {})).toEqual([
+        "header",
+        "footer",
+      ]);
+    });
+
+    it("leaves a declared but unstored slot absent", () => {
+      // This pass repairs what a reader would mis-render, and an empty slot
+      // renders nothing whether its key is present or not. Adding it would
+      // rewrite every document that omits an optional slot.
+      const prepared = prepareDocumentForRead(
+        panelWith({ footer: [heading("2", "Bottom")] }),
+        { resolver }
+      );
+
+      expect(Object.keys(prepared?.nodes[0]?.slots ?? {})).toEqual(["footer"]);
+    });
+
+    it("still drops an undeclared slot while reordering the rest", () => {
+      // Reordering and pruning compose on one node rather than only being
+      // correct apart. The ghost sits BETWEEN two declared slots, so an
+      // implementation that filtered in place would have to reorder around a
+      // gap; this one selects by declaration and never sees it.
+      const prepared = prepareDocumentForRead(
+        panelWith({
+          footer: [heading("2", "Bottom")],
+          ghost: [heading("3", "Nowhere")],
+          header: [heading("4", "Top")],
+        }),
+        { resolver }
+      );
+
+      expect(Object.keys(prepared?.nodes[0]?.slots ?? {})).toEqual([
+        "header",
+        "footer",
+      ]);
+    });
   });
 });

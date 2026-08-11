@@ -30,7 +30,8 @@
       "@nextlyhq/eslint-config",
       "@nextlyhq/prettier-config",
       "@nextlyhq/telemetry",
-      "@nextlyhq/tsconfig"
+      "@nextlyhq/tsconfig",
+      "@nextlyhq/builder"
     ]
   ],
   "linked": [],

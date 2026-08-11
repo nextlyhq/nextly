@@ -282,11 +282,14 @@ exports[`ui public export surface > ./color surface is unchanged 1`] = `
   "Hsv (type)",
   "Oklch (type)",
   "Rgb (type)",
+  "Rgba (type)",
   "hsvToRgb (value)",
   "normalizeHue (value)",
   "oklchToRgb (value)",
+  "parseHex (value)",
   "rgbToHsv (value)",
   "rgbToOklch (value)",
+  "toHex (value)",
 ]
 `;
 
