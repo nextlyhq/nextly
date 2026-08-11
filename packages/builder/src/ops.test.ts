@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { applyOp, OpError, type BuilderOp } from "./ops";
+import { applyOp, OpError, type BuilderOp, type NodePatch } from "./ops";
 
-import type { BlockNode } from "@nextlyhq/blocks-engine";
+import { updateNode, type BlockNode } from "@nextlyhq/blocks-engine";
 
 function node(id: string, slots?: Record<string, BlockNode[]>): BlockNode {
   return {
@@ -182,5 +182,121 @@ describe("an op that cannot apply", () => {
     expect(() =>
       applyOp(forest(), { kind: "insert", node: node("b"), at: { index: 0 } })
     ).toThrow(OpError);
+  });
+
+  it.each<[string, BuilderOp]>([
+    [
+      "insert naming a parent the document does not hold",
+      {
+        kind: "insert",
+        node: node("new"),
+        at: { parentId: "absent", slot: "main", index: 0 },
+      },
+    ],
+    [
+      "insert into a parent without naming the slot",
+      {
+        kind: "insert",
+        node: node("new"),
+        at: { parentId: "outer", index: 0 },
+      },
+    ],
+    [
+      "insert whose SUBTREE repeats an id the document holds",
+      {
+        kind: "insert",
+        node: node("new", { main: [node("b")] }),
+        at: { index: 0 },
+      },
+    ],
+    [
+      "move naming a parent the document does not hold",
+      {
+        kind: "move",
+        id: "b",
+        to: { parentId: "absent", slot: "main", index: 0 },
+      },
+    ],
+    [
+      "move into a parent without naming the slot",
+      { kind: "move", id: "b", to: { parentId: "outer", index: 0 } },
+    ],
+    [
+      "move into its own subtree",
+      {
+        kind: "move",
+        id: "outer",
+        to: { parentId: "a", slot: "main", index: 0 },
+      },
+    ],
+  ])("refuses what the engine declined: %s", (_label, op) => {
+    // The engine reports a refusal by handing back the forest it was given, and
+    // it declines for more reasons than a caller can enumerate. Reading the
+    // RESULT rather than restating those rules is what keeps the fifth reason
+    // from being admitted silently — which for a history means an entry for an
+    // edit that never happened, whose inverse throws when someone undoes it.
+    expect(() => applyOp(forest(), op)).toThrow(OpError);
+  });
+});
+
+describe("the patch type", () => {
+  it("is the engine's, not a copy of it", () => {
+    // A type-level pin, which is worth writing HERE because this package
+    // typechecks its test files — in a package that does not, the assertion
+    // below could never fail and would read as coverage anyway.
+    //
+    // It holds trivially while `NodePatch` is read off the signature. It earns
+    // its place if someone writes the shape out by hand again: the two
+    // assignments then stop compiling the moment the engine narrows, which is
+    // the divergence that would otherwise let an op carry a field `updateNode`
+    // had quietly stopped applying.
+    const fromEngine: NodePatch = {} as Parameters<typeof updateNode>[2];
+    const toEngine: Parameters<typeof updateNode>[2] = {} as NodePatch;
+
+    expect(fromEngine).toEqual({});
+    expect(toEngine).toEqual({});
+  });
+});
+
+describe("a node its author locked", () => {
+  /** The nested child, locked. The engine's primitives do not read this flag. */
+  function withLocked(): BlockNode[] {
+    return [
+      node("outer", {
+        main: [node("a"), { ...node("b"), locked: true }, node("c")],
+      }),
+      node("sibling"),
+    ];
+  }
+
+  it.each<[string, BuilderOp]>([
+    ["removed", { kind: "remove", id: "b" }],
+    [
+      "moved",
+      {
+        kind: "move",
+        id: "b",
+        to: { parentId: "outer", slot: "main", index: 0 },
+      },
+    ],
+  ])("cannot be %s", (_label, op) => {
+    // `BlockNode.locked` documents itself as an author-facing policy flag that
+    // the pure tree primitives do not read, which makes this module the boundary
+    // that enforces it. Nothing below here will.
+    expect(() => applyOp(withLocked(), op)).toThrow(OpError);
+  });
+
+  it("can still be restyled", () => {
+    // The control, and the scope of the lock: it is against being moved and
+    // deleted, not against being edited. A lock that also froze styling would
+    // be a different feature, and asserting only the refusals above would not
+    // notice it had become one.
+    const { nodes } = applyOp(withLocked(), {
+      kind: "update",
+      id: "b",
+      patch: { customCss: ".x { color: red }" },
+    });
+
+    expect(JSON.stringify(nodes)).toContain("color: red");
   });
 });

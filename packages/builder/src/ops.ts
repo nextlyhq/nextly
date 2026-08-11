@@ -37,11 +37,15 @@ import {
 /**
  * The fields an `update` op may carry.
  *
- * Mirrors what the engine's `updateNode` accepts rather than restating it: `id`
- * and `type` are not patchable (an id is identity, a type change is a conversion
- * with its own semantics) and children move through the structural ops.
+ * Read OFF the engine's signature rather than written to match it. `id` and
+ * `type` are not patchable (an id is identity, a type change is a conversion
+ * with its own semantics) and children move through the structural ops — but
+ * saying so again here would be a second statement of the engine's contract,
+ * and the two would agree only until the engine narrowed. Then `BuilderOp`
+ * would keep accepting a field `updateNode` had stopped applying, and the
+ * inverse would be derived for an edit that did not happen.
  */
-export type NodePatch = Partial<Omit<BlockNode, "id" | "type" | "slots">>;
+export type NodePatch = Parameters<typeof updateNode>[2];
 
 /** One edit. The four shapes below are the whole vocabulary. */
 export type BuilderOp =
@@ -66,6 +70,52 @@ export class OpError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "OpError";
+  }
+}
+
+/**
+ * The forest a primitive produced, or a refusal if it declined to act.
+ *
+ * The engine's tree functions report a refusal by returning the forest they
+ * were GIVEN — `moveNode` says so in its own body (`next === without ? nodes :
+ * next`) — so identity is the contract rather than a trick. They decline for
+ * more reasons than a caller can readily enumerate: an unknown parent, a slot
+ * position that names no slot, a destination inside the moving subtree, a
+ * duplicate id anywhere beneath the inserted root.
+ *
+ * Asked of the RESULT rather than re-derived as preconditions. Restating those
+ * rules here would be a second copy of the engine's placement logic, correct on
+ * the day it was written; and a check that enumerates four of five reasons
+ * admits the fifth silently, which for a history means recording an edit that
+ * never happened and an inverse that throws when someone undoes it.
+ */
+function accepted(
+  before: BlockNode[],
+  after: BlockNode[],
+  refusal: string
+): BlockNode[] {
+  if (after === before) throw new OpError(refusal);
+  return after;
+}
+
+/**
+ * Refuses a structural edit to a node its author locked.
+ *
+ * The flag is deliberately invisible to the engine — `BlockNode.locked`
+ * documents itself as "an author-facing policy flag, not a data-layer
+ * guarantee", and the pure tree primitives do not read it — which makes this
+ * module the boundary that has to enforce it. Nothing below here will.
+ *
+ * Structural edits only. A locked node may still be restyled and re-configured;
+ * the lock is against moving and deleting, which is what an author sets it to
+ * prevent.
+ */
+function assertUnlocked(node: BlockNode, verb: string): void {
+  if (node.locked === true) {
+    throw new OpError(
+      `${verb}: node "${node.id}" is locked. An author locked it against being ` +
+        `moved or deleted; unlock it before editing its place in the tree.`
+    );
   }
 }
 
@@ -123,15 +173,16 @@ export interface AppliedOp {
 export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
   switch (op.kind) {
     case "insert": {
-      if (findNode(nodes, op.node.id) !== undefined) {
-        throw new OpError(
-          `insert: a node with id "${op.node.id}" is already in the document. ` +
-            `Ids are identity, so inserting a second one would make every later ` +
-            `op ambiguous about which it addresses.`
-        );
-      }
       return {
-        nodes: insertNode(nodes, op.node, op.at),
+        nodes: accepted(
+          nodes,
+          insertNode(nodes, op.node, op.at),
+          `insert: the document did not accept "${op.node.id}" at the position ` +
+            `given. The position may name a parent the document does not hold ` +
+            `or omit the slot it needs, or the subtree may carry an id the ` +
+            `document already uses — ids are identity, so a repeat would make ` +
+            `every later op ambiguous about which node it addresses.`
+        ),
         inverse: { kind: "remove", id: op.node.id },
       };
     }
@@ -144,22 +195,35 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
           `remove: no node with id "${op.id}" in the document.`
         );
       }
+      assertUnlocked(node, "remove");
       // Both the node and where it sat, captured before it goes: neither is
       // recoverable from the forest afterwards, which is the whole reason the
       // inverse cannot be computed later.
       return {
-        nodes: removeNode(nodes, op.id),
+        nodes: accepted(
+          nodes,
+          removeNode(nodes, op.id),
+          `remove: the document did not accept removing "${op.id}".`
+        ),
         inverse: { kind: "insert", node, at: positionOf(location) },
       };
     }
 
     case "move": {
+      const node = findNode(nodes, op.id);
       const location = locateNode(nodes, op.id);
-      if (location === undefined) {
+      if (node === undefined || location === undefined) {
         throw new OpError(`move: no node with id "${op.id}" in the document.`);
       }
+      assertUnlocked(node, "move");
       return {
-        nodes: moveNode(nodes, op.id, op.to),
+        nodes: accepted(
+          nodes,
+          moveNode(nodes, op.id, op.to),
+          `move: the document did not accept "${op.id}" at the position given. ` +
+            `The position may name a parent the document does not hold, omit ` +
+            `the slot it needs, or sit inside the subtree being moved.`
+        ),
         inverse: { kind: "move", id: op.id, to: positionOf(location) },
       };
     }
