@@ -85,7 +85,7 @@ function positionOf(location: NodeLocation): TreePosition {
  * not have.
  *
  * An absent key has to be represented, not skipped. Undoing an edit that ADDED
- * `customClass` means removing it again, and a patch that simply omits the key
+ * `customCss` means removing it again, and a patch that simply omits the key
  * would leave the added value in place — an undo that silently keeps part of
  * what it undid. `undefined` is how that is said, and it survives the round trip
  * because a document is stored as JSON, where a key set to `undefined` and an

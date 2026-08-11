@@ -101,7 +101,7 @@ describe("an op and its inverse", () => {
     ],
     [
       "update a field the node does NOT have",
-      { kind: "update", id: "a", patch: { customClass: "added" } },
+      { kind: "update", id: "a", patch: { customCss: ".x { color: red }" } },
     ],
   ])("restores the document exactly: %s", (_label, op) => {
     const before = forest();
@@ -147,7 +147,7 @@ describe("the inverse is derived from the document, not from the caller", () => 
     const { applied } = roundTrip(forest(), {
       kind: "update",
       id: "a",
-      patch: { customClass: "added" },
+      patch: { customCss: ".x { color: red }" },
     });
 
     // `undefined` rather than an omitted key: undoing an addition has to REMOVE
@@ -155,13 +155,13 @@ describe("the inverse is derived from the document, not from the caller", () => 
     expect(applied.inverse).toEqual({
       kind: "update",
       id: "a",
-      patch: { customClass: undefined },
+      patch: { customCss: undefined },
     });
     expect(
       Object.keys(
         (applied.inverse as Extract<BuilderOp, { kind: "update" }>).patch
       )
-    ).toEqual(["customClass"]);
+    ).toEqual(["customCss"]);
   });
 });
 
