@@ -12,6 +12,7 @@ import {
   columnTypeIsIndexable,
   indexNameForColumn,
   MAX_INDEX_NAME_LENGTH,
+  uniquenessCanBeAnIndex,
 } from "../index-name";
 
 const LONG_TABLE = `dc_${"a".repeat(50)}`;
@@ -67,6 +68,10 @@ describe("the emitted DDL and the desired schema agree", () => {
       hasCreatedByColumn: false,
       localizedNames: new Set<string>(),
       columnNameFor: field => field.name,
+      // PostgreSQL keys every type this fixture uses, so the answer is yes — stated rather than
+      // defaulted, because the context requires it and a silent default would be the permissive
+      // answer this rule exists to stop.
+      uniquenessIsIndexable: () => true,
     }).map(spec => spec.name);
 
     // Every index the desired schema declares must be one the DDL actually installs, or the
@@ -111,6 +116,9 @@ describe("the DDL and the desired schema agree on WHICH indexes exist", () => {
       localizedNames: new Set<string>(),
       columnNameFor: field => field.name,
       columnIsIndexable: () => columnTypeIsIndexable("json", "mysql"),
+      // Same column, the narrower question: MySQL cannot key a JSON column, so its uniqueness
+      // cannot be a named index either.
+      uniquenessIsIndexable: () => uniquenessCanBeAnIndex("json", "mysql"),
     }).map(spec => spec.name);
 
     // Declaring it while the generator skips it makes every reconcile emit a CREATE INDEX that

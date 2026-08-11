@@ -193,6 +193,21 @@ describe.each(DIALECTS)(
         svc.generateMigrationSQL(TABLE, [definition]),
         column
       );
+      // A uniqueness the dialect cannot enforce has no agreeing pair to compare: CREATE writes
+      // it inline and the server rejects the whole statement, while ADD refuses before emitting
+      // anything. Both refuse to install a column without its guarantee; they simply refuse at
+      // different moments, so there are no attachments to line up.
+      if (
+        definition.unique === true &&
+        refusalMessages(() =>
+          svc.generateAlterTableMigration(TABLE, [], [definition], {
+            tableHasRows: false,
+          })
+        ).length > 0
+      ) {
+        return;
+      }
+
       const added = alterAttachments(
         svc.generateAlterTableMigration(TABLE, [], [definition], {
           tableHasRows: false,
@@ -251,13 +266,26 @@ describe("the attachments the ADD path used to lose", () => {
   it.each(DIALECTS)(
     "still applies an EXPLICIT unique flag, which the desired schema does model (%s)",
     dialect => {
-      const sql = service(dialect).generateAlterTableMigration(
-        TABLE,
-        [],
-        [field({ name: "sku", type: "text", unique: true })],
-        { tableHasRows: false }
-      );
-      expect(alterAttachments(sql, "sku").unique).toBe(true);
+      const add = () =>
+        service(dialect).generateAlterTableMigration(
+          TABLE,
+          [],
+          [field({ name: "sku", type: "text", unique: true })],
+          { tableHasRows: false }
+        );
+
+      // MySQL renders an unbounded `text` field as TEXT, which it can key in neither spelling.
+      // Because it commits each DDL statement separately, attempting the column and then its
+      // constraint would leave the column WITHOUT the guarantee, so the add is refused outright
+      // rather than half-applied. The other dialects key it and attach the constraint.
+      if (dialect === "mysql") {
+        const reported = refusalMessages(add);
+        expect(reported).toHaveLength(1);
+        expect(reported[0]).toContain("UNIQUE_NOT_ENFORCEABLE_ON_DIALECT");
+        return;
+      }
+
+      expect(alterAttachments(add(), "sku").unique).toBe(true);
     }
   );
 
