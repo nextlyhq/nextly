@@ -33,14 +33,16 @@ function cacheKeyParts(): string {
     -1
   );
   let depth = 0;
-  for (let i = text.indexOf("[", start); i < text.length; i++) {
+  let end = -1;
+  for (let i = text.indexOf("[", start); i < text.length && end < 0; i++) {
     if (text[i] === "[") depth++;
-    else if (text[i] === "]") {
-      depth--;
-      if (depth === 0) return text.slice(start, i);
-    }
+    else if (text[i] === "]" && --depth === 0) end = i;
   }
-  throw new Error("keyParts array is unterminated");
+  // An assertion rather than a thrown error: an unterminated array means this
+  // helper could not read the thing under test, which is a failure of the test
+  // and not a product fault to model with a `NextlyError`.
+  expect(end, "the keyParts array is unterminated").toBeGreaterThan(-1);
+  return text.slice(start, end);
 }
 
 describe("the trust bound is part of the cache identity", () => {

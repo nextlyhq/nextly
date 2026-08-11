@@ -10,10 +10,11 @@
  * 4. **`generateStaticParams`, which calls `find` DIRECTLY** and never touches
  *    `resolveContent` at all
  *
- * The fourth is why this file exists. It is the PRE-RENDERING path: what it
- * reads is written into a static artifact, served to everyone, and outlives the
- * source row being unpublished. A previous fix on this route asserted only
- * through the page component, looked complete, and left this path open.
+ * The fourth is why this file exists. It is an INDEPENDENT read path — it
+ * builds its query inline rather than calling `resolveContent`, so nothing
+ * applied to the shared helper reaches it. It is also the PRE-RENDERING path:
+ * what it reads is written into a static artifact, served to everyone, and
+ * outlives the source row being unpublished.
  *
  * Asserted on the source rather than by rendering, because the difference is
  * invisible to a unit harness: a read missing the bound returns the same rows
@@ -53,9 +54,9 @@ describe("the trust bound reaches every read a route performs", () => {
   });
 
   it("carries the bound on the static-params scan, not only the render", () => {
-    // The specific regression: `generateStaticParams` builds its query inline
-    // instead of calling `resolveContent`, so it is missed by any fix applied
-    // to the shared helper.
+    // `generateStaticParams` builds its query inline instead of calling
+    // `resolveContent`, so a bound threaded through the shared helper does not
+    // reach it.
     const text = source("content-route.ts");
     const scan = text.slice(
       text.indexOf("async function generateStaticParams")
@@ -82,5 +83,26 @@ describe("the trust bound reaches every read a route performs", () => {
         "trust bound. A read that forwards the access override without it " +
         "reads every populated target trusted."
     ).toBe(issued);
+  });
+
+  it("gives an enforced route an EMPTY default trusted set", () => {
+    // The two factories mean different things by listing a collection.
+    //
+    // A public route declares its collections public, so trusting them restates
+    // the promise the factory already made. An enforced route declares nothing:
+    // its bypass exists only while a draft grant answers the path, and that
+    // grant authorizes ONE document. It says nothing about what the document
+    // points at — including a SIBLING row in the same collection. Defaulting to
+    // the route's own collections would let a preview of one page bypass a
+    // restricted sibling's rules through a relationship, granting more than the
+    // token did.
+    const text = readFileSync(join(ROUTING, "content-route.ts"), "utf8");
+    expect(
+      /config\.trustedCollections \?\? \(isPublic \? collections : \[\]\)/.test(
+        text
+      ),
+      "an enforced route must trust nothing by default, or a scoped preview " +
+        "widens into siblings the grant never covered"
+    ).toBe(true);
   });
 });

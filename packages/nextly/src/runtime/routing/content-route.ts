@@ -210,12 +210,13 @@ export interface ContentRouteConfig<TNode> {
    * Trusting a collection says its published content may be shown; nothing
    * here can widen a lifecycle.
    *
-   * **`createContentRoute` uses it too, on preview reads.** Its ordinary reads
-   * are enforced, where the bound decides nothing — but a draft grant turns the
-   * bypass on for that request, and the bound is what keeps a preview scoped to
-   * what it previews rather than populating drafts from every collection the
-   * page reaches. Set it on a preview route for the same reason a public one
-   * does; leaving it out uses the route's own `collections`.
+   * **`createContentRoute` uses it too, and defaults it to NOTHING.** Its
+   * ordinary reads are enforced, where the bound decides nothing. A draft grant
+   * turns the bypass on for one request — but that grant authorizes ONE
+   * document and says nothing about what the document points at, including a
+   * sibling row in the same collection. So a preview populates enforced unless
+   * you name a target here, which is the same content an anonymous visitor
+   * would see beside the page being previewed.
    */
   trustedCollections?: string[];
   /** A booted Nextly instance (defaults to `getNextly()`). */
@@ -418,14 +419,25 @@ function buildRoute<TNode>(
   // Built once, at construction: the answer cannot vary per request, and a
   // predicate rebuilt per read is a place for the two to disagree.
   //
-  // Built for BOTH factories, not only the public one. An enforced route reads
-  // with the bypass off, where the predicate is inert — `trustsTarget` is
-  // `overrideAccess && trusted(target)`, so it decides nothing. But a draft
-  // grant turns the bypass ON for that request, and a grant scoped to ONE
-  // document would otherwise populate drafts and access-restricted rows from
-  // every collection the page happens to reach. The bound is what keeps a
-  // preview scoped to what it previews.
-  const trustedCollections = config.trustedCollections ?? collections;
+  // Built for BOTH factories, and the DEFAULT differs because the two factories
+  // mean different things by listing a collection.
+  //
+  // A public route lists the collections it serves and declares them public, so
+  // trusting them is a restatement of what the factory already promised.
+  //
+  // An enforced route declares nothing public. Its bypass exists only while a
+  // draft grant is answering the path, and that grant authorizes ONE document —
+  // it says nothing about what that document points at, including a SIBLING row
+  // in the same collection. Defaulting to the route's own collections would let
+  // a preview of one page bypass a restricted sibling's rules through a
+  // relationship, which is a wider grant than the token gave.
+  //
+  // So an enforced route trusts NOTHING by default: its previews populate
+  // enforced, exactly as the page would render outside preview. A site that
+  // knows a relation target is public names it and gets the same treatment a
+  // public route gets.
+  const trustedCollections =
+    config.trustedCollections ?? (isPublic ? collections : []);
   const trustedSet = new Set(trustedCollections);
   // The predicate form, for the reads this module issues directly.
   const trusted = (name: string): boolean => trustedSet.has(name);

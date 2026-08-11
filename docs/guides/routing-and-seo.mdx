@@ -206,9 +206,12 @@ decision rather than an inherited one.
 > this config widens a lifecycle.
 
 `createContentRoute` needs none of this for its ordinary reads — it reads
-enforced already. The bound still applies when a **draft grant** is active,
-because that turns the bypass on for one request: a preview scoped to a single
-document must not populate drafts from every collection the page reaches.
+enforced already, and **its previews trust nothing by default.** A draft grant
+turns the bypass on for one request, but it authorizes ONE document and says
+nothing about what that document points at — including a sibling row in the
+same collection. So a preview populates relations exactly as an anonymous
+visitor would see them. Name a target in `trustedCollections` if you know it is
+public and want it populated in preview too.
 
 > **Cached pages are point-in-time copies.** A public route pre-renders, so a
 > target whose read policy tightens after the build is not reflected until that
