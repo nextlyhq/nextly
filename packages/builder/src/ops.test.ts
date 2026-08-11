@@ -665,6 +665,58 @@ describe("an op whose own shape is wrong", () => {
     );
   });
 
+  it.each<[string, string]>([
+    ["__proto__", "__proto__"],
+    ["constructor", "constructor"],
+    // The name a hand-written list of the two above would miss, and it breaks
+    // in exactly the same way.
+    ["toString", "toString"],
+  ])("refuses a slot named after an inherited member: %s", (_label, slot) => {
+    const op = persisted(
+      `{"kind":"insert","node":{"id":"x","type":"core/box","version":1,"props":{}},"at":{"parentId":"outer","slot":"${slot}","index":0}}`
+    );
+    let thrown: unknown;
+    try {
+      applyOp(forest(), op);
+    } catch (error) {
+      thrown = error;
+    }
+    // The distinction is the point: without the guard the engine reads an
+    // inherited member as the child list and throws a TypeError, which escapes
+    // this module as something the caller cannot tell from an editor bug.
+    expect(thrown).toBeInstanceOf(OpError);
+    expect(thrown).not.toBeInstanceOf(TypeError);
+  });
+
+  it("refuses a sparse array where every entry must be a string", () => {
+    // `Array.prototype.every` SKIPS holes, so a sparse array reports that every
+    // entry is a string when there is no entry at all. It then serializes as
+    // `[null]`, which strict engine validation rejects — so the document would
+    // hold something no read can accept.
+    const sparse = Array<string>(1);
+    expect(() =>
+      applyOp(forest(), { kind: "update", id: "a", patch: { classes: sparse } })
+    ).toThrow(OpError);
+  });
+
+  it("still accepts an ordinary slot name and an ordinary class list", () => {
+    // The control for both guards above. A check that refused every slot name,
+    // or every array, would satisfy them while making the editor unusable.
+    const inserted = applyOp(forest(), {
+      kind: "insert",
+      node: node("kid"),
+      at: { parentId: "outer", slot: "main", index: 0 },
+    });
+    expect(inserted.nodes[0]?.slots?.main?.[0]?.id).toBe("kid");
+
+    const updated = applyOp(forest(), {
+      kind: "update",
+      id: "a",
+      patch: { classes: ["one", "two"] },
+    });
+    expect(updated.nodes).toBeDefined();
+  });
+
   it("refuses a subtree that contains itself", () => {
     // JSON cannot express this, but an in-process caller can, and the walk
     // would not return.

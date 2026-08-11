@@ -175,9 +175,15 @@ function isBoolean(value: unknown): boolean {
 }
 
 function isStringArray(value: unknown): boolean {
-  return (
-    Array.isArray(value) && value.every(entry => typeof entry === "string")
-  );
+  if (!Array.isArray(value)) return false;
+  // An INDEX loop, not `every`. `Array.prototype.every` skips holes, so
+  // `Array(1)` reports that every entry is a string when there is no entry at
+  // all — and the hole serializes as `null`, which strict validation rejects.
+  // The engine's own class check uses an index loop for this reason.
+  for (let index = 0; index < value.length; index += 1) {
+    if (typeof value[index] !== "string") return false;
+  }
+  return true;
 }
 
 function isStringRecord(value: unknown): boolean {
@@ -473,6 +479,26 @@ function assertPosition(at: TreePosition, verb: string): void {
   if (at.parentId !== undefined && typeof at.parentId !== "string") {
     throw new OpError(
       `${verb}: a parent id of ${JSON.stringify(at.parentId)} addresses nothing.`
+    );
+  }
+  // A slot name that names an inherited member. `insertNode` reads
+  // `slots[slot] ?? []` to find the existing children, and for "__proto__",
+  // "constructor" or "toString" that read answers with something from
+  // `Object.prototype` rather than `undefined` — so the engine throws a
+  // TypeError on a non-iterable and the op escapes this module without the
+  // OpError it promises for a bad op.
+  //
+  // Asked of `Object.prototype` rather than matched against a written list:
+  // the list everyone writes is "__proto__" and "constructor", and "toString"
+  // breaks it exactly the same way.
+  if (
+    typeof at.slot === "string" &&
+    Object.prototype.hasOwnProperty.call(Object.prototype, at.slot)
+  ) {
+    throw new OpError(
+      `${verb}: "${at.slot}" is not a usable slot name. It resolves to a ` +
+        `member every object inherits, so the document's own children could ` +
+        `not be told apart from it.`
     );
   }
   if (at.parentId !== undefined && typeof at.slot !== "string") {
