@@ -41,7 +41,14 @@ export default function setup(): void {
     execFileSync(
       "pnpm",
       ["exec", "turbo", "run", "build", "--filter=@nextlyhq/blocks-react"],
-      { cwd: repoRoot, stdio: "pipe" }
+      {
+        cwd: repoRoot,
+        stdio: "pipe",
+        // Windows resolves package-manager shims via the shell: Corepack
+        // installs `pnpm.cmd`, which cannot be launched directly. Matches how
+        // the CLI spawns a package manager in `cli/commands/add.ts`.
+        shell: process.platform === "win32",
+      }
     );
   } catch (error) {
     // Compiler diagnostics are the only thing that makes a failure here
