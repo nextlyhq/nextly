@@ -22,10 +22,12 @@
  * instead of an assertion failure about numbers that were never meaningful.
  */
 import {
+  frameContentOrigin,
   pointToCanvas,
   pointToHost,
   rectToHost,
   type FrameGeometry,
+  type FrameInset,
 } from "@nextlyhq/builder";
 
 import type { Point, Rect } from "./driver";
@@ -67,3 +69,13 @@ export function mapFrameRectToHost(
 ): Rect {
   return rectToHost(frameRect, frame(frameOrigin, scale));
 }
+
+/**
+ * Where the frame's content viewport starts, from a measured border box.
+ *
+ * Re-exported rather than wrapped: this is the arithmetic every caller needs
+ * after reading `boundingBox()` and `clientLeft`, and the two places that
+ * previously did it by hand both added the inset without scaling it. The
+ * measurement stays in the driver; the sums stay in the editor's module.
+ */
+export { frameContentOrigin, type FrameInset };

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   FrameGeometryError,
+  frameContentOrigin,
   pointToCanvas,
   pointToHost,
   rectToHost,
@@ -59,6 +60,63 @@ describe("mapping a rectangle across the frame", () => {
     const rect = { x: 10, y: 20, width: 30, height: 40 };
     expect(rectToHost(rect, IDENTITY)).toEqual(rect);
   });
+});
+
+describe("locating the frame's content viewport", () => {
+  it("scales the border inset with the frame", () => {
+    // The separating case, and the only one that distinguishes a correct
+    // implementation from adding the inset raw: a 4px border at 50% occupies 2
+    // host pixels, so the content starts at 100 + 2 rather than 100 + 4.
+    expect(
+      frameContentOrigin({ x: 100, y: 50 }, { left: 4, top: 8 }, 0.5)
+    ).toEqual({ x: 102, y: 54 });
+  });
+
+  it("agrees with adding the inset raw only at 100%", () => {
+    // Why the fault survived review: at scale 1 the two implementations are the
+    // same function, and 100% is the state a canvas is developed in.
+    expect(
+      frameContentOrigin({ x: 100, y: 50 }, { left: 4, top: 8 }, 1)
+    ).toEqual({ x: 104, y: 58 });
+  });
+
+  it("leaves the origin alone when the frame has no border", () => {
+    // The fixture case. It passes whether or not the inset is scaled, which is
+    // precisely why it could not have caught this.
+    expect(
+      frameContentOrigin({ x: 100, y: 50 }, { left: 0, top: 0 }, 0.5)
+    ).toEqual({ x: 100, y: 50 });
+  });
+
+  it("feeds a geometry that maps a content-relative point correctly", () => {
+    // The reason the correction exists at all: a rectangle read INSIDE the frame
+    // is relative to the content viewport, so the origin it is added to has to
+    // be the content corner. Composing the two here is what a caller does.
+    const origin = frameContentOrigin(
+      { x: 100, y: 50 },
+      { left: 4, top: 8 },
+      0.5
+    );
+    expect(pointToHost({ x: 20, y: 10 }, { origin, scale: 0.5 })).toEqual({
+      x: 112,
+      y: 59,
+    });
+  });
+
+  it.each([
+    ["zero scale", 0, { left: 1, top: 1 }],
+    ["negative scale", -1, { left: 1, top: 1 }],
+    ["NaN scale", Number.NaN, { left: 1, top: 1 }],
+    ["NaN inset", 1, { left: Number.NaN, top: 1 }],
+    ["infinite inset", 1, { left: 1, top: Number.POSITIVE_INFINITY }],
+  ])(
+    "refuses an unusable measurement rather than returning one: %s",
+    (_label, scale, inset) => {
+      expect(() => frameContentOrigin({ x: 0, y: 0 }, inset, scale)).toThrow(
+        FrameGeometryError
+      );
+    }
+  );
 });
 
 describe("a frame that describes no mapping", () => {

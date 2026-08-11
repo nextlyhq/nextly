@@ -54,10 +54,13 @@ export interface Rect {
  * first render, which is exactly the sort of near-miss that reads as "the
  * indicator feels slightly off" rather than as a bug.
  *
- * That correction belongs to whoever reads the DOM, not here: this module takes
- * numbers so it can be exercised without a browser, and the caller that measured
- * the frame is the only one holding `clientLeft`. See the e2e helper for the
- * measurement that satisfies this contract.
+ * Build one with {@link frameContentOrigin} rather than adding that correction
+ * at the call site. An earlier version of this note pushed the arithmetic out to
+ * "whoever reads the DOM", on the grounds that only the caller holds
+ * `clientLeft`. That reasoning conflated the DOM READ with the arithmetic that
+ * follows it: reading `clientLeft` needs a browser, turning it into an origin is
+ * three multiplications over plain numbers. Two callers duly wrote the
+ * correction themselves, and both wrote it the same way round and both wrong.
  *
  * `scale` is the visual scale the host applies to the frame: a zoomed-out canvas
  * at 50% has `scale: 0.5`.
@@ -102,6 +105,51 @@ function assertUsable(frame: FrameGeometry): void {
         `describes no mapping. Both coordinates must be finite.`
     );
   }
+}
+
+/**
+ * How far the frame's content viewport sits inside its border box.
+ *
+ * `clientLeft` and `clientTop` exactly as the DOM reports them, which is the
+ * whole reason this type exists rather than the caller passing two numbers: they
+ * are CSS pixels in the FRAME's own untransformed space. Every other coordinate
+ * in this module is host space. Mixing the two is the mistake below.
+ */
+export interface FrameInset {
+  readonly left: number;
+  readonly top: number;
+}
+
+/**
+ * Where the frame's content viewport starts, in host coordinates.
+ *
+ * `borderBox` is the corner `getBoundingClientRect` reports for the frame
+ * element, and `inset` is its border width. The border is laid out in the
+ * frame's own pixels, so a host that has scaled the frame scales the border with
+ * everything else: at 50% a 2px border occupies 1 host pixel. Adding the inset
+ * unscaled therefore misplaces the origin by `(1 - scale) * inset`, which is
+ * zero at 100% and grows as the canvas zooms out — a fault that is invisible in
+ * exactly the configuration people develop in.
+ *
+ * Both facts are needed together and neither is guessable from the other, which
+ * is why this is a function rather than a note telling callers to add them up.
+ */
+export function frameContentOrigin(
+  borderBox: Point,
+  inset: FrameInset,
+  scale: number
+): Point {
+  assertUsable({ origin: borderBox, scale });
+  if (!Number.isFinite(inset.left) || !Number.isFinite(inset.top)) {
+    throw new FrameGeometryError(
+      `A frame inset of (${String(inset.left)}, ${String(inset.top)}) ` +
+        `describes no mapping. Both edges must be finite.`
+    );
+  }
+  return {
+    x: borderBox.x + inset.left * scale,
+    y: borderBox.y + inset.top * scale,
+  };
 }
 
 /** A point inside the canvas frame, in host coordinates. */

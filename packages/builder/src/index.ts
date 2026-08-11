@@ -22,10 +22,11 @@
  * predicate would not have prevented that, because sharing a predicate does not
  * share the decision to call it; only sharing the entry point does.
  *
- * This entry exports no features yet. The package exists ahead of them so its
- * name is claimed on npm: trusted publishing cannot perform a package's first
- * publish, and the bootstrap script will not claim a name that is not already a
- * workspace package.
+ * **Public surface so far**: {@link BUILDER_PACKAGE_NAME}, and the frame
+ * geometry below. The editor itself is not exported yet — the package was
+ * created ahead of it so its name could be claimed on npm, because trusted
+ * publishing cannot perform a package's first publish and the bootstrap script
+ * will not claim a name that is not already a workspace package.
  *
  * @module @nextlyhq/builder
  */
@@ -52,10 +53,12 @@ export const BUILDER_PACKAGE_NAME = "@nextlyhq/builder" as const;
  */
 export {
   FrameGeometryError,
+  frameContentOrigin,
   pointToCanvas,
   pointToHost,
   rectToHost,
   type FrameGeometry,
+  type FrameInset,
   type Point,
   type Rect,
 } from "./geometry";

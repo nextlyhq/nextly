@@ -7,7 +7,11 @@ import { expect, type Frame, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "../support/admin";
 
-import { mapFrameRectToHost } from "./coordinate-mapping";
+import {
+  frameContentOrigin,
+  mapFrameRectToHost,
+  type FrameInset,
+} from "./coordinate-mapping";
 import type {
   ActiveTargetReader,
   CanvasDriver,
@@ -166,14 +170,16 @@ export function createPocDriver(page: Page): CanvasDriver {
       // pixels out. A canvas that does not reset the browser's default iframe
       // border has that gap from the first render, and it reads as "the
       // indicator feels slightly off" rather than as a fault.
-      const inset = await frame.evaluate<
-        { left: number; top: number },
-        HTMLIFrameElement
-      >(el => ({
+      //
+      // Measured here, converted there. `clientLeft` is in the frame's own
+      // untransformed pixels while the box is post-transform, so the two cannot
+      // be added without the scale, and doing that sum at the call site is what
+      // put the same error in two files.
+      const inset = await frame.evaluate<FrameInset, HTMLIFrameElement>(el => ({
         left: el.clientLeft,
         top: el.clientTop,
       }));
-      return { x: box.x + inset.left, y: box.y + inset.top };
+      return frameContentOrigin(box, inset, await frameScale());
     },
 
     async readBlockBoxes() {
