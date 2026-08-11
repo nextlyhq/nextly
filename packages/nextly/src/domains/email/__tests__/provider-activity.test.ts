@@ -472,6 +472,20 @@ describe("an update over a configuration nobody can decrypt", () => {
   let providerId: string;
 
   beforeEach(async () => {
+    // The permissive target, so a type change can land with no configuration
+    // of its own and an empty patch can be accepted.
+    getEmailProviderRegistry().register(
+      defineEmailProvider({
+        type: "permissive",
+        label: "Permissive",
+        configFields: [],
+        parseConfig: input => (input ?? {}) as Record<string, unknown>,
+        createAdapter: () => ({
+          send: () => Promise.resolve({ success: true, messageId: "x" }),
+        }),
+      })
+    );
+
     sqlite = new Database(":memory:");
     createEmailProvidersTable(sqlite);
     service = new EmailProviderService(
@@ -510,41 +524,52 @@ describe("an update over a configuration nobody can decrypt", () => {
     vi.clearAllMocks();
   });
 
-  it("reports the configuration as changed when it is replaced", async () => {
-    await service.updateProvider(
-      providerId,
-      {
-        configuration: {
-          host: "smtp.example.com",
-          port: 587,
-          secure: true,
-          auth: { user: "postmaster", pass: "a-new-password" },
-        },
-      },
-      ACTOR
-    );
+  it("reports the discarded configuration on a type change", async () => {
+    // The branch that replaces the stored configuration without the caller
+    // sending one. It decides whether to name `configuration` by asking
+    // whether the preimage held anything — and an unreadable preimage decrypts
+    // to `{}`, which reads as "there was nothing there". The credentials being
+    // discarded are exactly the ones nobody could read.
+    await service.updateProvider(providerId, { type: "permissive" }, ACTOR);
 
-    // Without the readability flag this diffs against `{}` and — for a patch
-    // that happened to merge to `{}` too — reports nothing at all. Here it is
-    // the honest answer either way: an unreadable preimage cannot support the
-    // claim that nothing changed.
     expect(logged[0]?.metadata).toMatchObject({
-      changedFields: ["configuration"],
+      changedFields: ["type", "configuration"],
     });
   });
 
-  it("still reports nothing for a rename over a READABLE configuration", async () => {
-    // The control. Without it the case above would pass on a service that had
-    // started reporting a configuration change on every save — which is the
-    // false-alarm bug an earlier round removed.
+  it("names configuration when an unreadable one is merged over", async () => {
+    // The other branch. A permissive target accepts an empty patch, so the
+    // merged result is `{}` too — identical to the fallback the unreadable
+    // preimage produced, and a string comparison of the two reports no change
+    // for a save that replaced an unreadable credential.
+    await service.updateProvider(
+      providerId,
+      { type: "permissive", configuration: {} },
+      ACTOR
+    );
+
+    expect(logged[0]?.metadata).toMatchObject({
+      changedFields: ["type", "configuration"],
+    });
+  });
+
+  it("reports nothing extra when the preimage is READABLE and empty", async () => {
+    // The control, and it has to be an EMPTY readable configuration rather
+    // than a rename: `{}` is what both cases produce, so this is the one
+    // fixture that distinguishes "nothing was there" from "nobody could read
+    // what was there". Without it, both assertions above would pass on a
+    // service that had started claiming a configuration change on every save
+    // — the false-alarm bug an earlier round removed.
     const readable = await service.createProvider(
-      { ...INPUT, name: "Readable" },
+      { ...INPUT, name: "Readable", type: "permissive", configuration: {} },
       ACTOR
     );
     logged.length = 0;
 
-    await service.updateProvider(readable.id, { name: "Renamed" }, ACTOR);
+    await service.updateProvider(readable.id, { configuration: {} }, ACTOR);
 
-    expect(logged[0]?.metadata).toMatchObject({ changedFields: ["name"] });
+    // No `changedFields` at all, which is how this service already reports an
+    // update that changed nothing.
+    expect(logged[0]?.metadata).toEqual({ providerType: "permissive" });
   });
 });
