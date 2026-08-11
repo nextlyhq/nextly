@@ -12,7 +12,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import type { BlockResolver } from "./resolver";
-import { pruneDrawlessNodes } from "./visibility";
+import { pruneNodes } from "./visibility";
 
 /**
  * A page's compiled stylesheet and the class each node was assigned.
@@ -318,10 +318,43 @@ export function readableGatedRules(
   return gated as Readonly<Record<string, unknown>>;
 }
 
+/**
+ * Which nodes draw nothing, for ONE resolution: the caller's own answer when it
+ * gave one, otherwise the blocks' own declarations.
+ *
+ * Derived once and used by both branches, because the two must agree about the
+ * same artifact. A sheet compiled under a caller's predicate holds exactly the
+ * nodes THAT predicate gated; a read path recomputing from the registry alone
+ * would append back every node the caller gated and the registry does not — and
+ * the stored-artifact branch never looks at the compile context, so a caller
+ * could not correct it by supplying the same one again.
+ *
+ * A caller's function is wrapped rather than called directly. It is host code
+ * running with no block boundary above it, on the path that decides a page's
+ * stylesheet, so a throw would lose the page rather than the node. Anything but
+ * an explicit `true` counts as drawing, which keeps a node that IS on the page
+ * styled.
+ */
+function drawlessTestFor(
+  blocks: BlockResolver,
+  supplied: ((node: BlockNode) => boolean) | undefined
+): (node: BlockNode) => boolean {
+  if (supplied === undefined) {
+    return node => declaresNoMarkup(node, type => blocks.get(type));
+  }
+  return node => {
+    try {
+      return supplied(node) === true;
+    } catch {
+      return false;
+    }
+  };
+}
+
 function withGatedRules(
   styles: PageStyles,
   document: BlockDocument,
-  blocks: BlockResolver
+  drawsNothing: (node: BlockNode) => boolean
 ): PageStyles {
   const entries = readableGatedRules(styles);
   if (entries === undefined || styles.css === undefined) return styles;
@@ -343,10 +376,11 @@ function withGatedRules(
   // and append every child under it. One walk, one rule, no way for the two to
   // disagree about a subtree.
   //
-  // The failure direction is the safe one: `declaresNoMarkup` answers "draws"
-  // for anything short of an explicit `true`, so a block that cannot be asked
-  // keeps its styling.
-  for (const id of documentNodeIds(pruneDrawlessNodes(document, blocks))) {
+  // The failure direction is the safe one: the test answers "draws" for anything
+  // short of an explicit `true`, so a block that cannot be asked keeps its
+  // styling.
+  const surviving = pruneNodes(document, node => !drawsNothing(node));
+  for (const id of documentNodeIds(surviving)) {
     const rules = entries[id];
     if (isUsableGatedEntry(rules)) appended.push(rules);
   }
@@ -497,6 +531,10 @@ export function resolvePageStyles(
    */
   options: ResolveStyleOptions = {}
 ): PageStyles {
+  // Derived before either branch, so the read path and the compile path cannot
+  // answer differently about the same document.
+  const drawsNothing = drawlessTestFor(blocks, styleContext?.drawsNothing);
+
   // An artifact naming classes for nodes this document does not contain was compiled from a
   // DIFFERENT, larger tree — which is exactly what pruning produces. Its `css` may carry those
   // nodes' rules and asset URLs while their markup is withheld, so it cannot be trusted however
@@ -531,7 +569,7 @@ export function resolvePageStyles(
     // appended, which is the same answer the sheet itself got.
     return normalized.refused
       ? normalized.styles
-      : withGatedRules(normalized.styles, document, blocks);
+      : withGatedRules(normalized.styles, document, drawsNothing);
   }
   if (
     styles &&
@@ -559,12 +597,7 @@ export function resolvePageStyles(
       ...(styleContext.blockBases === undefined
         ? { blockBases: blockBasesFor(document, blocks) }
         : {}),
-      ...(styleContext.drawsNothing === undefined
-        ? {
-            drawsNothing: (node: BlockNode) =>
-              declaresNoMarkup(node, type => blocks.get(type)),
-          }
-        : {}),
+      drawsNothing,
     };
     return toPageStyles(
       compilePageCss(document, context),

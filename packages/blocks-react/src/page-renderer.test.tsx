@@ -3978,6 +3978,56 @@ describe("PageRenderer", () => {
       expect(artifact.css).toContain("child-asset.png");
     });
 
+    it("honours the caller's own predicate when reading a stored artifact", async () => {
+      // A sheet compiled under a caller's `drawsNothing` holds exactly the nodes
+      // THAT predicate gated. `test/text` declares nothing, so a read path
+      // recomputing from the registry alone would append its rules straight back
+      // — and the stored-artifact branch never looks at the compile context, so
+      // supplying the same one again could not correct it.
+      const artifact = resolvePageStyles(
+        doc(
+          node("a", "test/text", { props: { value: "x" } }),
+          node("b", "test/text", { props: { value: "y" } })
+        ),
+        {
+          css: ".nx-b { color: teal }",
+          classes: { a: "nx-a", b: "nx-b" },
+          gated: { a: ".nx-a { background-image: url(/host-gated.png) }" },
+        },
+        {
+          breakpoints: { viewport: [], container: [] },
+          drawsNothing: candidate => candidate.id === "a",
+        },
+        createBlockResolver([text as AnyBlockDefinition])
+      );
+
+      expect(artifact.css).not.toContain("host-gated.png");
+    });
+
+    it("keeps the page when the caller's predicate throws", async () => {
+      // Host code, running with no block boundary above it, on the path that
+      // decides a page's stylesheet. A throw must cost the node's exemption, not
+      // the page.
+      const artifact = resolvePageStyles(
+        doc(node("a", "test/text", { props: { value: "x" } })),
+        {
+          css: ".nx-a { color: teal }",
+          classes: { a: "nx-a" },
+          gated: { a: ".nx-a { background-image: url(/host-gated.png) }" },
+        },
+        {
+          breakpoints: { viewport: [], container: [] },
+          drawsNothing: () => {
+            throw new Error("host predicate is broken");
+          },
+        },
+        createBlockResolver([text as AnyBlockDefinition])
+      );
+
+      // Answered "draws", so the node keeps its styling rather than losing it.
+      expect(artifact.css).toContain("host-gated.png");
+    });
+
     it("still gets the rules of a node that DOES draw", async () => {
       // The control. Without it the assertion above would pass on a resolver
       // that appends nothing at all, which would leave every gated node on every
