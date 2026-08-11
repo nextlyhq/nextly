@@ -36,18 +36,11 @@ import {
 } from "../../api/versions-access";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
-import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
-import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
-import {
-  readForeignKeyColumns,
-  readIndexNames,
-  tableHasRows,
-} from "../../domains/schema/pipeline/live-table-facts";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
 import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
 import {
@@ -62,9 +55,7 @@ import {
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
-import { applyMigrationStatements } from "../../domains/schema/services/apply-migration-statements";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
-import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
@@ -876,7 +867,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const wasLocalized = existing.localized === true;
       const isLocalized =
         b.localized !== undefined ? b.localized === true : wasLocalized;
-      const alterOmitLocalized = isLocalized || wasLocalized;
       // i18n: gate the Internationalization enable on the app-level
       // `localization` config (false→true only — an already-localized
       // single keeps saving, and disabling is always allowed).
@@ -884,330 +874,39 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         assertLocalizationConfigured("single", slug);
       }
 
-      let migrationStatus = existing.migrationStatus;
+      // What the single is being saved AS, and what it currently IS. Both halves are needed: the
+      // ALTER adds or drops the `status` column between them, and the companion's disable restore
+      // needs to know whether main carried it before this save.
+      const wasStatus = (existing as { status?: boolean }).status === true;
+      const hasStatus = b.status !== undefined ? b.status === true : wasStatus;
 
+      let schemaFields: FieldDefinition[] | undefined;
       if (b.fields !== undefined) {
         // Same rules as the ui-schema.json mirror (see api/fields-payload).
         assertValidFieldsPayload(b.fields);
         updateData.fields = b.fields;
         updateData.schemaHash = calculateSchemaHash(b.fields);
-
-        // Generate and execute ALTER TABLE migration. The dialect comes from
-        // the adapter that will run it, for the same reason as the create
-        // path above: the service's own default is "postgresql". Read
-        // optionally, matching how the execution below reads it.
-        const updateDialect = container.has("adapter")
-          ? container.get<DrizzleAdapter>("adapter").getCapabilities().dialect
-          : undefined;
-        const schemaService = new DynamicCollectionSchemaService(
-          undefined,
-          updateDialect
-        );
-        const tableName = existing.tableName;
-
-        // Normalize field lists for ALTER TABLE comparison. The physical
-        // table always has system columns (title, slug, updatedAt) added
-        // by generateMigrationSQL, but stored field definitions may not
-        // include them. We ensure both old and new lists include these
-        // so the diff doesn't try to ADD COLUMN for columns that already
-        // exist in the physical table.
-        const systemFields: FieldDefinition[] = [
-          // `localized: false` for the same reason the synthetic declarations
-          // carry it: these are main-table system columns, and text-like
-          // fields localize by default. Without it `omitLocalized` below
-          // strips them from a localized single's ALTER input, so the
-          // main-table diff stops seeing the `title`/`slug` it already has
-          // and plans them as additions against columns that exist.
-          { name: "title", type: "text", required: true, localized: false },
-          { name: "slug", type: "text", required: true, localized: false },
-        ];
-
-        const existingFields = (existing.fields ??
-          []) as unknown as FieldDefinition[];
-        // i18n: when the single is localized (in either state), translatable columns live on the
-        // companion, never the main table — drop them from the ALTER input so the main-table diff
-        // never tries to ADD/DROP them. `reconcileSingleCompanion` owns the companion side.
-        const omitLocalized = (
-          fields: FieldDefinition[]
-        ): FieldDefinition[] => {
-          if (!alterOmitLocalized) return fields;
-          const localizedNames = new Set(
-            resolveLocalizedFieldNames(fields, true)
-          );
-          return fields.filter(f => !localizedNames.has(f.name));
-        };
-        // Keyed by the COLUMN each field becomes, matching `defineSingle` and the generators. A
-        // field named `Title` already owns the `title` column, so prepending the system one beside
-        // it hands the alter two fields for a single column.
-        const declaredColumns = (fields: FieldDefinition[]): Set<string> =>
-          columnsDeclaredBy(fields);
-        const existingFieldsForAlter = omitLocalized(existingFields);
-        const existingFieldColumns = declaredColumns(existingFieldsForAlter);
-        const normalizedOldFields: FieldDefinition[] = [
-          ...systemFields.filter(sf => !existingFieldColumns.has(sf.name)),
-          ...existingFieldsForAlter,
-          {
-            name: "updatedAt",
-            type: "date",
-            required: false,
-          },
-        ];
-
-        const newFieldsRaw = b.fields as unknown as FieldDefinition[];
-        const newFieldsForAlter = omitLocalized(newFieldsRaw);
-        const newFieldColumns = declaredColumns(newFieldsForAlter);
-        const normalizedNewFields: FieldDefinition[] = [
-          ...systemFields.filter(sf => !newFieldColumns.has(sf.name)),
-          ...newFieldsForAlter,
-          {
-            name: "updatedAt",
-            type: "date",
-            required: false,
-          },
-        ];
-
-        // Forward status flags so the alter migration can ADD/DROP the
-        // `status` column when the user toggles Draft/Published. `existing`
-        // holds the previous value; `b.status` holds what the user is
-        // saving (undefined = leave alone).
-        const wasStatus = (existing as { status?: boolean }).status === true;
-        const hasStatus =
-          b.status !== undefined ? b.status === true : wasStatus;
-        // Generated where the table is known to exist, below. Whether a required column can be
-        // added without a value for the rows already there, and which columns are referenced by
-        // a foreign key, are read from the live table, and neither question has an answer for a
-        // table that was never created.
-        let migrationSQL = "";
-        // Whether any statement of this migration reached the database. Everything before that
-        // point — reading the live table, generating the SQL — either succeeds or leaves the
-        // schema exactly as it was, and a failure there must not be recorded as a migration
-        // that ran and save a field list the table never received.
-        let migrationBegan = false;
-
-        migrationStatus = "pending";
-
-        try {
-          if (container.has("adapter")) {
-            const adapter = container.get<DrizzleAdapter>("adapter");
-
-            // If the table doesn't exist (e.g. earlier creation failed),
-            // create it fresh instead of altering nothing.
-            const tableExistsBefore = await adapter.tableExists(tableName);
-
-            if (!tableExistsBefore) {
-              const createSQL = schemaService.generateMigrationSQL(
-                tableName,
-                normalizedNewFields,
-                // i18n: fresh (re)create omits translatable columns when localized.
-                { isSingle: true, hasStatus, localized: isLocalized }
-              );
-              // Same boundary as the ALTER branch below: once a statement is sent, a failure
-              // has left the table partly built rather than untouched.
-              migrationBegan = true;
-              await applyMigrationStatements(adapter, createSQL);
-            } else {
-              const db = adapter.getDrizzle();
-              const liveDialect = adapter.getCapabilities().dialect;
-              const [rows, foreignKeys, indexNames] = await Promise.all([
-                tableHasRows(db, liveDialect, tableName),
-                readForeignKeyColumns(db, liveDialect, tableName),
-                readIndexNames(db, liveDialect, tableName),
-              ]);
-              migrationSQL = schemaService.generateAlterTableMigration(
-                tableName,
-                normalizedOldFields,
-                normalizedNewFields,
-                {
-                  wasStatus,
-                  hasStatus,
-                  tableHasRows: rows,
-                  foreignKeysByColumn: foreignKeys,
-                  indexNames,
-                }
-              );
-              // Past this point a statement may have run, so a failure is a partly-applied
-              // migration rather than an edit that never started.
-              migrationBegan = true;
-              await applyMigrationStatements(adapter, migrationSQL);
-            }
-
-            const tableExistsAfter = await adapter.tableExists(tableName);
-            if (tableExistsAfter) {
-              migrationStatus = "applied";
-
-              // Re-register runtime schema with updated fields.
-              try {
-                const { generateRuntimeSchema } = await import(
-                  "../../domains/schema/services/runtime-schema-generator"
-                );
-                const dialect = adapter.getCapabilities().dialect;
-                const { table: runtimeTable } = generateRuntimeSchema(
-                  tableName,
-                  (b.fields ?? existing.fields) as FieldDefinition[],
-                  dialect,
-                  // i18n: main runtime table omits translatable columns when localized.
-                  { status: hasStatus, localized: isLocalized }
-                );
-                const resolver = (
-                  adapter as unknown as {
-                    tableResolver?: {
-                      registerDynamicSchema?: (
-                        name: string,
-                        table: unknown
-                      ) => void;
-                    };
-                  }
-                ).tableResolver;
-                if (
-                  resolver &&
-                  typeof resolver.registerDynamicSchema === "function"
-                ) {
-                  resolver.registerDynamicSchema(tableName, runtimeTable);
-                }
-              } catch {
-                // Non-fatal.
-              }
-
-              // i18n: provision/alter the companion single_<slug>_locales table for the new
-              // localized field set: CREATE + seed the default locale from main and drop those
-              // columns when newly localized (enable), restore + archive + drop on disable, or
-              // ADD/DROP columns as translatable fields change. `wasLocalized` drives the
-              // enable/disable detection.
-              try {
-                await reconcileSingleCompanion({
-                  slug,
-                  tableName,
-                  oldFields: existing.fields as unknown as FieldDefinition[],
-                  newFields: (b.fields ??
-                    existing.fields) as unknown as FieldDefinition[],
-                  localized: isLocalized,
-                  wasLocalized,
-                  status: hasStatus,
-                  // Already computed above from the persisted record, for the shared ALTER. The
-                  // disable restore needs the same fact.
-                  wasStatus,
-                  adapter,
-                });
-              } catch (companionErr) {
-                migrationStatus = "failed";
-                const m =
-                  companionErr instanceof Error
-                    ? companionErr.message
-                    : String(companionErr);
-                console.error(
-                  `[Singles] Companion reconcile failed for "${tableName}": ${m}`
-                );
-              }
-            } else {
-              migrationStatus = "failed";
-              console.error(
-                `[Singles] Table "${tableName}" not found after migration update`
-              );
-            }
-          } else {
-            console.warn(
-              "[Singles] No adapter found in container, migration not executed"
-            );
-          }
-        } catch (migrationError) {
-          // A refusal is not a failed migration. The generator rejects an edit it can never
-          // apply — a required column with no value for the rows already there, a referenced
-          // column SQLite cannot detach — before any statement runs, and the field list is
-          // still exactly what the caller sent. Recording "failed" and saving that list anyway
-          // would persist a schema the table does not have and report success for it, so the
-          // refusal is raised to the caller with the field it names.
-          //
-          // The same holds for anything else thrown before the first statement: a probe that
-          // cannot reach the database, or a catalog read the connection is not permitted, ends
-          // the save rather than reporting a migration that never began as one that failed.
-          if (migrationError instanceof NextlyError || !migrationBegan) {
-            throw migrationError;
-          }
-          migrationStatus = "failed";
-          const message =
-            migrationError instanceof Error
-              ? migrationError.message
-              : String(migrationError);
-          console.error("[Singles] Migration execution failed:", message);
-          console.error("[Singles] Migration SQL was:", migrationSQL);
-        }
-
-        updateData.migrationStatus = migrationStatus;
-      } else if (
-        isLocalized !== wasLocalized ||
-        (b.status !== undefined && (isLocalized || wasLocalized))
-      ) {
-        // Flag-only save (no field changes) that still needs companion work: an i18n
-        // enable/disable transition, or a Draft/Published toggle on a localized single (which
-        // ADDs/DROPs the companion `_status`). Without this, a settings-only toggle persisted the
-        // flag while leaving the physical schema untouched — data would strand in the wrong table.
-        try {
-          if (container.has("adapter")) {
-            const adapter = container.get<DrizzleAdapter>("adapter");
-            const tableName = existing.tableName;
-            const existingFields =
-              existing.fields as unknown as FieldDefinition[];
-            // What the single is being saved AS, and what it currently IS. The disable restore
-            // needs the second: whether main carried `status` and the companion `_status` before
-            // this apply.
-            const wasStatus =
-              (existing as { status?: boolean }).status === true;
-            const hasStatus =
-              b.status !== undefined ? b.status === true : wasStatus;
-            await reconcileSingleCompanion({
-              slug,
-              tableName,
-              oldFields: existingFields,
-              newFields: existingFields,
-              localized: isLocalized,
-              wasLocalized,
-              status: hasStatus,
-              wasStatus,
-              adapter,
-            });
-            // Re-register the main runtime table so it reflects the new column shape: a disable
-            // restores the translatable columns onto main, an enable omits them.
-            try {
-              const dialect = adapter.getCapabilities().dialect;
-              const { table: runtimeTable } = generateRuntimeSchema(
-                tableName,
-                existingFields,
-                dialect,
-                { status: hasStatus, localized: isLocalized }
-              );
-              const resolver = (
-                adapter as unknown as {
-                  tableResolver?: {
-                    registerDynamicSchema?: (
-                      name: string,
-                      table: unknown
-                    ) => void;
-                  };
-                }
-              ).tableResolver;
-              if (typeof resolver?.registerDynamicSchema === "function") {
-                resolver.registerDynamicSchema(tableName, runtimeTable);
-              }
-            } catch {
-              // Non-fatal: next boot re-registers the runtime table.
-            }
-            updateData.migrationStatus = "applied";
-          }
-        } catch (companionErr) {
-          const m =
-            companionErr instanceof Error
-              ? companionErr.message
-              : String(companionErr);
-          console.error(
-            `[Singles] Companion transition failed for "${existing.tableName}": ${m}`
-          );
-          updateData.migrationStatus = "failed";
-        }
+        schemaFields = b.fields as unknown as FieldDefinition[];
       }
 
-      const updated = await svc.registry.updateSingle(slug, updateData, {
-        source: "ui",
-      });
+      // The schema change and the registry row are written by one service call, because a lock has
+      // to cover both and cannot do that from here: the DDL would already have run by the time a
+      // lock taken inside the registry service was acquired.
+      const { record: updated, migrationStatus } =
+        await svc.metadata.updateSingleSchema({
+          slug,
+          existing,
+          updateData,
+          fields: schemaFields,
+          isLocalized,
+          wasLocalized,
+          hasStatus,
+          wasStatus,
+          // Whether the request SET the toggle, which is not the same as changing it: saving it at
+          // its current value still reaches the companion, and that is what repairs a localized
+          // single whose companion `_status` was never provisioned.
+          statusRequested: b.status !== undefined,
+        });
 
       // Migration status drives the toast copy so admins see "applied"
       // vs "pending" immediately.
