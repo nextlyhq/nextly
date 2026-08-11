@@ -53,13 +53,27 @@ import { validate } from "./validation";
  */
 
 /**
- * A document that tallies every property read the engine takes from it.
+ * A document that tallies every touch the engine makes on it.
  *
  * Wrapped one level at a time so that nested nodes, props and style records are
  * each counted, which is what makes the tally track the traversal rather than
- * the shape of the top-level object. Only string keys count: the symbol reads
- * that drive iteration are an artefact of how a walk is written rather than of
- * how much of the document it visits.
+ * the shape of the top-level object.
+ *
+ * EVERY way of reaching the input is counted, not only value reads, because a
+ * traversal does not have to read a value to be a traversal. `Object.keys`,
+ * `Object.entries`, `for...in` and `in` reach an object through the enumeration
+ * and descriptor traps and never call `get` at all — so a `get`-only tally
+ * scores repeated enumeration of the input as free, and the engine enumerates
+ * input keys in the validation and migration walks today. The four traps below
+ * are the complete set by which an object's own shape or values can be reached,
+ * which is what makes this a census rather than a sample: a walk cannot invent a
+ * fifth way.
+ *
+ * `ownKeys` is weighted by the keys it hands back, because enumerating a record
+ * costs its width — scoring one call as one touch would make a scan of a
+ * thousand keys as cheap as reading one field. Symbol keys are skipped in `get`:
+ * the symbol reads that drive iteration are an artefact of how a walk is
+ * written rather than of how much of the document it visits.
  *
  * The proxy is transparent — every trap defers to `Reflect` — so the engine
  * computes exactly what it would have computed on the plain document. The tests
@@ -70,10 +84,23 @@ import { validate } from "./validation";
 function tallyingReads<T>(value: T, tally: { reads: number }): T {
   if (value === null || typeof value !== "object") return value;
 
-  const count = {
-    get(target: object, key: string | symbol, receiver: unknown): unknown {
+  const count: ProxyHandler<object> = {
+    get(target, key, receiver) {
       if (typeof key === "string") tally.reads += 1;
       return Reflect.get(target, key, receiver);
+    },
+    has(target, key) {
+      tally.reads += 1;
+      return Reflect.has(target, key);
+    },
+    getOwnPropertyDescriptor(target, key) {
+      tally.reads += 1;
+      return Reflect.getOwnPropertyDescriptor(target, key);
+    },
+    ownKeys(target) {
+      const keys = Reflect.ownKeys(target);
+      tally.reads += keys.length;
+      return keys;
     },
   };
 
@@ -178,6 +205,25 @@ const MEASUREMENT_TIMEOUT_MS = 120_000;
 
 describe("validation scales linearly with document size", () => {
   const ctx = { breakpoints: SCALE_BREAKPOINTS, mode: "strict" as const };
+
+  it("counts reaching the document by enumeration, not only by reading", () => {
+    // The coverage the ratio depends on, pinned directly. `Object.keys` and its
+    // relatives reach an object through the enumeration and descriptor traps and
+    // never call `get`, so a tally watching reads alone scores repeated
+    // enumeration of the input as free — and the walks here enumerate node slots
+    // and attributes. A regression that re-enumerated would then be invisible to
+    // every assertion below while costing real time.
+    const tally = { reads: 0 };
+    const doc = tallyingReads(scaleDocument({ nodes: 2 }), tally);
+
+    const before = tally.reads;
+    Object.keys(doc);
+    expect(tally.reads).toBeGreaterThan(before);
+
+    const afterKeys = tally.reads;
+    "nodes" in doc;
+    expect(tally.reads).toBeGreaterThan(afterKeys);
+  });
 
   it("reports the same issues through the counting document", () => {
     // The precondition the ratio depends on. An instrument that shortened the
