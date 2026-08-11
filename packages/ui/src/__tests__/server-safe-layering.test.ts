@@ -291,8 +291,18 @@ function analyze(source: string, fileName: string): Analysis {
                   ts.isVariableDeclaration(grandchild) &&
                   isHoisted(grandchild)
                 ) {
+                  // `var { window } = source` binds through a PATTERN, so the declaration itself
+                  // has no single name and every binding sits in a nested element.
                   const name = boundName(grandchild);
                   if (name !== undefined) names.add(name);
+                  ts.forEachChild(
+                    grandchild.name,
+                    function element(child): void {
+                      const bound = boundName(child);
+                      if (bound !== undefined) names.add(bound);
+                      ts.forEachChild(child, element);
+                    }
+                  );
                 }
                 hoisted(grandchild);
               });
@@ -807,18 +817,22 @@ function resolveLocal(fromFile: string, specifier: string): string | null {
   // `./helper.mjs` may be backed by `helper.mts`, and `.cjs` by `.cts`. Those keep their own
   // extension rather than collapsing to `.ts`, so they need their own candidates.
   const moduleForm = base.replace(/\.mjs$/, ".mts").replace(/\.cjs$/, ".cts");
+  // `.tsx` BEFORE `.ts`, matching esbuild's documented implicit-extension order
+  // (`.tsx,.ts,.jsx,.js,.css,.json`). With both present the build takes the `.tsx`, so probing the
+  // other way round reads a file that does not ship and every conclusion about it is about the
+  // wrong module.
   for (const candidate of [
     base,
-    `${base}.ts`,
     `${base}.tsx`,
+    `${base}.ts`,
     // BEFORE the `.ts` collapse: with both `helper.ts` and `helper.mts` present, esbuild resolves
     // `./helper.mjs` to the `.mts`. Probing the collapsed form first would follow a different file
     // than the bundler does.
     moduleForm,
-    `${swapped}.ts`,
     `${swapped}.tsx`,
-    path.join(base, "index.ts"),
+    `${swapped}.ts`,
     path.join(base, "index.tsx"),
+    path.join(base, "index.ts"),
   ]) {
     if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
   }
@@ -1427,6 +1441,20 @@ describe("reading a module", () => {
     ).toEqual([]);
   });
 
+  it("hoists every name a destructured var binds", () => {
+    // `var { window } = source` binds through a PATTERN, so the declaration has no single name and
+    // the binding sits in a nested element. The hoist still reaches module scope, so the later
+    // read is the module's own and reporting it would reject valid code.
+    expect(
+      read(`
+        const source = { window: 1, location: 2 };
+        { var { window, location } = source; }
+        export const w = window;
+        export const l = location;
+      `).globals
+    ).toEqual([]);
+  });
+
   it("keeps a static block's var inside it too", () => {
     // `var` hoists out of a plain block but NOT out of a static block, which owns its var scope
     // the way a function does. The field initialiser beside it reads the ambient global.
@@ -1554,6 +1582,30 @@ describe("resolving a local import", () => {
       "entry.ts",
       "helper.ts",
     ]);
+  });
+
+  it("prefers `.tsx` over `.ts`, as esbuild's implicit-extension order does", () => {
+    // Only observable when BOTH exist. esbuild's documented default is
+    // `.tsx,.ts,.jsx,.js,.css,.json`, so the build takes `helper.tsx` — and reading `helper.ts`
+    // instead would inspect a file that does not ship, leaving every conclusion about that module
+    // green and about the wrong source. The `.tsx` here carries JSX, which the `.ts` does not.
+    const dir = mkdtempSync(path.join(os.tmpdir(), "nx-layering-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    writeFileSync(path.join(dir, "helper.ts"), "export const helper = 1;\n");
+    writeFileSync(
+      path.join(dir, "helper.tsx"),
+      "export const helper = <div />;\n"
+    );
+    const entry = path.join(dir, "entry.ts");
+    writeFileSync(entry, 'export { helper } from "./helper";\n');
+
+    const { files } = reach(entry);
+    expect(files.map(({ file }) => path.basename(file)).sort()).toEqual([
+      "entry.ts",
+      "helper.tsx",
+    ]);
+    // And the JSX in it is seen, which is the consequence that matters: the `.ts` sibling has none.
+    expect(files.some(({ analysis }) => analysis.jsx)).toBe(true);
   });
 
   it("prefers `.mts` over `.ts` for a `.mjs` specifier, as the bundler does", () => {
