@@ -8,6 +8,7 @@
  */
 
 import type { PaginationMeta } from "../../api/response-shapes";
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { HookWarning } from "../../hooks/side-effect-warnings";
 import type { RichTextOutputFormat } from "../../lib/rich-text-html";
 
@@ -405,6 +406,25 @@ export interface DirectAPIConfig {
    * and role for permission checks.
    */
   user?: UserContext;
+
+  /**
+   * The caller's authenticated scope, when the caller is not a session user.
+   *
+   * Distinct from `user`, which says WHO is calling. This says what kind of
+   * caller it is and, for an API key, which grants the KEY itself carries.
+   * A scoped key is authoritative on its own stamped scope and never on its
+   * owner's roles, so without this an access check resolves the owner's RBAC
+   * instead — including the owner's super-admin bypass, which would let an
+   * update-only key issued by an administrator act as that administrator.
+   *
+   * Only meaningful with `overrideAccess: false`. Omit it for session and
+   * system callers, which resolve their grants the normal way.
+   *
+   * Carried through to the service layer as `authenticatedScope`; the name
+   * differs because the config describes the CALLER while the service
+   * parameter describes what it is judged on.
+   */
+  actor?: AuthenticatedScope;
 
   /**
    * Request context passed to hooks.

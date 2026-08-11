@@ -120,6 +120,11 @@ export async function findByID<TSlug extends CollectionSlug>(
       richTextFormat: config.richTextFormat,
       overrideAccess: config.overrideAccess,
       user: config.user,
+      // Who is calling, as the access check needs it. Without this a scoped API
+      // key falls back to its OWNER's RBAC — including the owner's super-admin
+      // bypass — so a key holding `update-*` but not `read-*` would be judged by
+      // an account that can read. The service already knows what to do with it.
+      authenticatedScope: config.actor,
       // Overlay the pending working draft when the caller opts in; the service
       // still gates it on an update-capability probe.
       includeWorkingDraft: args.draft,
