@@ -39,21 +39,20 @@ export const TWEAKCN_THEMES: ThemeDefinition[] =
  * Themes that deliberately sit outside WCAG AA, and the number of asserted
  * pairings each one misses.
  *
- * The recorded number is what the harness measured, and recording it keeps an
- * UNINTENDED change visible while allowing the intended miss to stand. A
- * theme absent from this record is held to zero failures, so the strictness
- * of the suite is unchanged for everything else.
+ * It is EMPTY, and empty is the contract: every Nextly theme is held to zero
+ * failures. The escape hatch stays because the mechanism is worth having --
+ * an entry here would let a deliberate miss stand while still failing on any
+ * change to its count, so an unintended regression cannot hide behind an
+ * intended exception. Nothing currently needs it.
  *
- * Calm's misses are what "soft and quiet" costs a data-dense admin, and they
- * are concentrated rather than scattered: the quiet secondary-text register,
- * the whisper-weight rules and inputs, and the dusty status and primary
- * colours. Its body text is unaffected -- the theme is not illegible, it is
- * legible only in its loudest layer. The count stands until Calm's
- * rehabilitation to AA lands, at which point this record goes empty.
+ * Adding an entry means arguing that a theme should ship a pairing a reader
+ * cannot read. That argument has been made once and lost: Calm carried an
+ * accepted count here until it was rehabilitated to AA, and the shortlist has
+ * held at zero since. Treat a new entry as a design decision, not a
+ * bookkeeping one.
  *
- * 48, not the 58 first recorded: the shared contrast source in `packages/ui`
- * changed underneath this lab (the theming-readiness work on main), so the
- * measurement moved with it. The number is the harness's current reading,
- * re-measured 2026-08-10, not a design change to Calm.
+ * Note that this record is about NEXTLY themes. The tweakcn presets are
+ * third-party references shown for comparison and are scored, not gated;
+ * their real failure counts live in `contrast-report.generated.ts`.
  */
 export const EXPECTED_CONTRAST_FAILURES: Record<string, number> = {};

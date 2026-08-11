@@ -25,7 +25,22 @@ import { describe, expect, it } from "vitest";
 const here = dirname(fileURLToPath(import.meta.url));
 const appDir = resolve(here, "../../app");
 
-const ADMIN_STYLESHEET = "@nextlyhq/admin/style.css";
+/**
+ * Every stylesheet an admin-scoped route needs, not just the package one.
+ *
+ * Checking a single stylesheet certified the gallery route as styled while it
+ * was still missing two: `densities.css` keys on the `data-density` attribute
+ * the preview panels carry, and `harness.css` is what carries a theme's
+ * declared font and radius into primitives that read neither on their own. A
+ * route with only the package stylesheet renders every theme at the base
+ * metrics in the default face -- which is precisely the axes the themes were
+ * shortlisted on.
+ */
+const REQUIRED_STYLESHEETS = [
+  "@nextlyhq/admin/style.css",
+  "theme-lab/densities.css",
+  "theme-lab/harness.css",
+];
 
 /** The class the admin's component rules and tokens are scoped beneath. */
 const ADMIN_SCOPE = "nextly-admin";
@@ -82,7 +97,7 @@ function pages(): Array<{ route: string; entry: string }> {
 interface Route {
   route: string;
   scoped: boolean;
-  loads: boolean;
+  missing: string[];
 }
 
 // A className, not a mention: the scope name appears in prose too, including
@@ -96,7 +111,9 @@ const ROUTES: Route[] = pages().map(({ route, entry }) => {
   return {
     route: `/${route}`,
     scoped: sources.some(text => AS_CLASS.test(text)),
-    loads: sources.some(text => text.includes(ADMIN_STYLESHEET)),
+    missing: REQUIRED_STYLESHEETS.filter(
+      sheet => !sources.some(text => text.includes(sheet))
+    ),
   };
 });
 
@@ -124,16 +141,18 @@ describe("admin-scoped routes load the admin stylesheet", () => {
     ).toEqual(["/theme-lab"]);
   });
 
-  it("loads the stylesheet wherever admin-scoped UI renders", () => {
-    const missing = ROUTES.filter(r => r.scoped && !r.loads).map(r => r.route);
+  it("loads every required stylesheet wherever admin-scoped UI renders", () => {
+    const missing = ROUTES.filter(r => r.scoped && r.missing.length > 0).map(
+      r => `${r.route} is missing ${r.missing.join(", ")}`
+    );
 
     expect(
       missing.sort(),
-      `This route renders UI scoped to the admin class but never imports ` +
-        `\`${ADMIN_STYLESHEET}\`. Nothing throws: the components render with ` +
-        `no tokens and no component rules, which reads as a broken layout ` +
-        `rather than a missing import. Import the stylesheet in the route's ` +
-        `page.`
+      `This route renders UI scoped to the admin class but does not import ` +
+        `every stylesheet that scope needs. Nothing throws: components render ` +
+        `with no tokens, or at the base density in the default face, which ` +
+        `reads as a design difference rather than a missing import. Import ` +
+        `the listed stylesheets in the route's page.`
     ).toEqual([]);
   });
 });
