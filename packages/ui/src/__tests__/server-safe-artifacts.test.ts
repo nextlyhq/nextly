@@ -15,6 +15,7 @@ import {
   disallowedSpecifiers,
   domGlobalsPresent,
   packageOf,
+  restrictToSupportedFloor,
   specifiersIn,
 } from "../../scripts/check-server-safe-artifacts.mjs";
 
@@ -109,15 +110,51 @@ describe("the vacuity guard", () => {
     ]);
   });
 
-  it("ignores navigator, which Node itself defines", () => {
-    // Node has had a `navigator` global since v21. Probing for it would report a DOM on every
-    // current runtime, and the gate would refuse to run rather than check anything.
-    expect(domGlobalsPresent({ navigator: {} })).toEqual([]);
+  it("probes only globals no Node release has ever defined", () => {
+    // Node has had `navigator` since v21 and is adopting web storage now. Probing for either would
+    // report a DOM on an ordinary build machine, and the gate would refuse to run rather than
+    // check anything — turning a real assertion into a hard failure.
+    expect(
+      domGlobalsPresent({ navigator: {}, localStorage: {}, sessionStorage: {} })
+    ).toEqual([]);
   });
 
   it("passes on a real server, so the gate is reachable here", () => {
     // The positive control for the two above: this suite runs in Node, and the gate's precondition
     // has to actually hold there or it would never assert anything in the build either.
     expect(domGlobalsPresent()).toEqual([]);
+  });
+});
+
+describe("restricting to the oldest supported Node", () => {
+  it("removes a global that a newer Node added, and puts it back", () => {
+    // Without this the artifact is evaluated against the build machine's capabilities rather than
+    // the floor of the `engines` range, and a module-scope `navigator.userAgent` passes here while
+    // throwing for a consumer on Node 20.
+    const scope: Record<string, unknown> = { navigator: { userAgent: "x" } };
+    const floor = restrictToSupportedFloor(scope);
+    expect(floor.stubborn).toEqual([]);
+    expect("navigator" in scope).toBe(false);
+    floor.restore();
+    expect(scope.navigator).toEqual({ userAgent: "x" });
+  });
+
+  it("reports a global it could not remove rather than proceeding", () => {
+    // A leftover would let an artifact evaluate against a capability the floor does not have —
+    // the same vacuous pass this file exists to prevent, one level down.
+    const scope: Record<string, unknown> = {};
+    Object.defineProperty(scope, "navigator", {
+      value: {},
+      configurable: false,
+    });
+    expect(restrictToSupportedFloor(scope).stubborn).toEqual(["navigator"]);
+  });
+
+  it("leaves a scope that never had them untouched", () => {
+    const scope: Record<string, unknown> = { untouched: 1 };
+    const floor = restrictToSupportedFloor(scope);
+    expect(floor.stubborn).toEqual([]);
+    floor.restore();
+    expect(scope).toEqual({ untouched: 1 });
   });
 });

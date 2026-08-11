@@ -31,3 +31,15 @@ export function disallowedSpecifiers(
  * refuses to run rather than report it.
  */
 export function domGlobalsPresent(scope?: Record<string, unknown>): string[];
+
+/**
+ * Take the environment down to the oldest supported Node before evaluating anything, so the
+ * artifact is judged against the `engines` range rather than against the build machine.
+ *
+ * `stubborn` names the globals that could not be removed; a non-empty list means the evaluation
+ * would prove less than it claims.
+ */
+export function restrictToSupportedFloor(scope?: Record<string, unknown>): {
+  stubborn: string[];
+  restore: () => void;
+};

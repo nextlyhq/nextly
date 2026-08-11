@@ -142,11 +142,71 @@ export function disallowedSpecifiers(source, fileName, allowed) {
 /**
  * Globals whose presence means this is not a bare server.
  *
- * Deliberately NOT `navigator`: Node has defined it since v21, so probing for it reports a DOM on
- * every current runtime and the check refuses to run. The three below are absent from every Node
- * this package supports, which is what makes them evidence.
+ * Only the two that no Node release has ever defined. Anything Node has adopted, or may adopt,
+ * belongs in {@link ADDED_AFTER_SUPPORTED_FLOOR} instead — probing for one of those reports a DOM
+ * on an ordinary build machine and the check refuses to run rather than checking anything.
  */
-const DOM_ONLY_GLOBALS = ["window", "document", "localStorage"];
+const DOM_ONLY_GLOBALS = ["window", "document"];
+
+/**
+ * Web globals Node has added since the oldest release this package supports.
+ *
+ * Evaluating the artifact proves it runs on a server, and "a server" has to mean every Node in the
+ * supported range rather than whichever one happens to run the build. `navigator` arrived in v21
+ * and web storage is arriving now, so a module-scope `navigator.userAgent` evaluates cleanly on a
+ * modern build machine and throws for a consumer on the floor. Removing them first makes the
+ * evaluation answer the question the package's `engines` range actually asks.
+ *
+ * Deleting a name that is not there is a no-op, so a global Node adds later is covered by listing
+ * it here rather than by the check first failing in the field.
+ */
+const ADDED_AFTER_SUPPORTED_FLOOR = [
+  "navigator",
+  "localStorage",
+  "sessionStorage",
+];
+
+/**
+ * Take the environment down to the oldest supported Node before evaluating anything.
+ *
+ * Reports the globals it could NOT remove rather than proceeding, because a non-configurable
+ * leftover would let an artifact evaluate against a capability the floor does not have — the same
+ * vacuous pass this file exists to prevent, one level down.
+ *
+ * @param {Record<string, unknown>} scope
+ * @returns {{ stubborn: string[], restore: () => void }}
+ */
+export function restrictToSupportedFloor(scope = globalThis) {
+  /** @type {Array<[string, PropertyDescriptor]>} */
+  const removed = [];
+  const stubborn = [];
+  for (const name of ADDED_AFTER_SUPPORTED_FLOOR) {
+    if (!(name in scope)) continue;
+    const descriptor = Object.getOwnPropertyDescriptor(scope, name);
+    // Asked BEFORE deleting rather than after. This module is ESM, so it runs in strict mode,
+    // where `delete` on a non-configurable property throws instead of returning false — the
+    // reporting path below would never be reached, and the build would fail with a raw TypeError
+    // in place of the explanation.
+    if (descriptor !== undefined && !descriptor.configurable) {
+      stubborn.push(name);
+      continue;
+    }
+    delete scope[name];
+    if (name in scope) {
+      stubborn.push(name);
+      continue;
+    }
+    if (descriptor) removed.push([name, descriptor]);
+  }
+  return {
+    stubborn,
+    restore: () => {
+      for (const [name, descriptor] of removed) {
+        Object.defineProperty(scope, name, descriptor);
+      }
+    },
+  };
+}
 
 /**
  * Refuse to run where a DOM exists.
@@ -169,6 +229,18 @@ async function main() {
     console.error(
       `Server-safe artifact check cannot run: this environment defines ` +
         `${contaminated.join(", ")}, so importing an artifact proves nothing about a server.`
+    );
+    process.exit(1);
+  }
+
+  // Down to the oldest supported Node BEFORE anything is imported, so the evaluation answers for
+  // the whole `engines` range rather than for the build machine.
+  const floor = restrictToSupportedFloor();
+  if (floor.stubborn.length > 0) {
+    console.error(
+      `Server-safe artifact check cannot run: ${floor.stubborn.join(", ")} could not be removed ` +
+        `from this environment, so an artifact could evaluate against a capability the oldest ` +
+        `supported Node does not have.`
     );
     process.exit(1);
   }
@@ -222,6 +294,8 @@ async function main() {
       "No server-safe artifacts were derived, so this check would pass without asserting anything."
     );
   }
+
+  floor.restore();
 
   if (problems.length > 0) {
     console.error("Server-safe artifact check failed:");
