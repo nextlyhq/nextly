@@ -165,15 +165,15 @@ export interface ContentRouteConfig<TNode> {
   /**
    * Relation depth for the resolved read.
    *
-   * **The default differs by factory, and the difference is a security one.**
-   * `createContentRoute` defaults to `1`, matching `resolveContent`.
-   * `createPublicContentRoute` defaults to `0` — a trusted read propagates both
-   * its trust and a widened lifecycle into relationship expansion, so a
-   * populated target would be read with access rules bypassed and drafts
-   * included, and a public route pre-renders that into a static artifact.
+   * **The defaults differ by factory.** `createContentRoute` defaults to `1`,
+   * matching `resolveContent`. `createPublicContentRoute` defaults to `0`, so a
+   * route that populates nothing performs no expansion at all.
    *
-   * Setting this on a public route restores expansion, bounded by
-   * {@link ContentRouteConfig.trustedCollections}.
+   * Setting this on a public route enables expansion, bounded by
+   * {@link ContentRouteConfig.trustedCollections}: a target outside that set is
+   * read as a visitor would read it, and no target's drafts are admitted. A
+   * public route that expands is also not cached, because the rejected targets
+   * are judged by stored policies that no content-tag bust can invalidate.
    */
   depth?: number;
   /**
@@ -691,24 +691,16 @@ export function createPublicContentRoute<TNode>(
   }
   return buildRoute(
     {
-      // Populated relations are NOT covered by the promise this factory makes.
+      // No expansion unless the site asks for it.
       //
-      // A trusted read propagates both its trust and a widened lifecycle into
-      // relationship expansion: a populated target is read with access rules
-      // bypassed AND `status: "all"`. So at the inherited default of `depth: 1`
-      // a page in a public collection can embed a DRAFT or access-restricted
-      // row from a collection that appears nowhere in this config — and this
-      // route pre-renders that into a static artifact, which publishing cannot
-      // be taken back from.
+      // What a populated target is read AS is settled by
+      // `trustedCollections` — outside that set a target is judged by its own
+      // rules and published-only, so enabling expansion no longer widens what
+      // this route can publish. This default is about cost and surprise rather
+      // than exposure: a route that never populates relations should not pay
+      // for reads it did not ask for, and `depth` is the one dimension where an
+      // inherited value silently multiplies the work a page does.
       //
-      // Defaulting to no expansion makes the exposure something a site OPTS
-      // INTO rather than something it inherits. A site that populates relations
-      // sets `depth` itself, and by doing so states that those collections are
-      // public too.
-      //
-      // This bounds the blast radius; it does not fix the propagation. That
-      // still belongs where the trust is threaded, so a caller who sets `depth`
-      // gets the old behaviour in full.
       // Normalized AFTER the spread, not defaulted before it. An optional
       // property permits an EXPLICIT `undefined` — which forwarding a config
       // object produces routinely — and a spread overwrites with it, so
