@@ -24,6 +24,7 @@
 
 import {
   findNode,
+  isPlainRecord,
   walkNodes,
   insertNode,
   locateNode,
@@ -49,25 +50,83 @@ import {
 export type NodePatch = Parameters<typeof updateNode>[2];
 
 /**
- * Every field an update may name, as data rather than as a type.
+ * Whether `K` is OPTIONAL on `T`, as a type the compiler can evaluate.
  *
- * An op arrives from `JSON.parse` as often as from a compiler — this module says
- * so itself — so the key names in a patch are untrusted input and a type cannot
- * check them at runtime. This table is the runtime half.
- *
- * Its COMPLETENESS is checked by the compiler rather than by hand: the mapped
- * type requires an entry for every key of the engine's patch contract, so a
- * field added to `BlockNode` fails this file until it is classified. That is the
- * difference between a table derived from the contract and a list copied out of
- * it, which is the mistake this module already made once with `NodePatch`.
- *
- * `true` marks a field that may also be REMOVED. `version` and `props` are
- * required on every node, so they may be set and never unset — a node without
- * them is not a node.
+ * `Omit<T, K>` drops the field; if it is still assignable to `T`, the field was
+ * one `T` can do without. That is optionality read off the declaration rather
+ * than restated beside it, which matters because the alternative — a hand-kept
+ * boolean per field — compiles just as happily after the declaration changes
+ * underneath it.
  */
-const PATCHABLE: { readonly [K in keyof Required<NodePatch>]: boolean } = {
-  version: false,
-  props: false,
+type IsOptional<T, K extends keyof T> = Omit<T, K> extends T ? true : false;
+
+/**
+ * What the op layer checks about each node field, and whether a node can do
+ * without it.
+ *
+ * **`optional` is DERIVED, never asserted.** Writing `true` next to a field the
+ * engine has since made required is a compile error, because the mapped type
+ * demands the literal that `IsOptional` computes. A table of hand-kept booleans
+ * would still compile and would then let an update REMOVE a field every node
+ * needs — the engine's contract and this module's idea of it agreeing only
+ * until the engine moved.
+ *
+ * **`holds` is SHALLOW, and the boundary is deliberate.** It answers "is this
+ * the kind of value the field takes" — a record, an array of strings, a finite
+ * number — and nothing about whether the contents mean anything. Deep validity
+ * (does this block type exist, is this style value legal, does this breakpoint
+ * resolve) is `validate()` in the engine, which needs a block registry and a
+ * breakpoint set that a tree operation has no business requiring. Restating any
+ * of it here would put a second, stricter document validator in the repository,
+ * rejecting documents the engine itself accepts.
+ *
+ * It returns `boolean` rather than a type predicate for the same reason. A guard
+ * typed `value is NodeStyles` would be claiming to have checked a structure it
+ * only glanced at, and every caller downstream would be entitled to believe it.
+ *
+ * Completeness is the compiler's job: `Required<BlockNode>` forces an entry per
+ * field, so a field added to the engine fails this file until someone says what
+ * it is.
+ */
+const NODE_FIELDS: {
+  readonly [K in keyof Required<BlockNode>]: {
+    readonly holds: (value: unknown) => boolean;
+    readonly optional: IsOptional<BlockNode, K>;
+  };
+} = {
+  id: { holds: isNonEmptyString, optional: false },
+  type: { holds: isNonEmptyString, optional: false },
+  version: { holds: isFiniteNumber, optional: false },
+  props: { holds: isPlainRecord, optional: false },
+  bindings: { holds: isPlainRecord, optional: true },
+  slots: { holds: isSlotMap, optional: true },
+  styles: { holds: isPlainRecord, optional: true },
+  classes: { holds: isStringArray, optional: true },
+  visibility: { holds: isPlainRecord, optional: true },
+  locked: { holds: isBoolean, optional: true },
+  name: { holds: isString, optional: true },
+  customCss: { holds: isString, optional: true },
+  cssId: { holds: isString, optional: true },
+  attributes: { holds: isStringRecord, optional: true },
+  migrationFailed: { holds: isBoolean, optional: true },
+};
+
+/**
+ * Every field name an update may address.
+ *
+ * A key set rather than a lookup — the `true` carries no information, and the
+ * value it would otherwise carry (may this be removed?) is read from
+ * {@link NODE_FIELDS} so there is one statement of the node contract and not
+ * two. What this table adds is the narrower question of which of a node's
+ * fields an UPDATE may touch at all: `id` and `type` are identity, and children
+ * move through the structural ops.
+ *
+ * Read off the engine's patch signature, so a field the engine stops accepting
+ * fails here rather than being quietly applied to nothing.
+ */
+const PATCH_FIELDS: { readonly [K in keyof Required<NodePatch>]: true } = {
+  version: true,
+  props: true,
   bindings: true,
   styles: true,
   classes: true,
@@ -79,6 +138,70 @@ const PATCHABLE: { readonly [K in keyof Required<NodePatch>]: boolean } = {
   attributes: true,
   migrationFailed: true,
 };
+
+/** A field name an update may address. */
+type PatchField = keyof typeof PATCH_FIELDS;
+
+function isPatchField(key: string): key is PatchField {
+  return Object.hasOwn(PATCH_FIELDS, key);
+}
+
+/**
+ * Whether an update may REMOVE this field, from the engine's own declaration.
+ *
+ * A required field may be set and never unset: a node without `version` or
+ * `props` is not a node, and an inverse could not restore one it never saw.
+ */
+function mayRemove(key: PatchField): boolean {
+  return NODE_FIELDS[key].optional;
+}
+
+function isString(value: unknown): boolean {
+  return typeof value === "string";
+}
+
+function isNonEmptyString(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isBoolean(value: unknown): boolean {
+  return typeof value === "boolean";
+}
+
+/**
+ * A number that can be compared and stored.
+ *
+ * `NaN` and the infinities are excluded because they are numbers that survive
+ * `typeof` and not `JSON.stringify` — all three serialize to `null`, so a
+ * version stamp written as `Infinity` comes back as something else entirely.
+ */
+function isFiniteNumber(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isStringArray(value: unknown): boolean {
+  return (
+    Array.isArray(value) && value.every(entry => typeof entry === "string")
+  );
+}
+
+function isStringRecord(value: unknown): boolean {
+  return (
+    isPlainRecord(value) &&
+    Object.values(value).every(entry => typeof entry === "string")
+  );
+}
+
+/**
+ * Named child regions: a record of arrays.
+ *
+ * The child NODES are not checked here — the walk in {@link assertNodeShape}
+ * reaches them, and checking them twice would mean two answers to the same
+ * question.
+ */
+function isSlotMap(value: unknown): boolean {
+  return isPlainRecord(value) && Object.values(value).every(Array.isArray);
+}
 
 /** One edit. The four shapes below are the whole vocabulary. */
 export type BuilderOp =
@@ -167,8 +290,15 @@ function accepted(
  *   `prototype`. These reach an object's machinery rather than its data.
  */
 function assertPatchNames(op: Extract<BuilderOp, { kind: "update" }>): void {
+  if (!isPlainRecord(op.patch)) {
+    throw new OpError(
+      `update: a patch of ${JSON.stringify(op.patch)} names no fields. An ` +
+        `update carries a record of the values to write.`
+    );
+  }
+
   for (const [key, value] of Object.entries(op.patch)) {
-    if (!Object.hasOwn(PATCHABLE, key)) {
+    if (!isPatchField(key)) {
       throw new OpError(
         `update: "${key}" is not a field this op may set. Ids and types are ` +
           `identity, children move through the structural ops, and anything ` +
@@ -182,18 +312,121 @@ function assertPatchNames(op: Extract<BuilderOp, { kind: "update" }>): void {
           `\`unset\` instead, which survives being written down.`
       );
     }
+    // The VALUE, not only the name. A patch reaching `updateNode` is spread
+    // onto the node whatever it holds, so `{ version: "3" }` from a replayed
+    // buffer replaces a number with a string and the document is corrupt from
+    // then on, with nothing between the op and the tree to notice.
+    if (!NODE_FIELDS[key].holds(value)) {
+      throw new OpError(
+        `update: "${key}" cannot hold ${JSON.stringify(value)}. Writing it ` +
+          `would leave the node holding a value of the wrong kind, which every ` +
+          `later read treats as data.`
+      );
+    }
+  }
+
+  if (op.unset !== undefined && !isStringArray(op.unset)) {
+    throw new OpError(
+      `update: an unset of ${JSON.stringify(op.unset)} names no fields. It is ` +
+        `a list of field names.`
+    );
   }
 
   for (const key of op.unset ?? []) {
-    if (!Object.hasOwn(PATCHABLE, key)) {
+    if (!isPatchField(key)) {
       throw new OpError(`update: "${key}" is not a field this op may remove.`);
     }
-    if (!PATCHABLE[key as keyof typeof PATCHABLE]) {
+    if (!mayRemove(key)) {
       throw new OpError(
         `update: "${key}" is required on every node and cannot be removed. A ` +
           `node without it is not a node, and the inverse could not restore one.`
       );
     }
+  }
+}
+
+/**
+ * Refuses a node whose shape the document could not hold.
+ *
+ * The engine's tree primitives place a node without inspecting it, so an
+ * `insert` carrying `{ id: "bad" }` produces a NEW forest and every check that
+ * asks the primitive whether it acted reports success. The document is then
+ * holding something that is not a node, and the failure surfaces at render or
+ * at the next save — far from the op that caused it, and by then in the history
+ * as an edit that appeared to work.
+ *
+ * The whole SUBTREE, because an insert places one. A check on the root would
+ * pass a container whose children are junk, and those children are just as much
+ * in the document afterwards.
+ *
+ * What it does not do is decide whether the node is MEANINGFUL — whether its
+ * type is registered, its styles legal, its bindings resolvable. That is the
+ * engine's `validate()`, which the editor runs where a block registry is in
+ * hand. See {@link NODE_FIELDS} for why the split is there.
+ */
+function assertNodeShape(node: BlockNode, verb: string): void {
+  const seen = new Set<unknown>();
+  const visit = (candidate: unknown, path: string): void => {
+    if (!isPlainRecord(candidate)) {
+      throw new OpError(
+        `${verb}: ${path} is ${JSON.stringify(candidate)}, which is not a node. ` +
+          `A node is a record with an id, a type, a version and props.`
+      );
+    }
+    // A subtree arriving from an in-process caller can be cyclic — JSON cannot
+    // express that, but a caller holding live objects can, and the walk below
+    // would not return.
+    if (seen.has(candidate)) {
+      throw new OpError(
+        `${verb}: ${path} appears inside itself. A node cannot contain the ` +
+          `subtree it belongs to.`
+      );
+    }
+    seen.add(candidate);
+
+    for (const [field, contract] of Object.entries(NODE_FIELDS)) {
+      const value = candidate[field];
+      if (value === undefined) {
+        if (contract.optional) continue;
+        throw new OpError(
+          `${verb}: ${path} has no ${field}, which every node needs.`
+        );
+      }
+      if (!contract.holds(value)) {
+        throw new OpError(
+          `${verb}: ${path}.${field} cannot hold ${JSON.stringify(value)}.`
+        );
+      }
+    }
+
+    const slots: unknown = candidate.slots;
+    if (isPlainRecord(slots)) {
+      for (const [slot, children] of Object.entries(slots)) {
+        (children as unknown[]).forEach((child, index) => {
+          visit(child, `${path}.slots.${slot}[${index}]`);
+        });
+      }
+    }
+  };
+
+  visit(node, "the node");
+}
+
+/**
+ * Refuses an id that addresses nothing.
+ *
+ * `findNode` answers `undefined` for a non-string just as it does for an id the
+ * document does not hold, so without this the two are indistinguishable to the
+ * caller: a `remove` carrying `id: null` is reported as a missing node, which
+ * sends the reader looking for a deleted block rather than at the malformed op
+ * in front of them. The refusal is the same; only the diagnosis differs, and
+ * the diagnosis is the whole value.
+ */
+function assertNodeId(id: string, verb: string): void {
+  if (!isNonEmptyString(id)) {
+    throw new OpError(
+      `${verb}: an id of ${JSON.stringify(id)} addresses no node.`
+    );
   }
 }
 
@@ -224,6 +457,17 @@ function lockedWithin(node: BlockNode): string | undefined {
  * document is quietly reordered or grows a slot no block declared.
  */
 function assertPosition(at: TreePosition, verb: string): void {
+  // The container first. Every read below goes through `at`, so a `null` or a
+  // string reaches them as a property access on a non-object and leaves this
+  // module as a TypeError — an error the caller cannot tell apart from a bug in
+  // the editor, rather than the refusal this module promises for a bad op.
+  if (!isPlainRecord(at)) {
+    throw new OpError(
+      `${verb}: a position of ${JSON.stringify(at)} names nowhere. A position ` +
+        `is a record carrying an index, and a parent and slot when it is not at ` +
+        `the document root.`
+    );
+  }
   if (!Number.isInteger(at.index) || at.index < 0) {
     throw new OpError(
       `${verb}: an index of ${JSON.stringify(at.index)} names no position. ` +
@@ -318,6 +562,17 @@ export interface AppliedOp {
  * positions holding identical nodes there is no unique answer.
  */
 export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
+  // The op itself, before its discriminant is read. `op.kind` on a `null`
+  // leaves this module as a TypeError, which a caller cannot distinguish from
+  // the editor having a bug — and the whole point of `OpError` is that a
+  // refusal says which op was wrong and why.
+  if (!isPlainRecord(op)) {
+    throw new OpError(
+      `an op of ${JSON.stringify(op)} is not an edit. Every op is a record ` +
+        `naming its kind.`
+    );
+  }
+
   switch (op.kind) {
     case "insert": {
       // Refused rather than exempting the inverse from the lock. The inverse of
@@ -328,6 +583,10 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
       // storage, so nothing distinguishes the store's own inverse from a
       // forged one. Refusing at the door needs no such distinction.
       assertPosition(op.at, "insert");
+      // Before `lockedWithin` walks it and before the engine places it. Both
+      // accept whatever they are handed, so a malformed subtree is in the
+      // document by the time anything downstream could object.
+      assertNodeShape(op.node, "insert");
       const lockedId = lockedWithin(op.node);
       if (lockedId !== undefined) {
         throw new OpError(
@@ -351,6 +610,7 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
     }
 
     case "remove": {
+      assertNodeId(op.id, "remove");
       const node = findNode(nodes, op.id);
       const location = locateNode(nodes, op.id);
       if (node === undefined || location === undefined) {
@@ -381,6 +641,7 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
     }
 
     case "move": {
+      assertNodeId(op.id, "move");
       const node = findNode(nodes, op.id);
       const location = locateNode(nodes, op.id);
       if (node === undefined || location === undefined) {
@@ -427,6 +688,7 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
     }
 
     case "update": {
+      assertNodeId(op.id, "update");
       const node = findNode(nodes, op.id);
       if (node === undefined) {
         throw new OpError(

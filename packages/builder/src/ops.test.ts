@@ -534,3 +534,128 @@ describe("a node its author locked", () => {
     expect(JSON.stringify(nodes)).toContain("color: red");
   });
 });
+
+describe("an op whose own shape is wrong", () => {
+  /** What `JSON.parse` produces. These shapes cannot come from the compiler. */
+  function persisted(text: string): BuilderOp {
+    return JSON.parse(text) as BuilderOp;
+  }
+
+  it("still applies a well-formed node carrying every optional field", () => {
+    // The positive control, and it is the one that matters: a shape check that
+    // refused everything would satisfy every assertion below while making the
+    // editor unable to insert anything at all.
+    const complete: BlockNode = {
+      id: "complete",
+      type: "core/box",
+      version: 2,
+      props: { text: "hi" },
+      bindings: {},
+      slots: { main: [node("child")] },
+      styles: {},
+      classes: ["a", "b"],
+      visibility: {},
+      locked: false,
+      name: "Box",
+      customCss: ".x{}",
+      cssId: "box",
+      attributes: { "data-x": "1" },
+      migrationFailed: false,
+    };
+
+    const applied = applyOp(forest(), {
+      kind: "insert",
+      node: complete,
+      at: { index: 0 },
+    });
+    expect(applied.nodes[0]?.id).toBe("complete");
+  });
+
+  it.each<[string, string]>([
+    [
+      "an inserted node missing everything but an id",
+      '{"kind":"insert","node":{"id":"bad"},"at":{"index":0}}',
+    ],
+    [
+      "an inserted node whose version is a string",
+      '{"kind":"insert","node":{"id":"x","type":"core/box","version":"1","props":{}},"at":{"index":0}}',
+    ],
+    [
+      "a malformed child inside an inserted subtree",
+      '{"kind":"insert","node":{"id":"x","type":"core/box","version":1,"props":{},"slots":{"main":[{"id":"kid"}]}},"at":{"index":0}}',
+    ],
+    [
+      "an inserted node that is not an object at all",
+      '{"kind":"insert","node":"nope","at":{"index":0}}',
+    ],
+    [
+      "a patch value of the wrong kind",
+      '{"kind":"update","id":"a","patch":{"version":"bad"}}',
+    ],
+    [
+      "a patch naming classes that are not strings",
+      '{"kind":"update","id":"a","patch":{"classes":[1,2]}}',
+    ],
+    [
+      "a patch naming attributes that are not strings",
+      '{"kind":"update","id":"a","patch":{"attributes":{"data-x":5}}}',
+    ],
+    ["a patch that is not a record", '{"kind":"update","id":"a","patch":7}'],
+    [
+      "an unset that is not a list of names",
+      '{"kind":"update","id":"a","patch":{"name":"x"},"unset":"cssId"}',
+    ],
+  ])("refuses %s", (_label, json) => {
+    // Every one of these produces a NEW forest if it reaches the engine, so the
+    // acceptance check reads it as an edit that worked and the document keeps
+    // whatever arrived.
+    expect(() => applyOp(forest(), persisted(json))).toThrow(OpError);
+  });
+
+  it.each<[string, string]>([
+    ["a null position", '{"kind":"insert","node":null,"at":null}'],
+    ["a position that is a string", '{"kind":"move","id":"a","at":"end"}'],
+    ["an op that is null", "null"],
+  ])("refuses %s as an OpError rather than crashing", (_label, json) => {
+    let thrown: unknown;
+    try {
+      applyOp(forest(), persisted(json));
+    } catch (error) {
+      thrown = error;
+    }
+
+    // `toThrow(OpError)` alone would pass on a TypeError from reading a
+    // property of `null`, because that is still a throw. The distinction is the
+    // whole point: a refusal names the op that was wrong, and a TypeError
+    // escaping this module reads to the caller as a bug in the editor.
+    expect(thrown).toBeInstanceOf(OpError);
+    expect(thrown).not.toBeInstanceOf(TypeError);
+  });
+
+  it.each<[string, string]>([
+    ["a null id", '{"kind":"remove","id":null}'],
+    ["an id that is a number", '{"kind":"update","id":7,"patch":{"name":"x"}}'],
+    ["an empty id", '{"kind":"move","id":"","to":{"index":0}}'],
+  ])("says %s is malformed rather than missing", (_label, json) => {
+    // Asserting only `OpError` here would prove nothing, and this is the shape
+    // that hides it: `findNode` answers `undefined` for a malformed id exactly
+    // as it does for one the document does not hold, so the op is refused
+    // either way and the test passes with the guard removed. What the guard
+    // changes is the DIAGNOSIS — "addresses no node" sends the reader to the
+    // op, "no node with id" sends them hunting for a deleted block — so the
+    // diagnosis is what has to be asserted.
+    expect(() => applyOp(forest(), persisted(json))).toThrow(
+      /addresses no node/
+    );
+  });
+
+  it("refuses a subtree that contains itself", () => {
+    // JSON cannot express this, but an in-process caller can, and the walk
+    // would not return.
+    const cyclic = node("loop");
+    cyclic.slots = { main: [cyclic] };
+    expect(() =>
+      applyOp(forest(), { kind: "insert", node: cyclic, at: { index: 0 } })
+    ).toThrow(OpError);
+  });
+});

@@ -70,6 +70,14 @@ export {
 export type { NodeLocation, TreePosition } from "./tree";
 
 export { validate, ISSUE_CODES } from "./validation";
+/**
+ * Exported because anything holding a document read from storage has to ask the
+ * same question, and the answer is subtler than it looks: the check is on the
+ * PROTOTYPE, so a `Date`, a `Map` or a class instance is refused rather than
+ * walked and reported clean. A caller writing its own `typeof x === "object"`
+ * gets a different answer for exactly the values that survive JSON badly.
+ */
+export { isPlainRecord } from "./plain-record";
 export { declaresNoMarkup, isConditionGated } from "./visibility";
 export type { NoMarkupDefinitionSource } from "./visibility";
 export type {
