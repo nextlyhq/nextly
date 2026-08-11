@@ -45,14 +45,11 @@ export const TWEAKCN_THEMES: ThemeDefinition[] =
  * change to its count, so an unintended regression cannot hide behind an
  * intended exception. Nothing currently needs it.
  *
- * Adding an entry means arguing that a theme should ship a pairing a reader
- * cannot read. That argument has been made once and lost: Calm carried an
- * accepted count here until it was rehabilitated to AA, and the shortlist has
- * held at zero since. Treat a new entry as a design decision, not a
- * bookkeeping one.
+ * An entry here declares that a theme ships a pairing a reader cannot read, so
+ * it is a design decision rather than a bookkeeping one.
  *
- * Note that this record is about NEXTLY themes. The tweakcn presets are
- * third-party references shown for comparison and are scored, not gated;
- * their real failure counts live in `contrast-report.generated.ts`.
+ * Scope: NEXTLY themes only. The tweakcn presets are third-party references
+ * shown for comparison and are scored, not gated; their measured failure
+ * counts live in `contrast-report.generated.ts`.
  */
 export const EXPECTED_CONTRAST_FAILURES: Record<string, number> = {};
