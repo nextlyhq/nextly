@@ -17,11 +17,12 @@
  *
  * Run: node scripts/audit-themes.mjs
  */
-import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { register } from "node:module";
 import { dirname, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { contrastSourceStamp } from "./contrast-source-stamp.mjs";
 
 register("./ts-extension-loader.mjs", import.meta.url);
 
@@ -149,11 +150,8 @@ for (const theme of ALL) {
   }));
 }
 
-const contrastSourceRev = execFileSync(
-  "git",
-  ["log", "-1", "--format=%h", "--", "packages/ui/src/styles/contrast"],
-  { cwd: root, encoding: "utf8" }
-).trim();
+// Contents rather than a commit: see `contrast-source-stamp.mjs`.
+const contrastSourceRev = contrastSourceStamp(root);
 
 const outDir = resolvePath(here, "../src/theme-lab/audit-evidence");
 mkdirSync(outDir, { recursive: true });

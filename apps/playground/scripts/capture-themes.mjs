@@ -55,7 +55,12 @@
  * names (both match against the values below) and exist for smoke-testing a
  * small slice before committing to the full pass, which takes a while.
  */
-import { mkdirSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import { register } from "node:module";
 import { dirname, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -212,6 +217,8 @@ await page.goto(`${BASE}/admin`);
 await page.waitForLoadState("load");
 
 let shotCount = 0;
+/** Paths this run wrote, relative to the output root, for the manifest. */
+const written = [];
 
 for (const theme of themes) {
   let screens =
@@ -283,6 +290,7 @@ for (const theme of themes) {
 
       const shotPath = resolvePath(dir, `${name}-${mode}.png`);
       await page.screenshot({ path: shotPath });
+      written.push(`${theme.id}/${name}-${mode}.png`);
       shotCount += 1;
     }
   }
@@ -291,6 +299,45 @@ for (const theme of themes) {
 
 await browser.close();
 
+// A manifest of exactly what this run produced.
+//
+// A run only ever writes the files its arguments select, so anything else in
+// the output directory is from an earlier one: a retired theme, a route that no
+// longer exists, a screen excluded by `--screens`. Left unlabelled they sit
+// beside the fresh images looking equally current, and a comparison made across
+// them compares two different trees.
+//
+// The output is not cleared instead, because filtering by theme or screen is
+// the normal way to use this: clearing would delete the captures the filter
+// exists to preserve. Recording what is current says the same thing without
+// destroying anything.
+const stalePaths = existsSync(outRoot)
+  ? readdirSync(outRoot, { recursive: true })
+      .map(entry => String(entry).replaceAll("\\", "/"))
+      .filter(entry => entry.endsWith(".png") && !written.includes(entry))
+  : [];
+
+writeFileSync(
+  resolvePath(outRoot, "manifest.json"),
+  `${JSON.stringify(
+    {
+      capturedAt: new Date().toISOString(),
+      args: process.argv.slice(2),
+      themes: themes.map(theme => theme.id),
+      current: written.sort(),
+      note: "Files under this directory that are not in `current` were written by an earlier run with different arguments.",
+      stale: stalePaths.sort(),
+    },
+    null,
+    2
+  )}\n`
+);
+
 console.log(
   `capture-themes: wrote ${shotCount} screenshots for ${themes.length} themes to ${outRoot}`
 );
+if (stalePaths.length > 0) {
+  console.log(
+    `capture-themes: ${stalePaths.length} file(s) in ${outRoot} are from an earlier run; see manifest.json`
+  );
+}

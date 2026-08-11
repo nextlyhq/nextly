@@ -19,10 +19,11 @@
  * Run: node --experimental-strip-types scripts/generate-contrast-report.mjs
  */
 import { register } from "node:module";
-import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { contrastSourceStamp } from "./contrast-source-stamp.mjs";
 
 // Registered before the theme-lab modules are imported below, so their own
 // extensionless internal imports resolve. See ts-extension-loader.mjs.
@@ -72,19 +73,10 @@ if (mismatches.length > 0) {
 
 const outPath = resolvePath(here, "../src/theme-lab/contrast-report.generated.ts");
 
-// The revision of the contrast SOURCE these numbers were measured against.
-//
-// A failure count is a property of (theme x contrast source), not of the
-// theme: Calm's recorded 58 became 48 with the theme untouched, because the
-// shared harness under `packages/ui/src/styles/contrast/` moved when main
-// merged. Stored bare, such a number stays authoritative-looking after it
-// stops being true, and the drift gets hunted for in the theme. Stamping the
-// source revision here makes a stale reading announce itself as stale.
-const contrastSourceRev = execFileSync(
-  "git",
-  ["log", "-1", "--format=%h", "--", "packages/ui/src/styles/contrast"],
-  { cwd: resolvePath(here, "../../.."), encoding: "utf8" }
-).trim();
+// Which contrast harness these numbers were measured against. See
+// `contrast-source-stamp.mjs` for why this hashes contents rather than naming
+// a commit.
+const contrastSourceRev = contrastSourceStamp(resolvePath(here, "../../.."));
 
 const banner = `/**
  * Measured WCAG AA failure counts for every theme lab theme, keyed by id.

@@ -7,7 +7,7 @@
  * that miss WCAG AA on purpose, this measures all of them, so a tweakcn
  * preset shows its real score instead of defaulting to "pass".
  *
- * Measured against contrast source `b51f4e869`
+ * Measured against contrast source `252148c50456`
  * (packages/ui/src/styles/contrast). These counts are only comparable with
  * others taken against the SAME revision -- the harness deciding them is as
  * much an input as the theme is.
