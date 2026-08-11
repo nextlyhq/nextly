@@ -679,6 +679,15 @@ export class SingleMetadataService {
       //
       // The rebuild branch is the exception because it renders the table from the desired spec in
       // full, so reaching the end of it does mean every artifact was asked for.
+      //
+      // ⚠️ Known cost, accepted: a create that built the main table and failed only its COMPANION
+      // can never clear this, because every retry finds the table present and so takes the alter
+      // branch, even when the retry's reconcile succeeds and the schema is now complete. Clearing
+      // it correctly needs both halves established, and `migration_status` is one bit — it records
+      // that a migration failed, not which half. Verifying the live table against the desired spec
+      // is the answer, and until something does, holding a stale `failed` is the safer error: it is
+      // visible and blocks nothing, where a wrong `applied` hides an unenforced constraint until a
+      // write fails.
       if (
         input.existing.migrationStatus === "failed" &&
         !plan.describesWholeTable
