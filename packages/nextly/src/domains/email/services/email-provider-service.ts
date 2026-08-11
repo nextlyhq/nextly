@@ -558,8 +558,8 @@ export class EmailProviderService extends BaseService {
    *
    * Configuration is encrypted before storage.
    *
-   * If `isDefault` is true, the insert and the demotion of the previous
-   * default are one transaction, so the table never holds two defaults and
+   * If `isDefault` is true, the demotion of the previous default and this
+   * insert are one transaction, so the table never holds two defaults and
    * never holds none. It does not serialise two callers doing this at once.
    */
   async createProvider(
@@ -596,17 +596,22 @@ export class EmailProviderService extends BaseService {
 
     let displaced: DisplacedDefault[] = [];
     try {
-      // The insert and the demotion it causes are one change to the table, so
-      // they commit or they do not. Demoting first and inserting second, on
-      // separate connections, means a refused insert -- a duplicate name, a
-      // lost connection -- takes the working default away and puts nothing in
-      // its place.
+      // The demotion and the insert are one change to the table, so they
+      // commit together or not at all. On separate connections a refused
+      // insert -- a duplicate name, a lost connection -- took the working
+      // default away and put nothing in its place; inside the transaction the
+      // same failure rolls the demotion back with it.
+      //
+      // The demotion goes FIRST. Postgres carries a partial unique index over
+      // `is_default = true`, checked per row as each statement runs, so a
+      // second row inserted as the default while the incumbent still holds it
+      // is rejected outright.
       await this.withTransaction(async txRaw => {
         const tx = txRaw as ProviderTransaction;
-        await tx.insert(this.emailProviders).values(values);
         if (values.isDefault) {
           displaced = await this.demoteOtherDefaults(tx, now, id);
         }
+        await tx.insert(this.emailProviders).values(values);
       });
     } catch (error) {
       // Drizzle surfaces the driver's raw error here, so normalise it through
@@ -660,13 +665,16 @@ export class EmailProviderService extends BaseService {
   /**
    * Take the default away from every provider except the one that now holds it.
    *
-   * Runs AFTER the promoting write and inside the same transaction, so the
-   * table passes from one default straight to one default. Demoting first
-   * leaves an instant with no default at all, and a promoting write that then
-   * matches nothing makes that instant permanent — a row deleted between the
-   * read and the update, or an insert the database refuses, and the
-   * installation is left unable to send anything it was not given a provider
-   * for, with nothing in the trail to say why.
+   * Runs BEFORE the write that promotes, inside the same transaction.
+   * Postgres carries a partial unique index over `is_default = true` and
+   * checks it as each statement runs, so a row cannot take the default while
+   * the incumbent still holds it — the incumbent gives it up first, and the
+   * transaction is what makes the gap between them invisible and undoable.
+   *
+   * Its caller checks that the promotion has a target before calling this. A
+   * promoting write that matches nothing after the incumbent has been stripped
+   * would leave the installation unable to send anything it was not given a
+   * provider for, with nothing in the trail to say why.
    *
    * Returns the rows it demoted rather than recording them. An entry written
    * from in here would claim a demotion a rollback then took back, and the
@@ -676,6 +684,31 @@ export class EmailProviderService extends BaseService {
    * concurrent promotions still both commit, on MySQL and SQLite as well as
    * Postgres, because nothing here locks the rows it read.
    */
+  /**
+   * Whether the row a handover is about to promote is still there.
+   *
+   * Read inside the transaction and BEFORE the demotion, because the demotion
+   * has to come first and cannot be taken back without one. A promotion that
+   * matches nothing after the incumbent has been stripped leaves the
+   * installation with no default at all, and that is the state this ordering
+   * exists to make unreachable.
+   */
+  private async promotionTargetExists(
+    tx: ProviderTransaction,
+    id: string
+  ): Promise<boolean> {
+    const rows = await tx
+      .select({
+        id: this.emailProviders.id,
+        name: this.emailProviders.name,
+        type: this.emailProviders.type,
+      })
+      .from(this.emailProviders)
+      .where(eq(this.emailProviders.id, id));
+
+    return rows.length > 0;
+  }
+
   private async demoteOtherDefaults(
     tx: ProviderTransaction,
     now: Date,
@@ -925,20 +958,26 @@ export class EmailProviderService extends BaseService {
     let updatedRows = 0;
     let displaced: DisplacedDefault[] = [];
     try {
-      // One transaction, and the promotion before the demotion inside it. A
-      // PATCH naming `isDefault: true` for a row that has since been deleted
-      // matches nothing, and demoting first would have already stripped the
-      // default from the provider still holding it.
+      // One transaction, with the demotion before the write that promotes.
+      // Postgres rejects a second row holding `is_default = true` as the
+      // statement runs, so the incumbent has to give it up first -- and the
+      // transaction is what makes that safe, since a failure anywhere after it
+      // rolls the demotion back.
       await this.withTransaction(async txRaw => {
         const tx = txRaw as ProviderTransaction;
+        if (data.isDefault === true) {
+          // Nothing is written for a row that is no longer there, so the
+          // standing default keeps its place rather than being stripped for a
+          // promotion that then matches nothing.
+          if (!(await this.promotionTargetExists(tx, id))) return;
+          displaced = await this.demoteOtherDefaults(tx, now, id);
+        }
+
         const result = await tx
           .update(this.emailProviders)
           .set(updateData)
           .where(eq(this.emailProviders.id, id));
         updatedRows = affectedRowCount(result, this.dialect);
-
-        if (updatedRows === 0 || data.isDefault !== true) return;
-        displaced = await this.demoteOtherDefaults(tx, now, id);
       });
     } catch (error) {
       // DbError → NextlyError; spec §13.8 keeps the public message generic and
@@ -1068,10 +1107,10 @@ export class EmailProviderService extends BaseService {
   /**
    * Set a provider as the default.
    *
-   * The promotion and the demotion of the previous default are one
-   * transaction, so a promotion that matches nothing cannot leave the
-   * installation with no default at all. It does not serialise two callers
-   * promoting different providers at the same time.
+   * The demotion of the previous default and this promotion are one
+   * transaction, and the target is checked before either, so a promotion that
+   * matches nothing cannot leave the installation with no default at all. It
+   * does not serialise two callers promoting different providers at once.
    *
    * @throws NextlyError NOT_FOUND if provider doesn't exist
    */
@@ -1096,24 +1135,32 @@ export class EmailProviderService extends BaseService {
 
     const now = new Date();
 
-    // Promote first, then demote, both inside one transaction. The provider
-    // can be deleted between the read above and this statement, in which case
-    // nothing is promoted -- and demoting first would already have taken the
-    // default away from the provider that was correctly holding it, leaving
-    // the installation with none at all.
+    // Demote, then promote, both inside one transaction. Postgres refuses a
+    // second row holding the default as the statement runs, so the order is
+    // forced -- and the transaction is what keeps it safe, because a failure
+    // after the demotion takes the demotion back with it.
+    //
+    // The provider can be deleted between the read above and this block, which
+    // is why the target is checked once more inside the transaction: a
+    // demotion for a promotion that then matches nothing would leave the
+    // installation with no default at all.
     let promoted = false;
     let displaced: DisplacedDefault[] = [];
     await this.withTransaction(async txRaw => {
       const tx = txRaw as ProviderTransaction;
+      // Asked before anything is written. A row deleted since the read above
+      // has nothing to promote, and answering that here leaves the standing
+      // default untouched -- there is no demotion to undo.
+      if (!(await this.promotionTargetExists(tx, id))) return;
+
+      displaced = await this.demoteOtherDefaults(tx, now, id);
+
       const promotion = await tx
         .update(this.emailProviders)
         .set({ isDefault: true, updatedAt: now })
         .where(eq(this.emailProviders.id, id));
 
       promoted = affectedRowCount(promotion, this.dialect) > 0;
-      if (!promoted) return;
-
-      displaced = await this.demoteOtherDefaults(tx, now, id);
     });
 
     // Recording a promotion that matched no row would put a claim in the trail

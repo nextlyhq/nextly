@@ -193,10 +193,14 @@ export default function EditEmailProviderPage() {
     descriptors: descriptors ?? [],
   });
 
+  // Loading counts as well as unavailable. The form renders only its skeleton
+  // until the catalog settles, so the id this button submits to is not on the
+  // page yet and pressing it does nothing at all — which reads as a broken
+  // control rather than as a page that is not ready.
   const cannotEdit =
+    catalog === "loading" ||
     catalog === "unavailable" ||
-    (catalog !== "loading" &&
-      isUnregisteredProviderType(provider?.type, descriptors ?? []));
+    isUnregisteredProviderType(provider?.type, descriptors ?? []);
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>

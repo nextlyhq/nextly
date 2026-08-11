@@ -65,3 +65,11 @@ already fetched, so the type filter, the row labels and the form all still work
 from them; the pages now say so instead of reporting the catalog unavailable,
 and the edit page's Update button follows the form into read-only when the
 cached catalog no longer lists the stored type.
+
+The demotion of the previous default runs before the write that promotes, not
+after. PostgreSQL carries a partial unique index over `is_default = true` and
+checks it as each statement runs, so a row taking the default while the
+incumbent still holds it is rejected outright — which stopped every path that
+promotes a provider from working on that dialect. The promotion target is
+checked inside the transaction first, so a demotion is never spent on a
+promotion that then matches nothing.

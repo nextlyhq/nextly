@@ -213,6 +213,23 @@ describe("the edit page's Update button when a catalog refresh fails", () => {
     expect(updateButton()).toBeEnabled();
   });
 
+  it("is disabled while the catalog is still loading", () => {
+    // The form renders its skeleton until the catalog settles, so the form id
+    // this button targets is not on the page and the click is inert.
+    useEmailProviderTypes.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isSuccess: false,
+      isError: false,
+      isFetching: true,
+      error: null,
+      refetch: vi.fn(),
+    });
+    render(<EditEmailProviderPage />);
+
+    expect(updateButton()).toBeDisabled();
+  });
+
   it("is disabled when the catalog failed with nothing cached", () => {
     // There is no form in this state — it renders a fatal alert instead — so
     // the button submits to an id that is not on the page.
