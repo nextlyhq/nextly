@@ -100,6 +100,28 @@ export interface EmailProviderConfigField {
    * these three keys should express it in `parseConfig` alone.
    */
   constraints?: { min?: number; max?: number; maxLength?: number };
+  /**
+   * What a BLANK value means for this field, when the field is optional.
+   *
+   * A client editing a stored provider can express three things about an
+   * optional field — leave it, set it, remove it — and a blank input has to be
+   * mapped onto one of them. Which one is right depends entirely on how the
+   * provider's own parser is written, and nothing else in the descriptor says:
+   *
+   * - `"omit"` (the default) suits `z.string().min(1).optional()` and
+   *   `z.enum(...).optional()`, which accept an absent key and reject `""`.
+   * - `"empty"` suits a key nested inside a REQUIRED object, where the parser
+   *   demands the key exist and decides for itself what an empty value means.
+   *   The built-in SMTP provider is the live example: `auth` is required and
+   *   its `user`/`pass` may be empty for a loopback sink, so omitting them
+   *   fails with "expected string, received undefined" for the one setup this
+   *   repository documents.
+   *
+   * Declared rather than guessed, for the same reason `secret` is: a client
+   * cannot read `parseConfig`, and the two shapes are indistinguishable from
+   * the outside. Ignored for a required field, which can never be blank.
+   */
+  blankAs?: "omit" | "empty";
 }
 
 /** What a provider can do, so a UI never offers what it cannot honour. */
@@ -110,6 +132,19 @@ export interface EmailProviderCapabilities {
   connectionTest?: boolean;
   /** Honours a Reply-To address. */
   replyTo?: boolean;
+  /**
+   * Only accepts a sender on a domain verified with the provider.
+   *
+   * Declared rather than inferred. A hosted API provider generally requires it
+   * and a self-hosted relay does not, but nothing else in the descriptor
+   * distinguishes them — using the presence of `docsUrl` as the signal reads as
+   * a rule and is a coincidence, and it silently drops the warning for any
+   * provider that documents itself elsewhere.
+   *
+   * The consequence of getting it wrong is quiet: a provider saves cleanly with
+   * an unusable sender and fails at the first send.
+   */
+  requiresVerifiedSender?: boolean;
 }
 
 /**
@@ -126,6 +161,20 @@ export interface EmailProviderDefinition<TConfig = Record<string, unknown>> {
   description?: string;
   /** Where to read about getting credentials. */
   docsUrl?: string;
+  /**
+   * One line about which sender addresses this provider will accept.
+   *
+   * Shown beside the From address. Only for a provider whose rule cannot be
+   * derived from `capabilities.requiresVerifiedSender` alone — Resend, for
+   * instance, publishes a shared testing address that works before any domain
+   * is verified, and a form that says only "use a verified domain" makes a
+   * usable configuration look impossible.
+   *
+   * Prose in a wire format is a cost, and it is the same cost `help` and
+   * `description` already pay: the alternative is provider-specific copy
+   * hardcoded in a client, which is what a catalog exists to end.
+   */
+  senderGuidance?: string;
   capabilities?: EmailProviderCapabilities;
   /** Field metadata, in the order a form should render it. */
   configFields: ReadonlyArray<EmailProviderConfigField>;
@@ -157,6 +206,907 @@ export interface EmailProviderDefinition<TConfig = Record<string, unknown>> {
 }
 
 /**
+ * The control kinds a credential may be entered with.
+ *
+ * A secret is masked on read, which means the value a client holds for it is a
+ * STRING that stands for the stored one. Only a textual control can carry that:
+ * a switch has nowhere to put a mask, a select would have to list it as an
+ * option, and a number input rejects it outright. A provider declaring `secret`
+ * on any of those describes a field that cannot be edited without being
+ * replaced, so it is refused where the definition is written rather than
+ * discovered when someone tries to save one.
+ */
+const SECRET_CAPABLE_KINDS: ReadonlyArray<EmailProviderConfigField["kind"]> = [
+  "text",
+  "password",
+];
+
+/**
+ * Path segments a configuration key may never contain.
+ *
+ * A field name is a PATH that both the service and any client walk to read and
+ * write a value. These three do not name a property of the configuration; they
+ * reach the object prototype. A client assembling a form from the descriptor
+ * would write through one and corrupt every plain object it holds — and merely
+ * opening the form is enough, no save required.
+ *
+ * Refused at registration because that is the only place with the whole list,
+ * and because a provider cannot be made safe afterwards: every consumer of the
+ * descriptor would have to remember the same rule.
+ */
+const UNWALKABLE_PATH_SEGMENTS = new Set([
+  "__proto__",
+  "constructor",
+  "prototype",
+]);
+
+/** The value type each control can actually hold. */
+const DEFAULT_TYPE_FOR_KIND: Record<
+  EmailProviderConfigField["kind"],
+  "string" | "number" | "boolean"
+> = {
+  text: "string",
+  password: "string",
+  select: "string",
+  number: "number",
+  boolean: "boolean",
+};
+
+/** Reject a field name that cannot be walked safely. */
+function assertFieldNameIsWalkable(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  if (PATH_RESERVED_CHARACTERS.test(field.name)) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" declares the configuration field "${field.name}". A field name may not contain brackets or quotes: a form library reads those as structure and would store the value somewhere other than where it is validated and sent.`,
+      logContext: { type, field: field.name },
+    });
+  }
+
+  const segments = field.name.split(".");
+
+  // A numeric segment is read as an ARRAY INDEX by the form library and as a
+  // literal key by everything else: `servers.0.host` registers as
+  // `{ servers: [{ host }] }` in the form and is validated and sent as
+  // `{ servers: { "0": { host } } }`. Same declaration, two shapes, and
+  // nothing positioned to notice the disagreement.
+  const numeric = segments.find(segment => /^\d+$/.test(segment));
+  if (numeric !== undefined) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" declares the configuration field "${field.name}", whose segment "${numeric}" is a number. A form library reads a numeric segment as an array index while the rest of the contract reads it as a key, so the value would be stored somewhere other than where it is validated.`,
+      logContext: { type, field: field.name, segment: numeric },
+    });
+  }
+
+  const offender = segments.find(
+    segment => segment === "" || UNWALKABLE_PATH_SEGMENTS.has(segment)
+  );
+  if (offender === undefined) return;
+
+  throw new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider "${type}" declares the configuration field "${field.name}", whose path segment "${offender}" cannot be used. A field name is a dotted path into stored configuration and may not contain an empty segment or reach an object prototype.`,
+    logContext: { type, field: field.name, segment: offender },
+  });
+}
+
+/**
+ * Reject a default a control cannot hold.
+ *
+ * `default` is typed as the union of all three primitives, which is right for
+ * one property covering five kinds and wrong for any single field: a select
+ * defaulting to `true` renders as unselected and then fails its own generated
+ * string schema before anyone touches it, and a number field defaulting to
+ * `"3"` renders blank while quietly submitting a string. Correlating the two is
+ * a rule rather than a type, so it is checked where the definition is written.
+ */
+function assertDefaultMatchesKind(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  if (field.default === undefined) return;
+
+  const expected = DEFAULT_TYPE_FOR_KIND[field.kind];
+  if (typeof field.default === expected) return;
+
+  throw new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider "${type}" gives the ${field.kind} field "${field.name}" a ${typeof field.default} default. A ${field.kind} field can only default to a ${expected}.`,
+    logContext: {
+      type,
+      field: field.name,
+      kind: field.kind,
+      defaultType: typeof field.default,
+    },
+  });
+}
+
+/**
+ * Reject a default on a credential, and a blank-as-empty on a kind that has no
+ * empty value.
+ *
+ * **A secret default cannot be honoured.** `toDescriptor` strips it, correctly:
+ * the descriptor is served to anyone holding read or create, so forwarding a
+ * credential there would hand out the value stored configuration is masked to
+ * protect. And nothing server-side applies descriptor defaults -- they are a
+ * hint for the form and nothing else. A declared secret default is therefore
+ * inert in both directions, while looking to its author like a working
+ * fallback. A provider that wants one reads its environment inside
+ * `parseConfig`, which is authoritative and never leaves the server.
+ *
+ * **`blankAs: "empty"` needs a kind whose blank IS an empty string.** A number
+ * input's blank normalises to absent long before the payload is built, and a
+ * switch always holds a value, so declaring it on either is a request the form
+ * cannot carry out.
+ */
+/** The two spellings `blankAs` may take. */
+const BLANK_AS_VALUES: ReadonlyArray<
+  NonNullable<EmailProviderConfigField["blankAs"]>
+> = ["omit", "empty"];
+
+function assertDeclarationsCanBeHonoured(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  if (field.secret === true && field.default !== undefined) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" gives the credential "${field.name}" a default. A descriptor is served to any caller who can read providers, so a secret default is withheld from it — and nothing applies descriptor defaults on the server, so it would never be used. Read the fallback inside \`parseConfig\` instead.`,
+      logContext: { type, field: field.name },
+    });
+  }
+
+  // A typo reads as the default. `blankAs` has two spellings and the code below
+  // tests for one of them, so `"emty"` is silently treated as `"omit"` -- and
+  // for a field whose parser demands the key exist, every blank create is then
+  // stripped and rejected by the server instead of the descriptor being named
+  // at boot. An unrecognised value is a malformed descriptor, not a preference.
+  if (field.blankAs !== undefined && !BLANK_AS_VALUES.includes(field.blankAs)) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" declares \`blankAs: "${String(field.blankAs)}"\` on the field "${field.name}". It must be ${BLANK_AS_VALUES.map(value => `"${value}"`).join(" or ")}.`,
+      logContext: { type, field: field.name, blankAs: String(field.blankAs) },
+    });
+  }
+
+  if (
+    field.blankAs === "empty" &&
+    field.kind !== "text" &&
+    field.kind !== "password" &&
+    field.kind !== "select"
+  ) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" declares \`blankAs: "empty"\` on the ${field.kind} field "${field.name}". Only a text, password or select field has an empty string to send; a blank number is absent and a switch is never blank.`,
+      logContext: { type, field: field.name, kind: field.kind },
+    });
+  }
+}
+
+/**
+ * How one text property is allowed to be absent or blank.
+ *
+ * - `"required"` — must be a non-empty string. Blank is refused because the
+ *   value is a label somewhere: a control with no name, or a picker entry that
+ *   cannot be told from its neighbours.
+ * - `"identifier"` — must be a string, and emptiness belongs to another rule
+ *   that reports it better than "empty" would.
+ * - `"optional"` — may be omitted; if present it has to be a string.
+ */
+type TextRequirement = "required" | "identifier" | "optional";
+
+/**
+ * Reject descriptor text that is not text.
+ *
+ * A descriptor is the only part of a provider that crosses to the browser, and
+ * the admin renders these values directly: `help` and `senderGuidance` become
+ * React children, where a non-string throws and takes the settings page down
+ * with it, and `label` is called as a string while building a select's
+ * validation message. A descriptor is also structural, so a JavaScript plugin
+ * or a hand-built object supplies whatever it wrote.
+ *
+ * Refused where the descriptor is published rather than where it is rendered:
+ * the admin cannot say which install shipped the bad value, and by then the
+ * only symptom is a blank page.
+ */
+function assertTextIsRenderable(
+  type: string,
+  subject: string,
+  entries: ReadonlyArray<[key: string, value: unknown, rule: TextRequirement]>
+): void {
+  for (const [key, value, rule] of entries) {
+    if (value === undefined && rule === "optional") continue;
+
+    if (typeof value !== "string") {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Email provider "${type}" gives ${subject} a non-string \`${key}\` (${value === null ? "null" : typeof value}). Descriptor text is rendered by the admin as it arrives, so a value that is not a string breaks the page that would have shown it.`,
+        logContext: { type, subject, key, valueType: typeof value },
+      });
+    }
+
+    if (rule === "required" && value.trim().length === 0) {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Email provider "${type}" gives ${subject} an empty \`${key}\`. It is what names this in the admin, so nothing else identifies it once it is blank.`,
+        logContext: { type, subject, key },
+      });
+    }
+  }
+}
+
+/**
+ * Every text property a descriptor publishes about the provider itself.
+ *
+ * Exported for the same reason the field rules are: `RegisteredEmailProvider`
+ * is structural, so the registry is a second door into the admin and checking
+ * only the authoring helper would leave it open.
+ */
+export function assertProviderTextIsRenderable(provider: {
+  type: string;
+  label: string;
+  description?: string;
+  docsUrl?: string;
+  senderGuidance?: string;
+}): void {
+  assertTextIsRenderable(String(provider.type), "the provider", [
+    // Before the rules that read `.trim()` and `.length` off it. Emptiness is
+    // left to the registry, whose message for it says more than "empty".
+    ["type", provider.type, "identifier"],
+    ["label", provider.label, "required"],
+    ["description", provider.description, "optional"],
+    ["docsUrl", provider.docsUrl, "optional"],
+    ["senderGuidance", provider.senderGuidance, "optional"],
+  ]);
+
+  assertCapabilitiesAreBoolean(provider);
+}
+
+/**
+ * Reject a capability whose value is not a boolean.
+ *
+ * Every reader tests a capability for truth, so `"false"` is TRUE and the admin
+ * then tells an operator that a verified sender is required by a provider whose
+ * author wrote the opposite. The same mistake on a field flag is already
+ * refused; a capability crosses to the browser the same way and is read the
+ * same way, so it cannot be left to chance because it sits one level up.
+ *
+ * `EmailProviderCapabilities` is a structural type on a structural definition,
+ * so a JavaScript plugin or a hand-built object arrives with whatever it wrote.
+ */
+function assertCapabilitiesAreBoolean(provider: {
+  type: string;
+  capabilities?: EmailProviderCapabilities;
+}): void {
+  const capabilities = provider.capabilities;
+  if (capabilities === undefined) return;
+
+  // An array is caught by name rather than by `typeof`, which answers
+  // "object" for one. Its entries would then pass the boolean loop below --
+  // `Object.entries([true])` yields `["0", true]` -- and `toDescriptor`
+  // spreads the result, publishing `{ "0": true }` as a capability no client
+  // has a name for.
+  if (
+    capabilities === null ||
+    typeof capabilities !== "object" ||
+    Array.isArray(capabilities)
+  ) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${provider.type}" declares \`capabilities\` that is not an object (${capabilities === null ? "null" : Array.isArray(capabilities) ? "array" : typeof capabilities}).`,
+      logContext: { type: provider.type },
+    });
+  }
+
+  for (const [name, value] of Object.entries(capabilities)) {
+    if (value === undefined || typeof value === "boolean") continue;
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${provider.type}" gives the capability \`${name}\` a non-boolean value (${value === null ? "null" : typeof value}). Every reader tests it for truth, so anything else reads as \`true\` — including the string "false".`,
+      logContext: { type: provider.type, capability: name },
+    });
+  }
+}
+
+/**
+ * Reject metadata whose TYPE is wrong, before anything reads its value.
+ *
+ * Every rule in this file tests `field.secret === true` and
+ * `field.required === true`, which is correct for a boolean and silently wrong
+ * for anything else: `secret: "true"` is not `true`, so the field is treated as
+ * PUBLIC — `declaredSecretPaths` omits it while `declaredConfigPaths` still
+ * recognises it, and `maskConfiguration` then returns the credential in clear
+ * text to anyone who can read providers.
+ *
+ * `configFields` is a structural type, so a JavaScript plugin or a hand-built
+ * object reaches registration with whatever it wrote. A truthy string is the
+ * dangerous case precisely because it looks right.
+ */
+function assertFlagsAreBoolean(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  const flags: Array<[string, unknown]> = [
+    ["secret", field.secret],
+    ["required", field.required],
+  ];
+
+  for (const [name, value] of flags) {
+    if (value === undefined || typeof value === "boolean") continue;
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" gives the field "${field.name}" a non-boolean \`${name}\` (${typeof value}). Only \`true\` marks a field, so any other value reads as unset — for \`secret\` that means the credential is served in the clear.`,
+      logContext: { type, field: field.name, flag: name, kind: typeof value },
+    });
+  }
+}
+
+/**
+ * Reject a default that its own field would refuse.
+ *
+ * A form initialises from the default and validates against the same
+ * constraints, so a default outside them opens the form already invalid and
+ * the operator has to change a value they never chose in order to submit. The
+ * descriptor is the only place both halves are visible, so it is where they
+ * are checked against each other.
+ */
+function assertDefaultSatisfiesConstraints(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  const value = field.default;
+  if (value === undefined) return;
+  const { min, max, maxLength } = field.constraints ?? {};
+
+  // Requiredness is a constraint the form applies too, and a blank string is
+  // the value it applies it to: the generated schema reports an empty required
+  // field as missing, so a descriptor pre-filling one opens every create form
+  // already invalid. Checked before the bounds, which a blank satisfies -- it
+  // has the right type and violates no maximum, which is exactly why it slipped
+  // through them.
+  if (
+    field.required === true &&
+    typeof value === "string" &&
+    value.trim() === ""
+  ) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" gives the required field "${field.name}" a blank default. A required field rejects a blank, so the form opens on a value it will not accept and cannot be submitted until the operator changes something nobody chose. Omit the default, or make the field optional.`,
+      logContext: { type, field: field.name },
+    });
+  }
+
+  const violation =
+    typeof value === "number" && min !== undefined && value < min
+      ? `is below its minimum of ${min}`
+      : typeof value === "number" && max !== undefined && value > max
+        ? `is above its maximum of ${max}`
+        : typeof value === "string" &&
+            maxLength !== undefined &&
+            value.length > maxLength
+          ? `is longer than its maximum length of ${maxLength}`
+          : undefined;
+
+  if (violation === undefined) return;
+
+  throw new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider "${type}" gives the field "${field.name}" a default of ${JSON.stringify(value)}, which ${violation}. A form starting on a value it must reject cannot be submitted without changing something nobody chose.`,
+    logContext: {
+      type,
+      field: field.name,
+      default: value,
+      min,
+      max,
+      maxLength,
+    },
+  });
+}
+
+/**
+ * Reject an optional boolean that does not say what "unset" looks like.
+ *
+ * A switch has two positions and no third. Without a default, an absent stored
+ * key renders as OFF and every subsequent save writes `false` — so a parser
+ * that distinguishes absence from false (an optional flag defaulting to true
+ * server-side, say) is silently overwritten, and the clearing path cannot help
+ * because a switch can never be "emptied" back to absence.
+ *
+ * Declaring the default removes the ambiguity at the source: the form starts
+ * where the provider says, and the value it sends is always one the provider
+ * chose. A field that genuinely needs three states is a select, not a switch.
+ */
+function assertOptionalBooleanHasDefault(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  if (field.kind !== "boolean") return;
+  if (field.default !== undefined) return;
+  // A REQUIRED boolean has no absence to represent: the form initialises the
+  // switch to `false`, the generated schema accepts it, and both positions are
+  // a value the provider asked for. Only an optional one has three states to
+  // squeeze onto two positions.
+  if (field.required === true) return;
+
+  throw new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider "${type}" declares the boolean field "${field.name}" without a default. A switch has two positions, so an absent value would render as off and be saved as false — overwriting a provider default nobody changed. Declare \`default\`, or use a select if the field genuinely has three states.`,
+    logContext: { type, field: field.name },
+  });
+}
+
+/**
+ * Reject two fields that claim the same place in the configuration.
+ *
+ * A declaration and one of its own descendants — `auth` beside `auth.pass` —
+ * cannot both be represented: whichever is built second either overwrites the
+ * other's branch or tries to treat a leaf as one. Neither order produces a
+ * working form, and both fail somewhere far from the declaration, so the
+ * overlap is refused where it is written.
+ */
+function assertNoOverlappingPaths(
+  type: string,
+  fields: ReadonlyArray<EmailProviderConfigField>
+): void {
+  const seen: string[][] = [];
+
+  for (const field of fields) {
+    const path = field.name.split(".");
+    for (const other of seen) {
+      const shorter = other.length <= path.length ? other : path;
+      const longer = other.length <= path.length ? path : other;
+      const overlaps = shorter.every((part, index) => part === longer[index]);
+      if (!overlaps) continue;
+
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Email provider "${type}" declares the configuration fields "${other.join(".")}" and "${field.name}", which claim the same place in the stored configuration. Field paths must not repeat or nest inside one another.`,
+        logContext: { type, first: other.join("."), second: field.name },
+      });
+    }
+    seen.push(path);
+  }
+}
+
+/**
+ * Reject a select nobody can choose from.
+ *
+ * Two shapes the type permits and no form can render. A select with no options
+ * draws an empty control, and if it is required the provider can never be
+ * saved. An option whose value is the empty string is worse: the admin's select
+ * reserves `""` for "nothing selected" and throws on an item carrying it, so
+ * merely opening the form reaches an error boundary.
+ *
+ * Refused here rather than worked around in a client, because every client
+ * would otherwise need the same two workarounds and a form is not the place to
+ * discover that a provider is undeclarable.
+ */
+/**
+ * Refuse `options` metadata nothing can publish, whatever KIND declared it.
+ *
+ * Checked for every kind rather than for selects alone, because `toDescriptor`
+ * copies `options` off any field that carries one: a text field declaring
+ * `options: null` registers happily and then throws a raw `TypeError` out of
+ * the catalog endpoint. That takes every descriptor-driven form down, not just
+ * this provider's, since one response carries the whole catalog.
+ *
+ * `configFields` is a structural type, so a JavaScript plugin or a hand-built
+ * provider reaches here with whatever it wrote.
+ */
+function assertOptionsArePublishable(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  if (field.options === undefined) return;
+
+  if (!Array.isArray(field.options)) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" gives the field "${field.name}" an \`options\` that is not an array.`,
+      logContext: { type, field: field.name, kind: field.kind },
+    });
+  }
+
+  // `{ value: 1 }` would pass a looser check and then be unselectable -- the
+  // control renders strings and the generated schema validates strings, so a
+  // stored number matches no option.
+  const malformed = field.options.findIndex(
+    option =>
+      option === null ||
+      typeof option !== "object" ||
+      typeof option.value !== "string" ||
+      typeof option.label !== "string"
+  );
+  if (malformed !== -1) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" gives the field "${field.name}" an option at index ${malformed} that is not \`{ value: string; label: string }\`. A non-string value cannot be selected: the control and the generated schema both work in strings.`,
+      logContext: { type, field: field.name, index: malformed },
+    });
+  }
+}
+
+function assertSelectIsChoosable(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  if (field.kind !== "select") return;
+
+  // Shape is already settled by `assertOptionsArePublishable`, which runs for
+  // every kind; what follows is what a SELECT additionally needs to be usable.
+  const options = field.options ?? [];
+
+  if (options.length === 0) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" declares the select field "${field.name}" with no options. A select must offer at least one choice.`,
+      logContext: { type, field: field.name },
+    });
+  }
+
+  const blankLabel = options.findIndex(option => option.label.trim() === "");
+  if (blankLabel !== -1) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" gives the select field "${field.name}" an option at index ${blankLabel} with a blank label. The label is the only thing an operator sees in the menu, so a blank one is a choice nobody can tell from its neighbours -- and once picked, the control shows nothing.`,
+      logContext: { type, field: field.name, index: blankLabel },
+    });
+  }
+
+  // Two options sharing a value are two menu items the form cannot tell apart:
+  // they render with the same React key and the same select value, so which
+  // label survives reconciliation is not decided by anything the provider
+  // wrote, and both choices store the same configuration.
+  const duplicate = options.findIndex(
+    (option, index) =>
+      options.findIndex(other => other.value === option.value) !== index
+  );
+  if (duplicate !== -1) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" gives the select field "${field.name}" two options with the value "${options[duplicate]?.value ?? ""}". A value identifies a choice, so two choices cannot share one.`,
+      logContext: {
+        type,
+        field: field.name,
+        value: options[duplicate]?.value,
+        index: duplicate,
+      },
+    });
+  }
+
+  if (options.some(option => option.value === "")) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" gives the select field "${field.name}" an option with an empty value. An empty value means "nothing selected", so it cannot also be a choice.`,
+      logContext: { type, field: field.name },
+    });
+  }
+
+  // A default outside its own option list renders as nothing selected and then
+  // fails the schema generated from the same list, so the field arrives
+  // invalid and the provider cannot be saved until someone changes a value
+  // they never chose.
+  if (
+    field.default !== undefined &&
+    !options.some(option => option.value === field.default)
+  ) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" defaults the select field "${field.name}" to a value that is not one of its options.`,
+      logContext: { type, field: field.name, default: String(field.default) },
+    });
+  }
+}
+
+/**
+ * Characters a form library will read as structure rather than as a name.
+ *
+ * React Hook Form parses a registered path by splitting on `[` and stripping
+ * brackets and quotes, while this contract and every consumer of it split on
+ * dots alone. A field called `headers[x-api-key]` therefore registers as
+ * `{ headers: { "x-api-key": … } }` in the form and is validated and sent as
+ * `{ "headers[x-api-key]": … }` -- two different places in the configuration,
+ * neither of which reports the disagreement.
+ *
+ * Measured rather than assumed: `set(values, "configuration.headers[x-api-key]", v)`
+ * against react-hook-form produces the first shape, and the schema built from
+ * the same descriptor expects the second.
+ */
+const PATH_RESERVED_CHARACTERS = /[[\]"']/;
+
+/**
+ * The control kinds a form knows how to render.
+ *
+ * The admin switches over this union exhaustively, which is a COMPILE-time
+ * guarantee and no guarantee at all about a JavaScript plugin or a hand-built
+ * object. A `kind` outside the set falls off the end of that switch, the field
+ * gets no schema, and building the form recurses into `undefined` — so an
+ * unrenderable kind takes down the whole provider form rather than skipping one
+ * field.
+ */
+const RENDERABLE_KINDS: ReadonlyArray<EmailProviderConfigField["kind"]> = [
+  "text",
+  "password",
+  "number",
+  "boolean",
+  "select",
+];
+
+/** Reject a control nothing can draw. */
+function assertKindIsRenderable(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  if (RENDERABLE_KINDS.includes(field.kind)) return;
+
+  throw new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider "${type}" declares the field "${field.name}" with kind "${String(field.kind)}", which no form can render. Use one of: ${RENDERABLE_KINDS.join(", ")}.`,
+    logContext: { type, field: field.name, kind: String(field.kind) },
+  });
+}
+
+/**
+ * Reject numeric metadata that cannot survive the wire.
+ *
+ * A descriptor is served as JSON, and `JSON.stringify` turns `Infinity`,
+ * `-Infinity` and `NaN` into `null`. A client then reads a present limit whose
+ * value is `null`, and `value.length > null` is `value.length > 0` — so
+ * `maxLength: Infinity`, declared to mean "no limit", rejects every non-empty
+ * string and makes a required field impossible to submit.
+ *
+ * Refused at registration rather than coerced, because a provider author
+ * writing `Infinity` means "unbounded" and the way to say that is to omit the
+ * key. Silently dropping it would work and teach nothing.
+ */
+/**
+ * Reject a constraints container that is not one.
+ *
+ * Every rule reads `field.constraints?.min`, so `null` slips past all of them
+ * -- optional chaining treats it as absent. `toDescriptor` then tests
+ * `!== undefined`, finds it present, and dereferences it: the catalog endpoint
+ * throws a raw `TypeError` and EVERY provider's form becomes unavailable, not
+ * just this one's.
+ *
+ * Checked at registration, where the failure names the plugin, rather than at
+ * the first request for the catalog.
+ */
+function assertConstraintsAreAnObject(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  const constraints = field.constraints;
+  if (constraints === undefined) return;
+  if (constraints !== null && typeof constraints === "object") return;
+
+  throw new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider "${type}" gives the field "${field.name}" a \`constraints\` that is not an object (${constraints === null ? "null" : typeof constraints}). Omit the key to declare no bounds.`,
+    logContext: {
+      type,
+      field: field.name,
+      constraints: constraints === null ? "null" : typeof constraints,
+    },
+  });
+}
+
+function assertNumericMetadataIsFinite(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  const candidates: Array<[string, number | undefined]> = [
+    ["constraints.min", field.constraints?.min],
+    ["constraints.max", field.constraints?.max],
+    ["constraints.maxLength", field.constraints?.maxLength],
+    ["default", typeof field.default === "number" ? field.default : undefined],
+  ];
+
+  for (const [key, value] of candidates) {
+    if (value === undefined || Number.isFinite(value)) continue;
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" gives the field "${field.name}" a non-finite ${key} (${String(value)}). Descriptors are served as JSON, where that becomes null and reads as a real limit. Omit the key to mean "no limit".`,
+      logContext: { type, field: field.name, key, value: String(value) },
+    });
+  }
+}
+
+/**
+ * Which control each constraint describes, and the phrase naming those
+ * controls in the refusal.
+ *
+ * A character limit describes a string the operator types; a numeric bound
+ * describes a number input's value. Everything else either has no keyboard
+ * behind it (a switch), takes its value from an option list (a select), or
+ * measures the wrong quantity (`maxLength` on a number is not its magnitude).
+ */
+const CONSTRAINT_KINDS: ReadonlyArray<{
+  key: "maxLength" | "min" | "max";
+  kinds: ReadonlyArray<EmailProviderConfigField["kind"]>;
+  applies: string;
+}> = [
+  {
+    key: "maxLength",
+    kinds: ["text", "password"],
+    applies: "text or password",
+  },
+  { key: "min", kinds: ["number"], applies: "number" },
+  { key: "max", kinds: ["number"], applies: "number" },
+];
+
+/**
+ * Reject a constraint on a control that does not apply it.
+ *
+ * The generated form enforces `maxLength` in its text and password branch and
+ * `min`/`max` in its number branch, and nowhere else. Declaring one elsewhere
+ * publishes a constraint to every client that reads the descriptor while the
+ * form it describes ignores it — so the operator is allowed to enter a value
+ * the provider's own parser then rejects, after exactly the round trip the
+ * hint existed to avoid.
+ *
+ * Refused rather than dropped, on the same reasoning as `blankAs` on a number:
+ * an author who wrote it meant something by it, and a constraint that quietly
+ * does nothing teaches the opposite.
+ */
+function assertConstraintsApplyToKind(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  for (const { key, kinds, applies } of CONSTRAINT_KINDS) {
+    if (field.constraints?.[key] === undefined) continue;
+    if (kinds.includes(field.kind)) continue;
+
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" declares \`${key}\` on the ${field.kind} field "${field.name}". That constraint is only applied to a ${applies} field, so this one is published to every client and enforced by nothing.`,
+      logContext: {
+        type,
+        field: field.name,
+        kind: field.kind,
+        constraint: key,
+      },
+    });
+  }
+}
+
+/** Reject a text length no value can satisfy. */
+function assertTextLengthIsSatisfiable(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  const maxLength = field.constraints?.maxLength;
+  if (maxLength === undefined || maxLength >= 1) return;
+
+  // A field that can hold at most zero characters is not a field. Required, it
+  // rejects the empty string AND every non-empty one; optional, it permits
+  // exactly nothing. Either way the provider can never be saved through a form
+  // built from this descriptor.
+  throw new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider "${type}" gives the field "${field.name}" a maximum length of ${maxLength}. No value can satisfy that.`,
+    logContext: { type, field: field.name, maxLength },
+  });
+}
+
+/** Reject a numeric range no value can satisfy. */
+function assertNumericBoundsAreSatisfiable(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  const { min, max } = field.constraints ?? {};
+  if (min === undefined || max === undefined || min <= max) return;
+
+  throw new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider "${type}" gives the number field "${field.name}" a minimum of ${min} and a maximum of ${max}. No value can satisfy both, so the provider could never be saved.`,
+    logContext: { type, field: field.name, min, max },
+  });
+}
+
+/**
+ * Every rule a provider's field metadata has to satisfy.
+ *
+ * Exported and called from BOTH the authoring helper and the registry.
+ * `RegisteredEmailProvider` is a structural type, so a JavaScript plugin or a
+ * hand-built object reaches registration without passing through
+ * `defineEmailProvider` — checking in one place only would leave the rules
+ * enforced for the authors least likely to break them.
+ */
+export function assertConfigFieldsAreUsable(
+  type: string,
+  fields: ReadonlyArray<EmailProviderConfigField>
+): void {
+  // The CONTAINER before anything in it. `configFields` is structural, so a
+  // JavaScript plugin or a hand-built object reaches here with whatever it
+  // wrote, and the loop below turns `null` into `fields is not iterable` and a
+  // null entry into `Cannot read properties of null` -- raw TypeErrors that
+  // name neither the provider nor the position, thrown from a boot path where
+  // the only thing an operator can act on is which plugin to remove.
+  if (!Array.isArray(fields)) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" declares \`configFields\` as ${fields === null ? "null" : typeof fields}. It has to be an array, even an empty one.`,
+      logContext: { type, received: fields === null ? "null" : typeof fields },
+    });
+  }
+
+  const malformed = fields.findIndex(
+    field => field === null || typeof field !== "object"
+  );
+  if (malformed !== -1) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" declares a configuration field at index ${malformed} that is not an object. Every entry has to describe one field.`,
+      logContext: { type, index: malformed },
+    });
+  }
+
+  for (const field of fields) {
+    // Text first, because `name` is how every rule below says WHICH field it
+    // means and the walkability rule splits it: a non-string name otherwise
+    // surfaces as `field.name.split is not a function`, which names neither
+    // the plugin nor the field.
+    assertTextIsRenderable(type, `the field "${String(field.name)}"`, [
+      ["name", field.name, "identifier"],
+      ["label", field.label, "required"],
+      ["help", field.help, "optional"],
+      ["placeholder", field.placeholder, "optional"],
+    ]);
+    // Then kind: every rule below reads it, and a rule that switches on an
+    // unrenderable kind would report the wrong problem.
+    assertKindIsRenderable(type, field);
+    assertFieldNameIsWalkable(type, field);
+    // Before every rule that reads a flag, so a wrong TYPE is reported as
+    // itself rather than as the rule that silently read it as unset.
+    assertFlagsAreBoolean(type, field);
+    // Before every rule that reads `secret`: a credential declared on a
+    // control that cannot hold one is the more fundamental mistake, and
+    // reporting a rule about its default first would send the author to the
+    // wrong line.
+    if (field.secret === true && !SECRET_CAPABLE_KINDS.includes(field.kind)) {
+      throw secretFieldMustBeTextual(type, field);
+    }
+    // Before the satisfiability rules, which compare these numbers: `NaN`
+    // fails every comparison silently, so a bound of `NaN` would pass
+    // "min <= max" and be reported as fine.
+    // Before every rule that reads a bound off it: `null` reads as absent
+    // through optional chaining, so each of them passes and the descriptor
+    // build is where it finally fails.
+    assertConstraintsAreAnObject(type, field);
+    assertNumericMetadataIsFinite(type, field);
+    // Before satisfiability, which would report a `maxLength` of 0 on a select
+    // as a limit no value meets rather than as a limit that control never
+    // applies — sending the author to argue with the number instead of
+    // removing the key.
+    assertConstraintsApplyToKind(type, field);
+    assertTextLengthIsSatisfiable(type, field);
+    assertDefaultMatchesKind(type, field);
+    assertDefaultSatisfiesConstraints(type, field);
+    assertDeclarationsCanBeHonoured(type, field);
+    assertOptionalBooleanHasDefault(type, field);
+    assertOptionsArePublishable(type, field);
+    assertSelectIsChoosable(type, field);
+    assertNumericBoundsAreSatisfiable(type, field);
+  }
+  assertNoOverlappingPaths(type, fields);
+}
+
+/** The single error for a credential declared on a control that cannot hold one. */
+export function secretFieldMustBeTextual(
+  type: string,
+  field: EmailProviderConfigField
+): NextlyError {
+  return new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider "${type}" marks the ${field.kind} field "${field.name}" as secret. A credential is masked on read, so it can only be declared on a text or password field. Change the kind, or drop \`secret\`.`,
+    logContext: { type, field: field.name, kind: field.kind },
+  });
+}
+
+/**
  * A registered definition with its config type erased.
  *
  * The registry holds providers whose `TConfig`s differ, and no single generic
@@ -175,6 +1125,7 @@ export interface RegisteredEmailProvider {
   label: string;
   description?: string;
   docsUrl?: string;
+  senderGuidance?: string;
   capabilities?: EmailProviderCapabilities;
   configFields: ReadonlyArray<EmailProviderConfigField>;
   /** Throw if this configuration is unusable. Discards the parsed value. */
@@ -494,9 +1445,13 @@ export function describeProviderFailure(error: unknown): {
 export function defineEmailProvider<TConfig>(
   definition: EmailProviderDefinition<TConfig>
 ): RegisteredEmailProvider {
+  assertProviderTextIsRenderable(definition);
+
   if (definition.type.length > MAX_EMAIL_PROVIDER_TYPE_LENGTH) {
     throw emailProviderTypeTooLong(definition.type);
   }
+
+  assertConfigFieldsAreUsable(definition.type, definition.configFields);
 
   // Captured so the branch below narrows: an optional read off the object
   // inside a closure does not stay narrowed, and asserting it would hide a
@@ -568,6 +1523,7 @@ export function defineEmailProvider<TConfig>(
     label: definition.label,
     description: definition.description,
     docsUrl: definition.docsUrl,
+    senderGuidance: definition.senderGuidance,
     capabilities: definition.capabilities,
     configFields: definition.configFields,
     validateConfig: (input: unknown): void => {
@@ -663,6 +1619,7 @@ export interface EmailProviderDescriptor {
   label: string;
   description?: string;
   docsUrl?: string;
+  senderGuidance?: string;
   capabilities: EmailProviderCapabilities;
   configFields: ReadonlyArray<EmailProviderConfigField>;
 }
@@ -905,6 +1862,7 @@ export function toDescriptor(
     label: provider.label,
     description: provider.description,
     docsUrl: provider.docsUrl,
+    senderGuidance: provider.senderGuidance,
     capabilities: {
       ...provider.capabilities,
       // Derived, not echoed: a definition that claims the capability without
@@ -917,15 +1875,69 @@ export function toDescriptor(
         provider.capabilities?.connectionTest === true &&
         typeof provider.testConnectionFrom === "function",
     },
-    // A default on a secret field is stripped. The type permits one -- a
-    // provider might reasonably want `default: process.env.PROVIDER_KEY` -- and
-    // the descriptor is served to anyone holding read or create, so forwarding
-    // it would hand out the credential that stored configuration is masked to
-    // protect. The field is still described; only its value is withheld.
-    configFields: provider.configFields.map(field =>
-      field.secret === true && field.default !== undefined
-        ? { ...field, default: undefined }
-        : field
-    ),
+    configFields: provider.configFields.map(publishableField),
+  };
+}
+
+/**
+ * One config field, rebuilt from the properties a descriptor declares.
+ *
+ * Copied key by key rather than spread. `EmailProviderConfigField` is a
+ * structural type on a structural definition, so a JavaScript plugin or a
+ * hand-built provider can hang anything it likes off a field -- an operational
+ * `value`, a `credentials` blob -- and a spread publishes all of it to every
+ * client holding read or create. Registration ignores the extra property,
+ * which is exactly why nothing else would notice it leaving.
+ *
+ * An allowlist rather than a list of things to strip: a denylist is wrong the
+ * moment someone invents a key nobody thought of, and the set of keys a
+ * descriptor MEANS is already written down as this interface.
+ *
+ * A default on a secret field is withheld even though registration refuses
+ * one, for the same structural reason. The field is still described; only its
+ * value is withheld.
+ */
+function publishableField(
+  field: EmailProviderConfigField
+): EmailProviderConfigField {
+  const withheldDefault = field.secret === true;
+
+  return {
+    name: field.name,
+    label: field.label,
+    kind: field.kind,
+    ...(field.required !== undefined ? { required: field.required } : {}),
+    ...(field.default !== undefined && !withheldDefault
+      ? { default: field.default }
+      : {}),
+    ...(field.help !== undefined ? { help: field.help } : {}),
+    ...(field.placeholder !== undefined
+      ? { placeholder: field.placeholder }
+      : {}),
+    ...(field.options !== undefined
+      ? {
+          options: field.options.map(option => ({
+            value: option.value,
+            label: option.label,
+          })),
+        }
+      : {}),
+    ...(field.secret !== undefined ? { secret: field.secret } : {}),
+    ...(field.constraints !== undefined
+      ? {
+          constraints: {
+            ...(field.constraints.min !== undefined
+              ? { min: field.constraints.min }
+              : {}),
+            ...(field.constraints.max !== undefined
+              ? { max: field.constraints.max }
+              : {}),
+            ...(field.constraints.maxLength !== undefined
+              ? { maxLength: field.constraints.maxLength }
+              : {}),
+          },
+        }
+      : {}),
+    ...(field.blankAs !== undefined ? { blankAs: field.blankAs } : {}),
   };
 }

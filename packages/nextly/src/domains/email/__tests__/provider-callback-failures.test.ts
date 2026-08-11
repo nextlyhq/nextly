@@ -870,16 +870,18 @@ describe("a credential that is not a string", () => {
   });
 
   it("is contained too", async () => {
-    // `secret: true` is permitted on a `kind: "number"` field, so a numeric
-    // PIN is a legal declaration. Reading only string values hands back an
-    // empty secret list for exactly the provider about to interpolate one.
+    // A credential is declared on a text field -- that is the only kind that
+    // can hold the mask it is read back as -- and the VALUE stored under it is
+    // still whatever a coercing parser, a legacy row or a JavaScript caller
+    // put there. Reading only string values hands back an empty secret list
+    // for exactly the provider about to interpolate a number.
     const registry = getEmailProviderRegistry();
     registry.register(
       defineEmailProvider<{ pin: number }>({
         type: "numeric-secret",
         label: "Numeric secret",
         configFields: [
-          { name: "pin", label: "PIN", kind: "number", secret: true },
+          { name: "pin", label: "PIN", kind: "text", secret: true },
         ],
         parseConfig: input => input as { pin: number },
         createAdapter: config => ({
@@ -906,7 +908,7 @@ describe("a credential that is not a string", () => {
         type: "numeric-secret-clean",
         label: "Numeric secret clean",
         configFields: [
-          { name: "pin", label: "PIN", kind: "number", secret: true },
+          { name: "pin", label: "PIN", kind: "text", secret: true },
         ],
         parseConfig: input => input as { pin: number },
         createAdapter: () => ({
@@ -993,17 +995,18 @@ describe("a credential declared on a switch", () => {
   });
 
   it("costs the provider its message ids", async () => {
-    // `secret: true` is permitted on a boolean field. Its two renderings —
-    // "true" and "false" — appear inside ordinary identifiers often enough
-    // that comparing against them would delete legitimate ids while catching
-    // the credential only by accident, so it is unmatchable instead.
+    // A boolean VALUE under a declared credential -- what a coercing parser or
+    // a legacy row leaves behind. Its two renderings, "true" and "false",
+    // appear inside ordinary identifiers often enough that comparing against
+    // them would delete legitimate ids while catching the credential only by
+    // accident, so it is unmatchable instead.
     const registry = getEmailProviderRegistry();
     registry.register(
       defineEmailProvider<{ privateFlag: boolean }>({
         type: "bool-secret",
         label: "Boolean secret",
         configFields: [
-          { name: "privateFlag", label: "Flag", kind: "boolean", secret: true },
+          { name: "privateFlag", label: "Flag", kind: "text", secret: true },
         ],
         parseConfig: input => input as { privateFlag: boolean },
         createAdapter: config => ({

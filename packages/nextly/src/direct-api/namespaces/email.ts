@@ -47,7 +47,12 @@ import type {
 } from "../types/index";
 
 import type { NextlyContext } from "./context";
-import { isNotFoundError, mergeConfig, sliceListResult } from "./helpers";
+import {
+  directApiActor,
+  isNotFoundError,
+  mergeConfig,
+  sliceListResult,
+} from "./helpers";
 
 /**
  * `nextly.email.*` namespace — send raw or template-based emails.
@@ -134,7 +139,9 @@ export interface EmailProvidersNamespace {
   delete(
     args: DeleteEmailProviderArgs
   ): Promise<MutationResult<{ id: string }>>;
-  setDefault(args: SetDefaultProviderArgs): Promise<EmailProviderRecord>;
+  setDefault(
+    args: SetDefaultProviderArgs
+  ): Promise<MutationResult<EmailProviderRecord>>;
   test(
     args: TestEmailProviderArgs
   ): Promise<{ success: boolean; error?: string }>;
@@ -171,14 +178,23 @@ export function createEmailProvidersNamespace(
     async create(
       args: CreateEmailProviderArgs
     ): Promise<MutationResult<EmailProviderRecord>> {
-      const item = await ctx.emailProviderService.createProvider({
-        name: args.data.name,
-        type: args.data.type,
-        fromEmail: args.data.fromEmail,
-        fromName: args.data.fromName,
-        configuration: args.data.configuration,
-        isDefault: args.data.isDefault,
-      });
+      const item = await ctx.emailProviderService.createProvider(
+        {
+          name: args.data.name,
+          type: args.data.type,
+          fromEmail: args.data.fromEmail,
+          fromName: args.data.fromName,
+          configuration: args.data.configuration,
+          isDefault: args.data.isDefault,
+          // Named explicitly, like every property above it. This object is
+          // built key by key rather than spread from `data`, so a property the
+          // argument type offers and this list omits is dropped in silence:
+          // `createProvider` reads `isActive ?? true`, and a provider someone
+          // asked to create deactivated would begin sending.
+          isActive: args.data.isActive,
+        },
+        directApiActor(ctx.defaultConfig, args)
+      );
       return { message: "Email provider created.", item };
     },
 
@@ -187,7 +203,8 @@ export function createEmailProvidersNamespace(
     ): Promise<MutationResult<EmailProviderRecord>> {
       const item = await ctx.emailProviderService.updateProvider(
         args.id,
-        args.data
+        args.data,
+        directApiActor(ctx.defaultConfig, args)
       );
       return { message: "Email provider updated.", item };
     },
@@ -195,7 +212,10 @@ export function createEmailProvidersNamespace(
     async delete(
       args: DeleteEmailProviderArgs
     ): Promise<MutationResult<{ id: string }>> {
-      await ctx.emailProviderService.deleteProvider(args.id);
+      await ctx.emailProviderService.deleteProvider(
+        args.id,
+        directApiActor(ctx.defaultConfig, args)
+      );
       return {
         message: "Email provider deleted.",
         item: { id: args.id },
@@ -204,8 +224,16 @@ export function createEmailProvidersNamespace(
 
     async setDefault(
       args: SetDefaultProviderArgs
-    ): Promise<EmailProviderRecord> {
-      return await ctx.emailProviderService.setDefault(args.id);
+    ): Promise<MutationResult<EmailProviderRecord>> {
+      // The same envelope every other mutation in this namespace returns.
+      // Promotion changes a row, so a caller reads the result the way it reads
+      // a create or an update rather than remembering that one of the five
+      // hands its record back bare.
+      const item = await ctx.emailProviderService.setDefault(
+        args.id,
+        directApiActor(ctx.defaultConfig, args)
+      );
+      return { message: "Default email provider set.", item };
     },
 
     async test(

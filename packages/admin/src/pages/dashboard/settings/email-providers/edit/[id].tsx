@@ -6,8 +6,9 @@ import { useCallback } from "react";
 import {
   EMAIL_PROVIDER_FORM_ID,
   EmailProviderForm,
-  formValuesToPayload,
-  type ProviderFormValues,
+  emailCatalogState,
+  isUnregisteredProviderType,
+  type EmailProviderPayload,
 } from "@admin/components/features/settings/EmailProviderForm";
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
 import { Loader2 } from "@admin/components/icons";
@@ -19,14 +20,14 @@ import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import {
   useEmailProvider,
+  useEmailProviderTypes,
   useUpdateEmailProvider,
 } from "@admin/hooks/queries/useEmailProviders";
 import { useRouter } from "@admin/hooks/useRouter";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
 import { validateUUID } from "@admin/lib/validation";
-
-const MASKED_SECRET = "••••••••";
 
 export default function EditEmailProviderPage() {
   const { route } = useRouter();
@@ -46,76 +47,51 @@ export default function EditEmailProviderPage() {
     refetch,
   } = useEmailProvider(providerId || undefined);
 
+  // The provider catalog. The stored record says which type this provider is;
+  // the catalog says what that type's fields are, so both are needed before the
+  // form can render anything editable.
+  const {
+    data: descriptors,
+    isLoading: descriptorsLoading,
+    error: descriptorsError,
+  } = useEmailProviderTypes();
+
   // Update mutation
   const { mutate: updateProvider, isPending } = useUpdateEmailProvider();
 
   const handleSubmit = useCallback(
-    (values: ProviderFormValues) => {
+    (payload: EmailProviderPayload) => {
       if (!providerId) return;
 
-      const payload = formValuesToPayload(values);
-
-      // For edit, only send configuration fields that have values
-      // (empty sensitive fields mean "keep existing")
-      const configuration = { ...payload.configuration };
-
-      if (values.type === "smtp") {
-        if (
-          !values.smtpPassword ||
-          values.smtpPassword === MASKED_SECRET ||
-          /^\*+$/.test(values.smtpPassword)
-        ) {
-          const auth = configuration.auth as Record<string, unknown>;
-          delete auth.pass;
-        }
-      } else {
-        if (
-          !values.apiKey ||
-          values.apiKey === MASKED_SECRET ||
-          /^\*+$/.test(values.apiKey)
-        ) {
-          delete configuration.apiKey;
-        }
-      }
-
-      // Only include configuration in the update if it has actual values.
-      // An empty object would overwrite the stored (encrypted) credentials.
-      const dataToUpdate: {
-        name: string;
-        type: ProviderFormValues["type"];
-        fromEmail: string;
-        fromName: string | null;
-        isDefault: boolean;
-        configuration?: Record<string, unknown>;
-      } = {
-        name: payload.name,
-        type: payload.type,
-        fromEmail: payload.fromEmail,
-        fromName: payload.fromName,
-        isDefault: payload.isDefault,
-      };
-      if (Object.keys(configuration).length > 0) {
-        dataToUpdate.configuration = configuration;
-      }
-
+      // The form has already dropped the credentials the user did not touch,
+      // deciding from the descriptor's own `secret` flags and the stored value
+      // rather than from a list of provider names kept here. The server merges
+      // what remains over the stored configuration, so an omitted credential
+      // keeps its value.
       updateProvider(
         {
           id: providerId,
-          data: dataToUpdate,
+          data: payload,
         },
         {
           onSuccess: () => {
             toast.success("Provider updated", {
-              description: `${values.name} has been updated successfully.`,
+              description: `${payload.name} has been updated successfully.`,
             });
             navigateTo(ROUTES.SETTINGS_EMAIL_PROVIDERS);
           },
           onError: (error: Error) => {
             toast.error("Failed to update provider", {
-              description: getErrorMessage(
-                error,
-                "An error occurred while updating the provider."
-              ),
+              // apiErrorMessage, not getErrorMessage: a rule that lives only
+              // in the provider's own parser -- SMTP's conditional
+              // credentials, its transport-safety check, anything a plugin
+              // enforces -- arrives as per-field reasons in `data.errors`
+              // under a top-level "Validation failed." Reading only
+              // `Error.message` shows the operator that sentence and nothing
+              // they can act on.
+              description:
+                apiErrorMessage(error) ||
+                "An error occurred while updating the provider.",
             });
           },
         }
@@ -193,6 +169,39 @@ export default function EditEmailProviderPage() {
     );
   }
 
+  // The same question the form answers before it disables every field: is the
+  // stored type still registered? Asked once, from the shared predicate, so
+  // the button and the notice beside it can never disagree — an enabled Update
+  // under a "settings cannot be edited" banner submits an empty configuration
+  // and comes back with an unsupported-provider error.
+  //
+  // Gated on the catalog having settled, because an empty list mid-fetch makes
+  // every type look unregistered.
+  //
+  // A failed catalog with NOTHING cached is its own reason: the form renders a
+  // fatal alert instead of itself, so there is no form for this button to
+  // submit and an enabled Update would do nothing at all.
+  //
+  // A catalog that merely failed to REFRESH is not that reason. Its cached
+  // descriptors are what the form goes on to render and to disable itself
+  // from, so the same question has to be asked of them here — treating the
+  // stale state as "no answer yet" is what leaves Update enabled beneath the
+  // form's own notice that the settings cannot be edited.
+  const catalog = emailCatalogState({
+    loading: descriptorsLoading,
+    failed: descriptorsError !== null && descriptorsError !== undefined,
+    descriptors: descriptors ?? [],
+  });
+
+  // Loading counts as well as unavailable. The form renders only its skeleton
+  // until the catalog settles, so the id this button submits to is not on the
+  // page yet and pressing it does nothing at all — which reads as a broken
+  // control rather than as a page that is not ready.
+  const cannotEdit =
+    catalog === "loading" ||
+    catalog === "unavailable" ||
+    isUnregisteredProviderType(provider?.type, descriptors ?? []);
+
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
@@ -213,7 +222,7 @@ export default function EditEmailProviderPage() {
               <Button
                 type="submit"
                 form={EMAIL_PROVIDER_FORM_ID}
-                disabled={isPending}
+                disabled={isPending || cannotEdit}
               >
                 {isPending ? (
                   <>
@@ -230,6 +239,9 @@ export default function EditEmailProviderPage() {
           <EmailProviderForm
             mode="edit"
             provider={provider}
+            descriptors={descriptors ?? []}
+            descriptorsLoading={descriptorsLoading}
+            descriptorsError={descriptorsError}
             isPending={isPending}
             onSubmit={handleSubmit}
           />

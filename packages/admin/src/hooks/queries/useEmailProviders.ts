@@ -26,6 +26,7 @@ import {
 
 import {
   listProviders,
+  listProviderTypes,
   getProvider,
   createProvider,
   updateProvider,
@@ -33,6 +34,7 @@ import {
   setDefaultProvider,
   testProvider,
   type EmailProviderRecord,
+  type EmailProviderDescriptor,
   type EmailProviderListResponse,
   type CreateEmailProviderPayload,
   type UpdateEmailProviderPayload,
@@ -54,6 +56,11 @@ export const emailProviderKeys = {
   }) => [...emailProviderKeys.lists(), params] as const,
   details: () => [...emailProviderKeys.all(), "detail"] as const,
   detail: (id: string) => [...emailProviderKeys.details(), id] as const,
+  // The registry catalog sits OUTSIDE the record keys on purpose: every
+  // mutation invalidates `all()`, and the set of registered provider types
+  // cannot change because someone saved a provider. Nesting it there would
+  // refetch a fixed server-side list after each write.
+  types: () => ["emailProviderTypes"] as const,
 };
 
 // ============================================================
@@ -81,7 +88,7 @@ export function useEmailProviders(
         page: params.page,
         limit: params.pageSize,
         search: params.search,
-        type: params.type as Parameters<typeof listProviders>[0]["type"],
+        type: params.type,
       }),
     ...options,
   });
@@ -105,6 +112,41 @@ export function useEmailProvider(
       return getProvider(id);
     },
     enabled: !!id,
+    ...options,
+  });
+}
+
+/**
+ * useEmailProviderTypes — the provider catalog this installation can configure.
+ *
+ * Held for five minutes and refreshed on mount and on window focus. The
+ * registry is fixed once the server boots, so navigating between the provider
+ * screens costs no requests — but a redeploy changes it under a tab that is
+ * already open, and nothing in that tab would otherwise hear about it.
+ *
+ * A refresh that fails keeps the descriptors already fetched, so the surfaces
+ * reading this have a state where the catalog is both usable and stale.
+ */
+export function useEmailProviderTypes(
+  options?: Omit<
+    UseQueryOptions<EmailProviderDescriptor[], Error>,
+    "queryKey" | "queryFn"
+  >
+) {
+  return useQuery<EmailProviderDescriptor[], Error>({
+    queryKey: emailProviderKeys.types(),
+    queryFn: () => listProviderTypes(),
+    // Finite, and refetched on mount and focus. The catalog is decided by which
+    // plugins the SERVER has loaded, so it changes on a deploy or a restart —
+    // events a browser tab left open overnight knows nothing about. Cached
+    // forever, a newly installed provider stays invisible and a removed one
+    // keeps rendering an editable form whose submission the server now
+    // rejects. Five minutes is short enough that a deploy is picked up without
+    // asking anyone to reload, and long enough that navigating between
+    // provider screens costs no requests.
+    staleTime: 5 * 60 * 1000,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
     ...options,
   });
 }

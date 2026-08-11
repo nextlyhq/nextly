@@ -1,0 +1,485 @@
+/**
+ * How a patch says "unset this", and why it needs a third state.
+ *
+ * A patch merged over stored configuration has two states on its own: absent
+ * means "leave it" and a value means "set it". An optional field therefore
+ * became permanent the moment it was first saved — clearing it in the form
+ * omitted it, and omission is indistinguishable from not touching it.
+ *
+ * The third state is carried BESIDE the values, not inside them, because every
+ * in-band marker is a value some provider legitimately stores.
+ */
+
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+import { getCoreSchema } from "../../../schemas";
+import type { Logger } from "../../../services/shared";
+import { createTableBody } from "../../schema/pipeline/sql-templates/create-table-body";
+import { defineEmailProvider } from "../provider-definition";
+import { getEmailProviderRegistry } from "../services/email-provider-registry";
+import { EmailProviderService } from "../services/email-provider-service";
+
+vi.mock("../../../lib/env", () => ({
+  env: {
+    NEXTLY_SECRET: "test-secret-that-is-long-enough-for-derivation",
+    DB_DIALECT: "sqlite",
+    DATABASE_URL: undefined,
+    NODE_ENV: "test",
+  },
+}));
+
+const logger: Logger = {
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+};
+
+function makeAdapter(db: ReturnType<typeof drizzle>): DrizzleAdapter {
+  return {
+    dialect: "sqlite" as const,
+    getDrizzle: () => db,
+    getCapabilities: () => ({ dialect: "sqlite" as const }),
+    connect: async () => {},
+    disconnect: async () => {},
+    executeQuery: async () => [],
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
+  } as unknown as DrizzleAdapter;
+}
+
+function createEmailProvidersTable(sqlite: Database.Database): void {
+  const { tables } = getCoreSchema("sqlite");
+  const spec = tables.find(table => table.name === "email_providers");
+  if (!spec) {
+    expect.fail(
+      "email_providers is absent from the core schema — this fixture can no longer be derived from it."
+    );
+  }
+  sqlite.exec(
+    `CREATE TABLE "email_providers" (\n${createTableBody(spec, (id: string) => `"${id}"`)}\n)`
+  );
+}
+
+/**
+ * A provider with an OPTIONAL select, parsed the way a provider author would
+ * naturally write it. `z.enum(...).optional()` accepts an absent key and
+ * rejects both an empty string and a null, which is precisely why removal has
+ * to be removal rather than a sentinel value.
+ */
+const optionalSelectProvider = defineEmailProvider<{
+  apiKey: string;
+  tier?: "standard" | "priority";
+}>({
+  type: "tiered",
+  label: "Tiered",
+  configFields: [
+    {
+      name: "apiKey",
+      label: "API Key",
+      kind: "password",
+      required: true,
+      secret: true,
+    },
+    {
+      name: "tier",
+      label: "Tier",
+      kind: "select",
+      options: [
+        { value: "standard", label: "Standard" },
+        { value: "priority", label: "Priority" },
+      ],
+    },
+  ],
+  parseConfig: input => {
+    const config = input as { apiKey?: unknown; tier?: unknown };
+    if (typeof config.apiKey !== "string" || config.apiKey === "") {
+      throw new Error("apiKey is required");
+    }
+    if (
+      config.tier !== undefined &&
+      config.tier !== "standard" &&
+      config.tier !== "priority"
+    ) {
+      throw new Error("tier must be standard or priority");
+    }
+    return config as { apiKey: string; tier?: "standard" | "priority" };
+  },
+  createAdapter: () => ({
+    send: () => Promise.resolve({ success: true, messageId: "x" }),
+  }),
+});
+
+describe("clearing an optional configuration value", () => {
+  let sqlite: Database.Database;
+  let service: EmailProviderService;
+  let providerId: string;
+
+  beforeEach(async () => {
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(optionalSelectProvider);
+
+    const created = await service.createProvider({
+      name: "Tiered",
+      type: "tiered",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { apiKey: "k-1", tier: "priority" },
+      isDefault: false,
+      isActive: true,
+    });
+    providerId = created.id;
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    getEmailProviderRegistry().reset();
+  });
+
+  it("removes the key the patch names in unsetConfiguration", async () => {
+    await service.updateProvider(providerId, {
+      unsetConfiguration: ["tier"],
+    });
+
+    const stored = await service.getProviderDecrypted(providerId);
+    expect(Object.keys(stored.configuration)).not.toContain("tier");
+    // The control: removal must not take the rest of the configuration with
+    // it, or "clear one field" becomes "lose the credential".
+    expect(stored.configuration).toMatchObject({ apiKey: "k-1" });
+  });
+
+  it("stores null as a value rather than reading it as a removal", async () => {
+    // A contributed provider may accept a nullable field, and a create already
+    // stores that null verbatim. Reading the same value as "delete" on the
+    // patch path would make one request mean two things depending on whether
+    // the row existed.
+    const nullable = defineEmailProvider({
+      type: "nullable",
+      label: "Nullable",
+      configFields: [{ name: "tag", label: "Tag", kind: "text" }],
+      parseConfig: input => input as Record<string, unknown>,
+      createAdapter: () => ({
+        send: () => Promise.resolve({ success: true, messageId: "x" }),
+      }),
+    });
+    getEmailProviderRegistry().register(nullable);
+
+    const created = await service.createProvider({
+      name: "Nullable",
+      type: "nullable",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { tag: "before" },
+      isDefault: false,
+      isActive: true,
+    });
+
+    await service.updateProvider(created.id, {
+      configuration: { tag: null },
+    });
+
+    const stored = await service.getProviderDecrypted(created.id);
+    // Present AND null. The control is the key still existing: a deletion
+    // would satisfy a `toBeNull()` written against a missing property.
+    expect(Object.keys(stored.configuration)).toContain("tag");
+    expect(stored.configuration.tag).toBeNull();
+  });
+
+  it("refuses to unset a field the provider does not declare", async () => {
+    // The names are checked against the registry, which is also what keeps
+    // them from becoming arbitrary object paths.
+    await expect(
+      service.updateProvider(providerId, {
+        unsetConfiguration: ["somethingElse"],
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
+  it("leaves the key alone when the patch omits it", async () => {
+    // The other half of the distinction. Omission has to keep meaning "leave
+    // it", or every partial edit would erase everything it did not mention.
+    await service.updateProvider(providerId, { name: "Renamed" });
+
+    const stored = await service.getProviderDecrypted(providerId);
+    expect(stored.configuration).toMatchObject({ tier: "priority" });
+  });
+
+  it("still refuses to remove a value the provider requires", async () => {
+    // Removal is a request, not an instruction: the provider's own parser
+    // decides, and a credential it needs cannot be cleared.
+    await expect(
+      service.updateProvider(providerId, { unsetConfiguration: ["apiKey"] })
+    ).rejects.toThrow();
+  });
+
+  it("refuses an unsetConfiguration array with a HOLE in it", async () => {
+    // `new Array(1)` from a JavaScript Direct API caller.
+    // `Array.prototype.some` SKIPS holes, so the narrowing accepted it — while
+    // the `for...of` that follows visits the hole as `undefined`, and
+    // `path.split(".")` then threw. A malformed request was answered with a
+    // 500 carrying a driver-shaped message instead of the validation response
+    // the caller can act on.
+    const sparse = new Array(1) as unknown as string[];
+
+    await expect(
+      service.updateProvider(providerId, { unsetConfiguration: sparse })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+});
+
+describe("clearing the last value under a nested branch", () => {
+  let sqlite: Database.Database;
+  let service: EmailProviderService;
+
+  /**
+   * A parser written the way a provider author naturally would for an optional
+   * group: the object is absent or complete. It ACCEPTS no `credentials` key
+   * and REJECTS an empty one, which is what makes the branch matter.
+   */
+  const nestedProvider = defineEmailProvider({
+    type: "nested",
+    label: "Nested",
+    configFields: [
+      { name: "endpoint", label: "Endpoint", kind: "text", required: true },
+      { name: "credentials.key", label: "Key", kind: "password", secret: true },
+    ],
+    parseConfig: input => {
+      const config = input as {
+        endpoint?: unknown;
+        credentials?: unknown;
+      };
+      if (typeof config.endpoint !== "string") {
+        throw new Error("endpoint is required");
+      }
+      if (config.credentials !== undefined) {
+        const group = config.credentials as { key?: unknown };
+        if (typeof group.key !== "string" || group.key === "") {
+          throw new Error(
+            "credentials.key is required when credentials is present"
+          );
+        }
+      }
+      return config as Record<string, unknown>;
+    },
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  });
+
+  beforeEach(() => {
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(nestedProvider);
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    getEmailProviderRegistry().reset();
+  });
+
+  it("removes the branch as well as the leaf", async () => {
+    const created = await service.createProvider({
+      name: "Nested",
+      type: "nested",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: {
+        endpoint: "https://api.test",
+        credentials: { key: "k" },
+      },
+      isDefault: false,
+      isActive: true,
+    });
+
+    // Leaving `{ credentials: {} }` behind would fail the parser above, so the
+    // field could not be cleared at all — the update would report the removal
+    // as invalid.
+    await service.updateProvider(created.id, {
+      unsetConfiguration: ["credentials.key"],
+    });
+
+    const stored = await service.getProviderDecrypted(created.id);
+    expect(Object.keys(stored.configuration)).toEqual(["endpoint"]);
+  });
+});
+
+describe("a masked value at a path the descriptor does not declare", () => {
+  let sqlite: Database.Database;
+  let service: EmailProviderService;
+
+  /**
+   * A provider whose parser keeps more than its descriptor describes.
+   *
+   * The ordinary way to arrive here is an upgrade that drops a field while its
+   * parser still accepts the stored key — the row keeps a value nothing
+   * describes any more.
+   */
+  const narrow = defineEmailProvider({
+    type: "narrow",
+    label: "Narrow",
+    configFields: [
+      { name: "apiKey", label: "Key", kind: "password", secret: true },
+    ],
+    parseConfig: input => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  });
+
+  beforeEach(() => {
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(narrow);
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    getEmailProviderRegistry().reset();
+  });
+
+  it("is not written back over the real value", async () => {
+    // The read masks an undeclared leaf, on the reasoning that absence of
+    // information has to mask more rather than less. A client echoing that
+    // configuration back during an unrelated edit then sends the mask as if it
+    // were the value — so the strip has to drop everything the mask covered,
+    // not only the paths declared secret.
+    const created = await service.createProvider({
+      name: "Narrow",
+      type: "narrow",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { apiKey: "sk-real", legacyToken: "tok-real-value" },
+      isDefault: false,
+      isActive: true,
+    });
+
+    const read = await service.getProvider(created.id);
+    // The precondition: the read really does withhold this path. Without it
+    // the round trip below would be carrying a real value and prove nothing.
+    expect(read.configuration).toMatchObject({ legacyToken: "••••••••" });
+
+    await service.updateProvider(created.id, {
+      name: "Renamed",
+      configuration: read.configuration as Record<string, unknown>,
+    });
+
+    const stored = await service.getProviderDecrypted(created.id);
+    expect(stored.configuration).toMatchObject({
+      apiKey: "sk-real",
+      legacyToken: "tok-real-value",
+    });
+  });
+
+  it("still stores a mask-shaped value at a DECLARED public path", async () => {
+    // The control. Dropping every mask-shaped value regardless of path would
+    // pass the case above while discarding a real edit to a public field whose
+    // value happens to be bullets.
+    const withPublic = defineEmailProvider({
+      type: "withpublic",
+      label: "With public",
+      configFields: [
+        { name: "apiKey", label: "Key", kind: "password", secret: true },
+        { name: "label", label: "Label", kind: "text" },
+      ],
+      parseConfig: input => input as Record<string, unknown>,
+      createAdapter: () => ({
+        send: () => Promise.resolve({ success: true, messageId: "x" }),
+      }),
+    });
+    getEmailProviderRegistry().register(withPublic);
+
+    const created = await service.createProvider({
+      name: "Public",
+      type: "withpublic",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { apiKey: "sk-real", label: "before" },
+      isDefault: false,
+      isActive: true,
+    });
+
+    await service.updateProvider(created.id, {
+      configuration: { label: "••••••••" },
+    });
+
+    const stored = await service.getProviderDecrypted(created.id);
+    expect(stored.configuration).toMatchObject({ label: "••••••••" });
+  });
+});
+
+describe("a non-secret field whose value looks like the mask", () => {
+  let sqlite: Database.Database;
+  let service: EmailProviderService;
+
+  const bulletProvider = defineEmailProvider({
+    type: "bullets",
+    label: "Bullets",
+    configFields: [
+      { name: "apiKey", label: "Key", kind: "password", secret: true },
+      { name: "label", label: "Label", kind: "text" },
+    ],
+    parseConfig: input => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  });
+
+  beforeEach(() => {
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(bulletProvider);
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    getEmailProviderRegistry().reset();
+  });
+
+  it("is stored, not mistaken for an untouched credential", async () => {
+    // Stripping keyed on the VALUE alone: `••••••••` is a string a non-secret
+    // text field may legitimately hold, and dropping it there discards a real
+    // edit while reporting success.
+    const created = await service.createProvider({
+      name: "Bullets",
+      type: "bullets",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { apiKey: "k-1", label: "before" },
+      isDefault: false,
+      isActive: true,
+    });
+
+    await service.updateProvider(created.id, {
+      configuration: { label: "••••••••" },
+    });
+
+    const stored = await service.getProviderDecrypted(created.id);
+    expect(stored.configuration).toMatchObject({ label: "••••••••" });
+    // The control: the same value at a DECLARED secret path is still stripped,
+    // so echoing back the mask still means "leave this credential alone".
+    await service.updateProvider(created.id, {
+      configuration: { apiKey: "••••••••" },
+    });
+    const after = await service.getProviderDecrypted(created.id);
+    expect(after.configuration).toMatchObject({ apiKey: "k-1" });
+  });
+});

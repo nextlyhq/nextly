@@ -25,6 +25,7 @@ import { toDescriptor } from "../../domains/email/provider-definition";
 import { getEmailProviderRegistry } from "../../domains/email/services/email-provider-registry";
 import type { EmailProviderService } from "../../services/email/email-provider-service";
 import type { EmailTemplateService } from "../../services/email/email-template-service";
+import { readAuthenticatedActor } from "../helpers/authenticated-actor";
 import {
   getEmailProviderServiceFromDI,
   getEmailTemplateServiceFromDI,
@@ -76,9 +77,13 @@ const EMAIL_PROVIDER_METHODS: Record<
     },
   },
   createProvider: {
-    execute: async (svc, _p, body) => {
+    // The acting identity is already on the params -- the route handler stamps
+    // it for every dispatched request -- and this domain simply never read it,
+    // which is why credential changes left no trail.
+    execute: async (svc, p, body) => {
       const provider = await svc.providerService.createProvider(
-        body as Parameters<typeof svc.providerService.createProvider>[0]
+        body as Parameters<typeof svc.providerService.createProvider>[0],
+        readAuthenticatedActor(p)
       );
       return respondMutation("Email provider created.", provider, {
         status: 201,
@@ -97,7 +102,8 @@ const EMAIL_PROVIDER_METHODS: Record<
     execute: async (svc, p, body) => {
       const provider = await svc.providerService.updateProvider(
         p.providerId,
-        body as Parameters<typeof svc.providerService.updateProvider>[1]
+        body as Parameters<typeof svc.providerService.updateProvider>[1],
+        readAuthenticatedActor(p)
       );
       return respondMutation("Email provider updated.", provider);
     },
@@ -111,7 +117,10 @@ const EMAIL_PROVIDER_METHODS: Record<
     // If providerService.deleteProvider is later refactored to return
     // the deleted record, switch this back to respondMutation.
     execute: async (svc, p) => {
-      await svc.providerService.deleteProvider(p.providerId);
+      await svc.providerService.deleteProvider(
+        p.providerId,
+        readAuthenticatedActor(p)
+      );
       return respondAction("Email provider deleted.", {
         providerId: p.providerId,
       });
@@ -123,7 +132,10 @@ const EMAIL_PROVIDER_METHODS: Record<
     // Surface the updated provider as a sibling field so the admin can
     // refresh its local cache.
     execute: async (svc, p) => {
-      const provider = await svc.providerService.setDefault(p.providerId);
+      const provider = await svc.providerService.setDefault(
+        p.providerId,
+        readAuthenticatedActor(p)
+      );
       return respondAction("Default email provider updated.", { provider });
     },
   },

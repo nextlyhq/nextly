@@ -141,10 +141,15 @@ export const smtpDefinition: RegisteredEmailProvider = defineEmailProvider({
     // declaring it here would make a catalog-driven client refuse exactly the
     // Mailpit setup this repository documents. The parser stays authoritative
     // and reports the missing credential against `configuration.auth.*`.
+    // `blankAs: "empty"` on both: `smtpSchema` requires `auth` and declares
+    // its two keys as plain strings, so a client that omits a blank credential
+    // sends a configuration the parser rejects with "expected string, received
+    // undefined" -- for exactly the loopback setup these fields exist to allow.
     {
       name: "auth.user",
       label: "SMTP Username",
       kind: "text",
+      blankAs: "empty",
       help: "Account used to authenticate against the server. May be left empty only for a local sink such as Mailpit.",
     },
     {
@@ -152,6 +157,7 @@ export const smtpDefinition: RegisteredEmailProvider = defineEmailProvider({
       label: "SMTP Password",
       kind: "password",
       secret: true,
+      blankAs: "empty",
       help: "May be left empty only for a local sink such as Mailpit.",
     },
   ],
@@ -189,7 +195,20 @@ export const resendDefinition: RegisteredEmailProvider = defineEmailProvider({
   label: "Resend",
   description: "Send through the Resend API.",
   docsUrl: "https://resend.com/docs/api-reference/emails/send-email",
-  capabilities: { attachments: true, replyTo: true },
+  // Resend publishes a shared address that works before any domain is
+  // verified, so "use a verified domain" alone would make a usable test
+  // configuration look impossible. The limitation is stated with it, because
+  // the address silently only delivers to the account holder.
+  senderGuidance:
+    "For testing without a verified domain, use onboarding@resend.dev — it delivers only to the email address on your Resend account.",
+  // A hosted API that only accepts senders on a domain verified in the account.
+  // Declared, because nothing else in the descriptor distinguishes a hosted
+  // provider from a relay the operator runs themselves.
+  capabilities: {
+    attachments: true,
+    replyTo: true,
+    requiresVerifiedSender: true,
+  },
   configFields: [
     {
       name: "apiKey",
@@ -210,7 +229,12 @@ export const sendLayerDefinition: RegisteredEmailProvider = defineEmailProvider(
     type: "sendlayer",
     label: "SendLayer",
     description: "Send through the SendLayer API.",
-    capabilities: { attachments: true, replyTo: true },
+    docsUrl: "https://sendlayer.com/docs/",
+    capabilities: {
+      attachments: true,
+      replyTo: true,
+      requiresVerifiedSender: true,
+    },
     configFields: [
       {
         name: "apiKey",

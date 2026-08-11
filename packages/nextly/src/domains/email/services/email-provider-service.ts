@@ -16,8 +16,9 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq, desc } from "drizzle-orm";
+import { and, eq, desc, ne } from "drizzle-orm";
 
+import type { RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import { env } from "../../../lib/env";
@@ -34,6 +35,7 @@ import { BaseService } from "../../../shared/base-service";
 import { encrypt, decrypt } from "../../../utils/encryption";
 // Pull adapter type into a normal `import type` declaration so the return
 // signature on createAdapterFromProvider satisfies consistent-type-imports.
+import { affectedRowCount } from "../../auth/services/auth-service";
 import {
   isRecognisedMessageId,
   mailboxOf,
@@ -41,6 +43,11 @@ import {
   refusedMailboxes,
   type EmailDeliveryInput,
 } from "../delivery-record";
+import {
+  changedProviderFields,
+  recordProviderActivity,
+  type EmailProviderActivityInput,
+} from "../provider-activity";
 import { describeProviderFailure } from "../provider-definition";
 import type { EmailProviderAdapter } from "../types";
 
@@ -90,6 +97,27 @@ export interface UpdateEmailProviderInput {
   fromEmail?: string;
   fromName?: string | null;
   configuration?: Record<string, unknown>;
+  /**
+   * Configuration paths this update REMOVES, as declared field names.
+   *
+   * Out of band rather than a marker value inside `configuration`, because a
+   * patch merged over stored configuration otherwise has only two states --
+   * absent means "leave it", a value means "set it" -- and no way to say
+   * "unset it", so an optional field became permanent the moment it was first
+   * saved. Clearing it in the form omitted it, and omission is
+   * indistinguishable from not touching it.
+   *
+   * Every in-band alternative collides with real data: a provider's
+   * `parseConfig` may legitimately accept `null`, an empty string, or any
+   * sentinel string chosen here, and a create already stores those verbatim.
+   * A separate list cannot be confused with a value because it does not live
+   * in the value space at all.
+   *
+   * Each entry must name a field the effective provider DECLARES. Anything
+   * else is rejected, which also means these strings never become arbitrary
+   * object paths.
+   */
+  unsetConfiguration?: string[];
   isDefault?: boolean;
   isActive?: boolean;
 }
@@ -109,6 +137,42 @@ type EmailProvidersTable =
   | typeof emailProvidersPg
   | typeof emailProvidersMysql
   | typeof emailProvidersSqlite;
+
+/** A provider that held the default until a handover took it away. */
+interface DisplacedDefault {
+  id: string;
+  name: string;
+  type: string;
+}
+
+/**
+ * The transaction-bound query surface a handover needs.
+ *
+ * `withTransaction` hands its callback a dialect-specific instance typed
+ * `unknown`, because naming all three would bind this file to all three driver
+ * packages. Narrowing to the two statements a handover actually issues keeps
+ * the body typed without an `any`, and keeps the fact that they must run on
+ * the TRANSACTION rather than on `this.db` in the type: on Postgres and MySQL
+ * `this.db` is a different pooled connection, so a statement sent there would
+ * commit on its own and sit outside the rollback.
+ */
+interface ProviderTransaction {
+  select<TSelection extends Record<string, unknown>>(
+    fields: TSelection
+  ): {
+    from(table: EmailProvidersTable): {
+      where(condition: unknown): Promise<DisplacedDefault[]>;
+    };
+  };
+  update(table: EmailProvidersTable): {
+    set(values: Record<string, unknown>): {
+      where(condition: unknown): Promise<unknown>;
+    };
+  };
+  insert(table: EmailProvidersTable): {
+    values(data: Record<string, unknown>): Promise<unknown>;
+  };
+}
 
 export class EmailProviderService extends BaseService {
   private emailProviders: EmailProvidersTable;
@@ -173,7 +237,6 @@ export class EmailProviderService extends BaseService {
           "Email provider credentials cannot be saved because NEXTLY_SECRET is not set. " +
           "Set it in the environment and restart — provider passwords and API keys are " +
           "encrypted under it, and without it they would be stored readable.",
-        statusCode: 422,
         logContext: { reason: "email-provider-no-encryption-key" },
       });
     }
@@ -194,16 +257,37 @@ export class EmailProviderService extends BaseService {
   private decryptConfiguration(
     stored: Record<string, unknown> | string
   ): Record<string, unknown> {
+    return this.readConfiguration(stored).config;
+  }
+
+  /**
+   * Decrypt, and say whether it worked.
+   *
+   * `decryptConfiguration` answers `{}` for an unreadable value, which is the
+   * right thing for a READ -- a provider whose ciphertext no longer decrypts
+   * must still be listable, maskable and deletable rather than becoming a row
+   * nobody can act on. It is the wrong thing for a COMPARISON: `{}` is also
+   * what a genuinely empty configuration looks like, so a diff against an
+   * unreadable preimage concludes nothing changed at the moment it is least
+   * entitled to. Callers about to make a claim take this form and ask.
+   */
+  private readConfiguration(stored: Record<string, unknown> | string): {
+    config: Record<string, unknown>;
+    readable: boolean;
+  } {
     if (!this.encryptionSecret || typeof stored !== "string") {
-      return stored as Record<string, unknown>;
+      return { config: stored as Record<string, unknown>, readable: true };
     }
     try {
-      return JSON.parse(decrypt(stored, this.encryptionSecret));
+      return {
+        config: JSON.parse(decrypt(stored, this.encryptionSecret)),
+        readable: true,
+      };
     } catch {
       this.logger.warn(
         "Failed to decrypt provider configuration — returning empty object"
       );
-      return {};
+      return { config: {}, readable: false };
     }
   }
 
@@ -252,6 +336,31 @@ export class EmailProviderService extends BaseService {
    * Absence of information has to mask more, not less; an over-masked read is
    * recoverable by reinstalling the package, a leaked credential is not.
    */
+  /**
+   * Whether a configuration path is one this read withholds.
+   *
+   * Three states, not two. `null` means no usable definition, so nothing is
+   * known and everything is secret. Otherwise a path is public ONLY if the
+   * provider declared it and did not mark it secret: a key the definition does
+   * not mention at all -- a credential left behind by a plugin upgrade, say --
+   * is unknown rather than public, and the parsers strip unknown keys for
+   * adapter construction without removing them from storage.
+   *
+   * Asked by the mask AND by the strip that undoes it. Masking one set of
+   * paths and unmasking a smaller one is not a mismatch that shows up as a
+   * failure: a client echoing back what it was given writes the literal mask
+   * over a real stored value, and the update reports success.
+   */
+  private pathIsSecret(
+    path: string,
+    secretPaths: ReadonlySet<string> | null,
+    declaredPaths: ReadonlySet<string>
+  ): boolean {
+    if (secretPaths === null) return true;
+    if (!declaredPaths.has(path)) return true;
+    return secretPaths.has(path);
+  }
+
   private maskConfiguration(
     config: Record<string, unknown>,
     secretPaths: ReadonlySet<string> | null,
@@ -277,16 +386,9 @@ export class EmailProviderService extends BaseService {
         continue;
       }
 
-      // Three states, not two. `null` means no usable definition, so nothing is
-      // known and everything is masked. Otherwise a path is revealed ONLY if the
-      // provider declared it and did not mark it secret: a key the definition
-      // does not mention at all -- a credential left behind by a plugin upgrade,
-      // say -- is unknown rather than public, and the parsers strip unknown keys
-      // for adapter construction without removing them from storage.
-      const declared = secretPaths !== null && declaredPaths.has(path);
-      const isSecret =
-        secretPaths === null || !declared || secretPaths.has(path);
-      masked[key] = isSecret ? MASKED_VALUE : value;
+      masked[key] = this.pathIsSecret(path, secretPaths, declaredPaths)
+        ? MASKED_VALUE
+        : value;
     }
     return masked;
   }
@@ -295,18 +397,49 @@ export class EmailProviderService extends BaseService {
     return value !== null && typeof value === "object" && !Array.isArray(value);
   }
 
+  /**
+   * Drop the mask a client echoes back for a credential it did not touch.
+   *
+   * Restricted to paths the provider DECLARED secret. The value is the only
+   * signal otherwise, and `••••••••` is a string a non-secret text field may
+   * legitimately hold — dropping it there discards a real edit and reports
+   * success, so the operator sees the old value survive a save they made.
+   *
+   * `secretPaths` is null when no definition is available (an uninstalled
+   * plugin, or a provider that shipped no field metadata). Nothing is stripped
+   * then: with no way to tell a credential from a value, keeping what the
+   * caller sent is the choice that cannot silently lose an edit, and the
+   * provider's own parser still decides whether the result is usable.
+   */
   private stripMaskedConfigValues(
-    config: Record<string, unknown>
+    config: Record<string, unknown>,
+    secretPaths: ReadonlySet<string> | null,
+    declaredPaths: ReadonlySet<string>,
+    pathPrefix = ""
   ): Record<string, unknown> {
     const cleaned: Record<string, unknown> = {};
 
     for (const [key, value] of Object.entries(config)) {
-      if (value === MASKED_VALUE) {
+      const path = pathPrefix ? `${pathPrefix}.${key}` : key;
+
+      // Dropped for every path the READ would have masked, not only the
+      // declared secrets. A path the read withholds comes back as the mask
+      // whatever the reason, so keeping it here writes eight bullet characters
+      // over whatever was really stored there.
+      if (
+        value === MASKED_VALUE &&
+        this.pathIsSecret(path, secretPaths, declaredPaths)
+      ) {
         continue;
       }
 
       if (this.isPlainObject(value)) {
-        cleaned[key] = this.stripMaskedConfigValues(value);
+        cleaned[key] = this.stripMaskedConfigValues(
+          value,
+          secretPaths,
+          declaredPaths,
+          path
+        );
       } else {
         cleaned[key] = value;
       }
@@ -324,6 +457,12 @@ export class EmailProviderService extends BaseService {
     for (const [key, value] of Object.entries(incoming)) {
       if (value === undefined) continue;
 
+      // `null` is a VALUE here, carried through like any other. Removal is
+      // asked for by `unsetConfiguration` instead, because a contributed
+      // provider's `parseConfig` may accept a nullable field, and a create
+      // already stores that null verbatim -- reading it as "delete" on the
+      // patch path would make the same request mean two different things
+      // depending on whether the row existed.
       if (this.isPlainObject(value) && this.isPlainObject(merged[key])) {
         merged[key] = this.deepMergeConfig(merged[key], value);
       } else {
@@ -332,6 +471,126 @@ export class EmailProviderService extends BaseService {
     }
 
     return merged;
+  }
+
+  /**
+   * Narrow `unsetConfiguration` from what a request actually sent.
+   *
+   * The REST route copies this field out of parsed JSON, so the declared type
+   * is a promise rather than a fact. A non-array reaching the walk below would
+   * fail as a TypeError -- a 500 with a driver-shaped message for a malformed
+   * request -- instead of the validation error the caller can act on.
+   */
+  private readUnsetPaths(value: unknown): readonly string[] {
+    if (value === undefined) return [];
+    // Indexed rather than `.some`, which SKIPS holes. A sparse array --
+    // `new Array(1)` from a JavaScript Direct API caller -- therefore passed
+    // this check while `for...of` below still visits the hole as `undefined`,
+    // so `path.split(".")` threw a raw TypeError in place of the validation
+    // response the caller can act on.
+    const paths = Array.isArray(value) ? value : null;
+    // A HOLE is not detectable with `some`, which skips them -- the same trait
+    // that let a sparse array through in the first place. `Object.keys` on an
+    // array lists only the indices that are PRESENT, so a length that does not
+    // match is a hole.
+    const hasHole =
+      paths !== null && Object.keys(paths).length !== paths.length;
+    const malformed =
+      paths === null ||
+      hasHole ||
+      paths.some(entry => typeof entry !== "string");
+    if (malformed) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "unsetConfiguration",
+            code: "INVALID_TYPE",
+            message: "Must be an array of configuration field names.",
+          },
+        ],
+      });
+    }
+    return paths as string[];
+  }
+
+  /**
+   * Remove the configuration paths an update asked to unset.
+   *
+   * Each path must name a field the provider DECLARES. That is the whole
+   * safety argument: the strings are checked against a set built from the
+   * registry, and `assertConfigFieldsAreUsable` already refuses a field named
+   * `__proto__`, `constructor` or `prototype` at registration, so a request
+   * cannot steer this walk anywhere a declared field does not go. An
+   * undeclared path is rejected rather than ignored, because silently doing
+   * nothing would leave the operator looking at a value they just cleared.
+   *
+   * Unsetting an absent path is not an error — it is the state being asked
+   * for, and a retried request must not fail on its second attempt.
+   */
+  private applyConfigUnsets(
+    config: Record<string, unknown>,
+    paths: readonly string[],
+    effectiveType: string
+  ): Record<string, unknown> {
+    if (paths.length === 0) return config;
+
+    const declared = this.declaredConfigPaths(effectiveType);
+    const undeclared = paths.filter(path => !declared.has(path));
+    if (undeclared.length > 0) {
+      throw NextlyError.validation({
+        errors: undeclared.map(path => ({
+          path: `unsetConfiguration.${path}`,
+          code: "UNKNOWN_FIELD",
+          message: `"${path}" is not a configuration field of this provider.`,
+        })),
+        logContext: { effectiveType, undeclared },
+      });
+    }
+
+    const result = structuredClone(config);
+    for (const path of paths) {
+      const segments = path.split(".");
+      const leaf = segments.pop();
+      if (leaf === undefined) continue;
+
+      // Every branch walked, so an emptied one can be removed on the way back
+      // out.
+      const branches: Array<{ parent: Record<string, unknown>; key: string }> =
+        [];
+      let branch: Record<string, unknown> = result;
+      let reachable = true;
+      for (const segment of segments) {
+        const next = branch[segment];
+        if (!this.isPlainObject(next)) {
+          reachable = false;
+          break;
+        }
+        branches.push({ parent: branch, key: segment });
+        branch = next;
+      }
+      if (!reachable) continue;
+
+      delete branch[leaf];
+
+      // A branch left holding nothing is removed too. Clearing the last value
+      // under `credentials` otherwise leaves `{ credentials: {} }`, and a
+      // parser written as `credentials: z.object({...}).optional()` accepts an
+      // absent object and rejects an empty one -- so the field could not be
+      // cleared at all. Innermost first, because emptying one can empty its
+      // own parent.
+      //
+      // A provider that needs the branch to survive says so with
+      // `blankAs: "empty"` on its fields, which keeps them out of this list
+      // entirely rather than relying on an empty object being preserved.
+      for (let index = branches.length - 1; index >= 0; index -= 1) {
+        const entry = branches[index];
+        if (entry === undefined) break;
+        const value = entry.parent[entry.key];
+        if (!this.isPlainObject(value) || Object.keys(value).length > 0) break;
+        delete entry.parent[entry.key];
+      }
+    }
+    return result;
   }
 
   /**
@@ -367,11 +626,18 @@ export class EmailProviderService extends BaseService {
    * Create a new email provider.
    *
    * Configuration is encrypted before storage.
-   * If `isDefault` is true, unsets the previous default provider
-   * in a transaction to ensure only one default exists.
+   *
+   * If `isDefault` is true, the demotion of the previous default and this
+   * insert are one transaction, so the table never holds two defaults and
+   * never holds none. It does not serialise two callers doing this at once.
    */
   async createProvider(
-    data: CreateEmailProviderInput
+    data: CreateEmailProviderInput,
+    /**
+     * Who performed this, for the audit trail. Optional so an internal or
+     * seeded write needs no ceremony; those produce no entry by design.
+     */
+    actor?: RequestActor | null
   ): Promise<EmailProviderRecord> {
     // Reject an unregistered type and an unusable configuration BEFORE the
     // insert. Without this a row stores happily and fails only when something
@@ -397,17 +663,31 @@ export class EmailProviderService extends BaseService {
       updatedAt: now,
     };
 
+    let displaced: DisplacedDefault[] = [];
     try {
+      // The demotion and the insert are one change to the table, so they
+      // commit together or not at all. On separate connections a refused
+      // insert -- a duplicate name, a lost connection -- took the working
+      // default away and put nothing in its place; inside the transaction the
+      // same failure rolls the demotion back with it.
+      //
+      // The demotion goes FIRST. Postgres carries a partial unique index over
+      // `is_default = true`, checked per row as each statement runs, so a
+      // second row inserted as the default while the incumbent still holds it
+      // is rejected outright.
       if (values.isDefault) {
-        // Unset any existing default first, then insert the new default provider
-
-        await this.db
-          .update(this.emailProviders)
-          .set({ isDefault: false, updatedAt: now })
-          .where(eq(this.emailProviders.isDefault, true));
-
-        await this.db.insert(this.emailProviders).values(values);
+        await this.withTransaction(async txRaw => {
+          const tx = txRaw as ProviderTransaction;
+          displaced = await this.demoteOtherDefaults(tx, now, id);
+          await tx.insert(this.emailProviders).values(values);
+        });
       } else {
+        // No handover, so nothing to make atomic WITH. Opening a transaction
+        // anyway costs correctness on SQLite, where `withTransaction` issues
+        // `BEGIN IMMEDIATE` on the one shared connection: a second write that
+        // arrives while the first is between its BEGIN and COMMIT cannot
+        // begin, and is refused outright. A single statement has no such
+        // window.
         await this.db.insert(this.emailProviders).values(values);
       }
     } catch (error) {
@@ -417,7 +697,150 @@ export class EmailProviderService extends BaseService {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
+    // Recorded after the insert commits and before the read, so a trail entry
+    // cannot exist for a provider that was never stored.
+    await this.recordActivity({
+      action: "create",
+      providerId: id,
+      providerName: data.name,
+      providerType: data.type,
+      actor,
+    });
+    await this.recordDemotions(displaced, actor);
+
     return this.getProvider(id);
+  }
+
+  /**
+   * Refuse to promote a provider nothing can build an adapter for.
+   *
+   * Promotion decides which provider carries every unrouted message, so
+   * promoting a type whose plugin has been removed points all of them at
+   * something that fails at send time -- AND clears the working default on the
+   * way, so the damage outlives the request that caused it.
+   *
+   * Written once because two methods promote: `setDefault`, and
+   * `updateProvider` with `isDefault: true`. The second reaches the same
+   * statement through a catch-all PATCH or a Direct API update that names no
+   * configuration at all, so a guard living in the first is a guard the second
+   * does not have.
+   *
+   * Refused BEFORE anything is written, so a refusal leaves the stored default
+   * exactly as it was and there is nothing to attribute in the trail.
+   */
+  private assertPromotable(id: string, type: string): void {
+    if (getEmailProviderRegistry().has(type)) return;
+
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage:
+        "This provider's type is not registered on this server, so it cannot be made the default. Install the package that provides it first.",
+      logContext: { id, type },
+    });
+  }
+
+  /**
+   * Take the default away from every provider except the one that now holds it.
+   *
+   * Runs BEFORE the write that promotes, inside the same transaction.
+   * Postgres carries a partial unique index over `is_default = true` and
+   * checks it as each statement runs, so a row cannot take the default while
+   * the incumbent still holds it — the incumbent gives it up first, and the
+   * transaction is what makes the gap between them invisible and undoable.
+   *
+   * Its caller checks that the promotion has a target before calling this. A
+   * promoting write that matches nothing after the incumbent has been stripped
+   * would leave the installation unable to send anything it was not given a
+   * provider for, with nothing in the trail to say why.
+   *
+   * Returns the rows it demoted rather than recording them. An entry written
+   * from in here would claim a demotion a rollback then took back, and the
+   * trail's one job is to not say that.
+   *
+   * This settles the ORDER of a handover, not who wins a race for it. Two
+   * concurrent promotions still both commit, on MySQL and SQLite as well as
+   * Postgres, because nothing here locks the rows it read.
+   */
+  private async demoteOtherDefaults(
+    tx: ProviderTransaction,
+    now: Date,
+    promotedId: string
+  ): Promise<DisplacedDefault[]> {
+    const others = and(
+      eq(this.emailProviders.isDefault, true),
+      ne(this.emailProviders.id, promotedId)
+    );
+
+    const displaced = await tx
+      .select({
+        id: this.emailProviders.id,
+        name: this.emailProviders.name,
+        type: this.emailProviders.type,
+      })
+      .from(this.emailProviders)
+      .where(others);
+
+    if (displaced.length === 0) return displaced;
+
+    await tx
+      .update(this.emailProviders)
+      .set({ isDefault: false, updatedAt: now })
+      .where(others);
+
+    return displaced;
+  }
+
+  /**
+   * Write the trail entries for a handover, once it has committed.
+   *
+   * Separate from the statement that demoted them for the reason the entries
+   * are worth having: a durable claim that a provider stopped being the
+   * default has to outlive only the transactions that actually did it.
+   */
+  private async recordDemotions(
+    displaced: DisplacedDefault[],
+    actor?: RequestActor | null
+  ): Promise<void> {
+    for (const previous of displaced) {
+      await this.recordActivity({
+        action: "update",
+        providerId: previous.id,
+        providerName: previous.name,
+        providerType: previous.type,
+        changedFields: ["isDefault"],
+        actor,
+      });
+    }
+  }
+
+  /**
+   * Record a provider mutation, and never let recording break the mutation.
+   *
+   * The write has already committed by the time this runs. `recordProviderActivity`
+   * failing is not a reason to report the write as failed, so the failure is
+   * turned into a log line instead -- a trail that quietly stops being written
+   * should be visible somewhere.
+   */
+  private async recordActivity(
+    input: EmailProviderActivityInput
+  ): Promise<void> {
+    try {
+      await recordProviderActivity(input);
+    } catch (error) {
+      try {
+        this.logger.error("Failed to record email provider activity", {
+          providerId: input.providerId,
+          action: input.action,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      } catch {
+        // Nowhere left to report to: the reporting mechanism is what failed.
+        // The mutation this describes has already committed, so letting the
+        // throw out would report a create, an update, a delete or a promotion
+        // as failed after it happened -- and invite a retry of something that
+        // does not need one.
+      }
+    }
   }
 
   /**
@@ -458,11 +881,15 @@ export class EmailProviderService extends BaseService {
    */
   async updateProvider(
     id: string,
-    data: UpdateEmailProviderInput
+    data: UpdateEmailProviderInput,
+    actor?: RequestActor | null
   ): Promise<EmailProviderRecord> {
     const currentRow = await this.getRawProvider(id);
 
     const now = new Date();
+    // Whether the merged configuration differs from the stored one, decided
+    // before encryption where the two are comparable.
+    let configurationChanged = false;
     const updateData: Record<string, unknown> = {
       updatedAt: now,
     };
@@ -481,7 +908,11 @@ export class EmailProviderService extends BaseService {
       // because the submitted API key is exactly what the old shape lacks.
       const submitted =
         data.configuration !== undefined
-          ? this.stripMaskedConfigValues(data.configuration)
+          ? this.stripMaskedConfigValues(
+              data.configuration,
+              this.declaredSecretPaths(data.type as string),
+              this.declaredConfigPaths(data.type as string)
+            )
           : {};
       getEmailProviderRegistry()
         .get(data.type as string)
@@ -494,6 +925,22 @@ export class EmailProviderService extends BaseService {
       // "a type change replaces rather than merges" is supposed to prevent.
       if (data.configuration === undefined) {
         updateData.configuration = this.encryptConfiguration(submitted);
+        // This branch REPLACES the stored configuration without the caller
+        // having sent one, so the diff below -- which only runs when
+        // `data.configuration` is present -- would have reported a type change
+        // and nothing else. An entry that says "type" while the credentials
+        // beneath it were discarded is worse than no entry: it is a record
+        // that reads as harmless.
+        //
+        // An UNREADABLE preimage counts as a change on its own. `{}` is what
+        // this returns both for an empty configuration and for a ciphertext
+        // that no longer decrypts -- after a `NEXTLY_SECRET` rotation, say --
+        // and the second is precisely when a credential is being discarded.
+        // Reading the fallback as "there was nothing there" would file the
+        // loss as a type change and nothing more.
+        const previous = this.readConfiguration(currentRow.configuration);
+        configurationChanged =
+          !previous.readable || Object.keys(previous.config).length > 0;
       }
     }
 
@@ -501,16 +948,31 @@ export class EmailProviderService extends BaseService {
     if (data.type !== undefined) updateData.type = data.type;
     if (data.fromEmail !== undefined) updateData.fromEmail = data.fromEmail;
     if (data.fromName !== undefined) updateData.fromName = data.fromName;
-    if (data.configuration !== undefined) {
-      const existingConfig = this.decryptConfiguration(
-        currentRow.configuration
+    // An update that only clears fields carries no `configuration` of its own,
+    // so the branch below has to run for either half of the request. Without
+    // this, unsetting a value while changing nothing else would be accepted
+    // and do nothing.
+    const unsetPaths = this.readUnsetPaths(data.unsetConfiguration);
+    if (data.configuration !== undefined || unsetPaths.length > 0) {
+      // Read through `readConfiguration`, not `decryptConfiguration`: the diff
+      // below has to tell an empty stored configuration from one that no
+      // longer decrypts, and both arrive as `{}`.
+      const existing = this.readConfiguration(currentRow.configuration);
+      const existingConfig = existing.config;
+      const incomingConfig = this.stripMaskedConfigValues(
+        data.configuration ?? {},
+        this.declaredSecretPaths(effectiveType),
+        this.declaredConfigPaths(effectiveType)
       );
-      const incomingConfig = this.stripMaskedConfigValues(data.configuration);
       // Across a type change the stored configuration belongs to the previous
       // provider, so it is discarded rather than merged into the new shape.
-      const mergedConfig = typeChanged
-        ? incomingConfig
-        : this.deepMergeConfig(existingConfig, incomingConfig);
+      const mergedConfig = this.applyConfigUnsets(
+        typeChanged
+          ? incomingConfig
+          : this.deepMergeConfig(existingConfig, incomingConfig),
+        unsetPaths,
+        effectiveType
+      );
 
       // Validate the MERGED result, not the incoming patch: an update usually
       // carries only the fields that changed, and the masked values it omits
@@ -525,37 +987,142 @@ export class EmailProviderService extends BaseService {
         .get(effectiveType)
         .validateConfig(mergedConfig);
 
+      // Compared BEFORE encryption. Encryption is randomised -- a fresh salt
+      // and IV per call -- so two encryptions of identical configuration never
+      // match, and comparing ciphertexts reported a credential change on every
+      // save the form made, including one that touched nothing but the name.
+      // A false credential-change alert is worse in an audit trail than no
+      // entry: it is noise on the one signal the trail exists for.
+      //
+      // Nothing is decrypted for this. Both values are already in memory --
+      // `existingConfig` two statements above and `mergedConfig` beside it --
+      // because the update path had to read one and build the other.
+      //
+      // An unreadable preimage is a change by itself, for the reason given in
+      // the type-change branch: comparing against the `{}` fallback would
+      // report "unchanged" for a save that replaced a credential nobody could
+      // read with one they can.
+      configurationChanged =
+        !existing.readable ||
+        JSON.stringify(existingConfig) !== JSON.stringify(mergedConfig);
+
       updateData.configuration = this.encryptConfiguration(mergedConfig);
     }
     if (data.isActive !== undefined) updateData.isActive = data.isActive;
     if (data.isDefault !== undefined) updateData.isDefault = data.isDefault;
 
+    // Before the write, and before the demotion inside it: a refused promotion
+    // must leave the existing default alone.
+    if (data.isDefault === true) {
+      this.assertPromotable(id, effectiveType);
+    }
+
+    let updatedRows = 0;
+    let displaced: DisplacedDefault[] = [];
     try {
+      // One transaction, with the demotion before the write that promotes.
+      // Postgres rejects a second row holding `is_default = true` as the
+      // statement runs, so the incumbent has to give it up first -- and the
+      // transaction is what makes that safe, since a failure anywhere after it
+      // rolls the demotion back.
       if (data.isDefault === true) {
-        // Unset any existing default first, then apply all updates to this provider
+        await this.withTransaction(async txRaw => {
+          const tx = txRaw as ProviderTransaction;
+          displaced = await this.demoteOtherDefaults(tx, now, id);
 
-        await this.db
-          .update(this.emailProviders)
-          .set({ isDefault: false, updatedAt: now })
-          .where(eq(this.emailProviders.isDefault, true));
+          const result = await tx
+            .update(this.emailProviders)
+            .set(updateData)
+            .where(eq(this.emailProviders.id, id));
+          updatedRows = affectedRowCount(result, this.dialect);
 
-        await this.db
-          .update(this.emailProviders)
-          .set(updateData)
-          .where(eq(this.emailProviders.id, id));
+          // The row can be deleted between the read this update was built
+          // from and this statement. The demotion has already run, so
+          // committing here would leave the installation with no default at
+          // all -- throwing takes the demotion back with it, and the caller is
+          // told the truth, which is that the provider is gone.
+          if (updatedRows === 0) {
+            throw NextlyError.notFound({ logContext: { id } });
+          }
+        });
       } else {
-        await this.db
+        // No handover, so nothing to make atomic WITH -- and a transaction
+        // here costs correctness on SQLite, where `withTransaction` issues
+        // `BEGIN IMMEDIATE` on the one shared connection and a second write
+        // arriving mid-window cannot begin at all.
+        const result = await this.db
           .update(this.emailProviders)
           .set(updateData)
           .where(eq(this.emailProviders.id, id));
+        updatedRows = affectedRowCount(result, this.dialect);
       }
     } catch (error) {
+      // A `NextlyError` from inside the transaction was thrown deliberately --
+      // the handover raises one to roll its own demotion back -- so it carries
+      // a decision about what this failure IS. Normalising it as a driver
+      // error would relabel a chosen NOT_FOUND as an internal one and tell the
+      // caller nothing they can act on.
+      if (NextlyError.is(error)) throw error;
+
       // DbError → NextlyError; spec §13.8 keeps the public message generic and
       // tucks the dialect-specific code into logContext via fromDatabaseError.
       // Normalise raw driver errors via toDbError(dialect) first so the kind
       // is preserved (otherwise PG 23505 collapses to INTERNAL_ERROR).
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
+
+    // A delete can land between the read above and this statement, and the
+    // update then matches nothing. Recording the requested fields anyway would
+    // leave a durable entry claiming a change to a row that no longer exists,
+    // moments before `getProvider` reports it absent. Every dialect counts
+    // MATCHED rows here, not modified ones, so a request that genuinely
+    // rewrites nothing still reaches the trail.
+    if (updatedRows === 0) return this.getProvider(id);
+
+    await this.recordDemotions(displaced, actor);
+
+    // Field NAMES only, and `configuration` counted as one name rather than by
+    // its inner paths: naming `auth.pass` in a widely-readable row says which
+    // credential changed, which is a detail about the secret in a place the
+    // secret is not supposed to reach.
+    await this.recordActivity({
+      action: "update",
+      providerId: id,
+      providerName: data.name ?? currentRow.name,
+      providerType: effectiveType,
+      changedFields: [
+        // Built from the fields this service RECOGNISES, never by spreading
+        // the request body. `data` is a cast over parsed JSON, so an unknown
+        // key -- `{"notAProviderField": true}` -- is ignored by every write
+        // above and would otherwise be reported as a changed field, putting a
+        // request-controlled string into a widely readable audit row and
+        // claiming a change that never happened.
+        ...changedProviderFields(
+          {
+            name: currentRow.name,
+            type: currentRow.type,
+            fromEmail: currentRow.fromEmail,
+            fromName: currentRow.fromName,
+            isDefault: currentRow.isDefault,
+            isActive: currentRow.isActive,
+          },
+          {
+            ...(data.name !== undefined ? { name: data.name } : {}),
+            ...(data.type !== undefined ? { type: data.type } : {}),
+            ...(data.fromEmail !== undefined
+              ? { fromEmail: data.fromEmail }
+              : {}),
+            ...(data.fromName !== undefined ? { fromName: data.fromName } : {}),
+            ...(data.isDefault !== undefined
+              ? { isDefault: data.isDefault }
+              : {}),
+            ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+          }
+        ),
+        ...(configurationChanged ? ["configuration"] : []),
+      ],
+      actor,
+    });
 
     return this.getProvider(id);
   }
@@ -569,7 +1136,7 @@ export class EmailProviderService extends BaseService {
    *
    * @throws NextlyError BUSINESS_RULE_VIOLATION if provider is the default
    */
-  async deleteProvider(id: string): Promise<void> {
+  async deleteProvider(id: string, actor?: RequestActor | null): Promise<void> {
     let row;
     try {
       row = await this.getRawProvider(id);
@@ -594,40 +1161,113 @@ export class EmailProviderService extends BaseService {
         code: "BUSINESS_RULE_VIOLATION",
         publicMessage:
           "Cannot delete the default email provider. Set another provider as default first.",
-        statusCode: 422,
         logContext: { id },
       });
     }
 
-    await this.db
+    const result = await this.db
       .delete(this.emailProviders)
       .where(eq(this.emailProviders.id, id));
+
+    // Two deletes of the same provider can both read the row before either
+    // statement runs; the second affects nothing and must not attribute a
+    // deletion to whoever sent it. The method stays idempotent -- both callers
+    // still succeed -- but only the one that actually removed the row is
+    // recorded as having done so.
+    if (affectedRowCount(result, this.dialect) === 0) return;
+
+    // Recorded from the row read before the delete, because after it there is
+    // nothing left to name. A deleted provider's entry is the one whose
+    // subject the reader can no longer recover any other way.
+    await this.recordActivity({
+      action: "delete",
+      providerId: id,
+      providerName: row.name,
+      providerType: row.type,
+      actor,
+    });
   }
 
   /**
    * Set a provider as the default.
    *
-   * Unsets the previous default in a transaction to ensure
-   * only one default provider exists at any time.
+   * The demotion of the previous default and this promotion are one
+   * transaction, and the target is checked before either, so a promotion that
+   * matches nothing cannot leave the installation with no default at all. It
+   * does not serialise two callers promoting different providers at once.
    *
    * @throws NextlyError NOT_FOUND if provider doesn't exist
    */
-  async setDefault(id: string): Promise<EmailProviderRecord> {
-    await this.getRawProvider(id);
+  async setDefault(
+    id: string,
+    actor?: RequestActor | null
+  ): Promise<EmailProviderRecord> {
+    const row = await this.getRawProvider(id);
+
+    // A provider whose type is no longer registered cannot build an adapter,
+    // so promoting it points every unrouted message at something that fails at
+    // send time -- and the promotion clears the working default on its way, so
+    // the damage outlives the request that caused it.
+    //
+    // Refused BEFORE the audit entry below, because there is nothing to
+    // attribute: this leaves the stored default exactly as it was.
+    //
+    // Enforced here rather than only in the admin: the REST route and the
+    // Direct API reach this method without passing the list page, and a rule
+    // that lives in one caller is a rule the others do not have.
+    this.assertPromotable(row.id, row.type);
 
     const now = new Date();
 
-    // Unset any existing default first, then set the new one
+    // Demote, then promote, both inside one transaction. Postgres refuses a
+    // second row holding the default as the statement runs, so the order is
+    // forced -- and the transaction is what keeps it safe, because a failure
+    // after the demotion takes the demotion back with it.
+    //
+    // The provider can be deleted between the read above and this block. A
+    // check before the demotion cannot close that: nothing here locks the row,
+    // so a delete committed by another transaction lands between the check and
+    // the statement on Postgres and MySQL alike. The promotion's own row count
+    // is what actually knows, and it is only known afterwards -- so the
+    // decision is made there, and throwing is what takes the demotion back.
+    let displaced: DisplacedDefault[] = [];
+    await this.withTransaction(async txRaw => {
+      const tx = txRaw as ProviderTransaction;
+      displaced = await this.demoteOtherDefaults(tx, now, id);
 
-    await this.db
-      .update(this.emailProviders)
-      .set({ isDefault: false, updatedAt: now })
-      .where(eq(this.emailProviders.isDefault, true));
+      const promotion = await tx
+        .update(this.emailProviders)
+        .set({ isDefault: true, updatedAt: now })
+        .where(eq(this.emailProviders.id, id));
 
-    await this.db
-      .update(this.emailProviders)
-      .set({ isDefault: true, updatedAt: now })
-      .where(eq(this.emailProviders.id, id));
+      if (affectedRowCount(promotion, this.dialect) === 0) {
+        // Rolls the demotion back with it. Committing instead would leave the
+        // installation with no default at all and answer the caller with a
+        // provider that no longer exists, which is two wrong things rather
+        // than the one true one.
+        throw NextlyError.notFound({ logContext: { id } });
+      }
+    });
+
+    await this.recordDemotions(displaced, actor);
+
+    // An `update` touching `isDefault`, because that is what it is. Promotion
+    // decides which provider sends every unrouted message, so it is the change
+    // most worth attributing and the least visible in the record it otherwise
+    // leaves -- one boolean, on two rows.
+    await this.recordActivity({
+      action: "update",
+      providerId: id,
+      providerName: row.name,
+      providerType: row.type,
+      // A client retry promotes a provider that is already the default. The
+      // final state is identical, so claiming `isDefault` changed manufactures
+      // an audit event out of a no-op. An empty list is what the recorder
+      // reads as "nothing moved", and it writes no row at all for one -- the
+      // same answer the update path beside this one gets.
+      changedFields: row.isDefault ? [] : ["isDefault"],
+      actor,
+    });
 
     return this.getProvider(id);
   }

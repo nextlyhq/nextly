@@ -29,6 +29,8 @@ import {
 import React, { useState, useCallback, useMemo } from "react";
 
 import { SettingsTableToolbar } from "@admin/components/features/settings";
+import { emailCatalogState } from "@admin/components/features/settings/EmailProviderForm";
+import { clearSelectionValue } from "@admin/components/features/settings/EmailProviderForm/ProviderConfigFields";
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
 import {
   AlertTriangle,
@@ -55,48 +57,88 @@ import type {
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
   useEmailProviders,
+  useEmailProviderTypes,
   useDeleteEmailProvider,
   useSetDefaultProvider,
   useTestProvider,
 } from "@admin/hooks/queries/useEmailProviders";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 import { navigateTo } from "@admin/lib/navigation";
-import type { EmailProviderRecord } from "@admin/services/emailProviderApi";
+import type {
+  EmailProviderDescriptor,
+  EmailProviderRecord,
+} from "@admin/services/emailProviderApi";
 
 // ============================================================
 // Provider type badge map
 // ============================================================
 
-const PROVIDER_TYPE_CONFIG: Record<
-  EmailProviderRecord["type"],
-  { label: string; variant: "default" | "primary" | "success" }
-> = {
-  smtp: { label: "SMTP", variant: "default" },
-  resend: { label: "Resend", variant: "primary" },
-  sendlayer: { label: "SendLayer", variant: "success" },
-};
+/**
+ * Badge colours for the providers this admin ships artwork and copy for.
+ *
+ * Only the colour is looked up here — the LABEL comes from the descriptor, so a
+ * contributed provider is named correctly and merely renders in the neutral
+ * variant. A missing entry is the normal case for a plugin provider, never an
+ * error, which is what the old hardcoded map made it.
+ */
+/**
+ * A `Map` rather than an object literal, because the key is a plugin-chosen
+ * provider type. `variants["constructor"]` on a plain object answers with an
+ * inherited function, which is truthy, so the `?? "default"` fallback beside
+ * the lookup would never run and `Badge` would receive a function as its
+ * variant. A `Map` has no inherited keys to find.
+ */
+const PROVIDER_BADGE_VARIANTS = new Map<
+  string,
+  "default" | "primary" | "success"
+>([
+  ["smtp", "default"],
+  ["resend", "primary"],
+  ["sendlayer", "success"],
+]);
 
-function maskConfiguration(
-  type: EmailProviderRecord["type"],
+/**
+ * A one-line summary of a provider's configuration for the table.
+ *
+ * Built from the descriptor's non-secret fields in declaration order, so it
+ * works for a provider this admin has never heard of and can never print a
+ * credential: a secret field is returned masked by the server, and is skipped
+ * here regardless.
+ */
+function summariseConfiguration(
+  descriptor: EmailProviderDescriptor | undefined,
   config: Record<string, unknown>
 ): string {
-  switch (type) {
-    case "smtp": {
-      const host = (config.host as string | undefined) ?? "unknown";
-      const port = String((config.port as string | number | undefined) ?? "");
-      return `${host}:${port}`;
+  if (!descriptor) return "—";
+
+  const parts: string[] = [];
+  for (const field of descriptor.configFields) {
+    if (field.secret === true) continue;
+    const value = field.name
+      .split(".")
+      .reduce<unknown>(
+        (current, segment) =>
+          current !== null && typeof current === "object"
+            ? (current as Record<string, unknown>)[segment]
+            : undefined,
+        config
+      );
+    // Only primitives are summarised. A nested object under a declared path
+    // means the descriptor and the stored shape disagree, and printing
+    // "[object Object]" in the table is worse than printing nothing.
+    if (
+      typeof value !== "string" &&
+      typeof value !== "number" &&
+      typeof value !== "boolean"
+    ) {
+      continue;
     }
-    case "resend":
-    case "sendlayer": {
-      const apiKey = config.apiKey as string | undefined;
-      if (apiKey && apiKey.length > 8) {
-        return `${apiKey.slice(0, 4)}${"*".repeat(8)}${apiKey.slice(-4)}`;
-      }
-      return "********";
-    }
-    default:
-      return "—";
+    if (value === "") continue;
+    parts.push(String(value));
+    if (parts.length === 2) break;
   }
+
+  return parts.length > 0 ? parts.join(" · ") : "—";
 }
 
 function formatDate(dateValue?: string): string {
@@ -270,7 +312,12 @@ function EmailProviderTable() {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
   const [search, setSearch] = useState("");
-  const [type, setType] = useState<string>("all");
+  // `undefined` is "no filter". A hardcoded sentinel would have to be a string
+  // no provider may register, and no such string exists -- a plugin is entitled
+  // to the type `"all"`, and then choosing it would be indistinguishable from
+  // clearing the filter. The sentinel below exists only for the Select, which
+  // cannot hold an empty value, and never reaches the request.
+  const [type, setType] = useState<string | undefined>(undefined);
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
   const toggleColumn = useCallback((key: string) => {
@@ -301,6 +348,61 @@ function EmailProviderTable() {
     search,
     type,
   });
+
+  // The registry catalog names and describes each type. Without it the table
+  // could only label the providers this admin was compiled against.
+  const {
+    data: descriptorList,
+    isError: isCatalogError,
+    isLoading: isCatalogLoading,
+    refetch: refetchCatalog,
+    isFetching: isCatalogFetching,
+  } = useEmailProviderTypes();
+  const descriptors = useMemo(() => descriptorList ?? [], [descriptorList]);
+  // A failed request means two different things here, and the page owes a
+  // different sentence to each. Asked of the same function the form asks, so
+  // an operator moving between the table and the form is not told the catalog
+  // is unusable on one and merely stale on the other.
+  const catalog = emailCatalogState({
+    loading: isCatalogLoading,
+    failed: isCatalogError,
+    descriptors,
+  });
+  const descriptorsByType = useMemo(
+    () => new Map(descriptors.map(entry => [entry.type, entry])),
+    [descriptors]
+  );
+  // Derived from the catalog rather than fixed, for the reason the
+  // configuration select derives its own: any literal chosen here is a value
+  // some provider is entitled to register.
+  const allTypesValue = useMemo(
+    () =>
+      clearSelectionValue(descriptors.map(entry => ({ value: entry.type }))),
+    [descriptors]
+  );
+
+  /**
+   * Whether this type is known to have no provider behind it.
+   *
+   * An empty catalog is produced by a type that is genuinely gone AND by a
+   * catalog that failed or has not arrived, and only the first is a reason to
+   * withhold an action. Answering "unregistered" from an unanswered request
+   * takes Set Default and Send Test away from every working provider on the
+   * page, silently and with nothing to retry.
+   *
+   * The question is whether descriptors are in HAND, not whether the last
+   * request succeeded. A refresh that fails over a cache keeps every
+   * descriptor, so the cache can still say the type is gone — reading the
+   * request's own status instead reports every type as present the moment a
+   * refresh fails, and hands both actions back to a provider whose plugin has
+   * been removed.
+   */
+  const typeIsKnownMissing = useCallback(
+    (providerType: string) =>
+      (catalog === "ready" || catalog === "stale") &&
+      !descriptorsByType.has(providerType),
+    [catalog, descriptorsByType]
+  );
 
   const { mutate: doDelete, isPending: isDeleting } = useDeleteEmailProvider();
   const { mutate: doSetDefault } = useSetDefaultProvider();
@@ -403,10 +505,13 @@ function EmailProviderTable() {
     setPage(0);
   }, []);
 
-  const handleTypeChange = useCallback((newType: string) => {
-    setType(newType);
-    setPage(0);
-  }, []);
+  const handleTypeChange = useCallback(
+    (newType: string) => {
+      setType(newType === allTypesValue ? undefined : newType);
+      setPage(0);
+    },
+    [allTypesValue]
+  );
 
   const allColumns = useMemo<NextlyColumn<EmailProviderRecord>[]>(
     () => [
@@ -428,8 +533,15 @@ function EmailProviderTable() {
         name: "type",
         header: "Type",
         cell: ({ row }) => {
-          const config = PROVIDER_TYPE_CONFIG[row.type];
-          return <Badge variant={config.variant}>{config.label}</Badge>;
+          const descriptor = descriptorsByType.get(row.type);
+          return (
+            <Badge variant={PROVIDER_BADGE_VARIANTS.get(row.type) ?? "default"}>
+              {/* The registry's label when it has one; otherwise the stored
+                  type, so a provider whose plugin was removed still says what
+                  it is instead of rendering blank. */}
+              {descriptor?.label ?? row.type}
+            </Badge>
+          );
         },
       },
       {
@@ -450,7 +562,10 @@ function EmailProviderTable() {
         hideOnMobile: true,
         cell: ({ row }) => (
           <code className="text-xs bg-muted px-1.5 py-0.5 rounded-sm font-mono">
-            {maskConfiguration(row.type, row.configuration)}
+            {summariseConfiguration(
+              descriptorsByType.get(row.type),
+              row.configuration
+            )}
           </code>
         ),
       },
@@ -476,7 +591,9 @@ function EmailProviderTable() {
         ),
       },
     ],
-    []
+    // Rebuilt when the catalog arrives: the type badge and the configuration
+    // summary both read from it.
+    [descriptorsByType]
   );
 
   const columns = useMemo(
@@ -500,7 +617,12 @@ function EmailProviderTable() {
           onSelect: () => handleEdit(provider),
         },
       ];
-      if (!provider.isDefault) {
+      // Not offered for a stored provider whose plugin is gone. Promoting one
+      // points every unrouted message at a type nothing can build an adapter
+      // for, AND clears the working default on the way — so the damage outlives
+      // the click. The service refuses it too; this is the affordance, not the
+      // rule.
+      if (!provider.isDefault && !typeIsKnownMissing(provider.type)) {
         actions.push({
           id: "set-default",
           label: "Set Default",
@@ -508,13 +630,19 @@ function EmailProviderTable() {
           onSelect: () => handleSetDefault(provider),
         });
       }
-      actions.push({
-        id: "test",
-        label: "Send Test",
-        icon: <Send className="h-4 w-4" />,
-        isDisabled: () => isTesting,
-        onSelect: () => handleTest(provider),
-      });
+      // Same gate as Set Default. `testProvider` reaches the registry for the
+      // stored type and can only fail for one that is gone, and the read-only
+      // fallback exists so an orphaned row can be INSPECTED and deleted --
+      // offering an action that cannot succeed contradicts that.
+      if (!typeIsKnownMissing(provider.type)) {
+        actions.push({
+          id: "test",
+          label: "Send Test",
+          icon: <Send className="h-4 w-4" />,
+          isDisabled: () => isTesting,
+          onSelect: () => handleTest(provider),
+        });
+      }
       actions.push({
         id: "delete",
         label: "Delete",
@@ -524,7 +652,17 @@ function EmailProviderTable() {
       });
       return actions;
     },
-    [handleEdit, handleSetDefault, handleTest, handleDelete, isTesting]
+    [
+      handleEdit,
+      handleSetDefault,
+      handleTest,
+      handleDelete,
+      isTesting,
+      // Read to decide whether Set Default is offered, so the actions have to
+      // be rebuilt when the catalog arrives — otherwise the action stays
+      // hidden for every row until something else invalidates them.
+      typeIsKnownMissing,
+    ]
   );
 
   if (isError) {
@@ -554,6 +692,59 @@ function EmailProviderTable() {
 
   return (
     <div className="space-y-4">
+      {/* The catalog is what names each type and what the type filter is built
+          from, so its absence is visible all over this page while its cause is
+          not. Shown beside the table rather than in place of it: the providers
+          themselves loaded, and deleting an unwanted one still works. */}
+      {catalog === "unavailable" && (
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Provider catalog unavailable</AlertTitle>
+          <AlertDescription className="flex flex-wrap items-center gap-3">
+            <span>
+              Provider types could not be loaded, so this page cannot tell which
+              of these are still installed. Each row falls back to its stored
+              type, and the type filter has nothing to offer.
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                void refetchCatalog();
+              }}
+              disabled={isCatalogFetching}
+            >
+              {isCatalogFetching ? "Retrying..." : "Retry"}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      {/* A refresh that did not land, over descriptors already in hand. The
+          sentence above would be untrue here in every particular: the rows are
+          named from the cache, the filter is built from it, and nothing has
+          been withheld. Said without the destructive styling, because the page
+          is working and this is the one thing that is not. */}
+      {catalog === "stale" && (
+        <Alert>
+          <AlertDescription className="flex flex-wrap items-center gap-3">
+            <span>
+              Provider types could not be refreshed, so this page is using the
+              list it loaded with. A type installed or removed since then may
+              not be reflected.
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                void refetchCatalog();
+              }}
+              disabled={isCatalogFetching}
+            >
+              {isCatalogFetching ? "Retrying..." : "Retry"}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
       <SettingsTableToolbar
         search={
           <SearchBar
@@ -565,15 +756,22 @@ function EmailProviderTable() {
           />
         }
         filters={
-          <Select value={type} onValueChange={handleTypeChange}>
+          <Select
+            value={type ?? allTypesValue}
+            onValueChange={handleTypeChange}
+          >
             <SelectTrigger className="w-[130px] bg-background text-foreground hover:bg-accent/10">
               <SelectValue placeholder="All Types" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All Types</SelectItem>
-              <SelectItem value="smtp">SMTP</SelectItem>
-              <SelectItem value="resend">Resend</SelectItem>
-              <SelectItem value="sendlayer">SendLayer</SelectItem>
+              <SelectItem value={allTypesValue}>All Types</SelectItem>
+              {/* One entry per registered provider, so the filter can reach a
+                  contributed provider that is genuinely in the table. */}
+              {descriptors.map(descriptor => (
+                <SelectItem key={descriptor.type} value={descriptor.type}>
+                  {descriptor.label}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         }
@@ -680,3 +878,7 @@ const EmailProvidersPage: React.FC = () => {
 };
 
 export default EmailProvidersPage;
+
+// The table alone, so its behaviour can be exercised without the page's
+// boundary, layout and router around it.
+export { EmailProviderTable };
