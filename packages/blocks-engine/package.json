@@ -30,7 +30,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "check-types": "tsc --noEmit",
+    "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "test": "vitest run",

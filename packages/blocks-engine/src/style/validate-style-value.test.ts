@@ -221,12 +221,12 @@ describe("a budget that predates the site allowance", () => {
     );
     // One warning, and the allowance it came out of now exists on the object.
     expect(issues.map(i => i.code)).toEqual(["unknown-token"]);
-    expect(typeof (legacy as { siteRemaining?: number }).siteRemaining).toBe(
-      "number"
-    );
-    expect((legacy as { siteRemaining: number }).siteRemaining).toBe(
-      MAX_SITE_ISSUES - 1
-    );
+    // Read through ONE optional view. The allowance is absent from the legacy
+    // shape by construction, so a required view of it describes a type the
+    // object could never have had.
+    const filled = legacy as { siteRemaining?: number };
+    expect(typeof filled.siteRemaining).toBe("number");
+    expect(filled.siteRemaining).toBe(MAX_SITE_ISSUES - 1);
   });
 });
 
@@ -482,9 +482,13 @@ describe("composite shapes", () => {
     // complain about and reports it clean. Storage then puts the document
     // through JSON, where a Date becomes a string and a Map becomes `{}`, and
     // the same validator refuses on the next read what it just accepted.
-    expect(codes({ margin: new Date() })).toEqual(["invalid-style-value"]);
-    expect(codes({ background: new Map() })).toEqual(["invalid-style-value"]);
-    expect(codes({ position: /x/ })).toEqual(["invalid-style-value"]);
+    expect(codes({ margin: new Date() as never })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ background: new Map() as never })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ position: /x/ as never })).toEqual(["invalid-style-value"]);
   });
 
   it("refuses a token reference that is not a plain record", () => {
@@ -500,7 +504,7 @@ describe("composite shapes", () => {
   });
 
   it("accepts a record with no prototype, which JSON leaves alone", () => {
-    const sides = Object.create(null) as Record<string, unknown>;
+    const sides = Object.create(null) as StyleValues;
     sides.inlineStart = "2rem";
     expect(codes({ padding: sides })).toEqual([]);
   });
@@ -517,7 +521,9 @@ describe("union shapes", () => {
   });
 
   it("refuses a value no variant accepts", () => {
-    expect(codes({ borderRadius: true })).toEqual(["invalid-style-value"]);
+    expect(codes({ borderRadius: true as never })).toEqual([
+      "invalid-style-value",
+    ]);
     expect(codes({ fontWeight: "heavy" })).toEqual(["invalid-style-value"]);
   });
 });

@@ -97,8 +97,12 @@ describe("the define-then-register workflow keeps its prop types", () => {
     const output = def?.render({
       props: node.props,
       node,
-      slots: {},
       className: "nx-pb-x",
+      // Both are required by the render contract. This block draws no slots and
+      // reads no context, so they stand in rather than doing anything — but a
+      // call that omits them is not the call a renderer makes.
+      renderSlot: () => undefined,
+      ctx: undefined,
     });
     expect(output).toBe("hello reader");
   });
@@ -185,7 +189,7 @@ describe("registration rules", () => {
       registerBlocks([
         block({
           name: "core/arr",
-          example: { props: [] as unknown as object },
+          example: { props: [] as never },
         }),
       ])
     ).toThrow(/NEXTLY_BLOCK_INVALID.*plain object/s);

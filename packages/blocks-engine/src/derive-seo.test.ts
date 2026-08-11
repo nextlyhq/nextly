@@ -34,10 +34,11 @@ function doc(nodes: BlockNode[]): BlockDocument {
 function definitions(
   extra: Record<string, (props: never) => BlockSeoContribution | undefined> = {}
 ): SeoDefinitionSource {
-  const map: Record<
-    string,
-    { seo?: (props: never) => BlockSeoContribution | undefined }
-  > = {
+  // Derived from the source's own return type rather than restated. The
+  // hand-written version named only `seo`, so the `slots` these fixtures
+  // already carry were invisible to the compiler and the map described a
+  // narrower contract than the function it stands in for.
+  const map: Record<string, NonNullable<ReturnType<SeoDefinitionSource>>> = {
     "core/heading": {
       seo: (p: never) => ({ title: (p as { text?: string }).text }),
     },

@@ -1,9 +1,21 @@
+// The SHIPPING config: what `dist` is built from, and the only one whose
+// `types` list decides what ambient globals `src` can see.
+//
+// `types: []` is not tidiness. Without it, `@types/node` — a real devDependency
+// here, needed by the test files — is ambient across `src` as well, and a
+// published browser module can write `process.env.SECRET` and type-check
+// clean. Measured, not reasoned: adding that line to a `src` module compiles
+// with no `types` field and fails with `TS2591` once the list is empty.
+//
+// Test files are type-checked by `tsconfig.tests.json`, which re-widens `types`
+// for itself. Both configs run in `check-types`.
 {
   "extends": "@nextlyhq/tsconfig/base-bundler.json",
   "compilerOptions": {
     "rootDir": "src",
-    "outDir": "dist"
+    "outDir": "dist",
+    "types": []
   },
   "include": ["src/**/*"],
-  "exclude": ["dist", "node_modules", "**/*.test.ts"]
+  "exclude": ["dist", "node_modules", "**/*.test.ts", "**/*.test.tsx"]
 }
