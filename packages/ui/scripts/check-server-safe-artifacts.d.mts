@@ -47,6 +47,14 @@ export function disallowedSpecifiers(
 export function domGlobalsPresent(scope?: Record<string, unknown>): string[];
 
 /**
+ * The post-floor globals present in `scope`, empty once the floor restriction has run.
+ *
+ * Asked between artifact imports: one that installs `navigator` or `WebSocket` puts it back for
+ * everything evaluated afterwards.
+ */
+export function floorGlobalsPresent(scope?: Record<string, unknown>): string[];
+
+/**
  * Take the environment down to the oldest supported Node before evaluating anything, so the
  * artifact is judged against the `engines` range rather than against the build machine.
  *

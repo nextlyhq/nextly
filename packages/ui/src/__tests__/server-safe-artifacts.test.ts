@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import {
   disallowedSpecifiers,
   domGlobalsPresent,
+  floorGlobalsPresent,
   packageOf,
   reachedFrom,
   restrictToSupportedFloor,
@@ -251,6 +252,15 @@ describe("restricting to the oldest supported Node", () => {
     restrictToSupportedFloor(scope);
     expect("navigator" in scope).toBe(false);
     expect("Navigator" in scope).toBe(false);
+  });
+
+  it("names a post-floor global that reappeared", () => {
+    // Asked BETWEEN imports. An artifact that installs `navigator` puts it back for everything
+    // evaluated afterwards, and those entries then pass against a runtime no consumer has.
+    expect(floorGlobalsPresent({ navigator: {}, WebSocket: class {} })).toEqual(
+      ["navigator", "WebSocket"]
+    );
+    expect(floorGlobalsPresent({ clean: 1 })).toEqual([]);
   });
 
   it("leaves a scope that never had them untouched", () => {

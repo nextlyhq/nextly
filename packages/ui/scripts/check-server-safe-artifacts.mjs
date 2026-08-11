@@ -257,9 +257,25 @@ const ADDED_AFTER_SUPPORTED_FLOOR = [
   "localStorage",
   "sessionStorage",
   "Storage",
+  // v24.
+  "CloseEvent",
   // Not in any release the floor covers; listed ahead of the Node that ships it.
   "URLPattern",
 ];
+
+/**
+ * Post-floor globals present in `scope`.
+ *
+ * The mirror of {@link domGlobalsPresent}, for the names the floor restriction removed. An
+ * artifact that installs one puts it back for everything imported afterwards, so this is asked
+ * between imports rather than once at the start.
+ *
+ * @param {Record<string, unknown>} scope
+ * @returns {string[]}
+ */
+export function floorGlobalsPresent(scope = globalThis) {
+  return ADDED_AFTER_SUPPORTED_FLOOR.filter(name => name in scope);
+}
 
 /**
  * Take the environment down to the oldest supported Node before evaluating anything.
@@ -385,7 +401,11 @@ async function main() {
     // Re-asked before EVERY import, not once at the start. These artifacts share one process, so
     // an earlier one that installs `document` would leave a later one's module-scope read working
     // here and failing for a consumer importing that entry point alone.
-    const leaked = domGlobalsPresent();
+    // Both halves of the environment, re-asked before EVERY import. The DOM globals must never
+    // appear, and the post-floor ones were removed at the start — an artifact that installs
+    // either puts it back for everything imported afterwards, and the later entry then evaluates
+    // against a runtime no consumer has.
+    const leaked = [...domGlobalsPresent(), ...floorGlobalsPresent()];
     if (leaked.length > 0) {
       problems.push(
         `${leaked.join(", ")} appeared before ${file} was imported, so an earlier artifact ` +
