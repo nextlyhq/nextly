@@ -218,6 +218,20 @@ describe("clearing an optional configuration value", () => {
       service.updateProvider(providerId, { unsetConfiguration: ["apiKey"] })
     ).rejects.toThrow();
   });
+
+  it("refuses an unsetConfiguration array with a HOLE in it", async () => {
+    // `new Array(1)` from a JavaScript Direct API caller.
+    // `Array.prototype.some` SKIPS holes, so the narrowing accepted it — while
+    // the `for...of` that follows visits the hole as `undefined`, and
+    // `path.split(".")` then threw. A malformed request was answered with a
+    // 500 carrying a driver-shaped message instead of the validation response
+    // the caller can act on.
+    const sparse = new Array(1) as unknown as string[];
+
+    await expect(
+      service.updateProvider(providerId, { unsetConfiguration: sparse })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
 });
 
 describe("clearing the last value under a nested branch", () => {

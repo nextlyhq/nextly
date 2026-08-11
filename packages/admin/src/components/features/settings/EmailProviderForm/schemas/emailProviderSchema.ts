@@ -95,7 +95,19 @@ const identitySchema = {
  * kind is a compile error here rather than a field that silently validates as
  * anything.
  */
-function fieldSchema(field: EmailProviderConfigField): z.ZodTypeAny {
+function fieldSchema(
+  field: EmailProviderConfigField,
+  /**
+   * What this field currently holds in the database, when it holds anything.
+   *
+   * A select validates against the options the descriptor offers TODAY, and a
+   * provider upgrade may rename or drop one while its own parser still accepts
+   * the stored string. Without this, such a provider cannot be renamed or
+   * deactivated without first replacing configuration that is still valid — the
+   * form refuses a value the operator never chose and cannot see.
+   */
+  storedValue?: unknown
+): z.ZodTypeAny {
   const required = field.required === true;
 
   switch (field.kind) {
@@ -143,6 +155,12 @@ function fieldSchema(field: EmailProviderConfigField): z.ZodTypeAny {
           }
           return;
         }
+        // The value already in the database passes whatever the options say.
+        // It is the provider's own stored configuration, and its parser is the
+        // authority on whether it is still acceptable — the descriptor only
+        // describes what a NEW choice may be.
+        if (storedValue === value) return;
+
         // An empty option list means the provider declared a select without
         // choices; nothing can be checked against, so any value passes and the
         // server's parser has the final say.
@@ -326,7 +344,8 @@ function toObjectSchema(tree: Record<string, unknown>): z.ZodTypeAny {
  * than a round trip that fails on the server.
  */
 function configurationSchema(
-  descriptor: EmailProviderDescriptor | undefined
+  descriptor: EmailProviderDescriptor | undefined,
+  stored?: Record<string, unknown>
 ): z.ZodType<Record<string, unknown>, Record<string, unknown>> {
   // No descriptor means the provider is not registered on this server. The form
   // renders read-only in that state, so validating its configuration would only
@@ -337,7 +356,14 @@ function configurationSchema(
   for (const field of descriptor.configFields) {
     const path = splitFieldPath(field.name);
     if (path === null) continue;
-    assignAtPath(tree, path, fieldSchema(field));
+    assignAtPath(
+      tree,
+      path,
+      fieldSchema(
+        field,
+        stored === undefined ? undefined : readAtPath(stored, path)
+      )
+    );
   }
 
   // The top level is always present -- the form holds a `configuration` object
@@ -359,10 +385,14 @@ function configurationSchema(
  * Rebuilt when the selected type changes, because the configuration half of it
  * is that provider's and nothing else's.
  */
-export function buildProviderSchema(descriptor?: EmailProviderDescriptor) {
+export function buildProviderSchema(
+  descriptor?: EmailProviderDescriptor,
+  /** The stored configuration, so a legacy select choice stays valid. */
+  stored?: Record<string, unknown>
+) {
   return z.object({
     ...identitySchema,
-    configuration: configurationSchema(descriptor),
+    configuration: configurationSchema(descriptor, stored),
   });
 }
 

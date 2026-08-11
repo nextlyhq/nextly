@@ -155,6 +155,24 @@ function unrepresentableNotice(kind: EmailProviderConfigField["kind"]): string {
   return `The stored value cannot be shown by this control. ${shown} It is left out of the save unless you change it; ${change}.`;
 }
 
+/**
+ * Whether the value a select currently holds is absent from its options.
+ *
+ * Only a non-empty string qualifies: the empty string is how "nothing chosen"
+ * is spelled, and rendering an item for it would offer a blank choice beside
+ * the real ones.
+ */
+function isLegacyChoice(
+  value: unknown,
+  options: ReadonlyArray<{ value: string }> | undefined
+): value is string {
+  return (
+    typeof value === "string" &&
+    value !== "" &&
+    !(options ?? []).some(option => option.value === value)
+  );
+}
+
 function ProviderConfigField({
   field,
   control,
@@ -285,6 +303,21 @@ function ProviderConfigField({
                               {option.label}
                             </SelectItem>
                           ))}
+                          {/* The stored choice, when the descriptor no longer
+                              offers it. A provider upgrade may rename or drop
+                              an option while its own parser still accepts the
+                              stored string, and a select with no matching item
+                              renders as unselected — so the operator is shown
+                              an empty control over configuration that is
+                              perfectly valid, and cannot rename or deactivate
+                              the provider without replacing it. Labelled as
+                              itself, since the descriptor no longer has a name
+                              for it. */}
+                          {isLegacyChoice(controller.value, field.options) && (
+                            <SelectItem value={String(controller.value)}>
+                              {String(controller.value)}
+                            </SelectItem>
+                          )}
                         </SelectContent>
                       </Select>
                     );

@@ -805,6 +805,37 @@ function assertKindIsRenderable(
  * writing `Infinity` means "unbounded" and the way to say that is to omit the
  * key. Silently dropping it would work and teach nothing.
  */
+/**
+ * Reject a constraints container that is not one.
+ *
+ * Every rule reads `field.constraints?.min`, so `null` slips past all of them
+ * -- optional chaining treats it as absent. `toDescriptor` then tests
+ * `!== undefined`, finds it present, and dereferences it: the catalog endpoint
+ * throws a raw `TypeError` and EVERY provider's form becomes unavailable, not
+ * just this one's.
+ *
+ * Checked at registration, where the failure names the plugin, rather than at
+ * the first request for the catalog.
+ */
+function assertConstraintsAreAnObject(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  const constraints = field.constraints;
+  if (constraints === undefined) return;
+  if (constraints !== null && typeof constraints === "object") return;
+
+  throw new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider "${type}" gives the field "${field.name}" a \`constraints\` that is not an object (${constraints === null ? "null" : typeof constraints}). Omit the key to declare no bounds.`,
+    logContext: {
+      type,
+      field: field.name,
+      constraints: constraints === null ? "null" : typeof constraints,
+    },
+  });
+}
+
 function assertNumericMetadataIsFinite(
   type: string,
   field: EmailProviderConfigField
@@ -984,6 +1015,10 @@ export function assertConfigFieldsAreUsable(
     // Before the satisfiability rules, which compare these numbers: `NaN`
     // fails every comparison silently, so a bound of `NaN` would pass
     // "min <= max" and be reported as fine.
+    // Before every rule that reads a bound off it: `null` reads as absent
+    // through optional chaining, so each of them passes and the descriptor
+    // build is where it finally fails.
+    assertConstraintsAreAnObject(type, field);
     assertNumericMetadataIsFinite(type, field);
     // Before satisfiability, which would report a `maxLength` of 0 on a select
     // as a limit no value meets rather than as a limit that control never

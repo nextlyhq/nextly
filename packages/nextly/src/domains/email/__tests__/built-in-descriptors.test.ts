@@ -1647,3 +1647,46 @@ describe("a select option nobody can read", () => {
     expect(withOptions([{ value: "eu", label: "Europe" }])).not.toThrow();
   });
 });
+
+describe("a constraints container that is not one", () => {
+  const base = {
+    type: "fixture",
+    label: "Fixture",
+    parseConfig: (input: unknown) => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  };
+
+  function withConstraints(constraints: unknown) {
+    return () =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          {
+            name: "host",
+            label: "Host",
+            kind: "text",
+            constraints,
+          } as unknown as EmailProviderConfigField,
+        ],
+      });
+  }
+
+  it("refuses null, which every bound rule reads as absent", () => {
+    // Optional chaining makes `null` invisible to `field.constraints?.min`, so
+    // it passes every validator and fails at the descriptor build instead —
+    // where a raw TypeError takes the catalog endpoint down and with it the
+    // form for EVERY provider, not only this one.
+    expect(withConstraints(null)).toThrow(/not an object/);
+  });
+
+  it("refuses a non-object", () => {
+    expect(withConstraints("min:1")).toThrow(/not an object/);
+  });
+
+  it("accepts real bounds, and their absence", () => {
+    expect(withConstraints({ maxLength: 10 })).not.toThrow();
+    expect(withConstraints(undefined)).not.toThrow();
+  });
+});

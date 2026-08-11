@@ -119,7 +119,7 @@ export function EmailProviderForm({
   // a ref keeps one stable resolver identity that always validates against the
   // provider currently on screen.
   const resolverRef = useRef(
-    zodResolver(buildProviderSchema(initialDescriptor))
+    zodResolver(buildProviderSchema(initialDescriptor, provider?.configuration))
   );
   const resolver = useCallback<Resolver<ProviderFormValues>>(
     (values, context, options) => resolverRef.current(values, context, options),
@@ -141,9 +141,20 @@ export function EmailProviderForm({
 
   // The configuration half of the schema is this provider's and nothing
   // else's, so it is rebuilt whenever the selection changes.
+  // The stored configuration travels with it, and ONLY while the type is
+  // unchanged: across a type change it belongs to the previous provider, so a
+  // legacy choice from that one must not keep validating here.
   resolverRef.current = useMemo(
-    () => zodResolver(buildProviderSchema(selectedDescriptor)),
-    [selectedDescriptor]
+    () =>
+      zodResolver(
+        buildProviderSchema(
+          selectedDescriptor,
+          provider && provider.type === selectedType
+            ? provider.configuration
+            : undefined
+        )
+      ),
+    [selectedDescriptor, provider, selectedType]
   );
 
   // Which record this form has already been populated from, and whether the

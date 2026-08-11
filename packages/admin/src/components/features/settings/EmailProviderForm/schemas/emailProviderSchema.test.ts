@@ -1287,3 +1287,66 @@ describe("a blank the operator produced over an omitted value", () => {
     expect(payload.unsetConfiguration ?? []).not.toContain("note");
   });
 });
+
+describe("a select whose stored choice the provider no longer offers", () => {
+  const descriptor: EmailProviderDescriptor = {
+    type: "acme-mail",
+    label: "Acme Mail",
+    capabilities: {},
+    configFields: [
+      {
+        name: "region",
+        label: "Region",
+        kind: "select",
+        required: true,
+        options: [{ value: "eu-west-2", label: "London" }],
+      },
+    ],
+  };
+
+  const FORM = {
+    name: "A",
+    type: "acme-mail",
+    fromEmail: "a@b.com",
+    fromName: "",
+    isDefault: false,
+    isActive: true,
+  };
+
+  it("keeps the provider editable when the option was renamed", () => {
+    // A provider upgrade may rename or drop an option while its own parser
+    // still accepts the stored string. Validating only against today's options
+    // means the provider cannot be renamed or DEACTIVATED without first
+    // replacing configuration that is still perfectly valid.
+    const stored = { region: "eu-west-1" };
+    const values = { ...FORM, configuration: stored };
+
+    expect(
+      buildProviderSchema(descriptor, stored).safeParse(values).success
+    ).toBe(true);
+  });
+
+  it("still refuses a value that is neither an option nor what is stored", () => {
+    // The control. Accepting the stored value must not turn the select into a
+    // free-text field — a NEW choice is still checked against the descriptor.
+    const stored = { region: "eu-west-1" };
+
+    expect(
+      buildProviderSchema(descriptor, stored).safeParse({
+        ...FORM,
+        configuration: { region: "invented-by-hand" },
+      }).success
+    ).toBe(false);
+  });
+
+  it("refuses a legacy value on a CREATE, where nothing is stored", () => {
+    // No stored configuration means no legacy choice to preserve, so the
+    // descriptor is the only authority.
+    expect(
+      buildProviderSchema(descriptor).safeParse({
+        ...FORM,
+        configuration: { region: "eu-west-1" },
+      }).success
+    ).toBe(false);
+  });
+});

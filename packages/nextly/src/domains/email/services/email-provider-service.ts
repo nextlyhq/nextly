@@ -378,8 +378,23 @@ export class EmailProviderService extends BaseService {
    */
   private readUnsetPaths(value: unknown): readonly string[] {
     if (value === undefined) return [];
+    // Indexed rather than `.some`, which SKIPS holes. A sparse array --
+    // `new Array(1)` from a JavaScript Direct API caller -- therefore passed
+    // this check while `for...of` below still visits the hole as `undefined`,
+    // so `path.split(".")` threw a raw TypeError in place of the validation
+    // response the caller can act on.
     const paths = Array.isArray(value) ? value : null;
-    if (paths === null || paths.some(entry => typeof entry !== "string")) {
+    // A HOLE is not detectable with `some`, which skips them -- the same trait
+    // that let a sparse array through in the first place. `Object.keys` on an
+    // array lists only the indices that are PRESENT, so a length that does not
+    // match is a hole.
+    const hasHole =
+      paths !== null && Object.keys(paths).length !== paths.length;
+    const malformed =
+      paths === null ||
+      hasHole ||
+      paths.some(entry => typeof entry !== "string");
+    if (malformed) {
       throw NextlyError.validation({
         errors: [
           {
