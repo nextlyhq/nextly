@@ -128,16 +128,24 @@ describe("mintPreviewLink", () => {
   });
 
   it("lets a genuine failure keep its own status instead of reading as a denial", async () => {
-    // The neighbouring case, and the reason only 403/404 are treated as answers.
-    // Collapsing every failure into "not visible" would report a broken database
-    // as an ordinary permission denial and hide the outage.
-    getEntry.mockResolvedValue({ success: false, statusCode: 500 });
+    // 429, deliberately NOT 500. A test using 500 as both the input and the
+    // expected output cannot tell "the status was preserved" from "every
+    // failure is flattened to 500" — it passes under both, which is how the
+    // flattening survived the first version of this test.
+    getEntry.mockResolvedValue({
+      success: false,
+      statusCode: 429,
+      code: "RATE_LIMITED",
+      message: "Too many requests",
+    });
 
     const response = await mintPreviewLink(
       post({ collection: "pages", entryId: "7" })
     );
 
-    expect(response.status).toBe(500);
+    // Not 403 (an unreadable row) and not 500 (a flattened one): the caller
+    // needs the retry semantics the service actually reported.
+    expect(response.status).toBe(429);
   });
 
   it("judges the entry as the CALLER and keeps a never-published one visible", async () => {

@@ -26,6 +26,7 @@
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { getService } from "../di";
 import type { UserContext } from "../domains/singles/types";
+import { errorFromServiceEnvelope } from "../errors/from-service-envelope";
 import { NextlyError } from "../errors/nextly-error";
 
 /**
@@ -34,18 +35,29 @@ import { NextlyError } from "../errors/nextly-error";
  *
  * A 403 or 404 is an answer: this caller does not get this row, and the two are
  * deliberately collapsed because telling them apart would reveal which entry ids
- * exist. Any other failure is the read itself breaking, and reporting that as an
- * ordinary denial would hide an outage behind a permission error.
+ * exist.
+ *
+ * Anything else is the read failing rather than refusing, and it keeps the
+ * status the service gave it. Flattening every other outcome to 500 would erase
+ * what the caller needs to act on — a rate limit's 429 and its retry interval
+ * become an opaque server error, and a validation failure loses its field
+ * detail. The shared converter rebuilds the service's own error, which is what
+ * the Direct API boundary does with the same envelope.
  */
-function readVerdict(success: boolean, statusCode: number): boolean {
-  if (success) return true;
-  if (statusCode === 403 || statusCode === 404) return false;
-  throw NextlyError.internal({
-    logContext: {
-      reason: "preview-mint-probe-failed",
-      statusCode,
-    },
-  });
+function readVerdict(read: {
+  success: boolean;
+  statusCode: number;
+  code?: string;
+  message?: string;
+  messageKey?: string;
+  publicData?: unknown;
+}): boolean {
+  if (read.success) return true;
+  if (read.statusCode === 403 || read.statusCode === 404) return false;
+  throw errorFromServiceEnvelope(
+    { ...read, message: read.message ?? "Preview authorization read failed" },
+    { reason: "preview-mint-probe-failed" }
+  );
 }
 
 /**
@@ -81,7 +93,7 @@ export async function assertEntryPreviewable(
     status: "all",
   });
 
-  if (!readVerdict(read.success, read.statusCode)) {
+  if (!readVerdict(read)) {
     throw NextlyError.forbidden({
       logContext: {
         reason: "preview-link-entry-not-visible",
