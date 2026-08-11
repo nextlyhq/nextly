@@ -57,8 +57,8 @@ export async function renderImage({
   // value that could execute, the host list refuses one this site will not fetch
   // from. A resolver is trusted code, but the value it returns came out of a
   // media record a person filled in, so it is input in the same sense the typed
-  // prop is — checking one position of that pair and not the other is how this
-  // block has twice let a value through.
+  // prop is — checking one position of that pair and not the other lets a value
+  // through unfiltered.
   //
   // Before, because selecting first and filtering after means a library image
   // the site will not load beats a perfectly good typed URL and then takes the
