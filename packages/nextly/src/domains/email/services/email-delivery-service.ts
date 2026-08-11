@@ -233,13 +233,7 @@ export class EmailDeliveryService extends BaseService {
         // `provider_type` beside it keeps every row meaningful without the
         // join, which is the same reason MySQL carries no key here at all.
         await this.insertRows(inputs, ids, now, false);
-        this.logger.warn(
-          "Recorded an email delivery without its provider reference",
-          {
-            providerType: inputs[0]?.providerType,
-            providerId: inputs[0]?.providerId,
-          }
-        );
+        this.reportProviderReferenceDropped(inputs);
         return;
       } catch (retryError) {
         // BOTH errors. The original says the row was refused for its provider
@@ -251,6 +245,31 @@ export class EmailDeliveryService extends BaseService {
         return;
       }
       this.reportInsertFailure(inputs, error);
+    }
+  }
+
+  /**
+   * Say that a row was kept without its provider reference, and never let
+   * saying so change what happened.
+   *
+   * The row is already inserted by the time this runs. An installed logger
+   * that throws would otherwise be caught by the recovery's own handler and
+   * reported as a retry that failed -- an error naming a row that exists, on a
+   * path whose whole purpose was to keep it. Isolated for the same reason
+   * `reportInsertFailure` is, and the two sit together so neither is the one
+   * that gets forgotten.
+   */
+  private reportProviderReferenceDropped(inputs: EmailDeliveryInput[]): void {
+    try {
+      this.logger.warn(
+        "Recorded an email delivery without its provider reference",
+        {
+          providerType: inputs[0]?.providerType,
+          providerId: inputs[0]?.providerId,
+        }
+      );
+    } catch {
+      // Nowhere left to report to: the reporting mechanism is what failed.
     }
   }
 

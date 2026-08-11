@@ -698,10 +698,10 @@ export class EmailProviderService extends BaseService {
     let dispatched = false;
 
     // Resolved ONCE, outside the try, because both the resolved path and the
-    // catch record a delivery for it. Two derivations of one destination is
-    // how they came to disagree: the mailbox normalisation reached the first
-    // and not the second, so a thrown test send stored the hash of
-    // `Jane <jane@example.com>` while every reader hashes the bare address.
+    // catch record a delivery for this destination and they have to record the
+    // same one. Every reader hashes the bare address, so a row stored under
+    // the hash of `Jane <jane@example.com>` could never be found again --
+    // which is why the normalisation has to be shared rather than repeated.
     const testMailbox = mailboxOf(testEmail || provider.fromEmail);
 
     try {

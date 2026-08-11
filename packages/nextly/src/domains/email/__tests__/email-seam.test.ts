@@ -1087,10 +1087,10 @@ describe("a provider that reports its refusals as a bare string", () => {
 
   it("does not turn a delivered message into a failure", async () => {
     // `rejected` is provider-supplied and its declared type is a promise
-    // rather than a fact. Mapping over a bare string threw AFTER the send had
-    // returned and BEFORE the dispatched marker was set, so the catch recorded
-    // every recipient as failed and answered `{ success: false }` for a
-    // message that reached its primary destination.
+    // rather than a fact: a transport reporting a single refusal hands over a
+    // bare string where the type says array. One refused CC is one refusal,
+    // and it must be read as that -- without changing the outcome for the
+    // recipients the message did reach.
     const result = await reporting("cc@example.com").send({
       to: "a@b.com",
       cc: ["cc@example.com"],
@@ -1164,6 +1164,32 @@ describe("bookkeeping that fails after the provider accepted the message", () =>
     // must NOT be reported as delivered.
     expect(adapterSend).toHaveBeenCalledTimes(1);
     expect(result.success).toBe(true);
+  });
+
+  it("keeps the provider's own refusal when bookkeeping then throws", async () => {
+    // The provider answered, and answered NO. Recording only that it answered
+    // and defaulting the response to success turns a refusal into a delivery,
+    // which has an auth flow withhold the undelivered-token fallback for a
+    // message the provider said it never sent — the mirror of the case above
+    // and the worse of the two.
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: Record<string, unknown>) => {
+        const { to: _dropped, ...rest } = payload;
+        return rest;
+      }
+    );
+    const { service, adapterSend } = buildSend();
+    adapterSend.mockResolvedValueOnce({ success: false });
+
+    const result = await service.send({
+      to: "a@b.com",
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(adapterSend).toHaveBeenCalledTimes(1);
+    expect(result.success).toBe(false);
   });
 
   it("still reports a genuine provider failure as one", async () => {

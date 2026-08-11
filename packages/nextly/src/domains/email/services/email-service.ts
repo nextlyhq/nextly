@@ -456,7 +456,7 @@ export class EmailService extends BaseService {
     // refused: a full set of `failed` rows, an after-send action told the send
     // failed, and an auth flow withholding a token for a message that was
     // delivered.
-    let accepted = false;
+    let providerVerdict: boolean | undefined;
     let dispatched: { success: boolean; messageId?: string } | undefined;
 
     try {
@@ -472,9 +472,13 @@ export class EmailService extends BaseService {
         attachments: resolvedAttachments,
       });
 
-      // The provider has answered. Nothing below may report this as a send
-      // that never happened, and this is the first statement that can say so.
-      accepted = true;
+      // The provider has answered, and WHAT it answered. Both are recorded
+      // here: a later throw must not be able to turn a refusal into a success
+      // any more than it can turn an acceptance into a failure. Storing only
+      // "it answered" and defaulting to success would have an auth flow
+      // withhold its undelivered-token fallback for a message the provider
+      // said it did not send.
+      providerVerdict = result.success === true;
 
       // Recorded inline rather than through the after-send action seam, and
       // BEFORE it. That seam exists for PLUGIN side-effects -- ordered,
@@ -633,7 +637,7 @@ export class EmailService extends BaseService {
       // however it reached here. Reporting one would contradict the rows and
       // the action that have already gone out, and would tell an auth flow to
       // withhold a token for a mail that was sent.
-      if (accepted) {
+      if (providerVerdict !== undefined) {
         // The diagnostic is isolated because the thing it is describing may be
         // the logger itself: a transport that threw once will throw again, and
         // letting it do so here would reject an accepted send for the second
@@ -650,11 +654,15 @@ export class EmailService extends BaseService {
           // stands, which is the fact that matters to the caller.
         }
         // Absent when the throw landed between the provider's answer and the
-        // point the response was built. The message still went out; the only
-        // thing not known is its identifier, and reporting a failure because
-        // an id could not be assembled is the outcome this branch exists to
-        // prevent.
-        return dispatched ?? { success: true };
+        // point the response was built. The provider's own verdict stands --
+        // reporting a failure because an identifier could not be assembled is
+        // the outcome this branch exists to prevent, and reporting a success
+        // the provider never claimed is the outcome the verdict prevents.
+        //
+        // No identifier travels with it: the one the provider returned has not
+        // been through the check that keeps a credential or a recipient out of
+        // it, and an unchecked id is the thing that check exists to stop.
+        return dispatched ?? { success: providerVerdict };
       }
 
       // Recorded before the action seam, for the reason given in the success

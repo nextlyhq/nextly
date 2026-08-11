@@ -381,6 +381,41 @@ describe("a provider deleted while its send is in flight", () => {
     );
   });
 
+  it("keeps the recovered row when the WARNING itself throws", async () => {
+    // The row is already inserted by the time the notice is written. A logger
+    // that throws is caught by the recovery's own handler and reported as a
+    // retry that failed, so an operator is sent looking for a row that is
+    // sitting in the table.
+    const throwing = {
+      ...logger,
+      warn: () => {
+        throw new Error("the logging transport is down");
+      },
+    };
+    const db = drizzle({ client: sqlite });
+    const service = new EmailDeliveryService(
+      makeAdapter(dbThatRejectsTheFirstInsert(db)),
+      throwing
+    );
+
+    await expect(
+      service.record({
+        to: RECIPIENT,
+        providerType: "smtp",
+        providerId: "44444444-4444-4444-4444-444444444444",
+        status: "sent",
+      })
+    ).resolves.toBeUndefined();
+
+    // The row survived, and nothing claimed a failure for it. SQLite does not
+    // enforce the reference on its own, so the rejection is forced — without
+    // that the recovery never runs and this passes without reaching the notice
+    // at all.
+    const rows = await new EmailDeliveryService(makeAdapter(db), logger).list();
+    expect(rows).toHaveLength(1);
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
   it("reports BOTH failures when the retry fails too", async () => {
     // The recovery only runs for a foreign-key violation, so the first insert
     // has to fail as one and the second for something else. A fixture that

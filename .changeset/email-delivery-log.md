@@ -61,3 +61,13 @@ left both quoting the derived value into a diagnostic that reached the failure
 log, because the needles were computed from the stored form alone. A parser that
 renames one is refused outright, for the same reason a parser that shortens one
 already was.
+
+The provider's own verdict survives a failure in the bookkeeping that follows
+it. Recording only that the provider answered, and defaulting to success, turned
+a refusal into a delivery and had an auth flow withhold its undelivered-token
+fallback for a message that was never sent.
+
+The notice written when a row is kept without its provider reference can no
+longer change what happened. An installed logger that threw was caught by the
+recovery's own handler and reported as a retry that failed, for a row sitting in
+the table.

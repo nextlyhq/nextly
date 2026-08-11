@@ -10,8 +10,8 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-// The recipient digest is keyed with the install secret, so this module reads
-// the environment where it previously read nothing.
+// `hashRecipient` keys its digest with `NEXTLY_SECRET`, so the module under
+// test reads the environment and has to be given one before it is imported.
 vi.mock("../../../lib/env", () => ({
   env: {
     NEXTLY_SECRET: "test-secret-that-is-long-enough-for-derivation",
