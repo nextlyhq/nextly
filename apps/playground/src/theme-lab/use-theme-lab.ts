@@ -11,7 +11,7 @@
  * place for the two to disagree; the switcher panel calls that hook directly
  * for mode instead of duplicating it here.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 
 import { NEXTLY_THEMES, TWEAKCN_THEMES } from "./themes";
 import type { DensityId, ThemeDefinition } from "./types";
@@ -21,6 +21,16 @@ const STORAGE_KEY = "nextly-theme-lab";
 export interface Selection {
   theme: string;
   density: DensityId;
+  /**
+   * Whether the contributor picked this density themselves.
+   *
+   * Recorded rather than inferred. Inferring it -- "the density still matches
+   * the current theme's recommendation, so nobody chose it" -- has no answer
+   * for the shipped selection, which recommends nothing, so passing through
+   * the resting state turned a following density into a chosen one and the
+   * next theme was shown at the wrong metrics.
+   */
+  densityChosen: boolean;
 }
 
 /**
@@ -39,6 +49,7 @@ export const SHIPPED_THEME = "shipped";
 export const DEFAULT_SELECTION: Selection = {
   theme: SHIPPED_THEME,
   density: "default",
+  densityChosen: false,
 };
 
 // Every theme this build knows about, Nextly originals and tweakcn presets
@@ -88,6 +99,10 @@ export function readSelection(): Selection {
         parsed.density && KNOWN_DENSITIES.has(parsed.density)
           ? parsed.density
           : DEFAULT_SELECTION.density,
+      // Absent in anything an older build stored, which reads as "not
+      // chosen" -- the safe direction: a density that was in fact chosen goes
+      // back to following, rather than a following one being frozen forever.
+      densityChosen: parsed.densityChosen === true,
     };
   } catch {
     return DEFAULT_SELECTION;
@@ -97,6 +112,52 @@ export function readSelection(): Selection {
 export function writeSelection(selection: Selection): void {
   if (typeof localStorage === "undefined") return;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(selection));
+  // `storage` events fire only in OTHER documents, so a same-tab write is
+  // invisible to any other hook instance without this. The switcher and the
+  // gallery are both mounted on `/theme-lab`.
+  window.dispatchEvent(new Event(SELECTION_EVENT));
+}
+
+/** Same-document notification that the stored selection changed. */
+const SELECTION_EVENT = "nextly-theme-lab-selection";
+
+/**
+ * The snapshot `useSyncExternalStore` compares between renders.
+ *
+ * Cached deliberately: the hook compares snapshots by identity, so returning a
+ * fresh object from every read would look like a change on every render and
+ * spin. It is replaced only when the serialised value actually differs.
+ */
+let snapshot: Selection = DEFAULT_SELECTION;
+let snapshotSource = JSON.stringify(DEFAULT_SELECTION);
+
+function getSelectionSnapshot(): Selection {
+  const current = readSelection();
+  const serialised = JSON.stringify(current);
+  if (serialised !== snapshotSource) {
+    snapshot = current;
+    snapshotSource = serialised;
+  }
+  return snapshot;
+}
+
+/**
+ * What the server rendered, and therefore what the hydrating client render
+ * must produce too. Constant: the server has no storage to read.
+ */
+function getServerSelectionSnapshot(): Selection {
+  return DEFAULT_SELECTION;
+}
+
+function subscribeToSelection(onChange: () => void): () => void {
+  window.addEventListener(SELECTION_EVENT, onChange);
+  // Cross-tab: changing the theme in one tab should not leave another showing
+  // a selection that is no longer stored.
+  window.addEventListener("storage", onChange);
+  return () => {
+    window.removeEventListener(SELECTION_EVENT, onChange);
+    window.removeEventListener("storage", onChange);
+  };
 }
 
 /**
@@ -107,13 +168,41 @@ export function writeSelection(selection: Selection): void {
  * this last set.
  */
 export function useThemeLab() {
-  // Lazy initialiser reads localStorage synchronously before first paint
-  // instead of via a setState call inside an effect, which the
-  // react-hooks/set-state-in-effect rule flags: readSelection already
-  // returns the default when localStorage doesn't exist (server render), so
-  // the server and first client render stay identical and hydration has
-  // nothing to reconcile.
-  const [selection, setSelection] = useState<Selection>(() => readSelection());
+  // The persisted selection is read AFTER mount, never during the render that
+  // hydrates.
+  //
+  // A lazy initialiser calling `readSelection()` looked safe because that
+  // function returns the default when `localStorage` is undefined -- but that
+  // guard only covers the server. On the client's first render localStorage
+  // exists, so the initialiser returned the STORED value while the server had
+  // rendered the default. The gallery renders those two states as different
+  // markup (`Active` versus an `Apply` button), so React found a mismatched
+  // tree and discarded the subtree it had just hydrated.
+  //
+  // `useSyncExternalStore` is the shape React provides for exactly this: it
+  // uses the server snapshot for the hydrating render on the client too, then
+  // re-renders from the client snapshot once mounted. The alternative -- an
+  // effect that calls setState -- reaches the same place through an extra
+  // render React cannot see coming.
+  const stored = useSyncExternalStore(
+    subscribeToSelection,
+    getSelectionSnapshot,
+    getServerSelectionSnapshot
+  );
+
+  const selection = stored;
+
+  // Storage is the single source of truth, and a write is what causes a
+  // render. No local copy of the selection exists to fall out of step with
+  // it: the switcher and the gallery are both mounted on `/theme-lab`, and a
+  // local copy in each would be two answers to one question.
+  const setSelection = useCallback(
+    (next: Selection | ((prev: Selection) => Selection)) => {
+      const base = readSelection();
+      writeSelection(typeof next === "function" ? next(base) : next);
+    },
+    []
+  );
 
   useEffect(() => {
     const apply = () => {
@@ -156,7 +245,6 @@ export function useThemeLab() {
     };
 
     apply();
-    writeSelection(selection);
 
     // Observes the whole body subtree deliberately. The portal container is
     // created lazily by a ref callback after the shell's first commit, and
@@ -173,42 +261,50 @@ export function useThemeLab() {
     return () => observer.disconnect();
   }, [selection]);
 
-  const setTheme = useCallback((theme: string) => {
-    setSelection(prev => {
-      // Returning to the shipped theme leaves density alone: it is a separate
-      // axis, and dropping a palette override is not a reason to discard a
-      // density the contributor chose.
-      if (theme === SHIPPED_THEME) return { ...prev, theme };
-      const nextTheme = THEMES_BY_ID.get(theme);
-      if (!nextTheme) return prev;
-      const prevTheme = THEMES_BY_ID.get(prev.theme);
+  const setTheme = useCallback(
+    (theme: string) => {
+      setSelection(prev => {
+        // Returning to the shipped theme leaves density alone: it is a separate
+        // axis, and dropping a palette override is not a reason to discard a
+        // density the contributor chose.
+        if (theme === SHIPPED_THEME) return { ...prev, theme };
+        const nextTheme = THEMES_BY_ID.get(theme);
+        if (!nextTheme) return prev;
+        // Picking a theme applies its intended complete look, including its
+        // recommended density -- unless the contributor has chosen a density
+        // themselves, which a theme switch must not silently discard.
+        //
+        // Whether they have is RECORDED, not inferred. It used to be derived by
+        // comparing the current density against the previous theme's
+        // recommendation, and that inference had no answer for the shipped
+        // sentinel, which recommends nothing: picking Sand (compact), returning
+        // to shipped, then picking Calm left Calm at compact, because compact no
+        // longer matched the default and so read as a deliberate choice nobody
+        // had made. Passing through the resting state converted a following
+        // density into a chosen one.
+        const density = prev.densityChosen
+          ? prev.density
+          : nextTheme.recommendedDensity;
 
-      // Picking a theme applies its intended complete look (its recommended
-      // density) -- but only if the user hasn't already steered density away
-      // from what the PREVIOUS theme recommended. This is derived from the
-      // persisted selection rather than a separate "user touched this" flag:
-      // a density still sitting at what the last theme recommended is
-      // "following" and moves with the new theme; one that has drifted from
-      // it is a deliberate choice and is left alone across the switch, so it
-      // can't be silently overridden by picking a theme.
-      // From the shipped selection there is no previous theme to have made a
-      // recommendation, so "following" means the density is still the one
-      // nobody chose. Without this, picking a candidate from the resting state
-      // -- the common path -- would show it at the wrong density.
-      const following = prevTheme
-        ? prev.density === prevTheme.recommendedDensity
-        : prev.density === DEFAULT_SELECTION.density;
-      const density = following ? nextTheme.recommendedDensity : prev.density;
+        return { ...prev, theme, density };
+      });
+    },
+    [setSelection]
+  );
 
-      return { theme, density };
-    });
-  }, []);
+  const setDensity = useCallback(
+    (density: DensityId) => {
+      // Choosing a density marks it chosen, which is what stops a later theme
+      // switch from replacing it with that theme's recommendation.
+      setSelection(prev => ({ ...prev, density, densityChosen: true }));
+    },
+    [setSelection]
+  );
 
-  const setDensity = useCallback((density: DensityId) => {
-    setSelection(prev => ({ ...prev, density }));
-  }, []);
-
-  const reset = useCallback(() => setSelection(DEFAULT_SELECTION), []);
+  const reset = useCallback(
+    () => setSelection(DEFAULT_SELECTION),
+    [setSelection]
+  );
 
   return {
     ...selection,

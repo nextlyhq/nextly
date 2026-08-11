@@ -96,12 +96,20 @@ describe("theme lab selection", () => {
   });
 
   it("round-trips a selection", () => {
-    writeSelection({ theme: "sand", density: "compact" });
-    expect(readSelection()).toEqual({ theme: "sand", density: "compact" });
+    writeSelection({ theme: "sand", density: "compact", densityChosen: false });
+    expect(readSelection()).toEqual({
+      theme: "sand",
+      density: "compact",
+      densityChosen: false,
+    });
   });
 
   it("falls back to the shipped theme for an unknown id", () => {
-    writeSelection({ theme: "deleted", density: "default" });
+    writeSelection({
+      theme: "deleted",
+      density: "default",
+      densityChosen: false,
+    });
     expect(readSelection().theme).toBe(SHIPPED_THEME);
   });
 
@@ -109,10 +117,15 @@ describe("theme lab selection", () => {
     // Not hypothetical: every browser that used the 54-theme lab has one of
     // the pruned ids persisted. `graphite` was a real theme until the set was
     // shortlisted, which is exactly the shape of id that arrives here.
-    writeSelection({ theme: "graphite", density: "default" });
+    writeSelection({
+      theme: "graphite",
+      density: "default",
+      densityChosen: false,
+    });
     expect(readSelection()).toEqual({
       theme: SHIPPED_THEME,
       density: "default",
+      densityChosen: false,
     });
   });
 
@@ -126,6 +139,7 @@ describe("theme lab selection", () => {
     expect(readSelection()).toEqual({
       theme: "sand",
       density: DEFAULT_SELECTION.density,
+      densityChosen: false,
     });
   });
 
@@ -146,11 +160,19 @@ describe("theme lab selection", () => {
         density: "compact",
       })
     );
-    expect(readSelection()).toEqual({ theme: "sand", density: "compact" });
+    expect(readSelection()).toEqual({
+      theme: "sand",
+      density: "compact",
+      densityChosen: false,
+    });
   });
 
   it("recognises a tweakcn preset id as known", () => {
-    writeSelection({ theme: "tweakcn-vercel", density: "default" });
+    writeSelection({
+      theme: "tweakcn-vercel",
+      density: "default",
+      densityChosen: false,
+    });
     expect(readSelection().theme).toBe("tweakcn-vercel");
   });
 });
@@ -206,6 +228,45 @@ describe("theme lab density follow", () => {
 
       hook.act(() => hook.current.setTheme("calm"));
       expect(hook.current.density).toBe("comfortable");
+    } finally {
+      hook.unmount();
+    }
+  });
+
+  it("keeps following through the shipped selection", () => {
+    const hook = renderThemeLab();
+    try {
+      // The resting state recommends nothing, which is what broke this. When
+      // "following" was inferred by comparing the density against the current
+      // theme's recommendation, returning to shipped left a density that
+      // matched no recommendation -- so it read as a deliberate choice nobody
+      // had made, and the next theme was shown at the previous theme's
+      // metrics instead of its own.
+      hook.act(() => hook.current.setTheme("calm"));
+      expect(hook.current.density).toBe("comfortable");
+
+      hook.act(() => hook.current.setTheme(SHIPPED_THEME));
+      // Density is a separate axis; dropping the palette override does not
+      // discard it.
+      expect(hook.current.density).toBe("comfortable");
+
+      hook.act(() => hook.current.setTheme("signal"));
+      expect(hook.current.density).toBe("default");
+    } finally {
+      hook.unmount();
+    }
+  });
+
+  it("still respects a chosen density through the shipped selection", () => {
+    // The mirror case. Passing through the resting state must not FORGET a
+    // real choice either, which a naive "reset following on shipped" fix
+    // would have done.
+    const hook = renderThemeLab();
+    try {
+      hook.act(() => hook.current.setDensity("compact"));
+      hook.act(() => hook.current.setTheme(SHIPPED_THEME));
+      hook.act(() => hook.current.setTheme("calm"));
+      expect(hook.current.density).toBe("compact");
     } finally {
       hook.unmount();
     }
