@@ -137,8 +137,6 @@ const PROVIDER_TAGS: ReadonlySet<symbol> = new Set([
   Symbol.for("react.context"),
 ]);
 
-/** The built-in wrapper types, by the symbols React identifies them with. */
-
 /** The context consumer tag, whose single child must be a function. */
 const CONSUMER_TAG = Symbol.for("react.consumer");
 

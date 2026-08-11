@@ -745,9 +745,8 @@ describe("through the boundary", () => {
       // block built is not that: its children, its `value`, its `key` and `ref`,
       // and any iterator inside it are all author-controlled, and React reads
       // every one of them AGAIN after this check has returned. An exemption
-      // granted on a reading React need not repeat is an exemption that can be
-      // wrong, and it was wrong five separate ways — twice fatally, taking the
-      // page rather than the block.
+      // granted on a reading React need not repeat is one the author can
+      // invalidate afterwards, so it is not granted at all.
       //
       // So a node asking for an anchor on a wrapper root keeps its diagnostic,
       // and a block that genuinely draws nothing says so through
