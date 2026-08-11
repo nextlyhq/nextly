@@ -275,3 +275,83 @@ describe("editorReducer", () => {
     expect(s.past.length).toBeLessThanOrEqual(50);
   });
 });
+
+describe("editorReducer — repairing a slot nothing declares", () => {
+  function docWithGhost(): {
+    doc: BlockDocument;
+    rootId: string;
+    ghostId: string;
+    keptId: string;
+  } {
+    const ghost = makeNode("core/heading", { text: "Invisible" });
+    const kept = makeNode("core/heading", { text: "On the canvas" });
+    const root = makeNode("core/container", {}, undefined, {
+      default: [kept],
+      legacy: [ghost],
+    });
+    return {
+      doc: { version: 1, root },
+      rootId: root.id,
+      ghostId: ghost.id,
+      keptId: kept.id,
+    };
+  }
+
+  it("REMOVE_FROM_SLOT drops the slot once its last child is gone", () => {
+    // The slot NAME is what refuses the save, so leaving an emptied key behind would leave the
+    // author with nothing to remove and a page that still will not save.
+    const { doc, rootId, ghostId } = docWithGhost();
+    const s = editorReducer(initialState(doc), {
+      type: "REMOVE_FROM_SLOT",
+      parentId: rootId,
+      slot: "legacy",
+      id: ghostId,
+    });
+
+    expect(s.document.root.slots?.legacy).toBeUndefined();
+    expect(findNode(s.document.root, ghostId)).toBeUndefined();
+    expect(s.dirty).toBe(true);
+  });
+
+  it("leaves the canvas selection alone, because the removed block was never on it", () => {
+    // `REMOVE` clears the selection unconditionally. Doing that here would take away the block
+    // the author is actually working on to discard one they cannot see.
+    const { doc, rootId, ghostId, keptId } = docWithGhost();
+    let s = editorReducer(initialState(doc), { type: "SELECT", id: keptId });
+    s = editorReducer(s, {
+      type: "REMOVE_FROM_SLOT",
+      parentId: rootId,
+      slot: "legacy",
+      id: ghostId,
+    });
+
+    expect(s.selectedId).toBe(keptId);
+  });
+
+  it("clears the selection when the removed subtree contained it", () => {
+    // The other direction: a selection pointing at a node that no longer exists.
+    const { doc, rootId, ghostId } = docWithGhost();
+    let s = editorReducer(initialState(doc), { type: "SELECT", id: ghostId });
+    s = editorReducer(s, {
+      type: "REMOVE_FROM_SLOT",
+      parentId: rootId,
+      slot: "legacy",
+      id: ghostId,
+    });
+
+    expect(s.selectedId).toBeNull();
+  });
+
+  it("is undoable, so a removal the author regrets is recoverable", () => {
+    const { doc, rootId, ghostId } = docWithGhost();
+    let s = editorReducer(initialState(doc), {
+      type: "REMOVE_FROM_SLOT",
+      parentId: rootId,
+      slot: "legacy",
+      id: ghostId,
+    });
+    s = editorReducer(s, { type: "UNDO" });
+
+    expect(findNode(s.document.root, ghostId)).toBeDefined();
+  });
+});

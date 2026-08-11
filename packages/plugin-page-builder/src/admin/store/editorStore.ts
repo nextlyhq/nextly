@@ -12,6 +12,7 @@ import {
   makeNode,
   moveNode,
   reidSubtree,
+  removeFromSlot,
   removeNode,
   updateNode,
 } from "../../core/tree";
@@ -62,6 +63,15 @@ export type EditorAction =
     }
   | { type: "MOVE"; id: string; parentId: string; slot: string; index: number }
   | { type: "REMOVE"; id: string }
+  /**
+   * Discard a block from a named slot, dropping the slot once nothing is left in it.
+   *
+   * Distinct from `REMOVE` because the block it addresses is one the canvas never drew: it sits
+   * under a slot name its parent does not declare, so there is no element to select and `REMOVE`
+   * — which searches every slot and keeps the emptied key — would leave behind the very thing
+   * that refuses the save.
+   */
+  | { type: "REMOVE_FROM_SLOT"; parentId: string; slot: string; id: string }
   | { type: "DUPLICATE"; id: string }
   | { type: "UPDATE_PROPS"; id: string; props: Record<string, unknown> }
   | {
@@ -173,6 +183,23 @@ export function editorReducer(
     case "REMOVE": {
       const next = removeNode(root, action.id);
       return { ...commit(state, next), selectedId: null };
+    }
+
+    case "REMOVE_FROM_SLOT": {
+      const next = removeFromSlot(
+        root,
+        action.parentId,
+        action.slot,
+        action.id
+      );
+      // The discarded block was never on the canvas, so the author's selection is unrelated to it
+      // and clearing it unconditionally would take away work they can see. It only has to go when
+      // the removed subtree contained it.
+      const selectedId =
+        state.selectedId && !findNode(next, state.selectedId)
+          ? null
+          : state.selectedId;
+      return commit(state, next, selectedId);
     }
 
     case "DUPLICATE":
