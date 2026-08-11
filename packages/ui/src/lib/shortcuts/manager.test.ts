@@ -2286,6 +2286,38 @@ describe("a permitted key held while the stack changes", () => {
   });
 });
 
+describe("a permitted key that becomes an accelerator with no layer to catch it", () => {
+  it("suppresses the browser even when nothing matches", () => {
+    // A plain `w` bound with `preventDefault: false`, held, then Ctrl added. No binding matches
+    // Ctrl+W and there is NO blocking layer to report the keystroke as held, so the re-offer
+    // returns "none" — and the browser closes the tab on a press this manager still owns.
+    //
+    // Dispatched away from a field on purpose. The existing modifier-change test types into an
+    // input under a blocking modal, so it only ever exercises the "blocked" outcome; a bare
+    // character binding does not fire while typing at all, so this transition needs a target
+    // where the first press is genuinely consumed.
+    const manager = managerFor(false);
+    manager.register([binding("w", vi.fn(), { preventDefault: false })], {
+      name: "shell",
+      depth: 0,
+    });
+
+    const first = press("w", { code: "KeyW" });
+    expect(manager.handle(first)).toBe(true);
+    // The control: while it is still the binding's own keystroke, the default is left alone.
+    expect(first.defaultPrevented).toBe(false);
+
+    const accelerator = press("w", {
+      code: "KeyW",
+      ctrlKey: true,
+      repeat: true,
+    });
+    manager.handle(accelerator);
+
+    expect(accelerator.defaultPrevented).toBe(true);
+  });
+});
+
 describe("a held key whose binding falsifies its own condition", () => {
   it("re-decides its repeats", () => {
     // The binding lives IN the blocking layer, which is already up before the key goes down, so

@@ -840,7 +840,15 @@ export function createShortcutManager(
           event.preventDefault();
         } else {
           const still = offer([event], event, typing, false);
-          if (still === "blocked" && !insertsText(event, typing)) {
+          // "fired" means a binding matched and its own `preventDefault` policy has already been
+          // applied, so nothing more is decided here. Every other outcome leaves a press this
+          // manager still owns with no one applying a policy to it, and the browser must not act
+          // on a key we claim — unless it is text, which is the one thing a grab may never eat.
+          //
+          // The "none" case is not hypothetical: hold a plain `w` bound with
+          // `preventDefault: false`, then add Ctrl. No binding matches Ctrl+W, there may be no
+          // blocking layer to report it, and the browser closes the tab.
+          if (still !== "fired" && !insertsText(event, typing)) {
             event.preventDefault();
           }
         }
