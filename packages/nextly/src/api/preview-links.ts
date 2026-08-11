@@ -65,6 +65,27 @@ async function settingsService(): Promise<GeneralSettingsService> {
  * Read here rather than at module load so a misconfigured deployment fails the
  * one request that needs it, with a remedy, instead of refusing to boot.
  */
+/**
+ * Run an access-enforced read and report an unreadable entry as `null`.
+ *
+ * Two outcomes are deliberately collapsed: a row a row-level rule hides, and an
+ * id that matches nothing. Both mean the caller gets no link, and answering them
+ * differently would tell an unauthorized caller which entries exist.
+ *
+ * Only a not-found is translated. Any other failure keeps its own error, so a
+ * broken database is not reported as an ordinary denial.
+ */
+async function readEntryAsCaller<T>(
+  read: () => Promise<T | null>
+): Promise<T | null> {
+  try {
+    return await read();
+  } catch (error) {
+    if (NextlyError.isNotFound(error)) return null;
+    throw error;
+  }
+}
+
 function previewSigningSecret(): string {
   const secret = env.NEXTLY_SECRET;
   if (!secret) {
@@ -109,23 +130,32 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
   // either, rather than a token for nothing.
   const nextly = await getCachedNextly();
   const roles = await resolveRoleSlugs(auth);
-  const visible = await nextly.findByID({
-    collection,
-    id: entryId,
-    depth: 0,
-    overrideAccess: false,
-    // Built the one way a caller is built, so this probe reaches the verdict
-    // the caller's own read would. Claims matter here specifically: a stored
-    // `custom` rule that decides on one is absence-tolerant, so a probe that
-    // dropped them would admit exactly the caller the rule refuses.
-    user: buildUserContext({
-      claims: auth.claims,
-      id: auth.userId,
-      name: auth.userName,
-      email: auth.userEmail,
-      roles,
-    }),
-  });
+  // `findByID` reports an unreadable row by THROWING `NOT_FOUND`, not by
+  // returning null: null comes back only under `disableErrors`, which would also
+  // swallow a genuine internal failure and report it here as an ordinary denial.
+  // So the not-found case is translated and everything else keeps its own status
+  // — otherwise the throw skips the check below and the caller is told the entry
+  // does not exist, which is both the wrong answer and a different one from the
+  // answer a hidden row gets.
+  const visible = await readEntryAsCaller(() =>
+    nextly.findByID({
+      collection,
+      id: entryId,
+      depth: 0,
+      overrideAccess: false,
+      // Built the one way a caller is built, so this probe reaches the verdict
+      // the caller's own read would. Claims matter here specifically: a stored
+      // `custom` rule that decides on one is absence-tolerant, so a probe that
+      // dropped them would admit exactly the caller the rule refuses.
+      user: buildUserContext({
+        claims: auth.claims,
+        id: auth.userId,
+        name: auth.userName,
+        email: auth.userEmail,
+        roles,
+      }),
+    })
+  );
   if (!visible) {
     throw NextlyError.forbidden({
       logContext: {
