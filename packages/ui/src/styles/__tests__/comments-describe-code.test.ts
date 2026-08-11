@@ -310,10 +310,16 @@ function violationsInSource(
     // A rule that invents its own violations gets switched off faster than one
     // that misses some, so both directions are pinned below.
     // A BLANK comment line ends the paragraph. It satisfies every continuity
-    // test above -- it is adjacent, it reaches its newline, and it begins with
-    // its marker -- so without this a run reads straight across the gap
-    // between two paragraphs and builds a phrase out of the end of one and the
-    // start of the next, neither of which said it.
+    // test above -- adjacent, reaching its newline, beginning with its marker
+    // -- so nothing else here stops a run reading across the gap between two
+    // paragraphs and building a phrase out of the end of one and the start of
+    // the next, neither of which said it.
+    //
+    // Nothing else INTENTIONALLY, at least. An empty line normalises to "",
+    // which puts a second space in the join, and every pattern above wants a
+    // single literal space -- so today the gap is bridged by an accident of
+    // the pattern list rather than by a decision. This makes it a decision,
+    // and keeps it true for a pattern written with `\s+`.
     const parts = [normalize(current.text)];
     for (let j = index; ; j++) {
       const here = lines[j];
@@ -486,10 +492,18 @@ describe("comments describe the code, not the process", () => {
       )
     ).toEqual([]);
 
-    // A BLANK comment line ends the paragraph. It passes every continuity test
-    // -- adjacent, reaching its newline, beginning with its marker -- so
-    // without an explicit stop a run reads across the gap and builds a phrase
-    // from the end of one paragraph and the start of the next.
+    // A BLANK comment line ends the paragraph, so a run cannot read across the
+    // gap and build a phrase from the end of one paragraph and the start of
+    // the next.
+    //
+    // These two cases cannot currently FAIL, and that is worth saying rather
+    // than leaving for someone to discover. Without the explicit stop, a blank
+    // line still separates the paragraphs by accident: it normalises to an
+    // empty string, which contributes a SECOND space to the join, and every
+    // pattern above matches a single literal space. So the guard is protecting
+    // against a property of the pattern list, not against a live defect --
+    // add one pattern written with `\s+` and the accident stops holding while
+    // the guard keeps working. Pinned as a regression guard on that basis.
     expect(
       kinds(
         ["// an explanation ending in phase", "//", "// 2 starts a topic"].join(
