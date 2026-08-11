@@ -98,7 +98,14 @@ export function ProviderConfigFields({
     <SettingsSection label={`${descriptor.label} Configuration`}>
       {descriptor.configFields.map(field => (
         <ProviderConfigField
-          key={field.name}
+          // Keyed by TYPE as well as name, so switching provider remounts the
+          // field rather than reusing it. Two providers can declare the same
+          // path — the built-in Resend and SendLayer both use `apiKey` — and a
+          // reused `SecretField` would carry its "the user has replaced this"
+          // state across the switch, so returning to the original type would
+          // leave the restored mask no longer treated as one: focusing would
+          // not clear it and typing would append to it.
+          key={`${descriptor.type}:${field.name}`}
           field={field}
           control={control}
           disabled={disabled}

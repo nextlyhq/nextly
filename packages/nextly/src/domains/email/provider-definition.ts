@@ -316,6 +316,50 @@ function assertDefaultMatchesKind(
 }
 
 /**
+ * Reject a default on a credential, and a blank-as-empty on a kind that has no
+ * empty value.
+ *
+ * **A secret default cannot be honoured.** `toDescriptor` strips it, correctly:
+ * the descriptor is served to anyone holding read or create, so forwarding a
+ * credential there would hand out the value stored configuration is masked to
+ * protect. And nothing server-side applies descriptor defaults -- they are a
+ * hint for the form and nothing else. A declared secret default is therefore
+ * inert in both directions, while looking to its author like a working
+ * fallback. A provider that wants one reads its environment inside
+ * `parseConfig`, which is authoritative and never leaves the server.
+ *
+ * **`blankAs: "empty"` needs a kind whose blank IS an empty string.** A number
+ * input's blank normalises to absent long before the payload is built, and a
+ * switch always holds a value, so declaring it on either is a request the form
+ * cannot carry out.
+ */
+function assertDeclarationsCanBeHonoured(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  if (field.secret === true && field.default !== undefined) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" gives the credential "${field.name}" a default. A descriptor is served to any caller who can read providers, so a secret default is withheld from it — and nothing applies descriptor defaults on the server, so it would never be used. Read the fallback inside \`parseConfig\` instead.`,
+      logContext: { type, field: field.name },
+    });
+  }
+
+  if (
+    field.blankAs === "empty" &&
+    field.kind !== "text" &&
+    field.kind !== "password" &&
+    field.kind !== "select"
+  ) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" declares \`blankAs: "empty"\` on the ${field.kind} field "${field.name}". Only a text, password or select field has an empty string to send; a blank number is absent and a switch is never blank.`,
+      logContext: { type, field: field.name, kind: field.kind },
+    });
+  }
+}
+
+/**
  * Reject a default that its own field would refuse.
  *
  * A form initialises from the default and validates against the same
@@ -605,6 +649,13 @@ export function assertConfigFieldsAreUsable(
     // unrenderable kind would report the wrong problem.
     assertKindIsRenderable(type, field);
     assertFieldNameIsWalkable(type, field);
+    // Before every rule that reads `secret`: a credential declared on a
+    // control that cannot hold one is the more fundamental mistake, and
+    // reporting a rule about its default first would send the author to the
+    // wrong line.
+    if (field.secret === true && !SECRET_CAPABLE_KINDS.includes(field.kind)) {
+      throw secretFieldMustBeTextual(type, field);
+    }
     // Before the satisfiability rules, which compare these numbers: `NaN`
     // fails every comparison silently, so a bound of `NaN` would pass
     // "min <= max" and be reported as fine.
@@ -612,12 +663,10 @@ export function assertConfigFieldsAreUsable(
     assertTextLengthIsSatisfiable(type, field);
     assertDefaultMatchesKind(type, field);
     assertDefaultSatisfiesConstraints(type, field);
+    assertDeclarationsCanBeHonoured(type, field);
     assertOptionalBooleanHasDefault(type, field);
     assertSelectIsChoosable(type, field);
     assertNumericBoundsAreSatisfiable(type, field);
-    if (field.secret === true && !SECRET_CAPABLE_KINDS.includes(field.kind)) {
-      throw secretFieldMustBeTextual(type, field);
-    }
   }
   assertNoOverlappingPaths(type, fields);
 }
@@ -886,11 +935,13 @@ export function toDescriptor(
         provider.capabilities?.connectionTest === true &&
         typeof provider.testConnectionFrom === "function",
     },
-    // A default on a secret field is stripped. The type permits one -- a
-    // provider might reasonably want `default: process.env.PROVIDER_KEY` -- and
-    // the descriptor is served to anyone holding read or create, so forwarding
-    // it would hand out the credential that stored configuration is masked to
-    // protect. The field is still described; only its value is withheld.
+    // A default on a secret field is stripped, even though registration
+    // refuses one: `RegisteredEmailProvider` is structural, so a hand-built
+    // provider can reach a descriptor build without having been registered.
+    // The descriptor is served to anyone holding read or create, and
+    // forwarding a credential there would hand out the value stored
+    // configuration is masked to protect. The field is still described; only
+    // its value is withheld.
     configFields: provider.configFields.map(field =>
       field.secret === true && field.default !== undefined
         ? { ...field, default: undefined }

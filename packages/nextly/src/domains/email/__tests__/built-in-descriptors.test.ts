@@ -819,3 +819,66 @@ describe("a descriptor that would open the form already broken", () => {
     ).not.toThrow();
   });
 });
+
+describe("a declaration the form could not carry out", () => {
+  const base = {
+    type: "fixture",
+    label: "Fixture",
+    parseConfig: (input: unknown) => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  };
+
+  it("refuses a default on a credential", () => {
+    // `toDescriptor` withholds it, correctly — the descriptor is served to any
+    // caller who can read providers — and nothing applies descriptor defaults
+    // on the server. It is inert in both directions while reading to its
+    // author like a working fallback.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          {
+            name: "apiKey",
+            label: "API Key",
+            kind: "password",
+            secret: true,
+            default: "from-the-environment",
+          },
+        ],
+      })
+    ).toThrow(/parseConfig/);
+  });
+
+  it("refuses blankAs empty on a number", () => {
+    // A blank number normalises to absent long before the payload is built, so
+    // the empty string it promises to send never exists.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          {
+            name: "retries",
+            label: "Retries",
+            kind: "number",
+            blankAs: "empty",
+          },
+        ],
+      })
+    ).toThrow(/blankAs/);
+  });
+
+  it("accepts blankAs empty on a text field", () => {
+    // The control: the built-in SMTP credentials rely on this, so a rule that
+    // rejected every `blankAs` would break the documented Mailpit setup.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          { name: "auth.user", label: "User", kind: "text", blankAs: "empty" },
+        ],
+      })
+    ).not.toThrow();
+  });
+});
