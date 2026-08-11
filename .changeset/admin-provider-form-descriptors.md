@@ -69,8 +69,9 @@ all and nothing in the trail to say why.
 Inside that transaction the demotion runs first. PostgreSQL carries a partial
 unique index over `is_default = true` and checks it as each statement runs, so a
 row taking the default while the incumbent still holds it is rejected outright.
-The promotion target is checked before either statement, so a demotion is never
-spent on a promotion that then matches nothing.
+A promotion that then matches no row — because the provider was deleted in the
+meantime — throws rather than commits, which takes its own demotion back with
+it.
 
 A masked value is no longer written back over what it stood for. The read masks
 a configuration path the provider does not describe — a credential left behind
@@ -83,3 +84,23 @@ Only a handover opens a transaction. Wrapping every provider write in one cost
 correctness on SQLite, where the transaction is `BEGIN IMMEDIATE` on a single
 shared connection: a second ordinary write arriving while the first was open
 could not begin at all.
+
+An edit form left open reconciles a newer version of the record it is showing.
+The detail query refetches on focus, so a change made elsewhere used to be held
+and written back on the next save, reverting it from an edit that never touched
+those fields. Fields the operator has touched keep what they typed. If the
+record's TYPE changed, the configuration is rebuilt from the new provider rather
+than carried across — otherwise one provider's credential is submitted as
+another's wherever both declare the same field name.
+
+A stored value that predates a tightened constraint no longer blocks unrelated
+edits. A provider upgrade that lowers `maxLength`, or narrows a numeric range,
+made every provider holding an older value unrenameable and undeactivatable. The
+provider's own parser stays the authority on what it accepts; the descriptor
+governs replacements.
+
+Provider metadata that no descriptor can publish is refused at registration
+rather than at the first request for the catalog: `options` that is not an array
+of `{ value, label }` on any field kind, two select options sharing a value, and
+`capabilities` given as an array. One malformed provider previously took the
+whole catalog endpoint down, and with it every provider's form.

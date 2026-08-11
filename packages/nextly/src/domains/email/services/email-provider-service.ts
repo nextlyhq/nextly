@@ -761,31 +761,6 @@ export class EmailProviderService extends BaseService {
    * concurrent promotions still both commit, on MySQL and SQLite as well as
    * Postgres, because nothing here locks the rows it read.
    */
-  /**
-   * Whether the row a handover is about to promote is still there.
-   *
-   * Read inside the transaction and BEFORE the demotion, because the demotion
-   * has to come first and cannot be taken back without one. A promotion that
-   * matches nothing after the incumbent has been stripped leaves the
-   * installation with no default at all, and that is the state this ordering
-   * exists to make unreachable.
-   */
-  private async promotionTargetExists(
-    tx: ProviderTransaction,
-    id: string
-  ): Promise<boolean> {
-    const rows = await tx
-      .select({
-        id: this.emailProviders.id,
-        name: this.emailProviders.name,
-        type: this.emailProviders.type,
-      })
-      .from(this.emailProviders)
-      .where(eq(this.emailProviders.id, id));
-
-    return rows.length > 0;
-  }
-
   private async demoteOtherDefaults(
     tx: ProviderTransaction,
     now: Date,
