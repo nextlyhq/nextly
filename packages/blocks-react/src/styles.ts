@@ -706,8 +706,21 @@ export function resolvePageStyles(
   // to reuse a sheet from, but deciding that needs the rules rather than the
   // label, and a reader that has to reason about the rules is one that can get
   // it wrong quietly.
+  //
+  // A sheet compiled under an ANONYMOUS predicate is stale against every policy
+  // including no policy at all, which is why its own stamp is not enough to
+  // decide by. Two transitions make that concrete and they fail in opposite
+  // directions: to another anonymous predicate, where a stable sentinel would
+  // compare equal to itself and reuse CSS the new predicate never judged; and
+  // away from the predicate entirely, where absence is ALSO the honest stamp for
+  // an unrestricted compile, so a restrictive artifact would be reused and the
+  // URLs it dropped would stay missing for good. Neither a stable stamp nor an
+  // absent one separates those, so the stamp records what compiled the sheet and
+  // this comparison refuses it outright.
   const compiledUnderAnotherPolicy =
-    styles !== undefined && styles.fetchPolicyId !== options.fetchPolicyId;
+    styles !== undefined &&
+    (styles.fetchPolicyId !== options.fetchPolicyId ||
+      styles.fetchPolicyId === UNIDENTIFIED_FETCH_POLICY);
 
   if (
     styles &&
@@ -756,17 +769,7 @@ export function resolvePageStyles(
     return toPageStyles(
       compilePageCss(document, context),
       context.scope,
-      // The sentinel is a COMPARISON value, never a stamp. It says "this policy
-      // has no identity", and an artifact carrying it would answer that question
-      // with a stable string — so a later read under a DIFFERENT anonymous
-      // predicate would find its own sentinel on the stored sheet, compare equal,
-      // and reuse CSS that predicate never judged. Stamped as absent instead,
-      // which reads as "compiled under no policy" and cannot match any policy in
-      // force. That makes a sheet compiled under an anonymous predicate
-      // permanently uncacheable, which is exactly what having no identity means.
-      options.fetchPolicyId === UNIDENTIFIED_FETCH_POLICY
-        ? undefined
-        : options.fetchPolicyId
+      options.fetchPolicyId
     );
   }
   return {

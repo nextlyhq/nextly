@@ -308,16 +308,15 @@ describe("what a page is compiled WITH", () => {
     expect(read.styles.css).toBe("");
   });
 
-  it("never stamps a sheet with the anonymous-policy sentinel", () => {
-    // The sentinel is a comparison value, not a stamp. Stamped, it would answer
-    // "which policy compiled this?" with a stable string, so a later read under
-    // a DIFFERENT anonymous predicate would find its own sentinel on the stored
-    // sheet, compare equal, and reuse CSS that predicate never judged.
+  it("never reuses a sheet compiled under an anonymous predicate", () => {
+    // An anonymous predicate has no identity, so a sheet it compiled is stale
+    // against EVERY later policy. Two transitions break in opposite directions
+    // and neither a stable stamp nor an absent one separates them, so the stamp
+    // records what compiled the sheet and the comparison refuses it outright.
     //
-    // Asserted through a `url(...)` the two predicates disagree about, because
-    // bytes alone cannot separate reuse from a recompile that happens to produce
-    // the same sheet. The URL is the thing a fetch policy exists to decide, and
-    // it is what would actually be published.
+    // Asserted through a `url(...)` the predicates disagree about, because bytes
+    // alone cannot tell reuse from a recompile that happens to match. The URL is
+    // what a fetch policy exists to decide and what would actually be published.
     const fetching: BlockDocument = {
       formatVersion: DOCUMENT_FORMAT_VERSION,
       kind: "page",
@@ -341,17 +340,26 @@ describe("what a page is compiled WITH", () => {
       styleContext: { ...context, mayFetchUrl: () => true },
     });
     expect(permissive.styles.css).toContain("cdn.example.com");
-    // Nothing may carry the sentinel into storage.
-    expect(permissive.styles.fetchPolicyId).toBeUndefined();
+    expect(permissive.styles.fetchPolicyId).toBe(UNIDENTIFIED_FETCH_POLICY);
 
-    // A different anonymous predicate, which refuses that host.
+    // Transition one: another anonymous predicate, which refuses that host. A
+    // stable stamp would compare equal to itself here.
     const strict = preparePageForRead(fetching, {
       resolver: withPlugin,
       styles: permissive.styles,
       styleContext: { ...context, mayFetchUrl: () => false },
     });
-
     expect(strict.styles.css).not.toContain("cdn.example.com");
+
+    // Transition two: the predicate is removed entirely. Absence is also the
+    // honest stamp for an unrestricted compile, so stamping absence would have
+    // reused the restrictive sheet and left the URL missing for good.
+    const unrestricted = preparePageForRead(fetching, {
+      resolver: withPlugin,
+      styles: strict.styles,
+      styleContext: context,
+    });
+    expect(unrestricted.styles.css).toContain("cdn.example.com");
   });
 
   it("CONTROL: reuses the sheet when the caller states its policy identity", () => {
