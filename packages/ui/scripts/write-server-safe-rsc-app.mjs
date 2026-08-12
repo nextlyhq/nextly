@@ -188,10 +188,34 @@ const manifest = {
   type: "module",
 };
 
+// The export map publishes BOTH module systems, and only one of them is reachable from the page
+// above: a static `import` resolves each subpath's `import` condition, so the `.cjs` targets are
+// built, published, and never evaluated. Their wrappers are generated separately and can differ.
+//
+// Requiring them is not a simulation of a consumer, it is what a CommonJS consumer does — the same
+// installed package, through the same export map's `require` condition, on the same Node. A `.cjs`
+// file inside a `"type": "module"` package is CommonJS regardless of the manifest.
+const requireCheck = `const assert = require("node:assert");
+
+const subpaths = ${JSON.stringify(serverSafe.map(entry => specifier(entry.subpath)), null, 2)};
+
+for (const subpath of subpaths) {
+  const loaded = require(subpath);
+  // A namespace with no bindings loads exactly like a real module and would otherwise pass.
+  assert.ok(
+    loaded && typeof loaded === "object" && Object.keys(loaded).length > 0,
+    \`\${subpath} resolved through the require condition but exported nothing\`
+  );
+}
+
+console.log(\`Required \${subpaths.length} server-safe subpaths through the CommonJS condition.\`);
+`;
+
 mkdirSync(join(target, "app"), { recursive: true });
 writeFileSync(join(target, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 writeFileSync(join(target, "app", "page.jsx"), page);
 writeFileSync(join(target, "app", "layout.jsx"), layout);
+writeFileSync(join(target, "require-check.cjs"), requireCheck);
 
 console.log(
   `Wrote a Server Component importing ${serverSafe.length} server-safe subpaths ` +

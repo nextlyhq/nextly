@@ -261,6 +261,14 @@ jobs:
       - name: Verify the route was prerendered, naming every subpath
         run: node packages/ui/scripts/write-server-safe-rsc-app.mjs --verify /tmp/rsc-app
 
+      # The page above reaches only the `import` condition, so the `.cjs` targets are published and
+      # never evaluated even though the export map promises them. This loads them the way a
+      # CommonJS consumer does: same install, same export map, same Node.
+      - name: Evaluate the CommonJS targets the export map also publishes
+        run: |
+          cd /tmp/rsc-app
+          node require-check.cjs
+
   # A red nightly must surface without anyone watching the Actions tab. A red
   # pull request does not need an issue filed: it is already red on the PR, in
   # front of the person who caused it.
