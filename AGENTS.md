@@ -57,34 +57,44 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 ## Build and test (read this before running anything)
 
 - `pnpm build` builds all packages (turbo, dependency order).
-- `pnpm lint` does NOT need a build first. `pnpm test` does (turbo handles it
-  when run from the root).
-- `pnpm check-types` needs one for any package that imports a workspace sibling
-  through its package exports, and that is not a corner case: on a clean
-  checkout the root `pnpm check-types` EXITS 1, because `@nextlyhq/admin` cannot
-  resolve `@nextlyhq/ui`, `nextly/config` or `nextly/field-catalog` until their
-  `dist` exists. Nineteen of twenty-one packages pass, so the failure looks
-  local to one package rather than like a missing prerequisite.
+- `pnpm check-types` and `pnpm lint` BOTH need a build first. On a clean
+  checkout, measured with the cache forced off so the numbers are of work that
+  actually ran:
 
-  The specifier tells you which case you are in. `TS2307` naming a workspace
-  package (`nextly/...`, `@nextlyhq/...`) is a missing build, not a defect in
-  the code being checked — the same costume described in
-  `.claude/rules/verifying-merged-work.md`. Build just what that package needs:
+  | command                                         | result on a clean tree                             |
+  | ----------------------------------------------- | -------------------------------------------------- |
+  | `pnpm turbo run check-types --continue --force` | 6 of 21 successful, 18 packages reporting `TS2307` |
+  | `pnpm turbo run lint --continue --force`        | 8 of 22 successful                                 |
 
-  ```
-  pnpm --filter <pkg>^... build     # ^... is its dependencies, not the package
-  ```
+  `check-types` fails because a workspace import resolves through the sibling's
+  package exports to a `dist/index.d.ts` that does not exist yet. `lint` fails
+  for the same underlying reason through a different rule: `import-x/no-unresolved`
+  resolves the same specifiers, so an unbuilt sibling is an unresolved import.
 
-  A package importing no workspace sibling is genuinely build-free, which is why
-  the guarantee held for so long and why it fails without warning the first time
-  a package takes such a dependency.
+  Run `pnpm build` first. A per-package `pnpm --filter <pkg>^... build` builds
+  only that package's dependencies and is enough when you are checking one
+  package, but the failure is workspace-wide rather than local to one package.
 
-  `packages/admin` shows the half-measure that does not close this: it maps
-  `nextly` to `../nextly/src` with tsconfig `paths`, so the bare specifier
-  resolves from source, while its SUBPATHS and `@nextlyhq/ui` still do not.
-  Mapping a sibling's source is also not a general fix — it pulls that sibling's
-  whole program in, and under pnpm isolation its own devDependencies are not
-  visible from the consumer, so the errors change rather than stop.
+  **Measure these with `--force`.** Turbo caches both tasks, and a cached task
+  reports `Tasks: N successful` without running anything — so a warm cache from
+  an earlier built state reports a clean tree as passing. That is not a
+  hypothetical: the first version of this entry claimed 19 of 21 passing and
+  `lint` clean at 22 of 22, and both numbers came from cache hits.
+
+  `TS2307` naming a workspace package (`nextly/...`, `@nextlyhq/...`) is USUALLY
+  a missing build, and the rebuild is what confirms it. It is not proof on its
+  own: a misspelled specifier, a removed export-map subpath, or a broken
+  tsconfig path mapping produces exactly the same error, and no amount of
+  rebuilding fixes those. If the error survives a successful build of that
+  package's dependencies, it is a real resolution defect — see
+  `.claude/rules/verifying-merged-work.md`, which says to check what `main`
+  changed before calling any of this environmental.
+
+  Path mappings cover part of this and are not a general answer.
+  `packages/admin` maps the bare `nextly` specifier to `../nextly/src`, which is
+  why admin resolves it without a build while `packages/plugin-sdk`, which has
+  no such mapping, does not. Subpaths like `nextly/config` and
+  `nextly/field-catalog` are not covered by that mapping and still need `dist`.
 
 - CRITICAL: integration tests require built packages. Run them from the ROOT
   (`pnpm test:integration...`) so turbo builds first. Running
