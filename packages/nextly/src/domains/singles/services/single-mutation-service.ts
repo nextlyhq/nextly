@@ -46,6 +46,7 @@ import {
   type CollectionAccessRules,
   isSuperAdminContext,
 } from "../../../services/access";
+import { expansionAccess } from "../../../services/collections/trust-bound";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
@@ -2300,12 +2301,7 @@ export class SingleMutationService extends BaseService {
       updatedDoc = await this.queryService.expandUploadFields(
         updatedDoc,
         fieldConfigs,
-        {
-          user: options.user,
-          overrideAccess: options.overrideAccess,
-          trusted: options.trusted,
-          authenticatedScope: options.authenticatedScope,
-        }
+        expansionAccess(options)
       );
 
       // 10.6. Expand relationship fields with full related entry data.
