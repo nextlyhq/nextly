@@ -80,20 +80,16 @@ describe("DynamicPluginNav", () => {
   });
 
   /**
-   * The separating case, corrected. An earlier version asserted that a
-   * collections error suppressed the link, which encoded a bug as the control:
-   * `/admin/plugins` reads `admin-meta`, not collections, so it stays reachable
-   * during that failure and only the collection-derived entries are lost.
-   *
-   * What actually separates "renders the link always" from "renders it for the
-   * right users" is the capability, so that is the control.
+   * The separating case: what distinguishes "renders the link always" from
+   * "renders it for users who can open the page" is the capability, not the
+   * presence of data. A collections error is not that separator, because
+   * `/admin/plugins` reads `admin-meta` and stays reachable through one.
    */
   it("withholds the link from a collection reader who cannot open the page", () => {
-    // The panel must still RENDER for this user — they opened it to reach
-    // their plugin's collections — so a plugin collection is present. Without
-    // it the component returns early and the assertion below passes on the
-    // early return rather than on the link being gated, which is what an
-    // earlier version of this test did.
+    // The panel must still RENDER for this user, since they opened it to reach
+    // their plugin's collections, so a plugin collection is present. Without
+    // one the component returns early and the assertion below is satisfied by
+    // that return rather than by the gate under test.
     mockCanManageSettings = false;
     mockBranding = {
       plugins: [{ name: "@acme/p", collections: ["widgets"] }],
@@ -115,8 +111,7 @@ describe("DynamicPluginNav", () => {
 
     // Positive control on the component, not on any particular row: the panel
     // rendered something, so the missing link is a fact about the gate rather
-    // than about a component that returned null. An earlier version asserted
-    // only the absence, and passed on the early return instead of the gate.
+    // than about a component that returned null.
     expect(container).not.toBeEmptyDOMElement();
     expect(
       screen.queryByRole("link", { name: /installed plugins/i })
