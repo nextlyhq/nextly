@@ -20,8 +20,14 @@
  * major it was missing broke a consumer.
  *
  * Usage:
- *   node scripts/node-matrix.mjs            print the matrix as JSON
- *   node scripts/node-matrix.mjs --github   append `versions=<json>` to $GITHUB_OUTPUT
+ *   node scripts/node-matrix.mjs                 print the matrix as JSON
+ *   node scripts/node-matrix.mjs --github        write the outputs to $GITHUB_OUTPUT
+ *   node scripts/node-matrix.mjs --floor-only    the lowest floor alone, WITHOUT the network
+ *
+ * `--floor-only` exists because a pull request runs one leg, and that leg is derivable from the
+ * manifest alone. Fetching anyway would let an outage at nodejs.org fail a UI pull request that
+ * never needed the released majors — an outside dependency deciding whether unrelated work can
+ * merge. Scheduled runs, which consume the full matrix, still fetch.
  */
 import { appendFileSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -107,20 +113,29 @@ const invokedDirectly =
   process.argv[1].endsWith("node-matrix.mjs");
 
 if (invokedDirectly) {
+  const flags = new Set(process.argv.slice(2));
   const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
   const range = JSON.parse(readFileSync(join(root, "package.json"), "utf8"))
     .engines.node;
-  const versions = matrixFor(range, await releasedMajors());
+  const floor = lowestFloor(range);
+
+  // Both outputs carry the floor in floor-only mode, rather than one of them being empty. The
+  // workflow picks between them with an expression, and an empty list there would expand to a
+  // matrix of NO legs — a job that passes having run nothing, which is worse than the outage this
+  // mode exists to survive.
+  const versions = flags.has("--floor-only")
+    ? [floor]
+    : matrixFor(range, await releasedMajors());
   const payload = JSON.stringify(versions);
 
-  if (process.argv[2] === "--github") {
+  if (flags.has("--github")) {
     const out = process.env.GITHUB_OUTPUT;
     if (out === undefined) {
       console.error("GITHUB_OUTPUT is not set, so the matrix could not be published.");
       process.exit(1);
     }
     appendFileSync(out, `versions=${payload}\n`);
-    appendFileSync(out, `lowest=${JSON.stringify([lowestFloor(range)])}\n`);
+    appendFileSync(out, `lowest=${JSON.stringify([floor])}\n`);
   }
   console.log(payload);
 }

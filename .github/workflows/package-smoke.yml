@@ -207,9 +207,14 @@ jobs:
       # No install: the script reads the manifest and fetches the release index using built-ins
       # only. It FAILS rather than falling back to a shorter list, since a narrower matrix passes
       # while covering less, which is the failure this job exists to prevent one level up.
+      # A pull request runs one leg, and that leg comes from the manifest alone — so it does not
+      # fetch. Otherwise an outage at nodejs.org would fail a UI pull request that never needed the
+      # released majors, letting an outside service decide whether unrelated work can merge.
       - name: Derive
         id: derive
-        run: node packages/ui/scripts/node-matrix.mjs --github
+        run: |
+          node packages/ui/scripts/node-matrix.mjs --github \
+            ${{ github.event_name == 'pull_request' && '--floor-only' || '' }}
 
   server-safe-rsc-build:
     name: Server-safe subpaths in an RSC build (Node ${{ matrix.node }})
