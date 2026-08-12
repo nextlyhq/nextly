@@ -54,6 +54,11 @@ export function isColorTokenValue(value: unknown): value is ColorTokenValue {
   }
   const proto: unknown = Object.getPrototypeOf(value);
   if (proto !== Object.prototype && proto !== null) return false;
+  // The marker must be the object's OWN. An inherited `$token` — from a
+  // polluted `Object.prototype` — is not something this value carries, and
+  // serializing it drops the property, so a caller that stored it would find
+  // `{}` where a token had been.
+  if (!Object.hasOwn(value, "$token")) return false;
   return typeof (value as { $token: unknown }).$token === "string";
 }
 
@@ -81,7 +86,13 @@ export function resolveColorValue(
   value: ColorValue,
   tokens: Readonly<Record<string, string>> = {}
 ): string | null {
-  if (!isColorTokenValue(value)) return value;
+  // Narrowed rather than returned as-is. The TYPE admits shapes the predicate
+  // rejects — a class instance carrying `$token` satisfies `ColorTokenValue`
+  // structurally — so this branch can hold an object, and handing one back
+  // would break the `string | null` this promises for every rendering caller.
+  if (!isColorTokenValue(value)) {
+    return typeof value === "string" ? value : null;
+  }
   // Own keys only. A token name is a dot path with no reserved words, so
   // `constructor` and `toString` are legal names — and reading them off an
   // ordinary object walks the prototype and answers with a FUNCTION, which is

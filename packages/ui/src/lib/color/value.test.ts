@@ -30,6 +30,21 @@ describe("telling a token from a colour", () => {
     expect(isColorTokenValue(value)).toBe(false);
   });
 
+  it("rejects a $token inherited from a polluted Object.prototype", () => {
+    // Object.prototype ITSELF, not an intermediate object. An intermediate one
+    // fails the plain-object check long before the marker is read, so it never
+    // reaches the own-property test this exists for. A plain `{}` under
+    // pollution passes every other check, and serializing it drops the
+    // inherited property — a value stored on that basis becomes `{}`.
+    const proto = Object.prototype as unknown as Record<string, unknown>;
+    proto.$token = "color.primary";
+    try {
+      expect(isColorTokenValue({})).toBe(false);
+    } finally {
+      delete proto.$token;
+    }
+  });
+
   it.each([
     [
       "an array carrying $token",
@@ -90,6 +105,17 @@ describe("resolving a value to a colour", () => {
     expect(resolveColorValue({ $token: "color.primary" }, tokens)).toBe(
       "#3b82f6"
     );
+  });
+
+  it("never hands back an object the predicate rejected", () => {
+    // The type admits shapes the predicate does not: this instance satisfies
+    // `ColorTokenValue` structurally, so it reaches the literal branch. Passing
+    // it through would break `string | null` for every rendering caller.
+    const instance = new (class {
+      $token = "color.primary";
+    })();
+
+    expect(resolveColorValue(instance, tokens)).toBeNull();
   });
 
   it("answers null for a token when no lookup is supplied", () => {
