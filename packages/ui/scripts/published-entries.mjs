@@ -45,7 +45,6 @@ const SOURCES = {
   "./tailwind-preset": { source: "src/tailwind-preset.ts", client: false },
   "./utils": { source: "src/lib/utils.ts", client: false },
   "./color": { source: "src/lib/color/index.ts", client: false },
-  "./breakpoints": { source: "src/lib/breakpoints.ts", client: false },
 };
 
 /**

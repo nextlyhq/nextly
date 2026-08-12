@@ -71,11 +71,17 @@ const ALLOWED_RUNTIME_IMPORTS = [
   "react",
   "react-dom",
   "react/jsx-runtime",
+  // Icons only. `@nextlyhq/ui` declares it a peer for the same reason: one copy
+  // resolved by the host app rather than one bundled per package.
+  "lucide-react",
   "@nextlyhq/blocks-engine",
   // The ROOT entry only. `@nextlyhq/blocks-react/next` imports `nextly/runtime`,
   // and `/blocks` is the built-in catalogue, which nothing here needs yet.
   "@nextlyhq/blocks-react",
   "@nextlyhq/ui",
+  // The `cn` helper only. A separate subpath because the root barrel carries a
+  // `"use client"` banner and this one is plain string joining.
+  "@nextlyhq/ui/utils",
   // The `/admin` subpath ONLY, and not the SDK root. The root re-exports runtime
   // values from `nextly` (`export { definePlugin } from "nextly"`), which that
   // package's build leaves external, so importing it loads the CMS runtime this
@@ -89,6 +95,7 @@ const ALLOWED_RUNTIME_IMPORTS = [
 /** Node built-ins and test-only tooling, which never reach a consumer's bundle. */
 const ALLOWED_IN_TESTS = [
   "@nextlyhq/module-specifiers",
+  "@testing-library/react",
   "node:fs",
   "node:path",
   "node:url",
