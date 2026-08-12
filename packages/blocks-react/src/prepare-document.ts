@@ -291,30 +291,48 @@ export function prepareDocumentReadStages(
 }
 
 /**
+ * The tree a READER should present, or `null` when it should present none.
+ *
+ * The all-placeholder rule belongs to reading, not to the pipeline. A page that
+ * presents nothing but placeholders is unreadable to a visitor who wanted its
+ * content, which is what `null` names here — but the RENDERER must still walk
+ * that document, because the placeholders are the markers it draws. A pipeline
+ * that answered `null` for it would take those markers away and show an
+ * unsupported-format box for a page whose blocks are merely unresolvable.
+ *
+ * Compared against the tree AFTER gating: a page whose blocks are all
+ * condition-gated is legitimately empty, nothing failed, and reporting it as
+ * unreadable would show a fallback for a page working exactly as configured.
+ *
+ * Exported so that every reader applies the SAME rule. More than one entry point
+ * now turns stages into a reading view, and a second copy of this comparison
+ * would decide differently the first time either half moved.
+ */
+export function readingViewOf(
+  stages: DocumentReadStages
+): BlockDocument | null {
+  if (stages.deduped.nodes.length > 0 && stages.prepared.nodes.length === 0) {
+    return null;
+  }
+  return stages.prepared;
+}
+
+/**
  * The prepared document, for readers that need no intermediate state.
  *
  * Derived from `prepareDocumentReadStages` rather than repeating its passes.
  * Two implementations of one pipeline agree the day they are written and drift
  * after, and the drift is silent because both look correct alone.
+ *
+ * 🔴 Enough for a reader that only DESCRIBES the page — metadata, a search
+ * index, a link preview. A reader that also serves the page's stored STYLESHEET
+ * needs `preparePageForRead` instead: the stages hold the fact that decides what
+ * that sheet may still be trusted for, and this return value has dropped it.
  */
 export function prepareDocumentForRead(
   document: BlockDocument,
   args: PrepareDocumentArgs
 ): BlockDocument | null {
   const stages = prepareDocumentReadStages(document, args);
-  if (stages === null) return null;
-  // The all-placeholder rule belongs to READING, not to the pipeline. A page
-  // that presents nothing but placeholders is unreadable to a visitor who wanted
-  // its content, which is what `null` names here — but the RENDERER must still
-  // walk that document, because the placeholders are the markers it draws. A
-  // pipeline that answered `null` for it would take those markers away and show
-  // an unsupported-format box for a page whose blocks are merely unresolvable.
-  //
-  // Compared against the tree AFTER gating: a page whose blocks are all
-  // condition-gated is legitimately empty, nothing failed, and reporting it as
-  // unreadable would show a fallback for a page working exactly as configured.
-  if (stages.deduped.nodes.length > 0 && stages.prepared.nodes.length === 0) {
-    return null;
-  }
-  return stages.prepared;
+  return stages === null ? null : readingViewOf(stages);
 }

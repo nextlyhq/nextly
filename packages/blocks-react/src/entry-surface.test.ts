@@ -27,6 +27,7 @@ import * as contextModule from "./context";
 import * as pageRendererModule from "./page-renderer";
 import * as placeholderModule from "./placeholder";
 import * as prepareModule from "./prepare-document";
+import * as readPageModule from "./read-page";
 import * as resolverModule from "./resolver";
 import * as stylesModule from "./styles";
 import * as visibilityModule from "./visibility";
@@ -104,9 +105,32 @@ const SOURCE_MODULES: ReadonlyArray<{
     // reads through it, so a host's override cannot be honoured on one path and
     // ignored on the other. It crosses a module boundary inside this package; a
     // consumer states its answer through `styleContext.drawsNothing` instead.
+    // `effectiveCompile` reconciles a caller's context with what the stored
+    // artifact and the host already knew — the scope that lives on the artifact,
+    // the caps preparation honoured, and the identity a fetch predicate needs
+    // before a stored sheet can be judged against it. `page-renderer` and
+    // `read-page` both resolve a stored page and must not answer any of those
+    // differently, which is why it is one function rather than two.
+    // Deliberately NOT a consumer surface: publishing it would offer a third way
+    // to assemble a page by hand, and assembling by hand is precisely the path
+    // that gets this wrong. `preparePageForRead` is the consumer's answer.
+    // `gatedEntriesCoverRemovedNodes`, `gatedMapCoversPrunedNodes` and
+    // `hasDuplicateNodeIds` are the artifact-trust vocabulary: what a stored
+    // sheet can still ACCOUNT for once a pass has removed something. They live
+    // beside `isRecordedGatedEntry`, which they read through, so coverage and
+    // delivery cannot disagree about the same map. `page-renderer` and
+    // `read-page` both decide whether to trust a stored artifact and must reach
+    // the same verdict — a type-level rule survives its last node either way,
+    // and a duplicate id suppresses both twins' rules either way. They cross a
+    // module boundary inside this package; a consumer asks the question through
+    // `preparePageForRead` rather than assembling the verdict itself.
     internal: [
       "UNIDENTIFIED_FETCH_POLICY",
       "drawlessTestFor",
+      "effectiveCompile",
+      "gatedEntriesCoverRemovedNodes",
+      "gatedMapCoversPrunedNodes",
+      "hasDuplicateNodeIds",
       "isRecordedGatedEntry",
       "isUsableGatedEntry",
       "readableGatedRules",
@@ -148,11 +172,25 @@ const SOURCE_MODULES: ReadonlyArray<{
     // prepared document already has `prepareDocumentForRead`; a consumer wanting
     // the intermediates is reasoning about artifact trust, which is this package's
     // job and not something to hand out before anyone has asked for it.
+    //
+    // `readingViewOf` is the all-placeholder rule, which both entry points that
+    // turn stages into something a reader presents must apply identically. It
+    // is exported to delete the second copy, not to be called on its own: it
+    // takes stages, and a consumer holding stages is already past this surface.
     internal: [
       "prepareDocumentReadStages",
       "pruneKnownPlaceholders",
+      "readingViewOf",
       "rendersOwnMarkup",
     ],
+  },
+  {
+    name: "read-page",
+    module: readPageModule,
+    // Nothing withheld: the module exists to offer one entry point, and the
+    // repair test it decides with is module-private because the whole point is
+    // that a caller never has to ask it.
+    internal: [],
   },
   {
     name: "block-boundary",
@@ -177,6 +215,7 @@ describe("the root entry", () => {
       "fetchPolicyLabel",
       "migrationSourceFor",
       "prepareDocumentForRead",
+      "preparePageForRead",
       "pruneHiddenNodes",
       "registeredBlocks",
       "resolvePageStyles",
