@@ -26,6 +26,15 @@ import { fileURLToPath } from "node:url";
  * The name is anchored, so `NextlyError` and any other subclass a caller defines are unaffected —
  * the rule is about throwing something that carries no code, not about the word "Error".
  *
+ * That cuts both ways, and the second half is a real gap rather than a nicety. A custom class
+ * declared `extends Error` carries no code either, and this does not reject it. The distinction
+ * that matters — which base class it extends — is type information and is not present on the AST
+ * node the throw sits on, so no selector can make it. Widening by NAME to `*Error` is not the
+ * answer: several classes here already extend `NextlyError` and are exactly what the rule exists
+ * to encourage, and a name match would reject those too. Closing it needs a type-aware rule and,
+ * before that, a decision about which codeless classes are deliberate local signals — some are
+ * caught by `instanceof` a few lines from where they are thrown and never reach the API layer.
+ *
  * What this does NOT match is a throw whose operand was built elsewhere — `const e = new Error();
  * throw e;` — and that is deliberate. Constructing an `Error` is legitimate throughout the
  * package: it normalises an `unknown` in a catch, and it is the value handed to `onError`
