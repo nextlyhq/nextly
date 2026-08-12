@@ -65,6 +65,24 @@ describe("every media fetch carries the trust bound", () => {
   });
 });
 
+/**
+ * The fields `applyMediaTrustBound` reads before it narrows a media row.
+ *
+ * Checking `trusted` alone is not enough, and the gap is not symmetric.
+ * `boundRefuses` requires `overrideAccess === true` AND a refusing predicate,
+ * so a call dropping EITHER stops narrowing altogether and returns the whole
+ * row — the defect this file exists to catch, slipping past a check that
+ * happened to look at the other field. `user` and `authenticatedScope` decide
+ * whether an authorized caller keeps the row, so losing one of those narrows
+ * too much instead, which is wrong in the quieter direction.
+ */
+const BOUND_FIELDS = [
+  "overrideAccess",
+  "trusted",
+  "user",
+  "authenticatedScope",
+] as const;
+
 /** Modules that call the Single upload expansion. */
 const UPLOAD_EXPANSION_CALLERS = [
   join(SRC, "domains/singles/services/single-query-service.ts"),
@@ -118,12 +136,16 @@ describe("every upload expansion carries the caller", () => {
     // beside it returns early when a Single holds no relationship field, so a
     // bound threaded only there reaches nothing for an uploads-only Single.
     for (const call of uploadExpansionCalls(file)) {
-      expect(
-        call.includes("trusted:"),
-        `An expandUploadFields call in ${file} omits the caller, so it expands ` +
-          "media as an unbounded trusted read:\n" +
-          call
-      ).toBe(true);
+      for (const field of BOUND_FIELDS) {
+        expect(
+          call.includes(`${field}:`),
+          `An expandUploadFields call in ${file} omits \`${field}\`. Each of ` +
+            "these is read before a media row is narrowed, so a call missing " +
+            "any of them expands media as a different caller than the one " +
+            "that asked:\n" +
+            call
+        ).toBe(true);
+      }
     }
   });
 });
