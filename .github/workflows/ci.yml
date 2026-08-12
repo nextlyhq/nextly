@@ -270,6 +270,13 @@ jobs:
         env:
           TURBO_CACHE_DIR: .turbo
 
+      # Reads the BUILT output, so it has to sit after the build rather than beside
+      # the source gates above. A source scan cannot answer this: it would have to
+      # predict which specifiers survive bundling and which modules tsup folds into
+      # a shared chunk, and dist has already decided both.
+      - name: Client-safe artifact check (nextly)
+        run: pnpm --filter nextly check:client-safe-artifacts
+
       # Strict: package.json shape / publish-readiness across all 13 publishable
       # packages (nextly + create-nextly-app + 11 @nextlyhq/*). Failures here
       # block the release pipeline.

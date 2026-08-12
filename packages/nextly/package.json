@@ -35,6 +35,10 @@
       "types": "./dist/errors/index.d.ts",
       "import": "./dist/errors/index.mjs"
     },
+    "./field-group-type": {
+      "types": "./dist/field-group-type.d.ts",
+      "import": "./dist/field-group-type.mjs"
+    },
     "./field-catalog": {
       "types": "./dist/field-catalog.d.ts",
       "import": "./dist/collections/fields/catalog.mjs"
@@ -181,6 +185,7 @@
   ],
   "scripts": {
     "build": "tsup && tsc -p tsconfig.dts.json && node --max-old-space-size=8192 --import tsx/esm ./node_modules/rollup/dist/bin/rollup -c rollup.dts.config.ts && rimraf dist/_intermediate_dts && node scripts/postbuild.cjs",
+    "check:client-safe-artifacts": "node scripts/check-client-safe-artifacts.mjs",
     "dev": "tsup --watch",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",

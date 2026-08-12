@@ -82,7 +82,14 @@ const serverEntries = [
 
 // Client-safe entry points that should NOT have Node.js shims
 // These are imported in browser contexts (admin UI, client components)
-const clientEntries = ["src/config.ts", "src/next.ts"];
+const clientEntries = [
+  "src/config.ts",
+  "src/next.ts",
+  // Read and written by the admin editor from a client component, so it must stay free of
+  // Node built-ins. That property is enforced against the BUILT output by
+  // scripts/check-client-safe-artifacts.mjs, not by membership of this list.
+  "src/field-group-type.ts",
+];
 
 // Shared config options
 const sharedConfig = {
