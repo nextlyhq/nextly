@@ -104,6 +104,20 @@ The same shape applies to a derived check over routes, over registered field
 types, over dialects in a matrix: derive so nothing new escapes, then name the
 one or two whose disappearance is the thing you are actually afraid of.
 
+The general case of that pin is older than this rule and already in the same
+file, which is the best argument for it. A prohibition — "no entry point exposes
+these 22 names" — is satisfied PERFECTLY by an empty module, so it is paired
+with an assertion that the replacement API is present:
+
+```ts
+// The counterpart to the list above: absence alone would also be satisfied
+// by deleting the API, so the replacements are asserted present.
+expect(typeof cfg.defineFieldGroup).toBe("function");
+```
+
+Every prohibition needs that counterpart, and it is the half that gets skipped,
+because a prohibition passing feels like the check working.
+
 ## A pattern matching a common word is a narrowing check in reverse
 
 The separating-property test has a mirror image. A check can also fail by
@@ -134,6 +148,27 @@ granularity the language distinguishes — a word boundary, a parsed binding —
 read every hit before reporting a number. **A count is not a finding until
 something has looked at what it counted**, and "I filtered it" is not the same
 as having looked.
+
+The generalisation is worth more than the instance: **when you refine a check,
+ask what the refinement EXCLUDES, not only what it admits.** Two people refined
+this same scan on the same day and both narrowed the question instead of
+sharpening the answer — one restricted the path set on the reasoning that only
+one package publishes entry points, the other restricted the line set to those
+containing `export`. Each refinement felt like rigour and each silently dropped
+cases the unrefined version would have surfaced.
+
+A refinement that cannot be stated as "this excludes X, and X cannot matter
+because Y" is a guess wearing the costume of precision.
+
+Worth separating the SCAN from the GUARD here, because conflating them nearly
+put a false limitation into this file. A diff-text scan cannot see
+`export * from "./legacy-module"` — the forbidden name never appears in the
+diff. The suite is unaffected: it imports each entry point and asks
+`name in mod` against the live namespace object, and export-star bindings are
+present on that namespace (measured, not assumed). So the blind spot belonged to
+the pre-warning heuristic, not to the check that actually protects the package.
+When something looks like a hole, establish WHICH layer it is in before
+describing it as one.
 
 ## A derived check must match on three axes, not one
 
