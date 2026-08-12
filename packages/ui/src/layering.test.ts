@@ -479,6 +479,63 @@ const RUNTIME_RESOLVERS = [
   "import.meta.resolve",
 ];
 
+/**
+ * Whether an import of the loader module SURVIVES compilation.
+ *
+ * `import type { Module } from "node:module"` is erased by TypeScript, so the emitted JavaScript
+ * reaches no loader and refusing it rejects a declaration that cannot resolve anything. The shared
+ * specifier reader is deliberately blind to this — it answers "what does this file name", which is
+ * the right question for the engine ban and one answer too many here.
+ *
+ * So the specifier reader still decides WHETHER the module is named, and this decides whether the
+ * naming is a value import. Every form other than a marked `import type` emits: a dynamic
+ * `import()`, a `require()` and `import x = require(…)` all produce a runtime load.
+ */
+function loadsLoaderAtRuntime(tree: ts.SourceFile): boolean {
+  const namesLoader = (node: ts.Expression | undefined): boolean =>
+    node !== undefined &&
+    (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) &&
+    (node.text === "node:module" || node.text === "module");
+
+  let runtime = false;
+  const visit = (node: ts.Node): void => {
+    if (runtime) return;
+    if (ts.isImportDeclaration(node) && namesLoader(node.moduleSpecifier)) {
+      const clause = node.importClause;
+      // No clause at all is a side-effect import, which runs.
+      if (clause === undefined) runtime = true;
+      else if (!clause.isTypeOnly) {
+        const bindings = clause.namedBindings;
+        const everyNamedIsType =
+          bindings !== undefined &&
+          ts.isNamedImports(bindings) &&
+          bindings.elements.length > 0 &&
+          bindings.elements.every(element => element.isTypeOnly);
+        // A default or namespace binding is a value; named bindings count only if some is not
+        // individually marked `type`.
+        if (clause.name !== undefined || !everyNamedIsType) runtime = true;
+      }
+    } else if (ts.isImportEqualsDeclaration(node) && !node.isTypeOnly) {
+      if (
+        ts.isExternalModuleReference(node.moduleReference) &&
+        namesLoader(node.moduleReference.expression)
+      ) {
+        runtime = true;
+      }
+    } else if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const isDynamic = callee.kind === ts.SyntaxKind.ImportKeyword;
+      const isRequire = ts.isIdentifier(callee) && callee.text === "require";
+      if ((isDynamic || isRequire) && namesLoader(node.arguments[0])) {
+        runtime = true;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(tree);
+  return runtime;
+}
+
 /** The runtime-resolution constructs a shipped source file names, read from the syntax. */
 function runtimeResolversIn(text: string, fileName: string): string[] {
   const tree = ts.createSourceFile(
@@ -576,12 +633,9 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
    */
   const readsRestrictedGlobal = (node: ts.Node): string | undefined => {
     if (!ts.isElementAccessExpression(node)) return undefined;
-    if (
-      !ts.isIdentifier(node.expression) ||
-      !GLOBAL_OBJECTS.has(node.expression.text)
-    ) {
-      return undefined;
-    }
+    // Through the SAME normalisation the dotted form uses. Fixing one and not the other is how
+    // `(globalThis as T)["process"]` slipped past while `(globalThis as T).process` did not.
+    if (!receiverIsHost(node.expression)) return undefined;
     const key = node.argumentExpression;
     if (!ts.isStringLiteral(key) && !ts.isNoSubstitutionTemplateLiteral(key)) {
       return undefined;
@@ -734,7 +788,8 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
   if (
     importedSpecifiers(text, fileName).some(
       specifier => specifier === "node:module" || specifier === "module"
-    )
+    ) &&
+    loadsLoaderAtRuntime(tree)
   ) {
     found.push("createRequire");
   }
@@ -869,6 +924,13 @@ describe("this package resolves no module at runtime", () => {
         "a.ts"
       )
     ).toEqual(["process"]);
+    // A computed read off a CAST host, which the dotted form already refused.
+    expect(
+      runtimeResolversIn(
+        `export const r = (globalThis as typeof globalThis & { process: P })["process"];`,
+        "a.ts"
+      )
+    ).toEqual(["process"]);
     // The controls: ordinary code names none of them.
     expect(
       runtimeResolversIn(
@@ -883,6 +945,17 @@ describe("this package resolves no module at runtime", () => {
     expect(
       runtimeResolversIn(`export const w = globalThis["fetch"];`, "a.ts")
     ).toEqual([]);
+    // A TYPE-ONLY import of the loader is erased, so it reaches nothing at runtime.
+    expect(
+      runtimeResolversIn(`import type { Module } from "node:module";`, "a.ts")
+    ).toEqual([]);
+    expect(
+      runtimeResolversIn(`import { type Module } from "node:module";`, "a.ts")
+    ).toEqual([]);
+    // The separating control: drop the `type` and it is a runtime load again.
+    expect(
+      runtimeResolversIn(`import { createRequire } from "node:module";`, "a.ts")
+    ).toEqual(["createRequire"]);
     // The three NON-capturing uses, copied from `color-picker.tsx` so the rule is pinned against
     // real code rather than against an idea of it.
     expect(
@@ -939,18 +1012,25 @@ describe("this package resolves no module at runtime", () => {
   // from two places this package could grow: the manifest's `imports` map, asserted below, and
   // tsconfig `paths`. Both are conditions rather than observations, so both are pinned.
   it("declares no tsconfig path alias for a specifier to hide behind", () => {
+    // Read from the RESOLVED options, not the file's own JSON. `tsconfig.json` extends
+    // `@nextlyhq/tsconfig/react-library-bundler.json`, so an alias declared in the base is one
+    // TypeScript and the bundler both honour while a check reading the local file sees nothing.
+    // `parseJsonConfigFileContent` follows `extends`, which is why the scanned-file assertion
+    // above uses it too.
     const aliases = ["tsconfig.json", "tsconfig.tests.json"].flatMap(name => {
       const path = join(SRC, "..", name);
       const parsed = ts.parseConfigFileTextToJson(
         path,
         readFileSync(path, "utf8")
       );
-      const paths = (
-        parsed.config as {
-          compilerOptions?: { paths?: Record<string, unknown> };
-        }
-      ).compilerOptions?.paths;
-      return Object.keys(paths ?? {}).map(alias => `${name}: ${alias}`);
+      const resolved = ts.parseJsonConfigFileContent(
+        parsed.config,
+        ts.sys,
+        join(SRC, "..")
+      );
+      return Object.keys(resolved.options.paths ?? {}).map(
+        alias => `${name}: ${alias}`
+      );
     });
 
     expect(
