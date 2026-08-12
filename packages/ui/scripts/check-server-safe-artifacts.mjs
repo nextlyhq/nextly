@@ -73,7 +73,7 @@
  * which is the control on that.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname as pathDirname, join } from "node:path";
@@ -885,7 +885,6 @@ async function evaluateOne(file) {
   // arrival.
   /** @type {number | undefined} */
   let exitAttempt;
-  // eslint-disable-next-line no-global-assign
   process.exit = code => {
     exitAttempt = typeof code === "number" ? code : 0;
     // Returning rather than exiting lets the caller carry on, so the report names the artifact
@@ -1053,11 +1052,11 @@ async function main() {
           encoding: "utf8",
           timeout: EVALUATION_TIMEOUT_MS,
           env: childEnvironment(nodeEnv),
-          // Somewhere neutral, because the child otherwise inherits `packages/ui` and an artifact
-          // reading a relative path finds this package's own source tree. A consumer resolves that
-          // same path against their app and gets nothing, so the inherited directory answers a
-          // question about the wrong filesystem.
-          cwd: tmpdir(),
+          // A directory created for this evaluation alone, and empty. The shared system temp
+          // directory is neutral but not ISOLATED: one artifact, or the same artifact under an
+          // earlier `NODE_ENV`, can leave a file there that a later evaluation then finds, so a
+          // relative read would succeed for a reason no consumer shares. Fresh per run, it cannot.
+          cwd: mkdtempSync(join(tmpdir(), "nx-server-safe-")),
         })
       );
       // Named with the environment, because "utils.mjs threw" is a different report to act on

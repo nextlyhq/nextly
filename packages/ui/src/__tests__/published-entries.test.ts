@@ -314,10 +314,7 @@ function boundNames(name: ts.BindingName): string[] {
   return found;
 }
 
-function exportedNames(
-  source: string,
-  from?: { dir: string; seen: Set<string>; declaration?: boolean }
-): string[] {
+function exportedNames(source: string): string[] {
   // PARSED, not matched. Export syntax has a long tail -- a default export, a re-export list, a
   // namespace re-export, a declaration inside a block comment whose inner line begins at column
   // zero -- and a pattern blind to any one of them is blind to it in BOTH files at once, so both
@@ -332,8 +329,6 @@ function exportedNames(
     true
   );
   const found: string[] = [];
-  /** One entry per `export * from`, so a name reached through two of them is recognisable. */
-  const starred: string[][] = [];
 
   // One reader, so the `canHaveModifiers` guard is applied once rather than at each call site.
   // `getModifiers` requires a node that can carry them, and a second caller reaching for them
@@ -358,64 +353,23 @@ function exportedNames(
       if (statement.isTypeOnly) continue;
       const clause = statement.exportClause;
       if (clause === undefined) {
-        // `export * from "./x"` publishes the other module's names as this one's. Comparing two
-        // files that each carry the same MARKER agrees without ever comparing what the two sides
-        // of the star actually publish, so the target is read and its names merged in.
+        // `export * from "./x"` is REFUSED rather than modelled. Following it correctly means
+        // implementing the module system's own resolution: `default` is not forwarded, a name
+        // reached through two sources is ambiguous and published by neither UNLESS both resolve to
+        // the same underlying binding, a declaration file's target maps to `.d.mts`/`.d.cts`/`.d.ts`
+        // by the runtime extension it names, and cycles have to terminate. Each of those is a real
+        // rule, and a reader that gets any one wrong reports a surface neither file has.
         //
-        // Only relative specifiers can be followed. A bare package name resolves through
-        // node_modules and is not this package's surface to declare, so it stays a marker: two
-        // files then agree only when they star-export the same package, and a one-sided one fails.
+        // Neither file this compares uses one, so modelling it would be an unbounded exercise in
+        // service of a construct that is not there. Refusing is bounded, fails closed, and says so:
+        // adding a star export makes this fail with an explicit message rather than quietly
+        // producing a surface that is subtly wrong.
         const specifier = statement.moduleSpecifier;
         const where =
           specifier !== undefined && ts.isStringLiteral(specifier)
             ? specifier.text
             : "?";
-        // A declaration file uses the NodeNext spelling and points at the RUNTIME name:
-        // `export * from "./helper.mjs"` inside a `.d.mts` means `helper.d.mts`. Opening the
-        // literal path reads the runtime helper from both sides, so the two readers collect the
-        // same names and a binding the declaration omits is invisible.
-        const target =
-          from !== undefined && where.startsWith(".")
-            ? from.declaration
-              ? resolve(
-                  from.dir,
-                  where.replace(/\.m?js$/, match =>
-                    match === ".mjs" ? ".d.mts" : ".d.ts"
-                  )
-                )
-              : resolve(from.dir, where)
-            : undefined;
-        if (target === undefined) {
-          found.push(`<star export from ${where}>`);
-        } else if (from!.seen.has(target)) {
-          // A cycle. Already being read further up the stack, so its names arrive from there.
-          continue;
-        } else {
-          from!.seen.add(target);
-          // Unreadable is reported rather than skipped: a star export naming a file that is not
-          // there is a broken surface, and silently contributing nothing would read as agreement.
-          let text: string;
-          try {
-            text = readFileSync(target, "utf8");
-          } catch {
-            found.push(`<unreadable star export from ${where}>`);
-            continue;
-          }
-          // Kept apart from the local names, because ECMAScript resolves a collision between two
-          // star exports by publishing NEITHER, while a LOCAL export of the same name wins
-          // outright. Merged straight in, an ambiguous name would be reported as published and a
-          // declaration that correctly omits it would read as a divergence.
-          // `export *` never forwards `default` -- ECMAScript excludes it explicitly, so a barrel
-          // star-exporting a module with a default export does not itself have one. Merging it made
-          // the reader report a default the module does not publish.
-          starred.push(
-            exportedNames(text, {
-              dir: dirname(target),
-              seen: from!.seen,
-              declaration: from!.declaration,
-            })
-          );
-        }
+        found.push(`<unsupported: export * from ${where}>`);
       } else if (ts.isNamespaceExport(clause)) {
         // `export * as colors from "./x"` publishes exactly one binding, named `colors`.
         found.push(clause.name.text);
@@ -453,6 +407,14 @@ function exportedNames(
     // adds one the module does not have is a real divergence. Its name is an identifier for an
     // ordinary namespace; the string form belongs to `declare module "x"`, which augments another
     // module rather than publishing anything here.
+    // `export import Foo = require("./foo.cjs")` publishes `Foo` as a value a consumer can import
+    // by name. It is a declaration file's way of re-exporting a CommonJS module, and it carries the
+    // export modifier while being neither a declaration nor an export declaration.
+    if (ts.isImportEqualsDeclaration(statement)) {
+      // The export modifier is already required above, so reaching here means it is exported.
+      found.push(statement.name.text);
+      continue;
+    }
     if (ts.isModuleDeclaration(statement)) {
       if (ts.isIdentifier(statement.name)) found.push(statement.name.text);
       continue;
@@ -469,23 +431,7 @@ function exportedNames(
     }
   }
 
-  // A local export shadows every star export of the same name, so those are settled first. Among
-  // the stars, a name reached through exactly one of them is published and a name reached through
-  // two or more is ambiguous and published by neither -- which is what the runtime barrel does, so
-  // it is what the declaration must be compared against.
-  const local = new Set(found);
-  const reach = new Map<string, number>();
-  for (const names of starred) {
-    for (const name of new Set(names)) {
-      if (name === "default") continue;
-      if (local.has(name)) continue;
-      reach.set(name, (reach.get(name) ?? 0) + 1);
-    }
-  }
-  for (const [name, sources] of reach) {
-    if (sources === 1) local.add(name);
-  }
-  return [...local].sort();
+  return [...new Set(found)].sort();
 }
 
 describe("reading the names a module publishes", () => {
@@ -530,6 +476,28 @@ describe("reading the names a module publishes", () => {
     ).toEqual(["renamed"]);
   });
 
+  it("refuses a star export rather than modelling the module system", () => {
+    // Following `export *` correctly means implementing resolution: `default` is not forwarded, a
+    // name reached through two sources is ambiguous unless both resolve to the SAME binding, a
+    // declaration file maps its target by the runtime extension it names, and cycles must
+    // terminate. Getting any one wrong reports a surface neither file has.
+    //
+    // Neither file compared here uses one, so this fails closed and says why, rather than
+    // producing a subtly wrong answer.
+    expect(exportedNames(`export * from "./helper.mjs";`)).toEqual([
+      "<unsupported: export * from ./helper.mjs>",
+    ]);
+    // The refusal carries the SOURCE, so two files agree only when they star-export the same
+    // module -- and a one-sided star export fails loudly rather than comparing equal.
+    expect(exportedNames(`export * from "./a.mjs";`)).not.toEqual(
+      exportedNames(`export * from "./b.mjs";`)
+    );
+    // A local export beside it is still read, so the refusal does not swallow the rest of the file.
+    expect(
+      exportedNames(`export * from "./x.mjs";\nexport const own = 1;`)
+    ).toEqual(["<unsupported: export * from ./x.mjs>", "own"]);
+  });
+
   it("records a namespace re-export, which publishes exactly one name", () => {
     // `export * as colors from "./color.mjs"` is neither a star export whose names live elsewhere
     // nor a braced list, so it matched nothing and was invisible on both sides at once.
@@ -541,135 +509,6 @@ describe("reading the names a module publishes", () => {
     expect(
       exportedNames(`export * as colors from "./color.mjs";`)
     ).not.toContain("<star export from ./color.mjs>");
-  });
-
-  it("follows a relative star export and publishes what it finds", () => {
-    // The names of `export * from "./helper.mjs"` ARE this module's surface. Two files that each
-    // carry the same marker compare equal without either side of the star ever being read, so a
-    // binding the helper publishes and the declaration omits would pass unexamined.
-    const dir = mkdtempSync(path.join(tmpdir(), "nx-star-"));
-    writeFileSync(
-      path.join(dir, "helper.mjs"),
-      `export const fromHelper = 1;\nexport function alsoHelper() {}\n`
-    );
-    expect(
-      exportedNames(`export * from "./helper.mjs";\nexport const own = 2;`, {
-        dir,
-        seen: new Set(),
-      })
-    ).toEqual(["alsoHelper", "fromHelper", "own"]);
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  it("does not forward a default export through a star", () => {
-    // ECMAScript excludes `default` from `export *` explicitly, so a barrel star-exporting a module
-    // with a default does not itself have one. Reporting it invents a binding no consumer can
-    // import, and a declaration that correctly omits it would read as a divergence.
-    const dir = mkdtempSync(path.join(tmpdir(), "nx-star-default-"));
-    writeFileSync(
-      path.join(dir, "helper.mjs"),
-      `export default function build() {}\nexport const named = 1;`
-    );
-    expect(
-      exportedNames(`export * from "./helper.mjs";`, { dir, seen: new Set() })
-    ).toEqual(["named"]);
-    // The control: a default the barrel declares ITSELF is still published.
-    expect(
-      exportedNames(`export * from "./helper.mjs";\nexport default 1;`, {
-        dir,
-        seen: new Set(),
-      })
-    ).toEqual(["default", "named"]);
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  it("publishes neither name when two star exports collide", () => {
-    // ECMAScript resolves an ambiguous star name by publishing NOTHING: a barrel star-exporting two
-    // modules that both export `x` does not export `x` at all. Merged blindly, the reader reports it
-    // as published and a declaration that correctly omits it reads as a divergence.
-    const dir = mkdtempSync(path.join(tmpdir(), "nx-ambig-"));
-    writeFileSync(
-      path.join(dir, "a.mjs"),
-      `export const shared = 1;\nexport const onlyA = 2;`
-    );
-    writeFileSync(
-      path.join(dir, "b.mjs"),
-      `export const shared = 3;\nexport const onlyB = 4;`
-    );
-    expect(
-      exportedNames(`export * from "./a.mjs";\nexport * from "./b.mjs";`, {
-        dir,
-        seen: new Set(),
-      })
-    ).toEqual(["onlyA", "onlyB"]);
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  it("lets a local export win over a star export of the same name", () => {
-    // The other half of the rule, and the control on it: ambiguity applies only among stars. A
-    // local export shadows them outright, so `shared` IS published here.
-    const dir = mkdtempSync(path.join(tmpdir(), "nx-shadow-"));
-    writeFileSync(path.join(dir, "a.mjs"), `export const shared = 1;`);
-    writeFileSync(path.join(dir, "b.mjs"), `export const shared = 3;`);
-    expect(
-      exportedNames(
-        `export * from "./a.mjs";\nexport * from "./b.mjs";\nexport const shared = 5;`,
-        { dir, seen: new Set() }
-      )
-    ).toEqual(["shared"]);
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  it("survives a star export cycle", () => {
-    // Two modules star-exporting each other would otherwise recurse without end.
-    const dir = mkdtempSync(path.join(tmpdir(), "nx-cycle-"));
-    writeFileSync(
-      path.join(dir, "a.mjs"),
-      `export * from "./b.mjs";\nexport const fromA = 1;\n`
-    );
-    writeFileSync(
-      path.join(dir, "b.mjs"),
-      `export * from "./a.mjs";\nexport const fromB = 2;\n`
-    );
-    expect(
-      exportedNames(readFileSync(path.join(dir, "a.mjs"), "utf8"), {
-        dir,
-        seen: new Set([path.join(dir, "a.mjs")]),
-      })
-    ).toEqual(["fromA", "fromB"]);
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  it("reports a star export it cannot read rather than contributing nothing", () => {
-    // Silently skipping an unreadable target is the failure this whole reader exists to avoid:
-    // both files would contribute nothing and compare equal over a broken surface.
-    const dir = mkdtempSync(path.join(tmpdir(), "nx-missing-"));
-    expect(
-      exportedNames(`export * from "./gone.mjs";`, { dir, seen: new Set() })
-    ).toEqual(["<unreadable star export from ./gone.mjs>"]);
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  it("leaves a bare package star export as a marker", () => {
-    // A package name resolves through node_modules and is not this package's surface to declare,
-    // so it stays a marker: two files agree only when they star-export the same package.
-    expect(
-      exportedNames(`export * from "some-package";`, {
-        dir: "/nowhere",
-        seen: new Set(),
-      })
-    ).toEqual(["<star export from some-package>"]);
-  });
-
-  it("records a star re-export by its source, since its names are in another file", () => {
-    // Unanswerable from this file alone, so it is carried as a marker rather than dropped: two
-    // files agree only when they star-export the SAME module, and a one-sided one fails.
-    expect(exportedNames(`export * from "./other.mjs";`)).toEqual([
-      "<star export from ./other.mjs>",
-    ]);
-    expect(exportedNames(`export * from "./a.mjs";`)).not.toEqual(
-      exportedNames(`export * from "./b.mjs";`)
-    );
   });
 
   it("does not read an export out of a block comment", () => {
@@ -697,6 +536,17 @@ describe("reading the names a module publishes", () => {
     expect(exportedNames(`export default class Preset {}`)).toEqual([
       "default",
     ]);
+  });
+
+  it("publishes an exported import-equals declaration", () => {
+    // A declaration file re-exports a CommonJS module this way, and a consumer can import `Foo` by
+    // name. It carries the export modifier while being neither a declaration nor an export
+    // declaration, so it matched nothing.
+    expect(exportedNames(`export import Foo = require("./foo.cjs");`)).toEqual([
+      "Foo",
+    ]);
+    // The control: WITHOUT the export modifier it is a local alias and publishes nothing.
+    expect(exportedNames(`import Foo = require("./foo.cjs");`)).toEqual([]);
   });
 
   it("publishes an exported namespace, which is a value binding", () => {
@@ -727,33 +577,6 @@ describe("reading the names a module publishes", () => {
     ]);
   });
 
-  it("resolves a declaration file's star export to a declaration file", () => {
-    // A `.d.mts` re-exports by the RUNTIME name: `export * from "./helper.mjs"` means
-    // `helper.d.mts`. Opening the literal path reads the runtime helper from both sides, so both
-    // readers collect the same names and a binding the declaration omits is invisible.
-    const dir = mkdtempSync(path.join(tmpdir(), "nx-dts-"));
-    writeFileSync(
-      path.join(dir, "helper.mjs"),
-      `export const runtimeOnly = 1;`
-    );
-    writeFileSync(
-      path.join(dir, "helper.d.mts"),
-      `export declare const declaredOnly: number;`
-    );
-    expect(
-      exportedNames(`export * from "./helper.mjs";`, {
-        dir,
-        seen: new Set(),
-        declaration: true,
-      })
-    ).toEqual(["declaredOnly"]);
-    // The control: the same source read as RUNTIME resolves to the runtime helper.
-    expect(
-      exportedNames(`export * from "./helper.mjs";`, { dir, seen: new Set() })
-    ).toEqual(["runtimeOnly"]);
-    rmSync(dir, { recursive: true, force: true });
-  });
-
   it("names every declarator in one exported statement", () => {
     expect(exportedNames(`export const a = 1, b = 2;`)).toEqual(["a", "b"]);
   });
@@ -779,12 +602,7 @@ describe("the hand-written declaration beside the module", () => {
     "scripts"
   );
   const names = (file: string): string[] =>
-    exportedNames(readFileSync(path.join(scripts, file), "utf8"), {
-      dir: scripts,
-      seen: new Set([path.join(scripts, file)]),
-      // Declaration files re-export by the runtime name, so their star targets need mapping back.
-      declaration: file.endsWith(".d.mts") || file.endsWith(".d.ts"),
-    });
+    exportedNames(readFileSync(path.join(scripts, file), "utf8"));
 
   it("declares exactly the bindings the module exports", () => {
     const runtime = names("published-entries.mjs");
