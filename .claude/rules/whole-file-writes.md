@@ -35,7 +35,7 @@ generated output, a concurrent tool, another session — is truncated by a check
 that passed a moment earlier. An exclusive create refuses at write time instead,
 which is a boundary rather than a look:
 
-```
+```sh
 set -o noclobber        # `>` now fails on an existing file; `>|` opts out
 ```
 
@@ -51,39 +51,30 @@ bypassed, and it is the bypass rather than the command that does the damage.
 **A symlink anywhere in the path defeats every check below.** A shell redirect
 follows links and truncates the RESOLVED target; the named path is untouched, so
 `git diff -- <path>` reports nothing and each tell and proof clears a write that
-destroyed a different file.
+destroyed a different file. Any component can be the link, and testing the leaf
+does not find it: with `linkdir -> real`, `test -L linkdir/file.txt` is FALSE
+because the file itself is regular, while the write still lands in
+`real/file.txt`.
 
-Testing the leaf is not enough, and this is the trap: with `linkdir -> real`,
-`test -L linkdir/file.txt` is FALSE — the file itself is regular — while the
-write still lands in `real/file.txt`. Any component can be the link. So resolve
-the whole path unconditionally and treat the RESULT as the path being written,
-rather than inspecting components for links. Then every check in this rule runs
-against the file that actually changed.
+**The exclusive create above already answers this, which is why no path
+canonicalisation is prescribed here.** Measured: with `link.txt -> real.txt`
+holding content, both `set -o noclobber` and Node's `wx` flag refuse the write
+and leave `real.txt` untouched; with a DANGLING `link.txt -> ghost.txt`, both
+refuse as well and no `ghost.txt` is created. The refusal follows the link
+without needing to be told about it, which a resolver written here cannot claim
+— a leaf that exists, a leaf that is a link, a leaf that is a dangling link and
+a leaf that is absent are four behaviours, and a routine short by one hands back
+the wrong path silently.
 
-Resolve it with something that exists everywhere this repo runs — CI covers
-Ubuntu, macOS and Windows:
+That conservatism has one cost worth stating: a deliberate write through a
+dangling symlink is refused too, because the link entry exists. Take that with
+`>|`, or by writing the target directly, having decided it.
 
-```
-node -e 'const {realpathSync,existsSync}=require("fs"), {join,dirname,basename}=require("path");
-const p=process.argv[1];
-console.log(existsSync(p) ? realpathSync(p)
-                          : join(realpathSync(dirname(p)), basename(p)))' -- <path>
-```
-
-Resolve the whole path when the leaf EXISTS, and fall back to resolving the
-parent and re-attaching the leaf only when it does not. Both halves are
-load-bearing and each is wrong alone: `realpathSync` throws `ENOENT` on a path
-that does not exist, so resolving the leaf unconditionally rejects every
-genuinely new file — the case a blind write is legitimately for — while
-resolving only the parent returns the LINK when the leaf is itself a symlink,
-which is the case that started all this. Measured: for `link.txt -> real.txt`,
-parent-only yields `link.txt` and full resolution yields `real.txt`.
-
-`readlink -f` is a GNU extension, absent from POSIX and from Windows shells, so
-it is not the portable instruction even where it happens to work. If resolving
-the PARENT fails, stop rather than falling back to the unresolved path: not
-knowing which directory you are about to write into is the condition this whole
-rule is about.
+Resolution still matters for DIAGNOSIS — after a write, the file that changed is
+the resolved target rather than the path you named, so that is what the tells
+and the proof must inspect. Determine it with the platform's own tooling
+(`realpath`, `fs.realpathSync`, `lstat` for the link entry itself) at the moment
+you need it, rather than from a recipe transcribed here.
 
 `turbo.json` in `packages/ui` was replaced this way. It lost
 `dependsOn: ["$TURBO_EXTENDS$", "build"]` on both `test` and `test:coverage`,
@@ -101,8 +92,9 @@ The question is not "which of these two is it". Any of the last commit, the
 index, a retained stash, or nothing in git at all can hold that content — an
 untracked or ignored file was never in either, a stash holds edits that were
 reapplied and then clobbered, and edits that were only ever in the working tree
-are in none of them. Enumerating the cases is how this section kept being wrong;
-what settles it is naming the revision and CHECKING it holds what you expect:
+are in none of them. Enumerating the cases cannot be complete, because which
+revision holds the content depends on how the work reached the tree; what
+settles it is naming the revision and CHECKING it holds what you expect:
 
 - `git show <rev>:<path>` prints a candidate's copy — `HEAD`, a stash, any
   commit — and `git show :<path>` prints the index copy. Read the one you intend
