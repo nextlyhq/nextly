@@ -22,6 +22,17 @@ interface Row extends Record<string, unknown> {
 
 const ROWS: Row[] = [{ id: "1", name: "first" }];
 
+/**
+ * A class list as discrete tokens.
+ *
+ * Class assertions here go through this rather than through `className`,
+ * because Tailwind utility names nest as prefixes of one another and a
+ * substring match cannot tell `border` from `border-border`. Membership can.
+ */
+function tokensOf(el: Element | null | undefined): string[] {
+  return [...(el?.classList ?? [])];
+}
+
 function renderWithFooter(bordered?: boolean) {
   render(
     <DataTableView<Row>
@@ -60,8 +71,13 @@ describe("DataTableView footer", () => {
 
     // Same element that becomes the card at the breakpoint, so the footer is
     // enclosed by it and its own top border reads as the divider.
-    expect(surface?.className).toContain("@md/table:border");
-    expect(surface?.className).toContain("@md/table:rounded-md");
+    //
+    // Exact tokens, never substrings: "@md/table:border" is a prefix of
+    // "@md/table:border-border", so a substring check passes for a surface
+    // carrying a border COLOUR and no border at all -- which renders nothing
+    // and is precisely the implementation this test claims to exclude.
+    expect(tokensOf(surface)).toContain("@md/table:border");
+    expect(tokensOf(surface)).toContain("@md/table:rounded-md");
   });
 
   it("takes the column gap where there is no card to be a footer of", () => {
@@ -71,8 +87,8 @@ describe("DataTableView footer", () => {
     // Below the breakpoint the surface is a plain column and the rows are
     // separate cards, so the gap separates the footer from the last of them.
     // Above it the gap collapses and the card's edge does the work.
-    expect(surface?.className).toContain("gap-4");
-    expect(surface?.className).toContain("@md/table:gap-0");
+    expect(tokensOf(surface)).toContain("gap-4");
+    expect(tokensOf(surface)).toContain("@md/table:gap-0");
   });
 
   it("draws no card when the caller supplies one", () => {
@@ -80,7 +96,7 @@ describe("DataTableView footer", () => {
 
     // `EntryTable` and the media library wrap the view themselves; the surface
     // must stay borderless there or the outlines double.
-    expect(footer?.parentElement?.className).not.toContain("@md/table:border");
+    expect(tokensOf(footer?.parentElement)).not.toContain("@md/table:border");
   });
 
   it("renders nothing extra when no footer is given", () => {
