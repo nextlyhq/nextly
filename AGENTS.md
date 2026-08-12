@@ -85,7 +85,17 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   absent — and `lint` then fails on its self-imports, which is the same missing
   build wearing a different rule's error message.
 
-  **Measure these with `--force`.** Turbo caches both tasks, and a cached task
+  **Two states distort these numbers in OPPOSITE directions, and neither is
+  visible in the summary line.** A warm cache overstates health; a missing
+  `dist` overstates breakage. Measured from both ends: with the cache warm this
+  entry first recorded 19 of 21 passing and `lint` clean, and on a freshly
+  installed tree with nothing built another lane saw `pnpm lint` fail with 361
+  `@nextlyhq/ui` resolution errors and vitest unable to collect at all. Same
+  repository, same commit.
+
+  So state the cache AND the build state when you quote a number.
+
+  **Measure with `--force`.** Turbo caches both tasks, and a cached task
   reports `Tasks: N successful` without running anything — so a warm cache from
   an earlier built state reports a clean tree as passing. That is not a
   hypothetical: the first version of this entry claimed 19 of 21 passing and
@@ -96,7 +106,8 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   own: a misspelled specifier, a removed export-map subpath, or a broken
   tsconfig path mapping produces exactly the same error, and no amount of
   rebuilding fixes those. If the error survives a successful build of that
-  package's dependencies, it is a real resolution defect — see
+  package AND its dependencies — the `<pkg>...` form above, not `^...` — it is a
+  real resolution defect — see
   `.claude/rules/verifying-merged-work.md`, which says to check what `main`
   changed before calling any of this environmental.
 
