@@ -58,8 +58,14 @@ const ELEMENT_RULES: Array<{ pattern: RegExp; why: string }> = [
     why: "sets a corner — tabs are square so the underline stays flush, pinned by radius-tier-contract",
   },
   {
+    // Deliberately every inline style, not only the indicator properties. A
+    // scan reads text, so `style={{ borderBottomColor: c }}` is visible but
+    // `style={layout}` is not, and narrowing to named properties would pass the
+    // second while rejecting the first. The wider rule also holds tabs to the
+    // token-driven styling the rest of the admin follows: an inline pixel value
+    // is the one route that cannot move with a theme.
     pattern: /<Tabs(?:List|Trigger)[^>]*\bstyle=/,
-    why: "styles the tab inline, which no class-based override can be reasoned about alongside",
+    why: "styles the tab inline — use spacing and sizing utilities, which the scan can read and a theme can move",
   },
 ];
 
@@ -77,9 +83,10 @@ function sourceFiles(dir: string, found: string[] = []): string[] {
     }
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) {
-      // `__tests__` is skipped deliberately: the boundary tests RENDER the
-      // violations they assert against, so scanning them would report the
-      // proof as the problem.
+      // `__tests__` is skipped deliberately: a test may construct violating
+      // markup on purpose to show a pattern matches, and scanning it would
+      // report the proof as the problem. No test file renders tabs today, so
+      // this bounds a future one rather than an existing exception.
       if (entry !== "__tests__") sourceFiles(full, found);
     } else if (entry.endsWith(".tsx") && full !== PRIMITIVE) {
       found.push(full);
@@ -163,13 +170,17 @@ function violations(): Violation[] {
 describe("the tab indicator contract", () => {
   it("still has a contract to enforce", () => {
     // The structural witness. This scan exists only because the primitive owns
-    // the indicator; if it stops declaring one, the scan is not merely
-    // unscoped, it is meaningless — so its absence must go red rather than
-    // green. Chosen because the check's own purpose guarantees it, not because
-    // it happens to be in the file today.
+    // the indicator; if it stops drawing one, the scan is not merely unscoped,
+    // it is meaningless — so its absence must go red rather than green.
+    //
+    // Asserted on the underline itself rather than on a named constant: the
+    // primitive is free to be reorganised, and a check tied to an identifier
+    // would report a rename as a lost contract. The two facts below are what
+    // the call-site rules are written against — a bottom border, and an active
+    // state that colours it.
     const primitive = readFileSync(PRIMITIVE, "utf8");
-    expect(primitive).toContain("TRIGGER_INDICATOR");
-    expect(primitive).toMatch(/border-b-2!/);
+    expect(primitive).toMatch(/\bborder-b-2\b/);
+    expect(primitive).toMatch(/data-\[state=active\]:border-b-/);
   });
 
   it("finds files to check, so a clean result means conforming and not unscanned", () => {
