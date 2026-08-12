@@ -374,20 +374,55 @@ export function drawlessTestFor(
  */
 export function migrationChangedWhatDraws(
   stages: DocumentReadStages,
-  resolver: BlockResolver
+  resolver: BlockResolver,
+  styles: PageStyles | undefined
 ): boolean {
   if (stages.rewritten.length === 0) return false;
   const drawsNothing = drawlessTestFor(resolver);
-  // The engine's reported pointers are RESOLVED rather than matched against
-  // paths rebuilt here. Rebuilding them would be a second encoder of the same
-  // format: it agrees on every ordinary slot name and diverges on the ones the
-  // escaping exists for, so the mismatch appears only for the documents this
-  // check most needs to read.
+  const gatedRules = readableGatedRules(styles);
+
   return stages.rewritten.some(entry => {
-    const before = nodeAtPointer(stages.sanitized, entry.path);
     const after = nodeAtPointer(stages.migrated, entry.path);
-    if (before === undefined || after === undefined) return false;
-    return !drawsNothing(before) && drawsNothing(after);
+    if (after === undefined) return false;
+    // Nothing to be stale about a node that draws nothing now either.
+    if (!drawsNothing(after)) return false;
+
+    // Whether the node DREW when the sheet was compiled is read off the sheet
+    // rather than recomputed. The compiler records every node it withheld, by
+    // id, under its own combined decision — condition, drawless, or inherited
+    // from an ancestor — so an entry means "these rules are not in `css`" and
+    // its absence means they are.
+    //
+    // Read rather than re-derived for two reasons. Reapplying the gating rule
+    // here would be a second implementation of a decision the compiler owns,
+    // and the two only agree while both are maintained together: the compiler
+    // may widen what it gates, or change how gating descends a subtree, and a
+    // copy that does not follow classifies the same node differently while
+    // still looking correct. And the predicate cannot answer the question at
+    // all for a node whose migration RENAMED the prop `rendersNothing` reads:
+    // today's predicate over yesterday's props reports drawless for a node that
+    // drew, so the flip disappears. The artifact carries the answer the schema
+    // of the day produced, which is the only version-independent source there
+    // is.
+    if (gatedRules !== undefined) {
+      // Asked through `isRecordedGatedEntry`, the same predicate delivery and
+      // pruning coverage use, rather than by testing for the key. A stored map
+      // is input like any other: a row carrying `{ "a": null }` has the key and
+      // records nothing, so key presence alone would report the node withheld
+      // and keep serving rules — and any `url(...)` in them — that nothing
+      // accounts for.
+      return (
+        typeof after.id === "string" &&
+        !isRecordedGatedEntry(gatedRules[after.id])
+      );
+    }
+
+    // An artifact compiled before the per-node map existed carries no record,
+    // so the stored props are the only evidence left. This is the derivation
+    // above, kept ONLY for those artifacts and inheriting their limitation: a
+    // migration that renamed the prop the predicate reads is invisible here.
+    const before = nodeAtPointer(stages.sanitized, entry.path);
+    return before !== undefined && !drawsNothing(before);
   });
 }
 
