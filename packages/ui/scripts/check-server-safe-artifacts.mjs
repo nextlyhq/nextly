@@ -96,18 +96,33 @@ const DIST = join(pathDirname(fileURLToPath(import.meta.url)), "..", "dist");
 const EVALUATION_TIMEOUT_MS = 30_000;
 
 /**
- * This process's environment with anything that would PRELOAD code into the child removed.
+ * The variables an evaluation child is allowed to see.
  *
- * A fresh process is only isolated if it starts empty. `NODE_OPTIONS` carrying `--require` or
- * `--import` runs a module before the artifact does, and that module can install exactly the state
- * a separate process was started to exclude — so an artifact depending on it would evaluate here
- * and fail for a consumer whose environment sets nothing. Inherited from the build, which may be
- * running under monitoring that sets it, so it is dropped rather than trusted.
+ * An ALLOW-list, because the question is not "which variables are dangerous" but "which does the
+ * child need". A deny-list answers the first, and the first has no end: stripping `NODE_OPTIONS`
+ * left `CI`, and stripping `CI` would leave `GITHUB_ACTIONS`, `npm_lifecycle_event` and every
+ * variable a future runner invents. A published artifact reads `process.env` in a consumer's app,
+ * where none of the build's variables exist, so the environment that answers for that consumer is
+ * the empty one plus what Node itself needs to start.
+ *
+ * `NODE_ENV` is deliberately absent: it is set per evaluation, once for each state under test.
  */
-function environmentWithoutPreloads() {
-  const { NODE_OPTIONS: _preloads, ...rest } = process.env;
-  return rest;
-}
+const CHILD_ENVIRONMENT_KEEPS = [
+  // Node resolves its own executable by absolute path, but a spawned process without PATH cannot
+  // find anything it shells out to, and the failure looks like a broken check rather than a
+  // deliberate restriction.
+  "PATH",
+  "Path",
+  // Windows will not start a process without these.
+  "SystemRoot",
+  "SYSTEMROOT",
+  "COMSPEC",
+  "TEMP",
+  "TMP",
+  // Some platforms resolve a home-relative cache during module loading.
+  "HOME",
+  "USERPROFILE",
+];
 
 /**
  * The environment one evaluation child starts from, at one `NODE_ENV` state.
@@ -119,14 +134,14 @@ function environmentWithoutPreloads() {
  * @param {string | undefined} nodeEnv
  */
 function childEnvironment(nodeEnv) {
-  const base = environmentWithoutPreloads();
-  if (nodeEnv === undefined) {
-    const { NODE_ENV: _unset, ...rest } = base;
-    return rest;
+  /** @type {Record<string, string>} */
+  const base = {};
+  for (const key of CHILD_ENVIRONMENT_KEEPS) {
+    const value = process.env[key];
+    if (value !== undefined) base[key] = value;
   }
-  return { ...base, NODE_ENV: nodeEnv };
+  return nodeEnv === undefined ? base : { ...base, NODE_ENV: nodeEnv };
 }
-
 /**
  * The `NODE_ENV` values an artifact is evaluated under. `undefined` means the variable is ABSENT.
  *

@@ -332,6 +332,8 @@ function exportedNames(
     true
   );
   const found: string[] = [];
+  /** One entry per `export * from`, so a name reached through two of them is recognisable. */
+  const starred: string[][] = [];
 
   // One reader, so the `canHaveModifiers` guard is applied once rather than at each call site.
   // `getModifiers` requires a node that can carry them, and a second caller reaching for them
@@ -399,8 +401,12 @@ function exportedNames(
             found.push(`<unreadable star export from ${where}>`);
             continue;
           }
-          found.push(
-            ...exportedNames(text, {
+          // Kept apart from the local names, because ECMAScript resolves a collision between two
+          // star exports by publishing NEITHER, while a LOCAL export of the same name wins
+          // outright. Merged straight in, an ambiguous name would be reported as published and a
+          // declaration that correctly omits it would read as a divergence.
+          starred.push(
+            exportedNames(text, {
               dir: dirname(target),
               seen: from!.seen,
               declaration: from!.declaration,
@@ -440,6 +446,14 @@ function exportedNames(
     // file differ from its module by exactly its types, and the comparison would report a mismatch
     // on every correct pair. What this compares is the VALUE surface, which is what a consumer
     // importing a binding at runtime actually receives.
+    // `export declare namespace Foo {}` publishes `Foo` as a value binding, so a declaration that
+    // adds one the module does not have is a real divergence. Its name is an identifier for an
+    // ordinary namespace; the string form belongs to `declare module "x"`, which augments another
+    // module rather than publishing anything here.
+    if (ts.isModuleDeclaration(statement)) {
+      if (ts.isIdentifier(statement.name)) found.push(statement.name.text);
+      continue;
+    }
     if (
       ts.isFunctionDeclaration(statement) ||
       ts.isClassDeclaration(statement) ||
@@ -452,7 +466,22 @@ function exportedNames(
     }
   }
 
-  return [...new Set(found)].sort();
+  // A local export shadows every star export of the same name, so those are settled first. Among
+  // the stars, a name reached through exactly one of them is published and a name reached through
+  // two or more is ambiguous and published by neither -- which is what the runtime barrel does, so
+  // it is what the declaration must be compared against.
+  const local = new Set(found);
+  const reach = new Map<string, number>();
+  for (const names of starred) {
+    for (const name of new Set(names)) {
+      if (local.has(name)) continue;
+      reach.set(name, (reach.get(name) ?? 0) + 1);
+    }
+  }
+  for (const [name, sources] of reach) {
+    if (sources === 1) local.add(name);
+  }
+  return [...local].sort();
 }
 
 describe("reading the names a module publishes", () => {
@@ -525,6 +554,43 @@ describe("reading the names a module publishes", () => {
         seen: new Set(),
       })
     ).toEqual(["alsoHelper", "fromHelper", "own"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("publishes neither name when two star exports collide", () => {
+    // ECMAScript resolves an ambiguous star name by publishing NOTHING: a barrel star-exporting two
+    // modules that both export `x` does not export `x` at all. Merged blindly, the reader reports it
+    // as published and a declaration that correctly omits it reads as a divergence.
+    const dir = mkdtempSync(path.join(tmpdir(), "nx-ambig-"));
+    writeFileSync(
+      path.join(dir, "a.mjs"),
+      `export const shared = 1;\nexport const onlyA = 2;`
+    );
+    writeFileSync(
+      path.join(dir, "b.mjs"),
+      `export const shared = 3;\nexport const onlyB = 4;`
+    );
+    expect(
+      exportedNames(`export * from "./a.mjs";\nexport * from "./b.mjs";`, {
+        dir,
+        seen: new Set(),
+      })
+    ).toEqual(["onlyA", "onlyB"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("lets a local export win over a star export of the same name", () => {
+    // The other half of the rule, and the control on it: ambiguity applies only among stars. A
+    // local export shadows them outright, so `shared` IS published here.
+    const dir = mkdtempSync(path.join(tmpdir(), "nx-shadow-"));
+    writeFileSync(path.join(dir, "a.mjs"), `export const shared = 1;`);
+    writeFileSync(path.join(dir, "b.mjs"), `export const shared = 3;`);
+    expect(
+      exportedNames(
+        `export * from "./a.mjs";\nexport * from "./b.mjs";\nexport const shared = 5;`,
+        { dir, seen: new Set() }
+      )
+    ).toEqual(["shared"]);
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -605,6 +671,19 @@ describe("reading the names a module publishes", () => {
     expect(exportedNames(`export default class Preset {}`)).toEqual([
       "default",
     ]);
+  });
+
+  it("publishes an exported namespace, which is a value binding", () => {
+    // A declaration file adding `export declare namespace Foo {}` that the module does not have is
+    // a real divergence, and ignoring the statement made both lists agree over it.
+    expect(
+      exportedNames(`export declare namespace Foo { const x: number; }`)
+    ).toEqual(["Foo"]);
+    // The control: `declare module "x"` augments ANOTHER module and publishes nothing here, so a
+    // rule keyed on the statement kind alone would invent a binding named after a package.
+    expect(
+      exportedNames(`declare module "some-package" { export const y: number; }`)
+    ).toEqual([]);
   });
 
   it("names every binding a destructuring export introduces", () => {
