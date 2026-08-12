@@ -136,7 +136,7 @@ function storedSheetCannotDescribe(
     hasDuplicateNodeIds(stages.migrated) ||
     (stages.gated !== stages.migrated && !gatingCovered) ||
     stages.prepared !== stages.deduped ||
-    migrationChangedWhatDraws(stages, resolver)
+    migrationChangedWhatDraws(stages, resolver, styles)
   );
 }
 
