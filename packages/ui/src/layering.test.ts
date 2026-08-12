@@ -53,6 +53,7 @@ import {
   UNRESOLVABLE_SPECIFIER,
 } from "@nextlyhq/module-specifiers";
 import { describe, expect, it } from "vitest";
+import ts from "typescript";
 
 const SRC = join(__dirname);
 
@@ -381,6 +382,164 @@ describe("this package takes no direct dependency on the block engine", () => {
       "A component that needs the block model belongs in packages/builder, " +
         "which already depends on the engine. Importing it here makes this " +
         "package block-aware; restating its rules here makes them drift."
+    ).toEqual([]);
+  });
+});
+
+/**
+ * Runtime module resolution, which a bundler cannot see and an artifact scan cannot bound.
+ *
+ * `require`, `createRequire`, `module.require` and `import.meta.resolve` name a module without
+ * importing it. The bundler never resolves them, so they appear in no metafile record and leave no
+ * surviving import — a consumer installing only the declared dependencies gets a resolution error
+ * at runtime for something no build-time check saw.
+ *
+ * This is a SOURCE ban rather than an artifact scan, and the difference is the point. Reading the
+ * built output for these constructs means recognising every way a resolver can be stored and
+ * retrieved: under a name, through an alias, destructured, on an object property, assigned after
+ * declaration, reassigned before use. Each is a valid spelling, the set has no end, and the check
+ * has to be right about all of them. A source ban is complete by construction — the constructs
+ * simply are not present — and a bundled DEPENDENCY that uses one is caught by the artifact gate
+ * as a package, which is the half a source ban cannot see.
+ */
+const RUNTIME_RESOLVERS = [
+  "createRequire",
+  "module.require",
+  "import.meta.resolve",
+];
+
+/** The runtime-resolution constructs a shipped source file names, read from the syntax. */
+function runtimeResolversIn(text: string, fileName: string): string[] {
+  const tree = ts.createSourceFile(
+    fileName,
+    text,
+    ts.ScriptTarget.Latest,
+    true
+  );
+  const found: string[] = [];
+
+  /** `a.b` and `a["b"]` are the same read, and a rule for one is a rule the other walks around. */
+  const readsMember = (node: ts.Node, member: string): boolean => {
+    if (ts.isPropertyAccessExpression(node)) return node.name.text === member;
+    if (!ts.isElementAccessExpression(node)) return false;
+    const key = node.argumentExpression;
+    return (
+      (ts.isStringLiteral(key) || ts.isNoSubstitutionTemplateLiteral(key)) &&
+      key.text === member
+    );
+  };
+
+  const visit = (node: ts.Node): void => {
+    // Any import of Node's module loader, in either specifier spelling. The named binding is not
+    // checked: importing the module at all is what makes the loader reachable.
+    if (
+      ts.isImportDeclaration(node) &&
+      ts.isStringLiteral(node.moduleSpecifier)
+    ) {
+      const from = node.moduleSpecifier.text;
+      if (from === "node:module" || from === "module")
+        found.push("createRequire");
+    }
+    // `import.meta` is checked as a WHITELIST rather than by hunting for `.resolve`, and that is
+    // what makes this bounded where the artifact scan was not. Hunting means enumerating the ways
+    // a resolver can be reached — `.resolve`, `["resolve"]`, `const { resolve } = import.meta`,
+    // handed to a function — and the set has no end. Allowing only `import.meta.url` refuses every
+    // other use by construction, including ones nobody has thought of.
+    if (
+      ts.isMetaProperty(node) &&
+      node.keywordToken === ts.SyntaxKind.ImportKeyword
+    ) {
+      const read = node.parent;
+      const isUrl =
+        read !== undefined &&
+        (ts.isPropertyAccessExpression(read) ||
+          ts.isElementAccessExpression(read)) &&
+        read.expression === node &&
+        readsMember(read, "url");
+      if (!isUrl) found.push("import.meta.resolve");
+    }
+    // `module.require(...)`, which survives a format guard into a CommonJS build.
+    if (
+      readsMember(node, "require") &&
+      ts.isIdentifier((node as ts.PropertyAccessExpression).expression) &&
+      ((node as ts.PropertyAccessExpression).expression as ts.Identifier)
+        .text === "module"
+    ) {
+      found.push("module.require");
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  visit(tree);
+  return [...new Set(found)];
+}
+
+describe("this package resolves no module at runtime", () => {
+  it("is exercised — the reader finds each construct it bans", () => {
+    // Without this the assertion below passes against a reader that finds nothing, which is the
+    // shape of a guard reporting success because it looked for the wrong thing.
+    expect(
+      runtimeResolversIn(`import { createRequire } from "node:module";`, "a.ts")
+    ).toEqual(["createRequire"]);
+    expect(runtimeResolversIn(`import mod from "module";`, "a.ts")).toEqual([
+      "createRequire",
+    ]);
+    expect(
+      runtimeResolversIn(`export const r = import.meta.resolve("x");`, "a.ts")
+    ).toEqual(["import.meta.resolve"]);
+    expect(
+      runtimeResolversIn(
+        `export const r = import.meta["resolve"]("x");`,
+        "a.ts"
+      )
+    ).toEqual(["import.meta.resolve"]);
+    expect(
+      runtimeResolversIn(`export const r = module.require("x");`, "a.ts")
+    ).toEqual(["module.require"]);
+    expect(
+      runtimeResolversIn(`export const r = module["require"]("x");`, "a.ts")
+    ).toEqual(["module.require"]);
+    // Stored, aliased or destructured, the CONSTRUCT is still named in the source — which is what
+    // makes a source ban bounded where reading the built artifact was not.
+    expect(
+      runtimeResolversIn(
+        `const { resolve } = import.meta;\nconst load = resolve;`,
+        "a.ts"
+      )
+    ).toEqual(["import.meta.resolve"]);
+    // The controls: ordinary code names none of them.
+    expect(
+      runtimeResolversIn(
+        `import { clsx } from "clsx";\nexport const x = clsx("a");`,
+        "a.ts"
+      )
+    ).toEqual([]);
+    expect(
+      runtimeResolversIn(`export const u = import.meta.url;`, "a.ts")
+    ).toEqual([]);
+    expect(
+      runtimeResolversIn(
+        `const holder = { require: (n) => n };\nholder.require("x");`,
+        "a.ts"
+      )
+    ).toEqual([]);
+  });
+
+  it("names one in no shipped source file", () => {
+    const offenders = sourceFiles(SRC)
+      .map(
+        file =>
+          [file, runtimeResolversIn(readFileSync(file, "utf8"), file)] as const
+      )
+      .filter(([, found]) => found.length > 0)
+      .map(([file, found]) => `${file}: ${found.join(", ")}`);
+
+    expect(
+      offenders,
+      `A published entry point may not resolve a module at runtime. ${RUNTIME_RESOLVERS.join(", ")} ` +
+        "name a package the bundler never resolves, so it appears in no build record and a " +
+        "consumer installing the declared dependencies gets a resolution error instead. Import " +
+        "the module normally, or add the dependency deliberately."
     ).toEqual([]);
   });
 });

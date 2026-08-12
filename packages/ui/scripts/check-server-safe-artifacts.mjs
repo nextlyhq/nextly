@@ -37,18 +37,17 @@
  * end. The question is answerable by building a real app against these artifacts, because a real
  * build has no model in it; it is not answerable by reading them, which is all this file does.
  *
- * The runtime-resolution recognition below — `require`, `createRequire`, `module.require`,
- * `import.meta.resolve` — is DEFENCE IN DEPTH rather than a boundary, and it is best-effort by
- * design. Naming a module without importing it is outside the question by construction: the
- * bundler never resolves it, so it appears in no metafile record. Every spelling recognised has
- * another behind it.
+ * **Runtime module resolution is not read here, and that is deliberate.** `createRequire`,
+ * `module.require` and `import.meta.resolve` name a module the bundler never resolves, so it
+ * appears in no metafile record and in no surviving import. Recognising them in a BUILT artifact
+ * means recognising every way a resolver can be stored and retrieved — under a name, through an
+ * alias, destructured, on an object property, assigned after declaration, reassigned before use —
+ * and each is a valid spelling with no end to the set.
  *
- * The two halves of that list are limited by different things, and only one of them has a boundary
- * behind it. The CommonJS loader needs `node:module`, which cannot be imported from this package's
- * `src` at all — Node types are scoped to the test project, so the import is a type error that
- * fails `check-types` and the build. `import.meta.resolve` is syntax, needs no import, and
- * type-checks here today, so for that spelling this reading IS the only control. A bundled
- * dependency using either is caught as a package by the metafile instead.
+ * They are refused at SOURCE instead, by `src/layering.test.ts`, which is complete by construction:
+ * the constructs are simply not present, and `import.meta` is checked as a whitelist so a use
+ * nobody has thought of is refused too. A bundled DEPENDENCY that uses one is still caught here,
+ * as a package in the metafile — which is the half a source ban cannot see.
  *
  * The other residual, stated rather than implied: an ALLOWED package could itself grow a React
  * dependency, and nothing here would notice. The allow-list is two pure string utilities and every
@@ -108,102 +107,6 @@ export function specifiersIn(source, fileName) {
     found.push(`<unreadable specifier: ${node.getText()}>`);
   };
 
-  // The local names that MEAN `createRequire`, resolved from the import rather than assumed to be
-  // spelled that way: `import { createRequire as cr } from "node:module"` makes `cr` the factory,
-  // and the build preserves the alias.
-  // Seeded from IMPORTS only. A bare `createRequire` was assumed to be Node's, which made an
-  // unrelated local helper of that name into a module loader and rejected an artifact with no
-  // dependency at all. The name proves nothing; where it came from does.
-  const factories = new Set();
-  const namespaces = new Set();
-  const collectFactories = node => {
-    // ImportSpecifier sits under NamedImports under ImportClause under the declaration.
-    const from = node.parent?.parent?.parent?.moduleSpecifier;
-    const fromNodeModule =
-      from !== undefined &&
-      ts.isStringLiteral(from) &&
-      (from.text === "node:module" || from.text === "module");
-    if (
-      ts.isImportSpecifier(node) &&
-      fromNodeModule &&
-      (node.propertyName ?? node.name).text === "createRequire"
-    ) {
-      factories.add(node.name.text);
-    }
-    // `import * as mod from "node:module"` makes `mod.createRequire` the factory, and only that
-    // namespace's.
-    if (ts.isNamespaceImport(node)) {
-      const spec = node.parent?.parent?.moduleSpecifier;
-      if (
-        spec !== undefined &&
-        ts.isStringLiteral(spec) &&
-        (spec.text === "node:module" || spec.text === "module")
-      ) {
-        namespaces.add(node.name.text);
-      }
-    }
-    ts.forEachChild(node, collectFactories);
-  };
-  collectFactories(tree);
-
-  /**
-   * Whether an expression reads `<member>` off something, in either spelling.
-   *
-   * `a.b` and `a["b"]` are the same read, and a rule written for one of them is a rule the other
-   * walks around. Answered in one place so every member rule below inherits both spellings.
-   */
-  const readsMember = (node, member) => {
-    if (ts.isPropertyAccessExpression(node)) return node.name.text === member;
-    if (!ts.isElementAccessExpression(node)) return false;
-    const key = node.argumentExpression;
-    return (
-      key !== undefined &&
-      (ts.isStringLiteral(key) || ts.isNoSubstitutionTemplateLiteral(key)) &&
-      key.text === member
-    );
-  };
-
-  /**
-   * Whether an expression reads `<object>.<member>` off a binding the artifact does NOT declare.
-   */
-  const namesAmbientMember = (node, object, member) =>
-    readsMember(node, member) &&
-    ts.isIdentifier(node.expression) &&
-    node.expression.text === object &&
-    !isShadowed(node, object);
-
-  /**
-   * Whether an expression reads `import.meta.resolve`.
-   *
-   * `import.meta` is syntax rather than a binding, so nothing in the artifact can shadow it and no
-   * import names it. That is what makes the resolver reachable while the import list stays empty
-   * and the bundler records no dependency for what it names.
-   */
-  const namesMetaResolve = node =>
-    readsMember(node, "resolve") &&
-    ts.isMetaProperty(node.expression) &&
-    node.expression.keywordToken === ts.SyntaxKind.ImportKeyword &&
-    node.expression.name.text === "meta";
-
-  /** Whether an expression names the require factory, by local name or through a namespace. */
-  // The import that makes a name the factory sits at module scope, so a nested binding of the same
-  // word is a different value and calling it loads nothing. Both spellings resolve against the
-  // source file for that reason, rather than asking whether the name appears in the set.
-  const namesFactory = node => {
-    if (ts.isIdentifier(node)) {
-      return factories.has(node.text) && resolvesTo(node, node.text, tree);
-    }
-    // Through `readsMember` so `mod.createRequire` and `mod["createRequire"]` are one rule. Written
-    // as a property access only, the computed spelling walked past it — and the predicate that
-    // covers both already existed a few lines above, which is what makes this the avoidable kind.
-    return (
-      readsMember(node, "createRequire") &&
-      ts.isIdentifier(node.expression) &&
-      namespaces.has(node.expression.text) &&
-      resolvesTo(node.expression, node.expression.text, tree)
-    );
-  };
-
   /**
    * Every identifier a binding name introduces, including through destructuring.
    *
@@ -244,16 +147,18 @@ export function specifiersIn(source, fileName) {
    *
    * @param {ts.Node} scope
    * @param {string} name
+   * @param {boolean} fromParameter entered through this scope's own parameter list
    */
   const bindsName = (scope, name, fromParameter = false) => {
-    let found = false;
+    let found2 = false;
     const add = bound => {
-      if (bound === name) found = true;
+      if (bound === name) found2 = true;
     };
 
-    // A function's parameters, and its own name where it has one.
     if (ts.isFunctionLike(scope)) {
-      for (const parameter of scope.parameters) eachBoundName(parameter.name, add);
+      for (const parameter of scope.parameters) {
+        eachBoundName(parameter.name, add);
+      }
       if (
         (ts.isFunctionDeclaration(scope) || ts.isFunctionExpression(scope)) &&
         scope.name !== undefined
@@ -263,9 +168,7 @@ export function specifiersIn(source, fileName) {
     }
 
     // A named CLASS binds its own name throughout its body, exactly as a named function expression
-    // does — `const C = class require { ... }` makes `require` the class inside those braces. Only
-    // functions were doing this, so a call in such a body read as the ambient loader and rejected
-    // an artifact that loads nothing.
+    // does — `const C = class require { … }` makes `require` the class inside those braces.
     if (
       (ts.isClassDeclaration(scope) || ts.isClassExpression(scope)) &&
       scope.name !== undefined
@@ -278,14 +181,8 @@ export function specifiersIn(source, fileName) {
     }
 
     // `var` is FUNCTION-scoped, so it belongs to the nearest function or the file rather than to
-    // the block it is written in. Attributing it to the block put a loader out of reach of a call
-    // in the same function — `function f() { { var resolve = import.meta.resolve } resolve(x) }` —
-    // and the package it named went unreported. Nested functions own their own `var`s, so the walk
-    // stops at them.
-    // A default parameter initializer is evaluated BEFORE the body's `var` declarations exist, so
-    // `function f(x = resolve(...)) { var resolve }` reads the OUTER `resolve`. Counting the body's
-    // hoisted names for a call that lives in a parameter list made the function the nearest
-    // binding, and the outer loader stopped being recognised.
+    // the block it is written in. A class static block is its own `var` scope, and a default
+    // parameter initializer is evaluated before the body's `var`s exist — hence `fromParameter`.
     if (
       !fromParameter &&
       (ts.isFunctionLike(scope) ||
@@ -293,10 +190,6 @@ export function specifiersIn(source, fileName) {
         ts.isClassStaticBlockDeclaration(scope))
     ) {
       const hoisted = node => {
-        // A static block is its OWN `var` scope — `class C { static { var x } }` does not put `x`
-        // anywhere outside those braces — so the walk stops at one exactly as it stops at a nested
-        // function. Descending made the file look like the binding scope and rejected a build
-        // whose call resolves to the block's own local.
         if (ts.isFunctionLike(node) || ts.isClassStaticBlockDeclaration(node)) {
           return;
         }
@@ -328,11 +221,7 @@ export function specifiersIn(source, fileName) {
       ts.forEachChild(scope, hoisted);
     }
 
-    // Declarations sitting directly in a statement list, plus the initializer of a `for` form,
-    // which opens its own scope for the names it declares.
-    // A switch's CaseBlock is one lexical scope shared by every clause, so a `const` in a braceless
-    // `case` belongs to it rather than to the clause. Omitting it left `nearestBindingScope`
-    // returning undefined for that declaration, which unregisters the loader entirely.
+    // A switch's CaseBlock is one lexical scope shared by every clause.
     const statements = ts.isSourceFile(scope)
       ? scope.statements
       : ts.isBlock(scope) || ts.isModuleBlock(scope)
@@ -342,11 +231,14 @@ export function specifiersIn(source, fileName) {
           : undefined;
     for (const statement of statements ?? []) {
       if (ts.isVariableStatement(statement)) {
-        // A `var` here was already counted by the hoisting walk above, against the function or
-        // file that owns it. Counting it in a BLOCK as well would make the block look like the
-        // binding scope and defeat the fix.
-        if (!isBlockScoped(statement.declarationList) && !ts.isSourceFile(scope))
+        // A `var` here was already counted by the hoisting walk, against the function or file that
+        // owns it. Counting it in a BLOCK as well would make the block look like the binding scope.
+        if (
+          !isBlockScoped(statement.declarationList) &&
+          !ts.isSourceFile(scope)
+        ) {
           continue;
+        }
         for (const declaration of statement.declarationList.declarations) {
           eachBoundName(declaration.name, add);
         }
@@ -367,16 +259,14 @@ export function specifiersIn(source, fileName) {
       }
     }
 
+    // Only a `let`/`const` initializer makes a loop a scope; `for (var x = …)` binds to the
+    // enclosing function and the hoisting walk has already counted it there.
     const initializer =
       ts.isForStatement(scope) ||
       ts.isForInStatement(scope) ||
       ts.isForOfStatement(scope)
         ? scope.initializer
         : undefined;
-    // Only a `let`/`const` initializer makes the loop a scope. `for (var x = ...)` binds to the
-    // enclosing FUNCTION, and the hoisting walk above has already counted it there — claiming it
-    // here as well would make the loop look like the binding scope, which puts the declaration out
-    // of reach of a call after the loop in the same function.
     if (
       initializer !== undefined &&
       ts.isVariableDeclarationList(initializer) &&
@@ -387,272 +277,30 @@ export function specifiersIn(source, fileName) {
       }
     }
 
-    return found;
-  };
-
-  /**
-   * Whether `name` is bound by any scope ENCLOSING this node, so the read is not the ambient one.
-   *
-   * Asked per call site rather than once per file. A single set of every name declared anywhere
-   * suppressed a top-level `module.require("react")` because some unrelated nested function had a
-   * parameter called `module` — a binding that cannot reach the top level, silencing the one read
-   * this rule exists to catch.
-   *
-   * @param {ts.Node} node
-   * @param {string} name
-   */
-  const nearestBindingScope = (node, name) => {
-    let child = node;
-    for (let scope = node.parent; scope !== undefined; scope = scope.parent) {
-      // Whether this scope was entered through its own PARAMETER list, which changes what is
-      // visible: parameters yes, the body's hoisted `var`s not yet.
-      const fromParameter =
-        ts.isFunctionLike(scope) && scope.parameters.some(p => p === child);
-      if (bindsName(scope, name, fromParameter)) return scope;
-      child = scope;
-    }
-    return undefined;
+    return found2;
   };
 
   /**
    * Whether `name` at this node is bound by anything at all, so it is not the AMBIENT one.
    *
-   * For `require` and `module` any binding disqualifies the read, because what makes them loaders
-   * is that nothing in the artifact declares them.
-   */
-  const isShadowed = (node, name) =>
-    nearestBindingScope(node, name) !== undefined;
-
-  /**
-   * Whether `name` at this node resolves to the binding that `declaredIn` opened.
+   * Asked per call site rather than once per file: a single set of every name declared anywhere
+   * suppressed a top-level `require("react")` because an unrelated nested function had a
+   * parameter of that name.
    *
-   * The opposite question to {@link isShadowed}, and it has to be asked separately. A STORED loader
-   * is made by a declaration, so the binding is what qualifies the call rather than disqualifying
-   * it — asking "is anything binding this name" would reject the very declaration that created the
-   * loader. What disqualifies a stored loader is a NEARER binding: a parameter or local of the same
-   * name between the call and that declaration, which is a different value entirely.
+   * @param {ts.Node} node
+   * @param {string} name
    */
-  const resolvesTo = (node, name, declaredIn) =>
-    declaredIn !== undefined && nearestBindingScope(node, name) === declaredIn;
-
-  // Names bound to a loader before the walk, because the call that uses one can appear above the
-  // declaration in the emitted file. `const load = createRequire(import.meta.url)` makes `load`
-  // the module loader, and a bundler leaves that opaque exactly as it leaves `createRequire`.
-  // Mapped to the SCOPE each was declared in, not merely collected by name. A name is a loader
-  // where that declaration reaches and nowhere else: `export const resolve = import.meta.resolve`
-  // beside `function f(resolve) { return resolve(x) }` binds the same word to two different values,
-  // and reading membership alone treats the parameter as the resolver — rejecting an artifact
-  // whose call loads nothing.
-  // Name to the SET of scopes that bind it as a loader, not to one scope. Two functions can each
-  // declare `const resolve = import.meta.resolve`, and storing one scope per name lets the later
-  // declaration overwrite the earlier — so the first function's call stops resolving and whatever
-  // it named goes unreported, while the second keeps working and the check looks alive.
-  const loaders = new Map();
-
-  /** Record that `name` is a loader within the scope `declaredIn` opened. */
-  const addLoader = (name, declaredIn) => {
-    if (declaredIn === undefined) return;
-    const scopes = loaders.get(name);
-    if (scopes === undefined) loaders.set(name, new Set([declaredIn]));
-    else scopes.add(declaredIn);
-  };
-
-  /** Whether `name` at this node resolves to one of the bindings that made it a loader. */
-  const isLoaderAt = (node, name) => {
-    const scopes = loaders.get(name);
-    if (scopes === undefined) return false;
-    const scope = nearestBindingScope(node, name);
-    return scope !== undefined && scopes.has(scope);
-  };
-
-  const aliases = [];
-  /** Names given a non-loader value somewhere, which disqualifies the binding. */
-  const overwritten = [];
-
-  /**
-   * Resolvers held on an object PROPERTY, keyed `holder\u0000property` to the holder's scopes.
-   *
-   * `const holder = { load: import.meta.resolve }` puts the resolver somewhere the name-based
-   * store cannot see, because the binding `holder` is an object rather than a loader.
-   *
-   * DELIBERATELY ONE LEVEL. It covers a resolver placed directly on a literal and called directly
-   * off the name that holds it. It does not follow the holder through another binding, an array,
-   * a nested object or a computed holder, and it cannot: doing so is tracking values through the
-   * heap, which is a dataflow analysis rather than a reading of syntax. The bound is stated here
-   * rather than left for the next reader to discover from a miss.
-   */
-  const memberLoaders = new Map();
-  const memberKey = (holder, property) => `${holder}\u0000${property}`;
-  const addMemberLoader = (holder, property, declaredIn) => {
-    if (declaredIn === undefined) return;
-    const key = memberKey(holder, property);
-    const scopes = memberLoaders.get(key);
-    if (scopes === undefined) memberLoaders.set(key, new Set([declaredIn]));
-    else scopes.add(declaredIn);
-  };
-  const collectLoaders = node => {
-    /** Whether a key node names `resolve`, in every spelling a key can take. */
-    const namesResolveKey = key => {
-      if (key === undefined) return false;
-      // A COMPUTED key wraps its literal one level down, so reading the key node directly sees a
-      // node of the wrong kind rather than a non-matching name.
-      const inner = ts.isComputedPropertyName(key) ? key.expression : key;
-      if (ts.isIdentifier(inner)) return inner.text === "resolve";
-      return (
-        (ts.isStringLiteral(inner) ||
-          ts.isNoSubstitutionTemplateLiteral(inner)) &&
-        inner.text === "resolve"
-      );
-    };
-
-    /** Whether an expression is `import.meta` itself. */
-    const isImportMeta = value =>
-      value !== undefined &&
-      ts.isMetaProperty(value) &&
-      value.keywordToken === ts.SyntaxKind.ImportKeyword &&
-      value.name.text === "meta";
-
-    /**
-     * Names bound to `import.meta.resolve` by destructuring, in either target form.
-     *
-     * A DECLARATION destructures through a binding pattern (`const { resolve: load } = …`) and an
-     * ASSIGNMENT through an object literal (`({ resolve: load } = …)`) — different node types for
-     * one operation. Read separately they drift, which is how the assignment form stayed invisible
-     * after the declaration form was covered, so both are reduced here to (key, boundName).
-     */
-    const destructuredResolvers = target => {
-      const bound = [];
-      if (ts.isObjectBindingPattern(target)) {
-        for (const element of target.elements) {
-          if (
-            namesResolveKey(element.propertyName ?? element.name) &&
-            ts.isIdentifier(element.name)
-          ) {
-            bound.push(element.name);
-          }
-        }
-        return bound;
-      }
-      if (!ts.isObjectLiteralExpression(target)) return bound;
-      for (const property of target.properties) {
-        if (
-          ts.isShorthandPropertyAssignment(property) &&
-          namesResolveKey(property.name)
-        ) {
-          bound.push(property.name);
-        } else if (
-          ts.isPropertyAssignment(property) &&
-          namesResolveKey(property.name) &&
-          ts.isIdentifier(property.initializer)
-        ) {
-          bound.push(property.initializer);
-        }
-      }
-      return bound;
-    };
-
-    // `const { resolve } = import.meta` binds the resolver without ever naming
-    // `import.meta.resolve`, so the value check below never sees it and the target is not an
-    // identifier either. Handled first, because both guards there would reject it. Only the
-    // `resolve` property is a loader; `const { url } = import.meta` is not.
-    const destructuredFrom = ts.isVariableDeclaration(node)
-      ? [node.name, node.initializer]
-      : ts.isBinaryExpression(node) &&
-          node.operatorToken.kind === ts.SyntaxKind.EqualsToken
-        ? [node.left, node.right]
-        : undefined;
-    if (destructuredFrom !== undefined && isImportMeta(destructuredFrom[1])) {
-      for (const name of destructuredResolvers(destructuredFrom[0])) {
-        addLoader(name.text, nearestBindingScope(name, name.text));
-      }
+  const isShadowed = (node, name) => {
+    let child = node;
+    for (let scope = node.parent; scope !== undefined; scope = scope.parent) {
+      const fromParameter =
+        ts.isFunctionLike(scope) &&
+        scope.parameters.some(parameter => parameter === child);
+      if (bindsName(scope, name, fromParameter)) return true;
+      child = scope;
     }
-    // A name takes a loader in two ways that look different and mean the same: a declaration with
-    // an initializer, and a later ASSIGNMENT to an already-declared name. `let load; load =
-    // import.meta.resolve` survives the bundler intact and left no record anywhere, so reading only
-    // initializers made the whole form invisible. Both are reduced to (name, value) here.
-    const takes = (nameNode, value) => {
-      if (value === undefined || !ts.isIdentifier(nameNode)) return;
-      const declaredIn = nearestBindingScope(nameNode, nameNode.text);
-      if (ts.isCallExpression(value) && namesFactory(value.expression)) {
-        addLoader(nameNode.text, declaredIn);
-      } else if (namesMetaResolve(value)) {
-        // `const resolve = import.meta.resolve` hands the resolver on as a value, and calling it
-        // through that name names a package exactly as calling it in place does.
-        addLoader(nameNode.text, declaredIn);
-      } else if (ts.isIdentifier(value)) {
-        // `const again = load` hands the loader on under another name. Recorded now and resolved
-        // below, because the assignment can appear in any order in emitted output.
-        aliases.push([nameNode.text, value, declaredIn]);
-      } else if (ts.isObjectLiteralExpression(value)) {
-        // A resolver placed on a property of an object literal, e.g.
-        // `const holder = { load: import.meta.resolve }`. The holder itself is not a loader, so it
-        // is not recorded as one; only the property is.
-        for (const property of value.properties) {
-          if (!ts.isPropertyAssignment(property)) continue;
-          const held = property.initializer;
-          const isLoaderValue =
-            namesMetaResolve(held) ||
-            (ts.isCallExpression(held) && namesFactory(held.expression));
-          if (!isLoaderValue) continue;
-          const key = property.name;
-          const named = ts.isComputedPropertyName(key) ? key.expression : key;
-          if (
-            ts.isIdentifier(named) ||
-            ts.isStringLiteral(named) ||
-            ts.isNoSubstitutionTemplateLiteral(named)
-          ) {
-            addMemberLoader(nameNode.text, named.text, declaredIn);
-          }
-        }
-      } else {
-        // The name was given something that is NOT a loader. `let load = import.meta.resolve;
-        // load = v => v` leaves the call harmless, and reporting it rejects a valid artifact.
-        //
-        // Recorded rather than acted on here, and applied after the whole walk, because emitted
-        // output is not in source order — deciding at this point would depend on which assignment
-        // the traversal reached first. Conservative by design: a name ever given a non-loader stops
-        // being treated as one, which trades a possible miss for never failing a build whose call
-        // loads nothing.
-        overwritten.push([nameNode.text, declaredIn]);
-      }
-    };
-
-    if (ts.isVariableDeclaration(node)) {
-      takes(node.name, node.initializer);
-    }
-    if (
-      ts.isBinaryExpression(node) &&
-      node.operatorToken.kind === ts.SyntaxKind.EqualsToken
-    ) {
-      takes(node.left, node.right);
-    }
-    ts.forEachChild(node, collectLoaders);
+    return false;
   };
-  collectLoaders(tree);
-  // Applied BEFORE the alias fixed point, so a name that was overwritten cannot hand a loader on
-  // to something else through an alias it never really held.
-  for (const [name, declaredIn] of overwritten) {
-    if (declaredIn === undefined) continue;
-    loaders.get(name)?.delete(declaredIn);
-  }
-  // To a fixed point, so a chain of any length resolves rather than only the first link. The
-  // SOURCE is resolved from where the alias reads it, so `const again = load` follows the `load`
-  // visible at that point rather than any binding of that name anywhere.
-  for (let changed = true; changed; ) {
-    changed = false;
-    for (const [alias, source, declaredIn] of aliases) {
-      // Guarded on the alias not already being a loader IN THAT SCOPE, so the loop terminates
-      // while still allowing one name to be a loader in several scopes.
-      if (
-        isLoaderAt(source, source.text) &&
-        declaredIn !== undefined &&
-        !(loaders.get(alias)?.has(declaredIn) ?? false)
-      ) {
-        addLoader(alias, declaredIn);
-        changed = true;
-      }
-    }
-  }
 
   /** @param {ts.Node} node */
   const visit = node => {
@@ -666,62 +314,14 @@ export function specifiersIn(source, fileName) {
     } else if (ts.isCallExpression(node)) {
       const callee = node.expression;
       const isDynamicImport = callee.kind === ts.SyntaxKind.ImportKeyword;
-      // A module that declares its own `require` is not reaching the CommonJS loader, and reporting
-      // its argument names something that is not a module specifier. The same rule the `module`
-      // object already gets: the name proves nothing, where it came from does.
+      // The CJS build's own loader. A module that declares its OWN `require` is not reaching it,
+      // and reporting that call's argument names something which is not a module specifier —
+      // rejecting an artifact with no dependency at all.
       const isRequire =
         ts.isIdentifier(callee) &&
         callee.text === "require" &&
         !isShadowed(callee, "require");
-      // `module.require("react")` is the CommonJS loader reached through the module object, which
-      // survives a format guard into the CJS artifact and is opaque to the bundler, so it appears
-      // in neither the specifier list nor the metafile. `module` must be the ambient one.
-      //
-      // Both spellings go through one predicate. Handling the dot form and leaving the bracket
-      // form is how the two drift apart, and `module["require"]` is the same call.
-      const isModuleRequire = namesAmbientMember(callee, "module", "require");
-      // `createRequire(import.meta.url)("react")` loads a module while naming only `node:module`
-      // as an import. The loader is the RESULT of a call, so the callee is not the `require`
-      // identifier and the direct check never sees it. This package uses `createRequire` itself,
-      // precisely because a bundler leaves it opaque.
-      const isCreatedRequire =
-        // `createRequire(import.meta.url)("react")`, invoked where it is made.
-        (ts.isCallExpression(callee) && namesFactory(callee.expression)) ||
-        // `const load = createRequire(...); load("react")`, invoked through the name it was
-        // stored under — and only where that declaration is what the name resolves to.
-        (ts.isIdentifier(callee) && isLoaderAt(callee, callee.text)) ||
-        // `holder.load("react")`, where `load` was placed on `holder` as a resolver. Both member
-        // spellings, through the same predicate every other member rule uses.
-        ((ts.isPropertyAccessExpression(callee) ||
-          ts.isElementAccessExpression(callee)) &&
-          ts.isIdentifier(callee.expression) &&
-          (() => {
-            const holder = callee.expression;
-            const member = ts.isPropertyAccessExpression(callee)
-              ? callee.name.text
-              : ts.isStringLiteral(callee.argumentExpression) ||
-                  ts.isNoSubstitutionTemplateLiteral(callee.argumentExpression)
-                ? callee.argumentExpression.text
-                : undefined;
-            if (member === undefined) return false;
-            const scopes = memberLoaders.get(memberKey(holder.text, member));
-            if (scopes === undefined) return false;
-            const scope = nearestBindingScope(holder, holder.text);
-            return scope !== undefined && scopes.has(scope);
-          })());
-      // `import.meta.resolve("@nextlyhq/admin-css")` names a package without importing it. It
-      // needs no `node:module` import, so the guard that keeps the loader out of this package
-      // does not reach it, and a bundler records no dependency for what it names — a consumer
-      // installing only the declared dependencies gets ERR_MODULE_NOT_FOUND at runtime.
-      const isMetaResolve = namesMetaResolve(callee);
-      if (
-        (isDynamicImport ||
-          isRequire ||
-          isCreatedRequire ||
-          isModuleRequire ||
-          isMetaResolve) &&
-        node.arguments.length > 0
-      ) {
+      if ((isDynamicImport || isRequire) && node.arguments.length > 0) {
         record(node.arguments[0]);
       }
     }
