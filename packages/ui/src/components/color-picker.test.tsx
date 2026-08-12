@@ -162,6 +162,70 @@ describe("the eyedropper", () => {
     }
   });
 
+  it("does not disguise a failing host callback as a dismissal", async () => {
+    // The dismissal catch used to wrap the commit as well, so a host whose
+    // `onColorChange` throws — a rejected save, a failed validation — was
+    // swallowed as "the user closed the picker" while the picker had already
+    // moved. The failure has to reach the host, as it does on every other path.
+    const w = window as unknown as Record<string, unknown>;
+    w.EyeDropper = class {
+      open() {
+        return Promise.resolve({ sRGBHex: "#123456" });
+      }
+    };
+    const escaped: unknown[] = [];
+    const capture = (reason: unknown) => escaped.push(reason);
+    process.on("unhandledRejection", capture);
+    try {
+      render(
+        <ColorPicker
+          color="#000000"
+          onColorChange={() => {
+            throw new Error("host rejected the colour");
+          }}
+        />
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: "Pick a colour from the screen" })
+      );
+      await new Promise(resolve => setTimeout(resolve, 10));
+    } finally {
+      process.off("unhandledRejection", capture);
+      delete w.EyeDropper;
+    }
+
+    expect(escaped.map(String)).toEqual(["Error: host rejected the colour"]);
+  });
+
+  it("stays quiet when the user dismisses it", async () => {
+    // The other half, and the reason the catch exists at all: a dismissal is
+    // an ordinary outcome, so `open()` rejecting must report nothing. Without
+    // this, narrowing the catch to nothing at all would satisfy the test above.
+    const w = window as unknown as Record<string, unknown>;
+    w.EyeDropper = class {
+      open() {
+        return Promise.reject(new Error("AbortError"));
+      }
+    };
+    const escaped: unknown[] = [];
+    const capture = (reason: unknown) => escaped.push(reason);
+    process.on("unhandledRejection", capture);
+    const onColorChange = vi.fn();
+    try {
+      render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+      fireEvent.click(
+        screen.getByRole("button", { name: "Pick a colour from the screen" })
+      );
+      await new Promise(resolve => setTimeout(resolve, 10));
+    } finally {
+      process.off("unhandledRejection", capture);
+      delete w.EyeDropper;
+    }
+
+    expect(escaped).toEqual([]);
+    expect(onColorChange).not.toHaveBeenCalled();
+  });
+
   it("appears where it is supported", () => {
     // The positive control: without it, a picker that never renders the button
     // satisfies the assertion above.

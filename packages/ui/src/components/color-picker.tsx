@@ -248,14 +248,21 @@ export function ColorPicker<TValue = string>({
       | (new () => EyeDropperLike)
       | undefined;
     if (!ctor) return;
+    let sampled: string;
     try {
-      const { sRGBHex } = await new ctor().open();
-      const parsed = parseHex(sRGBHex);
-      // The screen's alpha is not meaningful, so the picker keeps its own.
-      if (parsed) commit(hsvaFrom(parsed, hsva.a, hsva.h));
+      sampled = (await new ctor().open()).sRGBHex;
     } catch {
       // The user dismissed the picker. Not an error, and nothing to report.
+      // Scoped to `open()` alone: with the commit inside this block, a host
+      // whose `onColorChange` throws — a failing save, a rejected validation —
+      // was reported as a dismissal and swallowed, while the picker had
+      // already moved. Every other edit path lets that reach the host, and so
+      // does this one now.
+      return;
     }
+    const parsed = parseHex(sampled);
+    // The screen's alpha is not meaningful, so the picker keeps its own.
+    if (parsed) commit(hsvaFrom(parsed, hsva.a, hsva.h));
   };
 
   return (

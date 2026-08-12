@@ -173,14 +173,30 @@ function resolvesToForbidden(specifier: string): boolean {
  * `engine` and the source says `import ... from "engine"`: the manifest check
  * and the import check both see a package they have never heard of, and both
  * pass. The VALUE is where the real specifier lives.
+ *
+ * Both routes ask {@link resolvesToForbidden} rather than testing the string
+ * themselves. A second opinion about which package a name refers to is what
+ * makes a guard disagree with itself: a bare `npm:<pkg>` prefix test rejects
+ * `npm:@nextlyhq/blocks-engine-extra` — a legitimately different package — even
+ * while the import side is careful to allow it.
  */
+function aliasedPackage(range: string): string | null {
+  if (!range.startsWith("npm:")) return null;
+  const target = range.slice("npm:".length);
+  // A scoped package opens with `@`, so the version delimiter is the LAST `@`
+  // rather than the first. An alias carrying no version is the whole remainder.
+  const versionAt = target.lastIndexOf("@");
+  return versionAt > 0 ? target.slice(0, versionAt) : target;
+}
+
 function forbiddenDeclarationsIn(manifest: Record<string, unknown>): string[] {
   return DEPENDENCY_FIELDS.flatMap(field =>
     Object.entries((manifest[field] as Record<string, string>) ?? {})
-      .filter(
-        ([name, range]) =>
-          name === FORBIDDEN || range.startsWith(`npm:${FORBIDDEN}`)
-      )
+      .filter(([name, range]) => {
+        if (resolvesToForbidden(name)) return true;
+        const target = aliasedPackage(range);
+        return target !== null && resolvesToForbidden(target);
+      })
       .map(([name]) => `${field}.${name}`)
   );
 }
@@ -339,6 +355,19 @@ describe("this package takes no direct dependency on the block engine", () => {
     expect(resolvesToForbidden(`${FORBIDDEN}/schema`)).toBe(true);
     expect(resolvesToForbidden(`${FORBIDDEN}-extra`)).toBe(false);
     expect(resolvesToForbidden("@nextlyhq/ui")).toBe(false);
+
+    // The manifest side must agree, and it is a separate code path: a neighbour
+    // declared through an alias is a legal dependency, and a guard that fails
+    // the suite over one is a guard people start routing around.
+    expect(
+      forbiddenDeclarationsIn({
+        dependencies: { engine: `npm:${FORBIDDEN}-extra@1.0.0` },
+      })
+    ).toEqual([]);
+    // An alias carrying no version at all still resolves to a package.
+    expect(
+      forbiddenDeclarationsIn({ dependencies: { engine: `npm:${FORBIDDEN}` } })
+    ).toEqual(["dependencies.engine"]);
 
     // Through the reader, because that is how the scan asks the question.
     expect(
