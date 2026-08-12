@@ -13,25 +13,26 @@
  * The proof-of-concept block library this package replaces has six blocks whose
  * own Style-tab controls are already dead for exactly this reason. Those blocks
  * get ported here, and a render body is copied more readily than it is reread,
- * so the moment of risk is the port rather than anything written today. This
- * fails at that moment instead of after someone notices a control doing nothing.
+ * so the moment of risk is the port rather than anything written today.
  *
- * Checked on the RENDERED OUTPUT rather than by scanning source. A syntax scan
- * has an unbounded surface — it already missed a block that assembled a
- * `CSSProperties` object separately and applied it as `style={hasStyle ? s : undefined}` —
- * whereas the output either carries the attribute or does not.
+ * Measured on SERIALIZED HTML rather than on the element tree, and that is the
+ * load-bearing choice. A block may return a component rather than a host
+ * element — `<Root className={className} />` — which forwards the class inward
+ * and adds a style of its own. Walking the returned elements sees the class on
+ * an unresolved component, counts the block as covered, and finds no style, so
+ * the block reads clean while its actual DOM root carries one. Rendering
+ * resolves every component, so what is inspected is what a browser receives.
  *
- * The output has to be AWAITED. Several blocks are async server components, so a
- * walk over what `render` returns synchronously reaches a promise, finds no
- * element on it, and reports them clean — which is how a first version of this
- * silently exempted `core/image`, `core/button` and `core/collection-loop`, the
- * three most likely to carry a computed style. Coverage is therefore asserted
- * per block by name rather than as a count.
+ * Rendered through the streaming renderer because several core blocks are async
+ * server components. The static renderer cannot express them, and an earlier
+ * version of this file that walked the synchronous return value silently
+ * exempted all three of them.
  */
 import { describe, expect, it } from "vitest";
 
 import type { AnyBlockDefinition, BlockNode } from "@nextlyhq/blocks-engine";
-import { isValidElement, type ReactElement } from "react";
+import type { ReactElement } from "react";
+import { renderToReadableStream } from "react-dom/server";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
@@ -43,15 +44,20 @@ const NODE: BlockNode = { id: "n1", type: "core/box", version: 1, props: {} };
 const NODE_CLASS = "nx-n1";
 
 /**
- * Blocks that must carry an inline style on their root, with the reason.
+ * Inline CSS properties a named block is permitted to write on its root.
  *
- * Empty, and that is the ratchet: every core block today renders without one, so
- * an addition here is a deliberate act with an argument attached rather than a
- * default anybody can drift into. A geometric value the compiler cannot express
- * would be a fair entry; a colour, a spacing or a border would not, because
- * those are precisely what an author reaches for a control to change.
+ * Keyed by block AND by property, never by block alone. A block exempted
+ * wholesale could later add `color` or `padding` to the same style object and
+ * stay green, which is precisely what this rule exists to catch — the exemption
+ * would silently widen from the one value that earned it to everything beside
+ * it.
+ *
+ * Empty, and that is the ratchet: no core block needs one today, so any entry is
+ * a deliberate act with an argument attached. A geometry the compiler cannot
+ * express would be a fair entry; a colour, a spacing or a border would not,
+ * because those are exactly what an author reaches for a control to change.
  */
-const ALLOWED: ReadonlyMap<string, string> = new Map();
+const ALLOWED: ReadonlyMap<string, ReadonlySet<string>> = new Map();
 
 function context(): PageContext {
   return {
@@ -61,107 +67,145 @@ function context(): PageContext {
   } as unknown as PageContext;
 }
 
-function renderArgs<P>(props: P): BlockRenderArgs<P> {
+function renderArgs(props: unknown): BlockRenderArgs<never> {
   return {
     props,
     node: NODE,
     className: NODE_CLASS,
     ctx: context(),
     renderSlot: () => <span>child</span>,
-  } as BlockRenderArgs<P>;
+  } as unknown as BlockRenderArgs<never>;
 }
 
 /**
- * A block's output, whether it renders synchronously or as a server component.
+ * The prop sets each block is exercised with.
  *
- * Taken as `AnyBlockDefinition` — the erased shape the registry itself stores —
- * because `coreBlocks` is a union of definitions with different prop types and a
- * union of functions cannot be called with any one of them. That is the same
- * erasure `registerBlocks` performs, so nothing here is looser than production.
+ * One example is not exhaustive: the PoC button builds a root style only when an
+ * icon, an explicit width or an outline variant is chosen, and none of those
+ * appear in a palette example — so a port of that implementation would keep a
+ * single-example guard green while real documents received overriding styles.
+ *
+ * Variants are DERIVED from the block's own prop schema rather than hand-listed,
+ * so they cannot drift as a block gains options: every declared `select` is
+ * exercised at each of its options. What this does NOT reach is a style branch
+ * keyed on a free-text or numeric prop, which no schema enumerates; those remain
+ * covered only by whatever the example supplies.
  */
-async function rendered(block: AnyBlockDefinition): Promise<unknown> {
-  return await block.render(renderArgs(block.example.props));
-}
-
-/** Every element in a render result, the root included. */
-function elementsIn(node: unknown): ReactElement[] {
-  if (!isValidElement(node)) {
-    // An array or a fragment's children arrive here as a plain iterable; a
-    // string, number, null or boolean has no props to inspect and ends the walk.
-    if (Array.isArray(node)) return node.flatMap(child => elementsIn(child));
-    return [];
+function propVariants(block: AnyBlockDefinition): unknown[] {
+  const base = {
+    ...(block.defaultProps ?? {}),
+    ...(block.example.props ?? {}),
+  } as Record<string, unknown>;
+  const variants: unknown[] = [base];
+  const schema: Record<string, unknown> = block.props ?? {};
+  for (const [name, entry] of Object.entries(schema)) {
+    const options: unknown = (entry as { options?: unknown }).options;
+    if (!Array.isArray(options)) continue;
+    for (const option of options) {
+      variants.push({ ...base, [name]: option });
+    }
   }
-  const children: unknown = (node.props as { children?: unknown }).children;
-  return [node, ...elementsIn(children)];
+  return variants;
 }
 
-/** The inline style an element carries, if any. Props are unknown-shaped here. */
-function inlineStyleOf(element: ReactElement): unknown {
-  return (element.props as { style?: unknown }).style;
+/** A block's output as a browser would receive it. */
+async function renderHtml(
+  block: AnyBlockDefinition,
+  props: unknown
+): Promise<string> {
+  // Wrapped as a component because the render result is a node, and an async
+  // block hands back a promise — the renderer resolves either through this.
+  const Block = (): unknown => block.render(renderArgs(props));
+  const stream = await renderToReadableStream(
+    (<Block />) as unknown as ReactElement,
+    {
+      onError(error: unknown) {
+        throw error;
+      },
+    }
+  );
+  await stream.allReady;
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let html = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    html += decoder.decode(value);
+  }
+  return html;
 }
 
-/** The elements a block put its given class on. */
-function classCarriers(node: unknown): ReactElement[] {
-  return elementsIn(node).filter(element => {
-    const className: unknown = (element.props as { className?: unknown })
-      .className;
-    return (
-      typeof className === "string" &&
-      className.split(/\s+/).includes(NODE_CLASS)
-    );
+/** Every opening tag whose class attribute carries the node class. */
+function classCarryingTags(html: string): string[] {
+  const tags = html.match(/<[a-zA-Z][a-zA-Z0-9-]*\s[^>]*>/g) ?? [];
+  return tags.filter(tag => {
+    const attr = /\sclass="([^"]*)"/.exec(tag);
+    return attr !== null && attr[1].split(/\s+/).includes(NODE_CLASS);
   });
+}
+
+/** The CSS property names an opening tag declares inline. */
+function inlinePropertiesOf(tag: string): string[] {
+  const attr = /\sstyle="([^"]*)"/.exec(tag);
+  if (attr === null) return [];
+  return attr[1]
+    .split(";")
+    .map(declaration => declaration.split(":")[0]?.trim() ?? "")
+    .filter(name => name.length > 0);
+}
+
+interface Inspection {
+  /** Blocks whose rendered output carried the class at least once. */
+  reached: Set<string>;
+  /** `block: property` for every disallowed inline declaration on a root. */
+  offenders: string[];
+}
+
+/**
+ * One pass over the library, shared by both assertions.
+ *
+ * Rendered ONCE rather than per assertion. A block whose second render differs —
+ * one that consumed a provider, or answered from state — would let a coverage
+ * check pass on the first pass while the style check silently examined nothing
+ * on the second, and that failure looks identical to a clean library.
+ */
+async function inspect(): Promise<Inspection> {
+  const reached = new Set<string>();
+  const offenders: string[] = [];
+  for (const block of coreBlocks) {
+    const definition = block as AnyBlockDefinition;
+    const permitted = ALLOWED.get(definition.name) ?? new Set<string>();
+    for (const props of propVariants(definition)) {
+      const html = await renderHtml(definition, props);
+      for (const tag of classCarryingTags(html)) {
+        reached.add(definition.name);
+        for (const property of inlinePropertiesOf(tag)) {
+          if (permitted.has(property)) continue;
+          offenders.push(`${definition.name}: ${property}`);
+        }
+      }
+    }
+  }
+  return { reached, offenders };
 }
 
 describe("a core block's root element", () => {
-  /**
-   * Which blocks put their class on something, resolved once.
-   *
-   * Named rather than counted. A count is satisfied by any nine of twelve, so it
-   * cannot tell a library that grew a clean block from one whose riskiest block
-   * stopped being reached — and the second is exactly what happened here.
-   */
-  async function inspectable(): Promise<Map<string, ReactElement[]>> {
-    const found = new Map<string, ReactElement[]>();
-    for (const block of coreBlocks) {
-      const carriers = classCarriers(await rendered(block));
-      if (carriers.length > 0) found.set(block.name, carriers);
-    }
-    return found;
-  }
+  it("carries no inline style, and every block was actually reached", async () => {
+    const { reached, offenders } = await inspect();
 
-  it("reaches every block that draws, named rather than counted", async () => {
-    const found = await inspectable();
+    // The vacuity control, asserted in the SAME pass and BY NAME. A count is
+    // satisfied by any nine of twelve, so it cannot tell a library that grew a
+    // clean block from one whose riskiest block stopped being rendered — and
+    // that second case is what an earlier version of this file did.
     const missing = coreBlocks
-      .map(block => block.name)
-      .filter(name => !found.has(name));
-
-    // EVERY core block is reached, `core/collection-loop` included — it draws its
-    // empty state when no provider answers rather than drawing nothing. A name
-    // appearing here means the walk stopped finding that block, and the
-    // assertion below would then pass by never running against it.
+      .map(block => (block as AnyBlockDefinition).name)
+      .filter(name => !reached.has(name));
     expect(missing).toEqual([]);
-  });
-
-  it("puts no inline style on the element it was given a class for", async () => {
-    const found = await inspectable();
-    const offenders: string[] = [];
-    for (const [name, carriers] of found) {
-      const inline = carriers.filter(el => inlineStyleOf(el) !== undefined);
-      if (ALLOWED.has(name)) {
-        expect(
-          inline.length,
-          `${name} is allow-listed but no longer needs it: ${ALLOWED.get(name) ?? ""}`
-        ).toBeGreaterThan(0);
-        continue;
-      }
-      for (const el of inline) {
-        offenders.push(`${name}: ${JSON.stringify(inlineStyleOf(el))}`);
-      }
-    }
 
     expect(
-      offenders,
-      "A block put an inline style on the element it was given a class for. " +
+      [...new Set(offenders)].sort(),
+      "A block wrote an inline style on the element it was given a class for. " +
         "An inline declaration beats every class rule, so a style control " +
         "writing that property compiles CSS with no visible effect. Move the " +
         "default to `baseStyles`, which the compiler emits as the block-type " +
