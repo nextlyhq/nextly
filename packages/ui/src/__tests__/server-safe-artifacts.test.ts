@@ -172,6 +172,54 @@ describe("reading an artifact's specifiers", () => {
     ).toEqual([]);
   });
 
+  it("does not treat a nested binding as the stored loader it shadows", () => {
+    // A stored loader is made BY a declaration, so the binding qualifies the call rather than
+    // disqualifying it — the opposite of `require`, where any binding means the call is not the
+    // ambient loader. Reading membership alone treated the parameter below as the resolver and
+    // rejected an artifact whose call loads nothing, which costs a correct lane a red build.
+    expect(
+      read(`
+        export const resolve = import.meta.resolve;
+        export function f(resolve) { return resolve("react"); }
+      `)
+    ).toEqual([]);
+    expect(
+      read(`
+        import { createRequire } from "node:module";
+        const load = createRequire(import.meta.url);
+        export function g(load) { return load("react"); }
+      `)
+    ).toEqual(["node:module"]);
+    // The control, and the one a careless fix breaks: at the scope where the loader IS declared,
+    // the call is still a module load.
+    expect(
+      read(`
+        export const resolve = import.meta.resolve;
+        export const react = resolve("react");
+      `)
+    ).toEqual(["react"]);
+  });
+
+  it("does not treat a nested binding as the imported require factory", () => {
+    // The import that makes a name the factory sits at module scope, so a parameter of the same
+    // word is a different value and calling it makes no loader.
+    expect(
+      read(`
+        import { createRequire } from "node:module";
+        export function h(createRequire) {
+          return createRequire(import.meta.url)("react");
+        }
+      `)
+    ).toEqual(["node:module"]);
+    // The control: at module scope the factory is still recognised.
+    expect(
+      read(`
+        import { createRequire } from "node:module";
+        export const react = createRequire(import.meta.url)("react");
+      `)
+    ).toEqual(["node:module", "react"]);
+  });
+
   it("does not treat a locally declared require as the loader", () => {
     // A module declaring its own `require` is not reaching the CommonJS loader, so its argument is
     // not a module specifier. Reported, it rejects an artifact with no dependency at all -- the

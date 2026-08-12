@@ -186,13 +186,19 @@ export function specifiersIn(source, fileName) {
     node.expression.name.text === "meta";
 
   /** Whether an expression names the require factory, by local name or through a namespace. */
+  // The import that makes a name the factory sits at module scope, so a nested binding of the same
+  // word is a different value and calling it loads nothing. Both spellings resolve against the
+  // source file for that reason, rather than asking whether the name appears in the set.
   const namesFactory = node => {
-    if (ts.isIdentifier(node)) return factories.has(node.text);
+    if (ts.isIdentifier(node)) {
+      return factories.has(node.text) && resolvesTo(node, node.text, tree);
+    }
     return (
       ts.isPropertyAccessExpression(node) &&
       node.name.text === "createRequire" &&
       ts.isIdentifier(node.expression) &&
-      namespaces.has(node.expression.text)
+      namespaces.has(node.expression.text) &&
+      resolvesTo(node.expression, node.expression.text, tree)
     );
   };
 
@@ -303,46 +309,78 @@ export function specifiersIn(source, fileName) {
    * @param {ts.Node} node
    * @param {string} name
    */
-  const isShadowed = (node, name) => {
+  const nearestBindingScope = (node, name) => {
     for (let scope = node.parent; scope !== undefined; scope = scope.parent) {
-      if (bindsName(scope, name)) return true;
+      if (bindsName(scope, name)) return scope;
     }
-    return false;
+    return undefined;
   };
+
+  /**
+   * Whether `name` at this node is bound by anything at all, so it is not the AMBIENT one.
+   *
+   * For `require` and `module` any binding disqualifies the read, because what makes them loaders
+   * is that nothing in the artifact declares them.
+   */
+  const isShadowed = (node, name) =>
+    nearestBindingScope(node, name) !== undefined;
+
+  /**
+   * Whether `name` at this node resolves to the binding that `declaredIn` opened.
+   *
+   * The opposite question to {@link isShadowed}, and it has to be asked separately. A STORED loader
+   * is made by a declaration, so the binding is what qualifies the call rather than disqualifying
+   * it — asking "is anything binding this name" would reject the very declaration that created the
+   * loader. What disqualifies a stored loader is a NEARER binding: a parameter or local of the same
+   * name between the call and that declaration, which is a different value entirely.
+   */
+  const resolvesTo = (node, name, declaredIn) =>
+    declaredIn !== undefined && nearestBindingScope(node, name) === declaredIn;
 
   // Names bound to a loader before the walk, because the call that uses one can appear above the
   // declaration in the emitted file. `const load = createRequire(import.meta.url)` makes `load`
   // the module loader, and a bundler leaves that opaque exactly as it leaves `createRequire`.
-  const loaders = new Set();
+  // Mapped to the SCOPE each was declared in, not merely collected by name. A name is a loader
+  // where that declaration reaches and nowhere else: `export const resolve = import.meta.resolve`
+  // beside `function f(resolve) { return resolve(x) }` binds the same word to two different values,
+  // and reading membership alone treats the parameter as the resolver — rejecting an artifact
+  // whose call loads nothing.
+  const loaders = new Map();
   const aliases = [];
   const collectLoaders = node => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
       const init = node.initializer;
+      const declaredIn = nearestBindingScope(node.name, node.name.text);
       if (
         init !== undefined &&
         ts.isCallExpression(init) &&
         namesFactory(init.expression)
       ) {
-        loaders.add(node.name.text);
+        loaders.set(node.name.text, declaredIn);
       } else if (init !== undefined && namesMetaResolve(init)) {
         // `const resolve = import.meta.resolve` hands the resolver on as a value, and calling it
         // through that name names a package exactly as calling it in place does.
-        loaders.add(node.name.text);
+        loaders.set(node.name.text, declaredIn);
       } else if (init !== undefined && ts.isIdentifier(init)) {
         // `const again = load` hands the loader on under another name. Recorded now and resolved
         // below, because the assignment can appear in any order in emitted output.
-        aliases.push([node.name.text, init.text]);
+        aliases.push([node.name.text, init, declaredIn]);
       }
     }
     ts.forEachChild(node, collectLoaders);
   };
   collectLoaders(tree);
-  // To a fixed point, so a chain of any length resolves rather than only the first link.
+  // To a fixed point, so a chain of any length resolves rather than only the first link. The
+  // SOURCE is resolved from where the alias reads it, so `const again = load` follows the `load`
+  // visible at that point rather than any binding of that name anywhere.
   for (let changed = true; changed; ) {
     changed = false;
-    for (const [alias, source] of aliases) {
-      if (loaders.has(source) && !loaders.has(alias)) {
-        loaders.add(alias);
+    for (const [alias, source, declaredIn] of aliases) {
+      if (
+        resolvesTo(source, source.text, loaders.get(source.text)) &&
+        !loaders.has(alias)
+      ) {
+        loaders.set(alias, declaredIn);
         changed = true;
       }
     }
@@ -382,8 +420,9 @@ export function specifiersIn(source, fileName) {
         // `createRequire(import.meta.url)("react")`, invoked where it is made.
         (ts.isCallExpression(callee) && namesFactory(callee.expression)) ||
         // `const load = createRequire(...); load("react")`, invoked through the name it was
-        // stored under.
-        (ts.isIdentifier(callee) && loaders.has(callee.text));
+        // stored under — and only where that declaration is what the name resolves to.
+        (ts.isIdentifier(callee) &&
+          resolvesTo(callee, callee.text, loaders.get(callee.text)));
       // `import.meta.resolve("@nextlyhq/admin-css")` names a package without importing it. It
       // needs no `node:module` import, so the guard that keeps the loader out of this package
       // does not reach it, and a bundler records no dependency for what it names — a consumer
