@@ -48,14 +48,11 @@ export const MAIN_MENU_ITEMS: MainMenuItem[] = [
   },
 ];
 
-export const getFilteredMenuItems = (
-  showBuilder: boolean,
-  hasInstalledPlugins: boolean = false
-) =>
+// Plugins is always listed, including on an install with none registered: the
+// entry is the only route to the plugin directory, so hiding it until a plugin
+// exists leaves a new install unable to find the page that installs one.
+export const getFilteredMenuItems = (showBuilder: boolean) =>
   MAIN_MENU_ITEMS.filter(item => {
     if (item.id === "builders" && !showBuilder) return false;
-    // Plugins functionality is in development; hide the menu entry until at
-    // least one plugin is registered so empty installs don't see a stub page.
-    if (item.id === "plugins" && !hasInstalledPlugins) return false;
     return true;
   });

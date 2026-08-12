@@ -37,13 +37,13 @@ describe("resolveItemHref", () => {
     ).toBe(ROUTES.SINGLES);
   });
 
-  it("keeps the plugins icon as a sub-sidebar opener (no landing page)", () => {
+  it("routes the plugins icon to the section landing page", () => {
     expect(
       resolveItemHref(
         makeItem({ id: "plugins", label: "Plugins", href: "#" }),
         []
       )
-    ).toBe("#");
+    ).toBe(ROUTES.PLUGINS);
   });
 
   it("routes the settings icon to the first reachable subpage when given one", () => {
