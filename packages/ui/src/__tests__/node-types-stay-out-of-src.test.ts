@@ -51,6 +51,20 @@ const compilerOptions = (config: Record<string, unknown>) =>
  * package folder that has nothing to do with node types — matching `@types` and `node` loosely
  * counts those and reports a leak that is not there.
  */
+/**
+ * How long one program construction gets.
+ *
+ * Building a TypeScript program reads and parses every file it reaches, which takes under a second
+ * on an idle machine and several times that on a CI runner sharing a host with other matrices.
+ * Vitest's default is 5s, and these two cases crossed it there while passing locally -- reddening
+ * unrelated lanes' pull requests, which is the expensive direction for a check to fail in.
+ *
+ * Raised rather than the work reduced, because what makes the second case slow is the thing it
+ * exists to prove: that the reader FINDS node types when they are present. A cheaper control would
+ * be a control of something else.
+ */
+const PROGRAM_TIMEOUT_MS = 60_000;
+
 function nodeTypeFilesIn(configName: string): string[] {
   const configPath = resolve(pkgRoot, configName);
   const { config, error } = ts.readConfigFile(configPath, ts.sys.readFile);
@@ -92,23 +106,31 @@ describe("node types stay out of the shipped surface", () => {
     expect(scripts["check-types"]).toContain("tsconfig.tests.json");
   });
 
-  it("loads no node type file into the shipping program", () => {
-    // The PROPERTY, not the line. Every assertion above reads configuration, and `types` governs
-    // only the AUTOMATIC inclusion of `node_modules/@types/*` — it does nothing about a
-    // `/// <reference types="node" />` inside a `.d.ts` the program already includes. So a
-    // dependency whose types reference node reopens this hole with `types: []` still written down
-    // and all four assertions above still green.
-    //
-    // Not hypothetical: applied to `blocks-react`, whose `/next` subpath imports Next, that same
-    // line is inert — 63 node type files load anyway, because `next/dist/types.d.ts` references
-    // them. The line works here and not there, so what is asserted has to be the outcome.
-    expect(nodeTypeFilesIn("tsconfig.json")).toEqual([]);
-  });
+  it(
+    "loads no node type file into the shipping program",
+    { timeout: PROGRAM_TIMEOUT_MS },
+    () => {
+      // The PROPERTY, not the line. Every assertion above reads configuration, and `types` governs
+      // only the AUTOMATIC inclusion of `node_modules/@types/*` — it does nothing about a
+      // `/// <reference types="node" />` inside a `.d.ts` the program already includes. So a
+      // dependency whose types reference node reopens this hole with `types: []` still written down
+      // and all four assertions above still green.
+      //
+      // Not hypothetical: applied to `blocks-react`, whose `/next` subpath imports Next, that same
+      // line is inert — 63 node type files load anyway, because `next/dist/types.d.ts` references
+      // them. The line works here and not there, so what is asserted has to be the outcome.
+      expect(nodeTypeFilesIn("tsconfig.json")).toEqual([]);
+    }
+  );
 
-  it("loads them into the test program, so the check can tell the two apart", () => {
-    // The positive control. Without it an empty result above cannot be distinguished from a reader
-    // that finds nothing under any circumstances — a bad path, a config that resolved no files, a
-    // filter that matches nothing.
-    expect(nodeTypeFilesIn("tsconfig.tests.json").length).toBeGreaterThan(0);
-  });
+  it(
+    "loads them into the test program, so the check can tell the two apart",
+    { timeout: PROGRAM_TIMEOUT_MS },
+    () => {
+      // The positive control. Without it an empty result above cannot be distinguished from a reader
+      // that finds nothing under any circumstances — a bad path, a config that resolved no files, a
+      // filter that matches nothing.
+      expect(nodeTypeFilesIn("tsconfig.tests.json").length).toBeGreaterThan(0);
+    }
+  );
 });
