@@ -24,11 +24,10 @@ name: Code hygiene
 # the change ADDS can fail, and only what it adds is annotated. Nothing here is
 # `continue-on-error`; a red run means this pull request introduced something.
 #
-# Three analyses rather than one, each against its own baseline, because that is
-# how the baselines work: a single `fallow --baseline` covers dead code alone,
-# and the combined run keeps failing on inherited duplication and complexity.
-# Measured on an unchanged tree, the three-baseline form emits no annotations
-# and exits 0, which is the property this job needs to be worth having.
+# Three analyses rather than one, because a single `fallow --baseline` applies
+# its baseline to dead code alone and the combined run then fails on inherited
+# duplication and complexity. Of the three, only dead code GATES — the step
+# below records which of the other two can be enforced and why they cannot.
 #
 # The baselines are computed per run rather than committed. A checked-in
 # baseline is a second copy of a fact the repository already holds, and it goes
@@ -113,38 +112,55 @@ jobs:
               --save-baseline "/tmp/base-$analysis.json" || true
           done
 
-      # Each analysis writes JSON and records its own verdict. `--format json`
-      # always exits 0 — it is machine output, and the caller decides — so the
-      # verdict comes from a second, human-format run rather than from that
-      # exit code, which would gate on nothing at all.
+      # One run per analysis. Its exit code IS the verdict, so a second
+      # human-format run to read one would recompute the same answer.
       #
-      # Rendering happens after all three regardless of verdict: a red check
-      # with no annotations tells the author only that something is wrong.
-      # `health` is analysed and reported but does NOT gate. Its baseline
-      # compares per-file counts (or per-function identity), and neither
-      # survives the two sides being different trees: measured on this
-      # repository, a branch touching none of them still came back with ~50
-      # complexity findings in `admin` and `plugin-form-builder` files it never
-      # opened, under both `count` and `identity`. A gate that fails for
-      # functions the author did not write is the thing the baseline exists to
-      # prevent, so complexity stays a signal to read rather than a verdict.
-      # `dead-code` and `dupes` both compare cleanly and do gate.
+      # Only `dead-code` gates, and only it can. Measured at fallow 3.15.0 on
+      # this tree:
+      #
+      #   dead-code  exits 1 on findings, 0 against a baseline that covers them
+      #   dupes      exits 0 ALWAYS — 846 clone groups and `--fail-on-issues`
+      #              both still exit 0, and its JSON carries no per-group
+      #              new-vs-inherited flag to count instead
+      #   health     exits 1, but its baseline matches per file and category
+      #              (or per function identity) and neither survives the two
+      #              sides being different trees: a branch touching none of
+      #              them still reported ~50 findings in `admin` and
+      #              `plugin-form-builder`
+      #
+      # So gating on those two would have been theatre: dupes could never fail
+      # and health could fail for functions the author never wrote. They are
+      # analysed and reported; dead code is analysed, reported and enforced —
+      # and it is the one that catches an export orphaned in a file the change
+      # never opened, which is why this job reads the whole repository.
+      #
+      # `set +e` because a findings exit would otherwise abort the step under
+      # GitHub's `bash -e`, taking the annotations, the summary and the gate
+      # with it and leaving the author a bare red check.
       - name: Analyse the pull request
         id: analyse
         run: |
+          set +e
           failed=""
+          crashed=""
           for analysis in dead-code dupes health; do
             pnpm exec fallow "$analysis" \
               --baseline "/tmp/base-$analysis.json" \
-              --format json > "/tmp/head-$analysis.json"
-          done
-          for analysis in dead-code dupes; do
-            if ! pnpm exec fallow "$analysis" \
-              --baseline "/tmp/base-$analysis.json" > /dev/null 2>&1; then
-              failed="$failed $analysis"
-            fi
+              --format json > "/tmp/head-$analysis.json" 2> "/tmp/err-$analysis.txt"
+            code=$?
+            case "$code" in
+              0) ;;
+              # 1 is "found something". Only dead-code turns that into a verdict.
+              1) [ "$analysis" = "dead-code" ] && failed="$failed $analysis" ;;
+              # Anything else is fallow failing to run — a bad config, a parse
+              # error, a missing baseline. Reporting that as "findings" sends
+              # the author hunting for code that is not the problem, so it is
+              # surfaced separately and its stderr is not swallowed.
+              *) crashed="$crashed $analysis($code)"; cat "/tmp/err-$analysis.txt" >&2 ;;
+            esac
           done
           echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          echo "crashed=$crashed" >> "$GITHUB_OUTPUT"
 
       # Inline on the offending lines, for the two analyses that gate. Only
       # findings absent from the baseline reach this point, so an unchanged
@@ -156,6 +172,7 @@ jobs:
       # as a demand rather than a signal. It stays in the job summary, where a
       # repository-wide number belongs.
       - name: Annotate findings
+        if: always() && steps.analyse.conclusion != 'skipped'
         run: |
           for analysis in dead-code dupes; do
             pnpm exec fallow report --from "/tmp/head-$analysis.json" \
@@ -163,6 +180,7 @@ jobs:
           done
 
       - name: Write the job summary
+        if: always() && steps.analyse.conclusion != 'skipped'
         run: |
           for analysis in dead-code dupes health; do
             pnpm exec fallow report --from "/tmp/head-$analysis.json" \
@@ -177,7 +195,9 @@ jobs:
       # cannot post should not fail a check the fork author cannot influence.
       # Annotations and the job summary still render for them.
       - name: Comment on the pull request
-        if: github.event.pull_request.head.repo.full_name == github.repository
+        if: >-
+          always() && steps.analyse.conclusion != 'skipped'
+          && github.event.pull_request.head.repo.full_name == github.repository
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -189,7 +209,11 @@ jobs:
             ${{ steps.analyse.outputs.failed == '' && '--clean' || '' }}
 
       - name: Gate
-        if: steps.analyse.outputs.failed != ''
+        if: always() && (steps.analyse.outputs.failed != '' || steps.analyse.outputs.crashed != '')
         run: |
-          echo "::error::fallow reported findings introduced by this pull request:${{ steps.analyse.outputs.failed }}. See the annotations above and the job summary."
+          if [ -n "${{ steps.analyse.outputs.crashed }}" ]; then
+            echo "::error::fallow failed to run:${{ steps.analyse.outputs.crashed }}. This is a tooling failure, not a finding in the change — its stderr is in the analysis step above."
+            exit 1
+          fi
+          echo "::error::fallow reported dead code introduced by this pull request:${{ steps.analyse.outputs.failed }}. See the annotations above and the job summary."
           exit 1
