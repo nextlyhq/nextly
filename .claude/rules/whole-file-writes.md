@@ -125,13 +125,29 @@ settles it is naming the revision and CHECKING it holds what you expect:
   reports the baseline as deleted and says nothing about what the file now
   holds, whatever that is. Measured: with the original in the stash and
   replacement text on disk, it prints `-ORIGINAL` and no `+` line at all, so a
-  clobber reads as a plain deletion. Materialise the candidate
-  (`git show <rev>:<path> > /tmp/base`) and compare with
-  `git diff --no-index /tmp/base <path>`, which reads both sides from the
-  filesystem and shows `-ORIGINAL +CLOBBERED`.
+  clobber reads as a plain deletion. Materialise the candidate into a file
+  created for the purpose, and compare with `git diff --no-index`, which reads
+  both sides from the filesystem and shows `-ORIGINAL +CLOBBERED`:
 
-**If no revision holds it — and you have established that rather than inferred
-it from an empty result — stop.** Say so and look outside git — editor local
+  ```sh
+  base="$(mktemp)" && git show <rev>:<path> > "$base" && git diff --no-index "$base" <path>
+  ```
+
+  `mktemp` rather than a fixed name, and one `&&` chain rather than separate
+  steps, for the reason this whole rule exists: `> /tmp/base` truncates whatever
+  is already at that path — through a symlink included — and two recoveries at
+  once overwrite each other's baseline. Chaining also stops a failed `git show`
+  leaving an empty file that the comparison then reads as recovered content.
+
+**Before concluding git holds nothing, look at the objects no ref points at.**
+Content staged and then reset out of the index is unreachable rather than gone:
+`git fsck --unreachable` lists the blob and `git cat-file -p <sha>` prints it.
+Measured — a file staged with deliberate content, unstaged, then clobbered is
+absent from `git show :<path>` and recovered verbatim from its unreachable blob.
+That is the last place to look, and no `<rev>:<path>` form above reaches it.
+
+**If no revision and no unreachable object holds it — and you have established
+that rather than inferred it from an empty result — stop.** Say so and look outside git — editor local
 history, a backup, an open buffer. A recovery that cannot recover is worth
 naming as one; running the steps anyway converts a known loss into an unnoticed
 one, because the resulting diff looks entirely clean.
