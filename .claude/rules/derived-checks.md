@@ -339,35 +339,30 @@ that. It is usually available and it usually costs the same.
 
 **A commit's author field is one of these, and it is the one most likely to be
 believed**, because it looks like provenance rather than like a string somebody
-chose. It is a login, and in this repo many agents commit under one. Measured
-over the last 400 commits: 343 carry a single identity.
+chose. It is configured, not authenticated: two contributors can set the same
+name and one can change theirs, so it identifies nobody in particular. In this
+repo many agents also commit under one identity — 343 of the last 400 commits
+carry a single name — so it does not separate sessions either. That distinction
+was never recorded anywhere, and no query recovers it.
 
-And it is not a credential in any checkable sense either: the name comes from
-environment or configuration, so it is chosen rather than authenticated, two
-contributors can pick the same one, and one contributor can change theirs. So it
-does not reliably separate contributors, and it certainly does not separate the
-concurrent sessions sharing a single configured identity — that distinction was
-never recorded anywhere.
+Which splits into two questions, and only one of them has an answer:
 
-Two different questions, and only one of them has a sound instrument:
+- **"did this line predate that change?"** is a fact about the TREE, and the
+  tree can be read. Compare the file at the two revisions.
+- **"who wrote this line?"** has no sound instrument here. Line-scoped history
+  finds the COMMIT, which is real; the name attached to it is the configured
+  string above.
 
-- **"did this line predate that change?"** — a fact about the tree, and
-  `git show <ref>^:<path>` answers it for the ordinary case: a single-parent
-  commit where the path did not move. `^` selects the FIRST parent only, so
-  across a merge it cannot see a line that arrived on another branch, and it
-  looks the path up verbatim, so a rename reads as absence. Where either
-  applies, check each parent and follow the rename (`git log --follow`) before
-  claiming precedence.
-- **"who wrote this line?"** — two separate failures, and the first is
-  mechanical. `git log --format=%an` has no line selector at all: it prints an
-  author for every commit the revision range selected, so it associates the line
-  with whoever touched the file. The line-scoped forms are `git blame -L
-<range> <file>` and `git log -L <range>:<file>`.
+So: use history to reach the commit, then stop. The commit is a fact; the name
+on it is a claim.
 
-  Reach for those and the second failure remains: what they return is configured
-  author metadata, so under a shared identity it is a guess with a citation
-  attached, which is worse than an obvious guess. Use them to find the commit,
-  then stop — the commit is a fact, the name on it is a claim.
+🔴 Deliberately no command recipes. Four review rounds on this paragraph each
+corrected a different one — a missing pathspec, an unanchored revision, a
+first-parent-only lookup, a command with no line selector at all — and each
+correction attracted the next. The exact invocation depends on merges, renames
+and which revision you anchor to, and a rule file that specifies it will be
+wrong in a way readers trust. Naming the question and its limits is the part
+that keeps.
 
 This surfaced while attributing a comment in `export-contract.test.ts`. The
 precedence claim was settled from the tree and held; the authorship claim around
