@@ -172,8 +172,11 @@ function contexts(): PageContext[] {
           total: 2,
         }),
     },
+    // No `alt` and no dimensions. Both are optional on `ResolvedMedia`, and
+    // `renderImage` has a distinct fallback for each — a library that captured
+    // neither is an ordinary library, not a malformed one.
     resolveMedia: () =>
-      Promise.resolve({ id: "m2", url: "https://example.com/y.png", alt: "y" }),
+      Promise.resolve({ id: "m2", url: "https://example.com/y.png" }),
   };
   const budgetSpent = { ...answering, queries: { take: () => false } };
   const budgetAvailable = { ...answering, queries: { take: () => true } };
@@ -377,10 +380,8 @@ function outOfRangeValuesFor(entry: Record<string, unknown>): unknown[] {
  * a member of the wrong type is a different state, and the one `core/list`
  * coerces per item — `stored.slice(...).map(item => text(item))` exists for it.
  *
- * The renderer's own `MAX_ITEMS` truncation is reached too, by the oversized
- * array below. It was left out at first on the estimate that a thousand-member
- * render would cost the whole matrix; measured, it costs nothing, because one
- * block declares an array prop and one of its variants is large.
+ * The renderer's own `MAX_ITEMS` truncation is a branch of the same kind, and
+ * the oversized array below reaches it at the smallest input that does.
  */
 function malformedMemberArraysFor(entry: Record<string, unknown>): unknown[] {
   if (entry.type !== "array") return [];
@@ -572,8 +573,15 @@ async function renderHtml(
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    html += decoder.decode(value);
+    // Streaming, because React splits its output at byte boundaries that need
+    // not be character boundaries: a multi-byte character straddling two chunks
+    // decodes to replacement characters when each chunk is treated as complete
+    // input, which corrupts exactly the block text most likely to be localized.
+    html += decoder.decode(value, { stream: true });
   }
+  // Flushes anything the decoder still holds from a trailing partial sequence,
+  // which would otherwise be dropped from the inspected markup.
+  html += decoder.decode();
   return html;
 }
 
@@ -758,9 +766,15 @@ const PROBES: {
       example: { props: {} },
       render: ({ className }: { className: string }) => (
         <>
+          {/* Two hoisted kinds, because the skip-list has several entries and
+              a probe authoring one protects only that entry: an eager image
+              makes React INJECT a preload `<link>` nobody wrote, which is the
+              entry a hand-authored tag cannot exercise. The image sits INSIDE
+              the wrapper so the wrapper remains the outermost written tag. */}
           <title>probe</title>
           <div style={{ color: "red" }}>
             <span className={className}>probe</span>
+            <img src="https://example.com/p.png" alt="" fetchPriority="high" />
           </div>
         </>
       ),
