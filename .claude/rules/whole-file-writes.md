@@ -38,19 +38,41 @@ bypassed, and it is the bypass rather than the command that does the damage.
 plus three call-site input trees, and the result parsed, ran, and passed
 everything.
 
+## First, name the BASELINE — everything below compares against it
+
+Every check in this rule asks one question: what was at this path before the
+write. So the baseline is chosen once, and each command follows from it. Getting
+this wrong is not a smaller version of the same answer — it silently swaps which
+content is being judged.
+
+- The last commit held the pre-write state → the baseline is `HEAD`, and
+  comparisons take the form `git diff HEAD -- <path>`.
+- The path carried deliberate STAGED edits when it was written → the index holds
+  the pre-write state, `HEAD` never did, and comparisons are the bare
+  `git diff -- <path>`, which is working tree against index. Inspect the staged
+  copy with `git diff --cached HEAD -- <path>` or `git show :<path>`; note that
+  `git status` shows only `MM` and reveals none of it.
+
+Both failure directions are live, which is why this is not a detail. Comparing
+against `HEAD` when the index is the baseline reports the staged additions as
+though they were your edit — and, worse, a clobber that preserved everything in
+`HEAD` while destroying the staged lines shows additions ONLY, clearing the
+overwrite that just happened. Comparing against the index when `HEAD` is the
+baseline misses anything already staged.
+
 ## Three tells that this has happened, in the order they appear
 
 They are worth knowing individually, because each looks like good news:
 
 1. **The diffstat shows deletions on a file you believe you are creating**, read
-   against the right baseline. A created file has no deleted lines, so one `-`
-   in its `++---` bar settles it — but only when the comparison starts from
-   before the file existed. A bare `git diff --stat` compares the working tree
-   with the INDEX, so a genuinely new path that was staged and then shortened
-   reports deletions too, and the tell fires on a file that really is new. Use
-   `git diff HEAD --stat`. This is the cheapest tell and the one most easily
-   read past, because by then the write has already succeeded and attention has
-   moved on.
+   against the baseline named above. A created file has no deleted lines, so one
+   `-` in its `++---` bar settles it — but only when the comparison starts from
+   before the file existed. A bare `git diff --stat` against the wrong baseline
+   answers a different question: with `HEAD` as the baseline it reports
+   deletions for a genuinely new path that was staged and then shortened, firing
+   on a file that really is new. This is the cheapest tell and the one most
+   easily read past, because by then the write has already succeeded and
+   attention has moved on.
 
 2. **A metric improves far more than the change should explain.** "1264 inputs
    became 119" was recorded as evidence that the new scoping was tight. It was
@@ -70,8 +92,8 @@ They are worth knowing individually, because each looks like good news:
    A tell that fires there sends a correct additive edit into a destructive
    recovery procedure, which is worse than the miss it was guarding.
 
-   So confirm it against the baseline — `git diff HEAD --stat -- <path>`, then
-   the hunks — and require content that predates your edit to have vanished.
+   So confirm it against the baseline named above — the `--stat`, then the hunks
+   — and require content that predates your edit to have vanished.
 
 ## Configuration coverage is UNEVEN, so find out before trusting green
 
@@ -145,13 +167,11 @@ command is right by default:
 
 Then prove it, and prove it **before submitting**:
 
-- Compare the repaired path against **the same baseline you restored from**, and
-  expect to see only the edit you meant. Which command that is follows from that
-  choice, not from habit: `git diff <pre-write-rev> -- <path>` when the baseline
-  was a commit, and the bare `git diff -- <path>` — working tree against index —
-  when the index held the only surviving pre-write state. Reaching for `HEAD` in
-  that second case mixes the deliberate staged edits into the delta being
-  checked, so the proof reports a difference the recovery did not cause.
+- Compare the repaired path against the baseline — the same one the tells used
+  and the one you restored from — and expect to see only the edit you meant. The
+  command follows from that choice, as above; reaching for `HEAD` when the index
+  is the baseline mixes the deliberate staged edits into the delta, so the proof
+  reports a difference the recovery did not cause.
 - The reason this step is not optional: the clobber and the restore both live
   inside one PR, so the branch diffstat nets out and reads as though nothing
   happened. The summary is exactly the artifact that hides this.
