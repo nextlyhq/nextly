@@ -17,7 +17,7 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { describe, expect, it, afterEach, beforeEach } from "vitest";
 
-import { sqliteTableDdl } from "../../../database/sqlite-table-ddl";
+import { sqliteTableDdl } from "../../../__tests__/fixtures/sqlite-table-ddl";
 import { dynamicCollectionsSqlite } from "../../../schemas/dynamic-collections/sqlite";
 import { DynamicCollectionRegistryService } from "../services/dynamic-collection-registry-service";
 
@@ -41,9 +41,8 @@ describe("DynamicCollectionRegistryService.listCollections — sortBy parameter"
     sqlite.pragma("foreign_keys = OFF");
 
     // Built from the schema the service reads, so this fixture cannot fall
-    // behind the table it stands in for. It had: a column the registry began
-    // selecting was absent here, and every case in this suite had to ask for
-    // the projection that did not name it.
+    // behind the table it stands in for — which matters because every case
+    // here asks for a projection, and the wide one names every column.
     for (const statement of sqliteTableDdl(dynamicCollectionsSqlite)) {
       sqlite.exec(statement);
     }

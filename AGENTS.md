@@ -272,6 +272,8 @@ Audit defaults to `gate=new-only`: only findings introduced by the current chang
 
 This gate reads the DIFF, and is deliberately not the same check as CI. `.github/workflows/code-hygiene.yml` analyses the whole repository against a baseline of the pull request's base, because a change can orphan an export in a file it never opened. This one runs on every commit and has to be fast; that one runs once per push and has to be complete. A commit passing here can still fail there.
 
+What CI ENFORCES is narrower than what it reports, and the difference is a property of the tool rather than a policy choice. Of its three analyses only dead code can gate: `fallow dupes` exits 0 whatever it finds — 846 clone groups and `--fail-on-issues` both — and its JSON carries no new-versus-inherited flag to count instead, while `fallow health` matches its baseline per file and category, which does not survive the two sides being different trees. Duplication and complexity are therefore reported and not enforced. Treat a green check as "this change added no dead code", not as "this change added nothing".
+
 The gate needs `jq` on PATH. Without it `fallow-gate.sh` prints one line to stderr and exits 0 — so a machine missing `jq` has the gate installed and auditing nothing.
 
 `FALLOW_AUDIT_BASE` is pinned to `origin/main` in `.claude/settings.json`. Left unset, the audit takes its base from the merge-base with the branch's UPSTREAM, which is the remote tracking branch — stale on any branch whose local commits are not pushed, and after a rebase that means the diff carries every commit `main` gained since. Measured here: 319 changed files and a `fail` verdict on a branch whose actual diff was nine commits. Every pull request in this repo targets `main`, so naming it removes the guesswork.
@@ -285,7 +287,7 @@ For non-skill agents, treat the task map below as the local onboarding source: r
 | delete an "unused" export or file                                 | `fallow dead-code --trace <file>:<export>`                                           |
 | prove a TypeScript symbol's exact consumers before refactoring    | `fallow dead-code --type-aware --symbol-impact <file>:<export-or-class.method>`      |
 | delete an "unused" dependency                                     | `fallow dead-code --trace-dependency <name>`                                         |
-| commit or open a PR                                               | `fallow audit --base <ref>`                                                          |
+| commit or open a PR                                               | `pnpm fallow:audit` (`fallow audit --base origin/main`)                              |
 | prioritize refactoring                                            | `fallow health --hotspots --targets`                                                 |
 | ask who owns code                                                 | `fallow health --ownership`                                                          |
 | check untested-but-reachable code                                 | `fallow health --coverage-gaps`                                                      |

@@ -7,10 +7,12 @@
   // cannot, because ESLint sees one file at a time.
   //
   // Commands:
-  //   - pnpm fallow       = full-repo report. Excludes apps/playground, whose
-  //                         standing findings would otherwise dominate it.
-  //   - pnpm fallow:audit = changed-files gate, run by CI on every PR. Covers
-  //                         playground too; see .github/workflows/code-hygiene.yml
+  //   - pnpm fallow       = full-repo report, apps/playground included.
+  //   - pnpm fallow:audit = the diff, against origin/main. Same check the
+  //                         agent gate runs before a commit.
+  //
+  // CI runs neither: .github/workflows/code-hygiene.yml scans the whole
+  // repository against a baseline built from the pull request's base.
   //
   // The lists below exist because a static reader cannot see every way this
   // repo reaches code: a path spelled inside a string, a package pulled in by
@@ -30,7 +32,11 @@
   //     `@/components/PostGrid` resolves only once the CLI has merged the
   //     two. Read in place, every one of them is unresolvable.
   //   docs/ = MDX for nextlyhq.com/docs, rendered by the site, not imported.
-  "ignorePatterns": ["templates/**", "docs/**"],
+  //   worktrees/ = AGENTS.md mandates a worktree per branch. Placed inside the
+  //     repository rather than beside it, each is a full second copy that
+  //     fallow walks as ordinary source, so every file, export and cycle is
+  //     counted twice and the report is dominated by another branch's tree.
+  "ignorePatterns": ["templates/**", "docs/**", "**/worktrees/**"],
 
   // Reachable only through a string, so the graph has no edge leading to
   // them. Left out, each reports as unused, and an unused file takes whatever
@@ -54,13 +60,22 @@
   //     paths (dist/field-catalog.d.ts and
   //     dist/collections/fields/catalog.mjs); fallow follows neither. Drop
   //     this once its exports resolver handles that shape.
-  //   ../dist/** = bin shims and one page-builder spec that import build
-  //     output directly. Present after `pnpm build`, absent on a clean tree,
-  //     so gating on them would make the verdict depend on build order.
-  // The exact subpath only. `nextly` exports `./field-catalog` and nothing
-  // beneath it, so a pattern covering that prefix would hide a deep import
-  // that genuinely does not resolve — the class of typo this check exists for.
-  "ignoreUnresolvedImports": ["nextly/field-catalog", "../dist/**"],
+  //   ../dist/cli.mjs and ../dist/render/index.js = the only two specifiers
+  //     in the tree that reach build output directly — create-nextly-app's
+  //     bin shim and one page-builder spec. Present after `pnpm build` and
+  //     absent on a clean checkout, so gating on them would make the verdict
+  //     depend on build order.
+  //
+  // Every entry is an exact specifier rather than a prefix. These match the
+  // raw import string, so `../dist/**` would also swallow a typo like
+  // `../dist/render/missing.js`, and `nextly/field-catalog/**` a deep import
+  // below a subpath that exports nothing — the class of mistake this check
+  // exists to catch.
+  "ignoreUnresolvedImports": [
+    "nextly/field-catalog",
+    "../dist/cli.mjs",
+    "../dist/render/index.js",
+  ],
 
   // Declared and genuinely used, through a mechanism no import records.
   // Adding a name here asserts that; anything whose usage cannot be pointed

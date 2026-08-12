@@ -19,7 +19,7 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { describe, expect, it, afterEach, beforeEach } from "vitest";
 
-import { sqliteTableDdl } from "../../../database/sqlite-table-ddl";
+import { sqliteTableDdl } from "../../../__tests__/fixtures/sqlite-table-ddl";
 import { dynamicCollectionsSqlite } from "../../../schemas/dynamic-collections/sqlite";
 import type { Logger } from "../../../shared/types";
 import { DynamicCollectionRegistryService } from "../services/dynamic-collection-registry-service";
@@ -44,7 +44,7 @@ const FIELDS_JSON = JSON.stringify([
  * still type-checks at every call site and simply arrives `undefined` — the
  * failure a reader of `status` or `versions` sees is a missing value, never a
  * missing property. Asserting only a subset reproduces exactly that blind
- * spot, which is how ten columns went missing from the shape unnoticed.
+ * spot, so the list has to name every column the projection carries.
  */
 const PROJECTED_COLUMNS = [
   "id",
