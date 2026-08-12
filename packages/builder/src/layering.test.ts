@@ -474,6 +474,16 @@ describe("the builder's layering contract", () => {
     expect(files.some(f => f.endsWith("index.ts"))).toBe(true);
   });
 
+  it("reads every extension it claims to, not only the common ones", () => {
+    // `length > 0` and "an index.ts is present" both survive a walk narrowed to
+    // `.ts` alone, so neither separates full coverage from partial. A file in a
+    // less common extension has to be named for that.
+    //
+    // The scan going quiet on one extension is the dangerous direction: the
+    // files it stops reading are the ones it then reports clean.
+    expect(files.some(f => f.endsWith(".mts"))).toBe(true);
+  });
+
   it("never imports @nextlyhq/admin directly", () => {
     // The one route to admin is `@nextlyhq/plugin-sdk/admin`. Asserted as a
     // prefix so `@nextlyhq/admin/anything` is caught too — a subpath import is
