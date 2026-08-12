@@ -149,6 +149,32 @@ function contexts(): PageContext[] {
     resolveMedia: () => Promise.reject(new Error("media lookup failed")),
     resolveEntryPath: () => Promise.reject(new Error("path lookup failed")),
   };
+  // A host answering RICHLY, in two ways the single-row, fully-described
+  // `answering` host cannot: more than one row, and a media record carrying no
+  // intrinsic size. Both are ordinary — a query usually returns several entries,
+  // and `ResolvedMedia` declares `width` and `height` optional because a library
+  // that never captured them is a normal library.
+  //
+  // Combined on ONE host rather than split across two, because that is the shape
+  // a real host has and doubling the context list doubles every render. What it
+  // does not separate is a block branching on multiple rows AND a fully
+  // described record at once; the single-row host describes its record fully, so
+  // that pair is reachable from neither.
+  const answeringRichly = {
+    ...answering,
+    data: {
+      find: () =>
+        Promise.resolve({
+          items: [
+            { id: "e1", title: "An entry" },
+            { id: "e2", title: "Another entry" },
+          ],
+          total: 2,
+        }),
+    },
+    resolveMedia: () =>
+      Promise.resolve({ id: "m2", url: "https://example.com/y.png", alt: "y" }),
+  };
   const budgetSpent = { ...answering, queries: { take: () => false } };
   const budgetAvailable = { ...answering, queries: { take: () => true } };
   // The shape a ROUTED page actually has. `createStandaloneContext` is called
@@ -173,6 +199,7 @@ function contexts(): PageContext[] {
     budgetAvailable,
     localizedBudgetSpent,
     localizedBudgetAvailable,
+    answeringRichly,
   ] as unknown as PageContext[];
 }
 
@@ -350,9 +377,10 @@ function outOfRangeValuesFor(entry: Record<string, unknown>): unknown[] {
  * a member of the wrong type is a different state, and the one `core/list`
  * coerces per item — `stored.slice(...).map(item => text(item))` exists for it.
  *
- * Not covered here, deliberately: the `MAX_ITEMS` slice cap. Reaching it needs
- * an array of a thousand members rendered under every host state and policy,
- * which buys one branch at a cost the whole matrix pays.
+ * The renderer's own `MAX_ITEMS` truncation is reached too, by the oversized
+ * array below. It was left out at first on the estimate that a thousand-member
+ * render would cost the whole matrix; measured, it costs nothing, because one
+ * block declares an array prop and one of its variants is large.
  */
 function malformedMemberArraysFor(entry: Record<string, unknown>): unknown[] {
   if (entry.type !== "array") return [];
