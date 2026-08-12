@@ -430,16 +430,6 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
   };
 
   const visit = (node: ts.Node): void => {
-    // Any import of Node's module loader, in either specifier spelling. The named binding is not
-    // checked: importing the module at all is what makes the loader reachable.
-    if (
-      ts.isImportDeclaration(node) &&
-      ts.isStringLiteral(node.moduleSpecifier)
-    ) {
-      const from = node.moduleSpecifier.text;
-      if (from === "node:module" || from === "module")
-        found.push("createRequire");
-    }
     // `import.meta` is checked as a WHITELIST rather than by hunting for `.resolve`, and that is
     // what makes this bounded where the artifact scan was not. Hunting means enumerating the ways
     // a resolver can be reached — `.resolve`, `["resolve"]`, `const { resolve } = import.meta`,
@@ -471,6 +461,20 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
   };
 
   visit(tree);
+
+  // Node's module loader is banned by SPECIFIER rather than by import form. A static import, a
+  // dynamic `await import("node:module")`, a `require("node:module")` and `import m = require(…)`
+  // all make the loader reachable, and enumerating those forms here would repeat — badly — a
+  // reader this package already shares for exactly that question. The named binding is not
+  // inspected: importing the module at all is what makes `createRequire` available.
+  if (
+    importedSpecifiers(text, fileName).some(
+      specifier => specifier === "node:module" || specifier === "module"
+    )
+  ) {
+    found.push("createRequire");
+  }
+
   return [...new Set(found)];
 }
 
@@ -484,6 +488,20 @@ describe("this package resolves no module at runtime", () => {
     expect(runtimeResolversIn(`import mod from "module";`, "a.ts")).toEqual([
       "createRequire",
     ]);
+    // Every import form the shared reader knows, since the loader is banned by SPECIFIER rather
+    // than by the shape of the statement that reaches it.
+    expect(
+      runtimeResolversIn(
+        `const { createRequire } = await import("node:module");`,
+        "a.ts"
+      )
+    ).toEqual(["createRequire"]);
+    expect(
+      runtimeResolversIn(`const m = require("node:module");`, "a.ts")
+    ).toEqual(["createRequire"]);
+    expect(
+      runtimeResolversIn(`import m = require("node:module");`, "a.ts")
+    ).toEqual(["createRequire"]);
     expect(
       runtimeResolversIn(`export const r = import.meta.resolve("x");`, "a.ts")
     ).toEqual(["import.meta.resolve"]);
