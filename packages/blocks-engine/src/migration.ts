@@ -55,9 +55,45 @@ export interface MigrationFailure {
   message: string;
 }
 
+/**
+ * One node whose OWN props migration replaced.
+ *
+ * Reported so a reader can ask what the rewrite changed about a node without
+ * re-deriving which nodes were rewritten. The alternative — comparing node
+ * references across the two documents — answers the same question a second
+ * time, and rests on an invariant that holds today and is asserted only for
+ * top-level nodes.
+ *
+ * Scoped to a node's OWN props, deliberately. `migrateNode` also rebuilds a
+ * parent whose child changed, so reference inequality is wider than this: such
+ * a parent carries the props it always had, and anything derived from its props
+ * answers exactly as before. Reporting it would send readers to re-examine
+ * nodes nothing can have changed about.
+ */
+export interface MigratedNode {
+  /** JSON-Pointer to the node, in BOTH the pre- and post-migration document. */
+  path: string;
+  /** The node's `id`, when it carries a usable one. */
+  id?: string;
+  type: string;
+  fromVersion: number;
+  /** The version reached. Below `toVersion` of the definition when a step failed. */
+  toVersion: number;
+}
+
 export interface MigrateResult {
   doc: BlockDocument;
   failures: MigrationFailure[];
+  /**
+   * Every node whose props were rewritten, in document order.
+   *
+   * COMPLETENESS is the load-bearing property, not brevity. A reader uses this
+   * to decide which nodes still need examining, so a node missing from it is
+   * silently exempted from whatever the reader was checking — no error and no
+   * slow path, just a check that did not run. `migration.test.ts` guards the
+   * producer for that reason rather than guarding any one consumer.
+   */
+  rewritten: MigratedNode[];
 }
 
 /** Result of upgrading a single props object. */
@@ -198,6 +234,35 @@ export function migrateDocument(
   source: MigrationSource
 ): MigrateResult {
   const failures: MigrationFailure[] = [];
+  const rewritten: MigratedNode[] = [];
+
+  // Called from every branch that replaces a node's props, rather than derived
+  // afterwards from what changed. A second pass comparing documents would be a
+  // separate implementation of "was this rewritten", free to disagree with the
+  // rewrite that actually happened.
+  const recordRewrite = (
+    node: BlockNode,
+    path: string,
+    fromVersion: number,
+    toVersion: number,
+    props: Record<string, unknown>
+  ): void => {
+    // The props OBJECT is what decides it, not the version stamp. A step that
+    // returns its input unchanged, and a failure at the very first step, both
+    // leave the stored object in place — so anything a reader derived from
+    // those props still holds, and naming the node would send it to re-examine
+    // something nothing can have changed about.
+    if (props === node.props) return;
+    rewritten.push({
+      path,
+      // Omitted rather than coerced when absent or of the wrong type: a reader
+      // matching on it must not be handed an id the document does not carry.
+      ...(typeof node.id === "string" && node.id !== "" ? { id: node.id } : {}),
+      type: node.type,
+      fromVersion,
+      toVersion,
+    });
+  };
 
   const migrateNode = (node: BlockNode, path: string): BlockNode => {
     if (!isPlainRecord(node)) return node;
@@ -235,9 +300,21 @@ export function migrateDocument(
           version: result.failure.fromVersion,
           migrationFailed: true,
         };
+        // Reported when steps ran before the failing one, because the props are
+        // then no longer the stored ones and a reader's conclusions about them
+        // are stale. A failure at the FIRST step ran nothing, so the props are
+        // the stored object and nothing derived from them can have moved.
+        recordRewrite(
+          node,
+          path,
+          node.version,
+          result.failure.fromVersion,
+          result.props
+        );
       } else {
         next = { ...node, props: result.props, version: info.version };
         if (next.migrationFailed) delete next.migrationFailed;
+        recordRewrite(node, path, node.version, info.version, result.props);
       }
     }
 
@@ -266,5 +343,5 @@ export function migrateDocument(
       )
     : doc.nodes;
 
-  return { doc: { ...doc, nodes }, failures };
+  return { doc: { ...doc, nodes }, failures, rewritten };
 }
