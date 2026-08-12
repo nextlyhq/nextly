@@ -783,7 +783,7 @@ describe("a dry run", () => {
     });
 
     if (outcome.ran !== false || outcome.reason !== "dry-run") {
-      throw new Error("expected a dry-run outcome");
+      expect.fail("expected a dry-run outcome");
     }
     // The separating assertion. A dry run returning before reconciliation has nothing to report,
     // and an empty list is also what a database with no work returns — so a non-empty plan naming
@@ -814,7 +814,7 @@ describe("a dry run", () => {
     });
 
     if (outcome.ran !== false || outcome.reason !== "dry-run") {
-      throw new Error("expected a dry-run outcome");
+      expect.fail("expected a dry-run outcome");
     }
     expect(outcome.renames).toContainEqual({
       from: "comp_hero",
@@ -861,7 +861,7 @@ describe("a dry run", () => {
     });
 
     if (outcome.ran !== false || outcome.reason !== "dry-run") {
-      throw new Error("expected a dry-run outcome");
+      expect.fail("expected a dry-run outcome");
     }
     // Still a real plan: a run that refused early would also write nothing, and would be
     // indistinguishable from this without asserting the preview it was asked for.
@@ -890,7 +890,7 @@ describe("a dry run", () => {
     // A claiming session refuses here. Observing reports it, because nothing acts on a preview:
     // the operator needs to know the answer is moving, not to be denied the answer.
     if (outcome.ran !== false || outcome.reason !== "dry-run") {
-      throw new Error("expected a dry-run outcome, not a refusal");
+      expect.fail("expected a dry-run outcome, not a refusal");
     }
     expect(outcome.lockedBy).toBe("field-group-migration:up#someone-else");
   });

@@ -409,6 +409,55 @@ describe("field-group migration session", () => {
     }
   });
 
+  // The promise `observe` makes is that nothing can write without the lock. A
+  // comment cannot hold that: the callback is handed a session, and whoever adds
+  // the next observing caller reads the type, not the prose.
+  it("refuses to open a transaction in observe mode", async () => {
+    const h = createAdapter({ heldBy: null });
+    let refusal: unknown;
+
+    await withMigrationSession(
+      {
+        adapter: h.adapter,
+        dialect: "postgresql",
+        label: "preview-1",
+        mode: "observe",
+      },
+      async session => {
+        refusal = await session
+          .inTransaction(async () => undefined)
+          .catch((error: unknown) => error);
+      }
+    );
+
+    expect(NextlyError.is(refusal)).toBe(true);
+    // The lock is untouched by the attempt: refusing must not be a path that
+    // half-claims and then fails.
+    expect(h.owner()).toBeNull();
+  });
+
+  it("claims nothing and reports the holder in observe mode", async () => {
+    const h = createAdapter({ heldBy: "someone-else" });
+    let observed: string | null = null;
+
+    await withMigrationSession(
+      {
+        adapter: h.adapter,
+        dialect: "postgresql",
+        label: "preview-2",
+        mode: "observe",
+      },
+      async session => {
+        observed = session.observedLockOwner;
+      }
+    );
+
+    // A claiming session refuses here; observing reports and leaves the row as
+    // it found it.
+    expect(observed).toBe("someone-else");
+    expect(h.owner()).toBe("someone-else");
+  });
+
   it("uses a lock table distinct from the schema pipeline's", () => {
     expect(MIGRATION_LOCK_TABLE).toBe("nextly_field_group_lock");
     expect(MIGRATION_LOCK_TABLE).not.toBe("nextly_migrate_lock");

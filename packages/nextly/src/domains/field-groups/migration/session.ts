@@ -235,7 +235,28 @@ export async function withMigrationSession<T>(
     const row = (await adapter.tableExists(MIGRATION_LOCK_TABLE))
       ? await readOwnerOutsideTransaction(adapter)
       : undefined;
-    return fn({ ...session, observedLockOwner: row?.owner ?? null });
+    return fn({
+      ...session,
+      // 🔴 Refused rather than documented. Handing the ordinary `inTransaction`
+      // to an observing caller would let it write without ever holding the
+      // lock, which is the one thing this whole module exists to prevent — and
+      // the promise that it does not would rest on the callback's restraint
+      // rather than on anything that could stop it. Today's caller happens not
+      // to write; a rule nothing enforces is broken by whoever adds the next
+      // one. `internal` rather than a service error because reaching here is a
+      // programming mistake, not a state an operator can be in.
+      inTransaction: () =>
+        Promise.reject(
+          NextlyError.internal({
+            logContext: {
+              reason:
+                "an observing migration session cannot open a transaction",
+              label,
+            },
+          })
+        ),
+      observedLockOwner: row?.owner ?? null,
+    });
   }
 
   if (args.requireExistingLock === true) {
