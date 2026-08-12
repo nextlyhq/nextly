@@ -31,7 +31,8 @@
       "@nextlyhq/prettier-config",
       "@nextlyhq/telemetry",
       "@nextlyhq/tsconfig",
-      "@nextlyhq/builder"
+      "@nextlyhq/builder",
+      "@nextlyhq/module-specifiers"
     ]
   ],
   "linked": [],

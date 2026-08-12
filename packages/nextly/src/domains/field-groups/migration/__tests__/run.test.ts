@@ -91,6 +91,10 @@ interface RunWorld {
  */
 function createRunWorld(world: RunWorld) {
   const trace: Trace = [];
+  // The marker is the first thing a run writes that outlives it, so recording the write itself is
+  // what makes "this run recorded nothing" an observation. Counting adapter calls would not: the
+  // same method serves reads, so a count above zero says nothing about which kind happened.
+  const writes = { marker: 0 };
   const lock: { seeded: boolean; owner: string | null } = {
     seeded: true,
     owner: null,
@@ -181,6 +185,23 @@ function createRunWorld(world: RunWorld) {
       maxParamsPerQuery: 65535,
     }),
     getDrizzle: () => ({
+      // The marker write. Modelled so a run that records its intent is DISTINGUISHABLE from one
+      // that only read -- without these the write throws, which a test could mistake for the
+      // absence it was hoping to observe.
+      insert: () => ({
+        values: () => {
+          writes.marker += 1;
+          return Promise.resolve();
+        },
+      }),
+      update: () => ({
+        set: () => ({
+          where: () => {
+            writes.marker += 1;
+            return Promise.resolve();
+          },
+        }),
+      }),
       select: () => ({
         from: () => ({
           where: () => ({
@@ -238,7 +259,7 @@ function createRunWorld(world: RunWorld) {
     })
   );
 
-  return { adapter, trace };
+  return { adapter, trace, writes };
 }
 
 /** A table's columns, honouring a world that predates the i18n column. */
@@ -312,7 +333,12 @@ describe("runFieldGroupMigration", () => {
     });
 
     await expect(
-      runFieldGroupMigration({ adapter, logger, direction: "up" })
+      runFieldGroupMigration({
+        adapter,
+        logger,
+        direction: "up",
+        backupConfirmed: true,
+      })
     ).resolves.toEqual({ ran: false, reason: "already-migrated" });
 
     expect(trace.indexOf("lock")).toBeGreaterThanOrEqual(0);
@@ -337,6 +363,7 @@ describe("runFieldGroupMigration", () => {
       adapter,
       logger,
       direction: "up",
+      backupConfirmed: true,
     }).catch((caught: unknown) => caught);
 
     expect(NextlyError.is(error)).toBe(true);
@@ -357,6 +384,7 @@ describe("runFieldGroupMigration", () => {
       adapter,
       logger,
       direction: "up",
+      backupConfirmed: true,
     }).catch((caught: unknown) => caught);
 
     expect(NextlyError.is(error)).toBe(true);
@@ -378,6 +406,7 @@ describe("runFieldGroupMigration", () => {
       adapter,
       logger,
       direction: "up",
+      backupConfirmed: true,
     }).catch((caught: unknown) => caught);
 
     expect(NextlyError.is(error)).toBe(true);
@@ -396,6 +425,7 @@ describe("runFieldGroupMigration", () => {
       adapter,
       logger,
       direction: "down",
+      backupConfirmed: true,
     }).catch((caught: unknown) => caught);
 
     expect(NextlyError.is(error)).toBe(true);
@@ -490,6 +520,7 @@ describe("a settled marker older than this build's work", () => {
       adapter,
       logger,
       direction: "up",
+      backupConfirmed: true,
     }).catch((caught: unknown) => caught);
 
     expect(NextlyError.is(error)).toBe(true);
@@ -519,6 +550,7 @@ describe("a settled marker older than this build's work", () => {
       adapter,
       logger,
       direction: "up",
+      backupConfirmed: true,
     }).catch((caught: unknown) => caught);
 
     expect(NextlyError.is(error)).toBe(true);
@@ -542,7 +574,12 @@ describe("a settled marker older than this build's work", () => {
     });
 
     await expect(
-      runFieldGroupMigration({ adapter, logger, direction: "down" })
+      runFieldGroupMigration({
+        adapter,
+        logger,
+        direction: "down",
+        backupConfirmed: true,
+      })
     ).resolves.toEqual({ ran: false, reason: "already-migrated" });
   });
 });
@@ -589,6 +626,7 @@ describe("a settled marker over content that was restored", () => {
       adapter,
       logger,
       direction: "up",
+      backupConfirmed: true,
     }).catch((caught: unknown) => caught);
 
     expect(NextlyError.is(error)).toBe(true);
@@ -612,7 +650,12 @@ describe("a settled marker over content that was restored", () => {
     });
 
     await expect(
-      runFieldGroupMigration({ adapter, logger, direction: "up" })
+      runFieldGroupMigration({
+        adapter,
+        logger,
+        direction: "up",
+        backupConfirmed: true,
+      })
     ).resolves.toEqual({ ran: false, reason: "already-migrated" });
   });
 });
@@ -650,5 +693,116 @@ describe("deciding whether the registry carries the i18n column", () => {
 
     const rows = await readRegistryRows(adapter, "postgresql", PRESERVING);
     expect(rows[0]?.hasCompanion).toBe(false);
+  });
+});
+
+/**
+ * The two things an operator does before this touches their data.
+ *
+ * Both are decisions made before anything executes, which is why they sit beside the other
+ * ordering tests: what matters is not that they exist but WHERE in the sequence they act. The
+ * acknowledgement is a precondition and must refuse before contending for the lock; the dry run is
+ * the opposite and must run late enough to have scored the plan against the live catalog.
+ */
+describe("the backup acknowledgement", () => {
+  /** An un-migrated database with one field group, so there is real work to plan. */
+  function unmigrated() {
+    return createRunWorld({
+      tables: [LEGACY_REGISTRY, "comp_hero"],
+      registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
+    });
+  }
+
+  it("refuses a run that would write without one", async () => {
+    const { adapter } = unmigrated();
+
+    const error = await runFieldGroupMigration({
+      adapter,
+      logger,
+      direction: "up",
+    }).catch((caught: unknown) => caught);
+
+    expect(NextlyError.is(error)).toBe(true);
+  });
+
+  it("refuses BEFORE taking the lock", async () => {
+    // A precondition that contends for the lock first has already interfered with whatever else
+    // was trying to change schema, in order to deliver a refusal it could have given immediately.
+    const { adapter, trace } = unmigrated();
+
+    await runFieldGroupMigration({
+      adapter,
+      logger,
+      direction: "up",
+    }).catch(() => undefined);
+
+    expect(trace).toEqual([]);
+  });
+
+  it("is not required for a dry run", async () => {
+    // The operator's first action is to look at the plan. Demanding they assert a backup before
+    // they are allowed to look teaches them to assert it without meaning it.
+    const { adapter } = unmigrated();
+
+    await expect(
+      runFieldGroupMigration({
+        adapter,
+        logger,
+        direction: "up",
+        dryRun: true,
+      })
+    ).resolves.toMatchObject({ ran: false, reason: "dry-run" });
+  });
+});
+
+describe("a dry run", () => {
+  function unmigrated() {
+    return createRunWorld({
+      tables: [LEGACY_REGISTRY, "comp_hero"],
+      registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
+    });
+  }
+
+  it("reports renames scored against the live catalog", async () => {
+    const { adapter } = unmigrated();
+
+    const outcome = await runFieldGroupMigration({
+      adapter,
+      logger,
+      direction: "up",
+      dryRun: true,
+    });
+
+    if (outcome.ran !== false || outcome.reason !== "dry-run") {
+      throw new Error("expected a dry-run outcome");
+    }
+    // The separating assertion. A dry run returning before reconciliation has nothing to report,
+    // and an empty list is also what a database with no work returns — so a non-empty plan naming
+    // the legacy registry is what distinguishes "reconciled" from "returned early".
+    expect(outcome.renames.length).toBeGreaterThan(0);
+    expect(outcome.renames.some(entry => entry.from === LEGACY_REGISTRY)).toBe(
+      true
+    );
+  });
+
+  it("reads the catalog but records nothing", async () => {
+    const { adapter, trace, writes } = unmigrated();
+
+    await runFieldGroupMigration({
+      adapter,
+      logger,
+      direction: "up",
+      dryRun: true,
+    });
+
+    // It took the lock and read, which is deliberate: a report built while another run mutates
+    // storage describes a world that no longer exists by the time it is read.
+    //
+    // 🔴 Taking the lock is itself a write on a database that has never run this before -- the
+    // table is created and an owner row inserted. This fixture pre-seeds the lock, so it cannot
+    // observe that, and the guarantee in `RunMigrationArgs` is worded to match the code rather
+    // than this test: no CONTENT is touched and no marker recorded, which is what is asserted.
+    expect(trace).toContain("lock");
+    expect(writes.marker).toBe(0);
   });
 });

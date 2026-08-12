@@ -29,11 +29,13 @@ import type {
   PrepareDocumentArgs,
 } from "./prepare-document";
 import { prepareDocumentReadStages, readingViewOf } from "./prepare-document";
+import type { BlockResolver } from "./resolver";
 import type { PageStyles } from "./styles";
 import {
   effectiveCompile,
   gatedMapCoversPrunedNodes,
   hasDuplicateNodeIds,
+  migrationChangedWhatDraws,
   readableGatedRules,
   resolvePageStyles,
 } from "./styles";
@@ -108,15 +110,20 @@ export interface PreparedPage {
  *   gone for every visitor until the page is republished, while the tiers it
  *   pulled into the sheet stay behind.
  *
- * **Migration** is the exclusion. It allocates unconditionally, so comparing it
- * against the caps pass is true on every document ever read; included, every
- * page would report as repaired and every stored sheet would be withheld on the
- * happy path.
+ * **Migration** is the exclusion, as a STAGE COMPARISON. It allocates
+ * unconditionally, so comparing it against the caps pass is true on every
+ * document ever read; included that way, every page would report as repaired and
+ * every stored sheet would be withheld on the happy path.
+ *
+ * What migration can still do is change what a node DRAWS, and that is asked
+ * separately below — of the nodes the engine reported rewriting rather than by
+ * comparing the two documents, so the ordinary page pays nothing for it.
  */
 function storedSheetCannotDescribe(
   document: BlockDocument,
   stages: DocumentReadStages,
-  styles: PageStyles | undefined
+  styles: PageStyles | undefined,
+  resolver: BlockResolver
 ): boolean {
   const gatedRules = readableGatedRules(styles);
   // An ABSENT map means "compiled before the split existed", not "nothing was
@@ -128,7 +135,8 @@ function storedSheetCannotDescribe(
     stages.sanitized !== document ||
     hasDuplicateNodeIds(stages.migrated) ||
     (stages.gated !== stages.migrated && !gatingCovered) ||
-    stages.prepared !== stages.deduped
+    stages.prepared !== stages.deduped ||
+    migrationChangedWhatDraws(stages, resolver)
   );
 }
 
@@ -176,7 +184,7 @@ export function preparePageForRead(
     args.styles,
     compile.context,
     args.resolver,
-    storedSheetCannotDescribe(document, stages, args.styles),
+    storedSheetCannotDescribe(document, stages, args.styles, args.resolver),
     { fetchPolicyId: compile.fetchPolicyId }
   );
 

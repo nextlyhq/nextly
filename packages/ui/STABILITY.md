@@ -15,7 +15,6 @@ Plugin authors use both:
 | Buttons, inputs, dialogs, tables and the design tokens              | `@nextlyhq/ui`                        |
 | A pure class-name helper (`cn`)                                     | `@nextlyhq/ui/utils`                  |
 | The Tailwind v3 preset                                              | `@nextlyhq/ui/tailwind-preset`        |
-| Validating a site's breakpoints before storing them                 | `@nextlyhq/ui/breakpoints`            |
 
 > **Never import from `@nextlyhq/admin`.** It is an application, not a published API.
 >
@@ -161,13 +160,8 @@ trade for using them early.
 - **Theming beyond the tokens.** Override `--nx-*` values; do not depend on class names,
   DOM structure or Radix internals, none of which are part of the contract.
 - **Server components.** The root barrel is published with `"use client"`. Only
-  `@nextlyhq/ui/utils`, `@nextlyhq/ui/tailwind-preset`, `@nextlyhq/ui/color` and
-  `@nextlyhq/ui/breakpoints` are importable from server code.
-
-`@nextlyhq/ui/breakpoints` is `@experimental`: the breakpoint types, and the rules deciding
-which definitions a site can actually use. It sits on the server-safe side because the point at
-which those rules matter is the point a host STORES settings, which is server code — a check
-reachable only from the client would run everywhere except where it decides something.
+  `@nextlyhq/ui/utils`, `@nextlyhq/ui/tailwind-preset` and `@nextlyhq/ui/color`
+  are importable from server code.
 
 `@nextlyhq/ui/color` is `@experimental`: conversions between sRGB, HSV and OKLCH. It sits on
 the server-safe side deliberately — the functions are arithmetic on numbers, and a colour a
