@@ -754,7 +754,7 @@ export function Inspector() {
           minHeight: 0,
         }}
       >
-        <TabsList style={{ margin: "10px 12px 0" }}>
+        <TabsList className="mx-3 mt-2.5">
           <TabsTrigger value="content">Content</TabsTrigger>
           <TabsTrigger value="style">Style</TabsTrigger>
           <TabsTrigger value="advanced">Advanced</TabsTrigger>

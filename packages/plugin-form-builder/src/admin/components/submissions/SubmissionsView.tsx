@@ -479,7 +479,7 @@ export function SubmissionsView({ collectionSlug }: SubmissionsViewProps) {
               setOpenId(null);
             }}
           >
-            <TabsList className="rounded-none">
+            <TabsList>
               {STATUS_TABS.map(tab => (
                 <TabsTrigger
                   key={tab.value}

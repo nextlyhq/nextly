@@ -286,12 +286,12 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
             value={device}
             onValueChange={value => setDevice(value as "desktop" | "mobile")}
           >
-            <TabsList className="rounded-none">
-              <TabsTrigger value="desktop" className="rounded-none gap-1.5">
+            <TabsList>
+              <TabsTrigger value="desktop" className="gap-1.5">
                 <Monitor className="h-3.5 w-3.5" aria-hidden="true" />
                 Desktop
               </TabsTrigger>
-              <TabsTrigger value="mobile" className="rounded-none gap-1.5">
+              <TabsTrigger value="mobile" className="gap-1.5">
                 <Smartphone className="h-3.5 w-3.5" aria-hidden="true" />
                 Mobile
               </TabsTrigger>
