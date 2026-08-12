@@ -89,3 +89,20 @@ export function huePosition(hue: number): number {
   const wrapped = ((hue % 360) + 360) % 360;
   return wrapped / 360;
 }
+
+/**
+ * The integer step a hue occupies on a strip whose last step is `max`.
+ *
+ * Rounding is what makes this more than a multiplication. A hue just below 360
+ * — `#ff0001` is about 359.76 — rounds UP to a step past the end of the strip,
+ * and the obvious repair of wrapping it with a modulo sends it to 0: the far
+ * LEFT, the opposite end from where that colour belongs. The handle then sits
+ * on the wrong side and any keyboard adjustment starts from there. Held at the
+ * last step instead, which is where it visually belongs.
+ *
+ * @experimental
+ */
+export function hueSliderValue(hue: number, max: number): number {
+  const step = Math.round(huePosition(hue) * (max + 1));
+  return step > max ? max : step;
+}

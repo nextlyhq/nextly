@@ -314,6 +314,7 @@ exports[`ui public export surface > ./color surface is unchanged 1`] = `
   "hsvToRgb (value)",
   "hueAt (value)",
   "huePosition (value)",
+  "hueSliderValue (value)",
   "normalizeHue (value)",
   "oklchToRgb (value)",
   "parseHex (value)",

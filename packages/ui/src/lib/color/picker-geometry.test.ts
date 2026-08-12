@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import {
   hueAt,
   huePosition,
+  hueSliderValue,
   pointOnSurface,
   saturationValueAt,
   surfacePointFor,
@@ -77,5 +78,22 @@ describe("hue", () => {
     expect(hueAt(1)).toBe(0);
     expect(huePosition(360)).toBe(0);
     expect(huePosition(-90)).toBe(0.75);
+  });
+
+  it("keeps a hue just below 360 at the far end of the strip", () => {
+    // The defect this exists for sends it to the OPPOSITE end. `#ff0001` is
+    // about 359.76 degrees; rounding reaches 360, one step past a strip whose
+    // last step is 359, and a modulo then maps it to 0. Both ends are extremes,
+    // so the wrong one still looks deliberate — the assertion has to name which.
+    expect(hueSliderValue(359.76, 359)).toBe(359);
+    expect(hueSliderValue(359.99, 359)).toBe(359);
+
+    // The genuine wrap still belongs at the left: 360 IS 0, not the far end.
+    expect(hueSliderValue(360, 359)).toBe(0);
+    expect(hueSliderValue(0, 359)).toBe(0);
+
+    // And the middle of the strip is untouched, so a fix that clamped
+    // everything upward would not pass.
+    expect(hueSliderValue(180, 359)).toBe(180);
   });
 });

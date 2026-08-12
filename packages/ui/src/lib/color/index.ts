@@ -54,6 +54,7 @@ export { parseHex, toHex } from "./hex";
 export {
   hueAt,
   huePosition,
+  hueSliderValue,
   pointOnSurface,
   saturationValueAt,
   surfacePointFor,
