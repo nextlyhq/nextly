@@ -46,6 +46,16 @@
         "default": "./dist/utils.cjs"
       }
     },
+    "./breakpoints": {
+      "import": {
+        "types": "./dist/breakpoints.d.ts",
+        "default": "./dist/breakpoints.mjs"
+      },
+      "require": {
+        "types": "./dist/breakpoints.d.cts",
+        "default": "./dist/breakpoints.cjs"
+      }
+    },
     "./color": {
       "import": {
         "types": "./dist/color.d.ts",
