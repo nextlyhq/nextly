@@ -167,45 +167,44 @@ test.describe("a canvas any Nextly editor could ship", () => {
     ).toBeGreaterThanOrEqual(0);
   });
 
-  test.fail(
-    "holds its target through a jitter at a zone boundary",
-    async ({ request }) => {
-      note(
-        PLAN_POINT.targetSwitchHysteresis,
-        "B-7",
-        "no switch margin: a 2px jitter moves the target to a neighbouring zone"
-      );
-      await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
-      // Jittering from dead space counts the indicator appearing and vanishing
-      // as target changes, which looks exactly like the missing hysteresis this
-      // is meant to detect. The property is only observable from a live zone,
-      // and without this the run reported nine changes that were mostly the
-      // indicator blinking rather than moving.
-      await dragOntoZone(driver);
+  test("holds its target through a jitter at a zone boundary", async ({
+    request,
+  }) => {
+    note(PLAN_POINT.targetSwitchHysteresis, "B-7");
+    await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
+    // Jittering from dead space counts the indicator appearing and vanishing
+    // as target changes, which looks exactly like the missing hysteresis this
+    // is meant to detect. The property is only observable from a live zone,
+    // and without this the run reported nine changes that were mostly the
+    // indicator blinking rather than moving.
+    await dragOntoZone(driver);
 
-      const reader = await driver.recordActiveTargetTransitions();
-      // A 2px oscillation across a boundary. With no switch margin the target
-      // flips on every crossing and the indicator stutters under a hand that is
-      // not perfectly still.
-      for (let cycle = 0; cycle < 6; cycle += 1) {
-        await driver.moveBy(0, 2);
-        await driver.moveBy(0, -2);
-      }
-      const transitions = await reader();
-      await driver.cancel();
-
-      // The transitions themselves, not just how many. A count cannot separate
-      // an indicator flipping between two real zones from one vanishing and
-      // returning, and only the first is the property named in the title. What
-      // this canvas produces is a single move to a REAL neighbouring zone, so
-      // the expected failure records a genuine absence of hysteresis and not a
-      // pointer that wandered off every zone.
-      expect(
-        transitions.map(entry => entry.index),
-        "a 2px jitter must not move the drop target"
-      ).toEqual([]);
+    const reader = await driver.recordActiveTargetTransitions();
+    // A 2px oscillation across a boundary. With no switch margin the target
+    // flips on every crossing and the indicator stutters under a hand that is
+    // not perfectly still.
+    for (let cycle = 0; cycle < 6; cycle += 1) {
+      await driver.moveBy(0, 2);
+      await driver.moveBy(0, -2);
     }
-  );
+    const transitions = await reader();
+    await driver.cancel();
+
+    // The log's FIRST entry is the state when recording began, not a change, so
+    // anything after it is motion the jitter caused. Comparing the whole log
+    // instead asserts an array that can never be empty, which would keep this
+    // reporting a shortfall the canvas does not have.
+    expect(
+      transitions.slice(1).map(entry => entry.index),
+      "a 2px jitter must not move the drop target"
+    ).toEqual([]);
+    // And the indicator has to have been visible throughout: a log holding only
+    // a baseline of -1 reports no movement because nothing was ever shown.
+    expect(
+      transitions[0]?.index,
+      "the indicator must be visible to measure whether it moves"
+    ).toBeGreaterThanOrEqual(0);
+  });
 
   test.fail(
     "shifts no existing block when its drop zones appear",
