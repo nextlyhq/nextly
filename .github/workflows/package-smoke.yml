@@ -9,24 +9,43 @@ name: Package smoke
 # compatibility, and native-module (better-sqlite3) prebuilds across the Node
 # lines the packages claim to support.
 #
-# Scheduled instead of per-PR: full installs take minutes, and this class of
-# drift moves slowly. A red night shows up as an issue, not a slower PR.
+# Mostly scheduled: full installs take minutes, and packaging drift moves
+# slowly. A red night shows up as an issue, not a slower PR.
+#
+# The RSC build is the exception and runs per PR as well, because it is the ONLY
+# control on the server-safe claim — the checks beside it read code and model
+# what Next.js would do, and a property with one control should not wait until
+# night to be checked. Path-filtered to the package that can change the answer.
 
 on:
   schedule:
     - cron: "0 3 * * *"
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "packages/ui/**"
+      - ".github/workflows/package-smoke.yml"
 
+# Least privilege at the top. The one job that files an issue asks for more, so
+# a `pull_request` run — which is the event a fork can trigger — carries a token
+# that can only read.
 permissions:
   contents: read
-  # The failure reporter files an issue via `gh`.
-  issues: write
+
+# Keyed by ref for pull requests, so a new push supersedes the run under review,
+# and by SHA otherwise, so two nightly runs never cancel each other.
+concurrency:
+  group: package-smoke-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: true
 
 jobs:
   pack-and-consume:
     name: Install packed tarballs in a clean project
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Nightly only: this installs every tarball in the repo, and nothing about a
+    # single package's PR changes whether the SET of them resolves together.
+    if: github.event_name != 'pull_request'
 
     steps:
       - name: Checkout
@@ -93,6 +112,9 @@ jobs:
     name: Scaffold and build (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Nightly only: this scaffolds and builds a whole app from the CLI, and the
+    # per-PR scaffold smoke already covers the scaffolder itself.
+    if: github.event_name != 'pull_request'
     strategy:
       fail-fast: false
       # Current LTS lines only; the interesting failure here is a
@@ -154,13 +176,19 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      # Every line the package's `engines` range admits, LOW END INCLUDED. The
-      # web globals Node adds over time are exactly what makes a server-safe
-      # claim version-dependent: a module reading `navigator` at module scope
-      # builds cleanly on 22 and 24 and throws for a consumer on the floor, so a
-      # matrix without the floor answers for the machines we happen to run on.
+      # Nightly runs every line the package's `engines` range admits, LOW END
+      # INCLUDED. The web globals Node adds over time are what make a
+      # server-safe claim version-dependent: a module reading `navigator` at
+      # module scope builds cleanly on 22 and 24 and throws for a consumer on
+      # the floor, so a matrix without the floor answers only for the machines
+      # we happen to run on.
+      #
+      # A pull request runs the FLOOR alone. It is the leg that catches the most
+      # for this property — everything the newer lines reject, 20 rejects too,
+      # plus the post-floor globals they accept — so one leg per PR buys nearly
+      # all of the signal at a third of the minutes.
       matrix:
-        node: [20, 22, 24]
+        node: ${{ fromJSON(github.event_name == 'pull_request' && '[20]' || '[20, 22, 24]') }}
 
     steps:
       - name: Checkout
@@ -211,13 +239,20 @@ jobs:
           cd /tmp/rsc-app
           npx next build
 
-  # A red nightly must surface without anyone watching the Actions tab.
+  # A red nightly must surface without anyone watching the Actions tab. A red
+  # pull request does not need an issue filed: it is already red on the PR, in
+  # front of the person who caused it.
   report-failure:
     name: File an issue on failure
     needs: [pack-and-consume, scaffold-and-build, server-safe-rsc-build]
-    if: failure()
+    if: failure() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # The only job that writes anything, so it is the only one holding the
+    # permission to.
+    permissions:
+      contents: read
+      issues: write
     steps:
       - name: Create or update the tracking issue
         env:
