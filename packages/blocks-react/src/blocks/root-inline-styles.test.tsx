@@ -105,7 +105,20 @@ function contexts(): PageContext[] {
       }),
     resolveEntryPath: () => Promise.resolve("/an-entry"),
   };
-  return [empty, answering] as unknown as PageContext[];
+  // A routed page attaches a query budget, and a block can branch on it being
+  // exhausted. A collection block also takes a distinct path when no provider is
+  // configured at all, which neither host above can produce because both define
+  // `data` and `PageContext.data` is optional.
+  const noProvider = { ...answering, data: undefined };
+  const budgetSpent = { ...answering, queries: { take: () => false } };
+  const budgetAvailable = { ...answering, queries: { take: () => true } };
+  return [
+    empty,
+    answering,
+    noProvider,
+    budgetSpent,
+    budgetAvailable,
+  ] as unknown as PageContext[];
 }
 
 /**
@@ -196,7 +209,14 @@ const REPRESENTATIVE: ReadonlyMap<string, readonly unknown[]> = new Map([
   ["richtext", ["x"]],
   ["url", ["https://example.com/x"]],
   ["media", ["https://example.com/x.png"]],
-  ["number", [1]],
+  // Two numbers, because one that equals the default cannot separate an omitted
+  // prop from an explicitly-set one — `core/list` normalises `start: 1` to its
+  // default, so a branch on `start !== 1` needs a second value.
+  ["number", [1, 3]],
+  // A single-element list is its own branch: a block may lay out one item
+  // differently from several, and neither an empty default nor a two-item
+  // example reaches it.
+  ["array", [["one"], ["one", "two", "three"]]],
   ["checkbox", [true, false]],
   ["boolean", [true, false]],
   ["color", ["#123456"]],
@@ -316,10 +336,31 @@ async function renderHtml(
   return html;
 }
 
-/** Every opening tag whose class attribute carries the node class. */
-function classCarryingTags(html: string): string[] {
-  const tags = html.match(/<[a-zA-Z][a-zA-Z0-9-]*\s[^>]*>/g) ?? [];
-  return tags.filter(tag => {
+/**
+ * The tags whose inline styles belong to this block's root.
+ *
+ * The class carriers, PLUS the outermost tag whatever class it holds. A block
+ * can wrap its class carrier in a styled element — `<div style><span class=…>` —
+ * and that wrapper IS the root the page lays out, so reading only the carrier
+ * would find nothing while the forbidden declaration ships on the element above
+ * it.
+ */
+function rootTags(html: string): string[] {
+  const tags = html.match(/<[a-zA-Z][a-zA-Z0-9-]*[\s>][^>]*>?/g) ?? [];
+  const carriers = tags.filter(tag => {
+    const attr = /\sclass="([^"]*)"/.exec(tag);
+    return attr !== null && attr[1].split(/\s+/).includes(NODE_CLASS);
+  });
+  const outermost = tags[0];
+  return outermost !== undefined && !carriers.includes(outermost)
+    ? [outermost, ...carriers]
+    : carriers;
+}
+
+/** Whether the block put its class on anything at all. */
+function carriesClass(html: string): boolean {
+  const tags = html.match(/<[a-zA-Z][a-zA-Z0-9-]*[\s>][^>]*>?/g) ?? [];
+  return tags.some(tag => {
     const attr = /\sclass="([^"]*)"/.exec(tag);
     return attr !== null && attr[1].split(/\s+/).includes(NODE_CLASS);
   });
@@ -356,8 +397,8 @@ async function inspectBlock(block: AnyBlockDefinition): Promise<Inspection> {
     for (const ctx of contexts()) {
       for (const hostPolicy of hostPolicies()) {
         const html = await renderHtml(block, props, ctx, hostPolicy);
-        for (const tag of classCarryingTags(html)) {
-          reached = true;
+        if (carriesClass(html)) reached = true;
+        for (const tag of rootTags(html)) {
           for (const property of inlinePropertiesOf(tag)) {
             if (permitted.has(property)) continue;
             offenders.push(`${block.name}: ${property}`);
@@ -375,9 +416,10 @@ const STYLED_PROBE = {
   version: 1,
   example: { props: {} },
   // Returns a COMPONENT that adds the style internally, not a host element.
-  // A probe returning `<div className style>` directly is found by shallow
-  // element inspection too, so it could not tell a working detector from the
-  // element-walking one this replaced — the very regression it exists to catch.
+  // A probe whose style sits on the element it returns is visible without
+  // rendering, so it cannot tell a detector that resolves components from one
+  // that only reads the returned element's own props. Placing the style behind
+  // a component is what makes the two answer differently.
   render: ({ className }: { className: string }) => {
     const Root = (inner: { className: string }) => (
       <div className={inner.className} style={{ color: "red" }}>
