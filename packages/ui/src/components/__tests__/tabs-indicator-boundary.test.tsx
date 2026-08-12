@@ -52,22 +52,36 @@ describe("the tab indicator boundary", () => {
     // is present"; if the component rendered nothing, or the query missed, they
     // would all fail for a reason unrelated to overriding.
     const classes = triggerClassesFor();
-    expect(classes).toContain("border-b-2");
-    expect(classes).toContain("rounded-none");
+    expect(classes).toContain("border-b-2!");
+    expect(classes).toContain("rounded-none!");
   });
 
   it.each([
-    ["a corner", "rounded-md", "rounded-none"],
-    ["the underline width", "border-b-0", "border-b-2"],
-    ["the underline offset", "mb-4", "-mb-0.5"],
+    ["a corner", "rounded-md", "rounded-none!"],
+    ["the underline width", "border-b-0", "border-b-2!"],
+    ["the underline offset", "mb-4", "-mb-0.5!"],
+    // The important forms. tailwind-merge groups by importance, so an
+    // unimportant protected utility loses to a caller's `!` no matter how late
+    // it sits in the merge — these are the cases that ordering alone missed.
+    ["an important corner", "rounded-md!", "rounded-none!"],
+    ["an important underline width", "border-b-0!", "border-b-2!"],
+    ["an important offset", "mb-4!", "-mb-0.5!"],
   ])("overrides %s passed by a call site", (_label, attempted, expected) => {
     // The route is irrelevant to the mechanism: by the time `cn()` runs, an
     // identifier, a spread and a literal are the same string. This passes a
     // literal because that is the readable form, and the boundary is the merge
     // order rather than the syntax.
     const classes = triggerClassesFor(attempted);
+    // The primitive's declaration is present and important, so it wins — that
+    // is the property, and it is what the browser resolves.
     expect(classes).toContain(expected);
-    expect(classes).not.toContain(attempted);
+    // An UNIMPORTANT attempt may still sit in the string; it simply loses to an
+    // important declaration. An IMPORTANT one lands in the same tailwind-merge
+    // group and is dropped outright. Asserting absence in both cases would be
+    // asserting a mechanism rather than the outcome.
+    if (attempted.endsWith("!")) {
+      expect(classes).not.toContain(attempted);
+    }
   });
 
   it("still lets a call site change layout", () => {
@@ -79,6 +93,31 @@ describe("the tab indicator boundary", () => {
     expect(classes).toContain("px-0");
     expect(classes).not.toContain("px-4");
     // ...while the indicator is untouched by that same className.
-    expect(classes).toContain("border-b-2");
+    expect(classes).toContain("border-b-2!");
+  });
+
+  it("drops an inline style aimed at the indicator, and keeps the rest", () => {
+    // The route no class ordering can close: an inline declaration beats every
+    // class, important or not. Stripped from the resolved object rather than
+    // scanned for in source, so a spread, an alias or a value built in another
+    // module all converge here.
+    const html = renderToStaticMarkup(
+      <Tabs defaultValue="a">
+        <TabsList>
+          <TabsTrigger
+            value="a"
+            style={{ borderBottomColor: "red", opacity: 0.5 }}
+          >
+            A
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+    );
+    const trigger = /data-slot="tabs-trigger"[^>]*/.exec(html)?.[0] ?? "";
+    const style = /style="([^"]*)"/.exec(trigger)?.[1] ?? "";
+    expect(style).not.toContain("border-bottom-color");
+    // The complement: only the indicator is owned, so an unrelated declaration
+    // survives. Without this the strip could be deleting everything and pass.
+    expect(style).toContain("opacity");
   });
 });

@@ -1,7 +1,7 @@
 "use client";
 
 import { Root, List, Trigger, Content } from "@radix-ui/react-tabs";
-import { forwardRef } from "react";
+import { forwardRef, type CSSProperties } from "react";
 
 import { cn } from "../lib/utils";
 import type {
@@ -112,9 +112,10 @@ const TabsList = forwardRef<TabsListRef, TabsListProps>(
       className={cn(
         "inline-flex h-10 items-center justify-center gap-1 p-0 text-muted-foreground",
         className,
-        // Last in the merge, so no call site can round the strip: these are
-        // underline tabs and the list never draws a rounded surface.
-        "rounded-none"
+        // Last in the merge AND important, so neither ordering nor a caller's
+        // `rounded-md!` can round the strip: these are underline tabs and the
+        // list never draws a rounded surface.
+        "rounded-none!"
       )}
       {...props}
     />
@@ -146,13 +147,18 @@ const TRIGGER_LAYOUT =
  * Square is part of the indicator, not a decoration: the border has to run
  * flush to the trigger's edges. `radius-tier-contract` pins the same fact.
  *
- * This does not cover an INLINE STYLE — a `style` prop beats any class by CSS
- * specificity, and no merge order changes that. That gap is what
- * `__tests__/tabs-contract.test.ts` scans for, and it is the only thing it has
- * to scan for now.
+ * Every utility here is IMPORTANT, and that is load-bearing rather than
+ * emphatic. tailwind-merge treats `border-b-0!` and `border-b-2` as different
+ * utilities and keeps both — after which CSS resolves in the caller's favour,
+ * so merge order alone loses to a single `!`. Matching importance puts them in
+ * the same group, where the later one wins and the later one is this.
+ *
+ * The `style` prop is handled separately in the component: an inline
+ * declaration beats any class regardless of importance, so it is stripped of
+ * the properties this owns rather than ordered against them.
  */
 const TRIGGER_INDICATOR =
-  "rounded-none border-b-2 -mb-0.5 data-[state=active]:border-b-primary! data-[state=active]:text-primary data-[state=inactive]:border-transparent data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary";
+  "rounded-none! border-b-2! -mb-0.5! data-[state=active]:border-b-primary! data-[state=active]:text-primary! data-[state=inactive]:border-transparent! data-[state=inactive]:text-muted-foreground! hover:text-primary! hover:border-primary!";
 
 /**
  * TabsTrigger - Clickable tab button
@@ -173,12 +179,52 @@ const TRIGGER_INDICATOR =
  * - Data attributes: [data-state="active|inactive"], [data-disabled]
  * @public
  */
+/**
+ * Inline declarations the primitive owns, removed from a caller's `style`.
+ *
+ * An inline style beats every class, important or not, so it is the one route
+ * the merge order cannot close. Rather than scan source text for it — which
+ * cannot see a spread, an alias, or a value built in another module — the
+ * properties are dropped from the resolved object, where every route has
+ * already converged.
+ *
+ * Narrow on purpose: only the properties that draw the underline and its
+ * corner. A caller styling colour, width or anything else is untouched, because
+ * those are not the indicator.
+ */
+const OWNED_STYLE_PROPERTIES = [
+  "borderBottom",
+  "borderBottomColor",
+  "borderBottomStyle",
+  "borderBottomWidth",
+  "borderRadius",
+  "marginBottom",
+] as const satisfies readonly (keyof CSSProperties)[];
+
+function withoutOwnedProperties(
+  style: CSSProperties | undefined
+): CSSProperties | undefined {
+  if (!style) return style;
+  const kept: CSSProperties = { ...style };
+  let removed = false;
+  for (const property of OWNED_STYLE_PROPERTIES) {
+    if (property in kept) {
+      delete kept[property];
+      removed = true;
+    }
+  }
+  // The original object is returned untouched when nothing matched, so the
+  // common path allocates nothing.
+  return removed ? kept : style;
+}
+
 const TabsTrigger = forwardRef<TabsTriggerRef, TabsTriggerProps>(
-  ({ className, ...props }, ref) => (
+  ({ className, style, ...props }, ref) => (
     <Trigger
       ref={ref}
       data-slot="tabs-trigger"
       className={cn(TRIGGER_LAYOUT, className, TRIGGER_INDICATOR)}
+      style={withoutOwnedProperties(style)}
       {...props}
     />
   )

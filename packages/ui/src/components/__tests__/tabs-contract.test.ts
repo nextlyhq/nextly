@@ -77,7 +77,10 @@ function sourceFiles(dir: string, found: string[] = []): string[] {
     }
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) {
-      sourceFiles(full, found);
+      // `__tests__` is skipped deliberately: the boundary tests RENDER the
+      // violations they assert against, so scanning them would report the
+      // proof as the problem.
+      if (entry !== "__tests__") sourceFiles(full, found);
     } else if (entry.endsWith(".tsx") && full !== PRIMITIVE) {
       found.push(full);
     }
