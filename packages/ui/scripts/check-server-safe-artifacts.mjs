@@ -243,7 +243,7 @@ export function specifiersIn(source, fileName) {
    * @param {ts.Node} scope
    * @param {string} name
    */
-  const bindsName = (scope, name) => {
+  const bindsName = (scope, name, fromParameter = false) => {
     let found = false;
     const add = bound => {
       if (bound === name) found = true;
@@ -280,9 +280,24 @@ export function specifiersIn(source, fileName) {
     // in the same function — `function f() { { var resolve = import.meta.resolve } resolve(x) }` —
     // and the package it named went unreported. Nested functions own their own `var`s, so the walk
     // stops at them.
-    if (ts.isFunctionLike(scope) || ts.isSourceFile(scope)) {
+    // A default parameter initializer is evaluated BEFORE the body's `var` declarations exist, so
+    // `function f(x = resolve(...)) { var resolve }` reads the OUTER `resolve`. Counting the body's
+    // hoisted names for a call that lives in a parameter list made the function the nearest
+    // binding, and the outer loader stopped being recognised.
+    if (
+      !fromParameter &&
+      (ts.isFunctionLike(scope) ||
+        ts.isSourceFile(scope) ||
+        ts.isClassStaticBlockDeclaration(scope))
+    ) {
       const hoisted = node => {
-        if (ts.isFunctionLike(node)) return;
+        // A static block is its OWN `var` scope — `class C { static { var x } }` does not put `x`
+        // anywhere outside those braces — so the walk stops at one exactly as it stops at a nested
+        // function. Descending made the file look like the binding scope and rejected a build
+        // whose call resolves to the block's own local.
+        if (ts.isFunctionLike(node) || ts.isClassStaticBlockDeclaration(node)) {
+          return;
+        }
         if (
           ts.isVariableStatement(node) &&
           !isBlockScoped(node.declarationList)
@@ -385,8 +400,14 @@ export function specifiersIn(source, fileName) {
    * @param {string} name
    */
   const nearestBindingScope = (node, name) => {
+    let child = node;
     for (let scope = node.parent; scope !== undefined; scope = scope.parent) {
-      if (bindsName(scope, name)) return scope;
+      // Whether this scope was entered through its own PARAMETER list, which changes what is
+      // visible: parameters yes, the body's hoisted `var`s not yet.
+      const fromParameter =
+        ts.isFunctionLike(scope) && scope.parameters.some(p => p === child);
+      if (bindsName(scope, name, fromParameter)) return scope;
+      child = scope;
     }
     return undefined;
   };

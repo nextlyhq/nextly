@@ -245,6 +245,55 @@ describe("reading an artifact's specifiers", () => {
     ).toEqual(["react"]);
   });
 
+  it("keeps a class static block's var inside it", () => {
+    // `class C { static { var x } }` puts `x` nowhere outside those braces, so the block is its own
+    // `var` scope. Hoisting out of it made the file look like the binding scope and rejected a
+    // build whose call resolves to the block's own local.
+    expect(
+      read(`
+        const resolve = import.meta.resolve;
+        class C { static { var resolve = (name) => name; resolve("react"); } }
+      `)
+    ).toEqual([]);
+    // The control in the other direction: a static block with no local of that name still reaches
+    // the outer resolver, so this is a scoping rule and not a blanket exemption for static blocks.
+    expect(
+      read(`
+        const resolve = import.meta.resolve;
+        class C { static { resolve("react"); } }
+      `)
+    ).toEqual(["react"]);
+    // And the other half of the same rule, which the two assertions above cannot distinguish: the
+    // block's `var` must not escape to shadow a call OUTSIDE it. Making the block a binding scope
+    // fixes the first case on its own; only stopping the hoisting walk at it fixes this one.
+    expect(
+      read(`
+        class C { static { var require = (name) => name; } }
+        export const r = require("react");
+      `)
+    ).toEqual(["react"]);
+  });
+
+  it("resolves a default parameter initializer without the body's vars", () => {
+    // Parameter initializers are evaluated BEFORE the body's `var` declarations exist, so this call
+    // reads the OUTER resolver. Counting the body's hoisted names made the function the nearest
+    // binding and the loader stopped being recognised — and `import.meta.resolve` leaves no
+    // metafile record, so nothing else would have caught the package it names.
+    expect(
+      read(`
+        const resolve = import.meta.resolve;
+        function f(x = resolve("react")) { var resolve; }
+      `)
+    ).toEqual(["react"]);
+    // The control: a PARAMETER of that name is visible to a later initializer, so it still shadows.
+    expect(
+      read(`
+        const resolve = import.meta.resolve;
+        function f(resolve, x = resolve("react")) { return x; }
+      `)
+    ).toEqual([]);
+  });
+
   it("does not read a named class as the loader it shadows", () => {
     // A named class binds its own name throughout its body, exactly as a named function expression
     // does. Only functions were doing that, so a call inside such a body read as the ambient loader
