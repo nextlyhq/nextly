@@ -116,3 +116,7 @@ packages/nextly/src/db/migrations/dynamic/*.sql
 # contents stay out of `git status` either way — named here so the directory
 # reads as build output rather than as something git merely happens to miss.
 .fallow/
+# Task trackers and working notes live beside the task files at the workspace
+# root, outside this repository: they are internal planning, and this repo is
+# public. Ignored here so a worktree cannot commit one by accident.
+/tasks/
