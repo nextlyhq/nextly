@@ -30,12 +30,12 @@
  * `document` while it evaluates imports no differently from one that does not, and nothing here
  * would see it.
  *
- * That question is answered where it can be answered honestly, in the package smoke workflow,
- * which builds a real Next.js app and imports these entry points from a Server Component.
- * Answering it here instead means SIMULATING a consumer's environment, and then the check is only
- * ever as good as the difference it modelled — Node version, `NODE_ENV`, which web globals exist,
- * what an artifact may schedule for after the import returns. Every gap in that model is a pass
- * the consumer does not get, and the list of gaps has no end. A real build has no model in it.
+ * That is deliberate rather than an omission. Answering it HERE means SIMULATING a consumer's
+ * environment, and the check is then only ever as good as the difference it modelled — Node
+ * version, `NODE_ENV`, which web globals exist, what an artifact may schedule for after the import
+ * returns. Every gap in the model is a pass the consumer does not get, and the list of gaps has no
+ * end. The question is answerable by building a real app against these artifacts, because a real
+ * build has no model in it; it is not answerable by reading them, which is all this file does.
  *
  * The runtime-resolution recognition below — `require`, `createRequire`, `module.require`,
  * `import.meta.resolve` — is DEFENCE IN DEPTH rather than a boundary, and it is best-effort by
