@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { applyOp, OpError, type BuilderOp, type NodePatch } from "./ops";
 
 import {
+  countNodes,
   DEFAULT_LIMITS,
   DEFAULT_MAX_DOCUMENT_BYTES,
   documentBytes,
@@ -1342,5 +1343,50 @@ describe("a node container JSON cannot write whole", () => {
       applyOp(doc(), { kind: "update", id: "a", patch: { name: "x" }, unset })
     ).toThrow(OpError);
     expect(reads, "the getter must never be invoked").toBe(0);
+  });
+});
+
+describe("an id the document holds twice", () => {
+  /** A forest carrying the same id at the top level and inside a slot. */
+  function duplicated(): BlockNode[] {
+    return [
+      node("outer", { main: [node("dupe"), node("keep")] }),
+      node("dupe"),
+    ];
+  }
+
+  it("refuses a remove that would delete more than its inverse restores", () => {
+    // `removeNode` filters EVERY match, while the inverse captures one node and
+    // one location — so the second subtree is deleted and the undo cannot bring
+    // it back. Verified below rather than argued.
+    const before = applyOp(doc(duplicated()), { kind: "remove", id: "keep" });
+    expect(
+      countNodes(before.document.nodes),
+      "the fixture must be a working document apart from the duplicate"
+    ).toBe(3);
+
+    expect(() =>
+      applyOp(doc(duplicated()), { kind: "remove", id: "dupe" })
+    ).toThrow(/addresses 2 nodes/);
+  });
+
+  it("refuses a move for the same reason", () => {
+    // `move` delegates through the same filter, so it destroys the duplicate
+    // exactly as `remove` does.
+    expect(() =>
+      applyOp(doc(duplicated()), {
+        kind: "move",
+        id: "dupe",
+        to: { parentId: "outer", slot: "main", index: 0 },
+      })
+    ).toThrow(/addresses 2 nodes/);
+  });
+
+  it("still accepts an id the document holds once", () => {
+    // The separating property. A guard that refused every remove would satisfy
+    // both assertions above while breaking the editor.
+    expect(() =>
+      applyOp(doc(duplicated()), { kind: "remove", id: "keep" })
+    ).not.toThrow();
   });
 });

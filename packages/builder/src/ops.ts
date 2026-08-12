@@ -761,6 +761,37 @@ function assertFitsCaps(
 }
 
 /**
+ * Refuses an id the document holds more than once.
+ *
+ * `removeNode` filters EVERY child whose id matches, at the top level and in
+ * every slot, while the inverse this module derives captures one node and one
+ * location. So a document that already carries a duplicate id loses the second
+ * subtree on remove and the undo restores only the first — a silent deletion
+ * that no later read can attribute to the edit that caused it. `move`
+ * delegates through the same filter and destroys the duplicate the same way.
+ *
+ * Refused rather than repaired. Which of two nodes sharing an id the author
+ * meant is not knowable here, and picking one would make the op layer decide a
+ * question the document itself has no answer to. Ids are identity: a document
+ * holding two is already broken, and the honest response is to say so rather
+ * than to edit it further.
+ */
+function assertIdIsUnique(nodes: BlockNode[], id: string, verb: string): void {
+  let seen = 0;
+  walkNodes(nodes, node => {
+    if (node.id === id) seen += 1;
+  });
+  if (seen > 1) {
+    throw new OpError(
+      `${verb}: "${id}" addresses ${String(seen)} nodes, and an id is ` +
+        `identity. Removing or moving it would delete every one of them while ` +
+        `the undo restored a single node, so the rest would vanish with no ` +
+        `record of the edit that took them.`
+    );
+  }
+}
+
+/**
  * Refuses an id that addresses nothing.
  *
  * `findNode` answers `undefined` for a non-string just as it does for an id the
@@ -1012,6 +1043,7 @@ export function applyOp(
         );
       }
 
+      assertIdIsUnique(nodes, op.id, "remove");
       const lockedId = lockedWithin(node);
       if (lockedId !== undefined) {
         throw new OpError(
@@ -1043,6 +1075,7 @@ export function applyOp(
       if (node === undefined || location === undefined) {
         throw new OpError(`move: no node with id "${op.id}" in the document.`);
       }
+      assertIdIsUnique(nodes, op.id, "move");
       assertPosition(op.to, "move");
       const lockedMoving = lockedWithin(node);
       if (lockedMoving !== undefined) {
