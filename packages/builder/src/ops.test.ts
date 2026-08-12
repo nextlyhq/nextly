@@ -1460,16 +1460,24 @@ describe("containers JSON cannot carry whole", () => {
 });
 
 describe("a document already past its limits", () => {
-  it("still allows the removal that would bring it back under", () => {
+  it("still allows an edit to a document that is already over", () => {
     // A site that lowers its caps leaves existing documents over them. A check
-    // reading only the RESULT refuses every edit to such a document, including
-    // the removals that fix it, so the author is locked out of repairing the
-    // only thing that can help.
+    // reading only the RESULT refuses every edit to such a document, so the
+    // author is locked out of the surface that could repair it.
+    //
+    // `update` is the case that separates the two rules: it leaves the node
+    // count untouched, so the document stays over the cap without the edit
+    // having made it worse. A `remove` would pass either way — the remove
+    // branch does not measure caps at all — and would prove nothing.
     const tight: DocumentLimits = { ...DEFAULT_LIMITS, maxNodes: 1 };
     const over = doc([node("a"), node("b")]);
 
-    const applied = applyOp(over, { kind: "remove", id: "b" }, tight);
-    expect(countNodes(applied.document.nodes)).toBe(1);
+    const applied = applyOp(
+      over,
+      { kind: "update", id: "a", patch: { name: "repaired" } },
+      tight
+    );
+    expect(countNodes(applied.document.nodes)).toBe(2);
   });
 
   it("still refuses an edit that makes the overage worse", () => {
