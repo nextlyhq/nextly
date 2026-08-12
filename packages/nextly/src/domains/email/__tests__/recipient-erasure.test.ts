@@ -164,6 +164,30 @@ describe("erasing a recipient from the delivery log", () => {
     expect(await service.list({ recipient: ERASED })).toEqual([]);
   });
 
+  it("erases a row that was RECORDED under a display name", async () => {
+    // The direction the case above cannot reach, and the one that was broken:
+    // it records a bare address and erases a decorated one, which passes even
+    // when the WRITE path skips the normalisation, because stripping a display
+    // name that was never there is a no-op. Recording the decorated form is
+    // what separates a shared digest from two that merely agree on plain
+    // addresses.
+    const decorated = `Jane <recorded-decorated@example.com>`;
+    const bare = "recorded-decorated@example.com";
+    await service.record({
+      to: decorated,
+      providerType: "smtp",
+      status: "sent",
+    });
+    // The write must be findable by the bare mailbox before the erasure runs,
+    // or the assertion below passes on a row that was never locatable at all.
+    expect(await service.list({ recipient: bare })).toHaveLength(1);
+
+    await erase(bare);
+
+    expect(await service.list({ recipient: bare })).toEqual([]);
+    expect(storedHashes()).not.toContain(recipientDigest(bare));
+  });
+
   it("changes nothing when run a second time", async () => {
     await erase(ERASED);
     const afterFirst = storedHashes().slice().sort();

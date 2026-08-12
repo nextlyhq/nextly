@@ -55,6 +55,21 @@ export type ErasableDeliveriesTable = Table & { recipientHash: Column };
  * stored value is the sentinel, which no address hashes to. Running this twice
  * therefore touches nothing the second time, without needing a guard to say so.
  *
+ * ROWS WRITTEN UNDER A PREVIOUS `NEXTLY_SECRET` ARE NOT REACHED. The digest is
+ * an HMAC keyed with the current secret, so after a rotation the predicate
+ * computes a value none of the older rows carry, and this returns having
+ * matched nothing — with no error, because "no rows matched" is also what a
+ * recipient with no deliveries looks like. Rotation is a real operational
+ * state here rather than a hypothetical: `email-provider-service.ts` already
+ * handles a stored configuration that no longer decrypts for exactly that
+ * reason.
+ *
+ * Recording a key version alongside the digest would close it, and that is a
+ * column on a table whose schema deliberately does not change in this change.
+ * Until then the bound is the retention pass: rows age out regardless of which
+ * key wrote them, so a rotation delays the removal of older rows rather than
+ * making it never happen.
+ *
  * The dialects do not agree on how this column compares: MySQL's default
  * `varchar` collation is case- and pad-insensitive, while Postgres and SQLite
  * compare exactly. That is safe here only because of what gets written —

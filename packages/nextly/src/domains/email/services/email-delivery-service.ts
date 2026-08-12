@@ -30,7 +30,6 @@ import {
 } from "../deliveries-table";
 import {
   EMAIL_RETENTION_CLASS,
-  hashRecipient,
   isErasedRecipientHash,
   recipientDigest,
   storableError,
@@ -38,6 +37,7 @@ import {
   type EmailDeliveryRecipientKind,
   type EmailDeliveryStatus,
 } from "../delivery-record";
+import { eraseRecipientDeliveries } from "../erase-recipient";
 
 /**
  * Rows per insert statement.
@@ -350,7 +350,12 @@ export class EmailDeliveryService extends BaseService {
         // The address is hashed here and nowhere retained. Callers hand over
         // the real one because they are sending to it; this is the boundary
         // where it stops travelling.
-        recipientHash: hashRecipient(input.to),
+        //
+        // Through `recipientDigest`, the same function the reader and the
+        // erasure use. A send addressed `Jane <jane@example.com>` must store
+        // what a lookup for `jane@example.com` will compute, or the row is
+        // written in a form nothing can ever find again.
+        recipientHash: recipientDigest(input.to),
         recipientKind: input.recipientKind ?? "to",
         status: input.status,
         attemptCount: 1,
@@ -361,6 +366,27 @@ export class EmailDeliveryService extends BaseService {
         // send, and staggering them by microseconds would suggest otherwise.
         createdAt: now,
       }))
+    );
+  }
+
+  /**
+   * Erase every delivery recorded for an address.
+   *
+   * The reachable entry point for the population `deleteUser` cannot serve:
+   * most recipients never had an account — a password reset to an address that
+   * never registered, a CC, a BCC added by a `beforeSend` filter — and no
+   * account deletion will ever fire for them. Without a caller of its own, the
+   * erasure would cover an arbitrary subset of the people it claims to.
+   *
+   * Runs outside a transaction because it stands alone here; `deleteUser`
+   * calls the underlying function directly with its own so the erasure commits
+   * and rolls back with the account removal.
+   */
+  async eraseRecipient(address: string): Promise<void> {
+    await eraseRecipientDeliveries(
+      this.db as Parameters<typeof eraseRecipientDeliveries>[0],
+      this.deliveries,
+      address
     );
   }
 
