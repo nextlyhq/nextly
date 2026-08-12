@@ -95,15 +95,24 @@ if (verifying) {
   const missing = [];
   const empty = [];
   for (const entry of serverSafe) {
-    const match = html.match(
-      new RegExp(
-        `data-subpath="${entry.subpath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}" data-exports="(\\d+)"`
-      )
+    const quoted = entry.subpath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // The ELEMENT is located first, then its attributes are read independently. Requiring the two
+    // attributes to be adjacent and in order made this depend on how React happens to serialize a
+    // tag, which is not part of any contract it publishes — a reordering or an inserted attribute
+    // would fail a build whose page is correct, and a required check that reds on a correct build
+    // costs more than the case it was guarding.
+    const element = html.match(
+      new RegExp(`<[a-zA-Z][a-zA-Z0-9-]*\\s[^>]*data-subpath="${quoted}"[^>]*>`)
     );
-    if (match === null) missing.push(entry.subpath);
+    if (element === null) {
+      missing.push(entry.subpath);
+      continue;
+    }
+    const exported = element[0].match(/data-exports="(\d+)"/);
     // A namespace with no bindings means the import resolved to something empty, which renders the
-    // same as a real module and would otherwise read as a pass.
-    else if (Number(match[1]) === 0) empty.push(entry.subpath);
+    // same as a real module and would otherwise read as a pass. An element carrying the subpath but
+    // no count is the same absence of evidence.
+    if (exported === null || Number(exported[1]) === 0) empty.push(entry.subpath);
   }
 
   if (missing.length > 0 || empty.length > 0) {

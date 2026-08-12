@@ -1,21 +1,20 @@
 /**
- * The Node versions the RSC smoke job runs against, checked against the range the repo supports.
+ * The derivation behind the RSC job's Node legs, and the workflow's use of it.
  *
- * The job's matrix is a list of exact versions and the `engines.node` range is a semver expression,
- * so the two cannot be one value — but they answer one question, and a copy drifts. Widening the
- * range without touching the workflow leaves a newly supported floor untested while every leg stays
- * green, which is the shape a version matrix is least likely to be suspected of.
+ * Two separate claims, and only the first is about behaviour. `matrixFor` decides which versions a
+ * supported range asks to be tested; the workflow has to actually CONSUME that rather than carry a
+ * list beside it. A correct derivation nothing reads is the same as no derivation.
  *
- * Checked here rather than derived inside the workflow. A setup job computing the matrix would
- * remove the copy entirely, at the cost of an extra job on every run and a second place for the
- * parsing to live; this suite already runs on every pull request, including the ones that change the
- * root manifest, so the drift is caught at the same moment for less.
+ * The released majors are passed IN here rather than fetched. A unit suite that reaches the network
+ * fails when the network does, and reports it as a defect in this package.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+
+import { lowestFloor, matrixFor } from "../../scripts/node-matrix.mjs";
 
 const repoRoot = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -34,83 +33,77 @@ const workflow = readFileSync(
   "utf8"
 );
 
-/**
- * The exact versions a semver range's clauses START at, plus whether any clause is open-ended.
- *
- * Only the two forms the range actually uses are recognised, and anything else THROWS rather than
- * being skipped. A parser that ignores what it cannot read would return a shorter list, and a
- * shorter list compares unequal and fails — but it would fail naming the wrong cause, sending the
- * next reader to the workflow when the range is what changed shape.
- */
-function floorsOf(range: string): { floors: string[]; openEnded: boolean } {
-  const floors: string[] = [];
-  let openEnded = false;
-  for (const clause of range.split("||").map(part => part.trim())) {
-    const caret = /^\^(\d+\.\d+\.\d+)$/.exec(clause);
-    const atLeast = /^>=(\d+\.\d+\.\d+)$/.exec(clause);
-    if (caret !== null) {
-      floors.push(caret[1]);
-    } else if (atLeast !== null) {
-      floors.push(atLeast[1]);
-      openEnded = true;
-    } else {
-      throw new Error(
-        `engines.node clause ${JSON.stringify(clause)} is neither a caret nor a >= range, so the ` +
-          `versions it admits could not be derived. Teach this parser the new form.`
-      );
-    }
-  }
-  return { floors, openEnded };
-}
-
-/** The two version lists the matrix expression chooses between, pull-request first. */
-function matrixLists(): { onPullRequest: string[]; nightly: string[] } {
-  const line = workflow
-    .split("\n")
-    .find(text => text.includes("fromJSON(github.event_name =="));
-  expect(
-    line,
-    "the RSC job's matrix expression was not found, so this test would assert nothing"
-  ).toBeDefined();
-  const arrays = [...(line as string).matchAll(/'(\[[^\]]*\])'/g)].map(match =>
-    JSON.parse(match[1])
-  );
-  expect(
-    arrays.length,
-    `expected two version lists in the matrix expression, found ${arrays.length}`
-  ).toBe(2);
-  return { onPullRequest: arrays[0], nightly: arrays[1] };
-}
-
-describe("the RSC smoke matrix and the engines range", () => {
-  it("runs every floor the supported range declares", () => {
-    const { floors, openEnded } = floorsOf(engines);
-    expect(floors.length, "engines.node named no versions").toBeGreaterThan(0);
-
-    // `latest` stands for the open-ended clause. Every release since that floor is a version the
-    // manifest promises, and there is no highest one to enumerate.
-    const expected = openEnded ? [...floors, "latest"] : floors;
-    expect(matrixLists().nightly).toEqual(expected);
+describe("deriving the Node legs from a supported range", () => {
+  it("tests the exact floor of a closed clause", () => {
+    // The floor is where a global Node added later is ABSENT, which is the whole signal. A major
+    // selector would install the newest of that line and never reach it.
+    expect(matrixFor("^20.19.0 || ^22.12.0", [20, 22])).toEqual([
+      "20.19.0",
+      "22.12.0",
+    ]);
   });
 
-  it("runs the lowest floor on a pull request", () => {
-    // One leg per PR, and it has to be the LOWEST: everything the newer lines reject it rejects
-    // too, plus the globals they have and it does not.
-    const { floors } = floorsOf(engines);
-    expect(matrixLists().onPullRequest).toEqual([floors[0]]);
+  it("tests every released major above an open clause, not just its endpoints", () => {
+    // `>=24.0.0` promises 24, 25 and 26 alike. The floor plus the newest release leaves 25
+    // unexercised, and a regression confined to it reaches consumers with every leg green.
+    expect(matrixFor(">=24.0.0", [22, 24, 25, 26])).toEqual([
+      "24.0.0",
+      "25",
+      "26",
+    ]);
   });
 
-  it("derives the floors from the range rather than restating them", () => {
-    // The control on the parser itself. Without it, a `floorsOf` that returned a hard-coded list
-    // would satisfy both assertions above for as long as the range happened to match.
-    expect(floorsOf("^20.19.0 || ^22.12.0 || >=24.0.0")).toEqual({
-      floors: ["20.19.0", "22.12.0", "24.0.0"],
-      openEnded: true,
-    });
-    expect(floorsOf("^18.0.0 || ^20.1.2")).toEqual({
-      floors: ["18.0.0", "20.1.2"],
-      openEnded: false,
-    });
-    expect(() => floorsOf("20.x")).toThrow(/neither a caret nor a >= range/);
+  it("picks up a new major without an edit here", () => {
+    // The property that makes this worth deriving at all.
+    expect(matrixFor(">=24.0.0", [24, 25, 26, 27])).toContain("27");
+  });
+
+  it("names no major that has not been released", () => {
+    // The mirror: a range admits versions that do not exist, and asking CI to install one fails the
+    // job for a reason that is not about this package.
+    expect(matrixFor(">=24.0.0", [24])).toEqual(["24.0.0"]);
+  });
+
+  it("refuses a clause it cannot read rather than returning a shorter list", () => {
+    // Skipping is the quieter failure: the job keeps passing on the clauses that were understood.
+    expect(() => matrixFor("20.x", [20])).toThrow(
+      /neither a caret nor a >= range/
+    );
+  });
+
+  it("selects the lowest floor for a pull request", () => {
+    expect(lowestFloor("^20.19.0 || ^22.12.0 || >=24.0.0")).toBe("20.19.0");
+  });
+
+  it("reads this repository's own range without throwing", () => {
+    // The control that keeps the cases above from being a private grammar: the range this repo
+    // actually declares has to be one the parser accepts.
+    expect(matrixFor(engines, [20, 22, 24]).length).toBeGreaterThan(0);
+  });
+});
+
+describe("the workflow's use of that derivation", () => {
+  it("takes its matrix from the derivation job, not from a list", () => {
+    const line = workflow
+      .split("\n")
+      .find(text => text.trimStart().startsWith("node: ${{"));
+    expect(
+      line,
+      "the RSC job's matrix expression was not found, so this test would assert nothing"
+    ).toBeDefined();
+    // A literal array here is the drift this whole module exists to remove, so it is named as the
+    // failure rather than left to a mismatch further down.
+    expect(
+      line,
+      "the matrix names versions inline; it must read them from the node-matrix job"
+    ).not.toMatch(/\[\s*"\d/);
+    expect(line).toContain("needs.node-matrix.outputs.versions");
+    expect(line).toContain("needs.node-matrix.outputs.lowest");
+  });
+
+  it("declares the dependency that makes those outputs available", () => {
+    // `needs` is what populates `needs.node-matrix.outputs`; without it the expression resolves to
+    // empty and the matrix silently produces no legs at all.
+    expect(workflow).toMatch(/\n {4}needs: node-matrix\n/);
   });
 });

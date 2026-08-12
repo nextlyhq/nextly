@@ -182,8 +182,38 @@ jobs:
   # model only answers for what it was taught, and the artifact gate spent 29
   # review rounds learning ways a simulated environment differs from a real one.
   # This asks the real toolchain instead, and the assertion is the build passing.
+  # The version legs are COMPUTED from `engines.node` rather than written beside it, because the
+  # range's last clause is open-ended: `>=24.0.0` promises every major Node has released since, and
+  # a list naming the floor and the newest leaves the ones between them untested. Node's own release
+  # index says which exist, so nothing here needs an edit when a major ships.
+  node-matrix:
+    name: Derive the Node legs from the engines range
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      versions: ${{ steps.derive.outputs.versions }}
+      lowest: ${{ steps.derive.outputs.lowest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      # No install: the script reads the manifest and fetches the release index using built-ins
+      # only. It FAILS rather than falling back to a shorter list, since a narrower matrix passes
+      # while covering less, which is the failure this job exists to prevent one level up.
+      - name: Derive
+        id: derive
+        run: node packages/ui/scripts/node-matrix.mjs --github
+
   server-safe-rsc-build:
     name: Server-safe subpaths in an RSC build (Node ${{ matrix.node }})
+    needs: node-matrix
     runs-on: ubuntu-latest
     # A module that calls `process.exit` while it initializes leaves the build
     # with no verdict to report rather than a failure, so the deadline is what
@@ -192,28 +222,17 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      # EXACT floors, not major selectors. `20` resolves to the newest 20.x,
-      # which is not the version the `engines` range promises to support, and
-      # the gap is precisely where this job's signal lives: a global added in
-      # 22.13 is present on the newest 22.x and absent for a consumer pinned to
-      # 22.12.0, so a floating leg reports a pass the floor never earned.
-      #
-      # The three floors come from the root `engines`
-      # (`^20.19.0 || ^22.12.0 || >=24.0.0`).
-      #
-      # `latest` is the other direction, and it is deliberately not a pinned
-      # major. The third clause is OPEN-ENDED, so every release Node has made
-      # since 24 is a version these packages claim to support; pinning `24` there
-      # would test the newest 24.x and leave every later major unexercised while
-      # the manifest promised it worked. Resolving to whatever Node has shipped
-      # keeps the leg matched to the claim with no edit here when a major lands.
-      # A new major breaking this job is not noise — it is the `>=` being wrong.
+      # Nightly runs every version the range asks for: the EXACT floor of each
+      # closed clause, where a global Node added later is absent — which is the
+      # failure this job exists to find, and one a floating `20` would miss by
+      # installing the newest 20.x — plus every released major above the open
+      # clause's floor.
       #
       # A pull request runs the LOWEST floor alone. Everything the newer lines
-      # reject, 20.19.0 rejects too, plus the post-floor globals they accept, so
-      # one leg buys nearly all the signal at a fraction of the minutes.
+      # reject, it rejects too, plus the post-floor globals they accept, so one
+      # leg buys nearly all the signal at a fraction of the minutes.
       matrix:
-        node: ${{ fromJSON(github.event_name == 'pull_request' && '["20.19.0"]' || '["20.19.0", "22.12.0", "24.0.0", "latest"]') }}
+        node: ${{ fromJSON(github.event_name == 'pull_request' && needs.node-matrix.outputs.lowest || needs.node-matrix.outputs.versions) }}
 
     steps:
       - name: Checkout
@@ -302,7 +321,13 @@ jobs:
   # front of the person who caused it.
   report-failure:
     name: File an issue on failure
-    needs: [pack-and-consume, scaffold-and-build, server-safe-rsc-build]
+    needs:
+      [
+        pack-and-consume,
+        scaffold-and-build,
+        node-matrix,
+        server-safe-rsc-build,
+      ]
     if: failure() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -325,7 +350,7 @@ jobs:
           else
             # printf keeps the multi-line body inside this YAML block scalar;
             # a raw multi-line string here would dedent and break the file.
-            body=$(printf 'The nightly package-smoke workflow failed. Run: %s\n\nOne of three things: the packed tarballs no longer install/import in a clean project, `create-nextly-app` no longer scaffolds an app that builds, or a subpath declared server-safe no longer survives a real Next.js Server Component build. The last one names a Node version in the job title, and a failure on the floor leg alone means the subpath uses something newer than the oldest supported Node. See the run logs for the failing job.' "$RUN_URL")
+            body=$(printf 'The nightly package-smoke workflow failed. Run: %s\n\nOne of three things: the packed tarballs no longer install/import in a clean project, `create-nextly-app` no longer scaffolds an app that builds, a subpath declared server-safe no longer survives a real Next.js Server Component build, or the Node legs could not be derived from the engines range. The last one names a Node version in the job title, and a failure on the floor leg alone means the subpath uses something newer than the oldest supported Node. See the run logs for the failing job.' "$RUN_URL")
             gh issue create --repo "${{ github.repository }}" \
               --title "Nightly package smoke is failing" \
               --label ci-nightly-failure \
