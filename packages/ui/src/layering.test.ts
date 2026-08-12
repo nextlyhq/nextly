@@ -96,8 +96,29 @@ const MODULE_EXTENSIONS = [
  * covered if a file with that extension happens to exist today.
  */
 function isShippedModule(entry: string): boolean {
-  if (/\.(test|fixture)\./.test(entry)) return false;
+  if (/\.(test|fixture|spec)\./.test(entry)) return false;
   return MODULE_EXTENSIONS.some(extension => entry.endsWith(extension));
+}
+
+/**
+ * The files the SHIPPING tsconfig compiles, asked of TypeScript rather than recomputed.
+ *
+ * `isShippedModule` answers the same question by pattern, and the two drifted: the tsconfig
+ * excludes `*.spec.ts` and `*.spec.tsx`, the pattern did not, and a contributor adding a
+ * conventional spec file would have had it scanned as published code and rejected for using
+ * `eval` in a test. Whichever way that divergence points it is wrong — a spec scanned as shipped
+ * blocks valid work, and a shipped file the tsconfig stops compiling would silently leave the
+ * scan. Asking the compiler makes the next convention added to `exclude` apply here for free.
+ */
+function tsconfigShippedFiles(): string[] {
+  const path = join(SRC, "..", "tsconfig.json");
+  const parsed = ts.parseConfigFileTextToJson(path, readFileSync(path, "utf8"));
+  const resolved = ts.parseJsonConfigFileContent(
+    parsed.config,
+    ts.sys,
+    join(SRC, "..")
+  );
+  return resolved.fileNames.map(file => resolve(file)).sort();
 }
 
 /**
@@ -488,6 +509,28 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
    * either name is refused rather than scope-analysed, which is the analysis this boundary exists
    * to avoid needing.
    */
+  /**
+   * Whether an expression IS a host object, seen through casts and grouping.
+   *
+   * `(globalThis as typeof globalThis & { process: P }).process` reads the same binding as
+   * `globalThis.process`, but the receiver is an `AsExpression` rather than an identifier — so a
+   * check reading the receiver directly treats `process` as somebody else's property key. `as`,
+   * `satisfies`, `!` and parentheses change the type or the grouping and never which object is in
+   * hand, so they are transparent here for the same reason they are transparent to capture.
+   */
+  const receiverIsHost = (expression: ts.Expression): boolean => {
+    let current: ts.Node = expression;
+    while (
+      ts.isAsExpression(current) ||
+      ts.isParenthesizedExpression(current) ||
+      ts.isNonNullExpression(current) ||
+      ts.isSatisfiesExpression(current)
+    ) {
+      current = current.expression;
+    }
+    return ts.isIdentifier(current) && GLOBAL_OBJECTS.has(current.text);
+  };
+
   const isMemberName = (node: ts.Identifier): boolean => {
     const parent = node.parent;
     if (parent === undefined) return false;
@@ -496,13 +539,8 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
     // re-expose globals are a closed set the language defines, unlike the open set of member
     // spellings this predicate exists to skip.
     if (ts.isPropertyAccessExpression(parent)) {
-      if (
-        parent.name === node &&
-        ts.isIdentifier(parent.expression) &&
-        GLOBAL_OBJECTS.has(parent.expression.text)
-      ) {
+      if (parent.name === node && receiverIsHost(parent.expression))
         return false;
-      }
       return parent.name === node;
     }
     if (ts.isQualifiedName(parent)) return parent.right === node;
@@ -823,6 +861,14 @@ describe("this package resolves no module at runtime", () => {
     expect(
       runtimeResolversIn(`export const r = use(globalThis);`, "a.ts")
     ).toEqual(["globalThis"]);
+    // A cast receiver is still the host: `(globalThis as T).process` reads the same binding as
+    // `globalThis.process`, so the member is not somebody else's key.
+    expect(
+      runtimeResolversIn(
+        `export const r = (globalThis as typeof globalThis & { process: P }).process;`,
+        "a.ts"
+      )
+    ).toEqual(["process"]);
     // The controls: ordinary code names none of them.
     expect(
       runtimeResolversIn(
@@ -881,6 +927,40 @@ describe("this package resolves no module at runtime", () => {
   // dependency. Making the tree un-leavable is what keeps the enumeration complete — the
   // alternative, following the entries' transitive graph, re-derives module resolution here and
   // inherits every disagreement with the resolver that actually runs.
+  it("scans exactly the files the shipping tsconfig compiles", () => {
+    // `isShippedModule` decides the scan by PATTERN and the tsconfig decides shipping by
+    // `exclude`; two answers to one question, which is why they drifted over `*.spec.*`. Asserted
+    // rather than merged into one function because `sourceFiles` has other callers — the point is
+    // that a divergence fails loudly here instead of silently changing what gets scanned.
+    expect(sourceFiles(SRC).sort()).toEqual(tsconfigShippedFiles());
+  });
+
+  // The containment test is complete only while no ALIAS can name a file for it, and aliases come
+  // from two places this package could grow: the manifest's `imports` map, asserted below, and
+  // tsconfig `paths`. Both are conditions rather than observations, so both are pinned.
+  it("declares no tsconfig path alias for a specifier to hide behind", () => {
+    const aliases = ["tsconfig.json", "tsconfig.tests.json"].flatMap(name => {
+      const path = join(SRC, "..", name);
+      const parsed = ts.parseConfigFileTextToJson(
+        path,
+        readFileSync(path, "utf8")
+      );
+      const paths = (
+        parsed.config as {
+          compilerOptions?: { paths?: Record<string, unknown> };
+        }
+      ).compilerOptions?.paths;
+      return Object.keys(paths ?? {}).map(alias => `${name}: ${alias}`);
+    });
+
+    expect(
+      aliases,
+      "A `paths` alias maps a bare specifier to a file, so shipped source could import one that " +
+        "the containment test reads as a package name and never resolves. Resolve those aliases " +
+        "in the containment test before declaring one."
+    ).toEqual([]);
+  });
+
   it("reaches no file outside the tree the ban reads", () => {
     const escapes = sourceFiles(SRC).flatMap(file =>
       importedSpecifiers(readFileSync(file, "utf8"), file)
