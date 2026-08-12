@@ -516,7 +516,6 @@ export default function UserTable() {
               />
             ) : undefined
           }
-          bordered={false}
           error={
             isError
               ? error instanceof Error

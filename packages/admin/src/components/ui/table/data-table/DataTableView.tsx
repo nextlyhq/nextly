@@ -402,7 +402,9 @@ export function DataTableView<Row extends object>({
             );
           })
         )}
-        {footer && <div className="mt-4">{footer}</div>}
+        {/* No margin: this is a direct child of the card view's `gap-4`
+            column, which already separates it from the last row card. */}
+        {footer}
       </div>
 
       {/* Desktop / wide: table view */}

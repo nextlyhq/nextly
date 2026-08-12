@@ -420,7 +420,6 @@ export default function RoleTable() {
               />
             ) : undefined
           }
-          bordered={false}
           emptyMessage={
             search
               ? "No roles found. Try adjusting your search."

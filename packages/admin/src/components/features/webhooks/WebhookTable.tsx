@@ -244,7 +244,6 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
             isLoading={isLoading}
           />
         }
-        bordered={false}
         emptyMessage="No webhook endpoints yet. Create one to start receiving events."
       />
     </ListShell>

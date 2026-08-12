@@ -67,14 +67,24 @@ describe("DataTableView footer", () => {
     expect(desktop?.className).toContain("border-border");
   });
 
-  it("takes a gap in the card view, where no card encloses it", () => {
-    const mobile = renderWithFooter().find(
-      node => node.parentElement?.className.includes("mt-4") ?? false
-    );
+  it("takes the card view's own gap, and not a second one", () => {
+    const mobile = renderWithFooter()
+      .map(node => ({ node, block: viewBlockOf(node) }))
+      .find(({ block }) => block?.className.includes("@md/table:hidden"));
 
-    // Without this the footer's top border lands against the last row card's
-    // rounded corner and reads as a hairline stuck to it.
     expect(mobile).toBeTruthy();
+
+    // The separation comes from the column's `gap-4`, which means the footer
+    // has to be a DIRECT child of it. Wrapping it to add a margin also adds the
+    // gap, and the two stack into double the intended space.
+    expect(mobile?.node.parentElement).toBe(mobile?.block);
+    expect(mobile?.block?.className).toContain("gap-4");
+
+    // Asserting a margin exists would encode whichever spacing shipped rather
+    // than the one intended, so what is pinned is the absence of a second
+    // source of it.
+    const between = mobile?.node.className ?? "";
+    expect(between).not.toMatch(/\bmt-\d/);
   });
 
   it("renders nothing extra when no footer is given", () => {

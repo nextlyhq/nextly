@@ -312,7 +312,6 @@ export default function PluginsTable() {
             />
           ) : undefined
         }
-        bordered={false}
         emptyMessage={
           debouncedSearch || statusFilter !== "all"
             ? "No plugins match the current filters."
