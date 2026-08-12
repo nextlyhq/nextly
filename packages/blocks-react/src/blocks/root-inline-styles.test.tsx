@@ -30,8 +30,8 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { BlockNode } from "@nextlyhq/blocks-engine";
-import { isValidElement, type ReactElement, type ReactNode } from "react";
+import type { AnyBlockDefinition, BlockNode } from "@nextlyhq/blocks-engine";
+import { isValidElement, type ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
@@ -71,28 +71,37 @@ function renderArgs<P>(props: P): BlockRenderArgs<P> {
   } as BlockRenderArgs<P>;
 }
 
-/** A block's output, whether it renders synchronously or as a server component. */
-async function rendered<P>(block: {
-  render: (args: BlockRenderArgs<P>) => ReactNode | Promise<ReactNode>;
-  example: { props: P };
-}): Promise<ReactNode> {
+/**
+ * A block's output, whether it renders synchronously or as a server component.
+ *
+ * Taken as `AnyBlockDefinition` — the erased shape the registry itself stores —
+ * because `coreBlocks` is a union of definitions with different prop types and a
+ * union of functions cannot be called with any one of them. That is the same
+ * erasure `registerBlocks` performs, so nothing here is looser than production.
+ */
+async function rendered(block: AnyBlockDefinition): Promise<unknown> {
   return await block.render(renderArgs(block.example.props));
 }
 
 /** Every element in a render result, the root included. */
-function elementsIn(node: ReactNode): ReactElement[] {
+function elementsIn(node: unknown): ReactElement[] {
   if (!isValidElement(node)) {
     // An array or a fragment's children arrive here as a plain iterable; a
     // string, number, null or boolean has no props to inspect and ends the walk.
     if (Array.isArray(node)) return node.flatMap(child => elementsIn(child));
     return [];
   }
-  const element = node as ReactElement<{ children?: ReactNode }>;
-  return [element, ...elementsIn(element.props.children)];
+  const children: unknown = (node.props as { children?: unknown }).children;
+  return [node, ...elementsIn(children)];
+}
+
+/** The inline style an element carries, if any. Props are unknown-shaped here. */
+function inlineStyleOf(element: ReactElement): unknown {
+  return (element.props as { style?: unknown }).style;
 }
 
 /** The elements a block put its given class on. */
-function classCarriers(node: ReactNode): ReactElement<{ style?: unknown }>[] {
+function classCarriers(node: unknown): ReactElement[] {
   return elementsIn(node).filter(element => {
     const className: unknown = (element.props as { className?: unknown })
       .className;
@@ -111,10 +120,8 @@ describe("a core block's root element", () => {
    * cannot tell a library that grew a clean block from one whose riskiest block
    * stopped being reached — and the second is exactly what happened here.
    */
-  async function inspectable(): Promise<
-    Map<string, ReactElement<{ style?: unknown }>[]>
-  > {
-    const found = new Map<string, ReactElement<{ style?: unknown }>[]>();
+  async function inspectable(): Promise<Map<string, ReactElement[]>> {
+    const found = new Map<string, ReactElement[]>();
     for (const block of coreBlocks) {
       const carriers = classCarriers(await rendered(block));
       if (carriers.length > 0) found.set(block.name, carriers);
@@ -139,7 +146,7 @@ describe("a core block's root element", () => {
     const found = await inspectable();
     const offenders: string[] = [];
     for (const [name, carriers] of found) {
-      const inline = carriers.filter(el => el.props.style !== undefined);
+      const inline = carriers.filter(el => inlineStyleOf(el) !== undefined);
       if (ALLOWED.has(name)) {
         expect(
           inline.length,
@@ -148,7 +155,7 @@ describe("a core block's root element", () => {
         continue;
       }
       for (const el of inline) {
-        offenders.push(`${name}: ${JSON.stringify(el.props.style)}`);
+        offenders.push(`${name}: ${JSON.stringify(inlineStyleOf(el))}`);
       }
     }
 
