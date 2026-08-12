@@ -79,3 +79,20 @@ export function restrictToSupportedFloor(scope?: Record<string, unknown>): {
   stubborn: string[];
   restore: () => void;
 };
+
+/**
+ * What one child process's result says about the artifact it evaluated, or `null` when it
+ * evaluated cleanly.
+ *
+ * A spawn that failed, and a child killed by a signal, are reported apart from a verdict: "the
+ * artifact is bad" and "the check could not run" call for different action.
+ */
+export function childOutcome(
+  file: string,
+  run: {
+    error?: Error;
+    status: number | null;
+    signal?: string | null;
+    stderr?: string;
+  }
+): string | null;

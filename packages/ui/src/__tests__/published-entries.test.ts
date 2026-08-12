@@ -288,6 +288,78 @@ describe("the barrel declaration and the export map", () => {
   });
 });
 
+/**
+ * Every name a module source publishes.
+ *
+ * Pure so the reading itself can be checked. Comparing two files it reads the same wrong way
+ * returns equal lists and reports parity, so a form neither matcher recognises is invisible in
+ * exactly the comparison meant to catch it.
+ */
+function exportedNames(source: string): string[] {
+  // Every exported BINDING, not only the functions. A `const` added to the module and missed in
+  // the declaration gives every TypeScript consumer `TS2305` while working at runtime, and a
+  // function-only comparison reported that as parity.
+  //
+  // `async` sits between `export` and `function`, and an export LIST names bindings declared
+  // elsewhere — both are ordinary ways to export something, and a matcher blind to either
+  // reports a missing declaration as agreement.
+  const declared = [
+    ...source.matchAll(
+      /^export (?:declare )?(?:async )?(?:function|const|let|var|class) (\w+)/gm
+    ),
+  ].map(match => match[1]!);
+  // The default export is one binding whose name IS `default`, and it is spelled without any of
+  // the keywords above. Unmatched, a module that gained one and a declaration that did not both
+  // reported nothing, so the arrays stayed equal and the mismatch read as agreement.
+  const byDefault = /^export default\b/m.test(source) ? ["default"] : [];
+  const listed = [...source.matchAll(/^export \{([^}]*)\}(?!\s*from)/gm)]
+    .flatMap(match => match[1]!.split(","))
+    .map(part => {
+      // `export { extra as renamed }` publishes the name on the RIGHT. This is also how
+      // `export { x as default }` is recognised, which is the other spelling of a default export.
+      const segments = part.trim().split(/\s+as\s+/);
+      return (segments[segments.length - 1] ?? "").trim();
+    })
+    .filter(name => name.length > 0 && name !== "type");
+  return [...new Set([...declared, ...byDefault, ...listed])].sort();
+}
+
+describe("reading the names a module publishes", () => {
+  it("records a default export, in each form it is written", () => {
+    // Neither the keyword matcher nor the export list saw these, so a module with one and a
+    // declaration without it compared equal.
+    expect(exportedNames(`export default function build() {}`)).toEqual([
+      "default",
+    ]);
+    expect(exportedNames(`export default async function build() {}`)).toEqual([
+      "default",
+    ]);
+    expect(exportedNames(`export default class Preset {}`)).toEqual([
+      "default",
+    ]);
+    expect(exportedNames(`const preset = {};\nexport default preset;`)).toEqual(
+      ["default"]
+    );
+    // A declaration file states it this way, and it is the same published name.
+    expect(
+      exportedNames(
+        `declare const preset: object;\nexport { preset as default };`
+      )
+    ).toEqual(["default"]);
+  });
+
+  it("does not read a default export into a module without one", () => {
+    // The control: `default` must come from the export, not from the word appearing in the file.
+    expect(
+      exportedNames(`export const defaults = 1;\n// export default preset;`)
+    ).toEqual(["defaults"]);
+  });
+
+  it("names a binding once when it is both declared and listed", () => {
+    expect(exportedNames(`export const a = 1;\nexport { a };`)).toEqual(["a"]);
+  });
+});
+
 describe("the hand-written declaration beside the module", () => {
   // A `.d.mts` maintained alongside a `.mjs` is a second list of the same facts, which is the
   // shape this module exists to remove everywhere else. Nothing typechecks these tests today, so
@@ -298,30 +370,8 @@ describe("the hand-written declaration beside the module", () => {
     "..",
     "scripts"
   );
-  const names = (file: string): string[] => {
-    const source = readFileSync(path.join(scripts, file), "utf8");
-    // Every exported BINDING, not only the functions. A `const` added to the module and missed in
-    // the declaration gives every TypeScript consumer `TS2305` while working at runtime, and a
-    // function-only comparison reported that as parity.
-    //
-    // `async` sits between `export` and `function`, and an export LIST names bindings declared
-    // elsewhere — both are ordinary ways to export something, and a matcher blind to either
-    // reports a missing declaration as agreement.
-    const declared = [
-      ...source.matchAll(
-        /^export (?:declare )?(?:async )?(?:function|const|let|var|class) (\w+)/gm
-      ),
-    ].map(match => match[1]!);
-    const listed = [...source.matchAll(/^export \{([^}]*)\}(?!\s*from)/gm)]
-      .flatMap(match => match[1]!.split(","))
-      .map(part => {
-        // `export { extra as renamed }` publishes the name on the RIGHT.
-        const segments = part.trim().split(/\s+as\s+/);
-        return (segments[segments.length - 1] ?? "").trim();
-      })
-      .filter(name => name.length > 0 && name !== "type");
-    return [...declared, ...listed].sort();
-  };
+  const names = (file: string): string[] =>
+    exportedNames(readFileSync(path.join(scripts, file), "utf8"));
 
   it("declares exactly the bindings the module exports", () => {
     const runtime = names("published-entries.mjs");

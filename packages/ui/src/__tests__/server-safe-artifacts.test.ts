@@ -12,6 +12,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  childOutcome,
   disallowedSpecifiers,
   domGlobalsPresent,
   floorGlobalsPresent,
@@ -568,5 +569,43 @@ describe("restricting to the oldest supported Node", () => {
     expect(floor.stubborn).toEqual([]);
     floor.restore();
     expect(scope).toEqual({ untouched: 1 });
+  });
+});
+
+describe("reading one artifact's own process", () => {
+  const ran = (over: Record<string, unknown>) =>
+    childOutcome("utils.mjs", { status: 0, stderr: "", ...over });
+
+  it("passes a child that exited cleanly", () => {
+    expect(ran({})).toBeNull();
+  });
+
+  it("reports the child's reason without repeating the artifact name", () => {
+    // The child names the failure and the parent names the file. Written at both ends, the report
+    // reads the name twice and the reason once.
+    expect(
+      ran({ status: 1, stderr: "installed document while being imported\n" })
+    ).toBe("utils.mjs installed document while being imported");
+  });
+
+  it("still reports a child that failed and said nothing", () => {
+    // A file name with no reason is what this avoids: the exit status is all there is to give.
+    expect(ran({ status: 3, stderr: "  \n" })).toContain("exited 3");
+  });
+
+  it("separates a signalled child from a verdict about the artifact", () => {
+    // `status` is null for a signalled child, which is unequal to 0 and would otherwise be
+    // described with the word "null" where the reason belongs.
+    const said = ran({ status: null, signal: "SIGKILL", stderr: "" });
+    expect(said).toContain("SIGKILL");
+    expect(said).not.toContain("null");
+  });
+
+  it("separates a child that never started from one that failed", () => {
+    // "The artifact is bad" and "the check could not run" call for different action, and a spawn
+    // that never happened is the second.
+    expect(ran({ error: new Error("EAGAIN"), status: null })).toContain(
+      "could not be evaluated"
+    );
   });
 });

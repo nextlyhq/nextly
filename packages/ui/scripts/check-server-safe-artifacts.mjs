@@ -15,10 +15,17 @@
  *
  * Two questions, one per way of crossing the boundary:
  *
- * 1. **Does it evaluate?** The artifact is imported into this process, which is Node with no DOM.
- *    A module reading `document` where its body runs throws, and nothing has to recognise the
+ * 1. **Does it evaluate?** Each artifact is imported into a FRESH process, which is Node with no
+ *    DOM. A module reading `document` where its body runs throws, and nothing has to recognise the
  *    spelling of the read for that to happen. This is the complete answer to the browser-global
  *    question, in place of enumerating globals and the syntax that dereferences them.
+ *
+ *    One process per artifact rather than one for all of them, because a consumer imports ONE
+ *    entry point. Shared, every artifact's verdict depended on the ones before it: enumerating
+ *    what may leak covers the names on the list and nothing else, and ordinary state is on no
+ *    list — a module populating `globalThis`, filling a registry or patching a prototype leaves
+ *    the next artifact evaluating against an environment no consumer has. A fresh process cannot
+ *    carry any of it.
  *
  * 2. **What does it reach?** Every module specifier surviving in the artifact must be on the
  *    allow-list. First-party code is bundled in, so what remains is exactly the external packages,
@@ -58,6 +65,7 @@
  * The allow-list is two pure string utilities and every addition to it is a deliberate decision,
  * which is the control on that.
  */
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
 import { dirname as pathDirname, join } from "node:path";
@@ -75,6 +83,9 @@ import {
 } from "./published-entries.mjs";
 
 const DIST = join(pathDirname(fileURLToPath(import.meta.url)), "..", "dist");
+
+/** This file, re-invoked as the child that evaluates one artifact. */
+const SELF = fileURLToPath(import.meta.url);
 
 /** Cleared only by reaching the end of the run, so an artifact ending the process is not a pass. */
 let completed = false;
@@ -648,33 +659,112 @@ export function domGlobalsPresent(scope = globalThis) {
   return DOM_ONLY_GLOBALS.filter(name => name in scope);
 }
 
-async function main() {
-  const problems = [];
+/**
+ * What one child's result says about its artifact, or null when it evaluated cleanly.
+ *
+ * Three ways for the answer to be absent rather than negative, and they are reported apart from a
+ * verdict because "the artifact is bad" and "the check could not run" call for different action.
+ * A signalled child in particular reports `status: null`, which compares unequal to 0 and would
+ * otherwise be described with the word `null` where a reason belongs.
+ *
+ * @param {string} file
+ * @param {{ error?: Error, status: number | null, signal?: string | null, stderr?: string }} run
+ * @returns {string | null}
+ */
+export function childOutcome(file, run) {
+  if (run.error !== undefined && run.error !== null) {
+    return (
+      `${file} could not be evaluated: ${run.error.message}. The check cannot report on an ` +
+      `artifact it never ran.`
+    );
+  }
+  if (run.status === 0) return null;
+  if (run.status === null) {
+    return (
+      `${file} ended on signal ${run.signal} while being evaluated, so no verdict was reached. ` +
+      `An entry point that ends the process during initialization would end a consumer's server ` +
+      `the same way.`
+    );
+  }
+  // The child names the failure and this names the artifact, so neither is written twice. A child
+  // that failed silently still has to say something, or the report would name a file and no reason.
+  const said = (run.stderr ?? "").trim();
+  return said === ""
+    ? `${file} exited ${run.status} while being evaluated, saying nothing about why.`
+    : `${file} ${said}`;
+}
 
+/**
+ * Evaluate ONE artifact in this process, which the parent has just started for it alone.
+ *
+ * Sharing a process across artifacts made every artifact's verdict depend on the ones before it.
+ * Enumerating what may leak — the DOM globals, then the post-floor ones — answers for the names on
+ * those lists and for nothing else, and ordinary state is not on any list: a module setting
+ * `globalThis.cache`, populating a registry, or monkey-patching a prototype leaves the next
+ * artifact evaluating against an environment no consumer has. A fresh process cannot carry any of
+ * it, which settles the whole class rather than the part that was enumerated.
+ *
+ * @param {string} file
+ */
+async function evaluateOne(file) {
   const contaminated = domGlobalsPresent();
   if (contaminated.length > 0) {
     console.error(
-      `Server-safe artifact check cannot run: this environment defines ` +
-        `${contaminated.join(", ")}, so importing an artifact proves nothing about a server.`
+      `this environment defines ${contaminated.join(", ")}, so importing an artifact proves ` +
+        `nothing about a server`
     );
     process.exitCode = 1;
     return;
   }
 
-  // Down to the oldest supported Node BEFORE anything is imported, so the evaluation answers for
-  // the whole `engines` range rather than for the build machine.
+  // Down to the oldest supported Node BEFORE the import, so the evaluation answers for the whole
+  // `engines` range rather than for the build machine. Not restored: the process exits next.
   const floor = restrictToSupportedFloor();
   if (floor.stubborn.length > 0) {
     console.error(
-      `Server-safe artifact check cannot run: ${floor.stubborn.join(", ")} could not be removed ` +
-        `from this environment, so an artifact could evaluate against a capability the oldest ` +
-        `supported Node does not have.`
+      `${floor.stubborn.join(", ")} could not be removed from this environment, so the artifact ` +
+        `could evaluate against a capability the oldest supported Node does not have`
     );
     process.exitCode = 1;
     return;
   }
 
-  const require = createRequire(import.meta.url);
+  const full = join(DIST, file);
+  importing = file;
+  try {
+    // The CJS artifacts go through `require` because `import()` of a `.cjs` file gives back its
+    // exports without running it as CommonJS.
+    if (file.endsWith(".cjs")) createRequire(import.meta.url)(full);
+    else await import(pathToFileURL(full).href);
+  } catch (error) {
+    console.error(
+      `threw while being imported under Node: ` +
+        `${error instanceof Error ? error.message : String(error)}. A server-safe entry point ` +
+        `must evaluate on a bare server, on its own`
+    );
+    process.exitCode = 1;
+    return;
+  }
+  importing = null;
+
+  // Still asked, because this artifact putting a browser global into its OWN consumer's
+  // environment is a defect whatever the next artifact does. What the fresh process removes is
+  // one artifact's leak deciding another's verdict, not the leak itself.
+  const installed = [...domGlobalsPresent(), ...floorGlobalsPresent()];
+  if (installed.length > 0) {
+    console.error(
+      `installed ${installed.join(", ")} while being imported. A server-safe entry point must ` +
+        `not put a browser global into its consumer's environment`
+    );
+    process.exitCode = 1;
+  }
+}
+
+async function main() {
+  const problems = [];
+
+  // Neither the environment check nor the floor restriction is done here any more: this process
+  // imports no artifact, and each child applies both to itself before the one import it makes.
   const artifacts = serverSafeArtifacts();
 
   // One read per format rather than per artifact; the build writes one file for each.
@@ -759,50 +849,16 @@ async function main() {
       );
     }
 
-    // Re-asked before EVERY import, not once at the start. These artifacts share one process, so
-    // an earlier one that installs `document` would leave a later one's module-scope read working
-    // here and failing for a consumer importing that entry point alone.
-    // Both halves of the environment, re-asked before EVERY import. The DOM globals must never
-    // appear, and the post-floor ones were removed at the start — an artifact that installs
-    // either puts it back for everything imported afterwards, and the later entry then evaluates
-    // against a runtime no consumer has.
-    const leaked = [...domGlobalsPresent(), ...floorGlobalsPresent()];
-    if (leaked.length > 0) {
-      problems.push(
-        `${leaked.join(", ")} appeared before ${file} was imported, so an earlier artifact ` +
-          `installed it. Nothing evaluated after that point was tested against a bare server.`
-      );
-      break;
-    }
-
-    // Evaluated, not merely read: this is what makes the browser-global question complete. The
-    // CJS artifacts go through `require` because `import()` of a `.cjs` file gives back its
-    // exports without running it as CommonJS.
-    try {
-      importing = file;
-      if (file.endsWith(".cjs")) {
-        require(full);
-      } else {
-        await import(pathToFileURL(full).href);
-      }
-      importing = null;
-      // Asked immediately AFTER too, not only before the next one. The before-check gives the
-      // final artifact no later iteration to be observed in, so a leak installed by the last
-      // import — which pollutes a consumer's environment just as much — went unreported.
-      const installed = [...domGlobalsPresent(), ...floorGlobalsPresent()];
-      if (installed.length > 0) {
-        problems.push(
-          `${file} installed ${installed.join(", ")} while being imported. A server-safe entry ` +
-            `point must not put a browser global into its consumer's environment.`
-        );
-        break;
-      }
-    } catch (error) {
-      problems.push(
-        `${file} threw while being imported under Node: ${error instanceof Error ? error.message : String(error)}. ` +
-          `A server-safe entry point must evaluate without a browser.`
-      );
-    }
+    // Evaluated, not merely read: this is what makes the browser-global question complete. One
+    // fresh process per artifact, so nothing an earlier one did to the environment can decide a
+    // later one's verdict — which is the state a consumer importing this entry ALONE is in.
+    const problem = childOutcome(
+      file,
+      spawnSync(process.execPath, [SELF, "--evaluate", file], {
+        encoding: "utf8",
+      })
+    );
+    if (problem !== null) problems.push(problem);
   }
 
   if (artifacts.length === 0) {
@@ -810,8 +866,6 @@ async function main() {
       "No server-safe artifacts were derived, so this check would pass without asserting anything."
     );
   }
-
-  floor.restore();
 
   if (problems.length > 0) {
     console.error("Server-safe artifact check failed:");
@@ -846,6 +900,11 @@ if (
       process.exitCode = 1;
     }
   });
-  await main();
+  // `--evaluate <file>` is this file run as its own child, importing one artifact into a process
+  // started for it alone. The parent reads the exit status; the assertion above is what stops an
+  // artifact calling `process.exit(0)` from being read as a clean evaluation.
+  const evaluating = process.argv[2] === "--evaluate" ? process.argv[3] : null;
+  if (evaluating !== null) await evaluateOne(evaluating);
+  else await main();
   completed = true;
 }
