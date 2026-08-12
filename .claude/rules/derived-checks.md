@@ -356,9 +356,16 @@ Two different questions, and only one of them has a sound instrument:
   looks the path up verbatim, so a rename reads as absence. Where either
   applies, check each parent and follow the rename (`git log --follow`) before
   claiming precedence.
-- **"who wrote this line?"** — `git log --format=%an` answers a question about a
-  credential. Under a shared one it is a guess with a citation attached, which
-  is worse than an obvious guess.
+- **"who wrote this line?"** — two separate failures, and the first is
+  mechanical. `git log --format=%an` has no line selector at all: it prints an
+  author for every commit the revision range selected, so it associates the line
+  with whoever touched the file. The line-scoped forms are `git blame -L
+<range> <file>` and `git log -L <range>:<file>`.
+
+  Reach for those and the second failure remains: what they return is configured
+  author metadata, so under a shared identity it is a guess with a citation
+  attached, which is worse than an obvious guess. Use them to find the commit,
+  then stop — the commit is a fact, the name on it is a claim.
 
 This surfaced while attributing a comment in `export-contract.test.ts`. The
 precedence claim was settled from the tree and held; the authorship claim around
