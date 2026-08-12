@@ -413,10 +413,16 @@ describe("this package takes no direct dependency on the block engine", () => {
  * of is refused with the rest.
  *
  * Its REACH is the limit. This reads syntax, so it sees a route only where the route appears as
- * syntax it recognises. Fourteen forms were added during review — computed member access, host
- * objects that re-expose globals, dynamic evaluation, an absolute import, a manifest alias, an
- * import into a path this scan skips — and each was a real gap found by someone looking, not by
- * the check. There is no argument that the fifteenth does not exist.
+ * syntax it recognises: computed member access, host objects that re-expose globals, dynamic
+ * evaluation, an absolute import, a manifest alias, and an import into a path this scan skips are
+ * all covered because each was found and added. None of them was found BY the check.
+ *
+ * One boundary of that reach is worth naming exactly, because it is reachable rather than
+ * hypothetical. A restricted global read under a LITERAL key — `globalThis["process"]` — is
+ * refused, since a literal is a fixed translation of the dotted form. A COMPUTED key is not:
+ * `globalThis["pro" + "cess"]` names the same binding and cannot be recognised without evaluating
+ * the expression, which is a different kind of analysis than reading syntax. The same holds for a
+ * specifier computed at runtime and handed to a loader that is otherwise allowed.
  *
  * A boundary that does not depend on recognising anything is to BUILD the package into a project
  * containing only the dependencies it is allowed to use, and run it: a load of anything else fails
@@ -433,6 +439,15 @@ describe("this package takes no direct dependency on the block engine", () => {
  * to. A name skipped as a property key after one of these is not a key at all.
  */
 const GLOBAL_OBJECTS = new Set(["globalThis", "global", "self", "window"]);
+
+/** The globals this package may not reach, whether named directly or off a host object. */
+const RESTRICTED_GLOBALS = new Set([
+  "require",
+  "module",
+  "process",
+  "eval",
+  "Function",
+]);
 
 const RUNTIME_RESOLVERS = [
   "require",
@@ -513,7 +528,32 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
     return false;
   };
 
+  /**
+   * A restricted global read off a host object under a LITERAL key: `globalThis["process"]`.
+   *
+   * The identifier rules below cannot see this — there is no `process` node, only a string — and
+   * `isMemberName` is not involved either. Literal keys are covered because they are a fixed
+   * translation of the dotted form. A COMPUTED key is not, and cannot be without evaluating the
+   * expression; that limit is stated in this file's doc comment rather than left to be found.
+   */
+  const readsRestrictedGlobal = (node: ts.Node): string | undefined => {
+    if (!ts.isElementAccessExpression(node)) return undefined;
+    if (
+      !ts.isIdentifier(node.expression) ||
+      !GLOBAL_OBJECTS.has(node.expression.text)
+    ) {
+      return undefined;
+    }
+    const key = node.argumentExpression;
+    if (!ts.isStringLiteral(key) && !ts.isNoSubstitutionTemplateLiteral(key)) {
+      return undefined;
+    }
+    return RESTRICTED_GLOBALS.has(key.text) ? key.text : undefined;
+  };
+
   const visit = (node: ts.Node): void => {
+    const restricted = readsRestrictedGlobal(node);
+    if (restricted !== undefined) found.push(restricted);
     // `import.meta` is checked as a WHITELIST rather than by hunting for `.resolve`, and that is
     // what makes this bounded where the artifact scan was not. Hunting means enumerating the ways
     // a resolver can be reached — `.resolve`, `["resolve"]`, `const { resolve } = import.meta`,
@@ -693,6 +733,18 @@ describe("this package resolves no module at runtime", () => {
         "a.ts"
       )
     ).toEqual(["Function"]);
+    // A restricted global read off a host object under a literal key — no identifier for the
+    // rules above to see, only a string.
+    expect(
+      runtimeResolversIn(
+        `declare const globalThis: { process: { getBuiltinModule(n: string): { createRequire(p: string): (s: string) => unknown } } };\n` +
+          `export const r = globalThis["process"].getBuiltinModule("module").createRequire("/x")("react");`,
+        "a.ts"
+      )
+    ).toEqual(["process"]);
+    expect(
+      runtimeResolversIn(`export const r = globalThis["require"]("x");`, "a.ts")
+    ).toEqual(["require"]);
     // The controls: ordinary code names none of them.
     expect(
       runtimeResolversIn(
@@ -702,6 +754,10 @@ describe("this package resolves no module at runtime", () => {
     ).toEqual([]);
     expect(
       runtimeResolversIn(`export const u = import.meta.url;`, "a.ts")
+    ).toEqual([]);
+    // An unrelated literal key off a host object is not a restricted global.
+    expect(
+      runtimeResolversIn(`export const w = globalThis["fetch"];`, "a.ts")
     ).toEqual([]);
     expect(
       runtimeResolversIn(
