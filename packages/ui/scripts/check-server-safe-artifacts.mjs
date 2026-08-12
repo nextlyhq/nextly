@@ -465,6 +465,32 @@ export function specifiersIn(source, fileName) {
 
   const aliases = [];
   const collectLoaders = node => {
+    // `const { resolve } = import.meta` binds the resolver without ever naming
+    // `import.meta.resolve`, so the initializer check below never sees it and the declaration is
+    // not an identifier either. Handled first, because both guards there would reject it.
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isObjectBindingPattern(node.name) &&
+      node.initializer !== undefined &&
+      ts.isMetaProperty(node.initializer) &&
+      node.initializer.keywordToken === ts.SyntaxKind.ImportKeyword &&
+      node.initializer.name.text === "meta"
+    ) {
+      for (const element of node.name.elements) {
+        // Only the `resolve` property is a loader; `const { url } = import.meta` is not.
+        const source = element.propertyName ?? element.name;
+        if (
+          ts.isIdentifier(source) &&
+          source.text === "resolve" &&
+          ts.isIdentifier(element.name)
+        ) {
+          addLoader(
+            element.name.text,
+            nearestBindingScope(element.name, element.name.text)
+          );
+        }
+      }
+    }
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
       const init = node.initializer;
       const declaredIn = nearestBindingScope(node.name, node.name.text);

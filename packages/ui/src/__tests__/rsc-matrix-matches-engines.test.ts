@@ -113,8 +113,28 @@ describe("the workflow's use of that derivation", () => {
       line,
       "the matrix names versions inline; it must read them from the node-matrix job"
     ).not.toMatch(/\[\s*"\d/);
-    expect(line).toContain("needs.node-matrix.outputs.versions");
-    expect(line).toContain("needs.node-matrix.outputs.lowest");
+    // Both names OCCURRING is not the property. Swapping them leaves every assertion above green
+    // while scheduled runs exercise only the lowest floor and pull requests run the full matrix —
+    // a plausible broken form the test could not tell from the intended one.
+    //
+    // The expression is `cond && A || B`, so the operand AFTER the `&&` is what a pull request
+    // selects and the one after the `||` is what everything else does.
+    const chosen = /pull_request'\s*&&\s*([^|]+?)\s*\|\|\s*(\S+?)\s*\)/.exec(
+      line as string
+    );
+    expect(
+      chosen,
+      "the matrix expression is not the expected `event == pull_request && A || B` form"
+    ).not.toBeNull();
+    const [, onPullRequest, otherwise] = chosen as RegExpExecArray;
+    expect(
+      onPullRequest,
+      "a pull request must run the single lowest floor"
+    ).toBe("needs.node-matrix.outputs.lowest");
+    expect(
+      otherwise,
+      "a scheduled or dispatched run must run the full derived matrix"
+    ).toBe("needs.node-matrix.outputs.versions");
   });
 
   it("declares the dependency that makes those outputs available", () => {

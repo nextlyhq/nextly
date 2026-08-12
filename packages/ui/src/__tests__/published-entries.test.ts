@@ -401,6 +401,16 @@ function exportedNames(source: string): string[] {
       statement.name !== undefined &&
       ts.isIdentifier(statement.name)
     ) {
+      // A namespace holding only types binds no runtime value, exactly as in the export branch.
+      // Without this, `declare namespace Foo { interface X {} }` followed by `export { Foo }` —
+      // the same declaration split across two statements — was recorded as a value.
+      if (
+        ts.isModuleDeclaration(statement) &&
+        !hasValueMember(statement.body)
+      ) {
+        typeSpace.add(statement.name.text);
+        continue;
+      }
       // Two exceptions, both binding a name that no consumer can use as a VALUE:
       // `import type Foo = require(...)`, and a `const enum`, whose members are inlined at each
       // use site so the enum object itself is never emitted.
@@ -809,6 +819,20 @@ describe("reading the names a module publishes", () => {
     ).toEqual([]);
     expect(
       exportedNames(`export declare namespace Foo { enum M { On } }`)
+    ).toEqual(["Foo"]);
+  });
+
+  it("leaves out a split type-only namespace as firmly as the direct form", () => {
+    // Same declaration, written across two statements. The space pass put every namespace into
+    // value space, so this walked around the check the single-statement form already had.
+    expect(
+      exportedNames(`declare namespace Foo { interface X {} }\nexport { Foo };`)
+    ).toEqual([]);
+    // The control: a namespace holding a value still publishes one in the split form too.
+    expect(
+      exportedNames(
+        `declare namespace Foo { const x: number; }\nexport { Foo };`
+      )
     ).toEqual(["Foo"]);
   });
 

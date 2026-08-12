@@ -245,6 +245,33 @@ describe("reading an artifact's specifiers", () => {
     ).toEqual(["react"]);
   });
 
+  it("sees a resolver taken off import.meta by destructuring", () => {
+    // `const { resolve } = import.meta` binds the resolver without the text `import.meta.resolve`
+    // appearing anywhere, so the initializer check never saw it — and this reading is the only
+    // control on that resolver, since it leaves no metafile record and no surviving import.
+    expect(
+      read(
+        `const { resolve } = import.meta;\nexport const r = resolve("react");`
+      )
+    ).toEqual(["react"]);
+    // Renamed on the way out, which is the ordinary emitted form.
+    expect(
+      read(
+        `const { resolve: load } = import.meta;\nexport const r = load("react");`
+      )
+    ).toEqual(["react"]);
+    // The controls, both directions: another property of `import.meta` is not a resolver, and the
+    // same destructuring off an unrelated object is not either.
+    expect(
+      read(`const { url } = import.meta;\nexport const r = url("react");`)
+    ).toEqual([]);
+    expect(
+      read(
+        `const { resolve } = someLibrary;\nexport const r = resolve("react");`
+      )
+    ).toEqual([]);
+  });
+
   it("keeps a class static block's var inside it", () => {
     // `class C { static { var x } }` puts `x` nowhere outside those braces, so the block is its own
     // `var` scope. Hoisting out of it made the file look like the binding scope and rejected a
