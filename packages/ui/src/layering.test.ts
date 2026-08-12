@@ -61,6 +61,27 @@ const DEPENDENCY_FIELDS = [
   "optionalDependencies",
 ] as const;
 
+/** The package this layer may not reach. */
+const FORBIDDEN = "@nextlyhq/blocks-engine";
+
+/**
+ * The one matcher. Its positive control below reads THIS value rather than a
+ * copy: a control with its own regex proves the copy works, and stays green
+ * while the matcher it stands for drifts.
+ */
+const IMPORTS_FORBIDDEN = new RegExp(
+  `from\\s+["']${FORBIDDEN.replace("/", "\\/")}`
+);
+
+/** Every `field.package` a manifest declares, across all four fields. */
+function declarationsIn(manifest: Record<string, unknown>): string[] {
+  return DEPENDENCY_FIELDS.flatMap(field =>
+    Object.keys((manifest[field] as Record<string, string>) ?? {}).map(
+      name => `${field}.${name}`
+    )
+  );
+}
+
 /**
  * Every SHIPPED source file in this package.
  *
@@ -98,42 +119,50 @@ describe("this package takes no direct dependency on the block engine", () => {
       readFileSync(join(SRC, "..", "package.json"), "utf8")
     ) as Record<string, unknown>;
 
-    const declared = DEPENDENCY_FIELDS.flatMap(field =>
-      Object.keys((manifest[field] as Record<string, string>) ?? {}).map(
-        name => `${field}.${name}`
-      )
-    );
-
     expect(
-      declared.filter(entry => entry.endsWith(".@nextlyhq/blocks-engine")),
+      declarationsIn(manifest).filter(entry => entry.endsWith(`.${FORBIDDEN}`)),
       "packages/ui is the block-agnostic layer. A component needing the block " +
         "model belongs in packages/builder, which already depends on the engine."
     ).toEqual([]);
   });
 
-  it("is exercised — the manifest scan reads fields that exist", () => {
-    // An empty result is only evidence once the fields being read are shown to
-    // hold something. A renamed field returns the same clean answer as
-    // compliance does.
-    const manifest: Record<string, unknown> = JSON.parse(
-      readFileSync(join(SRC, "..", "package.json"), "utf8")
-    ) as Record<string, unknown>;
-
-    const populated = DEPENDENCY_FIELDS.filter(
-      field => Object.keys((manifest[field] as object) ?? {}).length > 0
-    );
-    expect(populated.length).toBeGreaterThanOrEqual(2);
+  it("names every npm dependency field, so no route can go missing", () => {
+    // Pinned as a literal set, because the per-field control below cannot
+    // guard the list it iterates: removing a field deletes that field's own
+    // case, the suite shrinks by one and every remaining case passes. A
+    // vanishing test reads exactly like a passing one.
+    expect([...DEPENDENCY_FIELDS].sort()).toEqual([
+      "dependencies",
+      "devDependencies",
+      "optionalDependencies",
+      "peerDependencies",
+    ]);
   });
+
+  it.each(DEPENDENCY_FIELDS)(
+    "is exercised — the collector reads the %s field",
+    field => {
+      // Per field, not in aggregate. A count-based control is satisfied by the
+      // fields that happen to be populated, so dropping `dependencies` from the
+      // list would leave it green while the real assertion stopped inspecting
+      // runtime dependencies entirely. A sentinel in ONE field at a time is the
+      // only shape that fails when that field's route is missing.
+      expect(
+        declarationsIn({ [field]: { [FORBIDDEN]: "workspace:*" } })
+      ).toEqual([`${field}.${FORBIDDEN}`]);
+    }
+  );
 
   it("is exercised — the import scan can find the specifier it hunts", () => {
     // An empty offender list is only evidence once the search is shown to
     // work. A renamed package or a typo in the pattern returns exactly the
     // same clean result as compliance does.
-    const pattern = /from\s+["']@nextlyhq\/blocks-engine/;
-    expect(pattern.test('import { x } from "@nextlyhq/blocks-engine";')).toBe(
-      true
+    expect(
+      IMPORTS_FORBIDDEN.test('import { x } from "@nextlyhq/blocks-engine";')
+    ).toBe(true);
+    expect(IMPORTS_FORBIDDEN.test('import { x } from "@nextlyhq/ui";')).toBe(
+      false
     );
-    expect(pattern.test('import { x } from "@nextlyhq/ui";')).toBe(false);
   });
 
   it("imports it in no shipped source file", () => {
@@ -142,7 +171,7 @@ describe("this package takes no direct dependency on the block engine", () => {
     // never declares it. The import is the thing that would actually resolve,
     // so the import is what is checked.
     const offenders = sourceFiles(SRC).filter(file =>
-      /from\s+["']@nextlyhq\/blocks-engine/.test(readFileSync(file, "utf8"))
+      IMPORTS_FORBIDDEN.test(readFileSync(file, "utf8"))
     );
 
     expect(
