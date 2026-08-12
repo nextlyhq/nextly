@@ -346,10 +346,9 @@ export class UserFieldDefinitionService extends BaseService {
 
     if (existing.source === "code") {
       // §13.8: public message is a complete sentence with no identifiers; the
-      // field id + name go to logContext. Status 422 = business-rule violation.
+      // field id + name go to logContext.
       throw new NextlyError({
         code: "BUSINESS_RULE_VIOLATION",
-        statusCode: 422,
         publicMessage:
           "Cannot update code-sourced field definitions. Modify defineConfig() instead.",
         logContext: { id, name: existing.name },
@@ -407,10 +406,9 @@ export class UserFieldDefinitionService extends BaseService {
 
     if (existing.source === "code") {
       // §13.8: public message is a complete sentence with no identifiers; the
-      // field id + name go to logContext. Status 422 = business-rule violation.
+      // field id + name go to logContext.
       throw new NextlyError({
         code: "BUSINESS_RULE_VIOLATION",
-        statusCode: 422,
         publicMessage:
           "Cannot delete code-sourced field definitions. Remove from defineConfig() instead.",
         logContext: { id, name: existing.name },

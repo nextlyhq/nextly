@@ -336,21 +336,24 @@ export function createEmailTemplatesNamespace(
     async create(
       args: CreateEmailTemplateArgs
     ): Promise<MutationResult<EmailTemplateRecord>> {
-      const item = await ctx.emailTemplateService.createTemplate({
-        name: args.data.name,
-        slug: args.data.slug,
-        subject: args.data.subject,
-        htmlContent: args.data.htmlContent,
-        plainTextContent: args.data.textContent,
-        kind: args.data.kind,
-        preheader: args.data.preheader,
-        layoutId: args.data.layoutId,
-        fromOverride: args.data.fromOverride,
-        replyTo: args.data.replyTo,
-        useLayout: args.data.useLayout,
-        variables: args.data.variables,
-        attachments: args.data.attachments,
-      });
+      const item = await ctx.emailTemplateService.createTemplate(
+        {
+          name: args.data.name,
+          slug: args.data.slug,
+          subject: args.data.subject,
+          htmlContent: args.data.htmlContent,
+          plainTextContent: args.data.textContent,
+          kind: args.data.kind,
+          preheader: args.data.preheader,
+          layoutId: args.data.layoutId,
+          fromOverride: args.data.fromOverride,
+          replyTo: args.data.replyTo,
+          useLayout: args.data.useLayout,
+          variables: args.data.variables,
+          attachments: args.data.attachments,
+        },
+        directApiActor(ctx.defaultConfig, args)
+      );
       return { message: "Email template created.", item };
     },
 
@@ -372,7 +375,8 @@ export function createEmailTemplatesNamespace(
       }
       const item = await ctx.emailTemplateService.updateTemplate(
         args.id,
-        updateData
+        updateData,
+        directApiActor(ctx.defaultConfig, args)
       );
       return { message: "Email template updated.", item };
     },
@@ -380,7 +384,10 @@ export function createEmailTemplatesNamespace(
     async delete(
       args: DeleteEmailTemplateArgs
     ): Promise<MutationResult<{ id: string }>> {
-      await ctx.emailTemplateService.deleteTemplate(args.id);
+      await ctx.emailTemplateService.deleteTemplate(
+        args.id,
+        directApiActor(ctx.defaultConfig, args)
+      );
       return {
         message: "Email template deleted.",
         item: { id: args.id },
