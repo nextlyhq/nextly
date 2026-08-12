@@ -49,6 +49,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const SRC = join(__dirname);
@@ -97,28 +98,53 @@ function isShippedModule(entry: string): boolean {
 }
 
 /**
- * The one matcher. Its positive control below reads THIS value rather than a
- * copy: a control with its own regex proves the copy works, and stays green
- * while the matcher it stands for drifts.
+ * Every module specifier a source text loads, read from the AST.
  *
- * WHAT A PASS DOES NOT MEAN. This matches the `from` spelling only. A bare
- * side-effect `import "@nextlyhq/blocks-engine"`, a dynamic `import(...)`, a
- * `require(...)`, an `import x = require(...)` and a `typeof import(...)` in
- * type position all reach the package and all pass this check. Reading
- * specifiers from the TypeScript AST is what covers them, and
- * `packages/builder/src/layering.test.ts` already does exactly that, with each
- * form and its reason written out.
+ * A raw-text search cannot do this. It reports the specifier appearing in a
+ * COMMENT or a string as an import — a false positive, and the worse direction
+ * for a guard, because one that cries wolf about code the compiler never loads
+ * stops being read. It also misses a bare side-effect `import "pkg"`, a dynamic
+ * `import("pkg")` and a `require("pkg")`, none of which carry `from`.
  *
- * A second AST walker is not the answer here — that is the duplication this
- * file exists to argue against. The answer is one shared reader all three
- * layering tests call, which is a decision about where test infrastructure
- * crossing three packages lives. Until then this catches the common spelling
- * and every manifest declaration, and the limit is written down rather than
- * left to be inferred from a green run.
+ * DELIBERATE DUPLICATION, and it is the thing this file otherwise argues
+ * against. `packages/builder/src/layering.test.ts` already has a fuller reader
+ * covering `import x = require(...)`, `typeof import(...)` in type position and
+ * JSDoc `@import`, and the fix is one shared reader all three layering tests
+ * call — specified in `tasks/OPEN-2026-08-12-breakpoint-rules-duplicated.md`,
+ * with ownership cleared. This narrower copy exists only because shipping a
+ * guard with false positives is worse than shipping a temporary second
+ * implementation, and the extraction deletes it.
  */
-const IMPORTS_FORBIDDEN = new RegExp(
-  `from\\s+["']${FORBIDDEN.replace("/", "\\/")}`
-);
+function importedSpecifiers(text: string): string[] {
+  const source = ts.createSourceFile(
+    "module.ts",
+    text,
+    ts.ScriptTarget.ESNext,
+    true
+  );
+  const found: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteralLike(node.moduleSpecifier)
+    ) {
+      found.push(node.moduleSpecifier.text);
+    } else if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const loads =
+        callee.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(callee) && callee.text === "require");
+      const target = node.arguments[0];
+      if (loads && target && ts.isStringLiteralLike(target)) {
+        found.push(target.text);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+}
 
 /**
  * Every `field.package` a manifest declares that RESOLVES to the forbidden
@@ -255,12 +281,28 @@ describe("this package takes no direct dependency on the block engine", () => {
     // An empty offender list is only evidence once the search is shown to
     // work. A renamed package or a typo in the pattern returns exactly the
     // same clean result as compliance does.
-    expect(
-      IMPORTS_FORBIDDEN.test('import { x } from "@nextlyhq/blocks-engine";')
-    ).toBe(true);
-    expect(IMPORTS_FORBIDDEN.test('import { x } from "@nextlyhq/ui";')).toBe(
-      false
+    // Every form the reader claims, and the two it must NOT claim. The
+    // comment and string cases are the false positives a text search produces,
+    // and they are asserted here because that is where the reader's value is.
+    expect(importedSpecifiers(`import { x } from "${FORBIDDEN}";`)).toContain(
+      FORBIDDEN
     );
+    expect(importedSpecifiers(`import "${FORBIDDEN}";`)).toContain(FORBIDDEN);
+    expect(importedSpecifiers(`export { x } from "${FORBIDDEN}";`)).toContain(
+      FORBIDDEN
+    );
+    expect(importedSpecifiers(`await import("${FORBIDDEN}");`)).toContain(
+      FORBIDDEN
+    );
+    expect(importedSpecifiers(`require("${FORBIDDEN}");`)).toContain(FORBIDDEN);
+
+    expect(
+      importedSpecifiers(`// never import from "${FORBIDDEN}" here`)
+    ).toEqual([]);
+    expect(importedSpecifiers(`const s = 'from "${FORBIDDEN}"';`)).toEqual([]);
+    expect(importedSpecifiers('import { x } from "@nextlyhq/ui";')).toEqual([
+      "@nextlyhq/ui",
+    ]);
   });
 
   it("imports it in no shipped source file", () => {
@@ -269,7 +311,7 @@ describe("this package takes no direct dependency on the block engine", () => {
     // never declares it. The import is the thing that would actually resolve,
     // so the import is what is checked.
     const offenders = sourceFiles(SRC).filter(file =>
-      IMPORTS_FORBIDDEN.test(readFileSync(file, "utf8"))
+      importedSpecifiers(readFileSync(file, "utf8")).includes(FORBIDDEN)
     );
 
     expect(
