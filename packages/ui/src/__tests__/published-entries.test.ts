@@ -479,7 +479,22 @@ function exportedNames(source: string): string[] {
   for (const statement of tree.statements) {
     if (ts.isExportAssignment(statement)) {
       // `export default value`. `export =` is the CommonJS form and publishes no named binding.
-      if (statement.isExportEquals !== true) found.push("default");
+      if (statement.isExportEquals === true) continue;
+      // `export default Foo` where `Foo` is an IDENTIFIER publishes whatever space that name
+      // occupies, and the two sets already know: `interface Foo {}; export default Foo` exports a
+      // type — a consumer using it as a value gets TS2693 — while an unmarked import settles
+      // nothing and is refused, as it is everywhere else. Any other expression is a value.
+      const exported = statement.expression;
+      if (ts.isIdentifier(exported)) {
+        if (isTypeOnlyLocal(exported.text)) continue;
+        if (isUnsettledImport(exported.text)) {
+          found.push(
+            `<unsupported: default export of imported ${exported.text}>`
+          );
+          continue;
+        }
+      }
+      found.push("default");
       continue;
     }
 
@@ -820,6 +835,29 @@ describe("reading the names a module publishes", () => {
     expect(
       exportedNames(`export declare namespace Foo { enum M { On } }`)
     ).toEqual(["Foo"]);
+  });
+
+  it("reads what a default export actually publishes", () => {
+    // `interface Foo {}; export default Foo` exports a TYPE — a consumer using it as a value gets
+    // TS2693 — so recording `default` unconditionally let a module with a real default export
+    // compare equal to a declaration offering none.
+    expect(exportedNames(`interface Foo {}\nexport default Foo;`)).toEqual([]);
+    expect(exportedNames(`type Foo = string;\nexport default Foo;`)).toEqual(
+      []
+    );
+    // An unmarked import settles nothing here either, exactly as in a named export list.
+    expect(
+      exportedNames(`import Foo from "./x.mjs";\nexport default Foo;`)
+    ).toEqual(["<unsupported: default export of imported Foo>"]);
+    // The controls: a real value exported by name, and any non-identifier expression, both still
+    // publish `default`.
+    expect(exportedNames(`const Foo = 1;\nexport default Foo;`)).toEqual([
+      "default",
+    ]);
+    expect(exportedNames(`export default function build() {}`)).toEqual([
+      "default",
+    ]);
+    expect(exportedNames(`export default { a: 1 };`)).toEqual(["default"]);
   });
 
   it("leaves out a split type-only namespace as firmly as the direct form", () => {
