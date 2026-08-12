@@ -158,7 +158,12 @@ export function validateBreakpoints(set: BreakpointSet): BreakpointIssue[] {
         issues.push({ axis, index, field, code, message });
       };
 
-      const id = def.id.trim();
+      // Compared VERBATIM, never normalised. The compiler keys styles by the
+      // stored string, so `" tablet "` and `"tablet"` are two different
+      // breakpoints to it; trimming here would report one legal set as
+      // duplicates and another as using the reserved id, and since a saved id
+      // is not editable the author would have no way to answer either.
+      const id = def.id;
       if (id.length === 0) {
         at("id", "id-required", "Give this breakpoint an id.");
       } else if (id === BASE_BREAKPOINT_ID) {

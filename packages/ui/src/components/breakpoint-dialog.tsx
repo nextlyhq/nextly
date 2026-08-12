@@ -449,8 +449,14 @@ function Field({
           // Only ever names elements that EXIST. Pointing at an absent id
           // leaves the control described by nothing, which reads to a screen
           // reader as no error and no hint at all.
+          // Names only elements that are actually RENDERED. The hint is
+          // suppressed while an error is showing, so listing its id then would
+          // point assistive technology at nothing.
           aria-describedby={
-            [error !== undefined ? errorId : null, hint ? hintId : null]
+            [
+              error !== undefined ? errorId : null,
+              hint && error === undefined ? hintId : null,
+            ]
               .filter(Boolean)
               .join(" ") || undefined
           }

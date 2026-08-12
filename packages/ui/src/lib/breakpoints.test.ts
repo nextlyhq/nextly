@@ -173,14 +173,54 @@ describe("definitions the compiler drops", () => {
   });
 
   it("reports an empty id and an empty label on their own fields", () => {
+    // Empty, not blank. A stored id of `"  "` is a legal key the compiler uses
+    // verbatim, and an author's typing is trimmed on a NEW row before it
+    // arrives here — so blank reaching this point means a saved id nobody can
+    // edit, and reporting it would disable Save with no way out.
     const result = validateBreakpoints(
-      set({ viewport: [{ id: "  ", label: "", maxWidth: 600 }] })
+      set({ viewport: [{ id: "", label: "", maxWidth: 600 }] })
     );
 
     expect(result.map(i => ({ field: i.field, code: i.code }))).toEqual([
       { field: "id", code: "id-required" },
       { field: "label", code: "label-required" },
     ]);
+  });
+});
+
+describe("ids are compared as the compiler compares them", () => {
+  it("treats a padded id as its own breakpoint, not a duplicate", () => {
+    // The compiler keys styles by the stored string, so these are two
+    // breakpoints. Reporting them as duplicates would disable Save on a legal
+    // set the author cannot repair, because a saved id is read-only.
+    expect(
+      codes(
+        set({
+          viewport: [
+            { id: "tablet", label: "Tablet", maxWidth: 991 },
+            { id: " tablet ", label: "Legacy tablet", maxWidth: 900 },
+          ],
+        })
+      )
+    ).toEqual([]);
+  });
+
+  it("does not treat a padded base as the reserved id", () => {
+    expect(
+      codes(
+        set({
+          viewport: [{ id: " base ", label: "Legacy base", maxWidth: 1200 }],
+        })
+      )
+    ).toEqual([]);
+  });
+
+  it("still reports the reserved id exactly", () => {
+    // The positive control for the two above: dropping the reserved check
+    // entirely would satisfy them both.
+    expect(
+      codes(set({ viewport: [{ id: "base", label: "B", maxWidth: 1200 }] }))
+    ).toEqual(["id-reserved"]);
   });
 });
 
