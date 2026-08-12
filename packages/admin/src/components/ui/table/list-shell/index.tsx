@@ -3,69 +3,35 @@ import type { ReactNode } from "react";
 import { cn } from "@admin/lib/utils";
 
 /**
- * The frame every admin list sits in: an optional toolbar, the table, and its
- * pagination.
+ * Vertical rhythm for an admin list: a toolbar above the table.
  *
- * This exists because the frame was the duplicated part, not the table. Every
- * list surface already renders through `DataTableView`, and there is one
- * `Pagination` and one `SearchBar` -- but each page hand-rolled the card around
- * them, and they disagreed. Two shells shipped at once: one holding pagination
- * INSIDE the bordered card, and one leaving it outside as a sibling under
- * `space-y-4`. The second gives a row of dead space and a pagination bar
- * carrying a top border and no other sides, reading as an orphaned strip rather
- * than the table's footer.
+ * Deliberately thin. An earlier version also drew the card and placed the
+ * pagination inside it, which put the responsive decision in two places: this
+ * wrapper asked one container query whether to draw a card, and `DataTableView`
+ * asked a different one whether to render a table or per-row cards. Those two
+ * boxes are not the same width -- the inner one is narrower by the card's own
+ * border -- so across a two-pixel band the wrapper drew a card while the table
+ * was still rendering row cards, nesting them inside it.
  *
- * Placing pagination inside the card is what makes it a footer: it supplies its
- * own `border-t`, so the card's own border is the only outline and the divider
- * comes for free. Bordering the two separately doubles the outline AND opens
- * the gap.
- *
- * Presentational on purpose. It takes rendered nodes rather than data, columns
- * or fetchers, because each page already owns its own fetching and a shell that
- * demanded otherwise would go unused -- which is exactly what happened to the
- * batteries-included `DataTable`, which no admin route renders.
- *
- * Pass the table with `bordered={false}`: the shell draws the border, and a
- * bordered view inside a bordered shell is the doubling described above.
+ * The fix was not a better query but one owner. `DataTableView` already knows
+ * which view it is in and already draws the desktop card, so it also takes the
+ * `footer`: inside the card where there is a card, and below the rows with a
+ * gap where there is not. Nothing here needs to know the breakpoint, which is
+ * why nothing here asks.
  */
 export interface ListShellProps {
-  /** Search, filters and column controls. Rendered above the card. */
+  /** Search, filters and column controls. Rendered above the table. */
   toolbar?: ReactNode;
-  /** The table itself, normally a `DataTableView` with `bordered={false}`. */
+  /** The table, normally a `DataTableView` carrying its own `footer`. */
   children: ReactNode;
-  /**
-   * Rendered inside the card, directly below the table, so its own `border-t`
-   * reads as the divider. Omit it when a list does not paginate.
-   */
-  pagination?: ReactNode;
   className?: string;
 }
 
-export function ListShell({
-  toolbar,
-  children,
-  pagination,
-  className,
-}: ListShellProps) {
+export function ListShell({ toolbar, children, className }: ListShellProps) {
   return (
-    <div className={cn("@container/list w-full space-y-4", className)}>
+    <div className={cn("w-full space-y-4", className)}>
       {toolbar}
-      {/* The card treatment is desktop-only, and the breakpoint is a container
-          query rather than a viewport one so it turns on with the same box
-          `DataTableView` measures. Below it, that component hides the table and
-          renders every row as its own bordered Card; an enclosing card there
-          would wrap a stack of cards in a second card and clip their corners
-          against its `overflow-hidden`. */}
-      <div className="@md/list:overflow-hidden @md/list:rounded-md @md/list:border @md/list:border-border @md/list:bg-card @md/list:text-card-foreground">
-        {children}
-        {/* Pagination is a footer only where there is a card to be the footer
-            OF. Below the breakpoint the rows are separate cards and there is no
-            enclosing edge, so its own `border-t` would land against the last
-            card's rounded corner and read as a hairline stuck to it. There it
-            gets the gap the surrounding rhythm uses instead, and the divider
-            does the work only once the card exists. */}
-        {pagination && <div className="mt-4 @md/list:mt-0">{pagination}</div>}
-      </div>
+      {children}
     </div>
   );
 }

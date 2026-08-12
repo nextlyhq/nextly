@@ -221,18 +221,6 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
           />
         </div>
       }
-      pagination={
-        <Pagination
-          currentPage={page}
-          totalPages={Math.max(1, totalPages)}
-          pageSize={pageSize}
-          pageSizeOptions={[10, 25, 50]}
-          onPageChange={setPage}
-          onPageSizeChange={handlePageSizeChange}
-          totalItems={totalItems}
-          isLoading={isLoading}
-        />
-      }
     >
       <DataTableView<WebhookEndpointSummary>
         columns={columns}
@@ -244,6 +232,18 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
         rowActions={rowActions}
         registryKey="webhooks"
         ariaLabel="Webhook endpoints table"
+        footer={
+          <Pagination
+            currentPage={page}
+            totalPages={Math.max(1, totalPages)}
+            pageSize={pageSize}
+            pageSizeOptions={[10, 25, 50]}
+            onPageChange={setPage}
+            onPageSizeChange={handlePageSizeChange}
+            totalItems={totalItems}
+            isLoading={isLoading}
+          />
+        }
         bordered={false}
         emptyMessage="No webhook endpoints yet. Create one to start receiving events."
       />

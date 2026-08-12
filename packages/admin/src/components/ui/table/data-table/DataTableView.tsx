@@ -95,6 +95,21 @@ export interface DataTableViewProps<Row extends object> {
   registryKey?: string;
   loading?: boolean;
   error?: string | null;
+  /**
+   * Rendered below the rows, normally pagination.
+   *
+   * It belongs here rather than in a wrapper because where it goes depends on
+   * which view is showing, and this component is the only one that knows. In
+   * the table view it sits inside the bordered card so its own top border is
+   * the divider; in the card view there is no enclosing edge, so it takes the
+   * surrounding gap instead of butting against the last rounded row.
+   *
+   * A wrapper cannot make that call. It would have to guess the breakpoint with
+   * a second container query, and its box is wider than this one by the card's
+   * border, so the two would disagree within a two-pixel band -- exactly where
+   * row cards would end up nested inside the wrapper's card.
+   */
+  footer?: React.ReactNode;
   emptyMessage?: string;
   ariaLabel?: string;
   /** Draw the desktop table's card border. Disable when a parent supplies one. */
@@ -127,6 +142,7 @@ export function DataTableView<Row extends object>({
   registryKey,
   loading = false,
   error = null,
+  footer,
   emptyMessage = "No results found.",
   ariaLabel = "Data table",
   bordered = true,
@@ -386,6 +402,7 @@ export function DataTableView<Row extends object>({
             );
           })
         )}
+        {footer && <div className="mt-4">{footer}</div>}
       </div>
 
       {/* Desktop / wide: table view */}
@@ -548,6 +565,7 @@ export function DataTableView<Row extends object>({
             </TableBody>
           </Table>
         </div>
+        {footer}
       </div>
     </div>
   );

@@ -291,18 +291,6 @@ export default function PluginsTable() {
           </div>
         </div>
       }
-      pagination={
-        totalCount > 0 ? (
-          <Pagination
-            currentPage={page}
-            totalPages={Math.ceil(totalCount / pageSize)}
-            pageSize={pageSize}
-            onPageChange={setPage}
-            onPageSizeChange={handlePageSizeChange}
-            totalItems={totalCount}
-          />
-        ) : undefined
-      }
     >
       <DataTableView<PluginWithId>
         columns={columns}
@@ -312,6 +300,18 @@ export default function PluginsTable() {
         }
         registryKey="plugins"
         ariaLabel="Installed plugins table"
+        footer={
+          totalCount > 0 ? (
+            <Pagination
+              currentPage={page}
+              totalPages={Math.ceil(totalCount / pageSize)}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={handlePageSizeChange}
+              totalItems={totalCount}
+            />
+          ) : undefined
+        }
         bordered={false}
         emptyMessage={
           debouncedSearch || statusFilter !== "all"

@@ -393,20 +393,6 @@ export default function RoleTable() {
             </div>
           </>
         }
-        pagination={
-          data && data.meta.totalPages > 0 ? (
-            <Pagination
-              currentPage={page}
-              totalPages={data.meta.totalPages}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 25, 50]}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              isLoading={isLoading}
-              totalItems={data.meta.total}
-            />
-          ) : undefined
-        }
       >
         <DataTableView<Role>
           columns={columns}
@@ -420,6 +406,20 @@ export default function RoleTable() {
           rowActions={rowActions}
           registryKey="roles"
           ariaLabel="Roles table"
+          footer={
+            data && data.meta.totalPages > 0 ? (
+              <Pagination
+                currentPage={page}
+                totalPages={data.meta.totalPages}
+                pageSize={pageSize}
+                pageSizeOptions={[10, 25, 50]}
+                onPageChange={setPage}
+                onPageSizeChange={handlePageSizeChange}
+                isLoading={isLoading}
+                totalItems={data.meta.total}
+              />
+            ) : undefined
+          }
           bordered={false}
           emptyMessage={
             search

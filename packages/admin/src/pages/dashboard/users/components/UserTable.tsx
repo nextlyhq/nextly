@@ -486,20 +486,6 @@ export default function UserTable() {
             </div>
           </>
         }
-        pagination={
-          data && data.meta.totalPages > 0 ? (
-            <Pagination
-              currentPage={page}
-              totalPages={data.meta.totalPages}
-              totalItems={data.meta.total}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 25, 50]}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              isLoading={isLoading}
-            />
-          ) : undefined
-        }
       >
         {/* The failure renders as a table state rather than as an Alert. An
             Alert draws its own border and radius, so inside the card the two
@@ -516,6 +502,20 @@ export default function UserTable() {
           rowActions={rowActions}
           registryKey="users"
           ariaLabel="Users table"
+          footer={
+            data && data.meta.totalPages > 0 ? (
+              <Pagination
+                currentPage={page}
+                totalPages={data.meta.totalPages}
+                totalItems={data.meta.total}
+                pageSize={pageSize}
+                pageSizeOptions={[10, 25, 50]}
+                onPageChange={setPage}
+                onPageSizeChange={handlePageSizeChange}
+                isLoading={isLoading}
+              />
+            ) : undefined
+          }
           bordered={false}
           error={
             isError
