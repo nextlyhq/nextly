@@ -18,6 +18,7 @@ import { expect, test } from "@playwright/test";
 import { FLAT_LIST_FIXTURE, seedPage } from "./fixtures";
 import {
   frameContentOrigin,
+  frameInsetOf,
   mapFramePointToHost,
   mapFrameRectToHost,
   mapHostPointToFrame,
@@ -77,16 +78,11 @@ async function mapped(
   // The scale is passed through rather than measured so that `mapped(page, 1)`
   // stays a coherent "what a naive implementation computes" — it gets the wrong
   // origin AND the wrong mapping, which is what the control below asserts.
-  // Border AND padding: the nested viewport begins at the content box, so both
-  // displace it. `clientLeft` alone is the reading that looks complete.
+  // The same shared reader the driver uses, passed into the page. Border AND
+  // padding: the nested viewport begins at the content box, so both displace
+  // it, and `clientLeft` alone is the reading that looks complete.
   const inset = await frameElement.evaluate<FrameInset, HTMLIFrameElement>(
-    el => {
-      const style = getComputedStyle(el);
-      return {
-        left: el.clientLeft + parseFloat(style.paddingLeft || "0"),
-        top: el.clientTop + parseFloat(style.paddingTop || "0"),
-      };
-    }
+    frameInsetOf
   );
 
   const contentOrigin =

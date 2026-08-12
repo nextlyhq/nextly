@@ -56,9 +56,11 @@ export interface Rect {
  * `origin` is where the frame's CONTENT viewport lands in host coordinates, and
  * the word content is load-bearing. `getBoundingClientRect` on an iframe reports
  * its BORDER box, while every rectangle read inside the frame is relative to the
- * content viewport — so on a frame with any border the two differ by
- * `clientLeft`/`clientTop`, and an overlay built from the border box sits a
- * couple of scaled pixels out at every point. A canvas that never sets
+ * content viewport — so on a frame with any border or padding the two differ,
+ * and an overlay built from the border box sits a couple of scaled pixels out
+ * at every point. Measure that difference with {@link frameInsetOf}; the inset
+ * is border PLUS padding, and `clientLeft`/`clientTop` alone are short by the
+ * padding. A canvas that never sets
  * `border: none` gets the browser default and the fault is present from the
  * first render, which is exactly the sort of near-miss that reads as "the
  * indicator feels slightly off" rather than as a bug.

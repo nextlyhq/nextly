@@ -9,6 +9,7 @@ import { gotoAdmin } from "../support/admin";
 
 import {
   frameContentOrigin,
+  frameInsetOf,
   mapFramePointToHost,
   mapFrameRectToHost,
   type FrameInset,
@@ -192,13 +193,14 @@ export function createPocDriver(page: Page): CanvasDriver {
       // pixels while the box is post-transform, so the two cannot be added
       // without the scale, and doing that sum at the call site is what put the
       // same error in several files.
-      const inset = await frame.evaluate<FrameInset, HTMLIFrameElement>(el => {
-        const style = getComputedStyle(el);
-        return {
-          left: el.clientLeft + parseFloat(style.paddingLeft || "0"),
-          top: el.clientTop + parseFloat(style.paddingTop || "0"),
-        };
-      });
+      // The shared reader, PASSED INTO the page rather than called here.
+      // `evaluate` serializes the function and runs it in the browser, so this
+      // works only because `frameInsetOf` closes over nothing — it reads the
+      // element and globals and no module scope. That is what lets one
+      // definition serve both the editor and this harness.
+      const inset = await frame.evaluate<FrameInset, HTMLIFrameElement>(
+        frameInsetOf
+      );
       return frameContentOrigin(box, inset, await frameScale());
     },
 

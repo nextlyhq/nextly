@@ -62,3 +62,12 @@ export {
   type Point,
   type Rect,
 } from "./geometry";
+
+/**
+ * The DOM read the mapping cannot do for itself.
+ *
+ * Exported beside the geometry because the inset is the one input every caller
+ * has to measure, and the one they get wrong: documenting the recipe as
+ * `clientLeft`/`clientTop` left three call sites short by the padding.
+ */
+export { frameInsetOf } from "./geometry-dom";
