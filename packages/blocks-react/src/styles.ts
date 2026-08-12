@@ -1,6 +1,7 @@
 import {
   compilePageCss,
   declaresNoMarkup,
+  isConditionGated,
   isFetchableUrl,
   nodeAtPointer,
   nodeClassNames,
@@ -383,42 +384,53 @@ export function migrationChangedWhatDraws(
   // format: it agrees on every ordinary slot name and diverges on the ones the
   // escaping exists for, so the mismatch appears only for the documents this
   // check most needs to read.
-  // Only nodes whose rules could be in the MAIN sheet are asked. Condition
-  // gating moves a withheld node's rules into the per-node map instead, and it
-  // withholds whole subtrees, so a descendant flipping to drawless leaves the
-  // delivered CSS exactly as correct as it was. Marking the artifact repaired
-  // for one of those costs every OTHER block on the page its styling, since a
-  // caller without a compile context has no way to recompile and the stored
-  // sheet is withheld entire — a far larger regression than the stale rules
-  // this exists to drop.
+  // Which nodes the COMPILER would have put in the main sheet, mirrored from
+  // its own rule rather than approximated. `compile-page.ts` gates a node when
+  // an ancestor is gated, when the node is condition-gated, OR when it declares
+  // it draws nothing — and gating is inherited by the whole subtree, because a
+  // block that draws nothing places none of its slots' children.
   //
-  // Membership is by ID rather than by object identity or by resolving the
-  // pointer again. Both alternatives are wrong in a way that FAILS TO REPORT:
+  // Two things this must get right, and an earlier version got both wrong:
   //
-  // - the pointer addresses a position, and gating REMOVES nodes, so the same
-  //   pointer names a different node in that tree;
-  // - object identity survives an untouched node but NOT an ancestor, because
-  //   the gating walk rebuilds any parent it removed a child from. An ancestor
-  //   that stayed visible, kept its rules in the main sheet, and turned drawless
-  //   is exactly the node this exists to catch, and it is exactly the one whose
-  //   reference changed.
+  // - it walks the STORED tree, because that is what the artifact was compiled
+  //   from. Walking the migrated one asks whether a node draws nothing NOW,
+  //   which is the question being answered, not the one being conditioned on.
+  // - it includes drawless ancestry, not condition gating alone. A descendant
+  //   of a drawless ancestor has no rules in the main sheet either, so treating
+  //   its flip as a repair withholds a sheet that never described it.
   //
-  // Ids are sound here because a document carrying duplicates never reaches this
-  // point: `storedSheetCannotDescribe` and `PageRenderer` both test
-  // `hasDuplicateNodeIds` earlier in the same disjunction, and the compiler
-  // refuses to style duplicated ids at all.
-  const survivesGating = new Set<string>();
-  if (Array.isArray(stages.gated.nodes)) {
-    walkNodes(stages.gated.nodes, node => {
-      if (typeof node.id === "string") survivesGating.add(node.id);
-    });
+  // Keyed by id rather than by object reference: the passes rebuild any parent
+  // they removed a child from, so a node that survived arrives as a different
+  // object. Ids are sound here because a document carrying duplicates never
+  // reaches this clause — both entry points test `hasDuplicateNodeIds` earlier
+  // in the same disjunction.
+  const describedByTheSheet = new Set<string>();
+  const collect = (
+    nodes: readonly BlockNode[],
+    ancestorGated: boolean
+  ): void => {
+    for (const node of nodes) {
+      const gated =
+        ancestorGated || isConditionGated(node) || drawsNothing(node);
+      if (!gated && typeof node.id === "string") {
+        describedByTheSheet.add(node.id);
+      }
+      const slots = node.slots;
+      if (slots === undefined) continue;
+      for (const children of Object.values(slots)) {
+        if (Array.isArray(children)) collect(children, gated);
+      }
+    }
+  };
+  if (Array.isArray(stages.sanitized.nodes)) {
+    collect(stages.sanitized.nodes, false);
   }
 
   return stages.rewritten.some(entry => {
     const before = nodeAtPointer(stages.sanitized, entry.path);
     const after = nodeAtPointer(stages.migrated, entry.path);
     if (before === undefined || after === undefined) return false;
-    if (typeof after.id !== "string" || !survivesGating.has(after.id)) {
+    if (typeof after.id !== "string" || !describedByTheSheet.has(after.id)) {
       return false;
     }
     return !drawsNothing(before) && drawsNothing(after);
