@@ -303,14 +303,19 @@ exports[`ui public export surface > ./breakpoints surface is unchanged 1`] = `
 
 exports[`ui public export surface > ./color surface is unchanged 1`] = `
 [
+  "ColorTokenValue (type)",
+  "ColorValue (type)",
   "Hsv (type)",
   "Oklch (type)",
   "Rgb (type)",
   "Rgba (type)",
+  "colorTokenName (value)",
   "hsvToRgb (value)",
+  "isColorTokenValue (value)",
   "normalizeHue (value)",
   "oklchToRgb (value)",
   "parseHex (value)",
+  "resolveColorValue (value)",
   "rgbToHsv (value)",
   "rgbToOklch (value)",
   "toHex (value)",

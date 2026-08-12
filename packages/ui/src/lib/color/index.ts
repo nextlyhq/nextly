@@ -42,3 +42,14 @@ export {
  * opaque, so a value reads back the way it was entered.
  */
 export { parseHex, toHex } from "./hex";
+
+/**
+ * @experimental The value a colour control hands back: a literal, or a
+ * reference to a colour the site defines.
+ *
+ * Kept as a union rather than resolved at pick time, because resolving a token
+ * to its colour before storing it is what severs the link that made it a token.
+ */
+export { colorTokenName, isColorTokenValue, resolveColorValue } from "./value";
+/** @experimental */
+export type { ColorTokenValue, ColorValue } from "./value";
