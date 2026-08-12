@@ -34,6 +34,12 @@
       // a subset would be cheaper and would restore exactly the hole this
       // closes.
       //
+      // The `**/*.tsx` globs are not redundant with the `src` ones. The tab
+      // scan walks a whole root, so a call site in a fixture or an example
+      // directory beside `src` is one it would report -- and hashing only `src`
+      // leaves that file able to change behind a cached pass. The inputs now
+      // cover every file the scan can read.
+      //
       // $TURBO_EXTENDS$ inherits the root test inputs so they stay in sync and
       // nothing is dropped. The root task supplies dependsOn / cache.
       "inputs": [
@@ -42,6 +48,8 @@
         "$TURBO_ROOT$/packages/*/src/**",
         "$TURBO_ROOT$/apps/*/src/**",
         "$TURBO_ROOT$/templates/**",
+        "$TURBO_ROOT$/packages/**/*.tsx",
+        "$TURBO_ROOT$/apps/**/*.tsx",
         // The RSC-matrix suite reads the root manifest and the package-smoke
         // workflow, comparing the job's Node legs against `engines.node`. Listed
         // here rather than on the root task: there they become inputs to every
@@ -67,6 +75,8 @@
         "$TURBO_ROOT$/packages/*/src/**",
         "$TURBO_ROOT$/apps/*/src/**",
         "$TURBO_ROOT$/templates/**",
+        "$TURBO_ROOT$/packages/**/*.tsx",
+        "$TURBO_ROOT$/apps/**/*.tsx",
         // The RSC-matrix suite reads the root manifest and the package-smoke
         // workflow, comparing the job's Node legs against `engines.node`. Listed
         // here rather than on the root task: there they become inputs to every

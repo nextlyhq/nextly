@@ -147,93 +147,166 @@ function withoutImportance(classes: string): string {
   return classes.replace(/!/g, "");
 }
 
+interface Utility {
+  /** The variants that qualify it: `data-[state=active]`, `hover`, ... */
+  variants: string[];
+  /** The utility with variants and importance removed: `border-b-0`. */
+  bare: string;
+  important: boolean;
+}
+
 /**
- * The same class list with every variant prefix removed.
- *
- * tailwind-merge keys a utility by its variants as well as its property, so
- * `data-[state=active]:border-b-0` and an unconditional `border-b-2` are
- * different keys and both survive a merge. In the browser they are not
- * independent: while the tab is active the state-qualified rule wins and the
- * underline is gone. Comparing the bare utility is what makes that visible.
+ * Split a class into the parts that decide whether it beats another.
  *
  * Bracket depth is tracked because a variant can contain a colon of its own —
  * `data-[state=active]` — and splitting on the first one would truncate it.
  */
-function withoutVariants(classes: string): string {
-  return classes
-    .split(/\s+/)
-    .filter(Boolean)
-    .map(cls => {
-      let depth = 0;
-      let lastSeparator = -1;
-      for (let i = 0; i < cls.length; i += 1) {
-        const character = cls[i];
-        if (character === "[") depth += 1;
-        else if (character === "]") depth -= 1;
-        else if (character === ":" && depth === 0) lastSeparator = i;
-      }
-      return lastSeparator >= 0 ? cls.slice(lastSeparator + 1) : cls;
-    })
-    .join(" ");
+function utilityOf(cls: string): Utility {
+  const important = cls.includes("!");
+  const plain = withoutImportance(cls);
+  let depth = 0;
+  let lastSeparator = -1;
+  for (let i = 0; i < plain.length; i += 1) {
+    const character = plain[i];
+    if (character === "[") depth += 1;
+    else if (character === "]") depth -= 1;
+    else if (character === ":" && depth === 0) lastSeparator = i;
+  }
+  return {
+    important,
+    variants:
+      lastSeparator >= 0
+        ? plain.slice(0, lastSeparator).split(":").filter(Boolean)
+        : [],
+    bare: lastSeparator >= 0 ? plain.slice(lastSeparator + 1) : plain,
+  };
 }
 
 /**
- * Which of a component's owned classes a caller's `className` displaces.
+ * Whether a caller's utility takes an owned one over.
  *
- * Asked of tailwind-merge rather than answered here, because tailwind-merge is
- * what answers it in the browser. The second pass exists because it groups by
- * importance, so an important caller utility survives beside the primitive's
- * unimportant one and then wins in CSS — invisible to a survival test until
- * importance is removed from both sides of the comparison.
+ * Two questions, and only the first is tailwind-merge's. It answers whether the
+ * two touch the same property, which it does correctly for shorthands and
+ * arbitrary values — `border-0` displaces `border-b-2`, and no list of forbidden
+ * spellings has to be maintained to know that.
+ *
+ * It cannot answer the second, because it groups by variant AND by importance:
+ * `data-[state=active]:border-b-0` and an unconditional `border-b-2` are
+ * different keys, both survive, and CSS then decides. So the comparison is made
+ * on the BARE utilities, and which one wins is settled the way the browser
+ * settles it:
+ *
+ * - an important caller utility beats an unimportant owned one outright;
+ * - otherwise a caller utility wins only if it is at least as qualified —
+ *   its variants must include every variant the owned class carries.
+ *
+ * That second clause is what keeps a plain `opacity-100` legitimate: the
+ * primitive's `disabled:opacity-50` is more specific, so the disabled tab still
+ * fades, and reporting it would be a false positive. `!opacity-100` is not
+ * legitimate, and the first clause catches it.
  */
+function takesOver(owned: Utility, caller: Utility): boolean {
+  // Same property? Ask the resolver, on the bare forms.
+  const merged = new Set(twMerge(owned.bare, caller.bare).split(/\s+/));
+  if (merged.has(owned.bare)) return false;
+  if (caller.important && !owned.important) return true;
+  return owned.variants.every(variant => caller.variants.includes(variant));
+}
+
+/** Which of a component's owned classes a caller's `className` takes over. */
 function displacedBy(exported: string, classes: string): string[] {
   const owned = OWNED_BY_SLOT[exported] ?? [];
-  const base = owned.join(" ");
-  const survives = (candidate: string): Set<string> =>
-    new Set(twMerge(base, candidate).split(/\s+/));
-  const direct = survives(classes);
-  const unimportant = survives(withoutImportance(classes));
-  const bare = survives(withoutVariants(withoutImportance(classes)));
-  const passed = new Set(classes.split(/\s+/).filter(Boolean));
-  return owned.filter(
-    c =>
-      !direct.has(c) ||
-      !unimportant.has(c) ||
-      !bare.has(c) ||
-      // A byte-identical restatement displaces nothing, so the merge cannot see
-      // it — and it is still a second copy of one appearance, which is what
-      // drifts when the primitive changes and the call site does not.
-      passed.has(c)
-  );
+  const callers = classes.split(/\s+/).filter(Boolean);
+  const passed = new Set(callers);
+  return owned.filter(cls => {
+    // A byte-identical restatement takes nothing over, so no comparison can see
+    // it — and it is still a second copy of one appearance, which is what
+    // drifts when the primitive changes and the call site does not.
+    if (passed.has(cls)) return true;
+    const ownedUtility = utilityOf(cls);
+    return callers.some(caller => takesOver(ownedUtility, utilityOf(caller)));
+  });
 }
 
 /**
- * Whether an inline style property reaches the indicator.
+ * The CSS properties behind each appearance the primitive declares.
  *
- * Decided by what the property EXPANDS to rather than by a list of names, for
- * the same reason the class question goes to tailwind-merge: a list covers the
- * longhands someone thought of, and `border: "none"` or `borderWidth: 0` erases
- * the underline without appearing in it. The indicator is a bottom edge, a
- * corner and a bottom offset, so a property is owned when its expansion touches
- * one of those.
+ * An inline style beats every class, so this is the second half of the same
+ * contract — and it failed the same way the class side did, as a list of
+ * bottom-edge longhands that `border: "none"` walked past. It is DERIVED now:
+ * every owned class is mapped to the properties its utility sets, so the inline
+ * side covers exactly what the class side protects and moves when the primitive
+ * does. Without that, the geometry was covered and the focus ring, the ink and
+ * the disabled treatment were not, though the contract claims all five.
  *
- * The side alternation is what carries the reasoning: an omitted side means all
- * four, which includes the bottom; `y` and the logical `block` forms include it
- * too; `top`, `left`, `right` and `x` do not, and stay a caller's to set.
- * Corners are all owned, because the primitive squares all four.
+ * `UTILITY_PROPERTIES` is the one place a Tailwind utility is related to CSS by
+ * hand, and an owned class matching nothing in it fails the suite rather than
+ * quietly reducing coverage.
  */
-const OWNED_EDGE =
+const UTILITY_PROPERTIES: Array<{ utility: RegExp; properties: string[] }> = [
+  { utility: /^rounded(-|$)/, properties: ["border-radius"] },
+  {
+    utility: /^border(-|$)/,
+    properties: [
+      "border-bottom-width",
+      "border-bottom-style",
+      "border-bottom-color",
+    ],
+  },
+  { utility: /^-?mb-/, properties: ["margin-bottom"] },
+  { utility: /^text-/, properties: ["color"] },
+  { utility: /^ring(-|$)/, properties: ["box-shadow"] },
+  { utility: /^outline(-|$)/, properties: ["outline"] },
+  { utility: /^opacity-/, properties: ["opacity"] },
+  { utility: /^cursor-/, properties: ["cursor"] },
+  { utility: /^pointer-events-/, properties: ["pointer-events"] },
+];
+
+function propertiesOf(bare: string): string[] {
+  return (
+    UTILITY_PROPERTIES.find(entry => entry.utility.test(bare))?.properties ?? []
+  );
+}
+
+/** Every CSS property the primitive's owned appearance reaches. */
+const OWNED_CSS_PROPERTIES = new Set(
+  Object.values(OWNED_BY_SLOT)
+    .flat()
+    .flatMap(cls => propertiesOf(utilityOf(cls).bare))
+);
+
+/**
+ * Which CSS longhands an inline style property sets.
+ *
+ * The side alternation carries the reasoning rather than a list of names: an
+ * omitted side means all four and therefore includes the bottom; `y` and the
+ * logical `block` forms include it; `top`, `left`, `right` and `x` do not, and
+ * stay a caller's to set. Corners all expand to the radius, because the
+ * primitive squares all four.
+ */
+const BOTTOM_EDGE =
   /^border(-(bottom|block-end|block|y))?(-(width|style|color))?$/;
-const OWNED_CORNER = /^border(-[a-z]+)*-radius$/;
-const OWNED_OFFSET = /^margin(-(bottom|block-end|block|y))?$/;
+const ANY_CORNER = /^border(-[a-z]+)*-radius$/;
+const BOTTOM_OFFSET = /^margin(-(bottom|block-end|block|y))?$/;
+
+function expandsTo(property: string): string[] {
+  const kebab = property.replace(/([A-Z])/g, "-$1").toLowerCase();
+  if (BOTTOM_EDGE.test(kebab)) {
+    return [
+      "border-bottom-width",
+      "border-bottom-style",
+      "border-bottom-color",
+    ];
+  }
+  if (ANY_CORNER.test(kebab)) return ["border-radius"];
+  if (BOTTOM_OFFSET.test(kebab)) return ["margin-bottom"];
+  // Everything else stands for itself. `box-shadow` and `outline` are the two
+  // that matter beyond geometry, and the owned set names both directly.
+  return [kebab];
+}
 
 function ownsStyleProperty(property: string): boolean {
-  const kebab = property.replace(/([A-Z])/g, "-$1").toLowerCase();
-  return (
-    OWNED_EDGE.test(kebab) ||
-    OWNED_CORNER.test(kebab) ||
-    OWNED_OFFSET.test(kebab)
-  );
+  return expandsTo(property).some(p => OWNED_CSS_PROPERTIES.has(p));
 }
 
 /** Every `.tsx` under a scan root, excluding build output and the primitive. */
@@ -539,6 +612,21 @@ describe("the tab indicator contract", () => {
     expect(OWNED_BY_SLOT.TabsList).toContain("rounded-none");
   });
 
+  it("maps every owned class to the CSS it sets", () => {
+    // The instrument control for the inline half. The style oracle is derived
+    // from these mappings, so an owned class matching none of them silently
+    // narrows what an inline style is checked against — the geometry stayed
+    // covered that way while the focus ring, the ink and the disabled
+    // treatment were not, though the contract claims all five.
+    const unmapped = Object.values(OWNED_BY_SLOT)
+      .flat()
+      .filter(cls => propertiesOf(utilityOf(cls).bare).length === 0);
+    expect(unmapped).toEqual([]);
+    // ...and the derived set is not empty, which an over-eager filter would
+    // also produce while every assertion above stayed green.
+    expect(OWNED_CSS_PROPERTIES.size).toBeGreaterThan(3);
+  });
+
   it("finds files to check, so a clean result means conforming and not unscanned", () => {
     // The instrument control. Every assertion below is "nothing was found",
     // which a broken path, a wrong extension or an over-eager skip would also
@@ -625,6 +713,23 @@ describe("the tab indicator contract", () => {
     ],
     ["an inline corner", "<TabsList style={{ borderRadius: 8 }} />"],
     [
+      "an inline box-shadow, which erases the focus ring",
+      '<TabsTrigger style={{ boxShadow: "none" }} />',
+    ],
+    [
+      "an inline outline, which the primitive removes for focus-visible",
+      '<TabsTrigger style={{ outline: "1px solid red" }} />',
+    ],
+    [
+      "an inline opacity, which the disabled state sets",
+      "<TabsTrigger style={{ opacity: 1 }} />",
+    ],
+    [
+      "an unqualified important utility beating a variant-qualified owned one",
+      '<TabsTrigger className="!opacity-100" />',
+    ],
+    ["an unqualified important ring", '<TabsTrigger className="!ring-0" />'],
+    [
       "a quoted inline underline colour",
       '<TabsTrigger style={{ "borderBottomColor": c }} />',
     ],
@@ -697,6 +802,10 @@ describe("the tab indicator contract", () => {
     [
       "a state-qualified utility that touches nothing owned",
       '<TabsTrigger className="data-[state=active]:shadow-sm" />',
+    ],
+    [
+      "an unqualified plain utility a variant out-specifies",
+      '<TabsTrigger className="opacity-100" />',
     ],
     [
       "an unrelated element carrying a corner",
