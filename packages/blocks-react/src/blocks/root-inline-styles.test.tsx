@@ -110,12 +110,23 @@ function contexts(): PageContext[] {
   // configured at all, which neither host above can produce because both define
   // `data` and `PageContext.data` is optional.
   const noProvider = { ...answering, data: undefined };
+  // A host read can fail, and a block may render a different tree while handling
+  // it. A rejected promise is the production shape, not a thrown call.
+  const failing = {
+    ...answering,
+    data: { find: () => Promise.reject(new Error("read failed")) },
+  };
+  // A routed render sets a locale, and a block can branch on it when building
+  // its query, so the unlocalized state alone leaves that path uninspected.
+  const localized = { ...answering, locale: "fr" };
   const budgetSpent = { ...answering, queries: { take: () => false } };
   const budgetAvailable = { ...answering, queries: { take: () => true } };
   return [
     empty,
     answering,
     noProvider,
+    failing,
+    localized,
     budgetSpent,
     budgetAvailable,
   ] as unknown as PageContext[];
@@ -337,6 +348,22 @@ async function renderHtml(
 }
 
 /**
+ * Tags React may emit ahead of a block's own output.
+ *
+ * The streaming renderer hoists resource hints and document metadata to the
+ * front of the stream regardless of where they were declared, so none of them
+ * can be the element a block rendered.
+ */
+const HOISTED_BY_REACT: ReadonlySet<string> = new Set([
+  "link",
+  "script",
+  "meta",
+  "title",
+  "style",
+  "base",
+]);
+
+/**
  * The tags whose inline styles belong to this block's root.
  *
  * The class carriers, PLUS the outermost tag whatever class it holds. A block
@@ -351,7 +378,13 @@ function rootTags(html: string): string[] {
     const attr = /\sclass="([^"]*)"/.exec(tag);
     return attr !== null && attr[1].split(/\s+/).includes(NODE_CLASS);
   });
-  const outermost = tags[0];
+  // React hoists resource hints to the front of the stream, so the first tag in
+  // the serialized output can be a `<link rel="preload">` the block never wrote.
+  // Taking it as the root leaves a styled wrapper below it uninspected.
+  const outermost = tags.find(tag => {
+    const name = /^<([a-zA-Z][a-zA-Z0-9-]*)/.exec(tag)?.[1]?.toLowerCase();
+    return name !== undefined && !HOISTED_BY_REACT.has(name);
+  });
   return outermost !== undefined && !carriers.includes(outermost)
     ? [outermost, ...carriers]
     : carriers;
