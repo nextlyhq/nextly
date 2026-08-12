@@ -35,6 +35,7 @@ import {
   NESTED_FIXTURE,
   seedPage,
 } from "./fixtures";
+import { mapFramePointToHost } from "./coordinate-mapping";
 import { CanvasCapabilityError, dragUntilTarget } from "./driver";
 import type { CanvasChromeReader, CanvasDriver } from "./driver";
 import { createPocChromeReader, createPocDriver } from "./poc-driver";
@@ -147,38 +148,51 @@ test.describe("a canvas any Nextly editor could ship", () => {
     // fixed y guesses at where the zones are and lands in the dead space
     // between them as often as not, which reports "no owner" and looks like a
     // depth failure rather than a pointer that was never over a zone.
+    // CONVERTED, not used raw. `readBlockBoxes` measures inside the iframe, so
+    // its rects are frame-local; the pointer moves in host coordinates. Using
+    // one as the other is off by the frame's origin and wrong again by its
+    // scale, and at 100% zoom with the frame near the top-left it is close
+    // enough to look correct — which is how it survived.
+    const origin = await driver.frameOrigin();
+    const scale = await driver.frameScale();
+    const entry = mapFramePointToHost(
+      { x: first!.left + first!.width / 2, y: first!.top },
+      origin,
+      scale
+    );
+
     await driver.startDragAt(await driver.dragSourceCentre());
     const from = driver.pointer();
-    await driver.moveBy(
-      first!.left + first!.width / 2 - from.x,
-      first!.top - from.y
-    );
+    await driver.moveBy(entry.x - from.x, entry.y - from.y);
     const reached = await dragUntilTarget(driver);
     expect(
       reached,
       "the drag must reach a zone inside the nested container"
     ).toBeGreaterThanOrEqual(0);
 
-    // Everything above ran unprotected: the seed, the measurement and reaching
-    // a zone at all are harness concerns and a failure in them is real.
+    // No expected failure here, and the reason is worth recording. This case
+    // WAS marked as one: descending from `nx-inner` appeared to find no zone
+    // until well past the container's own bottom edge. That measurement was
+    // taken with frame-local rects used as host coordinates, so the pointer was
+    // never inside the container it was supposed to be in. Converted, the
+    // canvas resolves to the innermost container correctly.
     //
-    // What follows is the shortfall. Measured: descending from the top of
-    // `nx-inner` finds no active zone until y=384, past the container's own
-    // bottom edge at 320 — this canvas creates gap zones at the outer level
-    // only, so there is no inner zone for the innermost container to own.
-    test.fail(
-      true,
-      "no drop zone exists inside a nested container; the nearest is below it"
-    );
+    // The shortfall was the harness, not the canvas.
 
     // And it must still be inside `nx-inner` after that descent, or the walk
     // carried the pointer out the bottom and the ownership below is about a
     // different container entirely.
-    const pointerY = driver.pointer().y;
+    // Both sides in the SAME space. The pointer is host, the box is frame-local,
+    // so comparing them directly asks a question neither coordinate answers.
+    const bottom = mapFramePointToHost(
+      { x: 0, y: second!.top + second!.height },
+      origin,
+      scale
+    );
     expect(
-      pointerY,
+      driver.pointer().y,
       "the descent must not leave the nested container"
-    ).toBeLessThanOrEqual(second!.top + second!.height);
+    ).toBeLessThanOrEqual(bottom.y);
 
     const owner = await driver.readActiveZoneOwner();
     const active = await driver.readActiveTarget();
