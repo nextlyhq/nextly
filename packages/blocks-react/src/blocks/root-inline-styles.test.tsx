@@ -30,11 +30,15 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { AnyBlockDefinition, BlockNode } from "@nextlyhq/blocks-engine";
-import type { ReactElement } from "react";
+import type {
+  AnyBlockDefinition,
+  BlockNode,
+  BlockRenderArgs,
+} from "@nextlyhq/blocks-engine";
+import type { ReactNode } from "react";
 import { renderToReadableStream } from "react-dom/server";
 
-import type { BlockRenderArgs, PageContext } from "../context";
+import type { PageContext } from "../context";
 
 import { coreBlocks } from "./index";
 
@@ -67,14 +71,14 @@ function context(): PageContext {
   } as unknown as PageContext;
 }
 
-function renderArgs(props: unknown): BlockRenderArgs<never> {
+function renderArgs(props: unknown): BlockRenderArgs<object, unknown> {
   return {
     props,
     node: NODE,
     className: NODE_CLASS,
     ctx: context(),
     renderSlot: () => <span>child</span>,
-  } as unknown as BlockRenderArgs<never>;
+  } as unknown as BlockRenderArgs<object, unknown>;
 }
 
 /**
@@ -113,17 +117,19 @@ async function renderHtml(
   block: AnyBlockDefinition,
   props: unknown
 ): Promise<string> {
-  // Wrapped as a component because the render result is a node, and an async
-  // block hands back a promise — the renderer resolves either through this.
-  const Block = (): unknown => block.render(renderArgs(props));
-  const stream = await renderToReadableStream(
-    (<Block />) as unknown as ReactElement,
-    {
-      onError(error: unknown) {
-        throw error;
-      },
-    }
-  );
+  // Awaited first because an async block hands back a promise; anything nested
+  // inside the resolved tree is still resolved by the stream renderer below.
+  // `BlockRenderResult` is `unknown` on purpose: the engine declares the block
+  // contract without depending on React types. This file is inside the React
+  // renderer, which is the layer entitled to say what that value is, and a wrong
+  // narrowing cannot pass silently — the renderer throws on anything it cannot
+  // draw, and `onError` below rethrows into the test.
+  const node = (await block.render(renderArgs(props))) as ReactNode;
+  const stream = await renderToReadableStream(node, {
+    onError(error: unknown) {
+      throw error;
+    },
+  });
   await stream.allReady;
   const reader = stream.getReader();
   const decoder = new TextDecoder();
