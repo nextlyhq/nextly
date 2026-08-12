@@ -110,15 +110,37 @@ function environmentWithoutPreloads() {
 }
 
 /**
- * The `NODE_ENV` values an artifact is evaluated under.
+ * The environment one evaluation child starts from, at one `NODE_ENV` state.
  *
- * A module-scope branch on `NODE_ENV` is ordinary in published React code, and only one side of it
- * runs per evaluation. The build sets nothing, so the production side was never evaluated at all:
- * `if (process.env.NODE_ENV === "production") document.title` shipped past this gate and threw for
- * the consumer it was written for. Both sides are evaluated, because either one can be the one that
- * touches the DOM.
+ * `undefined` REMOVES the variable rather than setting it empty. `process.env.NODE_ENV === ""` and
+ * `process.env.NODE_ENV === undefined` are different values, and a branch reading the second would
+ * go unevaluated while this reported that it had covered the unset case.
+ *
+ * @param {string | undefined} nodeEnv
  */
-const EVALUATED_NODE_ENVS = ["production", "development"];
+function childEnvironment(nodeEnv) {
+  const base = environmentWithoutPreloads();
+  if (nodeEnv === undefined) {
+    const { NODE_ENV: _unset, ...rest } = base;
+    return rest;
+  }
+  return { ...base, NODE_ENV: nodeEnv };
+}
+
+/**
+ * The `NODE_ENV` values an artifact is evaluated under. `undefined` means the variable is ABSENT.
+ *
+ * A module-scope branch on `NODE_ENV` is ordinary in published React code and only one side of it
+ * runs per evaluation, so a single value leaves the others unevaluated:
+ * `if (process.env.NODE_ENV === "production") document.title` reaches the DOM for the consumer it
+ * was written for and for nobody else.
+ *
+ * Three states rather than two, because unset is not a synonym for development. `process.env.NODE_ENV`
+ * is then `undefined`, so `=== "development"` is false and `!== "production"` is true -- a branch can
+ * select the unset case specifically, and the build itself sets nothing, which makes it the state
+ * this check runs in by default.
+ */
+const EVALUATED_NODE_ENVS = [undefined, "production", "development"];
 
 /** This file, re-invoked as the child that evaluates one artifact. */
 const SELF = fileURLToPath(import.meta.url);
@@ -712,7 +734,11 @@ export function childOutcome(file, run) {
   // import either never finished or left a handle keeping the process alive, and an entry point
   // that does either hangs whatever imports it. Reported before the general spawn-failure branch,
   // which would otherwise describe it as "could not be evaluated" and hide a real defect.
-  if (run.error !== undefined && run.error !== null && run.error.code === "ETIMEDOUT") {
+  if (
+    run.error !== undefined &&
+    run.error !== null &&
+    run.error.code === "ETIMEDOUT"
+  ) {
     return (
       `${file} was still running ${EVALUATION_TIMEOUT_MS}ms after it was imported. A server-safe ` +
       `entry point must finish initializing and leave nothing holding the process open.`
@@ -904,12 +930,16 @@ async function main() {
         spawnSync(process.execPath, [SELF, "--evaluate", file], {
           encoding: "utf8",
           timeout: EVALUATION_TIMEOUT_MS,
-          env: { ...environmentWithoutPreloads(), NODE_ENV: nodeEnv },
+          env: childEnvironment(nodeEnv),
         })
       );
       // Named with the environment, because "utils.mjs threw" is a different report to act on
-      // depending on which branch did it, and the two runs are otherwise identical.
-      if (problem !== null) problems.push(`${problem} (NODE_ENV=${nodeEnv})`);
+      // depending on which branch did it, and the runs are otherwise identical.
+      if (problem !== null) {
+        problems.push(
+          `${problem} (NODE_ENV=${nodeEnv === undefined ? "unset" : nodeEnv})`
+        );
+      }
     }
   }
 

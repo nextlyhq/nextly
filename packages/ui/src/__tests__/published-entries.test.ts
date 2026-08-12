@@ -6,8 +6,9 @@
  * JavaScript target, two subpaths sharing one artifact — and a check exercised only against the
  * real map would be asserting that today's map is acceptable, which is a different claim.
  */
-import { readFileSync } from "node:fs";
-import path from "node:path";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path, { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -296,15 +297,17 @@ describe("the barrel declaration and the export map", () => {
  * returns equal lists and reports parity, so a form neither matcher recognises is invisible in
  * exactly the comparison meant to catch it.
  */
-function exportedNames(source: string): string[] {
-  // PARSED, not matched. Four rounds of review each found a form the regular expressions could not
-  // see -- a default export, a re-export list, a namespace re-export, and finally a declaration
-  // inside a block comment whose inner line began at column zero. The reason is structural rather
-  // than careless: the comparison reads two files with one reader, so any blindness is symmetric,
-  // both arrays lose the same entry, and they compare EQUAL. A parity check cannot detect a form it
-  // does not understand, by construction, and enumerating export syntax by hand has a long tail.
+function exportedNames(
+  source: string,
+  from?: { dir: string; seen: Set<string> }
+): string[] {
+  // PARSED, not matched. Export syntax has a long tail -- a default export, a re-export list, a
+  // namespace re-export, a declaration inside a block comment whose inner line begins at column
+  // zero -- and a pattern blind to any one of them is blind to it in BOTH files at once, so both
+  // arrays lose the same entry and compare EQUAL. A parity check cannot detect a form it does not
+  // understand, by construction, which is why the grammar is not restated here.
   //
-  // The compiler already answers this exactly, and comments cease to be a category to handle at all.
+  // The compiler already answers this exactly, and comments cease to be a category to handle.
   const tree = ts.createSourceFile(
     "module.mjs",
     source,
@@ -336,13 +339,42 @@ function exportedNames(source: string): string[] {
       if (statement.isTypeOnly) continue;
       const clause = statement.exportClause;
       if (clause === undefined) {
-        // `export * from "./x"` cannot be answered from this file: the names live in the other
-        // module. Carried as a marker naming its SOURCE, so two files agree only when they
-        // star-export the same module and a one-sided one fails loudly.
-        const from = statement.moduleSpecifier;
+        // `export * from "./x"` publishes the other module's names as this one's. Comparing two
+        // files that each carry the same MARKER agrees without ever comparing what the two sides
+        // of the star actually publish, so the target is read and its names merged in.
+        //
+        // Only relative specifiers can be followed. A bare package name resolves through
+        // node_modules and is not this package's surface to declare, so it stays a marker: two
+        // files then agree only when they star-export the same package, and a one-sided one fails.
+        const specifier = statement.moduleSpecifier;
         const where =
-          from !== undefined && ts.isStringLiteral(from) ? from.text : "?";
-        found.push(`<star export from ${where}>`);
+          specifier !== undefined && ts.isStringLiteral(specifier)
+            ? specifier.text
+            : "?";
+        const target =
+          from !== undefined && where.startsWith(".")
+            ? resolve(from.dir, where)
+            : undefined;
+        if (target === undefined) {
+          found.push(`<star export from ${where}>`);
+        } else if (from!.seen.has(target)) {
+          // A cycle. Already being read further up the stack, so its names arrive from there.
+          continue;
+        } else {
+          from!.seen.add(target);
+          // Unreadable is reported rather than skipped: a star export naming a file that is not
+          // there is a broken surface, and silently contributing nothing would read as agreement.
+          let text: string;
+          try {
+            text = readFileSync(target, "utf8");
+          } catch {
+            found.push(`<unreadable star export from ${where}>`);
+            continue;
+          }
+          found.push(
+            ...exportedNames(text, { dir: dirname(target), seen: from!.seen })
+          );
+        }
       } else if (ts.isNamespaceExport(clause)) {
         // `export * as colors from "./x"` publishes exactly one binding, named `colors`.
         found.push(clause.name.text);
@@ -444,6 +476,65 @@ describe("reading the names a module publishes", () => {
     ).not.toContain("<star export from ./color.mjs>");
   });
 
+  it("follows a relative star export and publishes what it finds", () => {
+    // The names of `export * from "./helper.mjs"` ARE this module's surface. Two files that each
+    // carry the same marker compare equal without either side of the star ever being read, so a
+    // binding the helper publishes and the declaration omits would pass unexamined.
+    const dir = mkdtempSync(path.join(tmpdir(), "nx-star-"));
+    writeFileSync(
+      path.join(dir, "helper.mjs"),
+      `export const fromHelper = 1;\nexport function alsoHelper() {}\n`
+    );
+    expect(
+      exportedNames(`export * from "./helper.mjs";\nexport const own = 2;`, {
+        dir,
+        seen: new Set(),
+      })
+    ).toEqual(["alsoHelper", "fromHelper", "own"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("survives a star export cycle", () => {
+    // Two modules star-exporting each other would otherwise recurse without end.
+    const dir = mkdtempSync(path.join(tmpdir(), "nx-cycle-"));
+    writeFileSync(
+      path.join(dir, "a.mjs"),
+      `export * from "./b.mjs";\nexport const fromA = 1;\n`
+    );
+    writeFileSync(
+      path.join(dir, "b.mjs"),
+      `export * from "./a.mjs";\nexport const fromB = 2;\n`
+    );
+    expect(
+      exportedNames(readFileSync(path.join(dir, "a.mjs"), "utf8"), {
+        dir,
+        seen: new Set([path.join(dir, "a.mjs")]),
+      })
+    ).toEqual(["fromA", "fromB"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("reports a star export it cannot read rather than contributing nothing", () => {
+    // Silently skipping an unreadable target is the failure this whole reader exists to avoid:
+    // both files would contribute nothing and compare equal over a broken surface.
+    const dir = mkdtempSync(path.join(tmpdir(), "nx-missing-"));
+    expect(
+      exportedNames(`export * from "./gone.mjs";`, { dir, seen: new Set() })
+    ).toEqual(["<unreadable star export from ./gone.mjs>"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("leaves a bare package star export as a marker", () => {
+    // A package name resolves through node_modules and is not this package's surface to declare,
+    // so it stays a marker: two files agree only when they star-export the same package.
+    expect(
+      exportedNames(`export * from "some-package";`, {
+        dir: "/nowhere",
+        seen: new Set(),
+      })
+    ).toEqual(["<star export from some-package>"]);
+  });
+
   it("records a star re-export by its source, since its names are in another file", () => {
     // Unanswerable from this file alone, so it is carried as a marker rather than dropped: two
     // files agree only when they star-export the SAME module, and a one-sided one fails.
@@ -507,7 +598,10 @@ describe("the hand-written declaration beside the module", () => {
     "scripts"
   );
   const names = (file: string): string[] =>
-    exportedNames(readFileSync(path.join(scripts, file), "utf8"));
+    exportedNames(readFileSync(path.join(scripts, file), "utf8"), {
+      dir: scripts,
+      seen: new Set([path.join(scripts, file)]),
+    });
 
   it("declares exactly the bindings the module exports", () => {
     const runtime = names("published-entries.mjs");
