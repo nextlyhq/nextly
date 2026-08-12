@@ -32,11 +32,11 @@
  * that this covers the shipped example rather than the whole render. It is stated so a green is not
  * read as more than it is.
  */
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { BlockNode } from "@nextlyhq/blocks-engine";
-import type { ReactElement } from "react";
+import { isValidElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
@@ -59,6 +59,9 @@ interface DrawableBlock {
 
 const DRAWABLE: readonly DrawableBlock[] = coreBlocks;
 
+/** The class a page compiles a node's own rules onto, handed to every render below. */
+const BLOCK_CLASS = "nx-n1";
+
 function context(): PageContext {
   return {
     entry: null,
@@ -69,13 +72,54 @@ function context(): PageContext {
 }
 
 /**
+ * The element a block puts its own `className` on, found in the tree it returns.
+ *
+ * The RENDERED element rather than serialized markup, and the element carrying the CLASS rather than
+ * the first opening tag. Both matter:
+ *
+ * - A block may wrap its content, so the outermost tag is not necessarily the one the compiled rules
+ *   land on. Reading the first tag would inspect a wrapper and leave the conflicting declaration on
+ *   the classed descendant unexamined.
+ * - `style` is read as a PROP, so nothing depends on how React serializes it. Matching text in an
+ *   opening tag cannot tell a real `style` attribute from `title="use style=compact"` or from a class
+ *   token containing the same characters, and a guard that rejects those costs an unrelated change a
+ *   red build.
+ *
+ * Returns every classed element, not the first. A block placing the class twice is malformed in a way
+ * worth failing on rather than silently reading one of them.
+ */
+function classedElements(node: ReactNode, className: string): ReactElement[] {
+  const found: ReactElement[] = [];
+  const walk = (current: ReactNode): void => {
+    if (Array.isArray(current)) {
+      for (const child of current) walk(child);
+      return;
+    }
+    if (!isValidElement(current)) return;
+    const props = current.props as {
+      className?: unknown;
+      children?: ReactNode;
+    };
+    if (
+      typeof props.className === "string" &&
+      props.className.split(/\s+/).includes(className)
+    ) {
+      found.push(current);
+    }
+    walk(props.children);
+  };
+  walk(node);
+  return found;
+}
+
+/**
  * Render one block the way a page would, from the worked instance it is required to publish.
  *
  * `example` rather than hand-written props: every definition carries one, so no block is skipped for
  * want of a fixture, and the props are the author's own rather than a guess that might miss the
  * branch that styles anything.
  */
-async function rootOf(block: DrawableBlock): Promise<string> {
+async function drawnBy(block: DrawableBlock): Promise<ReactNode> {
   const node: BlockNode = {
     id: "n1",
     type: block.name,
@@ -85,17 +129,13 @@ async function rootOf(block: DrawableBlock): Promise<string> {
   const args = {
     props: block.example.props,
     node,
-    className: "nx-n1",
+    className: BLOCK_CLASS,
     ctx: context(),
     renderSlot: () => <span>child</span>,
   } as unknown as BlockRenderArgs<never>;
   // Awaited because several blocks are async server components: calling `render` on one returns a
-  // promise of the element, and handing that straight to the renderer suspends instead of drawing.
-  const drawn = await block.render(args);
-  const html = renderToStaticMarkup(drawn as ReactElement);
-  // The opening tag alone. A nested element's own attributes are a different question, and reading
-  // the whole document here would answer it by accident.
-  return html.slice(0, html.indexOf(">") + 1);
+  // promise of the element rather than the element itself.
+  return (await block.render(args)) as ReactNode;
 }
 
 describe("a core block's root element", () => {
@@ -122,25 +162,54 @@ describe("a core block's root element", () => {
   it.each(DRAWABLE.map(block => [block.name, block] as const))(
     "%s writes no inline style",
     async (_name, block) => {
-      const root = await rootOf(block);
+      const classed = classedElements(await drawnBy(block), BLOCK_CLASS);
       // Asserted BEFORE the absence below, which is otherwise satisfied by absence: a block whose
-      // example renders nothing, or whose opening tag this helper failed to find, yields "" and
-      // passes a `not.toContain` while never having been checked at all.
-      expect(root).toMatch(/^<[a-zA-Z]/);
-      // The attribute, not the substring. `data-style="compact"` contains `style=` and is not an
-      // inline declaration, and a guard that rejects it costs an unrelated change a red build.
-      expect(root).not.toMatch(/\sstyle=/);
+      // example renders nothing, or which never applies the class it is handed, would yield an empty
+      // list and pass a "no style" check while never having been examined.
+      expect(classed).toHaveLength(1);
+      const { style } = classed[0]!.props as { style?: unknown };
+      expect(style).toBeUndefined();
     }
   );
 
-  it("would catch a block that styled its own root", async () => {
-    // The positive control. Without it the assertions above pass for a library whose blocks render
-    // nothing at all, or whose root tag this helper failed to find — neither of which is the
-    // property under test.
+  it("would catch a block that styled the element carrying the class", async () => {
+    // The positive control, exercising the SAME finder and the SAME property the per-block cases
+    // use. A control asserting something adjacent could stay green while the real check stopped
+    // recognising a style at all.
     const styled: DrawableBlock = {
       ...DRAWABLE[0]!,
-      render: () => <div className="nx-n1" style={{ padding: 24 }} />,
+      render: () => <div className={BLOCK_CLASS} style={{ padding: 24 }} />,
     };
-    expect(await rootOf(styled)).toContain("style=");
+    const classed = classedElements(await drawnBy(styled), BLOCK_CLASS);
+    expect(classed).toHaveLength(1);
+    expect((classed[0]!.props as { style?: unknown }).style).toBeDefined();
+  });
+
+  it("looks past a wrapper to the element that carries the class", async () => {
+    // The case a first-opening-tag reader gets wrong: the outermost element is not necessarily the
+    // one the compiled rules land on, so a style on the classed DESCENDANT must still be found.
+    const wrapped: DrawableBlock = {
+      ...DRAWABLE[0]!,
+      render: () => (
+        <section>
+          <div className={BLOCK_CLASS} style={{ padding: 24 }} />
+        </section>
+      ),
+    };
+    const classed = classedElements(await drawnBy(wrapped), BLOCK_CLASS);
+    expect(classed).toHaveLength(1);
+    expect((classed[0]!.props as { style?: unknown }).style).toBeDefined();
+  });
+
+  it("does not mistake an attribute VALUE for a style attribute", async () => {
+    // Reading the prop rather than the serialized tag is what makes this true. Text matching on an
+    // opening tag reports a style here and rejects markup no style control competes with.
+    const decoy: DrawableBlock = {
+      ...DRAWABLE[0]!,
+      render: () => <div className={BLOCK_CLASS} title="use style=compact" />,
+    };
+    const classed = classedElements(await drawnBy(decoy), BLOCK_CLASS);
+    expect(classed).toHaveLength(1);
+    expect((classed[0]!.props as { style?: unknown }).style).toBeUndefined();
   });
 });
