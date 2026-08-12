@@ -24,4 +24,25 @@
 "@nextlyhq/builder": patch
 ---
 
-Match the reference palette border weight for `--nx-input`, `--nx-border-strong` and `--nx-sidebar-border` in light mode, and record the pairings this puts below WCAG 1.4.11 in a new `contrast/accepted.ts` that the contrast suite reads.
+Take the reference palette's light-mode values for the admin, and record what
+that costs where a reader will find it.
+
+`--nx-input`, `--nx-border-strong` and `--nx-sidebar-border` move to the
+reference border weight; `--nx-destructive` and `--nx-destructive-solid` move to
+the reference red; `--nx-sidebar-foreground` matches the active nav ink so the
+sidebar reads at body-text weight.
+
+Several of those render below their WCAG minimum, deliberately. Each affected
+pairing is listed in the new `contrast/accepted.ts` with the ratio it actually
+measures, and the contrast suites hold every entry to three properties: it still
+measures what is recorded, it is still below its threshold, and it still names a
+token the theme declares. The sharpest is white on the destructive fill at
+3.84:1, which is the label of the Delete, Discard and Unpublish confirm buttons.
+
+Because resting and active sidebar ink are now one value in light mode, the
+active row also carries a font-weight change. A fill at 1.11:1 cannot identify a
+state on its own, and a weight difference is not a colour, so it is not subject
+to a contrast ratio at all.
+
+Dark mode is unchanged apart from `--nx-success`, which moves a step lighter to
+clear its minimum on the muted surface with the margin the suite requires.

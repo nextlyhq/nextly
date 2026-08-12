@@ -1,14 +1,22 @@
 /**
- * Guards the two-step relationship between the sidebar's resting and active ink.
+ * Guards that an active navigation row is distinguishable from a resting one,
+ * by whichever signal its mode uses.
  *
- * The nav paints `text-sidebar-foreground` at rest and
- * `text-sidebar-accent-foreground` when a row is active or hovered, so the two
- * tokens have to differ for the active row to read as emphasised. Contrast
- * pairings cannot catch this: each token was individually far above AA against
- * the sidebar surface at the point dark mode had them set to the same near-white
- * value, and the whole pair passed while the hierarchy was gone. What has to be
- * asserted is the relationship between them, in the direction each mode needs —
- * emphasis is darker than rest on a light surface and lighter on a dark one.
+ * Contrast pairings cannot catch this. Each token was individually far above AA
+ * against the sidebar surface at the point dark mode had resting and active ink
+ * set to the same near-white value, and the whole pair passed while the
+ * hierarchy was gone. What has to be asserted is the RELATIONSHIP between them.
+ *
+ * The two modes mark the state differently, so the contract is per mode and is
+ * declared in {@link MODE_SIGNAL} rather than inferred from the tokens:
+ *
+ * - **dark** holds resting ink a step back from active, in the direction that
+ *   mode needs — emphasis is lighter on a dark surface.
+ * - **light** paints both inks at the reference palette's value and marks the
+ *   row with its fill plus a font-weight change. The fill is roughly 1.11:1,
+ *   far below the 3:1 WCAG 1.4.11 asks of a state indicator, so it cannot carry
+ *   the state alone; the weight change is what satisfies the criterion, being a
+ *   difference that is not a colour and so not subject to a ratio at all.
  */
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -46,12 +54,40 @@ const MIN_STATE_SEPARATION = 1.6;
 const ACTIVE_FILL = "--nx-sidebar-accent";
 
 /**
- * How far the active fill must sit from the sidebar surface when it is the only
- * signal. Light mode ships 0.94 against 0.99, which is 1.11:1; the floor sits
- * just under that, so the shipped pair passes with no slack and a fill nudged
- * toward the surface fails. It is deliberately not 3:1 — an active row is a
- * large filled area rather than a boundary, and 1.4.11 does not scope it — but
- * it cannot be nothing.
+ * Which signal each mode uses to mark the active row. DECLARED, not derived:
+ * this is the palette's decision, and reading it back out of the tokens would
+ * let a mode that lost its signal by accident be scored against the weaker
+ * contract instead of failing.
+ *
+ * Dark holds resting ink a step back from active. Light paints both at the
+ * reference palette's value and marks the row with fill plus font weight.
+ */
+const MODE_SIGNAL: Record<"light" | "dark", "ink" | "fill"> = {
+  light: "fill",
+  dark: "ink",
+};
+
+/**
+ * Where the active row is rendered. When the fill carries the state, 1.4.11
+ * still applies -- it scopes 3:1 to information required to identify a
+ * component's STATE, and there is no exemption for a large filled region (that
+ * is 1.4.3, and it is about text). A fill at roughly 1.11:1 therefore cannot be
+ * the only signal, so the row also has to carry something that is not a colour.
+ */
+const MENU_BUTTON = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../../../../admin/src/components/layout/sidebar/index.tsx"
+);
+
+/**
+ * How far the active fill must sit from the sidebar surface. Light mode ships
+ * 0.94 against 0.99, which is 1.11:1; the floor sits just under that, so the
+ * shipped pair passes with no slack and a fill nudged toward the surface fails.
+ *
+ * This is NOT a 1.4.11 threshold and must not be read as one. 1.4.11 asks 3:1
+ * of a state indicator and this is nowhere near it; the fill is held to a floor
+ * only so it does not vanish entirely. What satisfies the criterion is the
+ * non-colour signal asserted alongside it.
  */
 const MIN_FILL_SEPARATION = 1.1;
 
@@ -65,22 +101,20 @@ for (const mode of MODES) {
   const paint = (token: string): ReturnType<typeof resolveColor> =>
     resolveColor(`var(${token})`, ctx);
 
-  const inkSeparates = contrastRatio(paint(RESTING), paint(ACTIVE)) > 1;
+  const signal = MODE_SIGNAL[mode.name];
 
   describe(`sidebar ink hierarchy (${mode.name})`, () => {
-    // Which signal marks the active row is a palette decision, and the modes
-    // make it differently: dark mode holds resting ink a step back from active,
-    // light mode paints both at the same value and lets the fill carry it.
-    // Asserting the two-step unconditionally would fail light mode for making a
-    // choice rather than for losing one.
+    // Which branch runs is read from MODE_SIGNAL, a DECLARED policy, never from
+    // the tokens themselves. Deriving it -- "do the two inks differ?" -- makes
+    // the check answer a question the values get to decide: dark ink collapsing
+    // by accident would silently move that mode onto the fill branch, which its
+    // fill happens to pass at 1.48:1, and the exact regression this file exists
+    // for would come back green.
     //
-    // What must NOT happen is losing BOTH signals at once, which is the defect
-    // this file was written for: dark mode once had one ink value for both
-    // states, each individually far above AA against the surface, and the whole
-    // suite passed while the hierarchy was gone. So the assertions are split by
-    // which signal the mode uses, and neither branch is optional -- a mode with
-    // no ink separation is held to its fill instead.
-    if (inkSeparates) {
+    // That regression: dark mode once had one ink value for both states, each
+    // individually far above AA against the surface, and the whole suite passed
+    // while the hierarchy was gone.
+    if (signal === "ink") {
       it("separates the resting and active states by ink", () => {
         const resting = paint(RESTING);
         const active = paint(ACTIVE);
@@ -111,25 +145,40 @@ for (const mode of MODES) {
         ).toBeGreaterThan(restingDistance);
       });
     } else {
-      it("marks the active row by its fill when the ink does not", () => {
-        // With one ink value across both states the fill is the only thing
-        // distinguishing an active row, so it has to be visible against the
-        // sidebar on its own. 1.4.11's 3:1 is the wrong bar -- this is a state
-        // indicator on a large filled area rather than a boundary -- but it
-        // cannot be nothing, and a fill that merges into the surface leaves the
-        // nav with no active state at all.
+      it("keeps the fill distinguishable from the surface", () => {
         const surface = paint(SURFACE);
         const fill = paint(ACTIVE_FILL);
         const ratio = contrastRatio(surface, fill);
 
         expect(
           ratio,
-          `${mode.name}: ${RESTING} and ${ACTIVE} are the same value, so ` +
-            `${ACTIVE_FILL} ${toHex(fill)} is the only signal for an active ` +
-            `row -- and against ${SURFACE} ${toHex(surface)} it is just ` +
-            `${ratio.toFixed(2)}:1. Either separate the two ink tokens, or ` +
-            `move the fill further from the surface.`
+          `${mode.name}: ${ACTIVE_FILL} ${toHex(fill)} against ${SURFACE} ` +
+            `${toHex(surface)} is ${ratio.toFixed(2)}:1. The fill carries the ` +
+            `active state in this mode, so it cannot merge into the surface.`
         ).toBeGreaterThanOrEqual(MIN_FILL_SEPARATION);
+      });
+
+      it("carries a non-colour signal as well as the fill", () => {
+        // The fill alone is about 1.11:1, well under the 3:1 that 1.4.11 asks
+        // of a state indicator, so on its own it would leave a low-vision user
+        // unable to tell which row is selected. A weight change is not a colour
+        // and is not subject to a contrast ratio, which is what makes it the
+        // repair rather than a second faint tint.
+        //
+        // Asserted against the component source because that is where the
+        // signal lives; a token file cannot show whether anything renders it.
+        const source = readFileSync(MENU_BUTTON, "utf8");
+        const marked = source.match(
+          /data-\[active=true\]:font-(?:medium|semibold|bold)/g
+        );
+
+        expect(
+          marked?.length ?? 0,
+          `${mode.name}: the sidebar menu button applies no weight change for ` +
+            `data-[active=true], so the ${contrastRatio(paint(SURFACE), paint(ACTIVE_FILL)).toFixed(2)}:1 fill is ` +
+            `the only thing marking the active row. Add a non-colour signal, ` +
+            `or separate ${RESTING} from ${ACTIVE} so the ink carries it.`
+        ).toBeGreaterThan(0);
       });
     }
   });

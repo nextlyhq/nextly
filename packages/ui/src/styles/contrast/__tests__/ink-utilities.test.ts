@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { acceptedFor } from "../accepted";
+import { acceptedFor, type AcceptedRegression } from "../accepted";
 import { contrastRatio, type Rgb } from "../color";
 import {
   parseThemeScale,
@@ -148,6 +148,16 @@ function isInkOnItsOwnFill(role: string): boolean {
     PAGE_SURFACES.includes(`--nx-${name}`)
   );
 }
+
+/** An accepted pair this scan actually reached, with what it measured. */
+interface Observed {
+  accepted: AcceptedRegression;
+  ratio: number;
+  required: number;
+  where: string;
+}
+
+const observed: Observed[] = [];
 
 interface Miss {
   utility: string;
@@ -384,7 +394,22 @@ for (const { path, line, self, utilities } of inkUsages()) {
         // complete on its own, and this scan reaches the same colours through
         // utility names rather than token names -- which is exactly the shape
         // that makes a second list look like a different subject.
-        if (acceptedFor(role, surface, mode)) continue;
+        const accepted = acceptedFor(role, surface, mode);
+        if (accepted) {
+          // Some accepted pairs are reached ONLY here -- the token pairing list
+          // never names them -- so this scan is the only place their recorded
+          // ratio can be held to anything. Suppressing without checking would
+          // leave those entries unpinned in both suites: a surface change could
+          // worsen the pair, or repair it, and accepted.ts would go stale with
+          // everything still green.
+          observed.push({
+            accepted,
+            ratio,
+            required,
+            where: `${path}:${line}`,
+          });
+          continue;
+        }
         misses.push({
           utility,
           role,
@@ -401,6 +426,44 @@ for (const { path, line, self, utilities } of inkUsages()) {
 }
 
 describe("ink utilities are readable on the surfaces they land on", () => {
+  it("holds accepted pairs to their recorded ratio", () => {
+    // Some accepted pairs have no entry in PAIRINGS -- this scan is the only
+    // thing that reaches them -- so if the suppression above were unconditional
+    // they would be pinned nowhere. The same two properties the token suite
+    // enforces are enforced here, for whatever this scan actually observed.
+    const drifted = observed
+      .filter(o => Number(o.ratio.toFixed(2)) !== o.accepted.ratio)
+      .map(
+        o =>
+          `${o.accepted.fg} on ${o.accepted.bg} (${o.accepted.mode}) recorded ` +
+          `${o.accepted.ratio}:1, measured ${o.ratio.toFixed(2)}:1 — ${o.where}`
+      );
+
+    expect(
+      [...new Set(drifted)].sort(),
+      `An accepted pair no longer measures what accepted.ts records. If the ` +
+        `change was intended, update the recorded ratio; if not, a token moved ` +
+        `under an entry that was not agreed for this value.`
+    ).toEqual([]);
+  });
+
+  it("requires a repaired pair to leave the accepted set", () => {
+    const repaired = observed
+      .filter(o => o.ratio >= o.required)
+      .map(
+        o =>
+          `${o.accepted.fg} on ${o.accepted.bg} (${o.accepted.mode}) now ` +
+          `measures ${o.ratio.toFixed(2)}:1, at or above its ${o.required}:1`
+      );
+
+    expect(
+      [...new Set(repaired)].sort(),
+      `These pairs now MEET their threshold, so their accepted.ts entries are ` +
+        `stale. Delete them: leaving them makes the accepted set read as ` +
+        `larger than it is.`
+    ).toEqual([]);
+  });
+
   it("scans the components and resolves tokens on both sides", () => {
     // Every assertion below is vacuously true over an empty scan, so a renamed
     // directory or a changed utility syntax must fail here first.
@@ -558,7 +621,16 @@ describe("ink utilities are readable on the surfaces they land on", () => {
           // pair being accepted does NOT excuse a state fill: this only skips
           // when the exact ink/fill combination is recorded, so a hover fill
           // that moves further from the label is still reported.
-          if (acceptedFor(role, fill.role, mode)) continue;
+          const accepted = acceptedFor(role, fill.role, mode);
+          if (accepted) {
+            observed.push({
+              accepted,
+              ratio,
+              required: REQUIRED.text,
+              where: `${path}:${line}`,
+            });
+            continue;
+          }
           failures.push(
             `text-${role} on ${fill.variant}bg-${fill.role} = ` +
               `${ratio.toFixed(2)}:1 (${mode}), needs ${REQUIRED.text}:1 — ` +
