@@ -20,6 +20,7 @@ import {
   filterCollectionItems,
   filterSingleItems,
 } from "@admin/lib/permissions/authorization";
+import { resolveCollectionPlacement } from "@admin/lib/plugins/collection-placement";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { resolvePluginIcon } from "@admin/lib/plugins/resolve-plugin-icon";
 import { cn } from "@admin/lib/utils";
@@ -188,14 +189,13 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     return filterSingleItems(allSingles, capabilities);
   }, [singlesData?.items, capabilities]);
 
+  // Bound to this render's metadata rather than reimplemented: the rail's
+  // visibility and the panel's contents must agree about where a collection
+  // belongs, and two implementations of that would let the rail offer a
+  // section whose destinations have all moved elsewhere.
   const getCollectionPlacement = useMemo(() => {
-    return (collection: ApiCollection): string | undefined => {
-      if (!pluginMetadata) return undefined;
-      const meta = pluginMetadata.find(p =>
-        (p.collections ?? []).includes(collection.name)
-      );
-      return meta?.placement ?? meta?.group ?? undefined;
-    };
+    return (collection: ApiCollection): string | undefined =>
+      resolveCollectionPlacement(collection.name, pluginMetadata);
   }, [pluginMetadata]);
 
   const hasPermissionDataPending =

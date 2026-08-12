@@ -88,9 +88,11 @@ function PluginSkeleton() {
 interface PluginEntry {
   name: string;
   slug: string;
-  /** Whether this plugin's items have been placed in another section */
-  isPlaced: boolean;
-  /** The plugin's collections (only shown when not placed) */
+  /**
+   * The plugin's collections that belong under Plugins. Empty when every one
+   * of them is rendered in another section, which is what makes a group
+   * unrenderable here — there is no separate placement flag to disagree with.
+   */
   collections: ApiCollection[];
 }
 
@@ -152,48 +154,6 @@ export function DynamicPluginNav({
   // Plugin-level metadata with declared placement
   const pluginMetadata = branding?.plugins;
 
-  // Build a lookup: collection group slug → plugin metadata
-  // Matches by checking if any collection in the group belongs to a plugin's collections list
-  const groupToPluginMeta = React.useMemo(() => {
-    const map = new Map<string, NonNullable<typeof pluginMetadata>[number]>();
-    if (!pluginMetadata) return map;
-    for (const meta of pluginMetadata) {
-      const collectionSlugs = new Set(meta.collections ?? []);
-      for (const collection of allPluginCollections) {
-        if (collectionSlugs.has(collection.name)) {
-          // Keyed by the group NAME the entries below are keyed by, not by a
-          // slug of it. `admin.group` is optional and those collections are
-          // grouped under "Other"; deriving the key from the absent heading
-          // produced an empty string, which was skipped, so the plugin was
-          // never found and its placement read as unset.
-          const groupName = collection.admin?.group || "Other";
-          if (!map.has(groupName)) {
-            map.set(groupName, meta);
-          }
-        }
-      }
-    }
-    return map;
-  }, [pluginMetadata, allPluginCollections]);
-
-  // Whether a plugin group is rendered in another sidebar section, from the
-  // config's placement only — user overrides do not apply here.
-  //
-  // Group-level, so it decides how the WHOLE entry renders: placed groups show
-  // a settings link, unplaced ones expand into their collections. Which
-  // individual collections may be listed is a per-collection question, and
-  // `isCollectionPlacedElsewhere` answers that one.
-  const isPluginPlaced = React.useCallback(
-    (groupName: string): boolean => {
-      const meta = groupToPluginMeta.get(groupName);
-      const placement = meta?.placement ?? meta?.group;
-      if (!placement || placement === "plugins") return false;
-      // "standalone" plugins get their own top-level sidebar icon, so treat as placed
-      return true;
-    },
-    [groupToPluginMeta]
-  );
-
   // Build plugin entries from ALL plugin collections (so the plugin always appears
   // with its Settings link), but only include visible collections as sub-items
   const plugins = React.useMemo(() => {
@@ -213,16 +173,15 @@ export function DynamicPluginNav({
         pluginMap.set(groupName, {
           name: groupName,
           slug,
-          isPlaced: isPluginPlaced(groupName),
           collections: [],
         });
       }
 
       // A sub-item must be visible, permitted, and not already rendered in
-      // another section. Placement is declared per collection, so it is decided
-      // per collection: `admin.group` is an optional heading, and a group-level
-      // answer cannot see a collection that declares none, which lists it here
-      // as well as wherever its plugin placed it.
+      // another section. Placement is declared per collection and read from the
+      // plugin that owns it, so a collection carrying no `admin.group` heading
+      // is still placed: the heading groups collections for display and says
+      // nothing about which section owns them.
       if (
         visibleCollectionIds.has(collection.id) &&
         !isCollectionPlacedElsewhere(collection.name, pluginMetadata)
@@ -246,13 +205,7 @@ export function DynamicPluginNav({
     return Array.from(pluginMap.values()).sort((a, b) =>
       a.name.localeCompare(b.name)
     );
-  }, [
-    allPluginCollections,
-    visibleCollectionIds,
-    isPluginPlaced,
-    pluginMetadata,
-    search,
-  ]);
+  }, [allPluginCollections, visibleCollectionIds, pluginMetadata, search]);
 
   // The overview link is shown only to users who can open the page it points
   // at: /admin/plugins is manage-settings guarded, and a collection reader
@@ -297,10 +250,7 @@ export function DynamicPluginNav({
     isActive("/admin/plugins") ||
     plugins.some(p => {
       if (isActive(getPluginUrl(p.slug))) return true;
-      if (!p.isPlaced) {
-        return p.collections.some(c => isActive(getCollectionUrl(c)));
-      }
-      return false;
+      return p.collections.some(c => isActive(getCollectionUrl(c)));
     });
 
   // Collapsed mode: single icon with dropdown listing the overview + plugin names
@@ -317,10 +267,12 @@ export function DynamicPluginNav({
     );
   }
 
-  // Plugins with unplaced collections (shown as expandable with collection sub-items)
-  const pluginsWithCollections = plugins.filter(
-    p => !p.isPlaced && p.collections.length > 0
-  );
+  // A group is expandable exactly when it retains a collection to expand into.
+  // Two plugins can share a display group — every group-less collection lands
+  // under "Other" — so one of them being placed elsewhere says nothing about
+  // the group, and a group-level answer would hide the other plugin's
+  // reachable collection behind a rail item that opens an empty panel.
+  const pluginsWithCollections = plugins.filter(p => p.collections.length > 0);
 
   return (
     <>

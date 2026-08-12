@@ -192,6 +192,58 @@ describe("DynamicPluginNav", () => {
   });
 });
 
+describe("DynamicPluginNav expanded", () => {
+  /**
+   * A group is expandable when it retains a collection, and only then.
+   *
+   * Two plugins can share a display group — every collection without an
+   * `admin.group` heading lands under "Other" — and they need not agree about
+   * placement. A group-level placement answer has to be one value for both, so
+   * it hides the group that still holds a reachable collection: the rail shows
+   * a Plugins item whose panel has nothing in it.
+   */
+  it("expands a shared group that still retains a reachable collection", () => {
+    mockCanManageSettings = false;
+    mockBranding = {
+      plugins: [
+        {
+          name: "@acme/moves",
+          collections: ["gadgets"],
+          placement: "settings",
+        },
+        { name: "@acme/stays", collections: ["widgets"] },
+      ],
+    } as unknown as AdminBranding;
+    mockCollectionCaps = {
+      widgets: { canRead: true },
+      gadgets: { canRead: true },
+    };
+    mockCollections = {
+      items: [
+        // `gadgets` first, so the placed plugin is the one a group-level
+        // lookup would find and apply to the whole group.
+        {
+          id: "c2",
+          name: "gadgets",
+          labels: { plural: "Gadgets" },
+          admin: { isPlugin: true },
+        },
+        {
+          id: "c1",
+          name: "widgets",
+          labels: { plural: "Widgets" },
+          admin: { isPlugin: true },
+        },
+      ],
+    };
+
+    renderNav();
+
+    // The group renders, because `widgets` is still under Plugins.
+    expect(screen.getByRole("button", { name: /other/i })).toBeInTheDocument();
+  });
+});
+
 describe("DynamicPluginNav collapsed", () => {
   it("offers the guarded destinations to a user who can open them", async () => {
     givePluginWithReadableCollection();
@@ -254,10 +306,9 @@ describe("DynamicPluginNav collapsed", () => {
    * The same omission, for a placed collection that declares no `admin.group`.
    *
    * `admin.group` is an optional heading, so these collections are grouped
-   * under "Other" and cannot be found by group at all. A group-keyed placement
-   * lookup answers "no placement" for them, which reads as "belongs under
-   * Plugins" — so the collection appears here AND under Settings, which is the
-   * duplicate the placement rule exists to prevent.
+   * under "Other" and are identifiable only by the plugin that owns them.
+   * Placement is read from that owner, which is what keeps the collection out
+   * of this menu while it is rendered under Settings.
    */
   it("omits a placed collection that declares no display group", async () => {
     mockCanManageSettings = false;
@@ -287,7 +338,7 @@ describe("DynamicPluginNav collapsed", () => {
           id: "c2",
           name: "gadgets",
           labels: { plural: "Gadgets" },
-          // No `group`. This is what the group-keyed lookup could not see.
+          // No `group`: owned by a plugin, but carrying no heading.
           admin: { isPlugin: true },
         },
       ],

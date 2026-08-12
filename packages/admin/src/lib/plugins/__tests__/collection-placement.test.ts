@@ -1,7 +1,8 @@
 /**
- * Placement decides which sidebar section may list a plugin collection. These
- * cover the case that made a group-keyed lookup wrong: a collection whose
- * plugin placed it elsewhere but which declares no display group.
+ * Placement decides which sidebar section may list a plugin collection, and it
+ * is a property of the plugin that OWNS the collection. These cover the inputs
+ * where ownership and display grouping come apart: a collection with no
+ * `admin.group` heading is still owned, so its placement is still knowable.
  */
 import { describe, expect, it } from "vitest";
 
