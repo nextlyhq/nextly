@@ -40,7 +40,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, normalize, relative } from "node:path";
-import { builtinModules } from "node:module";
+import { builtinModules, isBuiltin } from "node:module";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
@@ -71,20 +71,22 @@ const pkg = JSON.parse(readFileSync(join(pkgRoot, "package.json"), "utf8"));
  * standard library. The prefixed form is still matched because an external or unbundled module can
  * preserve it.
  */
-const BUILTIN_NAMES = new Set(
-  builtinModules.flatMap(name => [
-    name,
-    // 🔴 Both spellings, because the two lists disagree in BOTH directions. `builtinModules`
-    // lists most modules bare (`fs`) and some newer ones only prefixed (`node:sqlite`), while the
-    // bundler strips the prefix from whatever it finds. So a prefix-only built-in arrives in the
-    // artifact as a bare name that appears in no list, and gets classified as an ordinary npm
-    // package — certified for the browser precisely because it is too new to be listed bare.
-    name.startsWith("node:") ? name.slice("node:".length) : `node:${name}`,
-  ])
-);
-
+/**
+ * Whether a specifier names a Node built-in, asked of Node itself.
+ *
+ * 🔴 Not derived from `builtinModules`. That array omits built-ins the runtime resolves — on this
+ * Node, `node:test` and `node:test/reporters` are absent from it in BOTH spellings while
+ * `require.resolve` handles them — so a set built from it classifies them as ordinary npm
+ * packages, which is the certification this whole check exists to withhold. `isBuiltin` is the
+ * resolver's own answer and cannot fall behind the runtime the way a list does.
+ *
+ * Both spellings are asked because the two disagree in opposite directions: the bundler strips the
+ * `node:` prefix from whatever it finds, and `isBuiltin` answers false for the bare form of a
+ * prefix-only module (`sqlite`, `test`). Asking the prefixed form as well is what catches exactly
+ * the newest built-ins, which are the ones most likely to be missing from any hand-kept list.
+ */
 function isNodeBuiltin(spec) {
-  return BUILTIN_NAMES.has(spec);
+  return isBuiltin(spec) || isBuiltin(`node:${spec}`);
 }
 
 /** Every relative specifier in a built module, ignoring bare and `node:` ones. */
@@ -157,30 +159,37 @@ function selfCheck() {
     "plain require call": 'const p = require("path");\n',
   };
 
-  // Classification, asserted against the real list rather than a fixture. A prefix-only built-in
-  // reaches the artifact with its prefix stripped, so both spellings of every listed name have to
-  // classify as a built-in — otherwise the newest modules, which are the ones listed only as
-  // `node:x`, are the ones certified for the browser.
-  //
-  // ⚠️ The prefix-only half is vacuous on a Node whose list has no such entries (Node 22 has
-  // none; they appear from 24). Reported rather than hidden, so a green here is not read as
-  // covering a case this runtime cannot present.
-  const prefixOnly = builtinModules.filter(name => name.startsWith("node:"));
-  const misclassified = [
-    ...builtinModules.filter(name => !isNodeBuiltin(name)),
-    ...prefixOnly
-      .map(name => name.slice("node:".length))
-      .filter(bare => !isNodeBuiltin(bare)),
+  // Classification, asserted on names the runtime resolves rather than on a list. Both spellings
+  // of every built-in must classify, because the bundler strips the prefix and the newest
+  // built-ins are the ones a list is most likely to omit — which is how `node:test` slipped
+  // through a set derived from `builtinModules`.
+  const mustClassify = [
+    ...builtinModules,
+    ...builtinModules.map(n => n.replace(/^node:/, "")),
+    // Resolvable and absent from `builtinModules` on this runtime: the case a derived set misses.
+    "node:test",
+    "test",
+    "node:test/reporters",
   ];
+  const misclassified = mustClassify.filter(name => !isNodeBuiltin(name));
   if (misclassified.length > 0) {
     console.error(
       `✗ these built-ins are not classified as such: ${misclassified.join(", ")}`
     );
     process.exit(1);
   }
+  // A negative control beside the positives: a check that answered true for everything would
+  // satisfy every assertion above and certify nothing.
+  const falsePositives = ["react", "drizzle-orm", "next"].filter(isNodeBuiltin);
+  if (falsePositives.length > 0) {
+    console.error(
+      `✗ ordinary packages classified as built-ins: ${falsePositives.join(", ")}`
+    );
+    process.exit(1);
+  }
   console.log(
-    `✓ built-in classification: ${builtinModules.length} names, ` +
-      `${prefixOnly.length} prefix-only${prefixOnly.length === 0 ? " (this runtime lists none — that half is untested here)" : ""}`
+    `✓ built-in classification: ${mustClassify.length} names classify, ` +
+      `3 ordinary packages do not`
   );
 
   const problems = [];

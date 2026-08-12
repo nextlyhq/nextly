@@ -277,3 +277,17 @@ const CHECKS = [
 assertScanSeesEveryPattern();
 
 for (const check of CHECKS) grep(check.label, check.pattern);
+
+// 🔴 The verdict. Without this the script prints every ✗ and exits 0, which is worse than having
+// no gate: CI reports a pass, the output scrolls by in a green job, and the failures read as
+// decoration. It was lost when the checks became data — the edit replaced from the array to the
+// end of the file and took this with it.
+if (failures > 0) {
+  console.error(
+    `\n${failures} storage-spelling gate failure(s).\n` +
+      `Read the spelling from schemas/storage-format.ts instead of writing it out. ` +
+      `The catalog is what makes the storage migration a rename rather than a search.`
+  );
+  process.exit(1);
+}
+console.log("\nStorage-spelling gate passed.");
