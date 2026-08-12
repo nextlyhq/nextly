@@ -403,6 +403,34 @@ export { TableSkeleton } from "./components/table-skeleton";
 /** @experimental */
 export type { TableSkeletonProps } from "./components/table-skeleton";
 
+// Components — Breakpoints. Edits the widths a site's styles may respond to.
+/** @experimental */
+export { BreakpointDialog } from "./components/breakpoint-dialog";
+/** @experimental */
+export type { BreakpointDialogProps } from "./components/breakpoint-dialog";
+
+// The rules behind that dialog, exported so a host storing breakpoints from
+// somewhere other than the dialog can refuse the same definitions rather than
+// discovering the loss at compile time.
+/** @experimental */
+export {
+  BASE_BREAKPOINT_ID,
+  BREAKPOINT_AXES,
+  MAX_BREAKPOINTS_PER_AXIS,
+  inCascadeOrder,
+  isUsableWidth,
+  storedLimitFor,
+  validateBreakpoints,
+} from "./lib/breakpoints";
+/** @experimental */
+export type {
+  BreakpointAxis,
+  BreakpointDef,
+  BreakpointIssue,
+  BreakpointIssueCode,
+  BreakpointSet,
+} from "./lib/breakpoints";
+
 /** @experimental */
 // Types: Table
 export type {

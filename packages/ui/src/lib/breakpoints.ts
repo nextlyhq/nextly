@@ -24,21 +24,36 @@
  *
  * The compiler inserts this itself and claims the id before reading settings,
  * so a stored definition that reuses it contributes nothing at all.
+ *
+ * @experimental
  */
 export const BASE_BREAKPOINT_ID = "base";
 
-/** Maximum breakpoints per axis, the unconditional base included. */
+/**
+ * Maximum breakpoints per axis, the unconditional base included.
+ *
+ * @experimental
+ */
 export const MAX_BREAKPOINTS_PER_AXIS = 7;
 
-/** The two axes a breakpoint may respond to. */
+/**
+ * The two axes a breakpoint may respond to.
+ *
+ * @experimental
+ */
 export type BreakpointAxis = "viewport" | "container";
 
+/** @experimental */
 export const BREAKPOINT_AXES: readonly BreakpointAxis[] = [
   "viewport",
   "container",
 ];
 
-/** One breakpoint definition. Desktop-first: a bound is an upper bound. */
+/**
+ * One breakpoint definition. Desktop-first: a bound is an upper bound.
+ *
+ * @experimental
+ */
 export interface BreakpointDef {
   id: string;
   label: string;
@@ -46,13 +61,21 @@ export interface BreakpointDef {
   maxWidth?: number;
 }
 
-/** The site's breakpoint definitions on both axes. */
+/**
+ * The site's breakpoint definitions on both axes.
+ *
+ * @experimental
+ */
 export interface BreakpointSet {
   viewport: BreakpointDef[];
   container: BreakpointDef[];
 }
 
-/** Why a definition would not survive compilation. */
+/**
+ * Why a definition would not survive compilation.
+ *
+ * @experimental
+ */
 export type BreakpointIssueCode =
   | "id-required"
   | "id-reserved"
@@ -64,7 +87,11 @@ export type BreakpointIssueCode =
   | "second-unbounded-container"
   | "over-axis-limit";
 
-/** One reason one definition is unusable, addressed to the field that caused it. */
+/**
+ * One reason one definition is unusable, addressed to the field that caused it.
+ *
+ * @experimental
+ */
 export interface BreakpointIssue {
   axis: BreakpointAxis;
   /** Index within its axis, so an editor can mark the row. */
@@ -81,6 +108,8 @@ export interface BreakpointIssue {
  * unconditional context is inserted by the compiler rather than stored, and it
  * counts against the same cap. The container axis stores its own unbounded
  * definition, so the whole cap is available to it.
+ *
+ * @experimental
  */
 export function storedLimitFor(axis: BreakpointAxis): number {
   return axis === "viewport"
@@ -88,7 +117,11 @@ export function storedLimitFor(axis: BreakpointAxis): number {
     : MAX_BREAKPOINTS_PER_AXIS;
 }
 
-/** Whether a bound is one the compiler will keep. */
+/**
+ * Whether a bound is one the compiler will keep.
+ *
+ * @experimental
+ */
 export function isUsableWidth(width: number | undefined): width is number {
   return typeof width === "number" && Number.isFinite(width) && width > 0;
 }
@@ -100,6 +133,8 @@ export function isUsableWidth(width: number | undefined): width is number {
  * fields. Ids are checked across BOTH axes together, because that is the scope
  * the compiler claims them in: an id repeated on the other axis is dropped just
  * as one repeated within an axis is.
+ *
+ * @experimental
  */
 export function validateBreakpoints(set: BreakpointSet): BreakpointIssue[] {
   const issues: BreakpointIssue[] = [];
@@ -199,6 +234,8 @@ export function validateBreakpoints(set: BreakpointSet): BreakpointIssue[] {
  *
  * Presenting them in stored order instead would show an author a list whose
  * cascade runs in a different direction than it reads.
+ *
+ * @experimental
  */
 export function inCascadeOrder(defs: BreakpointDef[]): BreakpointDef[] {
   return [...defs].sort(
