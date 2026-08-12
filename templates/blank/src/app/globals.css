@@ -67,7 +67,11 @@ body {
 }
 
 .font-display {
-  font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+  /* The generic families are the var()'s fallback argument rather than a list
+     after it: an unresolved var() with no fallback invalidates the whole
+     declaration, so the element would inherit its parent's face instead of
+     falling through to these. */
+  font-family: var(--font-display, ui-sans-serif), system-ui, sans-serif;
 }
 
 .btn-primary {

@@ -141,6 +141,69 @@ describe("the two tier documents", () => {
   const theme = readFileSync(THEME, "utf8");
   const doc = readFileSync(DOC, "utf8");
 
+  /**
+   * The knob as the theme ships it, taken from the declaration itself. Both
+   * documents describe the admin at this value, so it is the thing they have to
+   * agree on rather than any one number that falls out of it.
+   */
+  const SHIPPED_KNOB = (() => {
+    const found = /^\s*--radius:\s*([^;]+);/m.exec(theme)?.[1]?.trim();
+    if (!found) throw new Error("theme.css declares no --radius knob");
+    return found;
+  })();
+
+  /** A CSS length in px. Only the units the knob is written in are supported. */
+  function toPx(length: string): number {
+    const [, value = "", unit = ""] = /^([\d.]+)(px|rem)$/.exec(length) ?? [];
+    if (!unit) throw new Error(`--radius is not a px/rem length: ${length}`);
+    return unit === "rem" ? Number(value) * 16 : Number(value);
+  }
+
+  /**
+   * What each tier computes to at the shipped knob, derived from the theme's own
+   * `calc()` offsets. Reading the offsets rather than restating them keeps this
+   * correct if a step is ever re-spaced.
+   */
+  /**
+   * The prose of a document, with the radius DECLARATIONS removed.
+   *
+   * Both assertions below ask what a document SAYS the shipped values are, and
+   * `calc(var(--radius) - 4px)` is not a statement of that -- it is the offset
+   * the value is computed from, which coincides with a tier result only by
+   * accident. Left in, it answers the `sm` assertion on its own and the check
+   * passes over prose describing a completely different knob.
+   */
+  function proseOf(source: string): string {
+    // Bounded to one line: a declaration ends with `;` on the line it starts.
+    // Unbounded, the run to the next `;` anywhere in the file deletes whole
+    // paragraphs of a Markdown document, and the assertions then pass or fail on
+    // prose that was never read.
+    return source.replace(/--radius(?:-[a-z0-9]+)?:[^;\n]*;/g, "");
+  }
+
+  /**
+   * Whether a document states a length, as a length rather than as a fragment
+   * of one. `4px` occurs inside `-4px` and `14px`, and `6px` inside `16px`, so
+   * a substring test reports agreement between documents describing different
+   * knobs -- the precise flaw this check replaced.
+   */
+  function states(source: string, length: string): boolean {
+    return new RegExp(`(?<![\\d.\\-])${length}\\b`).test(source);
+  }
+
+  const SHIPPED_TIERS = Object.fromEntries(
+    TIERS.map(tier => {
+      const declaration = new RegExp(
+        `--radius-${tier}:\\s*(?:calc\\(\\s*var\\(--radius\\)\\s*([+-])\\s*([\\d.]+px)\\s*\\)|var\\(--radius\\))`
+      ).exec(theme);
+      if (!declaration)
+        throw new Error(`theme.css declares no --radius-${tier}`);
+      const [, sign, offset] = declaration;
+      const delta = sign && offset ? toPx(offset) * (sign === "-" ? -1 : 1) : 0;
+      return [tier, toPx(SHIPPED_KNOB) + delta];
+    })
+  ) as Record<(typeof TIERS)[number], number>;
+
   it.each(TIERS)("theme.css defines --radius-%s from the knob", tier => {
     expect(theme).toMatch(
       new RegExp(`--radius-${tier}:\\s*(?:calc\\()?\\s*var\\(--radius\\)`)
@@ -158,9 +221,47 @@ describe("the two tier documents", () => {
     expect(tierTableRows.join("\n")).not.toMatch(/rounded-2?xl/);
   });
 
-  it("both record that the lower steps go negative at --radius: 0", () => {
-    // calc(0px - 4px) is -4px; border-radius clamps it, a padding or a JS read
-    // does not. Anyone documenting the knob has to say so.
+  it("both state the knob the theme actually ships", () => {
+    // Read from the declaration rather than restated here, so changing the
+    // shipped default cannot leave this check agreeing with a stale document.
+    // A substring probe for one incidental value (`-4px`) does not do this
+    // work: it stays green while both documents describe a different knob,
+    // because the theme's explanation of a LOW knob still contains it.
+    for (const [name, source] of [
+      ["theme.css", theme],
+      ["plugin-ui-authoring.md", doc],
+    ] as const) {
+      expect(
+        states(proseOf(source), SHIPPED_KNOB),
+        `${name} does not state the shipped --radius (${SHIPPED_KNOB}). ` +
+          `Changing the knob means updating both documents, not just the theme.`
+      ).toBe(true);
+    }
+  });
+
+  it.each(TIERS)("both state what %s computes to at the shipped knob", tier => {
+    // The tier values are derived from the knob and the theme's own calc()
+    // offsets, so a document quoting the arithmetic of a previous default fails
+    // here instead of misinforming a plugin author.
+    const expected = `${SHIPPED_TIERS[tier]}px`;
+    for (const [name, source] of [
+      ["theme.css", theme],
+      ["plugin-ui-authoring.md", doc],
+    ] as const) {
+      expect(
+        states(proseOf(source), expected),
+        `${name} does not state that --radius-${tier} is ${expected} at the ` +
+          `shipped --radius: ${SHIPPED_KNOB}.`
+      ).toBe(true);
+    }
+  });
+
+  it("both record that the lower steps go negative at a low knob", () => {
+    // sm and md subtract, so a knob under 4px computes them negative;
+    // border-radius clamps that, a padding or a JS read does not. The claim is
+    // conditional on the knob, so it stays true across defaults — but only the
+    // check above notices when the default itself moves.
+    expect(SHIPPED_TIERS.sm).toBeGreaterThan(0);
     for (const [name, source] of [
       ["theme.css", theme],
       ["plugin-ui-authoring.md", doc],
