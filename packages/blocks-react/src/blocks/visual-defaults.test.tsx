@@ -34,6 +34,11 @@ import { renderToReadableStream } from "react-dom/server";
  * read as more than it is.
  */
 import { describe, expect, it } from "vitest";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { createElement } from "react";
 
 import type { BlockNode } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
@@ -93,7 +98,11 @@ function classedAttributes(html: string, className: string): string[][] {
   // narrow class rejects the whole TAG rather than one attribute, which empties the result and
   // fails a block whose markup carries no style at all. Rejecting valid code is the expensive
   // direction, so this is the character set HTML allows rather than the one this file expects.
-  const NAME = "[a-zA-Z_:][a-zA-Z0-9_:.-]*";
+  // Anything HTML allows in an attribute name: everything except whitespace and the characters
+  // that end a name or a tag. An enumerated character class keeps being too narrow -- it rejected
+  // `data-h2`, then `xml:lang`, then a non-ASCII name, and each time the failure is that the whole
+  // TAG stops matching and a block carrying no style at all is reported as broken.
+  const NAME = "[^\\s\"'>/=]+";
   const tags = [
     ...html.matchAll(
       new RegExp(
@@ -107,9 +116,13 @@ function classedAttributes(html: string, className: string): string[][] {
     const attributes = [
       ...tag[2]!.matchAll(new RegExp(`\\s(${NAME})="([^"]*)"`, "g")),
     ];
-    const classes = attributes.find(pair => pair[1] === "class")?.[2] ?? "";
+    // Lower-cased, because HTML attribute names are case-insensitive: a browser applies `STYLE=`
+    // and `CLASS=` exactly as it applies the lower-case spellings, and React emits whatever it was
+    // given. Comparing exactly would miss a live declaration.
+    const named = attributes.map(pair => [pair[1]!.toLowerCase(), pair[2]!]);
+    const classes = named.find(pair => pair[0] === "class")?.[1] ?? "";
     if (!classes.split(/\s+/).includes(className)) continue;
-    matched.push(attributes.map(pair => pair[1]!));
+    matched.push(named.map(pair => pair[0]!));
   }
   return matched;
 }
@@ -257,6 +270,33 @@ describe("a core block's root element", () => {
     expect(attributes[0]).not.toContain("style");
   });
 
+  it("catches an uppercase STYLE, which a browser applies the same way", async () => {
+    // HTML attribute names are case-insensitive. React warns about the spelling and emits it
+    // unchanged, so the declaration is live on the page while an exact comparison reports nothing.
+    const shouty: DrawableBlock = {
+      ...DRAWABLE[0]!,
+      render: () =>
+        createElement("div", { className: BLOCK_CLASS, STYLE: "padding:24px" }),
+    };
+    expect(classedAttributes(await markupOf(shouty), BLOCK_CLASS)[0]).toContain(
+      "style"
+    );
+  });
+
+  it("reads a tag carrying a non-ASCII attribute name", async () => {
+    // React emits `føø="bar"` unchanged. An ASCII-only grammar rejects the whole tag, which
+    // empties the result and fails a block whose markup carries no style at all.
+    const wide: DrawableBlock = {
+      ...DRAWABLE[0]!,
+      render: () =>
+        createElement("div", { className: BLOCK_CLASS, føø: "bar" }),
+    };
+    const attributes = classedAttributes(await markupOf(wide), BLOCK_CLASS);
+    expect(attributes).toHaveLength(1);
+    expect(attributes[0]).toContain("føø");
+    expect(attributes[0]).not.toContain("style");
+  });
+
   it("does not mistake an attribute VALUE for a style attribute", async () => {
     // Enumerating attribute NAMES is what makes this true. React escapes `"` inside a value as
     // `&quot;`, so the decoy serializes as `title="use style=&quot;x&quot;"` and its `style=` is
@@ -271,5 +311,48 @@ describe("a core block's root element", () => {
     const attributes = classedAttributes(await markupOf(decoy), BLOCK_CLASS)[0];
     expect(attributes).toContain("title");
     expect(attributes).not.toContain("style");
+  });
+});
+
+describe("every branch, not only the one the example renders", () => {
+  // The render check above draws each block ONCE, from its example, so a block whose root is
+  // conditional has roots it never reaches -- `core/quote` returns a bare `<blockquote>` when
+  // nothing is attributed and a `<figure>` otherwise, and only one of those is drawn.
+  //
+  // Enumerating prop combinations per block would be endless. Reading the SOURCES is complete for
+  // the question actually being asked, because the rule is not "no style on the example's root" but
+  // "these blocks do not style themselves at all": every visual default belongs in `baseStyles`,
+  // whichever branch would have carried it.
+  //
+  // The two checks answer different halves and neither subsumes the other. This one cannot tell
+  // which element a declaration lands on, so it cannot distinguish a root from a nested element --
+  // which is why it is a whole-file rule rather than a narrower one. The render check can, and
+  // covers what a component root or a wrapper actually produces, which no source read can predict.
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const files = readdirSync(dir).filter(
+    name => name.endsWith(".tsx") && !name.includes(".test.")
+  );
+
+  it("reads every block file in the library", () => {
+    // Vacuity guard: a glob that matched nothing would leave the rule below asserting over an
+    // empty list, which passes and means nothing.
+    expect(files.length).toBeGreaterThanOrEqual(DRAWABLE.length);
+  });
+
+  it.each(files)("%s declares no inline style anywhere", name => {
+    const source = readFileSync(join(dir, name), "utf8");
+    expect(source).not.toContain("style={");
+  });
+
+  it("would catch a style added to a branch no example renders", () => {
+    // The positive control, on the shape this exists for: a second root, styled, that the example
+    // never selects. The render check above stays green on exactly this input.
+    const unreached = [
+      `export function renderThing({ className, props }) {`,
+      `  if (props.bare) return <div className={className} style={{ padding: 24 }} />;`,
+      `  return <div className={className} />;`,
+      `}`,
+    ].join("\n");
+    expect(unreached).toContain("style={");
   });
 });
