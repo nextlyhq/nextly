@@ -26,6 +26,7 @@ import { cn } from "@admin/lib/utils";
 import type { ApiCollection } from "@admin/types/entities";
 
 import { hasPluginsSection } from "./lib/has-plugins-section";
+import { isSubSidebarCategory, isSubSidebarOpen } from "./lib/has-sub-sidebar";
 import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-href";
 import type { MainMenuCategory, MainMenuItem } from "./sidebar-types";
 import { getFilteredMenuItems } from "./sidebar-types";
@@ -413,35 +414,14 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     return filterCollectionItems(visible, capabilities);
   }, [collectionsData, capabilities]);
 
-  // Determine if we should show the second sidebar. For media the sub-sidebar
-  // holds the folder tree, so it follows the tree's visibility toggle.
-  const hasSubSidebar =
-    [
-      "collections",
-      "singles",
-      "plugins",
-      "settings",
-      ...(showBuilder ? ["builders" as const] : []),
-    ].includes(selectedMain) ||
-    selectedMain.startsWith("standalone-") ||
-    (selectedMain === "media" && isFolderTreeVisible);
-
-  const CATEGORIES_WITH_SUB_SIDEBAR = [
-    "collections",
-    "singles",
-    "media",
-    "plugins",
-    "settings",
-    "builders",
-  ];
-
-  // Media only has a sub-sidebar while the folder tree is visible; treating
-  // it as a sub-sidebar category with the tree hidden would turn the mobile
-  // Media icon into a button that opens nothing instead of a link.
   const hasSubSidebarCategory = (id: string) =>
-    (CATEGORIES_WITH_SUB_SIDEBAR.includes(id) &&
-      (id !== "media" || isFolderTreeVisible)) ||
-    id.startsWith("standalone-");
+    isSubSidebarCategory(id, isFolderTreeVisible);
+
+  const hasSubSidebar = isSubSidebarOpen(
+    selectedMain,
+    visibleMenuItems.map(item => item.id),
+    isFolderTreeVisible
+  );
 
   // The Settings icon lands on the first subpage the user can actually OPEN —
   // gated on each route's own guard, not the broader "can see the link" flag, so

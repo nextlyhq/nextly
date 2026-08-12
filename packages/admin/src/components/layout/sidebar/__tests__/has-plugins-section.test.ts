@@ -9,12 +9,11 @@ const SETTLED = {
 
 describe("hasPluginsSection", () => {
   /**
-   * The case this predicate was extracted for. A fresh project has no plugins
-   * and no plugin-owned collections, so every arm below `canManageSettings` is
-   * false, so only the `canManageSettings` arm keeps the entry. It has to:
-   * `/admin/plugins` lists installed plugins and explains in its empty state
-   * that plugins are added through the Nextly config, and the sidebar entry is
-   * the only route to it.
+   * A fresh project has no plugins and no plugin-owned collections, so every
+   * arm below `canManageSettings` is false and only that arm keeps the entry.
+   * It has to: `/admin/plugins` lists installed plugins and explains in its
+   * empty state that plugins are added through the Nextly config, and the
+   * sidebar entry is the only route to it.
    */
   it("shows the entry on a fresh project once loading has settled", () => {
     expect(
