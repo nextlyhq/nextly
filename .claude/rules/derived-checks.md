@@ -89,6 +89,11 @@ So a derived check needs three things, and is usually written with one:
 
    ```ts
    const population = Object.keys(raw);
+   // `id` projects a derived case back onto the raw key it came from — the
+   // subpath, the route name, the field type. Name it explicitly: if you cannot
+   // write it, the derivation is not traceable to its source and the comparison
+   // below is not the one you think it is.
+   const id = (entry: Derived): string => entry.key;
    expect(new Set(derived.map(id))).toEqual(new Set(population)); // same members
    expect(derived).toHaveLength(population.length); // and no duplicates
    expect(population).toContain(KNOWN_MEMBER); // the INTENDED source was read
