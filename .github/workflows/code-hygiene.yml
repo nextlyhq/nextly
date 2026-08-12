@@ -95,10 +95,22 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           git worktree add /tmp/fallow-base "$BASE_SHA"
-          cd /tmp/fallow-base
-          pnpm install --frozen-lockfile
+          # Its own install, so imports resolve against what the base declared.
+          (cd /tmp/fallow-base && pnpm install --frozen-lockfile)
+          # Run from HERE, pointed at there. The base predates this branch, so
+          # it has neither the fallow devDependency nor .fallowrc.jsonc: `pnpm
+          # exec fallow` inside it fails outright, and a scan that found the
+          # binary would still read no config and baseline a different policy —
+          # comparing two sides under different rules measures nothing.
+          #
+          # `--save-baseline` exits non-zero when the tree it recorded has
+          # findings, which this one does by definition. That is not a failure
+          # of the step.
           for analysis in dead-code dupes health; do
-            pnpm exec fallow "$analysis" --save-baseline "/tmp/base-$analysis.json"
+            pnpm exec fallow "$analysis" \
+              --root /tmp/fallow-base \
+              --config "$GITHUB_WORKSPACE/.fallowrc.jsonc" \
+              --save-baseline "/tmp/base-$analysis.json" || true
           done
 
       # Each analysis writes JSON and records its own verdict. `--format json`
@@ -108,6 +120,15 @@ jobs:
       #
       # Rendering happens after all three regardless of verdict: a red check
       # with no annotations tells the author only that something is wrong.
+      # `health` is analysed and reported but does NOT gate. Its baseline
+      # compares per-file counts (or per-function identity), and neither
+      # survives the two sides being different trees: measured on this
+      # repository, a branch touching none of them still came back with ~50
+      # complexity findings in `admin` and `plugin-form-builder` files it never
+      # opened, under both `count` and `identity`. A gate that fails for
+      # functions the author did not write is the thing the baseline exists to
+      # prevent, so complexity stays a signal to read rather than a verdict.
+      # `dead-code` and `dupes` both compare cleanly and do gate.
       - name: Analyse the pull request
         id: analyse
         run: |
@@ -116,6 +137,8 @@ jobs:
             pnpm exec fallow "$analysis" \
               --baseline "/tmp/base-$analysis.json" \
               --format json > "/tmp/head-$analysis.json"
+          done
+          for analysis in dead-code dupes; do
             if ! pnpm exec fallow "$analysis" \
               --baseline "/tmp/base-$analysis.json" > /dev/null 2>&1; then
               failed="$failed $analysis"
@@ -123,11 +146,18 @@ jobs:
           done
           echo "failed=$failed" >> "$GITHUB_OUTPUT"
 
-      # Inline on the offending lines. Only findings absent from the baseline
-      # reach this point, so an unchanged tree annotates nothing.
+      # Inline on the offending lines, for the two analyses that gate. Only
+      # findings absent from the baseline reach this point, so an unchanged
+      # tree annotates nothing.
+      #
+      # Health is left out for the reason it does not gate: its residue lands
+      # on functions the author never touched — 51 of them on a branch that
+      # touched none — and an annotation pinned to a line nobody edited reads
+      # as a demand rather than a signal. It stays in the job summary, where a
+      # repository-wide number belongs.
       - name: Annotate findings
         run: |
-          for analysis in dead-code dupes health; do
+          for analysis in dead-code dupes; do
             pnpm exec fallow report --from "/tmp/head-$analysis.json" \
               --format github-annotations
           done
