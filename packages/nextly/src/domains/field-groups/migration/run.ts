@@ -42,6 +42,7 @@ import {
   hashManifest,
   hashRegistryIdentity,
   MIGRATION_TARGET,
+  tableRenamesOf,
   type ManifestEntry,
   type RegistryRow,
 } from "./manifest";
@@ -86,9 +87,15 @@ export type MigrationOutcome =
       ran: false;
       reason: "dry-run";
       direction: MigrationDirection;
-      /** Steps this run would execute, counted from the reconciled plan. */
-      steps: number;
-      /** Storage objects the run would rename, in execution order. */
+      /**
+       * Every table the run would rename, in execution order, companions included.
+       *
+       * 🔴 Deliberately NOT a step count. A run also rewrites customer rows and passes settlement
+       * gates, and those outnumber the renames; reporting a number derived from renames alone
+       * would understate the work while looking authoritative, and computing a second definition
+       * of the plan's size is how it drifts from the one that executes. What a caller can rely on
+       * here is exactly what it says: the storage objects that change name.
+       */
       renames: readonly { readonly from: string; readonly to: string }[];
     }
   | { ran: true; direction: MigrationDirection; steps: number };
@@ -99,7 +106,19 @@ export interface RunMigrationArgs {
   /** `up` unless an operator is explicitly rolling back. */
   direction: MigrationDirection;
   /**
-   * Report what the run would do and write nothing.
+   * Report what the run would do without changing any content or recording any intent.
+   *
+   * 🔴 It is NOT read-only, and the difference matters to whoever runs it. Claiming the session
+   * lock creates `nextly_field_group_lock` if absent and writes an owner into it, so a dry run
+   * issues DDL on first use and fails outright for a role with read-only privileges. That is a
+   * narrower promise than "writes nothing", which is what this said before, and the honest one:
+   * no content is touched and no migration marker is recorded, but the lock is real.
+   *
+   * The lock is deliberate rather than incidental. A plan reported while another run mutates
+   * storage describes a world that no longer exists by the time it is read, and this lock refuses
+   * rather than waits, so contention surfaces as a refusal instead of a stale answer. Making the
+   * preview usable by a read-only operator means building it outside the session, which changes
+   * that guarantee rather than preserving it, and is tracked separately.
    *
    * Stops immediately after the plan has been reconciled against the live catalog, which is the
    * last point before anything is recorded. That placement is the whole value: a plan reported
@@ -351,22 +370,17 @@ export async function runFieldGroupMigration(
       // reports a plan the database has already been scored against rather than one the manifest
       // merely proposes.
       if (dryRun) {
-        const renames = reconciled.map(entry => ({
-          from: entry.from,
-          to: entry.to,
-        }));
+        // Expanded through the same helper the executable steps use. A localized field group
+        // carries its companion `_locales` rename on the SAME manifest entry, so reading `from`
+        // and `to` off the entry reports one rename where two will happen -- and the one it omits
+        // is the one an operator is least likely to predict.
+        const renames = reconciled.flatMap(entry => tableRenamesOf(entry));
         logger.info?.("field-group migration dry run", {
           phase: FIELD_GROUP_MIGRATION_PHASE,
           direction,
           renames: renames.length,
         });
-        return {
-          ran: false,
-          reason: "dry-run",
-          direction,
-          steps: renames.length,
-          renames,
-        };
+        return { ran: false, reason: "dry-run", direction, renames };
       }
 
       // Written before the first statement, never after. A crash between a

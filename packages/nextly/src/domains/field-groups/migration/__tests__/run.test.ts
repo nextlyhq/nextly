@@ -779,8 +779,7 @@ describe("a dry run", () => {
     // The separating assertion. A dry run returning before reconciliation has nothing to report,
     // and an empty list is also what a database with no work returns — so a non-empty plan naming
     // the legacy registry is what distinguishes "reconciled" from "returned early".
-    expect(outcome.steps).toBeGreaterThan(0);
-    expect(outcome.renames.length).toBe(outcome.steps);
+    expect(outcome.renames.length).toBeGreaterThan(0);
     expect(outcome.renames.some(entry => entry.from === LEGACY_REGISTRY)).toBe(
       true
     );
@@ -798,8 +797,12 @@ describe("a dry run", () => {
 
     // It took the lock and read, which is deliberate: a report built while another run mutates
     // storage describes a world that no longer exists by the time it is read.
+    //
+    // 🔴 Taking the lock is itself a write on a database that has never run this before -- the
+    // table is created and an owner row inserted. This fixture pre-seeds the lock, so it cannot
+    // observe that, and the guarantee in `RunMigrationArgs` is worded to match the code rather
+    // than this test: no CONTENT is touched and no marker recorded, which is what is asserted.
     expect(trace).toContain("lock");
-    // And it wrote nothing durable. The marker is the first thing that would outlive the run.
     expect(writes.marker).toBe(0);
   });
 });
