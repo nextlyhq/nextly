@@ -13,7 +13,9 @@ describe("hasPluginsSection", () => {
    * The case this predicate was extracted for. A fresh project has no plugins
    * and no plugin-owned collections, so every arm below `canManageSettings` is
    * false. Before this rule the entry disappeared once loading settled, which
-   * left no route to the page that installs a plugin.
+   * left no route to `/admin/plugins` at all. That page lists installed
+   * plugins; its empty state explains that plugins are added through the
+   * Nextly config, and it performs no installation itself.
    */
   it("shows the entry on a fresh project once loading has settled", () => {
     expect(

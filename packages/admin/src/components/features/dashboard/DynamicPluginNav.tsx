@@ -197,12 +197,13 @@ export function DynamicPluginNav({
     return <PluginSkeleton />;
   }
 
-  // `plugins` is derived from plugin-owned collections, but a plugin that
-  // only contributes pages/settings/slots owns none — the overview must stay
-  // reachable whenever anything is installed, or those plugins are invisible.
-  const hasInstalledPlugins = (pluginMetadata?.length ?? 0) > 0;
-
-  if (error || (plugins.length === 0 && !hasInstalledPlugins)) {
+  // Only an error suppresses this panel. An empty install used to return null
+  // here, which left the panel with a search box and no link at all — and on
+  // mobile the primary icon only opens this panel rather than navigating, so
+  // there was no route to the overview from anywhere. The overview link below
+  // is the one implementation of that destination, so it has to render even
+  // when there is nothing to list underneath it.
+  if (error) {
     return null;
   }
 

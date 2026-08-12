@@ -123,24 +123,6 @@ export function SubSidebarContent({
             Plugins
           </p>
           <SidebarMenu>
-            {/* Rendered here rather than left to DynamicPluginNav, which
-                returns null when no plugin metadata and no plugin collections
-                exist. On mobile the primary icon is a button that only opens
-                this panel, so without a static entry a project with nothing
-                installed has a panel containing a search box and no link at
-                all, and /admin/plugins is unreachable. */}
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                asChild
-                isActive={isActive(ROUTES.PLUGINS)}
-                className="justify-start px-3"
-              >
-                <Link href={ROUTES.PLUGINS}>
-                  <Puzzle className="h-4 w-4" />
-                  <span>Installed Plugins</span>
-                </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
             <DynamicPluginNav isActive={isActive} search={pluginSearch} />
           </SidebarMenu>
         </div>
