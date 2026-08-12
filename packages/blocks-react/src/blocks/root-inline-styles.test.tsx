@@ -95,6 +95,28 @@ function renderArgs(props: unknown): BlockRenderArgs<object, unknown> {
  * keyed on a free-text or numeric prop, which no schema enumerates; those remain
  * covered only by whatever the example supplies.
  */
+/**
+ * What a document actually STORES for a declared option.
+ *
+ * A select may be declared with primitive options or with the `{ label, value }`
+ * records the field system requires — `choiceOptions` in
+ * `nextly/src/collections/fields/block-props.ts` rejects anything else — and the
+ * conversion stores `entry.value`. Passing the record itself would leave a
+ * branch such as `props.variant === "outline"` inactive, so the variant would
+ * render the default and its conditional root style would never be reached.
+ */
+function storedValueOf(option: unknown): unknown {
+  if (
+    typeof option === "object" &&
+    option !== null &&
+    "value" in option &&
+    typeof (option as { value: unknown }).value === "string"
+  ) {
+    return (option as { value: string }).value;
+  }
+  return option;
+}
+
 function propVariants(block: AnyBlockDefinition): unknown[] {
   const base = {
     ...(block.defaultProps ?? {}),
@@ -106,7 +128,7 @@ function propVariants(block: AnyBlockDefinition): unknown[] {
     const options: unknown = (entry as { options?: unknown }).options;
     if (!Array.isArray(options)) continue;
     for (const option of options) {
-      variants.push({ ...base, [name]: option });
+      variants.push({ ...base, [name]: storedValueOf(option) });
     }
   }
   return variants;
