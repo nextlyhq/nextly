@@ -111,6 +111,32 @@ describe("the accepted-regression set", () => {
     ).toEqual([]);
   });
 
+  it("holds one entry per identity", () => {
+    // `acceptedFor` returns the FIRST match, so a second entry with the same
+    // identity is never read: its ratio is never checked, its removal is never
+    // demanded, and every reachability check collapses both to one key. A
+    // contradictory duplicate -- the same pair recorded at two different ratios
+    // -- therefore sits in the file looking authoritative while the shadowed
+    // one is inert.
+    const seen = new Map<string, number>();
+    for (const entry of ACCEPTED_REGRESSIONS) {
+      const key =
+        `${entry.fg}|${entry.bg}|${entry.mode}|${entry.fgAlpha ?? "-"}|` +
+        `${entry.bgAlpha ?? "-"}|${entry.bgOver ? roleOf(entry.bgOver) : "-"}`;
+      seen.set(key, (seen.get(key) ?? 0) + 1);
+    }
+    const duplicated = [...seen]
+      .filter(([, count]) => count > 1)
+      .map(([key, count]) => `${key} — ${count} entries`);
+
+    expect(
+      duplicated,
+      `These acceptance identities appear more than once. Only the first is ` +
+        `ever consulted, so the rest are unexamined: delete them, or give them ` +
+        `the detail (alpha, underlying surface) that makes them distinct pairs.`
+    ).toEqual([]);
+  });
+
   it("is applicable in the mode it claims", () => {
     // An entry is only ever consulted for the mode it names, so one naming a
     // mode where its pairing does not apply is inert: never evaluated, so

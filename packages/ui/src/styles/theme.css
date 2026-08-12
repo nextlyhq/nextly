@@ -139,6 +139,7 @@
   --color-border-subtle: var(--nx-border-subtle);
   --color-border-strong: var(--nx-border-strong);
   --color-input: var(--nx-input);
+  --color-control-border: var(--nx-control-border);
   --color-ring: var(--nx-ring);
   --color-background: var(--nx-background);
   --color-foreground: var(--nx-foreground);
@@ -839,6 +840,25 @@
    * failing. */
   --nx-border-strong: color-mix(in srgb, oklch(0.92 0 0), black 25%);
   --nx-input: oklch(0.94 0 0);
+  /* The boundary of a control that has NOTHING ELSE to identify it.
+   *
+   * A text field at --nx-input is identifiable without its edge: it carries a
+   * label, a placeholder, a value, and a focus ring the moment it is used. An
+   * unchecked checkbox or radio is only the box. Its border is not decoration
+   * around the control, it IS the control, so 1.4.11's 3:1 applies with nothing
+   * to fall back on -- and at the reference palette's border weight the box is
+   * effectively invisible.
+   *
+   * These were one token, which is why the reference weight could not be taken
+   * without losing the checkbox. They are two questions -- "how heavy is a field
+   * edge" and "can this control be seen at all" -- and they only shared an
+   * answer by accident. Splitting them is what lets the field borders match the
+   * reference while the controls stay identifiable.
+   *
+   * Solved to the LIGHTEST value that still clears 3:1 with the margin the
+   * contrast suite requires, against the darkest surface a control lands on, so
+   * it sits as close to the reference weight as the criterion permits. */
+  --nx-control-border: oklch(0.62 0 0);
   --nx-ring: var(--nx-primary);
 
   /* The base colour of the elevation ramp (--shadow-sm..xl, -inner-subtle,
@@ -1037,6 +1057,9 @@
   /* Brightened so the field border clears WCAG 3:1 on the lighter popover
    * surface as well as the page and card (was 1.73:1 on a popover). */
   --nx-input: oklch(0.5445 0 0);
+  /* Dark mode never gave up the boundary minimum, so the control border simply
+     tracks the field border here and the split costs nothing. */
+  --nx-control-border: oklch(0.5445 0 0);
   --nx-ring: var(--nx-primary);
 
   /* Black in dark mode too: the ramp reads as depth against the deep surfaces

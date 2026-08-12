@@ -58,6 +58,10 @@ const EXTENSIONS = new Set([".tsx", ".ts", ".jsx", ".js"]);
  */
 const PAGE_SURFACES = [
   "--nx-background",
+  // The page container is its own token and is DARKER than `--nx-background`;
+  // in dark mode the two are 0.23 apart in lightness. Omitting it measured ink
+  // against a backdrop the page does not paint.
+  "--nx-page-background",
   "--nx-card",
   "--nx-muted",
   "--nx-popover",
@@ -262,10 +266,21 @@ function tintedRatios(
  * may carry its own `%`.
  */
 function parseAlpha(modifier: string): number | undefined {
-  const inner = modifier.replace(/^\//, "").replace(/^\[|\]$/g, "");
-  const value = Number.parseFloat(inner.replace(/%$/, ""));
+  const inner = modifier.replace(/^\//, "");
+  const bracketed = inner.startsWith("[");
+  const body = inner.replace(/^\[|\]$/g, "");
+  const percent = body.endsWith("%");
+  const value = Number.parseFloat(body.replace(/%$/, ""));
   if (!Number.isFinite(value)) return undefined;
-  return value / 100;
+
+  // Three spellings, two scales. A bare modifier (`/10`) and a bracketed one
+  // carrying its own sign (`/[4%]`) are percentages. A bracketed value WITHOUT
+  // a sign (`/[0.04]`) is already a fraction, and dividing it again yields
+  // 0.0004 -- a fill so close to transparent that the ink measures against the
+  // bare surface, which is the very error compositing the tint was added to
+  // fix. There are live `bg-primary/[0.04]` call sites, so this is not
+  // hypothetical.
+  return bracketed && !percent ? value : value / 100;
 }
 
 interface Utility {
@@ -523,6 +538,20 @@ describe("ink utilities are readable on the surfaces they land on", () => {
         `change was intended, update the recorded ratio; if not, a token moved ` +
         `under an entry that was not agreed for this value.`
     ).toEqual([]);
+  });
+
+  it("reads all three opacity spellings at the right scale", () => {
+    // Tailwind accepts a bare percentage, a bracketed percentage, and a
+    // bracketed fraction, and the last two look alike while meaning the same
+    // number written two ways. Getting the scale wrong is silent: the tint
+    // becomes near-transparent, the ink measures against the bare surface, and
+    // the check reports the pair as better than it renders.
+    expect(parseAlpha("/10")).toBeCloseTo(0.1, 6);
+    expect(parseAlpha("/[4%]")).toBeCloseTo(0.04, 6);
+    expect(parseAlpha("/[0.04]")).toBeCloseTo(0.04, 6);
+    // The two bracketed forms describe one colour, so they must agree.
+    expect(parseAlpha("/[4%]")).toBe(parseAlpha("/[0.04]"));
+    expect(parseAlpha("/nonsense")).toBeUndefined();
   });
 
   it("requires every acceptance to be reached by something", () => {

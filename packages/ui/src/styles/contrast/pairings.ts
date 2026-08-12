@@ -217,6 +217,17 @@ const STATUS_TEXT: Pairing[] = STATUSES.flatMap((s): Pairing[] => [
     kind: "text",
     label: `${s} text on sidebar`,
   },
+  // The page CONTAINER, which is what `.admin-page-container` actually paints
+  // and is a separate token from `--nx-background`. The boundary list already
+  // treats it as independently movable -- a control measured only against
+  // `background` read 3.80:1 while the screen rendered 3.05:1 -- and status ink
+  // rendered directly in a page has the same exposure.
+  {
+    fg: `--color-${s}`,
+    bg: "--nx-page-background",
+    kind: "text",
+    label: `${s} text on page container`,
+  },
 ]);
 const STATUS_ON_SOLID: Pairing[] = ["destructive", "success"].map(
   (s): Pairing => ({
@@ -406,6 +417,27 @@ const BOUNDARIES: Pairing[] = [
     kind: "ui",
     label: "input border on muted",
   },
+  // The checkbox and radio boundary, held to 3:1 on every surface with no
+  // acceptance. `--nx-input` is knowingly below the minimum; this token exists
+  // precisely because those two controls cannot follow it there. A field is
+  // identifiable without its edge -- label, placeholder, value, focus ring --
+  // and an unchecked box is not, so the same weight cannot serve both.
+  ...(
+    [
+      ["--nx-background", "page"],
+      ["--nx-card", "card"],
+      ["--nx-popover", "popover"],
+      ["--nx-page-background", "page container"],
+      ["--nx-muted", "muted"],
+    ] as const
+  ).map(
+    ([bg, name]): Pairing => ({
+      fg: "--nx-control-border",
+      bg,
+      kind: "ui",
+      label: `control border on ${name}`,
+    })
+  ),
   {
     fg: "--nx-border-strong",
     bg: "--nx-page-background",

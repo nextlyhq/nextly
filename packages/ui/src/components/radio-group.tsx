@@ -61,16 +61,15 @@ const RadioGroupItem = forwardRef<
       className={cn(
         // Unchecked outline uses primary/40 (clearly visible) instead of primary/5
         // (~5% opacity, effectively invisible); hover strengthens above the resting state.
-        // Resting border uses border-input, the token for a boundary that
-        // IDENTIFIES a control rather than decorates it; the checked state
-        // switches to border-primary below, keeping the two states distinct.
-        // border-input no longer meets 1.4.11's 3:1 minimum in light mode --
-        // see contrast/accepted.ts -- so it marks intent, not a guarantee.
+        // Resting border uses border-control-border, NOT border-input. An
+        // unchecked radio is only its ring, with nothing else to identify it,
+        // so it is held to 1.4.11's 3:1 -- which border-input deliberately no
+        // longer meets. The checked state switches to border-primary below.
         // rounded-full is fixed rather than derived from --radius: the circle is
         // what tells the user only one option can be chosen. The thick checked
         // border leaves a background-coloured core, and because the border's
         // inner edge is curved too that core reads as a round dot.
-        "peer h-4 w-4 shrink-0 rounded-full border border-input bg-background cursor-pointer transition-all duration-150 focus:border-primary! focus-visible:border-primary! focus:outline-none focus-visible:outline-none aria-invalid:border-destructive aria-invalid:focus:border-destructive! aria-invalid:focus-visible:border-destructive! disabled:cursor-not-allowed disabled:opacity-50 hover:border-primary/70 data-[state=checked]:border-primary data-[state=checked]:border-[5px]",
+        "peer h-4 w-4 shrink-0 rounded-full border border-control-border bg-background cursor-pointer transition-all duration-150 focus:border-primary! focus-visible:border-primary! focus:outline-none focus-visible:outline-none aria-invalid:border-destructive aria-invalid:focus:border-destructive! aria-invalid:focus-visible:border-destructive! disabled:cursor-not-allowed disabled:opacity-50 hover:border-primary/70 data-[state=checked]:border-primary data-[state=checked]:border-[5px]",
         className
       )}
       {...props}

@@ -191,6 +191,14 @@ export const ACCEPTED_REGRESSIONS: AcceptedRegression[] = [
   },
   {
     fg: "destructive",
+    bg: "page-background",
+    mode: "light",
+    ratio: 3.52,
+    reason:
+      "Destructive label on the page container, which is what .admin-page-container paints and is a separate token from the page background.",
+  },
+  {
+    fg: "destructive",
     bg: "muted",
     mode: "light",
     ratio: 3.52,
