@@ -81,9 +81,22 @@ export default defineConfig({
   collections: [Posts, Categories, Tags, BlockPages],
   singles: [Homepage, LandingPage, SiteSettings],
   fieldGroups: [Seo],
-  // Dev-harness plugins: page builder, form builder, and the styling fixture
-  // (exercises the plugin admin-styling layers for e2e).
-  plugins: [pageBuilder(), formBuilderPlugin, styleFixturePlugin],
+  // Dev-harness plugins: page builder and form builder are what a contributor
+  // works against.
+  //
+  // The styling fixture is registered only for the e2e run. It exists so
+  // plugin-admin-styling.spec.ts can prove a plugin's admin UI is styled in the
+  // real admin, and plugin-page-routing.spec.ts can resolve a deep link to a
+  // plugin page. In a normal `pnpm dev:app` it is neither of those things: it
+  // is a test double listed among real plugins, and it injects a showcase
+  // section into the Posts collection list, both of which read as product.
+  plugins: [
+    pageBuilder(),
+    formBuilderPlugin,
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [styleFixturePlugin]
+      : []),
+  ],
   typescript: {
     outputFile: "./src/types/nextly-types.ts",
   },

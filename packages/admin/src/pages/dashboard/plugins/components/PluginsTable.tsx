@@ -11,12 +11,11 @@ import {
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import * as Icons from "@admin/components/icons";
-import { Columns, Package } from "@admin/components/icons";
+import { Columns } from "@admin/components/icons";
 import { Pagination } from "@admin/components/shared/pagination";
+import { PluginIcon } from "@admin/components/shared/plugin-icon";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { DataTableView } from "@admin/components/ui/table/data-table";
 import type { NextlyColumn } from "@admin/components/ui/table/data-table";
@@ -25,30 +24,13 @@ import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 import { publicApi } from "@admin/lib/api/publicApi";
+import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
+import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import type { PluginMetadata, AdminBranding } from "@admin/types/branding";
-
-/** Human labels for the category vocabulary plugins declare. */
-const CATEGORY_LABELS: Record<string, string> = {
-  content: "Content",
-  forms: "Forms",
-  seo: "SEO",
-  media: "Media",
-  commerce: "Commerce",
-  integration: "Integration",
-  "dev-tools": "Dev Tools",
-  other: "Other",
-};
 
 type PluginWithId = PluginMetadata & { id: string };
 
 type StatusFilter = "all" | "enabled" | "disabled";
-
-function toSlug(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
 
 /** Columns pinned as always-visible in the column toggle. */
 const ALWAYS_VISIBLE = new Set(["name"]);
@@ -118,7 +100,7 @@ export default function PluginsTable() {
   const pluginsWithId = useMemo(() => {
     return (branding?.plugins ?? []).map(plugin => ({
       ...plugin,
-      id: toSlug(plugin.name),
+      id: pluginSlug(plugin.name),
     }));
   }, [branding?.plugins]);
 
@@ -165,9 +147,6 @@ export default function PluginsTable() {
         name: "name",
         header: "PLUGIN",
         cell: ({ row }) => {
-          const iconName = row.appearance?.icon || "Package";
-          const IconComponent =
-            (Icons as Record<string, React.ElementType>)[iconName] || Package;
           // Secondary metadata (description, author) packs under the name so
           // the table stays two-scan-columns wide like an installed-list should.
           const secondary = [row.description, row.author && `by ${row.author}`]
@@ -176,7 +155,13 @@ export default function PluginsTable() {
           return (
             <div className="flex items-center gap-3">
               <div className="table-row-icon-cover">
-                <IconComponent className="h-4 w-4" />
+                {/* Package, not Database: this surface presents a plugin as the
+                    package you installed rather than as its collections. */}
+                <PluginIcon
+                  plugin={row}
+                  fallback="Package"
+                  className="h-4 w-4"
+                />
               </div>
               <div className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate text-sm font-medium text-foreground">
@@ -210,7 +195,9 @@ export default function PluginsTable() {
               variant="default"
               className="text-xs font-normal text-muted-foreground"
             >
-              {CATEGORY_LABELS[value] ?? value}
+              {/* Falls back to the raw value for a third-party plugin that
+                  declares a category outside the vocabulary. */}
+              {categoryLabel(value)}
             </Badge>
           ) : (
             <span className="text-sm text-muted-foreground">—</span>

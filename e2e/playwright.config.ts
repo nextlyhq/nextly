@@ -109,6 +109,11 @@ export default defineConfig({
       // asserts against. They are off by default so a contributor's admin
       // keeps the monochrome identity a default install has.
       NEXTLY_E2E_BRANDING: "1",
+      // Registers the style fixture, which plugin-admin-styling.spec.ts and
+      // plugin-page-routing.spec.ts both depend on. Off by default so a test
+      // double does not appear in a contributor's plugins list or inject a
+      // showcase section into the Posts collection.
+      NEXTLY_E2E_STYLE_FIXTURE: "1",
     },
   },
 
