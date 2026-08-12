@@ -466,6 +466,8 @@ export function specifiersIn(source, fileName) {
   };
 
   const aliases = [];
+  /** Names given a non-loader value somewhere, which disqualifies the binding. */
+  const overwritten = [];
   const collectLoaders = node => {
     /** Whether a key node names `resolve`, in every spelling a key can take. */
     const namesResolveKey = key => {
@@ -559,6 +561,16 @@ export function specifiersIn(source, fileName) {
         // `const again = load` hands the loader on under another name. Recorded now and resolved
         // below, because the assignment can appear in any order in emitted output.
         aliases.push([nameNode.text, value, declaredIn]);
+      } else {
+        // The name was given something that is NOT a loader. `let load = import.meta.resolve;
+        // load = v => v` leaves the call harmless, and reporting it rejects a valid artifact.
+        //
+        // Recorded rather than acted on here, and applied after the whole walk, because emitted
+        // output is not in source order — deciding at this point would depend on which assignment
+        // the traversal reached first. Conservative by design: a name ever given a non-loader stops
+        // being treated as one, which trades a possible miss for never failing a build whose call
+        // loads nothing.
+        overwritten.push([nameNode.text, declaredIn]);
       }
     };
 
@@ -574,6 +586,12 @@ export function specifiersIn(source, fileName) {
     ts.forEachChild(node, collectLoaders);
   };
   collectLoaders(tree);
+  // Applied BEFORE the alias fixed point, so a name that was overwritten cannot hand a loader on
+  // to something else through an alias it never really held.
+  for (const [name, declaredIn] of overwritten) {
+    if (declaredIn === undefined) continue;
+    loaders.get(name)?.delete(declaredIn);
+  }
   // To a fixed point, so a chain of any length resolves rather than only the first link. The
   // SOURCE is resolved from where the alias reads it, so `const again = load` follows the `load`
   // visible at that point rather than any binding of that name anywhere.

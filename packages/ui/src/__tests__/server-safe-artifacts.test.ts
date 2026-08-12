@@ -281,6 +281,50 @@ describe("reading an artifact's specifiers", () => {
     ).toEqual([]);
   });
 
+  it("stops treating a name as a loader once it is given something else", () => {
+    // `let load = import.meta.resolve; load = v => v; load(x)` invokes the replacement, so
+    // reporting it rejects an artifact that loads nothing — the direction that costs a correct
+    // lane a red build rather than letting a dependency through.
+    expect(
+      read(`
+        let load = import.meta.resolve;
+        load = (value) => value;
+        export const r = load("react");
+      `)
+    ).toEqual([]);
+    // An alias reading an overwritten source inherits nothing, since the source never really held
+    // a loader by the time anything could take it.
+    expect(
+      read(`
+        let a = import.meta.resolve;
+        a = (value) => value;
+        const b = a;
+        export const r = b("react");
+      `)
+    ).toEqual([]);
+    // The controls, and they are the ones this could plausibly have broken: an unreassigned
+    // binding, the assigned-later form, a destructured resolver, and an alias chain all still
+    // resolve.
+    expect(
+      read(`let load = import.meta.resolve;\nexport const r = load("react");`)
+    ).toEqual(["react"]);
+    expect(
+      read(
+        `let load;\nload = import.meta.resolve;\nexport const r = load("react");`
+      )
+    ).toEqual(["react"]);
+    expect(
+      read(
+        `const { resolve } = import.meta;\nexport const r = resolve("react");`
+      )
+    ).toEqual(["react"]);
+    expect(
+      read(
+        `const a = import.meta.resolve;\nconst b = a;\nexport const r = b("react");`
+      )
+    ).toEqual(["react"]);
+  });
+
   it("sees a loader assigned after it is declared", () => {
     // A name takes a loader two ways that look different and mean the same: a declaration with an
     // initializer, and a later assignment. Reading only initializers made the assignment form
