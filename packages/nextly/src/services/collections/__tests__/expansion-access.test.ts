@@ -1,14 +1,14 @@
 /**
- * The upload expansion decides whether to narrow a media row from four fields,
- * and every one of them is optional. An incomplete context is therefore a VALID
- * context describing a DIFFERENT caller, which is why getting it wrong is
- * silent: `overrideAccess` missing, or `trusted` bound to undefined, and the
- * bound stops applying while the code still reads as though it carries one.
+ * `expansionAccess` builds the context an upload expansion runs under, from the
+ * options its caller already holds.
  *
- * Two earlier attempts checked the call SOURCE for those field names. Neither
- * could separate a correct binding from `trusted: undefined`, because both
- * spell the same text. So the assembly is a function now, and this measures
- * what it produces.
+ * Every field it forwards is optional, and each decides something different:
+ * `overrideAccess` and `trusted` together decide whether a media row is
+ * narrowed at all, while `user` and `authenticatedScope` decide whether an
+ * authorized caller keeps the row a bound would otherwise strip. An object
+ * missing any of them is still a VALID context — it simply describes a
+ * different caller — so the forwarding cannot be checked by reading the shape
+ * of the call and is measured here on what the helper produces.
  */
 import { describe, expect, it } from "vitest";
 
@@ -39,6 +39,11 @@ describe("the access an expansion runs under", () => {
     // real decision rather than on the shape of its input: this caller holds a
     // bypass bounded to `posts`, so media is refused and its ownership and
     // filing come off.
+    //
+    // This covers the helper, NOT the seam between a Single read or write and
+    // it. A call site substituting a different context of its own would keep
+    // this green; only exercising the production read/write path can separate
+    // those.
     const rows = [
       { id: "m1", url: "/u.png", uploadedBy: "u9", folderId: "f1" },
     ];
