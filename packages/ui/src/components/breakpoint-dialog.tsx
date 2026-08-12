@@ -60,21 +60,40 @@ export interface BreakpointDialogProps {
 
 /** A draft row. Width is held as TEXT while editing. */
 interface DraftRow {
-  /** Stable across edits so React keeps focus while the id field is retyped. */
+  /**
+   * Stable across edits so React keeps focus while a field is retyped, and
+   * stable across REMOVALS because it is stored with the row rather than
+   * recomputed from its index.
+   */
   key: string;
   id: string;
   label: string;
   width: string;
+  /**
+   * Whether this row was added in this session.
+   *
+   * A saved breakpoint's id is the key every stored style is filed under, and
+   * `onSave` carries only the breakpoint set — so renaming one here would
+   * detach every style on every page that uses it, with nothing to report it.
+   */
+  isNew: boolean;
 }
 
-let nextRowKey = 0;
-
-function toDraft(defs: BreakpointDef[]): DraftRow[] {
-  return defs.map(def => ({
-    key: `row-${nextRowKey++}`,
+/**
+ * Seeds the draft with keys derived from the position a row was loaded at.
+ *
+ * Deterministic rather than drawn from a counter: a module-level counter is
+ * shared by every render on a server and starts again at zero in the browser,
+ * so the same row would be keyed `row-9` in prerendered markup and `row-0` on
+ * hydration — and these keys reach the DOM through the field ids.
+ */
+function toDraft(axis: BreakpointAxis, defs: BreakpointDef[]): DraftRow[] {
+  return defs.map((def, index) => ({
+    key: `${axis}-${index}`,
     id: def.id,
     label: def.label,
     width: def.maxWidth === undefined ? "" : String(def.maxWidth),
+    isNew: false,
   }));
 }
 
@@ -146,19 +165,27 @@ export function BreakpointDialog({
   const fieldId = React.useId();
   const [draft, setDraft] = React.useState<Record<BreakpointAxis, DraftRow[]>>(
     () => ({
-      viewport: toDraft(value.viewport),
-      container: toDraft(value.container),
+      viewport: toDraft("viewport", value.viewport),
+      container: toDraft("container", value.container),
     })
   );
+  // Scoped to this instance, so nothing about a key depends on how many times
+  // the module has been rendered.
+  const addedRows = React.useRef(0);
+  const wasOpen = React.useRef(open);
 
-  // Re-seeded whenever the dialog is opened rather than on every change to
-  // `value`, so a save that round-trips through the host does not wipe an edit
-  // in progress, and re-opening always starts from what is stored.
+  // Re-seeded on the CLOSED-to-OPEN transition only. Depending on `value`
+  // itself would reseed on any parent render that rebuilt it — a background
+  // settings refresh, a parent re-render with a fresh object literal — and
+  // discard an edit in progress while the dialog is still on screen.
   React.useEffect(() => {
-    if (!open) return;
+    const opening = open && !wasOpen.current;
+    wasOpen.current = open;
+    if (!opening) return;
+    addedRows.current = 0;
     setDraft({
-      viewport: toDraft(value.viewport),
-      container: toDraft(value.container),
+      viewport: toDraft("viewport", value.viewport),
+      container: toDraft("container", value.container),
     });
   }, [open, value]);
 
@@ -185,7 +212,13 @@ export function BreakpointDialog({
       ...current,
       [axis]: [
         ...current[axis],
-        { key: `row-${nextRowKey++}`, id: "", label: "", width: "" },
+        {
+          key: `${axis}-added-${addedRows.current++}`,
+          id: "",
+          label: "",
+          width: "",
+          isNew: true,
+        },
       ],
     }));
   };
@@ -266,6 +299,18 @@ export function BreakpointDialog({
                           placeholder="tablet"
                           error={rowIssues.id}
                           className="font-mono"
+                          // Fixed once saved. The id is the key every stored
+                          // style is filed under, and saving carries only the
+                          // breakpoint set — so a rename here would detach
+                          // every style on every page that uses it, silently.
+                          // Removing the breakpoint and adding a new one is
+                          // the same operation with the loss made visible.
+                          readOnly={!row.isNew}
+                          hint={
+                            row.isNew
+                              ? undefined
+                              : "Fixed once saved — styles are filed under it."
+                          }
                           onChange={id => updateRow(axis, row.key, { id })}
                         />
                         <Field
@@ -363,6 +408,8 @@ function Field({
   className,
   inputMode,
   suffix,
+  readOnly,
+  hint,
   onChange,
 }: {
   id: string;
@@ -374,9 +421,12 @@ function Field({
   className?: string;
   inputMode?: "numeric";
   suffix?: string;
+  readOnly?: boolean;
+  hint?: string;
   onChange: (value: string) => void;
 }) {
   const errorId = `${id}-error`;
+  const hintId = `${id}-hint`;
   return (
     <div className="space-y-1">
       <Label htmlFor={id} className={cn("text-xs", hideLabel && "sr-only")}>
@@ -388,11 +438,21 @@ function Field({
           value={value}
           placeholder={placeholder}
           inputMode={inputMode}
+          readOnly={readOnly}
           aria-invalid={error !== undefined}
-          // Only referenced when a message exists: pointing at an absent
-          // element leaves a control described by nothing.
-          aria-describedby={error === undefined ? undefined : errorId}
-          className={cn(suffix && "pr-8", className)}
+          // Only ever names elements that EXIST. Pointing at an absent id
+          // leaves the control described by nothing, which reads to a screen
+          // reader as no error and no hint at all.
+          aria-describedby={
+            [error !== undefined ? errorId : null, hint ? hintId : null]
+              .filter(Boolean)
+              .join(" ") || undefined
+          }
+          className={cn(
+            suffix && "pr-8",
+            readOnly && "text-muted-foreground bg-muted/50",
+            className
+          )}
           onChange={event => onChange(event.target.value)}
         />
         {suffix && (
@@ -408,6 +468,11 @@ function Field({
         <p id={errorId} className="text-destructive flex gap-1 text-xs">
           <TriangleAlert className="mt-0.5 size-3 shrink-0" />
           <span>{error}</span>
+        </p>
+      )}
+      {hint && !error && (
+        <p id={hintId} className="text-muted-foreground text-xs">
+          {hint}
         </p>
       )}
     </div>

@@ -408,20 +408,10 @@ export type { TableSkeletonProps } from "./components/table-skeleton";
 export { BreakpointDialog } from "./components/breakpoint-dialog";
 /** @experimental */
 export type { BreakpointDialogProps } from "./components/breakpoint-dialog";
+// The rules and types behind it ship from the server-safe `./breakpoints`
+// subpath, not from here: a host validates settings before STORING them, which
+// is server-side, and this barrel carries the client banner.
 
-// The rules behind that dialog, exported so a host storing breakpoints from
-// somewhere other than the dialog can refuse the same definitions rather than
-// discovering the loss at compile time.
-/** @experimental */
-export {
-  BASE_BREAKPOINT_ID,
-  BREAKPOINT_AXES,
-  MAX_BREAKPOINTS_PER_AXIS,
-  inCascadeOrder,
-  isUsableWidth,
-  storedLimitFor,
-  validateBreakpoints,
-} from "./lib/breakpoints";
 /** @experimental */
 export type {
   BreakpointAxis,
