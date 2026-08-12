@@ -1187,3 +1187,83 @@ describe("the document envelope an edit is measured inside", () => {
     ).toThrow(/holds no forest/);
   });
 });
+
+describe("a value read before it is known to be data", () => {
+  it("refuses an accessor inside a shallow-checked field without running it", () => {
+    // `isStringArray` enumerates what it is handed, so ordering is the fix: the
+    // JSON domain has to be established before any shape predicate reads the
+    // value, or a throwing getter leaves this module as a RangeError.
+    let reads = 0;
+    const classes: string[] = [];
+    Object.defineProperty(classes, "0", {
+      get: (): string => {
+        reads += 1;
+        throw new RangeError("the getter ran");
+      },
+      enumerable: true,
+    });
+
+    expect(() =>
+      applyOp(doc(), { kind: "update", id: "a", patch: { classes } })
+    ).toThrow(OpError);
+    expect(reads, "the getter must never be invoked").toBe(0);
+  });
+
+  it("refuses an accessor inside attributes without running it", () => {
+    // The record-shaped counterpart, through `isStringRecord`.
+    let reads = 0;
+    const attributes: Record<string, string> = {};
+    Object.defineProperty(attributes, "title", {
+      get: (): string => {
+        reads += 1;
+        return "computed";
+      },
+      enumerable: true,
+    });
+
+    expect(() =>
+      applyOp(doc(), { kind: "update", id: "a", patch: { attributes } })
+    ).toThrow(OpError);
+    expect(reads, "the getter must never be invoked").toBe(0);
+  });
+
+  it("refuses negative zero, which JSON replays as positive zero", () => {
+    expect(() =>
+      applyOp(doc(), {
+        kind: "update",
+        id: "a",
+        patch: { props: { offset: -0 } },
+      })
+    ).toThrow(OpError);
+    // The separating property: positive zero is ordinary data and stays
+    // accepted, so this is not a blanket refusal of zero.
+    expect(() =>
+      applyOp(doc(), {
+        kind: "update",
+        id: "a",
+        patch: { props: { offset: 0 } },
+      })
+    ).not.toThrow();
+  });
+
+  it("refuses a numeric key past the largest array index", () => {
+    // `length` stays 0, so the key is an ordinary property JSON writes nowhere:
+    // the live document keeps it and replay drops it.
+    const list: unknown[] = [];
+    Object.defineProperty(list, "4294967295", {
+      value: "lost",
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    expect(list.length, "the fixture must not become a real index").toBe(0);
+
+    expect(() =>
+      applyOp(doc(), {
+        kind: "update",
+        id: "a",
+        patch: { props: { list } },
+      })
+    ).toThrow(OpError);
+  });
+});

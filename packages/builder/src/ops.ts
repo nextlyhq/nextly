@@ -251,7 +251,14 @@ function describe(value: unknown): string {
 function isJsonValue(value: unknown, seen: Set<object> = new Set()): boolean {
   if (value === null) return true;
   if (typeof value === "string" || typeof value === "boolean") return true;
-  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "number") {
+    // Negative zero is finite and survives nothing: `JSON.stringify(-0)` writes
+    // `0`, so an accepted op replays as a DIFFERENT value and `1 / offset`
+    // flips sign after a crash restore. Refused rather than canonicalized,
+    // because silently rewriting an author's value is the other way to make the
+    // live document and its stored form disagree.
+    return Number.isFinite(value) && !Object.is(value, -0);
+  }
   if (typeof value !== "object") return false;
 
   const held = value;
@@ -296,6 +303,18 @@ function isJsonValue(value: unknown, seen: Set<object> = new Set()): boolean {
  *
  * Both shapes must also hold plain VALUES, which is {@link holdsAValue}.
  */
+/**
+ * Whether a key is a canonical array INDEX, not merely a numeric string.
+ *
+ * The range matters. An array's length is a uint32, so the largest index is
+ * 2^32 - 2; a property named `"4294967295"` is an ordinary string key that
+ * leaves `length` untouched. `JSON.stringify` writes it nowhere, so accepting
+ * it keeps a value in the live document that replay silently drops.
+ */
+function isArrayIndex(key: string): boolean {
+  return /^(?:0|[1-9]\d*)$/.test(key) && Number(key) <= 4294967294;
+}
+
 function hasOnlyJsonOwnKeys(value: object): boolean {
   if (Array.isArray(value)) {
     for (const key of Reflect.ownKeys(value)) {
@@ -303,7 +322,7 @@ function hasOnlyJsonOwnKeys(value: object): boolean {
       // a member, so it is the one key that is expected rather than lost.
       if (key === "length") continue;
       if (typeof key !== "string") return false;
-      if (!/^(?:0|[1-9]\d*)$/.test(key)) return false;
+      if (!isArrayIndex(key)) return false;
       // Enumerability is deliberately NOT required of an index: `JSON.stringify`
       // reads an array by position from `0` to `length`, so a non-enumerable
       // index still round-trips and refusing it would reject a value that
@@ -483,6 +502,20 @@ function assertPatchNames(op: Extract<BuilderOp, { kind: "update" }>): void {
           `\`unset\` instead, which survives being written down.`
       );
     }
+    // The JSON domain FIRST, before any shape predicate reads the value.
+    // `isStringArray` and `isStringRecord` enumerate what they are given, so an
+    // accessor at `classes[0]` runs during validation: a throwing getter leaves
+    // this module as its own native error rather than an OpError, and a
+    // returning one is read as though the document held it. Ordering is the
+    // whole fix — the predicates stay simple and nothing reaches them until the
+    // value is known to be plain data.
+    if (!isJsonValue(value)) {
+      throw new OpError(
+        `update: "${key}" holds a value JSON cannot carry unchanged. A patch ` +
+          `is stored as JSON, so a value it drops or rewrites would replay as ` +
+          `something else — or not at all.`
+      );
+    }
     // The VALUE, not only the name. A patch reaching `updateNode` is spread
     // onto the node whatever it holds, so `{ version: "3" }` from a replayed
     // buffer replaces a number with a string and the document is corrupt from
@@ -492,17 +525,6 @@ function assertPatchNames(op: Extract<BuilderOp, { kind: "update" }>): void {
         `update: "${key}" cannot hold ${describe(value)}. Writing it ` +
           `would leave the node holding a value of the wrong kind, which every ` +
           `later read treats as data.`
-      );
-    }
-    // The JSON domain, checked rather than inferred from `stringify` not
-    // throwing. A function or a symbol inside `props` is DROPPED silently, so
-    // the live document would keep it while the stored op did not — and a
-    // crash replay would rebuild a different document than the author saw.
-    if (!isJsonValue(value)) {
-      throw new OpError(
-        `update: "${key}" holds a value JSON cannot carry unchanged. A patch ` +
-          `is stored as JSON, so a value it drops or rewrites would replay as ` +
-          `something else — or not at all.`
       );
     }
   }
@@ -593,6 +615,36 @@ function assertNodeShape(node: BlockNode, verb: string): void {
         if (contract.optional) continue;
         throw new OpError(
           `${verb}: ${path} has no ${field}, which every node needs.`
+        );
+      }
+      // Same ordering as the patch check, for the same reason: a shape
+      // predicate enumerates what it is handed, so an accessor would run before
+      // anything established the value was plain data.
+      //
+      // `slots` is the exception, and deliberately so. Its contents are CHILD
+      // NODES, which this walk already reaches one at a time — running the
+      // recursive JSON check over them would both ask the same question twice
+      // and recurse without a depth bound, overflowing the stack on a subtree
+      // deeper than the limit before the bounded walk below could refuse it.
+      // Its own keys still get the descriptor rule, so an accessor on the slot
+      // map or on a slot's array cannot run either.
+      if (field === "slots") {
+        const safe =
+          isPlainRecord(value) &&
+          hasOnlyJsonOwnKeys(value) &&
+          Object.values(value).every(
+            entry => Array.isArray(entry) && hasOnlyJsonOwnKeys(entry as object)
+          );
+        if (!safe) {
+          throw new OpError(
+            `${verb}: ${path}.slots names child regions JSON cannot carry ` +
+              `unchanged, so they would replay as something else.`
+          );
+        }
+      } else if (!isJsonValue(value)) {
+        throw new OpError(
+          `${verb}: ${path}.${field} holds a value JSON cannot carry ` +
+            `unchanged, so it would replay as something else.`
         );
       }
       if (!contract.holds(value)) {
