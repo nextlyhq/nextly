@@ -113,6 +113,16 @@ export interface CanvasDriver {
 
   /** Press the pointer at a top-level viewport point and pass the drag threshold. */
   startDragAt(point: Point): Promise<void>;
+  /**
+   * Press the pointer WITHOUT passing the drag threshold.
+   *
+   * Separate from {@link CanvasDriver.startDragAt}, which moves past the
+   * threshold by contract — so a test asserting that a small movement does not
+   * drag cannot use it, because the drag has already begun. Each canvas knows
+   * its own threshold, which is why this is a driver method rather than the
+   * suite pressing and moving a number it chose.
+   */
+  pressAt(point: Point): Promise<void>;
   /** Move the pointer by a delta, in one step. */
   moveBy(dx: number, dy: number): Promise<void>;
   drop(): Promise<void>;

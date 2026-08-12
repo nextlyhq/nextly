@@ -113,7 +113,9 @@ test.describe("a canvas any Nextly editor could ship", () => {
     note(PLAN_POINT.dragStartHysteresis, "B-6");
     await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
 
-    await driver.startDragAt(await driver.dragSourceCentre());
+    // `pressAt`, not `startDragAt`: the latter passes the drag threshold by
+    // contract, so the drag would already have begun before the move below.
+    await driver.pressAt(await driver.dragSourceCentre());
     // Below any sane activation distance. A canvas that begins dragging here
     // makes every click on a block a possible accidental move.
     await driver.moveBy(2, 2);
@@ -123,6 +125,11 @@ test.describe("a canvas any Nextly editor could ship", () => {
     expect(dragging, "a 2px movement must not begin a drag").toBe(false);
   });
 
+  // UNRESOLVED. This fails here (5 target changes) while `scenarios.spec.ts`
+  // asserts the same property against the same canvas and passes, so one of
+  // the two drives the gesture differently and it is not yet known which is
+  // right. Left failing rather than marked expected: declaring a shortfall
+  // this canvas may not have would put a false target in front of B-7.
   test("holds its target through a jitter at a zone boundary", async ({
     request,
   }) => {
@@ -147,22 +154,28 @@ test.describe("a canvas any Nextly editor could ship", () => {
     ).toBe(0);
   });
 
-  test("shifts no existing block when its drop zones appear", async ({
-    request,
-  }) => {
-    note(PLAN_POINT.zeroLayoutShift, "B-6");
-    await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
+  test.fail(
+    "shifts no existing block when its drop zones appear",
+    async ({ request }) => {
+      note(
+        PLAN_POINT.zeroLayoutShift,
+        "B-6",
+        "this canvas's drop zones take layout space, so every block below the " +
+          "pointer moves — the same shortfall checklist.spec.ts already marks"
+      );
+      await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
 
-    const before = await driver.readBlockBoxes();
-    await dragFromPanel(driver);
-    const during = await driver.readBlockBoxes();
-    await driver.cancel();
+      const before = await driver.readBlockBoxes();
+      await dragFromPanel(driver);
+      const during = await driver.readBlockBoxes();
+      await driver.cancel();
 
-    // Unrounded, and every edge. Comparing tops alone passes a canvas that
-    // reflows horizontally, and rounding hides a shift under half a pixel —
-    // exactly the size a grid or a percentage-width column produces.
-    expect(during, "drop zones must take no layout space").toEqual(before);
-  });
+      // Unrounded, and every edge. Comparing tops alone passes a canvas that
+      // reflows horizontally, and rounding hides a shift under half a pixel —
+      // exactly the size a grid or a percentage-width column produces.
+      expect(during, "drop zones must take no layout space").toEqual(before);
+    }
+  );
 
   test.fail(
     "draws exactly one insertion indicator, in host chrome",
@@ -327,7 +340,7 @@ test.describe("a canvas any Nextly editor could ship", () => {
     }
   );
 
-  test("cancels a drag on Escape without leaving the editor", async ({
+  test("leaves the document and the editor intact when Escape cancels", async ({
     request,
   }) => {
     note(PLAN_POINT.escapeCancelsWithoutNavigating, "B-11");
@@ -337,12 +350,30 @@ test.describe("a canvas any Nextly editor could ship", () => {
     await dragFromPanel(driver);
     await driver.cancel();
 
-    // Three claims, because a canvas can satisfy any two: the drag ends, the
-    // document is untouched, and the shell does not treat Escape as "go back".
-    expect(await driver.isDragging(), "Escape must end the drag").toBe(false);
-    expect(await driver.readTreeShape(), "and change nothing").toEqual(before);
-    expect(await driver.isEditorPresent(), "and leave the editor mounted").toBe(
-      true
+    // Two of the three claims. Split from the third because a canvas can
+    // satisfy any two, and folding them into one assertion would let this
+    // canvas's shortfall on the third hide the regression cover the first two
+    // give today.
+    expect(await driver.readTreeShape(), "Escape changes nothing").toEqual(
+      before
     );
+    expect(
+      await driver.isEditorPresent(),
+      "and the shell does not treat it as go-back"
+    ).toBe(true);
+  });
+
+  test.fail("ends the drag when Escape cancels", async ({ request }) => {
+    note(
+      PLAN_POINT.escapeCancelsWithoutNavigating,
+      "B-11",
+      "this canvas leaves its drag state set after Escape; the gesture stops " +
+        "affecting the document but never reports that it ended"
+    );
+    await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
+    await dragFromPanel(driver);
+    await driver.cancel();
+
+    expect(await driver.isDragging(), "Escape must end the drag").toBe(false);
   });
 });

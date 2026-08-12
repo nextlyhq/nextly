@@ -302,6 +302,12 @@ export function createPocDriver(page: Page): CanvasDriver {
       await page.mouse.move(pointer.x, pointer.y);
     },
 
+    async pressAt(point: Point) {
+      pointer = { ...point };
+      await page.mouse.move(pointer.x, pointer.y);
+      await page.mouse.down();
+    },
+
     async moveBy(dx: number, dy: number) {
       pointer = { x: pointer.x + dx, y: pointer.y + dy };
       await page.mouse.move(pointer.x, pointer.y);
