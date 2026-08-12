@@ -89,14 +89,22 @@ So a derived check needs three things, and is usually written with one:
 
    ```ts
    const population = Object.keys(raw);
-   expect(derived).toHaveLength(population.length); // no narrowing transform
-   expect(population.length).toBeGreaterThan(0); // the source was really read
+   expect(new Set(derived.map(id))).toEqual(new Set(population)); // same members
+   expect(derived).toHaveLength(population.length); // and no duplicates
+   expect(population).toContain(KNOWN_MEMBER); // the INTENDED source was read
    ```
 
-   The first catches a glob or predicate quietly selecting a subset. The second
-   catches the collapse where the read returns nothing and every remaining case
-   passes over an empty matrix — without it, `toHaveLength(0)` against an empty
-   source is a green that asserts nothing.
+   Compare MEMBERS, not just how many. Equal lengths are satisfied by a
+   derivation that substitutes one member for another, or emits a duplicate
+   while dropping a real one — the count agrees and a raw member has no case.
+   The length assertion still earns its place beside the set comparison, because
+   a set silently absorbs duplicates.
+
+   The third line is the one usually left out, and non-emptiness cannot replace
+   it: a loader that reads the WRONG manifest, or returns a non-empty fallback,
+   passes every count check, and the derived length agrees with it because both
+   sides came from the same wrong input. Pin something only the intended source
+   contains.
 
 3. **Pin by name the members whose absence would itself be the regression.**
 
