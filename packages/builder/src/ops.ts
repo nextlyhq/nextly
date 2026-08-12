@@ -293,6 +293,8 @@ function isJsonValue(value: unknown, seen: Set<object> = new Set()): boolean {
  * in the live document and dropped from the stored op. Anything else stays in
  * memory and vanishes on the round trip, which is a document diverging from
  * itself with no error anywhere.
+ *
+ * Both shapes must also hold plain VALUES, which is {@link holdsAValue}.
  */
 function hasOnlyJsonOwnKeys(value: object): boolean {
   if (Array.isArray(value)) {
@@ -302,6 +304,13 @@ function hasOnlyJsonOwnKeys(value: object): boolean {
       if (key === "length") continue;
       if (typeof key !== "string") return false;
       if (!/^(?:0|[1-9]\d*)$/.test(key)) return false;
+      // Enumerability is deliberately NOT required of an index: `JSON.stringify`
+      // reads an array by position from `0` to `length`, so a non-enumerable
+      // index still round-trips and refusing it would reject a value that
+      // serializes correctly.
+      if (!holdsAValue(Object.getOwnPropertyDescriptor(value, key))) {
+        return false;
+      }
     }
     return true;
   }
@@ -309,8 +318,31 @@ function hasOnlyJsonOwnKeys(value: object): boolean {
     if (typeof key !== "string") return false;
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (descriptor === undefined || !descriptor.enumerable) return false;
+    if (!holdsAValue(descriptor)) return false;
   }
   return true;
+}
+
+/**
+ * Whether a property holds a value rather than running code to produce one.
+ *
+ * An accessor is not something a document HOLDS, and admitting one costs twice.
+ * Reading it runs caller code during validation: a throwing getter leaves this
+ * module as its own native error, and a caller cannot tell that from the editor
+ * having a bug — which is the whole reason ops refuse with `OpError`.
+ *
+ * The successful getter is the worse case, because nothing reports it. The
+ * accessor stays in the live document while `JSON.stringify` writes whatever it
+ * returned at serialization time, so the op replays from storage as a plain
+ * data property. The document and its own persisted form disagree about what
+ * kind of thing that key is, and the disagreement surfaces later as a value
+ * that stopped tracking whatever the getter computed from.
+ *
+ * Asked of the descriptor rather than of the object so the record branch, which
+ * has already read one to check enumerability, does not read it twice.
+ */
+function holdsAValue(descriptor: PropertyDescriptor | undefined): boolean {
+  return descriptor !== undefined && "value" in descriptor;
 }
 
 function isStringRecord(value: unknown): boolean {
@@ -601,24 +633,33 @@ function assertNodeShape(node: BlockNode, verb: string): void {
 }
 
 /**
- * Refuses an insert that would push the document past the engine's node cap.
+ * Refuses an edit whose RESULT would exceed what the engine will store.
  *
- * `insertNode` places whatever it is handed, so a subtree large enough to break
- * the cap enters history as a successful edit — and the engine's strict
- * validator then reports `node-count-exceeded` on every save and publish. The
- * author is left with a document they cannot store and an undo entry for the
- * edit that did it.
+ * The engine's builders place whatever they are handed, so an edit past either
+ * cap enters history as a success — and the strict validator then refuses every
+ * save and publish afterwards. The author is left with a document they cannot
+ * store and an undo entry for the edit that did it.
  *
- * Counted with the engine's own `countNodes` against its own `MAX_NODES`, for
- * the same reason the depth bound asks `MAX_DEPTH`: a second opinion about how
- * large a document may be is a second contract to keep in step.
+ * Measured on the forest the op actually produced, never on an estimate of it.
+ * Estimating is what the earlier version did, and both of its estimates were
+ * wrong in the permissive direction: it summed the incoming subtree as a new
+ * ROOT, so an insert into a slot never counted the slot's own key, and an
+ * `update` was not measured at all because there was no subtree to add. A
+ * measurement of the result cannot drift from the placement, because it IS the
+ * placement.
+ *
+ * Safe to run after the builder because the builders are pure — they copy at
+ * every level and return the original forest untouched when they refuse — so
+ * nothing is committed until `applyOp` returns. The quota is still enforced
+ * before any caller can adopt the result, which is what a quota has to promise.
+ *
+ * Counted with the engine's own `countNodes` and `documentBytes` against its own
+ * `MAX_NODES` and `DEFAULT_MAX_DOCUMENT_BYTES`, for the same reason the depth
+ * bound asks `MAX_DEPTH`: a second opinion about how large a document may be is
+ * a second contract to keep in step.
  */
-function assertFitsNodeCap(
-  nodes: BlockNode[],
-  incoming: BlockNode[],
-  verb: string
-): void {
-  const total = countNodes(nodes) + countNodes(incoming);
+function assertFitsCaps(result: BlockNode[], verb: string): void {
+  const total = countNodes(result);
   if (total > MAX_NODES) {
     throw new OpError(
       `${verb}: this would leave the document holding ${String(total)} nodes, ` +
@@ -632,7 +673,7 @@ function assertFitsNodeCap(
   const bytes = documentBytes({
     formatVersion: DOCUMENT_FORMAT_VERSION,
     kind: "page",
-    nodes: [...nodes, ...incoming],
+    nodes: result,
   });
   if (bytes > DEFAULT_MAX_DOCUMENT_BYTES) {
     throw new OpError(
@@ -833,7 +874,6 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
       // accept whatever they are handed, so a malformed subtree is in the
       // document by the time anything downstream could object.
       assertNodeShape(op.node, "insert");
-      assertFitsNodeCap(nodes, [op.node], "insert");
       const lockedId = lockedWithin(op.node);
       if (lockedId !== undefined) {
         throw new OpError(
@@ -842,16 +882,20 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
             `adding it to the document.`
         );
       }
+      const placed = accepted(
+        nodes,
+        insertNode(nodes, op.node, op.at),
+        `insert: the document did not accept "${op.node.id}" at the position ` +
+          `given. The position may name a parent the document does not hold ` +
+          `or omit the slot it needs, or the subtree may carry an id the ` +
+          `document already uses — ids are identity, so a repeat would make ` +
+          `every later op ambiguous about which node it addresses.`
+      );
+      // Measured on the placed forest rather than on the loose subtree, which
+      // is what makes an insert into a slot count the slot's own key.
+      assertFitsCaps(placed, "insert");
       return {
-        nodes: accepted(
-          nodes,
-          insertNode(nodes, op.node, op.at),
-          `insert: the document did not accept "${op.node.id}" at the position ` +
-            `given. The position may name a parent the document does not hold ` +
-            `or omit the slot it needs, or the subtree may carry an id the ` +
-            `document already uses — ids are identity, so a repeat would make ` +
-            `every later op ambiguous about which node it addresses.`
-        ),
+        nodes: placed,
         inverse: { kind: "remove", id: op.node.id },
       };
     }
@@ -928,6 +972,10 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
             `effect.`
         );
       }
+      // A move keeps the node count and can still grow the document: relocating
+      // into a slot the parent did not have yet adds that slot's name to what is
+      // stored, and a long enough name crosses the byte cap on its own.
+      assertFitsCaps(moved, "move");
       return {
         nodes: moved,
         inverse: { kind: "move", id: op.id, to: positionOf(location) },
@@ -980,8 +1028,13 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
         );
       }
 
+      // An update changes no node count and is the easiest way past the byte
+      // cap: one large string in `props` is a document the engine will refuse
+      // to store, written by an edit nothing objected to.
+      const updated = updateNode(nodes, op.id, { ...op.patch, ...removals });
+      assertFitsCaps(updated, "update");
       return {
-        nodes: updateNode(nodes, op.id, { ...op.patch, ...removals }),
+        nodes: updated,
         inverse: {
           kind: "update",
           id: op.id,

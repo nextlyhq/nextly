@@ -4,6 +4,8 @@ import { applyOp, OpError, type BuilderOp, type NodePatch } from "./ops";
 
 import {
   DEFAULT_MAX_DOCUMENT_BYTES,
+  documentBytes,
+  DOCUMENT_FORMAT_VERSION,
   MAX_DEPTH,
   MAX_NODES,
   updateNode,
@@ -997,6 +999,114 @@ describe("an op whose own shape is wrong", () => {
     cyclic.slots = { main: [cyclic] };
     expect(() =>
       applyOp(forest(), { kind: "insert", node: cyclic, at: { index: 0 } })
+    ).toThrow(OpError);
+  });
+});
+
+describe("an edit measured against what it would actually produce", () => {
+  it("refuses an update that would pass the document's byte cap", () => {
+    // The count-based caps cannot see this: an update changes no node count,
+    // and one large string in `props` is a document the engine refuses to
+    // store. Without the check the edit applies, enters history, and every
+    // save afterwards fails on a document the author cannot repair by undoing.
+    expect(() =>
+      applyOp(forest(), {
+        kind: "update",
+        id: "a",
+        patch: { props: { text: "x".repeat(DEFAULT_MAX_DOCUMENT_BYTES) } },
+      })
+    ).toThrow(OpError);
+  });
+
+  it("refuses an insert whose SLOT carries the result past the byte cap", () => {
+    // A slot name is unbounded and is stored as a key, so a subtree that fits
+    // as a root can fail to fit where it is actually placed.
+    const slot = "s".repeat(8192);
+    const base = forest();
+    const incoming = node("heavy");
+    const asRoots = (text: string): number =>
+      documentBytes({
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [...base, { ...incoming, props: { text } }],
+      });
+    // Sized so the subtree fits comfortably as a root and only its placement
+    // crosses the cap, which is the whole separating property.
+    const slack = DEFAULT_MAX_DOCUMENT_BYTES - asRoots("") - 4096;
+    const text = "x".repeat(slack);
+    incoming.props = { text };
+
+    // Precondition, not decoration. If the payload were simply oversized this
+    // would throw for the ordinary reason and pass whether or not placement is
+    // measured, which is a test that cannot fail for its stated cause.
+    expect(
+      asRoots(text),
+      "the subtree must fit as a root, or this tests the wrong thing"
+    ).toBeLessThanOrEqual(DEFAULT_MAX_DOCUMENT_BYTES);
+
+    expect(() =>
+      applyOp(base, {
+        kind: "insert",
+        node: incoming,
+        at: { parentId: "outer", slot, index: 0 },
+      })
+    ).toThrow(OpError);
+  });
+});
+
+describe("a value that computes itself", () => {
+  /** A record whose one key runs code instead of holding a value. */
+  function withAccessor(get: () => unknown): Record<string, unknown> {
+    const held: Record<string, unknown> = {};
+    Object.defineProperty(held, "text", { get, enumerable: true });
+    return held;
+  }
+
+  it("refuses a patch whose value is an accessor", () => {
+    // What JSON writes is whatever the getter returned at serialization time,
+    // so the accessor stays in the live document and comes back from storage as
+    // a plain data property. The document and its own persisted form disagree
+    // about what that key even is, and nothing reports it.
+    expect(() =>
+      applyOp(forest(), {
+        kind: "update",
+        id: "a",
+        patch: { props: withAccessor(() => "computed") },
+      })
+    ).toThrow(OpError);
+  });
+
+  it("refuses an accessor without running it", () => {
+    // The separating property: a getter that throws must not be the thing that
+    // rejects the op. Reading it would leave this module as a RangeError, which
+    // a caller cannot tell from the editor having a bug — the refusal has to
+    // come from the shape check, before any caller code runs.
+    let reads = 0;
+    const patch = {
+      props: withAccessor(() => {
+        reads += 1;
+        throw new RangeError("the getter ran");
+      }),
+    };
+
+    expect(() => applyOp(forest(), { kind: "update", id: "a", patch })).toThrow(
+      OpError
+    );
+    expect(reads, "the getter must never be invoked").toBe(0);
+  });
+
+  it("refuses an accessor sitting at an array index", () => {
+    // The same hole through the other container. An array is walked by
+    // position, so an accessor at index 0 is read exactly like a value.
+    const classes: unknown[] = [];
+    Object.defineProperty(classes, "0", { get: () => "x", enumerable: true });
+
+    expect(() =>
+      applyOp(forest(), {
+        kind: "update",
+        id: "a",
+        patch: { props: { classes } },
+      })
     ).toThrow(OpError);
   });
 });
