@@ -24,12 +24,10 @@
 
 import {
   countNodes,
-  DEFAULT_MAX_DOCUMENT_BYTES,
+  DEFAULT_LIMITS,
   documentBytes,
   findNode,
   isNodeType,
-  MAX_DEPTH,
-  MAX_NODES,
   isNodeVersion,
   isPlainRecord,
   walkNodes,
@@ -39,6 +37,7 @@ import {
   removeNode,
   updateNode,
   type BlockDocument,
+  type DocumentLimits,
   type BlockNode,
   type NodeLocation,
   type TreePosition,
@@ -529,6 +528,15 @@ function assertPatchNames(op: Extract<BuilderOp, { kind: "update" }>): void {
     }
   }
 
+  // The JSON domain before the shape predicate, for the reason every other
+  // field already gets it: `isStringArray` enumerates what it is handed, so an
+  // accessor at an index would run during validation.
+  if (op.unset !== undefined && !isJsonValue(op.unset)) {
+    throw new OpError(
+      `update: an unset of ${describe(op.unset)} holds a value JSON cannot ` +
+        `carry unchanged, so it would replay as something else.`
+    );
+  }
   if (op.unset !== undefined && !isStringArray(op.unset)) {
     throw new OpError(
       `update: an unset of ${describe(op.unset)} names no fields. It is ` +
@@ -568,7 +576,11 @@ function assertPatchNames(op: Extract<BuilderOp, { kind: "update" }>): void {
  * engine's `validate()`, which the editor runs where a block registry is in
  * hand. See {@link NODE_FIELDS} for why the split is there.
  */
-function assertNodeShape(node: BlockNode, verb: string): void {
+function assertNodeShape(
+  node: BlockNode,
+  verb: string,
+  limits: DocumentLimits
+): void {
   const seen = new Set<unknown>();
   // An explicit stack rather than recursion. A well-formed but very deep
   // subtree from an agent exhausts the JavaScript stack, and a `RangeError`
@@ -585,9 +597,9 @@ function assertNodeShape(node: BlockNode, verb: string): void {
 
     // The engine's own limit, asked rather than restated. A subtree deeper than
     // a document may hold is refused here rather than after it is placed.
-    if (depth > MAX_DEPTH) {
+    if (depth > limits.maxDepth) {
       throw new OpError(
-        `${verb}: ${path} is nested deeper than ${String(MAX_DEPTH)} levels, ` +
+        `${verb}: ${path} is nested deeper than ${String(limits.maxDepth)} levels, ` +
           `which is as deep as a document goes.`
       );
     }
@@ -608,6 +620,18 @@ function assertNodeShape(node: BlockNode, verb: string): void {
       );
     }
     seen.add(candidate);
+
+    // The container, before a single field is read. A required `props` that is
+    // non-enumerable is accepted by the loop below and then serializes away, so
+    // the live document holds a node the stored one does not; a top-level
+    // accessor would run here for the same reason. The same rule the patch and
+    // every nested record already answer to.
+    if (!hasOnlyJsonOwnKeys(candidate)) {
+      throw new OpError(
+        `${verb}: ${path} carries keys JSON cannot write, so the stored node ` +
+          `would differ from the one in the document.`
+      );
+    }
 
     for (const [field, contract] of Object.entries(NODE_FIELDS)) {
       const value = candidate[field];
@@ -710,12 +734,16 @@ function assertNodeShape(node: BlockNode, verb: string): void {
  * bound asks `MAX_DEPTH`: a second opinion about how large a document may be is
  * a second contract to keep in step.
  */
-function assertFitsCaps(result: BlockDocument, verb: string): void {
+function assertFitsCaps(
+  result: BlockDocument,
+  verb: string,
+  limits: DocumentLimits
+): void {
   const total = countNodes(result.nodes);
-  if (total > MAX_NODES) {
+  if (total > limits.maxNodes) {
     throw new OpError(
       `${verb}: this would leave the document holding ${String(total)} nodes, ` +
-        `past the ${String(MAX_NODES)} a document may hold. The edit would ` +
+        `past the ${String(limits.maxNodes)} a document may hold. The edit would ` +
         `apply and then fail to save.`
     );
   }
@@ -723,10 +751,10 @@ function assertFitsCaps(result: BlockDocument, verb: string): void {
   // puts the document past what the engine will store, with the same result:
   // the edit applies, enters history, and every save afterwards is refused.
   const bytes = documentBytes(result);
-  if (bytes > DEFAULT_MAX_DOCUMENT_BYTES) {
+  if (bytes > limits.maxBytes) {
     throw new OpError(
       `${verb}: this would leave the document at ${String(bytes)} bytes, past ` +
-        `the ${String(DEFAULT_MAX_DOCUMENT_BYTES)} it may hold. The edit would ` +
+        `the ${String(limits.maxBytes)} it may hold. The edit would ` +
         `apply and then fail to save.`
     );
   }
@@ -908,7 +936,11 @@ function withNodes(document: BlockDocument, nodes: BlockNode[]): BlockDocument {
  * several edits could have produced the difference, and for a move between two
  * positions holding identical nodes there is no unique answer.
  */
-export function applyOp(document: BlockDocument, op: BuilderOp): AppliedOp {
+export function applyOp(
+  document: BlockDocument,
+  op: BuilderOp,
+  limits: DocumentLimits = DEFAULT_LIMITS
+): AppliedOp {
   // The document itself, before its forest is read. An op arrives beside a
   // document from storage, so neither is more trustworthy than the other.
   if (!isPlainRecord(document) || !Array.isArray(document.nodes)) {
@@ -943,7 +975,7 @@ export function applyOp(document: BlockDocument, op: BuilderOp): AppliedOp {
       // Before `lockedWithin` walks it and before the engine places it. Both
       // accept whatever they are handed, so a malformed subtree is in the
       // document by the time anything downstream could object.
-      assertNodeShape(op.node, "insert");
+      assertNodeShape(op.node, "insert", limits);
       const lockedId = lockedWithin(op.node);
       if (lockedId !== undefined) {
         throw new OpError(
@@ -963,7 +995,7 @@ export function applyOp(document: BlockDocument, op: BuilderOp): AppliedOp {
       );
       // Measured on the placed forest rather than on the loose subtree, which
       // is what makes an insert into a slot count the slot's own key.
-      assertFitsCaps(withNodes(document, placed), "insert");
+      assertFitsCaps(withNodes(document, placed), "insert", limits);
       return {
         document: withNodes(document, placed),
         inverse: { kind: "remove", id: op.node.id },
@@ -1048,7 +1080,7 @@ export function applyOp(document: BlockDocument, op: BuilderOp): AppliedOp {
       // A move keeps the node count and can still grow the document: relocating
       // into a slot the parent did not have yet adds that slot's name to what is
       // stored, and a long enough name crosses the byte cap on its own.
-      assertFitsCaps(withNodes(document, moved), "move");
+      assertFitsCaps(withNodes(document, moved), "move", limits);
       return {
         document: withNodes(document, moved),
         inverse: { kind: "move", id: op.id, to: positionOf(location) },
@@ -1105,7 +1137,7 @@ export function applyOp(document: BlockDocument, op: BuilderOp): AppliedOp {
       // cap: one large string in `props` is a document the engine will refuse
       // to store, written by an edit nothing objected to.
       const updated = updateNode(nodes, op.id, { ...op.patch, ...removals });
-      assertFitsCaps(withNodes(document, updated), "update");
+      assertFitsCaps(withNodes(document, updated), "update", limits);
       return {
         document: withNodes(document, updated),
         inverse: {

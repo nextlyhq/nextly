@@ -126,11 +126,22 @@ exactly the correction it exists to catch.
 
 ### The op store
 
-`applyOp(nodes, op)` — apply one edit to a forest, returning the new forest and
-the op that undoes it. Every change to a document goes through it: the canvas,
-the layers panel, the inspector and an agent all produce ops and nothing else,
-which is what makes undo, autosave, crash restore and edit review one mechanism
-rather than four.
+`applyOp(document, op, limits?)` — apply one edit to a `BlockDocument`,
+returning the new document under `AppliedOp.document` and the op that undoes it.
+Every change goes through it: the canvas, the layers panel, the inspector and an
+agent all produce ops and nothing else, which is what makes undo, autosave,
+crash restore and edit review one mechanism rather than four.
+
+It takes a DOCUMENT rather than a bare forest because the size caps are
+document-level. A forest measured on its own omits `settings` and `assets`, so a
+document already near its byte limit through those would accept an edit the
+engine then refuses to store. The document is returned whole: `settings`,
+`assets` and any field the format gains later survive an edit untouched.
+
+`limits` defaults to the engine's `DEFAULT_LIMITS` and takes the same
+`DocumentLimits` that `validate()` accepts. Pass the site's own limits if it
+renders with custom ones, or the op layer and the validator will disagree about
+what fits.
 
 `BuilderOp` — the whole edit vocabulary: `insert`, `remove`, `move`, `update`.
 Ops address nodes by id, never by path, because a path describes the tree at the

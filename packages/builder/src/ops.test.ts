@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { applyOp, OpError, type BuilderOp, type NodePatch } from "./ops";
 
 import {
+  DEFAULT_LIMITS,
   DEFAULT_MAX_DOCUMENT_BYTES,
   documentBytes,
   DOCUMENT_FORMAT_VERSION,
@@ -10,6 +11,7 @@ import {
   MAX_NODES,
   updateNode,
   type BlockDocument,
+  type DocumentLimits,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
@@ -1265,5 +1267,80 @@ describe("a value read before it is known to be data", () => {
         patch: { props: { list } },
       })
     ).toThrow(OpError);
+  });
+});
+
+describe("the limits an edit is judged against", () => {
+  it("honours a site's configured caps rather than the defaults", () => {
+    // The engine validates with `ctx.limits ?? DEFAULT_LIMITS`, so a site that
+    // renders with custom limits gets a different verdict from a hardcoded one.
+    // Both directions are wrong: a stricter default refuses an edit the site's
+    // validator accepts, and a looser one admits an edit it then refuses.
+    const tall: DocumentLimits = { ...DEFAULT_LIMITS, maxNodes: 3 };
+    const extra = node("one-too-many");
+
+    expect(() =>
+      applyOp(doc(), { kind: "insert", node: extra, at: { index: 0 } }, tall)
+    ).toThrow(/past the 3 a document may hold/);
+
+    // The separating property: the SAME edit under the defaults is accepted, so
+    // what refuses it is the configured limit and not the edit.
+    expect(() =>
+      applyOp(doc(), { kind: "insert", node: extra, at: { index: 0 } })
+    ).not.toThrow();
+  });
+
+  it("judges depth by the configured limit too", () => {
+    const shallow: DocumentLimits = { ...DEFAULT_LIMITS, maxDepth: 1 };
+    const parent = node("parent", { main: [node("child")] });
+
+    expect(() =>
+      applyOp(
+        doc(),
+        { kind: "insert", node: parent, at: { index: 0 } },
+        shallow
+      )
+    ).toThrow(/nested deeper than 1 levels/);
+  });
+});
+
+describe("a node container JSON cannot write whole", () => {
+  it("refuses a node whose required field is non-enumerable", () => {
+    // The loop reads it and accepts the node, then `JSON.stringify` omits it:
+    // the live document holds a node the stored one does not, and replay
+    // rebuilds something malformed with no error anywhere.
+    const hidden = node("hidden");
+    Object.defineProperty(hidden, "props", {
+      value: {},
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    });
+    expect(
+      JSON.stringify(hidden),
+      "the fixture must actually lose the field, or this tests nothing"
+    ).not.toContain("props");
+
+    expect(() =>
+      applyOp(doc(), { kind: "insert", node: hidden, at: { index: 0 } })
+    ).toThrow(OpError);
+  });
+
+  it("refuses an unset entry that computes itself", () => {
+    // `isStringArray` enumerates, so an accessor here ran during validation.
+    let reads = 0;
+    const unset: string[] = [];
+    Object.defineProperty(unset, "0", {
+      get: (): string => {
+        reads += 1;
+        throw new RangeError("the getter ran");
+      },
+      enumerable: true,
+    });
+
+    expect(() =>
+      applyOp(doc(), { kind: "update", id: "a", patch: { name: "x" }, unset })
+    ).toThrow(OpError);
+    expect(reads, "the getter must never be invoked").toBe(0);
   });
 });
