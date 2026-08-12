@@ -2,7 +2,6 @@
 
 import type { TableParams } from "@nextlyhq/ui";
 import {
-  Alert,
   Avatar,
   AvatarFallback,
   AvatarImage,
@@ -502,31 +501,35 @@ export default function UserTable() {
           ) : undefined
         }
       >
-        {isError ? (
-          <Alert variant="destructive">
-            {error instanceof Error
-              ? error.message
-              : "Failed to load users. Please try again."}
-          </Alert>
-        ) : (
-          <DataTableView<UserApiResponse>
-            columns={columns}
-            rows={filteredData}
-            loading={showLoadingSkeleton}
-            rowHref={user => buildRoute(ROUTES.USERS_EDIT, { id: user.id })}
-            primaryColumn="name"
-            selection={selection}
-            rowActions={rowActions}
-            registryKey="users"
-            ariaLabel="Users table"
-            bordered={false}
-            emptyMessage={
-              search || roleFilter !== "all"
-                ? "No users found. Try adjusting your search or filters."
-                : "No users available."
-            }
-          />
-        )}
+        {/* The failure renders as a table state rather than as an Alert. An
+            Alert draws its own border and radius, so inside the card the two
+            outlines double and its corners are clipped by `overflow-hidden`;
+            `TableError` is drawn by the borderless view and inherits the card
+            it sits in, which is also how every other list reports a failure. */}
+        <DataTableView<UserApiResponse>
+          columns={columns}
+          rows={filteredData}
+          loading={showLoadingSkeleton}
+          rowHref={user => buildRoute(ROUTES.USERS_EDIT, { id: user.id })}
+          primaryColumn="name"
+          selection={selection}
+          rowActions={rowActions}
+          registryKey="users"
+          ariaLabel="Users table"
+          bordered={false}
+          error={
+            isError
+              ? error instanceof Error
+                ? error.message
+                : "Failed to load users. Please try again."
+              : null
+          }
+          emptyMessage={
+            search || roleFilter !== "all"
+              ? "No users found. Try adjusting your search or filters."
+              : "No users available."
+          }
+        />
       </ListShell>
 
       <UserDeleteDialog

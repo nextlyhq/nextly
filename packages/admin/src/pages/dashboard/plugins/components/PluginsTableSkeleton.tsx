@@ -84,10 +84,11 @@ export const PluginsTableSkeleton: React.FC = () => {
 
         {/* Footer Skeleton */}
         <div className="table-footer border-t border-border bg-[var(--nx-table-header-bg)]">
-          {/* One padding utility: the footer sits inside the card, so its inset is
-             uniform. An axis-specific pair alongside `p-4` is inert -- `p-4` sets
-             both axes and wins on equal specificity. */}
-          <div className="flex items-center justify-between p-4">
+          {/* Axis utilities rather than the `p-4` shorthand: Tailwind emits `.px-2`
+              and `.py-4` AFTER `.p-4`, so at equal specificity the shorthand loses
+              both axes and contributes nothing. The footer is deliberately tighter
+              horizontally than vertically. */}
+          <div className="flex items-center justify-between px-2 py-4">
             <div className="flex items-center gap-2 text-sm">
               <GrayBar className="h-4 w-[120px]" />
             </div>
