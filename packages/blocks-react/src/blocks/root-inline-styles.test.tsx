@@ -369,6 +369,41 @@ function alternativesFor(
   return alternatives;
 }
 
+/**
+ * Prop sets with one declared prop MISSING, which no other variant produces.
+ *
+ * Every other case spreads over a base built from the defaults and the example,
+ * so a prop either block declares is present in all of them — and "absent" is a
+ * third state that neither a value nor a malformed value reaches. Blocks branch
+ * on it directly: `core/image` emits the media record's alt text only when the
+ * node authored none, and `isAuthoredText` counts an empty string as authored,
+ * so an example carrying `alt: ""` keeps that path unreached just as firmly as
+ * one carrying a sentence.
+ *
+ * A stored document reaches this state the ordinary way — a prop added to a
+ * block after the node was written, or one the author never filled in.
+ *
+ * Applied to the LAYERED sets as well as to the base, because absence usually
+ * only matters in company: `core/image` reaches its record-alt fallback when a
+ * media id resolves AND no alt was authored, and the base carries no media id,
+ * so omitting `alt` from it alone leaves the branch as unreached as before.
+ */
+function omittedVariants(
+  sets: readonly Record<string, unknown>[],
+  schema: Record<string, unknown>
+): unknown[] {
+  const variants: unknown[] = [];
+  for (const set of sets) {
+    for (const name of Object.keys(schema)) {
+      if (!(name in set)) continue;
+      const variant = { ...set };
+      delete variant[name];
+      variants.push(variant);
+    }
+  }
+  return variants;
+}
+
 /** The prop sets each block is exercised with. */
 function propVariants(block: AnyBlockDefinition): unknown[] {
   const base = {
@@ -390,9 +425,14 @@ function propVariants(block: AnyBlockDefinition): unknown[] {
       variants.push({ ...base, [name]: value });
     }
   }
+  const layered = layeredVariants(base, alternatives) as Record<
+    string,
+    unknown
+  >[];
   return [
     ...variants,
-    ...layeredVariants(base, alternatives),
+    ...layered,
+    ...omittedVariants([base, ...layered], schema),
     ...malformedVariants(base, schema),
   ];
 }
