@@ -381,7 +381,22 @@ function isSlotMap(value: unknown): boolean {
   return isPlainRecord(value) && Object.values(value).every(Array.isArray);
 }
 
-/** One edit. The four shapes below are the whole vocabulary. */
+/**
+ * One edit to the NODE TREE. The four shapes below are the whole vocabulary
+ * for that, and deliberately not for the document as a whole.
+ *
+ * `BlockDocument.settings` — page-scoped styles, `customCss` — has no op here:
+ * `update` addresses a node by id and `NodePatch` is read off `updateNode`'s
+ * signature, which excludes the envelope. So an editor changing page settings
+ * has to write them outside this module, and that change is absent from undo,
+ * autosave, crash replay and review.
+ *
+ * Stated rather than quietly true. Adding a fifth op widens the PERSISTED
+ * format, which every later version has to keep reading, so its shape wants its
+ * own design pass rather than being appended to whichever change notices the
+ * gap. Nothing bypasses undo in practice yet, because nothing consumes this
+ * module.
+ */
 export type BuilderOp =
   | {
       readonly kind: "insert";
