@@ -405,6 +405,9 @@ function exportedNames(
           // star exports by publishing NEITHER, while a LOCAL export of the same name wins
           // outright. Merged straight in, an ambiguous name would be reported as published and a
           // declaration that correctly omits it would read as a divergence.
+          // `export *` never forwards `default` -- ECMAScript excludes it explicitly, so a barrel
+          // star-exporting a module with a default export does not itself have one. Merging it made
+          // the reader report a default the module does not publish.
           starred.push(
             exportedNames(text, {
               dir: dirname(target),
@@ -474,6 +477,7 @@ function exportedNames(
   const reach = new Map<string, number>();
   for (const names of starred) {
     for (const name of new Set(names)) {
+      if (name === "default") continue;
       if (local.has(name)) continue;
       reach.set(name, (reach.get(name) ?? 0) + 1);
     }
@@ -554,6 +558,28 @@ describe("reading the names a module publishes", () => {
         seen: new Set(),
       })
     ).toEqual(["alsoHelper", "fromHelper", "own"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does not forward a default export through a star", () => {
+    // ECMAScript excludes `default` from `export *` explicitly, so a barrel star-exporting a module
+    // with a default does not itself have one. Reporting it invents a binding no consumer can
+    // import, and a declaration that correctly omits it would read as a divergence.
+    const dir = mkdtempSync(path.join(tmpdir(), "nx-star-default-"));
+    writeFileSync(
+      path.join(dir, "helper.mjs"),
+      `export default function build() {}\nexport const named = 1;`
+    );
+    expect(
+      exportedNames(`export * from "./helper.mjs";`, { dir, seen: new Set() })
+    ).toEqual(["named"]);
+    // The control: a default the barrel declares ITSELF is still published.
+    expect(
+      exportedNames(`export * from "./helper.mjs";\nexport default 1;`, {
+        dir,
+        seen: new Set(),
+      })
+    ).toEqual(["default", "named"]);
     rmSync(dir, { recursive: true, force: true });
   });
 

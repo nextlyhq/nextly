@@ -68,6 +68,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
+import { tmpdir } from "node:os";
 import { dirname as pathDirname, join } from "node:path";
 
 /** The directory part of an output-relative file name, or "" for a flat one. */
@@ -159,6 +160,16 @@ const EVALUATED_NODE_ENVS = [undefined, "production", "development"];
 
 /** This file, re-invoked as the child that evaluates one artifact. */
 const SELF = fileURLToPath(import.meta.url);
+
+/**
+ * Node's own `process.exit`, captured before anything can replace it.
+ *
+ * The child installs an interceptor around the artifact's import, so every failure path has to end
+ * the process through THIS rather than through whatever `process.exit` currently is. Reaching for
+ * the live one recorded the check's own exit as the artifact's and reported a thrown module as one
+ * that called `process.exit`.
+ */
+const realExit = process.exit.bind(process);
 
 /** Cleared only by reaching the end of the run, so an artifact ending the process is not a pass. */
 let completed = false;
@@ -358,7 +369,13 @@ export function specifiersIn(source, fileName) {
     } else if (ts.isCallExpression(node)) {
       const callee = node.expression;
       const isDynamicImport = callee.kind === ts.SyntaxKind.ImportKeyword;
-      const isRequire = ts.isIdentifier(callee) && callee.text === "require";
+      // A module that declares its own `require` is not reaching the CommonJS loader, and reporting
+      // its argument names something that is not a module specifier. The same rule the `module`
+      // object already gets: the name proves nothing, where it came from does.
+      const isRequire =
+        ts.isIdentifier(callee) &&
+        callee.text === "require" &&
+        !declaredNames.has("require");
       // `module.require("react")` is the CommonJS loader reached through the module object, which
       // survives a format guard into the CJS artifact and is opaque to the bundler, so it appears
       // in neither the specifier list nor the metafile. `module` must be the ambient one.
@@ -829,7 +846,7 @@ export function remaining(before, after) {
 function failEvaluation(why) {
   console.error(why);
   completed = true;
-  process.exit(1);
+  realExit(1);
 }
 
 async function evaluateOne(file) {
@@ -852,6 +869,23 @@ async function evaluateOne(file) {
   }
 
   const full = join(DIST, file);
+
+  // `process.exit` is captured and replaced BEFORE the import. An artifact that ends the process
+  // is a defect whenever it does it, and the timing decides only whether THIS child lives long
+  // enough to see it: a scheduled exit on an unrefed timer never fires here, because nothing keeps
+  // a short-lived child alive, while a consumer's server has work to do and the same timer ends it.
+  // Intercepting removes the dependence on timing entirely -- the call is the defect, not its
+  // arrival.
+  /** @type {number | undefined} */
+  let exitAttempt;
+  // eslint-disable-next-line no-global-assign
+  process.exit = code => {
+    exitAttempt = typeof code === "number" ? code : 0;
+    // Returning rather than exiting lets the caller carry on, so the report names the artifact
+    // rather than this process vanishing mid-verdict.
+    return undefined;
+  };
+
   // What this process is holding open BEFORE the artifact runs, so only what the ARTIFACT adds is
   // reported. The stdio pipes are here on every run and are not the artifact's doing.
   const before = process.getActiveResourcesInfo();
@@ -869,6 +903,24 @@ async function evaluateOne(file) {
     );
   }
   importing = null;
+
+  // A turn of the TIMERS phase, so a timer that is already due gets its chance to run. A
+  // `setImmediate` yield is not enough and was measured not to be: it resolves in the check phase,
+  // which runs after timers, so a due unrefed timer stays pending. Scheduling through `setTimeout`
+  // puts this continuation in the same phase as the artifact's own timer, behind it in the queue.
+  //
+  // This is one turn, not a wait. An artifact whose exit is scheduled far enough out still escapes,
+  // and nothing here can close that without waiting an unbounded time; what it removes is the
+  // dependence on a child being short-lived, which is what made an ALREADY-DUE exit invisible.
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  process.exit = realExit;
+  if (exitAttempt !== undefined) {
+    failEvaluation(
+      `called process.exit(${exitAttempt}) while being imported, or scheduled a call that ran ` +
+        `immediately afterwards. A server-safe entry point must not end its consumer's process.`
+    );
+  }
 
   // What the artifact left RUNNING. Reaching the end of the import is not the same as being
   // finished: a module-scope `setInterval` keeps its consumer's process alive forever, and a
@@ -994,6 +1046,11 @@ async function main() {
           encoding: "utf8",
           timeout: EVALUATION_TIMEOUT_MS,
           env: childEnvironment(nodeEnv),
+          // Somewhere neutral, because the child otherwise inherits `packages/ui` and an artifact
+          // reading a relative path finds this package's own source tree. A consumer resolves that
+          // same path against their app and gets nothing, so the inherited directory answers a
+          // question about the wrong filesystem.
+          cwd: tmpdir(),
         })
       );
       // Named with the environment, because "utils.mjs threw" is a different report to act on

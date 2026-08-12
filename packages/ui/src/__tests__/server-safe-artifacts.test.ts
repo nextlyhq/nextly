@@ -132,6 +132,20 @@ describe("reading an artifact's specifiers", () => {
     ).toEqual([]);
   });
 
+  it("does not treat a locally declared require as the loader", () => {
+    // A module declaring its own `require` is not reaching the CommonJS loader, so its argument is
+    // not a module specifier. Reported, it rejects an artifact with no dependency at all -- the
+    // expensive direction, since a lane whose code is correct gets a red build.
+    expect(
+      read(`
+        const require = (name) => name.toUpperCase();
+        export const label = require("react");
+      `)
+    ).toEqual([]);
+    // The control: the AMBIENT `require` in a CommonJS artifact is still read.
+    expect(read(`const react = require("react");`)).toEqual(["react"]);
+  });
+
   it("does not treat a local helper of the same name as the loader", () => {
     // The name proves nothing; where it came from does. A module defining its own `createRequire`
     // has no dependency on Node's, and reading one in would reject an artifact that imports
