@@ -524,6 +524,10 @@ for (const entry of DIALECTS) {
         adapter: adapter as never,
         logger: logger as never,
         direction,
+        // These fixtures are created and dropped by the suite itself, so the acknowledgement is
+        // trivially true here. Stated rather than defaulted, because a default would mean the
+        // production precondition is never exercised by anything that calls this helper.
+        backupConfirmed: true,
       });
     }
 
