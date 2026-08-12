@@ -104,3 +104,8 @@ docs/guides/testing-migrations.md
 # Generated dynamic migrations leaked when the package src is used as an app root in tests/playground
 packages/nextly/src/db/migrations/dynamic/*.sql
 .nextly-review/
+
+# Task trackers and working notes live beside the task files at the workspace
+# root, outside this repository: they are internal planning, and this repo is
+# public. Ignored here so a worktree cannot commit one by accident.
+/tasks/

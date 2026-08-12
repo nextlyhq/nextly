@@ -95,6 +95,21 @@ export interface DataTableViewProps<Row extends object> {
   registryKey?: string;
   loading?: boolean;
   error?: string | null;
+  /**
+   * Rendered below the rows, normally pagination.
+   *
+   * Mounted ONCE, inside the surface that holds both views, so a stateful
+   * footer keeps one instance and its controls keep unique ids. Rendering it
+   * per view and letting CSS hide one would run every effect twice and hand the
+   * user a different instance on resize.
+   *
+   * It belongs here rather than in a wrapper because its placement depends on
+   * which view is showing, and this component is the only one that knows. A
+   * wrapper would have to ask a second container query, and its box is wider
+   * than this one by the card's border, so the two disagree across a
+   * two-pixel band.
+   */
+  footer?: React.ReactNode;
   emptyMessage?: string;
   ariaLabel?: string;
   /** Draw the desktop table's card border. Disable when a parent supplies one. */
@@ -127,6 +142,7 @@ export function DataTableView<Row extends object>({
   registryKey,
   loading = false,
   error = null,
+  footer,
   emptyMessage = "No results found.",
   ariaLabel = "Data table",
   bordered = true,
@@ -286,253 +302,297 @@ export function DataTableView<Row extends object>({
   const colSpan =
     visibleColumns.length + (selection ? 1 : 0) + (hasRowActions ? 1 : 0);
 
+  // A failed request and an empty result are different facts, and only one of
+  // them can be true. Rendering the table anyway pairs "could not load" with
+  // "no users available", which states as data what is actually the absence of
+  // an answer. Rows that survive an earlier fetch are still worth showing, so
+  // only the row-less case replaces the table outright.
+  if (error && rows.length === 0) {
+    return (
+      <div className={cn("@container/table w-full", className)}>
+        <div
+          role="alert"
+          className="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
+        >
+          <TableError message={error} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={cn("@container/table w-full", className)}>
       {error && (
-        <div className="mb-3 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+        <div
+          role="alert"
+          className="mb-3 rounded-md bg-destructive/10 p-3 text-sm text-destructive"
+        >
           <TableError message={error} />
         </div>
       )}
 
-      {/* Mobile / narrow: card view */}
-      <div className="flex flex-col gap-4 @md/table:hidden">
-        {loading && rows.length === 0 ? (
-          <div className="p-8 text-center">
-            <TableLoading />
-          </div>
-        ) : rows.length === 0 ? (
-          <div className="p-8 text-center">
-            <p className="text-sm text-muted-foreground">{emptyMessage}</p>
-          </div>
-        ) : (
-          rows.map(row => {
-            const id = getRowId(row);
-            const nav = resolveRow(row);
-            const clickable = Boolean(nav.href || nav.onClick);
-            const selectable = selection?.isSelectable?.(row) ?? true;
-            return (
-              <Card
-                key={id}
-                variant={clickable ? "interactive" : "default"}
-                className={cn(clickable && "cursor-pointer")}
-                role={clickable ? "button" : undefined}
-                tabIndex={clickable ? 0 : undefined}
-                onClick={activateRow(nav)}
-                onKeyDown={
-                  clickable ? onActivateKey(activateRow(nav)) : undefined
-                }
-              >
-                <CardHeader className="flex flex-row items-start justify-between gap-2 pb-3">
-                  <CardTitle className="text-base">
-                    {cardPrimary ? renderCell(cardPrimary, row, nav.href) : id}
-                  </CardTitle>
-                  <div
-                    className="flex items-center gap-1"
-                    onClick={e => e.stopPropagation()}
-                  >
-                    {selection && (
+      {/* One surface holds both views and the footer.
+          Gated on the same container the views read, so the card and the view
+          it encloses can never disagree. Below the breakpoint it is a plain
+          column: the row cards carry their own borders and the footer takes the
+          column's gap. At and above it, it becomes the card and the footer sits
+          inside as the table's own footer. */}
+      <div
+        className={cn(
+          // Clipping is NOT part of the card. The table view rounds its own
+          // corners through whatever encloses it, and a globally coloured
+          // <thead> paints square corners through a rounded parent that does
+          // not clip -- which the shared DataTable is, and it is the caller
+          // that passes bordered={false}. So this stays unconditional, as it
+          // was before the card moved onto this element.
+          "flex flex-col gap-4 @md/table:block @md/table:gap-0 @md/table:overflow-hidden",
+          bordered &&
+            "@md/table:rounded-md @md/table:border @md/table:border-border @md/table:bg-card @md/table:text-card-foreground"
+        )}
+      >
+        {/* Mobile / narrow: card view */}
+        <div className="flex flex-col gap-4 @md/table:hidden">
+          {loading && rows.length === 0 ? (
+            <div className="p-8 text-center">
+              <TableLoading />
+            </div>
+          ) : rows.length === 0 ? (
+            <div className="p-8 text-center">
+              <p className="text-sm text-muted-foreground">{emptyMessage}</p>
+            </div>
+          ) : (
+            rows.map(row => {
+              const id = getRowId(row);
+              const nav = resolveRow(row);
+              const clickable = Boolean(nav.href || nav.onClick);
+              const selectable = selection?.isSelectable?.(row) ?? true;
+              return (
+                <Card
+                  key={id}
+                  variant={clickable ? "interactive" : "default"}
+                  className={cn(clickable && "cursor-pointer")}
+                  role={clickable ? "button" : undefined}
+                  tabIndex={clickable ? 0 : undefined}
+                  onClick={activateRow(nav)}
+                  onKeyDown={
+                    clickable ? onActivateKey(activateRow(nav)) : undefined
+                  }
+                >
+                  <CardHeader className="flex flex-row items-start justify-between gap-2 pb-3">
+                    <CardTitle className="text-base">
+                      {cardPrimary
+                        ? renderCell(cardPrimary, row, nav.href)
+                        : id}
+                    </CardTitle>
+                    <div
+                      className="flex items-center gap-1"
+                      onClick={e => e.stopPropagation()}
+                    >
+                      {selection && (
+                        <Checkbox
+                          checked={selectedSet.has(id)}
+                          disabled={!selectable}
+                          onCheckedChange={() => selection.onToggle(row)}
+                          aria-label="Select row"
+                        />
+                      )}
+                      {renderRowActions(row)}
+                    </div>
+                  </CardHeader>
+                  {cardSecondary.length > 0 && (
+                    <CardContent className="pb-3">
+                      <dl className="flex flex-col gap-2">
+                        {cardSecondary.map(col => (
+                          <div
+                            key={col.name}
+                            className="flex items-start justify-between gap-4 text-sm"
+                          >
+                            {!col.hideLabelOnMobile && (
+                              <dt className="min-w-20 shrink-0 text-muted-foreground">
+                                {col.header}
+                              </dt>
+                            )}
+                            <dd
+                              className={cn(
+                                "flex-1",
+                                col.hideLabelOnMobile
+                                  ? "text-left"
+                                  : "text-right"
+                              )}
+                            >
+                              {renderCell(col, row, nav.href)}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </CardContent>
+                  )}
+                </Card>
+              );
+            })
+          )}
+        </div>
+
+        {/* Desktop / wide: table view */}
+        <div className="hidden @md/table:block">
+          <div className="overflow-x-auto">
+            <Table aria-label={ariaLabel} className="w-full min-w-max">
+              <TableHeader>
+                <TableRow>
+                  {selection && (
+                    <TableHead className="w-10">
                       <Checkbox
-                        checked={selectedSet.has(id)}
-                        disabled={!selectable}
-                        onCheckedChange={() => selection.onToggle(row)}
-                        aria-label="Select row"
+                        checked={allSelected}
+                        indeterminate={someSelected}
+                        onCheckedChange={() =>
+                          selection.onToggleAll(selectableRows, allSelected)
+                        }
+                        aria-label="Select all"
                       />
-                    )}
-                    {renderRowActions(row)}
-                  </div>
-                </CardHeader>
-                {cardSecondary.length > 0 && (
-                  <CardContent className="pb-3">
-                    <dl className="flex flex-col gap-2">
-                      {cardSecondary.map(col => (
-                        <div
-                          key={col.name}
-                          className="flex items-start justify-between gap-4 text-sm"
-                        >
-                          {!col.hideLabelOnMobile && (
-                            <dt className="min-w-20 shrink-0 text-muted-foreground">
-                              {col.header}
-                            </dt>
+                    </TableHead>
+                  )}
+                  {visibleColumns.map(col => {
+                    const canSort = Boolean(col.sortable && onSortChange);
+                    const sorted = sort?.field === col.name ? sort.order : null;
+                    return (
+                      <TableHead
+                        key={col.name}
+                        className={cn(
+                          col.align === "right" && "text-right",
+                          col.align === "center" && "text-center",
+                          canSort && "cursor-pointer select-none"
+                        )}
+                        role={canSort ? "button" : undefined}
+                        tabIndex={canSort ? 0 : undefined}
+                        aria-sort={
+                          sorted === "asc"
+                            ? "ascending"
+                            : sorted === "desc"
+                              ? "descending"
+                              : canSort
+                                ? "none"
+                                : undefined
+                        }
+                        onClick={
+                          canSort
+                            ? () =>
+                                onSortChange?.(
+                                  col.name,
+                                  sorted === "asc" ? "desc" : "asc"
+                                )
+                            : undefined
+                        }
+                        onKeyDown={
+                          canSort
+                            ? onActivateKey(() =>
+                                onSortChange?.(
+                                  col.name,
+                                  sorted === "asc" ? "desc" : "asc"
+                                )
+                              )
+                            : undefined
+                        }
+                      >
+                        <span
+                          className={cn(
+                            "inline-flex items-center gap-1",
+                            col.align === "right" && "flex-row-reverse",
+                            col.align === "center" && "justify-center"
                           )}
-                          <dd
+                        >
+                          {col.header}
+                          {sorted && (
+                            <span className="text-muted-foreground">
+                              {sorted === "asc" ? "↑" : "↓"}
+                            </span>
+                          )}
+                        </span>
+                      </TableHead>
+                    );
+                  })}
+                  {hasRowActions && <TableHead className="w-12 text-right" />}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {loading && rows.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={colSpan} className="h-24 text-center">
+                      <TableLoading />
+                    </TableCell>
+                  </TableRow>
+                ) : rows.length > 0 ? (
+                  rows.map(row => {
+                    const id = getRowId(row);
+                    const nav = resolveRow(row);
+                    const clickable = Boolean(nav.href || nav.onClick);
+                    const selectable = selection?.isSelectable?.(row) ?? true;
+                    return (
+                      <TableRow
+                        key={id}
+                        data-state={
+                          selectedSet.has(id) ? "selected" : undefined
+                        }
+                        className={cn(
+                          "hover-unified-table-row",
+                          clickable && "cursor-pointer",
+                          selectedSet.has(id) && "bg-muted/50"
+                        )}
+                        role={clickable ? "button" : undefined}
+                        tabIndex={clickable ? 0 : undefined}
+                        onClick={activateRow(nav)}
+                        onKeyDown={
+                          clickable
+                            ? onActivateKey(activateRow(nav))
+                            : undefined
+                        }
+                      >
+                        {selection && (
+                          <TableCell
+                            className="w-10"
+                            onClick={e => e.stopPropagation()}
+                          >
+                            <Checkbox
+                              checked={selectedSet.has(id)}
+                              disabled={!selectable}
+                              onCheckedChange={() => selection.onToggle(row)}
+                              aria-label="Select row"
+                            />
+                          </TableCell>
+                        )}
+                        {visibleColumns.map(col => (
+                          <TableCell
+                            key={col.name}
                             className={cn(
-                              "flex-1",
-                              col.hideLabelOnMobile ? "text-left" : "text-right"
+                              col.align === "right" && "text-right",
+                              col.align === "center" && "text-center"
                             )}
                           >
                             {renderCell(col, row, nav.href)}
-                          </dd>
-                        </div>
-                      ))}
-                    </dl>
-                  </CardContent>
-                )}
-              </Card>
-            );
-          })
-        )}
-      </div>
-
-      {/* Desktop / wide: table view */}
-      <div
-        className={cn(
-          "hidden overflow-hidden @md/table:block",
-          bordered &&
-            "rounded-md border border-border bg-card text-card-foreground"
-        )}
-      >
-        <div className="overflow-x-auto">
-          <Table aria-label={ariaLabel} className="w-full min-w-max">
-            <TableHeader>
-              <TableRow>
-                {selection && (
-                  <TableHead className="w-10">
-                    <Checkbox
-                      checked={allSelected}
-                      indeterminate={someSelected}
-                      onCheckedChange={() =>
-                        selection.onToggleAll(selectableRows, allSelected)
-                      }
-                      aria-label="Select all"
-                    />
-                  </TableHead>
-                )}
-                {visibleColumns.map(col => {
-                  const canSort = Boolean(col.sortable && onSortChange);
-                  const sorted = sort?.field === col.name ? sort.order : null;
-                  return (
-                    <TableHead
-                      key={col.name}
-                      className={cn(
-                        col.align === "right" && "text-right",
-                        col.align === "center" && "text-center",
-                        canSort && "cursor-pointer select-none"
-                      )}
-                      role={canSort ? "button" : undefined}
-                      tabIndex={canSort ? 0 : undefined}
-                      aria-sort={
-                        sorted === "asc"
-                          ? "ascending"
-                          : sorted === "desc"
-                            ? "descending"
-                            : canSort
-                              ? "none"
-                              : undefined
-                      }
-                      onClick={
-                        canSort
-                          ? () =>
-                              onSortChange?.(
-                                col.name,
-                                sorted === "asc" ? "desc" : "asc"
-                              )
-                          : undefined
-                      }
-                      onKeyDown={
-                        canSort
-                          ? onActivateKey(() =>
-                              onSortChange?.(
-                                col.name,
-                                sorted === "asc" ? "desc" : "asc"
-                              )
-                            )
-                          : undefined
-                      }
-                    >
-                      <span
-                        className={cn(
-                          "inline-flex items-center gap-1",
-                          col.align === "right" && "flex-row-reverse",
-                          col.align === "center" && "justify-center"
+                          </TableCell>
+                        ))}
+                        {hasRowActions && (
+                          <TableCell
+                            className="w-12 text-right"
+                            onClick={e => e.stopPropagation()}
+                          >
+                            {renderRowActions(row)}
+                          </TableCell>
                         )}
-                      >
-                        {col.header}
-                        {sorted && (
-                          <span className="text-muted-foreground">
-                            {sorted === "asc" ? "↑" : "↓"}
-                          </span>
-                        )}
-                      </span>
-                    </TableHead>
-                  );
-                })}
-                {hasRowActions && <TableHead className="w-12 text-right" />}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading && rows.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={colSpan} className="h-24 text-center">
-                    <TableLoading />
-                  </TableCell>
-                </TableRow>
-              ) : rows.length > 0 ? (
-                rows.map(row => {
-                  const id = getRowId(row);
-                  const nav = resolveRow(row);
-                  const clickable = Boolean(nav.href || nav.onClick);
-                  const selectable = selection?.isSelectable?.(row) ?? true;
-                  return (
-                    <TableRow
-                      key={id}
-                      data-state={selectedSet.has(id) ? "selected" : undefined}
-                      className={cn(
-                        "hover-unified-table-row",
-                        clickable && "cursor-pointer",
-                        selectedSet.has(id) && "bg-muted/50"
-                      )}
-                      role={clickable ? "button" : undefined}
-                      tabIndex={clickable ? 0 : undefined}
-                      onClick={activateRow(nav)}
-                      onKeyDown={
-                        clickable ? onActivateKey(activateRow(nav)) : undefined
-                      }
-                    >
-                      {selection && (
-                        <TableCell
-                          className="w-10"
-                          onClick={e => e.stopPropagation()}
-                        >
-                          <Checkbox
-                            checked={selectedSet.has(id)}
-                            disabled={!selectable}
-                            onCheckedChange={() => selection.onToggle(row)}
-                            aria-label="Select row"
-                          />
-                        </TableCell>
-                      )}
-                      {visibleColumns.map(col => (
-                        <TableCell
-                          key={col.name}
-                          className={cn(
-                            col.align === "right" && "text-right",
-                            col.align === "center" && "text-center"
-                          )}
-                        >
-                          {renderCell(col, row, nav.href)}
-                        </TableCell>
-                      ))}
-                      {hasRowActions && (
-                        <TableCell
-                          className="w-12 text-right"
-                          onClick={e => e.stopPropagation()}
-                        >
-                          {renderRowActions(row)}
-                        </TableCell>
-                      )}
-                    </TableRow>
-                  );
-                })
-              ) : (
-                <TableRow>
-                  <TableCell colSpan={colSpan} className="h-24 text-center">
-                    <TableEmpty message={emptyMessage} />
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+                      </TableRow>
+                    );
+                  })
+                ) : (
+                  <TableRow>
+                    <TableCell colSpan={colSpan} className="h-24 text-center">
+                      <TableEmpty message={emptyMessage} />
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
         </div>
+        {footer}
       </div>
     </div>
   );

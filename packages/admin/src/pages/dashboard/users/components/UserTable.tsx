@@ -2,7 +2,6 @@
 
 import type { TableParams } from "@nextlyhq/ui";
 import {
-  Alert,
   Avatar,
   AvatarFallback,
   AvatarImage,
@@ -31,6 +30,7 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import { ListShell } from "@admin/components/ui/table/list-shell";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useUserFields } from "@admin/hooks/queries/useUserFields";
 import {
@@ -426,67 +426,72 @@ export default function UserTable() {
   const showLoadingSkeleton = isLoading || (isFetching && !data);
 
   return (
-    <div className="space-y-4">
-      {selectedCount > 0 && (
-        <BulkActionBar
-          selectedCount={selectedCount}
-          collection={undefined}
-          onDelete={handleBulkDelete}
-          onClear={clearSelection}
-          itemLabel="user"
-        />
-      )}
+    <>
+      <ListShell
+        toolbar={
+          <>
+            {selectedCount > 0 && (
+              <BulkActionBar
+                selectedCount={selectedCount}
+                collection={undefined}
+                onDelete={handleBulkDelete}
+                onClear={clearSelection}
+                itemLabel="user"
+              />
+            )}
 
-      {/* Search + column visibility */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <SearchBar
-          value={search}
-          onChange={setSearch}
-          placeholder="Search users by name or email"
-          isLoading={isFetching}
-          className="max-w-sm flex-1 border-border bg-background text-foreground"
-        />
+            {/* Search + column visibility */}
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <SearchBar
+                value={search}
+                onChange={setSearch}
+                placeholder="Search users by name or email"
+                isLoading={isFetching}
+                className="max-w-sm flex-1 border-border bg-background text-foreground"
+              />
 
-        <div className="flex items-center gap-2">
-          {showLoadingSkeleton ? (
-            <Skeleton className="h-9 w-25" />
-          ) : (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="md"
-                  className="border-border bg-background text-foreground hover:bg-accent/10"
-                >
-                  <Columns className="h-4 w-4" />
-                  Columns
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {toggleableColumns.map(col => (
-                  <DropdownMenuCheckboxItem
-                    key={col.name}
-                    checked={!hiddenColumns.has(col.name)}
-                    onCheckedChange={() => toggleColumn(col.name)}
-                  >
-                    {typeof col.header === "string" ? col.header : col.name}
-                  </DropdownMenuCheckboxItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-        </div>
-      </div>
-
-      {isError ? (
-        <Alert variant="destructive">
-          {error instanceof Error
-            ? error.message
-            : "Failed to load users. Please try again."}
-        </Alert>
-      ) : (
+              <div className="flex items-center gap-2">
+                {showLoadingSkeleton ? (
+                  <Skeleton className="h-9 w-25" />
+                ) : (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="md"
+                        className="border-border bg-background text-foreground hover:bg-accent/10"
+                      >
+                        <Columns className="h-4 w-4" />
+                        Columns
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-48">
+                      <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      {toggleableColumns.map(col => (
+                        <DropdownMenuCheckboxItem
+                          key={col.name}
+                          checked={!hiddenColumns.has(col.name)}
+                          onCheckedChange={() => toggleColumn(col.name)}
+                        >
+                          {typeof col.header === "string"
+                            ? col.header
+                            : col.name}
+                        </DropdownMenuCheckboxItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+              </div>
+            </div>
+          </>
+        }
+      >
+        {/* The failure is a table state rather than a separate Alert, so the
+            list reports one the way every other list does. With no rows to
+            show, `DataTableView` returns the message alone and draws no card
+            around it, which is why nothing here needs to suppress the empty
+            state or lay the error out. */}
         <DataTableView<UserApiResponse>
           columns={columns}
           rows={filteredData}
@@ -497,26 +502,34 @@ export default function UserTable() {
           rowActions={rowActions}
           registryKey="users"
           ariaLabel="Users table"
+          footer={
+            data && data.meta.totalPages > 0 ? (
+              <Pagination
+                currentPage={page}
+                totalPages={data.meta.totalPages}
+                totalItems={data.meta.total}
+                pageSize={pageSize}
+                pageSizeOptions={[10, 25, 50]}
+                onPageChange={setPage}
+                onPageSizeChange={handlePageSizeChange}
+                isLoading={isLoading}
+              />
+            ) : undefined
+          }
+          error={
+            isError
+              ? error instanceof Error
+                ? error.message
+                : "Failed to load users. Please try again."
+              : null
+          }
           emptyMessage={
             search || roleFilter !== "all"
               ? "No users found. Try adjusting your search or filters."
               : "No users available."
           }
         />
-      )}
-
-      {data && data.meta.totalPages > 0 && (
-        <Pagination
-          currentPage={page}
-          totalPages={data.meta.totalPages}
-          totalItems={data.meta.total}
-          pageSize={pageSize}
-          pageSizeOptions={[10, 25, 50]}
-          onPageChange={setPage}
-          onPageSizeChange={handlePageSizeChange}
-          isLoading={isLoading}
-        />
-      )}
+      </ListShell>
 
       <UserDeleteDialog
         open={deleteDialogOpen}
@@ -534,6 +547,6 @@ export default function UserTable() {
           .map(user => ({ id: user.id, name: user.name, email: user.email }))}
         onConfirm={handleConfirmBulkDelete}
       />
-    </div>
+    </>
   );
 }
