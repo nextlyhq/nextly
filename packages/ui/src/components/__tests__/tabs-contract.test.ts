@@ -56,7 +56,7 @@
  * overridable, so completeness was never available.
  */
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -205,12 +205,36 @@ function utilityOf(cls: string): Utility {
  * fades, and reporting it would be a false positive. `!opacity-100` is not
  * legitimate, and the first clause catches it.
  */
+function wins(owned: Utility, caller: Utility): boolean {
+  if (caller.important && !owned.important) return true;
+  return owned.variants.every(variant => caller.variants.includes(variant));
+}
+
+/**
+ * The CSS property a Tailwind arbitrary-property utility sets, if it is one.
+ *
+ * `[border-bottom-width:0]` is a declaration wearing a class's clothes, and
+ * tailwind-merge deliberately does not reconcile it with `border-b-2` — both
+ * survive, and Tailwind emits the arbitrary rule later. So the resolver cannot
+ * answer for these and the property is read directly, through the same
+ * expansion the inline-style side uses. The two forms are the same act.
+ */
+function arbitraryProperty(bare: string): string | undefined {
+  return /^\[([a-zA-Z-]+):[^\]]*\]$/.exec(bare)?.[1];
+}
+
 function takesOver(owned: Utility, caller: Utility): boolean {
+  const property = arbitraryProperty(caller.bare);
+  if (property) {
+    const declared = new Set(expandsTo(property));
+    const ownedProperties = propertiesOf(owned.bare);
+    if (!ownedProperties.some(p => declared.has(p))) return false;
+    return wins(owned, caller);
+  }
   // Same property? Ask the resolver, on the bare forms.
   const merged = new Set(twMerge(owned.bare, caller.bare).split(/\s+/));
   if (merged.has(owned.bare)) return false;
-  if (caller.important && !owned.important) return true;
-  return owned.variants.every(variant => caller.variants.includes(variant));
+  return wins(owned, caller);
 }
 
 /** Which of a component's owned classes a caller's `className` takes over. */
@@ -309,19 +333,28 @@ function ownsStyleProperty(property: string): boolean {
   return expandsTo(property).some(p => OWNED_CSS_PROPERTIES.has(p));
 }
 
-/** Every `.tsx` under a scan root, excluding build output and the primitive. */
+/**
+ * Every `.tsx` under a scan root, excluding build output and the primitive.
+ *
+ * Entry types come from the directory listing rather than from a `stat`, which
+ * resolves symlinks: a link back to an ancestor would recurse forever, and the
+ * failure is a hung suite rather than a red one. In a pnpm workspace that is
+ * not hypothetical — the store is full of links — so the traversal only follows
+ * real directories.
+ */
 function sourceFiles(dir: string, found: string[] = []): string[] {
-  for (const entry of readdirSync(dir)) {
-    if (entry === "node_modules" || entry === "dist" || entry === ".turbo") {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const name = entry.name;
+    if (name === "node_modules" || name === "dist" || name === ".turbo") {
       continue;
     }
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) {
+    const full = join(dir, name);
+    if (entry.isDirectory()) {
       // `__tests__` is skipped deliberately: a test may construct violating
       // markup on purpose to show a rule fires, and scanning it would report
       // the proof as the problem.
-      if (entry !== "__tests__") sourceFiles(full, found);
-    } else if (entry.endsWith(".tsx") && full !== PRIMITIVE) {
+      if (name !== "__tests__") sourceFiles(full, found);
+    } else if (entry.isFile() && name.endsWith(".tsx") && full !== PRIMITIVE) {
       found.push(full);
     }
   }
@@ -729,6 +762,18 @@ describe("the tab indicator contract", () => {
       '<TabsTrigger className="!opacity-100" />',
     ],
     ["an unqualified important ring", '<TabsTrigger className="!ring-0" />'],
+    // Arbitrary properties: a declaration wearing a class's clothes.
+    // tailwind-merge deliberately does not reconcile these with predefined
+    // utilities, so both survive and Tailwind emits the arbitrary rule later.
+    [
+      "an arbitrary bottom-border width",
+      '<TabsTrigger className="[border-bottom-width:0]" />',
+    ],
+    ["an arbitrary corner", '<TabsList className="[border-radius:8px]" />'],
+    [
+      "an arbitrary box-shadow qualified the way the ring is",
+      '<TabsTrigger className="focus-visible:[box-shadow:none]" />',
+    ],
     [
       "a quoted inline underline colour",
       '<TabsTrigger style={{ "borderBottomColor": c }} />',
@@ -806,6 +851,18 @@ describe("the tab indicator contract", () => {
     [
       "an unqualified plain utility a variant out-specifies",
       '<TabsTrigger className="opacity-100" />',
+    ],
+    [
+      "an arbitrary property the primitive does not set",
+      '<TabsTrigger className="[width:20rem]" />',
+    ],
+    [
+      // The ring is declared under `focus-visible`, so an unqualified rule
+      // loses to it on specificity and the ring still draws when focused. The
+      // INLINE form of the same declaration does win, and is reported — the
+      // two are not interchangeable, and this pins the difference.
+      "an unqualified arbitrary box-shadow a variant out-specifies",
+      '<TabsTrigger className="[box-shadow:none]" />',
     ],
     [
       "an unrelated element carrying a corner",
