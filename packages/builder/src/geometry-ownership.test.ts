@@ -21,10 +21,17 @@
  * about their own question and disagree about the shared one — the indicator
  * lands a few pixels off the gap it names, and neither module's tests fail.
  *
- * A convention cannot hold that, because the second implementation looks
- * reasonable in isolation and arrives when someone needs a rectangle and has a
- * DOM node to hand. So it is checked: `getBoundingClientRect` may be read in
- * `geometry.ts` and nowhere else in this package.
+ * So this scans for that read outside `geometry.ts` — and it is a REVIEW AID,
+ * not a boundary. It recognises a bounded set of spellings: a property access,
+ * a string element access, and a destructured binding in either form. A name
+ * assembled at runtime, a `Reflect.get`, a property descriptor and an `eval`
+ * all walk past it, and the last test in this file asserts one of them does.
+ *
+ * That is worth saying at the top rather than only at the bottom, because a
+ * scan is easy to read as a guarantee. It narrows the paths someone takes by
+ * accident, which is the failure it is aimed at: the second implementation
+ * looks reasonable in isolation and arrives when someone needs a rectangle and
+ * has a DOM node to hand. It cannot stop one written deliberately.
  *
  * Read from the AST rather than by matching text, so a call written as
  * `el["getBoundingClientRect"]()` is seen as the same thing — the spelling that
