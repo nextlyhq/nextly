@@ -109,6 +109,17 @@ function environmentWithoutPreloads() {
   return rest;
 }
 
+/**
+ * The `NODE_ENV` values an artifact is evaluated under.
+ *
+ * A module-scope branch on `NODE_ENV` is ordinary in published React code, and only one side of it
+ * runs per evaluation. The build sets nothing, so the production side was never evaluated at all:
+ * `if (process.env.NODE_ENV === "production") document.title` shipped past this gate and threw for
+ * the consumer it was written for. Both sides are evaluated, because either one can be the one that
+ * touches the DOM.
+ */
+const EVALUATED_NODE_ENVS = ["production", "development"];
+
 /** This file, re-invoked as the child that evaluates one artifact. */
 const SELF = fileURLToPath(import.meta.url);
 
@@ -887,15 +898,19 @@ async function main() {
     // Evaluated, not merely read: this is what makes the browser-global question complete. One
     // fresh process per artifact, so nothing an earlier one did to the environment can decide a
     // later one's verdict — which is the state a consumer importing this entry ALONE is in.
-    const problem = childOutcome(
-      file,
-      spawnSync(process.execPath, [SELF, "--evaluate", file], {
-        encoding: "utf8",
-        timeout: EVALUATION_TIMEOUT_MS,
-        env: environmentWithoutPreloads(),
-      })
-    );
-    if (problem !== null) problems.push(problem);
+    for (const nodeEnv of EVALUATED_NODE_ENVS) {
+      const problem = childOutcome(
+        file,
+        spawnSync(process.execPath, [SELF, "--evaluate", file], {
+          encoding: "utf8",
+          timeout: EVALUATION_TIMEOUT_MS,
+          env: { ...environmentWithoutPreloads(), NODE_ENV: nodeEnv },
+        })
+      );
+      // Named with the environment, because "utils.mjs threw" is a different report to act on
+      // depending on which branch did it, and the two runs are otherwise identical.
+      if (problem !== null) problems.push(`${problem} (NODE_ENV=${nodeEnv})`);
+    }
   }
 
   if (artifacts.length === 0) {

@@ -11,6 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+import ts from "typescript";
 
 import {
   clientBuildEntries,
@@ -296,57 +297,96 @@ describe("the barrel declaration and the export map", () => {
  * exactly the comparison meant to catch it.
  */
 function exportedNames(source: string): string[] {
-  // Every exported BINDING, not only the functions. A `const` added to the module and missed in
-  // the declaration gives every TypeScript consumer `TS2305` while working at runtime, and a
-  // function-only comparison reported that as parity.
+  // PARSED, not matched. Four rounds of review each found a form the regular expressions could not
+  // see -- a default export, a re-export list, a namespace re-export, and finally a declaration
+  // inside a block comment whose inner line began at column zero. The reason is structural rather
+  // than careless: the comparison reads two files with one reader, so any blindness is symmetric,
+  // both arrays lose the same entry, and they compare EQUAL. A parity check cannot detect a form it
+  // does not understand, by construction, and enumerating export syntax by hand has a long tail.
   //
-  // `async` sits between `export` and `function`, and an export LIST names bindings declared
-  // elsewhere — both are ordinary ways to export something, and a matcher blind to either
-  // reports a missing declaration as agreement.
-  const declared = [
-    ...source.matchAll(
-      /^export (?:declare )?(?:async )?(?:function|const|let|var|class) (\w+)/gm
-    ),
-  ].map(match => match[1]!);
-  // The default export is one binding whose name IS `default`, and it is spelled without any of
-  // the keywords above. Unmatched, a module that gained one and a declaration that did not both
-  // reported nothing, so the arrays stayed equal and the mismatch read as agreement.
-  const byDefault = /^export default\b/m.test(source) ? ["default"] : [];
-  // A re-export publishes a binding exactly as a local one does, so the list is read whether or not
-  // a `from` clause follows it. Excluding those made `export { extra } from "./other.mjs"` invisible
-  // on both sides at once, which is the one way a parity comparison reports agreement over a real
-  // difference.
-  //
-  // `export * from` is the case that cannot be answered by reading one file: the names live in the
-  // other module. It is recorded as a marker naming its source rather than skipped, so two files
-  // agree only when they star-export the same module and a one-sided one fails loudly.
-  const starred = [
-    ...source.matchAll(/^export \* from\s*["']([^"']+)["']/gm),
-  ].map(match => `<star export from ${match[1]!}>`);
-  // `export * as colors from "./color.mjs"` publishes ONE binding named `colors`, so it is neither
-  // a star export whose names live elsewhere nor a braced list. Matched by neither, it was invisible
-  // on both sides at once.
-  const namespaced = [...source.matchAll(/^export \* as (\w+) from/gm)].map(
-    match => match[1]!
+  // The compiler already answers this exactly, and comments cease to be a category to handle at all.
+  const tree = ts.createSourceFile(
+    "module.mjs",
+    source,
+    ts.ScriptTarget.Latest,
+    true
   );
-  const listed = [...source.matchAll(/^export \{([^}]*)\}/gm)]
-    .flatMap(match => match[1]!.split(","))
-    .map(part => {
-      // `export { extra as renamed }` publishes the name on the RIGHT. This is also how
-      // `export { x as default }` is recognised, which is the other spelling of a default export.
-      const segments = part.trim().split(/\s+as\s+/);
-      return (segments[segments.length - 1] ?? "").trim();
-    })
-    .filter(name => name.length > 0 && name !== "type");
-  return [
-    ...new Set([
-      ...declared,
-      ...byDefault,
-      ...starred,
-      ...namespaced,
-      ...listed,
-    ]),
-  ].sort();
+  const found: string[] = [];
+
+  // One reader, so the `canHaveModifiers` guard is applied once rather than at each call site.
+  // `getModifiers` requires a node that can carry them, and a second caller reaching for them
+  // directly is how the guard gets skipped.
+  const modifiersOf = (node: ts.Node): readonly ts.Modifier[] =>
+    ts.canHaveModifiers(node) ? (ts.getModifiers(node) ?? []) : [];
+
+  const hasModifier = (node: ts.Node, kind: ts.SyntaxKind): boolean =>
+    modifiersOf(node).some(modifier => modifier.kind === kind);
+
+  for (const statement of tree.statements) {
+    if (ts.isExportAssignment(statement)) {
+      // `export default value`. `export =` is the CommonJS form and publishes no named binding.
+      if (statement.isExportEquals !== true) found.push("default");
+      continue;
+    }
+
+    if (ts.isExportDeclaration(statement)) {
+      // `export type { X } from "./x"` marks the whole DECLARATION type-only, where
+      // `export { type X }` marks the element. Both publish no value, and checking only the
+      // element form let the declaration form through.
+      if (statement.isTypeOnly) continue;
+      const clause = statement.exportClause;
+      if (clause === undefined) {
+        // `export * from "./x"` cannot be answered from this file: the names live in the other
+        // module. Carried as a marker naming its SOURCE, so two files agree only when they
+        // star-export the same module and a one-sided one fails loudly.
+        const from = statement.moduleSpecifier;
+        const where =
+          from !== undefined && ts.isStringLiteral(from) ? from.text : "?";
+        found.push(`<star export from ${where}>`);
+      } else if (ts.isNamespaceExport(clause)) {
+        // `export * as colors from "./x"` publishes exactly one binding, named `colors`.
+        found.push(clause.name.text);
+      } else {
+        // A list, with or without a `from`. A re-export publishes a binding as a local one does,
+        // and `export { x as default }` is the other spelling of a default export.
+        for (const element of clause.elements) {
+          if (element.isTypeOnly) continue;
+          found.push(element.name.text);
+        }
+      }
+      continue;
+    }
+
+    if (!hasModifier(statement, ts.SyntaxKind.ExportKeyword)) continue;
+
+    if (ts.isVariableStatement(statement)) {
+      // Every declarator, so `export const a = 1, b = 2` publishes both.
+      for (const declaration of statement.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name))
+          found.push(declaration.name.text);
+      }
+      continue;
+    }
+
+    const isDefault = hasModifier(statement, ts.SyntaxKind.DefaultKeyword);
+    // Interfaces and type aliases are deliberately absent from this list. They exist only in type
+    // space, so a runtime module CANNOT publish one: counting them would make every declaration
+    // file differ from its module by exactly its types, and the comparison would report a mismatch
+    // on every correct pair. What this compares is the VALUE surface, which is what a consumer
+    // importing a binding at runtime actually receives.
+    if (
+      ts.isFunctionDeclaration(statement) ||
+      ts.isClassDeclaration(statement) ||
+      ts.isEnumDeclaration(statement)
+    ) {
+      // `export default function build() {}` publishes `default`, not `build`: a consumer imports it
+      // without naming it, and the local name is not part of the surface.
+      if (isDefault) found.push("default");
+      else if (statement.name !== undefined) found.push(statement.name.text);
+    }
+  }
+
+  return [...new Set(found)].sort();
 }
 
 describe("reading the names a module publishes", () => {
@@ -413,6 +453,42 @@ describe("reading the names a module publishes", () => {
     expect(exportedNames(`export * from "./a.mjs";`)).not.toEqual(
       exportedNames(`export * from "./b.mjs";`)
     );
+  });
+
+  it("does not read an export out of a block comment", () => {
+    // Commenting a binding out is how one is REMOVED. Matched as text, the inner line still begins
+    // with `export` at column zero, so the binding was reported as published and a declaration that
+    // still named it compared equal -- the removal invisible on both sides at once.
+    expect(
+      exportedNames(`/*\nexport const stale = 1;\n*/\nexport const live = 2;`)
+    ).toEqual(["live"]);
+    // A line comment is the same question, and so is an export named inside a string.
+    expect(
+      exportedNames(`// export const alsoStale = 1;\nexport const live = 2;`)
+    ).toEqual(["live"]);
+    expect(
+      exportedNames(`export const doc = \`export const inText = 1;\`;`)
+    ).toEqual(["doc"]);
+  });
+
+  it("publishes `default` for a default declaration, not its local name", () => {
+    // `export default function build() {}` is imported without naming it, so the local name is not
+    // part of the surface and reporting it would compare against a name no consumer can use.
+    expect(exportedNames(`export default function build() {}`)).toEqual([
+      "default",
+    ]);
+    expect(exportedNames(`export default class Preset {}`)).toEqual([
+      "default",
+    ]);
+  });
+
+  it("names every declarator in one exported statement", () => {
+    expect(exportedNames(`export const a = 1, b = 2;`)).toEqual(["a", "b"]);
+  });
+
+  it("ignores a type-only re-export, which publishes no value", () => {
+    expect(exportedNames(`export { type Only } from "./x.mjs";`)).toEqual([]);
+    expect(exportedNames(`export type { Also } from "./x.mjs";`)).toEqual([]);
   });
 
   it("names a binding once when it is both declared and listed", () => {

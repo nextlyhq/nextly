@@ -9,6 +9,10 @@
  * These cover that: the specifier reader and the package classifier are exercised against the
  * spellings a bundler emits, including the ones that would let a real dependency through unseen.
  */
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -23,6 +27,7 @@ import {
   restrictToSupportedFloor,
   specifiersIn,
 } from "../../scripts/check-server-safe-artifacts.mjs";
+import { SERVER_SAFE_ALLOWED_PACKAGES } from "../../scripts/published-entries.mjs";
 
 const read = (source: string): string[] => specifiersIn(source, "artifact.mjs");
 
@@ -257,6 +262,39 @@ describe("classifying a specifier", () => {
     // The control: a real package that merely looks like one must still be named.
     expect(packageOf("react")).toBe("react");
     expect(packageOf("path-browserify")).toBe("path-browserify");
+  });
+});
+
+describe("what the allow-list is allowed to name", () => {
+  it("names only packages this one declares as its own dependencies", () => {
+    // A manifest assertion is a boundary only if the RESOLVER agrees with it. Under pnpm a root
+    // dependency, or one hoisted for another workspace package, stays importable here — so an
+    // allow-list entry this package does not declare would pass the specifier scan, resolve in the
+    // evaluation child, and then fail for a consumer who installed only what the manifest names.
+    //
+    // Read from the manifest rather than restated, so adding a dependency and adding it to the
+    // allow-list stay two deliberate acts that cannot silently diverge.
+    const manifest = JSON.parse(
+      readFileSync(
+        path.join(
+          path.dirname(fileURLToPath(import.meta.url)),
+          "..",
+          "..",
+          "package.json"
+        ),
+        "utf8"
+      )
+    ) as { dependencies?: Record<string, string> };
+    const declared = new Set(Object.keys(manifest.dependencies ?? {}));
+    const undeclared = [...SERVER_SAFE_ALLOWED_PACKAGES].filter(
+      name => !declared.has(name)
+    );
+    expect(undeclared).toEqual([]);
+  });
+
+  it("has something to check, so the rule cannot pass vacuously", () => {
+    // An empty allow-list satisfies the rule above by having nothing to test.
+    expect(SERVER_SAFE_ALLOWED_PACKAGES.size).toBeGreaterThan(0);
   });
 });
 
