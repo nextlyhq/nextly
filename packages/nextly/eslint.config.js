@@ -1,64 +1,12 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { config } from "@nextlyhq/eslint-config/base";
 
-/**
- * Files that still throw a bare `Error`, exempt from the guard below until they do not.
- *
- * Held as JSON rather than a module: it is data, and a `.js` beside the config gets picked up
- * by lint-staged and parsed as typed source, which fails because it is outside the TS project.
- * JSON has no such problem and needs no declaration file to stay typed at its other reader,
- * `src/errors/__tests__/bare-error-allowlist.test.ts`.
- */
-const BARE_ERROR_ALLOWLIST = JSON.parse(
-  readFileSync(
-    join(
-      dirname(fileURLToPath(import.meta.url)),
-      "eslint-bare-error-allowlist.json"
-    ),
-    "utf8"
-  )
-);
+import { bareErrorConfig } from "./eslint-bare-error-rule.js";
 
 export default [
   ...config,
-  {
-    // A thrown bare `Error` reaches the API layer with no code to map, so it becomes a 500
-    // whatever it actually was — a caller-fixable refusal reads as a server fault, and the
-    // message is the only thing left to act on. `NextlyError` carries the code instead.
-    //
-    // The rule already existed in AGENTS.md and had 304 violations, because nothing checked:
-    // where the correct path and the easy path differ, the easy one wins. This makes the
-    // easy path fail.
-    //
-    // Enforced as a syntax restriction rather than a bespoke rule so there is no plugin to
-    // build or version — the same trade this repo made for the keyboard-listener guard in
-    // `packages/admin/eslint.config.js`. The selector matches the throw itself, which is the
-    // thing that must not appear.
-    //
-    // Existing violations are exempted BY FILE so this lands green rather than as a 107-file
-    // change nobody can review. See `eslint-bare-error-allowlist.js` for what that does and
-    // does not cover.
-    files: ["src/**/*.ts"],
-    ignores: [
-      ...BARE_ERROR_ALLOWLIST,
-      // Tests may throw whatever makes a failure legible; they never cross the API boundary.
-      "src/**/*.test.ts",
-      "src/**/*.spec.ts",
-    ],
-    rules: {
-      "no-restricted-syntax": [
-        "error",
-        {
-          selector: "ThrowStatement > NewExpression[callee.name='Error']",
-          message:
-            "Throw a NextlyError, not a bare Error. A bare Error carries no code, so the API layer reports it as a 500 even when it is a caller-fixable refusal. Use NextlyError.validation / .notFound / .conflict / .internal, or `new NextlyError({ code, publicMessage })` for a code without a factory.",
-        },
-      ],
-    },
-  },
+  // Globs are relative to packages/nextly/ because the lint command runs `eslint .` from this
+  // directory. The repository-root config mounts the same builder with a path prefix.
+  bareErrorConfig(),
   // F1 PR 1 + F11 PR 5: bans on imports from the deployed app's
   // runtime code (the request graph + boot path).
   //
@@ -145,9 +93,10 @@ export default [
       "node_modules/**",
       "test-*.ts",
       "tsup.config.js",
-      // Config DATA for the rule above, not source. Same treatment as the other
-      // root-level config files: outside the TS project service, so linting it as
-      // typed source fails to parse.
+      // Config for the rule above, not source. Same treatment as the other root-level
+      // config files: outside the TS project service, so linting it as typed source
+      // fails to parse.
+      "eslint-bare-error-rule.js",
       "vitest.config.ts",
       "vitest.*.config.ts",
       "scripts/*.cjs",

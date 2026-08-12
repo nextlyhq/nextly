@@ -1,6 +1,8 @@
 import { config } from "@nextlyhq/eslint-config/base";
 import { reactRules } from "@nextlyhq/eslint-config/react-internal";
 
+import { bareErrorConfig } from "./packages/nextly/eslint-bare-error-rule.js";
+
 // Apply the React + react-hooks rule set to React-bearing paths so
 // inline `// eslint-disable-next-line react-hooks/...` directives
 // resolve when lint-staged invokes ESLint from the repo root. Without
@@ -19,6 +21,12 @@ const REACT_FILES = [
 export default [
   ...config,
   ...reactRules.map(entry => ({ ...entry, files: REACT_FILES })),
+  // Mount packages/nextly's bare-`Error` guard here too, with its globs rewritten relative to
+  // the repository root. ESLint picks a flat config by CWD rather than by linted file, so a
+  // rule that lives only in the package config is absent from every root invocation — which
+  // includes lint-staged, the hook that runs before a commit is written. Same reason as the
+  // React block above.
+  bareErrorConfig("packages/nextly/"),
   {
     ignores: [
       "packages/*/dist/**",
@@ -40,6 +48,9 @@ export default [
       // config files aren't in any tsconfig project; they are meant to be
       // maintained by hand, not linted as TS source
       "**/eslint.config.{js,mjs,cjs,ts}",
+      // reason: same as the configs above — a rule module beside a package's eslint config is
+      // not in that package's tsconfig project, so typed linting cannot resolve it.
+      "packages/nextly/eslint-bare-error-rule.js",
       // reason: vitest config files aren't in any tsconfig project either.
       // F18 added vitest.integration.config.ts as a sibling of vitest.config.ts
       // to split unit/integration suites; both are config-only and not

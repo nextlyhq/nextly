@@ -1,5 +1,4 @@
 [
-  "src/__tests__/database/setup.ts",
   "src/auth/handlers/deps-bridge.ts",
   "src/auth/password/index.ts",
   "src/auth/pipeline/challenge.ts",
@@ -44,9 +43,6 @@
   "src/domains/email/services/providers/sendlayer-provider.ts",
   "src/domains/email/services/providers/smtp-provider.ts",
   "src/domains/email/services/template-engine.ts",
-  "src/domains/field-groups/__tests__/field-group-test-helpers.ts",
-  "src/domains/field-groups/migration/__tests__/helpers/locking-adapter.ts",
-  "src/domains/field-groups/migration/__tests__/helpers/table-world.ts",
   "src/domains/field-groups/services/field-group-schema-service.ts",
   "src/domains/i18n/config/validate.ts",
   "src/domains/i18n/migration/ddl-types.ts",
@@ -70,7 +66,6 @@
   "src/domains/schema/pipeline/sql-templates/sqlite.ts",
   "src/domains/schema/services/drizzle-statement-executor.ts",
   "src/domains/schema/services/runtime-schema-generator.ts",
-  "src/domains/singles/__tests__/single-test-helpers.ts",
   "src/domains/singles/services/resolve-single-table-name.ts",
   "src/domains/users/services/user-ext-schema-service.ts",
   "src/domains/users/services/user-field-definition-service.ts",
