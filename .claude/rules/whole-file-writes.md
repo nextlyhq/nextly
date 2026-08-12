@@ -29,6 +29,21 @@ makes a redirect safe. So the condition to require is an explicit NOT FOUND;
 every other read failure aborts, because a file the reader could not open is
 still a file the shell will happily truncate.
 
+**Better still, do not separate the check from the write.** A probe followed by
+a redirect is two operations, and anything that creates the path in between —
+generated output, a concurrent tool, another session — is truncated by a check
+that passed a moment earlier. An exclusive create refuses at write time instead,
+which is a boundary rather than a look:
+
+```
+set -o noclobber        # `>` now fails on an existing file; `>|` opts out
+```
+
+Node's equivalent is the `wx` flag, which throws `EEXIST` rather than
+truncating: `writeFileSync(path, data, { flag: "wx" })`. Use one of these when
+the intent is genuinely "create", and keep the NOT FOUND probe for deciding
+whether that is the intent at all.
+
 Under an editing tool that requires a prior read, use it; reaching for the shell
 to write a file the tool would have made you read is how the requirement gets
 bypassed, and it is the bypass rather than the command that does the damage.
@@ -49,16 +64,20 @@ Resolve it with something that exists everywhere this repo runs — CI covers
 Ubuntu, macOS and Windows:
 
 ```
-node -e 'const {realpathSync}=require("fs"), {join,dirname,basename}=require("path");
+node -e 'const {realpathSync,existsSync}=require("fs"), {join,dirname,basename}=require("path");
 const p=process.argv[1];
-console.log(join(realpathSync(dirname(p)), basename(p)))' -- <path>
+console.log(existsSync(p) ? realpathSync(p)
+                          : join(realpathSync(dirname(p)), basename(p)))' -- <path>
 ```
 
-Resolve the PARENT and re-attach the leaf, rather than resolving the whole path.
-`realpathSync` throws `ENOENT` on a path that does not exist, and the file not
-existing is the case a blind write is legitimately for — resolving the leaf
-would reject every genuinely new file, which is the outcome this rule is meant
-to permit. The parent is what carries the symlink risk, and it exists.
+Resolve the whole path when the leaf EXISTS, and fall back to resolving the
+parent and re-attaching the leaf only when it does not. Both halves are
+load-bearing and each is wrong alone: `realpathSync` throws `ENOENT` on a path
+that does not exist, so resolving the leaf unconditionally rejects every
+genuinely new file — the case a blind write is legitimately for — while
+resolving only the parent returns the LINK when the leaf is itself a symlink,
+which is the case that started all this. Measured: for `link.txt -> real.txt`,
+parent-only yields `link.txt` and full resolution yields `real.txt`.
 
 `readlink -f` is a GNU extension, absent from POSIX and from Windows shells, so
 it is not the portable instruction even where it happens to work. If resolving
@@ -125,13 +144,14 @@ They are worth knowing individually, because each looks like good news:
    `-` in its `++---` bar settles it — but only when the comparison starts from
    before the file existed.
 
-   Read against the wrong baseline it answers a different question. A genuinely
-   new path that was STAGED and then shortened shows deletions under the bare
-   `git diff --stat`, which compares the working tree with the index where the
-   longer version now sits; against `HEAD`, where the path does not exist at
-   all, the same file shows additions only. So the bare form is the one that
-   fires on a file that really is new, and it fires exactly when the baseline
-   section says the index is NOT the baseline. This is the cheapest tell and the
+   Read against the wrong baseline it answers a different question, and a new
+   path that was STAGED is the case that makes this concrete. The index holds
+   its pre-write content and `HEAD` does not, so the index IS the baseline —
+   the bare `git diff --stat` is the right command, and it correctly shows
+   deletions when that staged content was clobbered. Reaching for `HEAD` there
+   compares against a revision where the path does not exist at all, which
+   reports additions only and clears the overwrite. The baseline section decides
+   this; the tell just uses what it decided. This is the cheapest tell and the
    one most easily read past, because by then the write has already succeeded
    and attention has moved on.
 
