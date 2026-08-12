@@ -29,6 +29,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { blockTypeClassName, nodeClassName } from "@nextlyhq/blocks-engine";
 import type {
   AnyBlockDefinition,
   BlockNode,
@@ -41,8 +42,22 @@ import type { PageContext } from "../context";
 
 import { coreBlocks } from "./index";
 
-/** The class the renderer hands a block for its root element. */
-const NODE_CLASS = "nx-n1";
+/** The node id every fixture renders under. */
+const NODE_ID = "n1";
+
+/**
+ * The class a block is handed, in the shape production uses.
+ *
+ * `classNameFor` always passes the node class AND the block-type class together,
+ * so a root helper branching on that two-class shape takes a different path when
+ * handed one class alone.
+ */
+function classNameFor(block: AnyBlockDefinition): string {
+  return `${nodeClassName(NODE_ID)} ${blockTypeClassName(block.name)}`;
+}
+
+/** The node class alone, which is what a root element is matched on. */
+const NODE_CLASS = nodeClassName(NODE_ID);
 
 /**
  * Inline CSS properties a named block is permitted to write on its root.
@@ -60,13 +75,6 @@ const NODE_CLASS = "nx-n1";
  */
 const ALLOWED: ReadonlyMap<string, ReadonlySet<string>> = new Map();
 
-/**
- * The host services every render receives, all inert.
- *
- * Answering nothing is what a standalone render does anyway, but they must be
- * PRESENT: a block that reaches for one it was not given throws, and the failure
- * reads as a block defect rather than as a thin fixture.
- */
 /**
  * The host services a render receives, in both of the states a block branches on.
  *
@@ -112,24 +120,44 @@ function nodeFor(block: AnyBlockDefinition, props: unknown): BlockNode {
   // The SAME object reaches `args.props` and `args.node.props` in production, so
   // a branch reading either sees what the other saw.
   return {
-    id: "n1",
+    id: NODE_ID,
     type: block.name,
     version: block.version,
     props: props as BlockNode["props"],
   };
 }
 
+/**
+ * Host policies a render is exercised under.
+ *
+ * `BlockBoundary` forwards one to every block, and image and embed already
+ * branch on `remotePatterns` and `trustedFrameOrigins` — so a root style
+ * introduced on a configured-policy path is invisible with the policy always
+ * absent. Both states run.
+ */
+function hostPolicies(): (object | undefined)[] {
+  return [
+    undefined,
+    {
+      remotePatterns: [{ protocol: "https", hostname: "example.com" }],
+      trustedFrameOrigins: ["https://example.com"],
+    },
+  ];
+}
+
 function renderArgs(
   block: AnyBlockDefinition,
   props: unknown,
-  ctx: PageContext
+  ctx: PageContext,
+  hostPolicy: object | undefined
 ): BlockRenderArgs<object, unknown> {
   return {
     props,
     node: nodeFor(block, props),
-    className: NODE_CLASS,
+    className: classNameFor(block),
     ctx,
     renderSlot: () => <span>child</span>,
+    ...(hostPolicy === undefined ? {} : { hostPolicy }),
   } as unknown as BlockRenderArgs<object, unknown>;
 }
 
@@ -174,30 +202,54 @@ const REPRESENTATIVE: ReadonlyMap<string, readonly unknown[]> = new Map([
   ["color", ["#123456"]],
 ]);
 
+/**
+ * Every alternative value a declared prop can take, derived ONCE.
+ *
+ * Both the per-prop pass and the layered pass need this, and interpreting the
+ * schema twice would let support for a new prop shape reach one and not the
+ * other — so individual and conjunction coverage would silently disagree about
+ * which branches exist.
+ */
+function alternativesFor(
+  schema: Record<string, unknown>
+): Map<string, readonly unknown[]> {
+  const alternatives = new Map<string, readonly unknown[]>();
+  for (const [name, entry] of Object.entries(schema)) {
+    const options: unknown = (entry as { options?: unknown }).options;
+    if (Array.isArray(options)) {
+      alternatives.set(name, options.map(storedValueOf));
+      continue;
+    }
+    const declared: unknown = (entry as { type?: unknown }).type;
+    const values =
+      typeof declared === "string" ? REPRESENTATIVE.get(declared) : undefined;
+    if (values !== undefined) alternatives.set(name, values);
+  }
+  return alternatives;
+}
+
 /** The prop sets each block is exercised with. */
 function propVariants(block: AnyBlockDefinition): unknown[] {
   const base = {
     ...(block.defaultProps ?? {}),
     ...(block.example.props ?? {}),
   } as Record<string, unknown>;
-  const variants: unknown[] = [base];
   const schema: Record<string, unknown> = block.props ?? {};
-  for (const [name, entry] of Object.entries(schema)) {
-    const options: unknown = (entry as { options?: unknown }).options;
-    if (Array.isArray(options)) {
-      for (const option of options) {
-        variants.push({ ...base, [name]: storedValueOf(option) });
-      }
-      continue;
-    }
-    const declared: unknown = (entry as { type?: unknown }).type;
-    const values =
-      typeof declared === "string" ? REPRESENTATIVE.get(declared) : undefined;
-    for (const value of values ?? []) {
+  const alternatives = alternativesFor(schema);
+  // The UNMODIFIED defaults are their own case. Spreading the example over them
+  // means the real default state is never rendered when the example differs —
+  // `core/button` defaults to no destination and renders a `<button>`, while its
+  // example supplies one and every derived case keeps it.
+  const defaults = {
+    ...((block.defaultProps ?? {}) as Record<string, unknown>),
+  };
+  const variants: unknown[] = [defaults, base];
+  for (const [name, values] of alternatives) {
+    for (const value of values) {
       variants.push({ ...base, [name]: value });
     }
   }
-  return [...variants, ...layeredVariants(base, schema)];
+  return [...variants, ...layeredVariants(base, alternatives)];
 }
 
 /**
@@ -215,20 +267,8 @@ function propVariants(block: AnyBlockDefinition): unknown[] {
  */
 function layeredVariants(
   base: Record<string, unknown>,
-  schema: Record<string, unknown>
+  alternatives: Map<string, readonly unknown[]>
 ): unknown[] {
-  const alternatives = new Map<string, readonly unknown[]>();
-  for (const [name, entry] of Object.entries(schema)) {
-    const options: unknown = (entry as { options?: unknown }).options;
-    if (Array.isArray(options)) {
-      alternatives.set(name, options.map(storedValueOf));
-      continue;
-    }
-    const declared: unknown = (entry as { type?: unknown }).type;
-    const values =
-      typeof declared === "string" ? REPRESENTATIVE.get(declared) : undefined;
-    if (values !== undefined) alternatives.set(name, values);
-  }
   const depth = Math.max(0, ...[...alternatives.values()].map(v => v.length));
   const layers: unknown[] = [];
   for (let i = 0; i < depth; i += 1) {
@@ -248,14 +288,17 @@ function layeredVariants(
 async function renderHtml(
   block: AnyBlockDefinition,
   props: unknown,
-  ctx: PageContext
+  ctx: PageContext,
+  hostPolicy: object | undefined
 ): Promise<string> {
   // `BlockRenderResult` is `unknown` on purpose: the engine declares the block
   // contract without depending on React types. This file is inside the React
   // renderer, which is the layer entitled to say what that value is, and a wrong
   // narrowing cannot pass silently — the renderer throws on anything it cannot
   // draw, and `onError` rethrows into the test.
-  const node = (await block.render(renderArgs(block, props, ctx))) as ReactNode;
+  const node = (await block.render(
+    renderArgs(block, props, ctx, hostPolicy)
+  )) as ReactNode;
   const stream = await renderToReadableStream(node, {
     onError(error: unknown) {
       throw error;
@@ -311,13 +354,14 @@ async function inspectBlock(block: AnyBlockDefinition): Promise<Inspection> {
   let reached = false;
   for (const props of propVariants(block)) {
     for (const ctx of contexts()) {
-      for (const tag of classCarryingTags(
-        await renderHtml(block, props, ctx)
-      )) {
-        reached = true;
-        for (const property of inlinePropertiesOf(tag)) {
-          if (permitted.has(property)) continue;
-          offenders.push(`${block.name}: ${property}`);
+      for (const hostPolicy of hostPolicies()) {
+        const html = await renderHtml(block, props, ctx, hostPolicy);
+        for (const tag of classCarryingTags(html)) {
+          reached = true;
+          for (const property of inlinePropertiesOf(tag)) {
+            if (permitted.has(property)) continue;
+            offenders.push(`${block.name}: ${property}`);
+          }
         }
       }
     }
