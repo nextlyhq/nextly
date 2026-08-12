@@ -402,6 +402,15 @@ describe("this package takes no direct dependency on the block engine", () => {
  * simply are not present — and a bundled DEPENDENCY that uses one is caught by the artifact gate
  * as a package, which is the half a source ban cannot see.
  */
+/**
+ * The names that re-expose the global object, so `X.process` is the `process` binding itself.
+ *
+ * Closed by the language rather than by this list's authorship: `globalThis` is the standard
+ * spelling, and the other three are the host aliases that exist on the runtimes this package ships
+ * to. A name skipped as a property key after one of these is not a key at all.
+ */
+const GLOBAL_OBJECTS = new Set(["globalThis", "global", "self", "window"]);
+
 const RUNTIME_RESOLVERS = [
   "require",
   "module",
@@ -444,7 +453,20 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
   const isMemberName = (node: ts.Identifier): boolean => {
     const parent = node.parent;
     if (parent === undefined) return false;
-    if (ts.isPropertyAccessExpression(parent)) return parent.name === node;
+    // `globalThis.process` is the SAME binding as `process`, so treating the word as a harmless
+    // key there hands back every restricted global through one extra hop. The host objects that
+    // re-expose globals are a closed set the language defines, unlike the open set of member
+    // spellings this predicate exists to skip.
+    if (ts.isPropertyAccessExpression(parent)) {
+      if (
+        parent.name === node &&
+        ts.isIdentifier(parent.expression) &&
+        GLOBAL_OBJECTS.has(parent.expression.text)
+      ) {
+        return false;
+      }
+      return parent.name === node;
+    }
     if (ts.isQualifiedName(parent)) return parent.right === node;
     if (ts.isBindingElement(parent)) return parent.propertyName === node;
     // `<Widget module={value} require />` spells both words as PROP names. They reach no ambient
@@ -710,9 +732,28 @@ describe("this package resolves no module at runtime", () => {
           if (specifier.startsWith("#")) return true;
           // Compared after RESOLUTION, so a specifier that climbs out and back in is judged by
           // where it lands rather than by how it is spelled.
-          return relative(SRC, resolve(dirname(file), specifier)).startsWith(
-            ".."
-          );
+          const target = resolve(dirname(file), specifier);
+          if (relative(SRC, target).startsWith("..")) return true;
+          // Inside `src` is not the same as inside the SCANNED set, and the difference is the
+          // whole point of the check. `sourceFiles` skips `__tests__` directories and anything
+          // `isShippedModule` rejects, so `./helper.fixture.ts` and `../__tests__/helper.ts` both
+          // resolve within `src` and are never opened by the ban above — while the bundler still
+          // pulls them into the artifact as first-party input.
+          //
+          // Resolution here is deliberately the small subset TypeScript sources use — the literal
+          // path, an added extension, or a directory's `index` — rather than a reimplementation of
+          // Node's algorithm. Every candidate is checked for MEMBERSHIP of the scanned set, so a
+          // form this does not construct reports an escape and gets looked at, instead of being
+          // waved through by a resolver guess that happens to land somewhere plausible.
+          const scanned = new Set(sourceFiles(SRC));
+          const candidates = [target];
+          for (const extension of MODULE_EXTENSIONS) {
+            candidates.push(
+              target + extension,
+              join(target, `index${extension}`)
+            );
+          }
+          return !candidates.some(candidate => scanned.has(candidate));
         })
         .map(specifier => `${file}: ${specifier}`)
     );

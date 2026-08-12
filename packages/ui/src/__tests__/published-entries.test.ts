@@ -373,8 +373,15 @@ function exportedNames(source: string): string[] {
           modifier => modifier.kind === ts.SyntaxKind.ConstKeyword
         );
       }
-      // An import inside a namespace binds a name for the body to use; it publishes nothing.
+      // An import inside a namespace binds a name for the body to use; it publishes nothing. The
+      // `import X = require(…)` form is the same act written differently, and only publishes when
+      // it carries `export` — without it a consumer using the namespace as a value gets TS2708.
       if (ts.isImportDeclaration(member)) return false;
+      if (ts.isImportEqualsDeclaration(member)) {
+        return modifiersOf(member).some(
+          modifier => modifier.kind === ts.SyntaxKind.ExportKeyword
+        );
+      }
       if (ts.isExportDeclaration(member)) {
         // A LOCAL export list names members declared in this same block, and `some` visits each of
         // those declarations on its own — so counting the list too makes a namespace of pure types
@@ -927,6 +934,24 @@ describe("reading the names a module publishes", () => {
     expect(
       exportedNames(`export declare namespace A.B.C { interface X {} }`)
     ).toEqual([]);
+  });
+
+  it("reads a namespace-local import alias as the binding it is", () => {
+    // `import X = require(…)` inside a namespace binds a name for the body. Unexported it
+    // publishes nothing, so a declaration exposing only that compared equal to a module exporting
+    // a real `Foo`, while a consumer using `Foo` as a value gets TS2708.
+    expect(
+      exportedNames(
+        `export declare namespace Foo { import X = require("./x"); }`
+      )
+    ).toEqual([]);
+    // The control: the same form WITH `export` does publish, so the modifier is what decides it
+    // rather than the statement kind.
+    expect(
+      exportedNames(
+        `export declare namespace Foo { export import X = require("./x"); }`
+      )
+    ).toEqual(["Foo"]);
   });
 
   it("leaves out an ambient const enum", () => {
