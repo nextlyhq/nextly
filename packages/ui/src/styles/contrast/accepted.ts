@@ -204,6 +204,110 @@ export const ACCEPTED_REGRESSIONS: AcceptedRegression[] = [
     ratio: 3.73,
     reason: "Destructive label on the sidebar surface, in quick-link rows.",
   },
+  // Destructive ink on a TINTED destructive fill: the error panels, the delete
+  // affordances on repeater and component rows, and the dashboard widgets. The
+  // tint sits on the muted surface, and blending it there lands closer to the
+  // ink than any opaque pair does -- which is why these are keyed by alpha and
+  // by the surface underneath, and why the opaque entries above do not cover
+  // them. These are the worst ratios in this file.
+  {
+    fg: "destructive",
+    bg: "destructive",
+    bgAlpha: 0.1,
+    bgOver: "muted",
+    mode: "light",
+    ratio: 3.11,
+    reason:
+      "Error-panel text on a 10% destructive tint over the muted surface. The lowest ratio the palette ships, and it is a message someone reads when something has already gone wrong.",
+  },
+  {
+    fg: "destructive",
+    bg: "destructive",
+    bgAlpha: 0.05,
+    bgOver: "muted",
+    mode: "light",
+    ratio: 3.31,
+    reason:
+      "Destructive ink on a 5% tint over the muted surface: dashboard widget counts and empty states.",
+  },
+  // The same two tints over the remaining surfaces. Listed rather than reduced
+  // to a rule, because each is a distinct measured colour and the file's whole
+  // purpose is that a reader can see the number without recomputing it. The
+  // spread is narrow (3.11 to 3.60) and every one of them fails, which is the
+  // useful summary: nowhere in the admin does destructive ink on its own tint
+  // reach the text minimum.
+  {
+    fg: "destructive",
+    bg: "destructive",
+    bgAlpha: 0.1,
+    bgOver: "background",
+    mode: "light",
+    ratio: 3.29,
+    reason: "10% tint over the page.",
+  },
+  {
+    fg: "destructive",
+    bg: "destructive",
+    bgAlpha: 0.1,
+    bgOver: "card",
+    mode: "light",
+    ratio: 3.38,
+    reason: "10% tint over a card, the best of the tinted set.",
+  },
+  {
+    fg: "destructive",
+    bg: "destructive",
+    bgAlpha: 0.1,
+    bgOver: "popover",
+    mode: "light",
+    ratio: 3.29,
+    reason: "10% tint inside a popover.",
+  },
+  {
+    fg: "destructive",
+    bg: "destructive",
+    bgAlpha: 0.1,
+    bgOver: "sidebar-background",
+    mode: "light",
+    ratio: 3.29,
+    reason: "10% tint on the sidebar surface.",
+  },
+  {
+    fg: "destructive",
+    bg: "destructive",
+    bgAlpha: 0.05,
+    bgOver: "background",
+    mode: "light",
+    ratio: 3.5,
+    reason: "5% tint over the page.",
+  },
+  {
+    fg: "destructive",
+    bg: "destructive",
+    bgAlpha: 0.05,
+    bgOver: "card",
+    mode: "light",
+    ratio: 3.6,
+    reason: "5% tint over a card.",
+  },
+  {
+    fg: "destructive",
+    bg: "destructive",
+    bgAlpha: 0.05,
+    bgOver: "popover",
+    mode: "light",
+    ratio: 3.5,
+    reason: "5% tint inside a popover.",
+  },
+  {
+    fg: "destructive",
+    bg: "destructive",
+    bgAlpha: 0.05,
+    bgOver: "sidebar-background",
+    mode: "light",
+    ratio: 3.5,
+    reason: "5% tint on the sidebar surface.",
+  },
   {
     fg: "destructive-foreground",
     bg: "destructive-solid",

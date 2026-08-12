@@ -79,6 +79,32 @@ const MENU_BUTTON = resolve(
   "../../../../../admin/src/components/layout/sidebar/index.tsx"
 );
 
+/** A weight change is the non-colour signal; any of these three carries it. */
+const MARKER = /data-\[active=true\]:font-(?:medium|semibold|bold)/;
+
+/**
+ * Every variant that renders an active row, each anchored to something stable
+ * in the source rather than to a line number.
+ */
+const ACTIVE_ROW_VARIANTS = [
+  { label: "menu button", anchor: "const sidebarMenuButtonVariants" },
+  { label: "menu sub-button", anchor: 'data-sidebar="menu-sub-button"' },
+] as const;
+
+/**
+ * The source from a variant's anchor to the next one, so a marker belonging to
+ * one variant cannot satisfy the assertion for another. The last variant runs
+ * to end of file.
+ */
+function variantSource(source: string, anchor: string): string {
+  const start = source.indexOf(anchor);
+  if (start === -1) return "";
+  const rest = ACTIVE_ROW_VARIANTS.map(v => source.indexOf(v.anchor)).filter(
+    at => at > start
+  );
+  return source.slice(start, rest.length > 0 ? Math.min(...rest) : undefined);
+}
+
 /**
  * How far the active fill must sit from the sidebar surface. Light mode ships
  * 0.94 against 0.99, which is 1.11:1; the floor sits just under that, so the
@@ -167,18 +193,26 @@ for (const mode of MODES) {
         //
         // Asserted against the component source because that is where the
         // signal lives; a token file cannot show whether anything renders it.
+        // Checked per VARIANT, not file-wide. Both the top-level menu button
+        // and the sub-button render active rows, and a count over the whole
+        // file passes while one of them has lost its marker -- the other
+        // occurrence covers for it, and active sub-navigation silently falls
+        // back to the fill alone.
         const source = readFileSync(MENU_BUTTON, "utf8");
-        const marked = source.match(
-          /data-\[active=true\]:font-(?:medium|semibold|bold)/g
+        const fill = contrastRatio(paint(SURFACE), paint(ACTIVE_FILL)).toFixed(
+          2
         );
+        const unmarked = ACTIVE_ROW_VARIANTS.filter(
+          variant => !variantSource(source, variant.anchor).match(MARKER)
+        ).map(variant => variant.label);
 
         expect(
-          marked?.length ?? 0,
-          `${mode.name}: the sidebar menu button applies no weight change for ` +
-            `data-[active=true], so the ${contrastRatio(paint(SURFACE), paint(ACTIVE_FILL)).toFixed(2)}:1 fill is ` +
-            `the only thing marking the active row. Add a non-colour signal, ` +
-            `or separate ${RESTING} from ${ACTIVE} so the ink carries it.`
-        ).toBeGreaterThan(0);
+          unmarked,
+          `${mode.name}: these sidebar variants apply no weight change for ` +
+            `data-[active=true], so the ${fill}:1 fill is the only thing ` +
+            `marking their active row. Add a non-colour signal, or separate ` +
+            `${RESTING} from ${ACTIVE} so the ink carries it.`
+        ).toEqual([]);
       });
     }
   });

@@ -25,14 +25,20 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { acceptedFor, type AcceptedRegression } from "../accepted";
-import { contrastRatio, type Rgb } from "../color";
+import {
+  ACCEPTED_REGRESSIONS,
+  acceptedFor,
+  roleOf,
+  type AcceptedRegression,
+} from "../accepted";
+import { PAIRINGS } from "../pairings";
+import { compositeOver, contrastRatio, type Rgb } from "../color";
 import {
   parseThemeScale,
   parseThemeTokens,
   type TokenMap,
 } from "../parse-theme";
-import { resolveColor } from "../resolve";
+import { applyOpacity, resolveColor } from "../resolve";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../../../../../..");
@@ -213,6 +219,55 @@ function ratiosFor(
   return measured;
 }
 
+/** The opaque fills a set of utilities names, as token references. */
+function namedSurfaces(
+  fills: readonly Utility[]
+): readonly string[] | undefined {
+  const named = [...new Set(fills.map(fill => `--nx-${fill.role}`))];
+  return named.length > 0 ? named : undefined;
+}
+
+/**
+ * Ink measured against a translucent fill blended over each page surface.
+ *
+ * The key is the surface the tint sits ON, not the blend, because that is what
+ * identifies the pair: `destructive/10 over card` and `destructive/10 over page`
+ * are different colours and different acceptances. `accepted.ts` keys them the
+ * same way through {@link PairDetail}.
+ */
+function tintedRatios(
+  role: string,
+  tint: Utility,
+  tokens: TokenMap
+): Map<string, number> | null {
+  const ink = colorOf(role, tokens);
+  const fill = colorOf(tint.role, tokens);
+  // Without a resolvable tint there is nothing to blend, so fall back to the
+  // bare surfaces rather than silently measuring nothing.
+  if (!ink || !fill) return ratiosFor(role, tokens);
+
+  const measured = new Map<string, number>();
+  for (const surface of PAGE_SURFACES) {
+    const base = colorOf(surface.replace(/^--nx-/, ""), tokens);
+    if (!base) continue;
+    const blended = compositeOver(applyOpacity(fill, tint.alpha ?? 1), base);
+    measured.set(surface, contrastRatio(ink, blended));
+  }
+  return measured;
+}
+
+/**
+ * An opacity modifier as a fraction: `/10` is 0.1, `/[12.5%]` is 0.125. Written
+ * as a bare number Tailwind reads it as a percentage, and the bracketed form
+ * may carry its own `%`.
+ */
+function parseAlpha(modifier: string): number | undefined {
+  const inner = modifier.replace(/^\//, "").replace(/^\[|\]$/g, "");
+  const value = Number.parseFloat(inner.replace(/%$/, ""));
+  if (!Number.isFinite(value)) return undefined;
+  return value / 100;
+}
+
 interface Utility {
   /** `text`, `ring`, `bg`, ... */
   prefix: string;
@@ -222,8 +277,15 @@ interface Utility {
   variant: string;
   /** Variants other than `dark`, which is what makes two utilities siblings. */
   state: string;
-  /** A translucent fill composites over what is behind it: not knowable here. */
+  /** A translucent fill composites over what is behind it. */
   translucent: boolean;
+  /**
+   * The opacity modifier as a fraction, when one is written. Retained rather
+   * than reduced to a boolean because a tint's ALPHA decides the colour the ink
+   * actually lands on, and discarding it made the check measure the surface
+   * under the tint instead of the blend on top of it.
+   */
+  alpha?: number;
   /** Ink with an opacity modifier: a wash, not something carrying meaning. */
   decorative: boolean;
   appliesInDark: boolean;
@@ -284,6 +346,7 @@ function parseUtilities(classString: string): Utility[] {
         .filter(part => part && part !== "dark")
         .join(":"),
       translucent: prefix === "bg" && Boolean(opacity),
+      alpha: opacity ? parseAlpha(opacity) : undefined,
       appliesInDark: true,
       appliesInLight: true,
       // An ink utility carrying an opacity modifier is a decorative wash --
@@ -369,23 +432,29 @@ for (const { path, line, self, utilities } of inkUsages()) {
       const inherited = fills.filter(fill => fill.state === "");
       const effective = sameState.length > 0 ? sameState : inherited;
 
-      // A translucent fill composites over whatever is behind it, which this
-      // cannot know. It still counts as the fill for the mode -- so rather than
-      // measure against a background that is not there, fall through to the
-      // page surfaces, which is where the blend ends up anyway.
-      const named = effective.some(fill => fill.translucent)
-        ? []
-        : [...new Set(effective.map(fill => `--nx-${fill.role}`))];
-
-      const measured = ratiosFor(
-        role,
-        tokens,
-        named.length > 0 ? named : undefined
-      );
+      // A translucent fill composites over whatever is behind it. Which page
+      // surface that is cannot be known here, so the tint is blended over EACH
+      // of them and the ink measured against every result.
+      //
+      // Falling through to the bare page surfaces instead -- the previous
+      // behaviour -- measures a colour the ink never touches. `text-destructive`
+      // on `bg-destructive/10` reads 3.73:1 against the page and 3.29:1 against
+      // the blend that is actually painted, so the check reported the pair as
+      // better than it renders, and an acceptance recorded from it understated
+      // the cost of the palette by a fifth of a point.
+      const tint = effective.find(fill => fill.translucent);
+      const measured = tint
+        ? tintedRatios(role, tint, tokens)
+        : ratiosFor(role, tokens, namedSurfaces(effective));
       if (!measured) continue;
       resolvedAny = true;
-      const best = Math.max(...measured.values());
-      if (named.length > 0 && best >= required) continue;
+      // When the component NAMES its own fill, clearing the bar on any one of
+      // them is enough: it tells us which surface this ink actually lands on.
+      // Falling back to the page surfaces carries no such knowledge, so every
+      // one of them has to hold. A tint is measured over all of them and is in
+      // the second case.
+      const declared = !tint && namedSurfaces(effective) !== undefined;
+      if (declared && Math.max(...measured.values()) >= required) continue;
       for (const [surface, ratio] of measured) {
         if (ratio >= required) continue;
         // A pair the palette knowingly ships below its minimum is recorded once
@@ -394,7 +463,16 @@ for (const { path, line, self, utilities } of inkUsages()) {
         // complete on its own, and this scan reaches the same colours through
         // utility names rather than token names -- which is exactly the shape
         // that makes a second list look like a different subject.
-        const accepted = acceptedFor(role, surface, mode);
+        // Keyed WITH the tint. An opaque acceptance must not cover a tinted
+        // variant of the same roles: they are different colours, they measure
+        // differently, and accepting one on the strength of the other is how
+        // the ledger came to understate what renders.
+        const accepted = tint
+          ? acceptedFor(role, tint.role, mode, {
+              bgAlpha: tint.alpha,
+              bgOver: surface,
+            })
+          : acceptedFor(role, surface, mode);
         if (accepted) {
           // Some accepted pairs are reached ONLY here -- the token pairing list
           // never names them -- so this scan is the only place their recorded
@@ -444,6 +522,46 @@ describe("ink utilities are readable on the surfaces they land on", () => {
       `An accepted pair no longer measures what accepted.ts records. If the ` +
         `change was intended, update the recorded ratio; if not, a token moved ` +
         `under an entry that was not agreed for this value.`
+    ).toEqual([]);
+  });
+
+  it("requires every acceptance to be reached by something", () => {
+    // Token existence is not enough. An entry whose call sites all disappear
+    // stops being evaluated by either suite while both roles remain declared,
+    // so it sits in the file reading as live coverage -- and pre-accepts the
+    // next component that happens to paint that pair.
+    //
+    // This is the assertion that can see both sources: PAIRINGS for entries the
+    // token suite evaluates, and `observed` for the ones only this scan reaches.
+    const byPairing = new Set(
+      PAIRINGS.flatMap(p => {
+        const key = `${roleOf(p.fg)}|${roleOf(p.bg)}|${p.fgAlpha ?? "-"}|${p.bgAlpha ?? "-"}|${p.bgOver ? roleOf(p.bgOver) : "-"}`;
+        return p.mode === undefined
+          ? [`${key}|light`, `${key}|dark`]
+          : [`${key}|${p.mode}`];
+      })
+    );
+    const byScan = new Set(
+      observed.map(
+        o =>
+          `${o.accepted.fg}|${o.accepted.bg}|${o.accepted.fgAlpha ?? "-"}|` +
+          `${o.accepted.bgAlpha ?? "-"}|${o.accepted.bgOver ? roleOf(o.accepted.bgOver) : "-"}|${o.accepted.mode}`
+      )
+    );
+
+    const unreached = ACCEPTED_REGRESSIONS.filter(entry => {
+      const key =
+        `${entry.fg}|${entry.bg}|${entry.fgAlpha ?? "-"}|${entry.bgAlpha ?? "-"}|` +
+        `${entry.bgOver ? roleOf(entry.bgOver) : "-"}|${entry.mode}`;
+      return !byPairing.has(key) && !byScan.has(key);
+    }).map(entry => `${entry.fg} on ${entry.bg} (${entry.mode})`);
+
+    expect(
+      unreached,
+      `These accepted-regression entries are evaluated by nothing: no pairing ` +
+        `covers them and no component paints them. Delete them — an ` +
+        `unreachable acceptance is not documentation, it is a standing ` +
+        `permission for whatever paints that pair next.`
     ).toEqual([]);
   });
 

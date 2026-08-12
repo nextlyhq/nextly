@@ -878,14 +878,25 @@
   /* Sidebar specific colors - using Slate scale */
   --nx-sidebar-background: oklch(0.99 0 0);
   /* flat with the content surface; nav is separated by borders, not fill */
-  /* Resting and active nav ink are the same value in light mode, so the active
-   * row is distinguished by its FILL alone (--nx-sidebar-accent). That is the
-   * reference palette's arrangement: nav labels sit at body-text weight rather
-   * than a step back from it. Because the fill carries the whole signal here,
-   * it is the part to protect if the sidebar surface ever changes -- a
-   * low-contrast surface weakens the fill first. Dark mode keeps the two-step
-   * relationship, where a near-white active ink on a dark row is what separates
-   * the states. */
+  /* Resting and active nav ink are the same value in light mode: nav labels sit
+   * at body-text weight rather than a step back from it, which is the reference
+   * palette's arrangement.
+   *
+   * So the active row is marked by its FILL (--nx-sidebar-accent) TOGETHER WITH
+   * a font-weight change, and the pair is load-bearing rather than decorative.
+   * The fill alone is about 1.11:1, far under the 3:1 WCAG 1.4.11 asks of
+   * information identifying a component's state, and there is no exemption for
+   * a large filled region -- that is 1.4.3, and it is about text. The weight
+   * change is what satisfies the criterion, being a difference that is not a
+   * colour and so carries no ratio at all.
+   *
+   * Removing `data-[active=true]:font-medium` from the sidebar menu buttons
+   * therefore leaves the nav with no conforming active state, and
+   * `contrast/__tests__/sidebar-ink-hierarchy.test.ts` fails per variant if
+   * either loses it.
+   *
+   * Dark mode keeps the two-step ink relationship instead, where a near-white
+   * active ink on a dark row is what separates the states. */
   --nx-sidebar-foreground: oklch(0 0 0);
   --nx-sidebar-primary: oklch(0 0 0);
   --nx-sidebar-primary-foreground: oklch(1 0 0);

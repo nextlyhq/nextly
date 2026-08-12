@@ -22,6 +22,7 @@
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
 "@nextlyhq/builder": patch
+"@nextlyhq/module-specifiers": patch
 ---
 
 Take the reference palette's light-mode values for the admin, and record what
