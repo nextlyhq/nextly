@@ -325,7 +325,21 @@ function outOfRangeValuesFor(entry: Record<string, unknown>): unknown[] {
   if (entry.type !== "number") return [];
   const min = typeof entry.min === "number" ? entry.min : 1;
   const max = typeof entry.max === "number" ? entry.max : 100;
-  return [0, -1, min - 1, max + 1, min + 0.5];
+  return [
+    0,
+    -1,
+    min - 1,
+    max + 1,
+    min + 0.5,
+    // A bound the SCHEMA never declared. A renderer applies caps of its own —
+    // `core/list` clamps `start` to a million while its schema names only a
+    // minimum — so edges derived from the schema alone stop short of the value
+    // that actually selects the branch. Anything past the largest exactly
+    // representable integer is beyond every such cap without guessing which
+    // one a given block chose, which the two lines above cannot avoid doing.
+    Number.MAX_SAFE_INTEGER,
+    -Number.MAX_SAFE_INTEGER,
+  ];
 }
 
 /**
@@ -342,7 +356,18 @@ function outOfRangeValuesFor(entry: Record<string, unknown>): unknown[] {
  */
 function malformedMemberArraysFor(entry: Record<string, unknown>): unknown[] {
   if (entry.type !== "array") return [];
-  return [[42], [null], [{}], ["ok", 42]];
+  return [
+    [42],
+    [null],
+    [{}],
+    ["ok", 42],
+    // Past the renderer's own truncation. `core/list` slices at a thousand
+    // before it maps, and that slice is a branch like any other: a stored array
+    // can be any length, and nothing in the schema says otherwise. Sized just
+    // over the cap rather than far past it, so the branch is reached at the
+    // smallest input that reaches it.
+    Array.from({ length: 1001 }, (_, index) => `i${index}`),
+  ];
 }
 
 function alternativesFor(
