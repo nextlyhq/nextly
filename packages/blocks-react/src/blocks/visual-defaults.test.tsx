@@ -1,4 +1,4 @@
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToReadableStream } from "react-dom/server";
 /**
  * A core block's visual defaults are DATA, never declarations written on its root.
  *
@@ -89,14 +89,24 @@ function context(): PageContext {
  * the text reports a style attribute that is not there.
  */
 function classedAttributes(html: string, className: string): string[][] {
+  // The name grammar is deliberately wide. React emits `data-h2` and `xml:lang` unchanged, and a
+  // narrow class rejects the whole TAG rather than one attribute, which empties the result and
+  // fails a block whose markup carries no style at all. Rejecting valid code is the expensive
+  // direction, so this is the character set HTML allows rather than the one this file expects.
+  const NAME = "[a-zA-Z_:][a-zA-Z0-9_:.-]*";
   const tags = [
     ...html.matchAll(
-      /<([a-zA-Z][a-zA-Z0-9-]*)((?:\s+[a-zA-Z-]+="[^"]*")*)\s*\/?>/g
+      new RegExp(
+        `<([a-zA-Z][a-zA-Z0-9-]*)((?:\\s+${NAME}="[^"]*")*)\\s*\\/?>`,
+        "g"
+      )
     ),
   ];
   const matched: string[][] = [];
   for (const tag of tags) {
-    const attributes = [...tag[2]!.matchAll(/\s([a-zA-Z-]+)="([^"]*)"/g)];
+    const attributes = [
+      ...tag[2]!.matchAll(new RegExp(`\\s(${NAME})="([^"]*)"`, "g")),
+    ];
     const classes = attributes.find(pair => pair[1] === "class")?.[2] ?? "";
     if (!classes.split(/\s+/).includes(className)) continue;
     matched.push(attributes.map(pair => pair[1]!));
@@ -127,7 +137,14 @@ async function markupOf(block: DrawableBlock): Promise<string> {
   } as unknown as BlockRenderArgs<never>;
   // Awaited because several blocks are async server components: calling `render` on one returns a
   // promise of the element, and handing that straight to the renderer suspends instead of drawing.
-  return renderToStaticMarkup((await block.render(args)) as ReactElement);
+  // The STREAMING renderer, which resolves async components. `renderToStaticMarkup` is synchronous:
+  // a root delegated to an async server component suspends and throws there, so awaiting
+  // `block.render` alone is not enough -- that only resolves the OUTER element, and any async
+  // component inside it is still unresolved when the markup is produced.
+  const stream = await renderToReadableStream(
+    (await block.render(args)) as ReactElement
+  );
+  return await new Response(stream).text();
 }
 
 describe("a core block's root element", () => {
@@ -192,6 +209,22 @@ describe("a core block's root element", () => {
     ).toContain("style");
   });
 
+  it("resolves a root delegated to an ASYNC component", async () => {
+    // A server component may be async, and the synchronous renderer suspends and throws on one.
+    // Awaiting `block.render` resolves only the outer element, so an async component inside it is
+    // still unresolved when markup is produced -- and the declaration it carries goes unseen.
+    const AsyncRoot = async ({ className }: { className: string }) => (
+      <div className={className} style={{ padding: 24 }} />
+    );
+    const delegated: DrawableBlock = {
+      ...DRAWABLE[0]!,
+      render: () => (<AsyncRoot className={BLOCK_CLASS} />) as ReactElement,
+    };
+    expect(
+      classedAttributes(await markupOf(delegated), BLOCK_CLASS)[0]
+    ).toContain("style");
+  });
+
   it("looks past a wrapper to the element that carries the class", async () => {
     // The outermost element is not necessarily the one the compiled rules land on, so a style on
     // the classed DESCENDANT must still be found.
@@ -206,6 +239,22 @@ describe("a core block's root element", () => {
     expect(
       classedAttributes(await markupOf(wrapped), BLOCK_CLASS)[0]
     ).toContain("style");
+  });
+
+  it("reads a tag carrying attributes with digits and namespaces", async () => {
+    // React emits `data-h2` and `xml:lang` unchanged. A narrow name grammar rejects the whole tag
+    // rather than one attribute, which empties the result and fails a block carrying no style --
+    // rejecting valid markup, which costs an unrelated change a red build.
+    const wide: DrawableBlock = {
+      ...DRAWABLE[0]!,
+      render: () => (
+        <div className={BLOCK_CLASS} data-h2="clean" aria-label="x" />
+      ),
+    };
+    const attributes = classedAttributes(await markupOf(wide), BLOCK_CLASS);
+    expect(attributes).toHaveLength(1);
+    expect(attributes[0]).toContain("data-h2");
+    expect(attributes[0]).not.toContain("style");
   });
 
   it("does not mistake an attribute VALUE for a style attribute", async () => {
