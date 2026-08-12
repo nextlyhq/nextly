@@ -67,13 +67,37 @@ const ALLOWED: ReadonlyMap<string, ReadonlySet<string>> = new Map();
  * PRESENT: a block that reaches for one it was not given throws, and the failure
  * reads as a block defect rather than as a thin fixture.
  */
-function context(): PageContext {
-  return {
+/**
+ * The host services a render receives, in both of the states a block branches on.
+ *
+ * A permanently inert host inspects only the empty path. `core/image` takes a
+ * different one once `resolveMedia` answers with a record, so a style written on
+ * the resolved branch would never be reached. Both states are exercised.
+ */
+function contexts(): PageContext[] {
+  const empty = {
     entry: null,
     data: { find: () => Promise.resolve({ items: [], total: 0 }) },
     resolveMedia: () => Promise.resolve(null),
     resolveEntryPath: () => Promise.resolve(null),
-  } as unknown as PageContext;
+  };
+  const answering = {
+    entry: { id: "e1", title: "An entry" },
+    data: {
+      find: () =>
+        Promise.resolve({ items: [{ id: "e1", title: "An entry" }], total: 1 }),
+    },
+    resolveMedia: () =>
+      Promise.resolve({
+        id: "m1",
+        url: "https://example.com/x.png",
+        alt: "x",
+        width: 800,
+        height: 600,
+      }),
+    resolveEntryPath: () => Promise.resolve("/an-entry"),
+  };
+  return [empty, answering] as unknown as PageContext[];
 }
 
 /**
@@ -84,19 +108,27 @@ function context(): PageContext {
  * One shared node would hand every block another block's identity, so a style
  * written only on that branch would never be reached.
  */
-function nodeFor(block: AnyBlockDefinition): BlockNode {
-  return { id: "n1", type: block.name, version: block.version, props: {} };
+function nodeFor(block: AnyBlockDefinition, props: unknown): BlockNode {
+  // The SAME object reaches `args.props` and `args.node.props` in production, so
+  // a branch reading either sees what the other saw.
+  return {
+    id: "n1",
+    type: block.name,
+    version: block.version,
+    props: props as BlockNode["props"],
+  };
 }
 
 function renderArgs(
   block: AnyBlockDefinition,
-  props: unknown
+  props: unknown,
+  ctx: PageContext
 ): BlockRenderArgs<object, unknown> {
   return {
     props,
-    node: nodeFor(block),
+    node: nodeFor(block, props),
     className: NODE_CLASS,
-    ctx: context(),
+    ctx,
     renderSlot: () => <span>child</span>,
   } as unknown as BlockRenderArgs<object, unknown>;
 }
@@ -165,20 +197,65 @@ function propVariants(block: AnyBlockDefinition): unknown[] {
       variants.push({ ...base, [name]: value });
     }
   }
-  return variants;
+  return [...variants, ...layeredVariants(base, schema)];
+}
+
+/**
+ * Cases that move EVERY prop at once, not one at a time.
+ *
+ * A style conditional on a conjunction — `label === "x" && type === "submit"` —
+ * is reached by neither single-prop case, because each retains the example's
+ * value for the other. Layer `i` gives every prop its i-th alternative, so the
+ * conjunctions formed from those alternatives are exercised.
+ *
+ * Bounded to the widest prop's alternative count rather than the cross product,
+ * which would be exponential in the number of props. What that leaves uncovered
+ * is a conjunction needing values from DIFFERENT layers, or one keyed on a
+ * specific free-text value no schema enumerates.
+ */
+function layeredVariants(
+  base: Record<string, unknown>,
+  schema: Record<string, unknown>
+): unknown[] {
+  const alternatives = new Map<string, readonly unknown[]>();
+  for (const [name, entry] of Object.entries(schema)) {
+    const options: unknown = (entry as { options?: unknown }).options;
+    if (Array.isArray(options)) {
+      alternatives.set(name, options.map(storedValueOf));
+      continue;
+    }
+    const declared: unknown = (entry as { type?: unknown }).type;
+    const values =
+      typeof declared === "string" ? REPRESENTATIVE.get(declared) : undefined;
+    if (values !== undefined) alternatives.set(name, values);
+  }
+  const depth = Math.max(0, ...[...alternatives.values()].map(v => v.length));
+  const layers: unknown[] = [];
+  for (let i = 0; i < depth; i += 1) {
+    const layer: Record<string, unknown> = { ...base };
+    for (const [name, values] of alternatives) {
+      // Clamped rather than skipped, so a prop with fewer alternatives still
+      // contributes one to every layer instead of dropping out of the later
+      // conjunctions entirely.
+      layer[name] = values[Math.min(i, values.length - 1)];
+    }
+    layers.push(layer);
+  }
+  return layers;
 }
 
 /** A block's output as a browser would receive it. */
 async function renderHtml(
   block: AnyBlockDefinition,
-  props: unknown
+  props: unknown,
+  ctx: PageContext
 ): Promise<string> {
   // `BlockRenderResult` is `unknown` on purpose: the engine declares the block
   // contract without depending on React types. This file is inside the React
   // renderer, which is the layer entitled to say what that value is, and a wrong
   // narrowing cannot pass silently — the renderer throws on anything it cannot
   // draw, and `onError` rethrows into the test.
-  const node = (await block.render(renderArgs(block, props))) as ReactNode;
+  const node = (await block.render(renderArgs(block, props, ctx))) as ReactNode;
   const stream = await renderToReadableStream(node, {
     onError(error: unknown) {
       throw error;
@@ -233,11 +310,15 @@ async function inspectBlock(block: AnyBlockDefinition): Promise<Inspection> {
   const offenders: string[] = [];
   let reached = false;
   for (const props of propVariants(block)) {
-    for (const tag of classCarryingTags(await renderHtml(block, props))) {
-      reached = true;
-      for (const property of inlinePropertiesOf(tag)) {
-        if (permitted.has(property)) continue;
-        offenders.push(`${block.name}: ${property}`);
+    for (const ctx of contexts()) {
+      for (const tag of classCarryingTags(
+        await renderHtml(block, props, ctx)
+      )) {
+        reached = true;
+        for (const property of inlinePropertiesOf(tag)) {
+          if (permitted.has(property)) continue;
+          offenders.push(`${block.name}: ${property}`);
+        }
       }
     }
   }
@@ -249,11 +330,18 @@ const STYLED_PROBE = {
   name: "test/styled-probe",
   version: 1,
   example: { props: {} },
-  render: ({ className }: { className: string }) => (
-    <div className={className} style={{ color: "red" }}>
-      probe
-    </div>
-  ),
+  // Returns a COMPONENT that adds the style internally, not a host element.
+  // A probe returning `<div className style>` directly is found by shallow
+  // element inspection too, so it could not tell a working detector from the
+  // element-walking one this replaced — the very regression it exists to catch.
+  render: ({ className }: { className: string }) => {
+    const Root = (inner: { className: string }) => (
+      <div className={inner.className} style={{ color: "red" }}>
+        probe
+      </div>
+    );
+    return <Root className={className} />;
+  },
 } as unknown as AnyBlockDefinition;
 
 describe("the detector itself", () => {
@@ -265,7 +353,9 @@ describe("the detector itself", () => {
     const { reached, offenders } = await inspectBlock(STYLED_PROBE);
 
     expect(reached).toBe(true);
-    expect(offenders).toEqual(["test/styled-probe: color"]);
+    // Deduped, as the library assertion is: a block is rendered once per host
+    // state and per prop variant, so one breach is reported once per case.
+    expect([...new Set(offenders)]).toEqual(["test/styled-probe: color"]);
   });
 });
 
