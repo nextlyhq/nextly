@@ -18,7 +18,11 @@
 
 import type { FieldConfig } from "../../collections/fields/types";
 import { IMMUTABLE_SYSTEM_FIELDS_ANY_ENTITY } from "../../lib/immutable-system-fields";
-import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import {
+  currentFieldGroupTypeKey,
+  isFieldGroupTypeKey,
+  readFieldGroupType,
+} from "../field-groups/storage/field-group-type-key";
 import { isFieldLocalized } from "../i18n/classify-fields";
 
 /**
@@ -379,9 +383,9 @@ function pruneContainerValue(
   // keeps a key that this row's component has since lost merely because a
   // sibling component still declares it — and the save path, which serializes
   // against the row's own schema, then drops it without saying so.
-  const rowType = (value as { _componentType?: unknown })[
-    STORAGE_FORMAT.wireTypeKey
-  ];
+  // Asked rather than indexed: a snapshot being restored was written under the schema of its
+  // day, so its type key may carry either spelling.
+  const rowType = readFieldGroupType(value);
   const rowSchema =
     isComponentValue && typeof rowType === "string"
       ? componentSchemas?.get(rowType)
@@ -401,17 +405,21 @@ function pruneContainerValue(
     // Only for component instances. A group or repeater is ordinary JSON, where
     // a stale key that happens to be called `id` is exactly the kind of unknown
     // key this function exists to remove.
-    if (
-      isComponentValue &&
-      (key === STORAGE_FORMAT.wireTypeKey || key === "id")
-    ) {
+    if (isComponentValue && (isFieldGroupTypeKey(key) || key === "id")) {
       // The type marker exists to record what the snapshot captured, and it has
       // already done its work above by selecting this row's schema. Carrying it
       // into the payload is only safe where the write path consumes it, which
       // is the dynamic zone alone. A single component nested in a group or
       // repeater is written as part of that container's JSON, and a marker left
       // inside would be stored verbatim and then served by ordinary reads.
-      if (key === STORAGE_FORMAT.wireTypeKey && !storesType) continue;
+      if (isFieldGroupTypeKey(key)) {
+        // 🔴 Every raw discriminator entry is SKIPPED here; the resolved one is stamped once,
+        // after the loop. Writing each raw value onto the current key as it is encountered lets
+        // object insertion order decide the winner, which overrides both the precedence and the
+        // non-string rejection the reader already applied — a document carrying a good value
+        // under one spelling and a junk value under another would emit the junk.
+        continue;
+      }
       out[key] = child;
       continue;
     }
@@ -478,6 +486,18 @@ function pruneContainerValue(
         : kept;
   }
 
+  // 🔴 The discriminator is stamped ONCE, from the value the reader already resolved, under the
+  // spelling this version writes. Doing it here rather than inside the loop is what makes the
+  // emitted type the one the schema was chosen by: the loop sees raw entries in insertion order
+  // and cannot honour the reader's precedence or its rejection of a non-string.
+  //
+  // `storesType` gates it because only a dynamic zone consumes the marker. A single component
+  // nested in a group or repeater is written as part of that container's JSON, and a marker left
+  // inside would be stored verbatim and then served by ordinary reads.
+  if (isComponentValue && storesType && rowType !== undefined) {
+    out[currentFieldGroupTypeKey] = rowType;
+  }
+
   return out;
 }
 
@@ -494,7 +514,7 @@ function retainsNothing(pruned: unknown): boolean {
     if (typeof row !== "object" || row === null) return false;
     const keys = Object.keys(row);
     if (keys.length === 0) return false;
-    return keys.every(k => k === "id" || k === STORAGE_FORMAT.wireTypeKey);
+    return keys.every(k => k === "id" || isFieldGroupTypeKey(k));
   };
 
   if (Array.isArray(pruned)) {
@@ -529,7 +549,7 @@ function withoutTypeMarker(value: unknown): unknown {
 
   const out: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if (key !== STORAGE_FORMAT.wireTypeKey) out[key] = child;
+    if (!isFieldGroupTypeKey(key)) out[key] = child;
   }
   return out;
 }
@@ -550,10 +570,9 @@ function partitionAllowedInstances(
 ): { kept: unknown; rejected: string[] } {
   if (allowed === null) return { kept: value, rejected: [] };
 
-  const typeOf = (row: unknown): string | undefined =>
-    typeof row === "object" && row !== null
-      ? (row as { _componentType?: string })[STORAGE_FORMAT.wireTypeKey]
-      : undefined;
+  // Asked rather than indexed. A row whose type does not resolve is treated as untyped, and
+  // an untyped row is dropped here — so reading only one spelling would discard live instances.
+  const typeOf = (row: unknown): string | undefined => readFieldGroupType(row);
 
   // A row keeps its place when its type is allowed, or when this field stores
   // no type at all. Where a type IS required, a row without one cannot be

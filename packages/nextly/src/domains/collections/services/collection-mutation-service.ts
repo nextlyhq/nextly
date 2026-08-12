@@ -95,6 +95,7 @@ import {
 import type { SupportedDialect } from "../../../types/database";
 import { willRecordMutationActivity } from "../../audit/record-activity";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import {
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
@@ -1884,7 +1885,9 @@ export class CollectionMutationService extends BaseService {
           kept.push(inst);
           continue;
         }
-        const tagged = (inst as Record<string, unknown>)._componentType;
+        // Asked rather than read: an instance already stored may carry either spelling of
+        // this key, depending on which side of the storage migration wrote it.
+        const tagged = readFieldGroupType(inst);
         const slug =
           typeof tagged === "string"
             ? tagged
