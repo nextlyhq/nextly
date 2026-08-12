@@ -18,11 +18,20 @@ distinguishes "there was nothing here" from "I removed everything that was".
 
 The belief that a file is new is the whole risk. Nobody overwrites a file they
 know exists; they overwrite one they are sure does not. So the precaution is not
-"be careful with destructive commands" — it is to READ the path first, and treat
-a successful read as a refusal to write blind. Under an editing tool that
-requires a prior read, use it; reaching for the shell to write a file the tool
-would have made you read is how the requirement gets bypassed, and it is the
-bypass rather than the command that does the damage.
+"be careful with destructive commands" — it is to establish that the path is
+absent, and to treat anything short of that as a refusal to write blind.
+
+**A failed read is not an absent file, and this is where the precaution leaks.**
+"I tried to read it and got nothing back" covers a path that does not exist AND
+a path that exists but could not be read — too large, binary, wrong permissions,
+a tool that declines it. Both produce the same silence, and only one of them
+makes a redirect safe. So the condition to require is an explicit NOT FOUND;
+every other read failure aborts, because a file the reader could not open is
+still a file the shell will happily truncate.
+
+Under an editing tool that requires a prior read, use it; reaching for the shell
+to write a file the tool would have made you read is how the requirement gets
+bypassed, and it is the bypass rather than the command that does the damage.
 
 `turbo.json` in `packages/ui` was replaced this way. It lost
 `dependsOn: ["$TURBO_EXTENDS$", "build"]` on both `test` and `test:coverage`,
@@ -49,11 +58,20 @@ They are worth knowing individually, because each looks like good news:
    magnitude in the direction you were hoping for is the moment to ask which
    change produced it, not to write it down as a result.
 
-3. **The overwritten content contradicts the reason you gave for writing it.**
-   The replaced file already used `$TURBO_EXTENDS$` — the very mechanism the new
-   comment introduced as if it were absent. Whenever a file turns out to have
-   been doing the thing you are adding, you did not add it; you replaced
-   something that already worked.
+3. **Content you did not write, and did not mean to remove, is gone.** This is
+   the only one of the three that is conclusive on its own, and it has to be
+   stated as the disappearance rather than as the suspicion that led there.
+
+   What led there in the real case was noticing that the replaced file already
+   used `$TURBO_EXTENDS$` — the mechanism the new comment introduced as if it
+   were absent. That is a good prompt to go and look, and it is NOT evidence:
+   adding `$TURBO_EXTENDS$` to `test:coverage` when `test` already uses it means
+   the file was also "already doing the thing", with nothing overwritten at all.
+   A tell that fires there sends a correct additive edit into a destructive
+   recovery procedure, which is worse than the miss it was guarding.
+
+   So confirm it against the baseline — `git diff HEAD --stat -- <path>`, then
+   the hunks — and require content that predates your edit to have vanished.
 
 ## Configuration coverage is UNEVEN, so find out before trusting green
 
@@ -105,9 +123,14 @@ command is right by default:
   state**, which is common and not a given. Where the path carried deliberate
   staged or unstaged edits when it was clobbered, `HEAD` never held them, and
   this overwrites the index and the working-tree copy alike from that commit —
-  destroying the edits being recovered. Read `git status` and
-  `git diff HEAD -- <path>` first; with uncommitted work in flight, the index
-  copy or a stash may be the only surviving pre-write state.
+  destroying the edits being recovered. Inspect the INDEX before choosing, and
+  note which command actually shows it: `git status` reports only `MM`, and
+  `git diff HEAD -- <path>` renders the post-clobber working tree, so neither
+  displays the staged content at risk. `git diff --cached HEAD -- <path>` — or
+  `git show :<path>` for the copy verbatim — is what puts it on screen. With
+  uncommitted work in flight, that index copy or a stash may be the only
+  surviving pre-write state, and it is the one a `checkout` from a commit
+  destroys without ever having shown it to you.
 - **`git checkout origin/main -- <path>` restores from `origin/main`, which is a
   different question**, and two independent things break it: the branch may have
   committed its own edits to that path, and `main` may have changed the path
