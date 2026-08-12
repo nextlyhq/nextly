@@ -25,8 +25,8 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A plugin's slug, category vocabulary, icon and description now have one source each.
+`nextly/config` now exports `pluginAdminSlug`, `PLUGIN_CATEGORIES` and `isPluginCategory`, so a plugin author can derive a plugin's admin slug and check a category against the vocabulary `definePlugin` accepts, rather than reimplementing either.
 
-`nextly/config` exports `pluginAdminSlug`, `PLUGIN_CATEGORIES` and `isPluginCategory`, and the admin uses those rather than its own copies. Previously the admin derived a plugin's URL slug with its own implementation of core's algorithm, so a plugin page could be linked at one slug and routed at another the moment either side changed; and it kept its own list of valid categories, so it could reject a category `definePlugin` accepts.
+The admin uses those exports instead of its own copies. It previously derived a plugin's URL slug with its own implementation of core's algorithm, so a plugin page could be linked at one slug and routed at another the moment either side changed, and it kept its own list of valid categories, so it could reject a category `definePlugin` accepts.
 
-The plugin directory now prefers an installed plugin's own icon and description over the catalogue's, per field. A plugin that is installed describes itself; the catalogue only speaks for plugins that are not. The Page Builder and Form Builder catalogue icons also now match the icons those plugins declare.
+Nothing changes in the admin UI. The plugin directory that consumes these is not built yet; this is the groundwork it needs.
