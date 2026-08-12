@@ -1,14 +1,9 @@
 ---
-# Scoped to everything, and the first draft's path list is why. It named
-# `tsup.config.ts` and `vitest.config.ts` and therefore missed
-# `packages/nextly/tsup.config.js`, `packages/ui/tsup.server-safe.config.ts`,
-# `packages/*/vitest.integration.config.ts` and `apps/playground/next.config.ts`
-# — an enumeration of spellings, in a rule about not enumerating.
-#
-# The deeper reason is that a path-scoped rule loads when a matching path is
-# READ or EDITED, and the failure here is a shell redirect that reads nothing.
-# The rule would have been absent at exactly the moment it applies. This is a
-# property of the ACT, not of the file type.
+# Unconditional, because the subject is an ACT rather than a kind of file. Two
+# things follow. Any path can be clobbered, so no glob over filenames selects
+# the population; and the failure is a shell redirect, which reads nothing, so a
+# rule keyed to reading a matching path would be absent at exactly the moment it
+# applies.
 paths:
   - "**/*"
 ---
@@ -36,11 +31,15 @@ everything.
 
 They are worth knowing individually, because each looks like good news:
 
-1. **The diffstat shows deletions on a file you believe you are creating.** A
-   created file has no deleted lines, so a single `-` in its `++---` bar is
-   conclusive, whatever the counts. This is the cheapest tell and the one most
-   easily read past, because by then the write has already succeeded and
-   attention has moved on.
+1. **The diffstat shows deletions on a file you believe you are creating**, read
+   against the right baseline. A created file has no deleted lines, so one `-`
+   in its `++---` bar settles it — but only when the comparison starts from
+   before the file existed. A bare `git diff --stat` compares the working tree
+   with the INDEX, so a genuinely new path that was staged and then shortened
+   reports deletions too, and the tell fires on a file that really is new. Use
+   `git diff HEAD --stat`. This is the cheapest tell and the one most easily
+   read past, because by then the write has already succeeded and attention has
+   moved on.
 
 2. **A metric improves far more than the change should explain.** "1264 inputs
    became 119" was recorded as evidence that the new scoping was tight. It was
@@ -93,15 +92,20 @@ drop whatever the root supplies.
 
 ## Restoring, and proving the restore
 
-The target is the **pre-write** content of that path, which is not a fixed
-command — name it before running anything:
+The target is the **pre-write** content of that path. Which revision holds it is
+a question about this working tree, so answer it before running anything — no
+command is right by default:
 
 - **`git checkout -- <path>` restores from the INDEX, not from a commit.** If
   the clobbered content was staged it repairs nothing, and if deliberate earlier
-  edits were staged it reinstates those. `git checkout HEAD -- <path>` is the
-  form that goes to the last commit.
-- **`git checkout HEAD -- <path>` is the default answer**, because the branch's
-  own last commit is where the pre-write content is.
+  edits were staged it reinstates those.
+- **`git checkout HEAD -- <path>` is right when the last commit IS the pre-write
+  state**, which is common and not a given. Where the path carried deliberate
+  staged or unstaged edits when it was clobbered, `HEAD` never held them, and
+  this overwrites the index and the working-tree copy alike from that commit —
+  destroying the edits being recovered. Read `git status` and
+  `git diff HEAD -- <path>` first; with uncommitted work in flight, the index
+  copy or a stash may be the only surviving pre-write state.
 - **`git checkout origin/main -- <path>` restores from `origin/main`, which is a
   different question**, and two independent things break it: the branch may have
   committed its own edits to that path, and `main` may have changed the path
@@ -109,8 +113,10 @@ command — name it before running anything:
   content while looking like a clean repair, and no check on the branch's own
   history detects it. Reach for it only when you specifically want `main`'s
   version — not as the way to undo a clobber.
-- Whichever source you take, the deliberate edit is then re-applied on top as an
-  APPEND. The restore does not carry it.
+- Whichever source you take, the restore does not carry the deliberate edit —
+  re-apply that on top as the delta it actually was. An append is right for the
+  additive case only; for a removal or a replacement it duplicates a setting, or
+  reinstates content that was meant to go.
 
 Then prove it, and prove it **before submitting**:
 
