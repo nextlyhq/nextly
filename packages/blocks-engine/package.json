@@ -39,7 +39,7 @@
     "clean": "rimraf dist"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
   },
   "dependencies": {
     "css-tree": "^2.3.1",
