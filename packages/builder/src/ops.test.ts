@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { applyOp, OpError, type BuilderOp, type NodePatch } from "./ops";
 
 import {
+  DEFAULT_MAX_DOCUMENT_BYTES,
   MAX_DEPTH,
   MAX_NODES,
   updateNode,
@@ -841,6 +842,61 @@ describe("an op whose own shape is wrong", () => {
         id: "a",
         patch: { props: build() },
       })
+    ).toThrow(OpError);
+  });
+
+  it("refuses a patch carrying a symbol-named field", () => {
+    // `Object.entries` reports only string keys, but the spread that applies
+    // the patch copies symbols onto the node — so the field reaches the live
+    // document and JSON omits it from the stored op. The patch OBJECT is now
+    // held to the same key rule as the values inside it.
+    const patch: Record<string, unknown> = { name: "changed" };
+    (patch as Record<string | symbol, unknown>)[Symbol("lost")] = "x";
+    expect(() =>
+      applyOp(forest(), {
+        kind: "update",
+        id: "a",
+        patch: patch as NodePatch,
+      })
+    ).toThrow(OpError);
+  });
+
+  it("refuses an array carrying a named property", () => {
+    // JSON writes an array's elements and nothing else, so `list.note` stays in
+    // the live document and vanishes from the stored op — the same divergence
+    // as a symbol key, through the one container the key check did not cover.
+    const list: string[] = ["a", "b"];
+    (list as unknown as Record<string, unknown>).note = "secret";
+    expect(() =>
+      applyOp(forest(), {
+        kind: "update",
+        id: "a",
+        patch: { classes: list },
+      })
+    ).toThrow(OpError);
+  });
+
+  it("still accepts an ordinary array and an ordinary patch", () => {
+    // The control for both. A key rule that rejected every array, or every
+    // patch, would satisfy the two assertions above while refusing all real
+    // edits — and `length` is an own property of every array, so a rule that
+    // forgot to expect it would do exactly that.
+    const applied = applyOp(forest(), {
+      kind: "update",
+      id: "a",
+      patch: { classes: ["one", "two"], name: "fine" },
+    });
+    expect(applied.inverse.kind).toBe("update");
+  });
+
+  it("refuses an insert that would pass the document's byte cap", () => {
+    // A single large string passes the node count and still puts the document
+    // past what the engine stores, with the same outcome: the edit applies,
+    // enters history, and every save afterwards is refused.
+    const heavy = node("heavy");
+    heavy.props = { text: "x".repeat(DEFAULT_MAX_DOCUMENT_BYTES) };
+    expect(() =>
+      applyOp(forest(), { kind: "insert", node: heavy, at: { index: 0 } })
     ).toThrow(OpError);
   });
 

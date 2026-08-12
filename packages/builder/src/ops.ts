@@ -24,6 +24,9 @@
 
 import {
   countNodes,
+  DEFAULT_MAX_DOCUMENT_BYTES,
+  documentBytes,
+  DOCUMENT_FORMAT_VERSION,
   findNode,
   isNodeType,
   MAX_DEPTH,
@@ -256,6 +259,8 @@ function isJsonValue(value: unknown, seen: Set<object> = new Set()): boolean {
   if (seen.has(held)) return false;
   seen.add(held);
 
+  if (!hasOnlyJsonOwnKeys(held)) return false;
+
   if (Array.isArray(value)) {
     // By index: `every` skips holes, and a hole serializes as `null`.
     for (let index = 0; index < value.length; index += 1) {
@@ -266,18 +271,45 @@ function isJsonValue(value: unknown, seen: Set<object> = new Set()): boolean {
   }
 
   if (!isPlainRecord(value)) return false;
-  // Own KEYS as well as values. `Object.values` reports only enumerable
-  // string-keyed properties, so a symbol-named or non-enumerable own property
-  // is invisible to it — it stays in the live document and `JSON.stringify`
-  // drops it from the stored op, which is the same divergence a function value
-  // produces and by the same silence.
+  for (const entry of Object.values(value)) {
+    if (!isJsonValue(entry, seen)) return false;
+  }
+  seen.delete(held);
+  return true;
+}
+
+/**
+ * Whether every OWN key of an object is one JSON will write.
+ *
+ * Asked of arrays, of records, and of a patch object alike, because it is one
+ * question and answering it per traversal is what let three different shapes of
+ * invisible key through in turn: a symbol on a record, a named property on an
+ * array, a symbol on the patch itself. Each was found only after the previous
+ * traversal was tightened, which is the signal that the traversals — not the
+ * cases — were the problem.
+ *
+ * What JSON writes is narrow. For a record: enumerable, string-keyed. For an
+ * array: the indexed elements and nothing else, so a `list.note = "x"` is kept
+ * in the live document and dropped from the stored op. Anything else stays in
+ * memory and vanishes on the round trip, which is a document diverging from
+ * itself with no error anywhere.
+ */
+function hasOnlyJsonOwnKeys(value: object): boolean {
+  if (Array.isArray(value)) {
+    for (const key of Reflect.ownKeys(value)) {
+      // `length` is an own property of every array and is never serialized as
+      // a member, so it is the one key that is expected rather than lost.
+      if (key === "length") continue;
+      if (typeof key !== "string") return false;
+      if (!/^(?:0|[1-9]\d*)$/.test(key)) return false;
+    }
+    return true;
+  }
   for (const key of Reflect.ownKeys(value)) {
     if (typeof key !== "string") return false;
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (descriptor === undefined || !descriptor.enumerable) return false;
-    if (!isJsonValue(descriptor.value, seen)) return false;
   }
-  seen.delete(held);
   return true;
 }
 
@@ -390,6 +422,17 @@ function assertPatchNames(op: Extract<BuilderOp, { kind: "update" }>): void {
     throw new OpError(
       `update: a patch of ${describe(op.patch)} names no fields. An ` +
         `update carries a record of the values to write.`
+    );
+  }
+
+  // The patch OBJECT, by the same rule as the values inside it. `Object.entries`
+  // below reports only enumerable string keys, while the spread that applies
+  // the patch copies symbol keys onto the node too — so an unchecked symbol
+  // field reaches the live document and is dropped from the stored op.
+  if (!hasOnlyJsonOwnKeys(op.patch)) {
+    throw new OpError(
+      `update: the patch carries a field JSON cannot write. A patch is stored ` +
+        `as JSON, so a key it drops would apply here and be absent on replay.`
     );
   }
 
@@ -580,6 +623,21 @@ function assertFitsNodeCap(
     throw new OpError(
       `${verb}: this would leave the document holding ${String(total)} nodes, ` +
         `past the ${String(MAX_NODES)} a document may hold. The edit would ` +
+        `apply and then fail to save.`
+    );
+  }
+  // Size as well as count. A single large string passes a node count and still
+  // puts the document past what the engine will store, with the same result:
+  // the edit applies, enters history, and every save afterwards is refused.
+  const bytes = documentBytes({
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: [...nodes, ...incoming],
+  });
+  if (bytes > DEFAULT_MAX_DOCUMENT_BYTES) {
+    throw new OpError(
+      `${verb}: this would leave the document at ${String(bytes)} bytes, past ` +
+        `the ${String(DEFAULT_MAX_DOCUMENT_BYTES)} it may hold. The edit would ` +
         `apply and then fail to save.`
     );
   }
