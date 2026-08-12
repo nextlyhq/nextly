@@ -224,8 +224,11 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       permittedSingles.some(single => !single.admin?.hidden));
 
   const pluginsSectionVisible = hasPluginsSection(capabilities, {
-    isPending:
-      hasPermissionDataPending || isCollectionsLoading || isCollectionsError,
+    // Loading only. A FAILED collections query is not pending: it will never
+    // resolve into visible collections, and for a user without
+    // `canManageSettings` the panel then has no destination at all, so keeping
+    // the rail item would open an empty panel rather than defer a decision.
+    isPending: hasPermissionDataPending || isCollectionsLoading,
     hasVisiblePluginCollection: permittedCollections.some(collection => {
       if (!collection.admin?.isPlugin || collection.admin?.hidden) return false;
       const placement = getCollectionPlacement(collection);

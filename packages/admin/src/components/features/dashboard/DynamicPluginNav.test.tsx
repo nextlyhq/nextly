@@ -178,6 +178,52 @@ describe("DynamicPluginNav collapsed", () => {
     ).toBeInTheDocument();
   });
 
+  it("omits a placed plugin's collections from the collection reader's menu", async () => {
+    // A placed plugin's collections live under Collections, Settings or its own
+    // standalone section. Repeating them here would show one collection twice.
+    mockCanManageSettings = false;
+    mockBranding = {
+      plugins: [
+        { name: "@acme/here", collections: ["widgets"], placement: "plugins" },
+        {
+          name: "@acme/elsewhere",
+          collections: ["gadgets"],
+          placement: "settings",
+        },
+      ],
+    } as unknown as AdminBranding;
+    mockCollectionCaps = {
+      widgets: { canRead: true },
+      gadgets: { canRead: true },
+    };
+    mockCollections = {
+      items: [
+        {
+          id: "c1",
+          name: "widgets",
+          labels: { plural: "Widgets" },
+          admin: { isPlugin: true, group: "Here" },
+        },
+        {
+          id: "c2",
+          name: "gadgets",
+          labels: { plural: "Gadgets" },
+          admin: { isPlugin: true, group: "Elsewhere" },
+        },
+      ],
+    };
+
+    const { container } = renderNav({ collapsed: true });
+    fireEvent.mouseEnter(container.querySelector("li")!);
+
+    // Positive control: the unplaced one IS offered, so the absence below is
+    // about placement rather than about a menu that rendered nothing.
+    expect(
+      await screen.findByRole("menuitem", { name: "Widgets" })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Gadgets" })).toBeNull();
+  });
+
   /**
    * Every destination the collapsed dropdown offers by default is
    * manage-settings guarded, so a collection reader would get a menu whose

@@ -57,6 +57,20 @@ describe("hasPluginsSection", () => {
     ).toBe(true);
   });
 
+  /**
+   * A failed collections query is not pending. It will never resolve into
+   * visible collections, so for this user the panel has no destination and the
+   * rail item would open an empty one. The caller passes loading only.
+   */
+  it("hides it from a collection reader once loading has settled with nothing visible", () => {
+    expect(
+      hasPluginsSection(
+        { canManageSettings: false, canViewCollections: true },
+        { isPending: false, hasVisiblePluginCollection: false }
+      )
+    ).toBe(false);
+  });
+
   it("shows it for a collection reader while data is still pending", () => {
     expect(
       hasPluginsSection(

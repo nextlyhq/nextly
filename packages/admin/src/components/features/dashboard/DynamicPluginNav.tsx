@@ -452,6 +452,12 @@ function CollapsedPluginDropdown({
                 </DropdownMenuItem>,
               ];
             }
+            // Only UNPLACED plugins contribute collections here. A placed
+            // plugin's collections already appear under Collections, Settings
+            // or its own standalone section, which is why the expanded view
+            // filters on the same flag; listing them again under Plugins would
+            // show one collection in two places.
+            if (plugin.isPlaced) return [];
             return plugin.collections.map(collection => {
               const href = getCollectionUrl(collection);
               const active = isActive(href);
