@@ -96,7 +96,7 @@ So a derived check needs three things, and is usually written with one:
    const id = (entry: Derived): string => entry.key;
    expect(new Set(derived.map(id))).toEqual(new Set(population)); // same members
    expect(derived).toHaveLength(population.length); // and no duplicates
-   expect(population).toContain(KNOWN_MEMBER); // the INTENDED source was read
+   expect(population).toContain(KNOWN_MEMBER); // ONLY if empty is invalid here
    ```
 
    Compare MEMBERS, not just how many. Equal lengths are satisfied by a
@@ -105,8 +105,14 @@ So a derived check needs three things, and is usually written with one:
    The length assertion still earns its place beside the set comparison, because
    a set silently absorbs duplicates.
 
-   The third line is the one usually left out, and non-emptiness cannot replace
-   it: a loader that reads the WRONG manifest, or returns a non-empty fallback,
+   🔴 The third line is CONDITIONAL, and applies exactly when emptiness would
+   violate the subject's contract — the same test as deciding what to pin by
+   name. A subject that may legitimately be empty (a feature-gated registry with
+   no routes) is proved complete by the set and length comparisons alone, and
+   demanding a known member there rejects a valid configuration and invents the
+   presence contract this rule warns against further down.
+
+   Where it does apply, non-emptiness cannot replace it: a loader that reads the WRONG manifest, or returns a non-empty fallback,
    passes every count check, and the derived length agrees with it because both
    sides came from the same wrong input. Pin something only the intended source
    contains.
@@ -126,12 +132,17 @@ new subpath was never checked. `696281d12` then published a 42nd subpath and
 replaced the hand-written matrix in the same commit, which is why no single
 revision shows the gap at its widest.
 
-It now does all three. The matrix comes from `Object.keys(manifest.exports)`,
-which is TOTAL — the whole manifest, with no predicate or glob between, which is
-what makes the addition case genuinely closed rather than merely relocated. Its
-length is then asserted against `declaredSubpaths.length` and against zero, so a
-mapping that silently selected a subset, or none, fails instead of deleting its
-own cases.
+It now derives from `Object.keys(manifest.exports)`, which is TOTAL — the whole
+manifest, with no predicate or glob between, which is what makes the addition
+case genuinely closed rather than merely relocated. Its length is asserted
+against `declaredSubpaths.length` and against zero, so a mapping that silently
+selected a subset, or none, fails instead of deleting its own cases.
+
+🔴 It does NOT yet compare member identities, so the guidance above is ahead of
+this example: a mapping that substituted or duplicated one entry while omitting
+another keeps the count equal, and the generated cases inspect the duplicate
+twice. Counts catch a mapping that returns FEWER things; only the set comparison
+catches one that returns the WRONG things.
 
 And it still carries one hardcoded assertion:
 
