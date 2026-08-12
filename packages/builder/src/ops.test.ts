@@ -1582,3 +1582,37 @@ describe("a guard that must not crash on the input it refuses", () => {
     expect(thrown).not.toBeInstanceOf(RangeError);
   });
 });
+
+describe("the document's own identity fields", () => {
+  it("refuses a document whose kind is not one the engine knows", () => {
+    // Accepted by every structural check and then refused by `validate()` with
+    // `invalid-kind`, so the edit enters history and every save afterwards
+    // fails on a document the author cannot repair by undoing.
+    const odd = { ...doc(), kind: "not-a-kind" } as unknown as BlockDocument;
+    expect(() => applyOp(odd, { kind: "remove", id: "a" })).toThrow(
+      /is not one this editor knows/
+    );
+  });
+
+  it("counts a duplicate id on a deep document without overflowing", () => {
+    // The uniqueness scan delegated to the engine's recursive walker, so a
+    // document deep enough to need repairing was exactly the one that made the
+    // guard throw a native RangeError — it broke on the input the repair was
+    // trying to fix.
+    let leaf = node("deep-0");
+    const root = leaf;
+    for (let level = 1; level < 15_000; level += 1) {
+      const next = node(`deep-${String(level)}`);
+      leaf.slots = { main: [next] };
+      leaf = next;
+    }
+
+    let thrown: unknown;
+    try {
+      applyOp(doc([root]), { kind: "remove", id: "deep-0" });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).not.toBeInstanceOf(RangeError);
+  });
+});

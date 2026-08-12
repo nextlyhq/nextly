@@ -26,6 +26,7 @@ import {
   countNodes,
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
+  DOCUMENT_KINDS,
   documentBytes,
   findNode,
   isNodeType,
@@ -263,6 +264,17 @@ function describe(value: unknown): string {
  * a few dozen.
  */
 const MAX_VALUE_DEPTH = 512;
+
+/**
+ * How deep a node TREE may nest before the engine's helpers cannot walk it.
+ *
+ * A machine limit, not a product one: `limits.maxDepth` is a rule a site may
+ * set and this is the point past which `findNode`, `locateNode` and
+ * `lockedWithin` overflow the stack whatever any site says. Well beyond
+ * `DEFAULT_LIMITS.maxDepth`, so it only ever fires on documents no product
+ * setting would have allowed.
+ */
+const MAX_WALKABLE_DEPTH = 1_000;
 
 function isJsonValue(value: unknown): boolean {
   // ITERATIVE, with an explicit stack. The recursive form exhausted the JS
@@ -954,10 +966,22 @@ function assertFitsCaps(
  * than to edit it further.
  */
 function assertIdIsUnique(nodes: BlockNode[], id: string, verb: string): void {
+  // Counted with an explicit stack rather than through the engine's recursive
+  // `walkNodes`. A document deep enough to need repairing is exactly the one
+  // that made the recursive walker throw a native RangeError here — so the
+  // guard broke on the input the repair was trying to fix.
   let seen = 0;
-  walkNodes(nodes, node => {
-    if (node.id === id) seen += 1;
-  });
+  const pending: BlockNode[] = [...nodes];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) break;
+    if (current.id === id) seen += 1;
+    const slots = current.slots;
+    if (slots === undefined) continue;
+    for (const children of Object.values(slots)) {
+      for (const child of children) pending.push(child);
+    }
+  }
   if (seen > 1) {
     throw new OpError(
       `${verb}: "${id}" addresses ${String(seen)} nodes, and an id is ` +
@@ -1192,7 +1216,39 @@ export function applyOp(
         `whose meaning this code does not know.`
     );
   }
+  // The kind, asked of the engine's own set rather than restated here. A
+  // document with a missing or unknown kind is accepted by every structural
+  // check and then refused by `validate()` with `invalid-kind`, so the edit
+  // enters history and every save afterwards fails.
+  if (!DOCUMENT_KINDS.includes(document.kind)) {
+    throw new OpError(
+      `a document of kind ${describe(document.kind)} is not one this editor ` +
+        `knows. Every document names a kind from: ${DOCUMENT_KINDS.join(", ")}.`
+    );
+  }
   assertForestEntries(nodes);
+  // Depth the ENGINE can survive, checked before any of its helpers run.
+  //
+  // Three separate guards have now been moved off recursion because a deep
+  // document broke them — the JSON walk, the forest walk, the uniqueness scan.
+  // Each fix moved the overflow to the next recursive thing: `findNode`,
+  // `locateNode` and `lockedWithin` are the engine's, and rewriting the engine
+  // from here is not this module's business.
+  //
+  // So the boundary states the honest limit instead. A document nested past
+  // what the call stack survives cannot be edited by anything downstream, and
+  // saying so is better than letting a native RangeError escape from whichever
+  // helper reaches it first. This is deliberately NOT `limits.maxDepth`: that
+  // is a product rule a site may relax, and this is a machine one nothing can.
+  const inputDepth = depthOf(nodes);
+  if (inputDepth > MAX_WALKABLE_DEPTH) {
+    throw new OpError(
+      `a document nested ${String(inputDepth)} levels deep cannot be edited: ` +
+        `past ${String(MAX_WALKABLE_DEPTH)} the tree helpers exhaust the call ` +
+        `stack, so no edit to it — including one that would make it shallower ` +
+        `— can be applied.`
+    );
+  }
 
   // The op itself, before its discriminant is read. `op.kind` on a `null`
   // leaves this module as a TypeError, which a caller cannot distinguish from
