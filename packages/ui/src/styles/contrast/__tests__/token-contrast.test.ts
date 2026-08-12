@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { ACCEPTED_REGRESSIONS, acceptedFor } from "../accepted";
+import { ACCEPTED_REGRESSIONS, acceptedFor, roleOf } from "../accepted";
 import { compositeOver, contrastRatio, toHex, type Rgb } from "../color";
 import { PAIRINGS, THRESHOLDS, type Pairing } from "../pairings";
 import {
@@ -76,40 +76,108 @@ const MODES: ReadonlyArray<{ name: "light" | "dark"; tokens: TokenMap }> = [
 ];
 
 describe("the accepted-regression set", () => {
-  it("names only pairings that exist", () => {
-    // An entry whose label no longer matches a pairing suppresses nothing and
-    // is never evaluated, so it cannot be caught by the ratio or still-failing
-    // checks -- those only run for pairings that ARE asserted. A renamed
-    // pairing would therefore leave a permanent unexamined entry here while
-    // quietly re-entering the strict path, or worse, a future pairing that
-    // happens to take the old label would be silently pre-accepted.
-    const labels = new Set(PAIRINGS.map(p => p.label));
-    const orphans = ACCEPTED_REGRESSIONS.filter(
-      entry => !labels.has(entry.label)
-    ).map(entry => `${entry.label} (${entry.mode})`);
+  it("matches only role pairs that exist", () => {
+    // An entry matching nothing suppresses nothing and is never evaluated, so
+    // neither the ratio pin nor the still-failing check can catch it -- both
+    // run only for pairings that ARE asserted. A renamed or deleted pairing
+    // would leave a permanent unexamined entry, and a future pairing that
+    // happened to take the same role pair would be silently pre-accepted.
+    //
+    // Both roles must name a token the theme declares. That is the property
+    // worth asserting, and it is deliberately NOT "a pairing exists for this
+    // entry": the accepted set is consulted by two suites, and the scan over
+    // component source legitimately finds ink/surface combinations that the
+    // enumerated pairing list never names. Requiring a pairing would have meant
+    // inventing one for every scan finding purely as bookkeeping, which grows
+    // the asserted set for reasons unrelated to what renders.
+    //
+    // A typo or a removed token is the real failure mode here, and token
+    // existence catches both.
+    const declared = new Set(
+      [...light.keys(), ...dark.keys(), ...scale.keys()].map(roleOf)
+    );
+    const orphans = ACCEPTED_REGRESSIONS.flatMap(entry =>
+      [entry.fg, entry.bg]
+        .filter(role => !declared.has(role))
+        .map(role => `${role} (in "${entry.fg} on ${entry.bg}")`)
+    );
 
     expect(
       orphans,
-      `These accepted-regression entries name no pairing in pairings.ts. ` +
-        `Either the pairing was renamed, in which case update the entry, or it ` +
-        `was removed, in which case delete the entry.`
+      `These accepted-regression entries name a role no token in theme.css ` +
+        `declares, so they can never match and suppress nothing. Either the ` +
+        `token was renamed, in which case update the entry, or it was removed, ` +
+        `in which case delete the entry.`
+    ).toEqual([]);
+  });
+
+  it("is applicable in the mode it claims", () => {
+    // An entry is only ever consulted for the mode it names, so one naming a
+    // mode where its pairing does not apply is inert: never evaluated, so
+    // neither the ratio pin nor the still-failing check can see it, and it sits
+    // in the file reading as live coverage. It also becomes a trap -- if the
+    // pairing later becomes applicable in that mode again, it is pre-accepted
+    // without anyone choosing that.
+    //
+    // Only entries that correspond to a pairing at all are checked. Entries
+    // that exist for the component scan have no pairing to be applicable in,
+    // and are covered by the token-existence check above.
+    const pairingModes = new Map<string, Set<string>>();
+    for (const p of PAIRINGS) {
+      const key = `${roleOf(p.fg)}|${roleOf(p.bg)}`;
+      const modes = pairingModes.get(key) ?? new Set<string>();
+      if (p.mode === undefined) {
+        modes.add("light");
+        modes.add("dark");
+      } else {
+        modes.add(p.mode);
+      }
+      pairingModes.set(key, modes);
+    }
+
+    const inert = ACCEPTED_REGRESSIONS.filter(entry => {
+      const modes = pairingModes.get(`${entry.fg}|${entry.bg}`);
+      return modes !== undefined && !modes.has(entry.mode);
+    }).map(
+      entry =>
+        `${entry.fg} on ${entry.bg} accepted for ${entry.mode}, but its ` +
+        `pairing applies only in ` +
+        `${[...(pairingModes.get(`${entry.fg}|${entry.bg}`) ?? [])].join("/")}`
+    );
+
+    expect(
+      inert,
+      `These accepted-regression entries name a mode their pairing does not ` +
+        `apply in, so they are never evaluated. Correct the mode, or delete ` +
+        `the entry if the pairing no longer renders in it.`
     ).toEqual([]);
   });
 
   it("is keyed by something that identifies one pairing", () => {
-    // The whole mechanism looks a pairing up by label, so two pairings sharing
-    // a label would let one entry silently accept the other as well.
-    const seen = new Map<string, number>();
+    // Lookup is by role pair, so two pairings reducing to the same one would
+    // let a single entry silently accept both. The alpha variants are the live
+    // risk: `text-primary` and `text-primary/50` on one surface share a role
+    // pair while measuring very different ratios.
+    const seen = new Map<string, string[]>();
     for (const p of PAIRINGS) {
-      const key = `${p.label}|${p.mode ?? "both"}`;
-      seen.set(key, (seen.get(key) ?? 0) + 1);
+      // The key carries everything that changes what a pairing measures, so
+      // this reports genuine ambiguity rather than pairs that merely share
+      // tokens.
+      const key =
+        `${roleOf(p.fg)}|${roleOf(p.bg)}|${p.mode ?? "both"}` +
+        `|${p.fgAlpha ?? "-"}|${p.bgAlpha ?? "-"}|${p.bgOver ? roleOf(p.bgOver) : "-"}`;
+      seen.set(key, [...(seen.get(key) ?? []), p.label]);
     }
-    const duplicated = [...seen].filter(([, n]) => n > 1).map(([key]) => key);
+    const duplicated = [...seen]
+      .filter(([, labels]) => labels.length > 1)
+      .map(([key, labels]) => `${key} — ${labels.join(", ")}`);
 
     expect(
       duplicated,
-      `These labels describe more than one pairing, so accepting one would ` +
-        `accept its twin. Give each a distinct label.`
+      `These pairings reduce to the same role pair, so accepting one would ` +
+        `accept its twin. Either they are genuinely one pairing, or the ` +
+        `accepted-regression key needs to carry what distinguishes them ` +
+        `(alpha, or the surface a tint is painted over).`
     ).toEqual([]);
   });
 });
@@ -132,7 +200,11 @@ for (const mode of MODES) {
         `${pairing.bg} ${toHex(surface)} = ${ratio.toFixed(2)}:1, ` +
         `needs ${required}:1 (${pairing.kind})`;
 
-      const accepted = acceptedFor(pairing.label, mode.name);
+      const accepted = acceptedFor(pairing.fg, pairing.bg, mode.name, {
+        fgAlpha: pairing.fgAlpha,
+        bgAlpha: pairing.bgAlpha,
+        bgOver: pairing.bgOver,
+      });
       if (accepted) {
         // Still-failing is asserted BEFORE the ratio pin, and the order is
         // load-bearing rather than stylistic. Any repair moves the ratio too,
@@ -151,13 +223,19 @@ for (const mode of MODES) {
         // would let the token slide further behind an entry that already
         // admits failure, which is how an accepted regression quietly becomes
         // a worse one.
+        // Compared at the precision the entry is WRITTEN at, by rounding both
+        // sides, rather than through a tolerance. `toBeCloseTo(x, 1)` admits an
+        // absolute difference just under 0.05, so a token could fade by several
+        // hundredths while the file claimed to pin it to two decimal places --
+        // the assertion would have been looser than its own documentation, and
+        // looser than the change it exists to catch.
         expect(
-          ratio,
+          Number(ratio.toFixed(2)),
           `${where}\nThis pairing is recorded in accepted.ts at ` +
             `${accepted.ratio}:1 and now measures ${ratio.toFixed(2)}:1. If the ` +
             `change was intended, update the recorded ratio; if not, the token ` +
             `moved under an entry that was not agreed for this value.`
-        ).toBeCloseTo(accepted.ratio, 1);
+        ).toBe(accepted.ratio);
         return;
       }
 
@@ -182,6 +260,11 @@ for (const mode of MODES) {
           const ratio = contrastRatio(foreground, surface);
           return {
             label: pairing.label,
+            fg: pairing.fg,
+            bg: pairing.bg,
+            fgAlpha: pairing.fgAlpha,
+            bgAlpha: pairing.bgAlpha,
+            bgOver: pairing.bgOver,
             margin: ratio - THRESHOLDS[pairing.kind],
             ratio,
             required: THRESHOLDS[pairing.kind],
@@ -190,7 +273,14 @@ for (const mode of MODES) {
         // A pairing that is knowingly below its threshold is not "thin", it is
         // accepted, and it is pinned by the case above. Leaving it in here
         // would report every accepted entry as a fragile pass forever.
-        .filter(row => !acceptedFor(row.label, mode.name))
+        .filter(
+          row =>
+            !acceptedFor(row.fg, row.bg, mode.name, {
+              fgAlpha: row.fgAlpha,
+              bgAlpha: row.bgAlpha,
+              bgOver: row.bgOver,
+            })
+        )
         .filter(row => row.margin < MARGIN)
         .sort((a, b) => a.margin - b.margin);
 

@@ -194,6 +194,29 @@ const STATUS_TEXT: Pairing[] = STATUSES.flatMap((s): Pairing[] => [
     kind: "text",
     label: `${s} text on popover`,
   },
+  // Status ink also lands on the muted and sidebar surfaces -- dashboard
+  // widgets, stat tiles and quick-link rows paint it there. Neither is covered
+  // by page, card or popover: muted is the darkest of the light surfaces and
+  // the tightest of the set, and the sidebar carries its own background token
+  // that a palette change can move independently.
+  //
+  // Both were found by the scan over real component source rather than by
+  // enumerating surfaces here, which is the usual direction. The utility scan
+  // sees what is PAINTED, this list says what is ASSERTED, and the gap between
+  // them is the thing worth closing -- three surfaces were listed while five
+  // were rendered.
+  {
+    fg: `--color-${s}`,
+    bg: "--nx-muted",
+    kind: "text",
+    label: `${s} text on muted`,
+  },
+  {
+    fg: `--color-${s}`,
+    bg: "--nx-sidebar-background",
+    kind: "text",
+    label: `${s} text on sidebar`,
+  },
 ]);
 const STATUS_ON_SOLID: Pairing[] = ["destructive", "success"].map(
   (s): Pairing => ({
@@ -202,6 +225,25 @@ const STATUS_ON_SOLID: Pairing[] = ["destructive", "success"].map(
     kind: "text",
     label: `${s} on-color (solid fill)`,
   })
+);
+
+// The 600 shade is also painted directly on the muted surface, in the entry
+// meta strip, rather than only on its own tint. It is a `color-mix()` step
+// rather than the base token, so the base pairing above does not cover it: it
+// is darker, and passing or failing at a different ratio.
+const STATUS_SHADE_ON_SURFACE: Pairing[] = STATUSES.flatMap((s): Pairing[] =>
+  (
+    [
+      ["--nx-muted", "muted"],
+      ["--nx-background", "page"],
+    ] as const
+  ).map(([bg, name]) => ({
+    fg: `--color-${s}-600`,
+    bg,
+    kind: "text" as const,
+    mode: "light" as const,
+    label: `${s} 600 on ${name} (light)`,
+  }))
 );
 
 // Tinted status surfaces (badges, alerts, chips). These are `color-mix()`
@@ -316,6 +358,11 @@ const INFO_ALERT: Pairing[] = ["--color-background", "--color-card"].map(
 // or row divider is excluded below with the normative reasoning, so the tokens
 // listed here can be held to 3:1 without that floor leaking onto the whole
 // border scale.
+//
+// Listed here means ASSERTED, not necessarily passing: some of these are
+// recorded in accepted.ts as knowingly below the minimum. That is the point of
+// keeping them in this list rather than moving them to EXCLUSIONS — an excluded
+// pairing is out of scope, an accepted one is in scope and measured every run.
 const BOUNDARIES: Pairing[] = [
   {
     fg: "--nx-border-strong",
@@ -396,6 +443,7 @@ export const PAIRINGS: Pairing[] = [
   ...CODE_TEXT,
   ...STATUS_TEXT,
   ...STATUS_ON_SOLID,
+  ...STATUS_SHADE_ON_SURFACE,
   ...STATUS_SHADES,
   ...ALERT_ACCENT,
   ...PRIMARY_BADGE,

@@ -61,8 +61,11 @@ const RadioGroupItem = forwardRef<
       className={cn(
         // Unchecked outline uses primary/40 (clearly visible) instead of primary/5
         // (~5% opacity, effectively invisible); hover strengthens above the resting state.
-        // Resting border uses border-input (a visible 3:1 boundary); the checked
-        // state switches to border-primary below, keeping the two states distinct.
+        // Resting border uses border-input, the token for a boundary that
+        // IDENTIFIES a control rather than decorates it; the checked state
+        // switches to border-primary below, keeping the two states distinct.
+        // border-input no longer meets 1.4.11's 3:1 minimum in light mode --
+        // see contrast/accepted.ts -- so it marks intent, not a guarantee.
         // rounded-full is fixed rather than derived from --radius: the circle is
         // what tells the user only one option can be chosen. The thick checked
         // border leaves a background-coloured core, and because the border's

@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { acceptedFor } from "../accepted";
 import { contrastRatio, type Rgb } from "../color";
 import {
   parseThemeScale,
@@ -377,6 +378,13 @@ for (const { path, line, self, utilities } of inkUsages()) {
       if (named.length > 0 && best >= required) continue;
       for (const [surface, ratio] of measured) {
         if (ratio >= required) continue;
+        // A pair the palette knowingly ships below its minimum is recorded once
+        // in accepted.ts and read from there, rather than listed again here.
+        // Two lists of accepted failures drift apart silently, each looking
+        // complete on its own, and this scan reaches the same colours through
+        // utility names rather than token names -- which is exactly the shape
+        // that makes a second list look like a different subject.
+        if (acceptedFor(role, surface, mode)) continue;
         misses.push({
           utility,
           role,
@@ -546,6 +554,11 @@ describe("ink utilities are readable on the surfaces they land on", () => {
           if (!surface) continue;
           const ratio = contrastRatio(ink, surface);
           if (ratio >= REQUIRED.text) continue;
+          // Read from the same accepted set as everything else. The resting
+          // pair being accepted does NOT excuse a state fill: this only skips
+          // when the exact ink/fill combination is recorded, so a hover fill
+          // that moves further from the label is still reported.
+          if (acceptedFor(role, fill.role, mode)) continue;
           failures.push(
             `text-${role} on ${fill.variant}bg-${fill.role} = ` +
               `${ratio.toFixed(2)}:1 (${mode}), needs ${REQUIRED.text}:1 — ` +

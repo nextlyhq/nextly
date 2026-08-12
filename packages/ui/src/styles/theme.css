@@ -758,9 +758,12 @@
    * light enough to read as text on the page is too light for white text, so
    * success splits the fill and destructive flips its ink to black instead.
    * The on-color token is what varies, not just the fill. */
-  /* Darkened from red-500; renders as #d92c32, ~4.8:1 as text on white. */
-  --nx-destructive: oklch(0.5661 0.19 23.03);
-  --nx-destructive-solid: oklch(0.5661 0.19 23.03);
+  /* red-500 itself, the reference palette's red. It is lighter than the 4.5:1
+   * text minimum allows; darkening it to pass reads as a different colour, and
+   * the palette is built around this one. `contrast/accepted.ts` records the
+   * affected pairings with their measured ratios. */
+  --nx-destructive: oklch(0.63 0.19 23.03);
+  --nx-destructive-solid: oklch(0.63 0.19 23.03);
   --nx-destructive-foreground: oklch(1 0 0);
   /* white */
   /* Darkened from green-600; renders as #00852c, ~4.8:1 as text on white. */
@@ -875,11 +878,15 @@
   /* Sidebar specific colors - using Slate scale */
   --nx-sidebar-background: oklch(0.99 0 0);
   /* flat with the content surface; nav is separated by borders, not fill */
-  /* Resting nav ink sits a step back from the active ink, so an active row
-   * reads as emphasised by its INK as well as its fill. The chosen palette
-   * used one value for both, which leaves the fill carrying the whole signal
-   * -- and the fill is the part a low-contrast surface weakens first. */
-  --nx-sidebar-foreground: oklch(0.44 0 0);
+  /* Resting and active nav ink are the same value in light mode, so the active
+   * row is distinguished by its FILL alone (--nx-sidebar-accent). That is the
+   * reference palette's arrangement: nav labels sit at body-text weight rather
+   * than a step back from it. Because the fill carries the whole signal here,
+   * it is the part to protect if the sidebar surface ever changes -- a
+   * low-contrast surface weakens the fill first. Dark mode keeps the two-step
+   * relationship, where a near-white active ink on a dark row is what separates
+   * the states. */
+  --nx-sidebar-foreground: oklch(0 0 0);
   --nx-sidebar-primary: oklch(0 0 0);
   --nx-sidebar-primary-foreground: oklch(1 0 0);
   /* slate-50 */
@@ -963,7 +970,11 @@
   --nx-destructive-foreground: oklch(0 0 0);
   /* Lightened green so it reads as text at WCAG 4.5:1 on the dark page and on
    * the lighter popover surface (was 4.17:1 on the page, 4.29:1 on a popover). */
-  --nx-success: oklch(0.6 0.1921 149.58);
+  /* Lightened a step so success ink clears 4.5:1 on --nx-muted with the margin
+   * the suite requires. Muted is the binding surface here, being the lightest
+   * of the dark surfaces this ink lands on; against card or page it was never
+   * close. */
+  --nx-success: oklch(0.61 0.1921 149.58);
   /* Darker green fill so white on-color button text clears 4.5:1. */
   --nx-success-solid: oklch(0.5225 0.1921 149.58);
   --nx-success-foreground: oklch(1 0 0);

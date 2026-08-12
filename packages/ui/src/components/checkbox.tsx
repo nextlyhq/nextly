@@ -16,8 +16,11 @@ const Checkbox = forwardRef<
     ref={ref}
     data-slot="checkbox"
     className={cn(
-      // Resting border uses border-input (a visible 3:1 boundary); the checked
-      // state switches to border-primary below, keeping the two states distinct.
+      // Resting border uses border-input, the token for a boundary that
+      // IDENTIFIES a control rather than decorates it; the checked state
+      // switches to border-primary below, keeping the two states distinct.
+      // border-input no longer meets 1.4.11's 3:1 minimum in light mode -- see
+      // contrast/accepted.ts -- so it marks intent here, not a guarantee.
       "peer relative h-4 w-4 shrink-0 rounded-sm border border-input ring-offset-background before:absolute before:left-1/2 before:top-1/2 before:h-6 before:w-6 before:-translate-x-1/2 before:-translate-y-1/2 before:content-[''] focus:border-primary! focus-visible:border-primary! focus:outline-none focus-visible:outline-none aria-invalid:border-destructive aria-invalid:focus:border-destructive! aria-invalid:focus-visible:border-destructive! disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground data-[state=checked]:border-primary data-[state=indeterminate]:bg-primary data-[state=indeterminate]:text-primary-foreground data-[state=indeterminate]:border-primary transition-all duration-200",
       className
     )}
