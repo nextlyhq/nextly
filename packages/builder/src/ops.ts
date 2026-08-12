@@ -848,6 +848,23 @@ function lockedWithin(node: BlockNode): string | undefined {
  * NEW forest, so the acceptance check reads them as edits that worked — the
  * document is quietly reordered or grows a slot no block declared.
  */
+function assertPositionContainer(at: unknown, verb: string): void {
+  // The descriptor itself, before any field of it is read. A non-enumerable
+  // `index` is accepted by the field checks and then dropped by JSON, so the
+  // edit applies here and the stored op replays into a different position — or
+  // is refused outright. An accessor would run during validation for the same
+  // reason every other container now refuses one.
+  // Only a RECORD with unwritable keys is this check's business. A non-record
+  // falls through to `assertPosition`, whose diagnosis names the actual problem
+  // instead of reporting it as a serialization one.
+  if (isPlainRecord(at) && !hasOnlyJsonOwnKeys(at)) {
+    throw new OpError(
+      `${verb}: a position of ${describe(at)} is not one JSON can carry. A key ` +
+        `it drops would replay as a different placement than the one applied.`
+    );
+  }
+}
+
 function assertPosition(at: TreePosition, verb: string): void {
   // The container first. Every read below goes through `at`, so a `null` or a
   // string reaches them as a property access on a non-object and leaves this
@@ -996,12 +1013,24 @@ export function applyOp(
     );
   }
   const nodes = document.nodes;
+  // Every ENTRY, not just the array. A stored forest carrying a `null` or a
+  // primitive passes the array check and then reaches helpers that read `.id`
+  // off it, so the failure surfaces as a TypeError from inside the engine
+  // rather than as a refusal naming the malformed document.
+  for (const entry of nodes) {
+    if (!isPlainRecord(entry)) {
+      throw new OpError(
+        `a document holding ${describe(entry)} among its nodes is malformed. ` +
+          `Every entry in a forest is a node.`
+      );
+    }
+  }
 
   // The op itself, before its discriminant is read. `op.kind` on a `null`
   // leaves this module as a TypeError, which a caller cannot distinguish from
   // the editor having a bug — and the whole point of `OpError` is that a
   // refusal says which op was wrong and why.
-  if (!isPlainRecord(op)) {
+  if (!isPlainRecord(op) || !hasOnlyJsonOwnKeys(op)) {
     throw new OpError(
       `an op of ${describe(op)} is not an edit. Every op is a record ` +
         `naming its kind.`
@@ -1017,7 +1046,14 @@ export function applyOp(
       // an undo", and a flag is a claim any caller can make: an op arrives from
       // storage, so nothing distinguishes the store's own inverse from a
       // forged one. Refusing at the door needs no such distinction.
+      assertPositionContainer(op.at, "insert");
       assertPosition(op.at, "insert");
+      // A parent id held twice places the incoming node under BOTH, which mints
+      // duplicate ids the inverse cannot unpick — the destination side of the
+      // same identity defect the addressed id already refuses.
+      if (op.at.parentId !== undefined) {
+        assertIdIsUnique(nodes, op.at.parentId, "insert");
+      }
       // Before `lockedWithin` walks it and before the engine places it. Both
       // accept whatever they are handed, so a malformed subtree is in the
       // document by the time anything downstream could object.
@@ -1091,7 +1127,11 @@ export function applyOp(
         throw new OpError(`move: no node with id "${op.id}" in the document.`);
       }
       assertIdIsUnique(nodes, op.id, "move");
+      assertPositionContainer(op.to, "move");
       assertPosition(op.to, "move");
+      if (op.to.parentId !== undefined) {
+        assertIdIsUnique(nodes, op.to.parentId, "move");
+      }
       const lockedMoving = lockedWithin(node);
       if (lockedMoving !== undefined) {
         throw new OpError(

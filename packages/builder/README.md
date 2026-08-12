@@ -181,9 +181,11 @@ pnpm run build         # tsup
 
 `pnpm turbo test --filter=@nextlyhq/builder` builds dependencies itself, because
 the `test` task declares `dependsOn: ["^build"]`. `check-types` and `lint` do
-not — they are configured build-free repo-wide, which holds for packages that
-import no workspace sibling and stopped holding for this one when it took its
-first dependency on the engine.
+not. Neither is build-free on a clean checkout: a workspace import resolves
+through the sibling's package exports to a `dist` that does not exist yet, and
+`lint` fails on the same specifiers through `import-x/no-unresolved`. Build
+first — `pnpm build`, or `pnpm --filter @nextlyhq/builder... build` for this
+package and its dependencies.
 
 ## Peer dependencies
 

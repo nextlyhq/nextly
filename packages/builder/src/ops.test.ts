@@ -535,9 +535,9 @@ describe("a node its author locked", () => {
   });
 
   it("cannot be deleted by deleting the container it sits in", () => {
-    // The finding this pairs with: removing an unlocked container removes its
-    // whole subtree, so a check reading only the addressed node honours the
-    // lock at the node and defeats it one level up.
+    // Removing an unlocked container removes its whole subtree, so a check
+    // reading only the addressed node honours the lock at that node and
+    // defeats it one level up.
     const nested: BlockNode[] = [
       node("outer", { main: [{ ...node("b"), locked: true }] }),
     ];
@@ -1401,6 +1401,60 @@ describe("a duplicate id reached through update", () => {
     ];
     expect(() =>
       applyOp(doc(forest), { kind: "update", id: "dupe", patch: { name: "x" } })
+    ).toThrow(/addresses 2 nodes/);
+  });
+});
+
+describe("containers JSON cannot carry whole", () => {
+  it("refuses an op whose kind is non-enumerable", () => {
+    // The switch reads `kind` and applies the op, then persistence drops the
+    // key: the stored op replays as nothing at all.
+    const op = { id: "a", patch: { name: "x" } };
+    Object.defineProperty(op, "kind", { value: "update", enumerable: false });
+    expect(JSON.stringify(op)).not.toContain("update");
+
+    expect(() => applyOp(doc(), op as unknown as BuilderOp)).toThrow(OpError);
+  });
+
+  it("refuses a position whose index is non-enumerable", () => {
+    // Applied here with the index honoured, stored without it, so replay places
+    // the node somewhere else or refuses the op outright.
+    const at = { parentId: "outer", slot: "main" };
+    Object.defineProperty(at, "index", { value: 0, enumerable: false });
+
+    expect(() =>
+      applyOp(doc(), {
+        kind: "insert",
+        node: node("fresh"),
+        at: at as unknown as { parentId: string; slot: string; index: number },
+      })
+    ).toThrow(/JSON can carry/);
+  });
+
+  it("refuses a forest holding something that is not a node", () => {
+    // Without this the entry reaches helpers that read `.id` off it, and the
+    // failure arrives as a TypeError from inside the engine rather than as a
+    // refusal naming the malformed document.
+    const forest = [node("a"), null] as unknown as BlockNode[];
+    expect(() => applyOp(doc(forest), { kind: "remove", id: "a" })).toThrow(
+      /is malformed/
+    );
+  });
+
+  it("refuses an insert under a parent id the document holds twice", () => {
+    // `insertNode` places the incoming node beneath EVERY matching parent,
+    // minting duplicate ids the inverse cannot unpick — the destination side of
+    // the identity defect the addressed id already refuses.
+    const twins: BlockNode[] = [
+      node("twin", { main: [] }),
+      node("twin", { main: [] }),
+    ];
+    expect(() =>
+      applyOp(doc(twins), {
+        kind: "insert",
+        node: node("fresh"),
+        at: { parentId: "twin", slot: "main", index: 0 },
+      })
     ).toThrow(/addresses 2 nodes/);
   });
 });
