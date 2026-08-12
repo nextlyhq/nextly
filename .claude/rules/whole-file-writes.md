@@ -33,13 +33,17 @@ Under an editing tool that requires a prior read, use it; reaching for the shell
 to write a file the tool would have made you read is how the requirement gets
 bypassed, and it is the bypass rather than the command that does the damage.
 
-**A symlink defeats every check below, so refuse to write through one.** A shell
-redirect follows the link and truncates its TARGET; the link entry itself is
-untouched, so `git diff -- <path>` reports nothing and each tell and proof
-clears a write that destroyed a different file. Test the path with `test -L`
-first. If a link genuinely has to be written through, resolve it — `readlink -f`
-— and run every check in this rule against the resolved target instead, because
-that is the file that changed.
+**A symlink anywhere in the path defeats every check below.** A shell redirect
+follows links and truncates the RESOLVED target; the named path is untouched, so
+`git diff -- <path>` reports nothing and each tell and proof clears a write that
+destroyed a different file.
+
+Testing the leaf is not enough, and this is the trap: with `linkdir -> real`,
+`test -L linkdir/file.txt` is FALSE — the file itself is regular — while the
+write still lands in `real/file.txt`. Any component can be the link. So resolve
+the whole path unconditionally with `readlink -f` and treat the RESULT as the
+path being written, rather than inspecting components for links. Then every
+check in this rule runs against the file that actually changed.
 
 `turbo.json` in `packages/ui` was replaced this way. It lost
 `dependsOn: ["$TURBO_EXTENDS$", "build"]` on both `test` and `test:coverage`,
@@ -53,21 +57,23 @@ write. So the baseline is chosen once, and each command follows from it. Getting
 this wrong is not a smaller version of the same answer — it silently swaps which
 content is being judged.
 
-- The last commit held the pre-write state → the baseline is `HEAD`, and
-  comparisons take the form `git diff HEAD -- <path>`.
-- The path carried deliberate STAGED edits when it was written → the index holds
-  the pre-write state, `HEAD` never did, and comparisons are the bare
-  `git diff -- <path>`, which is working tree against index. Inspect the staged
-  copy with `git diff --cached HEAD -- <path>` or `git show :<path>`; note that
-  `git status` shows only `MM` and reveals none of it.
-- The path carried deliberate UNSTAGED edits that were never committed or
-  stashed → **git holds no copy of the pre-write state, and this is where the
-  procedure stops.** Neither source above contains those lines, so choosing
-  either produces a repair that looks clean and silently omits them. Say so and
-  go outside git — the editor's local history, a backup, an open buffer — rather
-  than picking the nearest baseline. A recovery that cannot recover is worth
-  naming as one; running the steps anyway converts a known loss into an
-  unnoticed one.
+Ask them in this order, because the first question that answers YES settles it:
+
+1. **Did the path carry deliberate UNSTAGED edits that were never committed or
+   stashed?** Then **git holds no copy of the pre-write state, and the procedure
+   stops here.** This takes precedence even when staged edits ALSO existed — the
+   index preserves only the staged subset, so restoring from it produces a
+   convincing delta that silently drops the unstaged lines. Say so and go
+   outside git: the editor's local history, a backup, an open buffer. A recovery
+   that cannot recover is worth naming as one; running the steps anyway converts
+   a known loss into an unnoticed one.
+2. **Were there deliberate STAGED edits (and no unstaged ones)?** The index holds
+   the pre-write state, `HEAD` never did, and comparisons are the bare
+   `git diff -- <path>`, which is working tree against index. Inspect the staged
+   copy with `git diff --cached HEAD -- <path>` or `git show :<path>`; note that
+   `git status` shows only `MM` and reveals none of it.
+3. **Otherwise** the last commit held it: the baseline is `HEAD`, and comparisons
+   take the form `git diff HEAD -- <path>`.
 
 Both failure directions are live, which is why this is not a detail. Comparing
 against `HEAD` when the index is the baseline reports the staged additions as
