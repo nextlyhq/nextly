@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { BUNDLED_MODULE, TEST_MODULE } from "./source-modules";
+import { collectModules, TEST_MODULE } from "./source-modules";
 
 /**
  * The package's layering contract, enforced rather than documented.
@@ -105,14 +105,13 @@ const UNRESOLVABLE_SPECIFIER = "<unresolvable-specifier>";
  * anything, with the typecheck none the wiser because `allowJs` is off.
  */
 
+/** The package's modules, by the shared rule; only the file reading is local. */
 function sourceFiles(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...sourceFiles(full));
-    else if (BUNDLED_MODULE.test(entry.name)) out.push(full);
-  }
-  return out;
+  return collectModules(
+    dir,
+    at => readdirSync(at, { withFileTypes: true }),
+    join
+  );
 }
 
 /**

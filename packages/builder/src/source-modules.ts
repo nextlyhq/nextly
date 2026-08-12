@@ -67,3 +67,33 @@ export const TEST_MODULE = new RegExp(`\\.test\\.(?:${ANY_EXTENSION})$`);
 
 /** The same set as {@link TEST_MODULE}, in the form `vitest.config.ts` takes. */
 export const TEST_GLOBS = MODULE_EXTENSIONS.map(ext => `src/**/*.test.${ext}`);
+
+/**
+ * Every module beneath a directory, found by one rule.
+ *
+ * Both guards in this package walk `src` looking for files to inspect, and each
+ * had its own copy of this loop. Two walks can diverge in ways the shared
+ * extension list cannot prevent — one skipping a directory, one matching on a
+ * different part of the path — and a guard that walks past a file reports clean
+ * about code it never read.
+ *
+ * Reading the directory is INJECTED rather than imported, so this module keeps
+ * importing nothing: a `node:fs` import here would put a Node dependency inside
+ * `src`, where the layering guard is entitled to refuse it. The caller supplies
+ * the two functions; the rule about what counts and where to recurse lives here.
+ */
+export function collectModules(
+  dir: string,
+  readdir: (
+    at: string
+  ) => ReadonlyArray<{ name: string; isDirectory: () => boolean }>,
+  join: (...parts: string[]) => string
+): string[] {
+  const out: string[] = [];
+  for (const entry of readdir(dir)) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...collectModules(full, readdir, join));
+    else if (BUNDLED_MODULE.test(entry.name)) out.push(full);
+  }
+  return out;
+}
