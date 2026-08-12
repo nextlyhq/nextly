@@ -208,6 +208,17 @@ function hostPolicies(): (object | undefined)[] {
       remotePatterns: [{ protocol: "https", hostname: "cdn.test" }],
       trustedFrameOrigins: ["https://cdn.test"],
     },
+    // Fetch permission and frame trust are SEPARATE grants, and the policies
+    // above move them together — so `embed` never reaches the state where a url
+    // is fetchable but its origin is not trusted. It refuses an unfetchable url
+    // by returning null (`embed.tsx:65`) BEFORE `isTrustedOrigin` is consulted,
+    // so a policy that refuses the host answers the sandbox question by never
+    // asking it. Permitting the fetch and withholding the trust is the only
+    // arrangement that reaches the restricted-sandbox branch.
+    {
+      remotePatterns: [{ protocol: "https", hostname: "example.com" }],
+      trustedFrameOrigins: ["https://cdn.test"],
+    },
   ];
 }
 
@@ -578,6 +589,34 @@ const PROBES: {
     } as unknown as AnyBlockDefinition,
   },
   {
+    label: "a styled wrapper behind a hoisted resource tag",
+    property: "color",
+    // The control for `HOISTED_BY_REACT` itself, which nothing else exercises:
+    // every other probe renders only `div`/`span`, so React emits no resource
+    // hint and the skip-list is never consulted. React moves `title` to the
+    // front of the stream regardless of where it sits in the tree, so the first
+    // tag serialized here is one the block did not write.
+    //
+    // The style sits on the WRAPPER rather than on the carrier deliberately. A
+    // breach on the carrier is found by the class lookup whether or not the
+    // skip-list works, so it could not distinguish them; with the style one
+    // level up, locating the root is the only way to see it, and that is
+    // exactly what the hoisted tag would displace.
+    block: {
+      name: "test/probe-hoisted",
+      version: 1,
+      example: { props: {} },
+      render: ({ className }: { className: string }) => (
+        <>
+          <title>probe</title>
+          <div style={{ color: "red" }}>
+            <span className={className}>probe</span>
+          </div>
+        </>
+      ),
+    } as unknown as AnyBlockDefinition,
+  },
+  {
     label: "an odd-cased style attribute",
     property: "padding",
     // React preserves an unknown prop's spelling and HTML attribute names are
@@ -616,34 +655,53 @@ describe("the detector itself", () => {
   );
 });
 
+/**
+ * The render matrix is deliberately exhaustive — every block, against every
+ * host state, host policy and prop variant — so its cost grows with the block
+ * library rather than staying fixed. Vitest's default 5s budget is a limit on
+ * the MACHINE, not on the code: the work is CPU-bound server rendering, and a
+ * CI runner executing several matrix legs at once is far slower than a
+ * developer's machine, so the default turns a coverage-widening edit here into
+ * an intermittent red that says nothing about the invariant. An explicit budget
+ * keeps the failure meaningful: this test should fail because a block wrote an
+ * inline style, never because a runner was busy.
+ */
+const EXHAUSTIVE_RENDER_TIMEOUT_MS = 60_000;
+
 describe("a core block's root element", () => {
-  it("carries no inline style, and every block was actually reached", async () => {
-    const results = await Promise.all(
-      coreBlocks.map(async block => {
-        const definition = block as AnyBlockDefinition;
-        return { name: definition.name, ...(await inspectBlock(definition)) };
-      })
-    );
+  it(
+    "carries no inline style, and every block was actually reached",
+    async () => {
+      const results = await Promise.all(
+        coreBlocks.map(async block => {
+          const definition = block as AnyBlockDefinition;
+          return { name: definition.name, ...(await inspectBlock(definition)) };
+        })
+      );
 
-    // The exact set, not a floor. A minimum of ten is still met after one or
-    // two blocks are dropped from the export, and the reachability check below
-    // only ever examines what remains — so coverage would fall silently while
-    // both assertions stayed green. Naming them makes a deletion a failure and
-    // an addition a deliberate edit here.
-    expect(results.map(result => result.name).sort()).toEqual(EXPECTED_BLOCKS);
+      // The exact set, not a floor. A minimum of ten is still met after one or
+      // two blocks are dropped from the export, and the reachability check below
+      // only ever examines what remains — so coverage would fall silently while
+      // both assertions stayed green. Naming them makes a deletion a failure and
+      // an addition a deliberate edit here.
+      expect(results.map(result => result.name).sort()).toEqual(
+        EXPECTED_BLOCKS
+      );
 
-    // The vacuity control, BY NAME. A count is satisfied by any nine of twelve,
-    // so it cannot tell a library that grew a clean block from one whose
-    // riskiest block stopped being rendered.
-    expect(results.filter(r => !r.reached).map(r => r.name)).toEqual([]);
+      // The vacuity control, BY NAME. A count is satisfied by any nine of twelve,
+      // so it cannot tell a library that grew a clean block from one whose
+      // riskiest block stopped being rendered.
+      expect(results.filter(r => !r.reached).map(r => r.name)).toEqual([]);
 
-    expect(
-      [...new Set(results.flatMap(r => r.offenders))].sort(),
-      "A block wrote an inline style on the element it was given a class for. " +
-        "An inline declaration beats every class rule, so a style control " +
-        "writing that property compiles CSS with no visible effect. Move the " +
-        "default to `baseStyles`, which the compiler emits as the block-type " +
-        "tier beneath the node's own values."
-    ).toEqual([]);
-  });
+      expect(
+        [...new Set(results.flatMap(r => r.offenders))].sort(),
+        "A block wrote an inline style on the element it was given a class for. " +
+          "An inline declaration beats every class rule, so a style control " +
+          "writing that property compiles CSS with no visible effect. Move the " +
+          "default to `baseStyles`, which the compiler emits as the block-type " +
+          "tier beneath the node's own values."
+      ).toEqual([]);
+    },
+    EXHAUSTIVE_RENDER_TIMEOUT_MS
+  );
 });
