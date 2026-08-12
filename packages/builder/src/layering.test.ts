@@ -480,14 +480,15 @@ describe("the builder's layering contract", () => {
   });
 
   it("asks the runner to collect every extension it treats as a test", () => {
-    // Anchored HERE, in a `.ts` file, and not in the `.mts` control itself.
-    // That control proves the runner follows `.mts` by executing — but if the
-    // globs lose that extension the control stops being collected, so the
-    // evidence disappears with the behaviour it was evidence for, and the run
-    // simply reports fewer tests passing.
+    // The globs and the allowlist agree about the word "test". That is an
+    // internal-consistency property and it is worth checking here, but it is
+    // NOT what catches a narrowed extension list: this assertion lives in a
+    // file the globs decide whether to collect, so dropping `ts` un-collects
+    // the check along with everything else and the run reports `1 passed (1)`
+    // in green. Measured, not supposed.
     //
-    // This file is collected by any glob set that collects anything, so it
-    // survives to report the narrowing.
+    // What survives that is in `vitest.global-setup.ts`, which runs before any
+    // file is collected and compares the globs against the tests on disk.
     expect(TEST_GLOBS).toHaveLength(MODULE_EXTENSIONS.length);
     for (const extension of MODULE_EXTENSIONS) {
       expect(TEST_GLOBS).toContain(`src/**/*.test.${extension}`);

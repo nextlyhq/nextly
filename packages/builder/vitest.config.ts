@@ -16,11 +16,19 @@ import { TEST_GLOBS } from "./src/source-modules";
  * and the guard have to mean the same thing by the word: a hand-written glob
  * that omitted an extension the guard accepted would let a file import `vitest`
  * and never be run. Both now come from one list in `src/source-modules.ts`.
+ *
+ * `globalSetup` is what keeps that derivation honest. Narrowing the one list
+ * narrows these globs too, and a suite that stops being collected reports the
+ * same green as a suite that passed — so the check that the runner still
+ * collects every test on disk cannot itself be a test, because the narrowing
+ * would un-collect it. It runs before collection instead, where no glob decides
+ * whether it executes.
  */
 
 export default defineConfig({
   test: {
     environment: "node",
     include: TEST_GLOBS,
+    globalSetup: ["./vitest.global-setup.ts"],
   },
 });
