@@ -1,11 +1,13 @@
 name: Package smoke
 
 # Nightly proof that the published artifacts actually work: the tarballs
-# install into a clean project and import, and the scaffolder produces an app
-# that really installs and builds. publint and attw validate manifests and
+# install into a clean project and import, the scaffolder produces an app that
+# really installs and builds, and the subpaths declared server-safe survive a
+# real Next.js Server Component build. publint and attw validate manifests and
 # types statically on every PR; this covers the runtime layer they cannot —
-# missing `files` entries, broken bins, template dependency drift, and
-# native-module (better-sqlite3) prebuilds across current Node LTS lines.
+# missing `files` entries, broken bins, template dependency drift, RSC
+# compatibility, and native-module (better-sqlite3) prebuilds across the Node
+# lines the packages claim to support.
 #
 # Scheduled instead of per-PR: full installs take minutes, and this class of
 # drift moves slowly. A red night shows up as an issue, not a slower PR.
@@ -136,10 +138,83 @@ jobs:
           cd smoke-app
           npm run build
 
+  # The three static server-safe checks in packages/ui are all MODELS of what
+  # Next.js does with those subpaths: one looks for a `"use client"` banner, one
+  # walks the sources, one reads the built artifacts against an allow-list. A
+  # model only answers for what it was taught, and the artifact gate spent 29
+  # review rounds learning ways a simulated environment differs from a real one.
+  # This asks the real toolchain instead, and the assertion is the build passing.
+  server-safe-rsc-build:
+    name: Server-safe subpaths in an RSC build (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    # A module that calls `process.exit` while it initializes leaves the build
+    # with no verdict to report rather than a failure, so the deadline is what
+    # turns that into a red job. Generous relative to the work: install plus a
+    # build of one page takes about a minute.
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      # Every line the package's `engines` range admits, LOW END INCLUDED. The
+      # web globals Node adds over time are exactly what makes a server-safe
+      # claim version-dependent: a module reading `navigator` at module scope
+      # builds cleanly on 22 and 24 and throws for a consumer on the floor, so a
+      # matrix without the floor answers for the machines we happen to run on.
+      matrix:
+        node: [20, 22, 24]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the UI package
+        run: pnpm turbo build --filter=@nextlyhq/ui
+
+      # Packed and installed as a tarball rather than linked from the workspace,
+      # so the app resolves the subpaths through the published export map — the
+      # thing being claimed — instead of through pnpm's workspace links.
+      - name: Pack the UI package
+        run: |
+          mkdir -p /tmp/ui-pack
+          (cd packages/ui && pnpm pack --pack-destination /tmp/ui-pack)
+
+      # The app is GENERATED from the export map, so a new server-safe subpath is
+      # covered without editing this workflow. A hand-written import list would
+      # keep passing on the entries someone remembered.
+      - name: Write the Server Component app
+        run: node packages/ui/scripts/write-server-safe-rsc-app.mjs /tmp/rsc-app
+
+      - name: Install Next.js and the packed UI tarball
+        run: |
+          cd /tmp/rsc-app
+          npm install next react react-dom /tmp/ui-pack/*.tgz --no-audit --no-fund
+
+      # An App Router page is prerendered during the build, so every module the
+      # Server Component imports is evaluated in a real server render. A module
+      # body that reads `document` fails here naming the file, with nothing
+      # having to recognise the spelling of that read.
+      - name: Build the app
+        run: |
+          cd /tmp/rsc-app
+          npx next build
+
   # A red nightly must surface without anyone watching the Actions tab.
   report-failure:
     name: File an issue on failure
-    needs: [pack-and-consume, scaffold-and-build]
+    needs: [pack-and-consume, scaffold-and-build, server-safe-rsc-build]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 5
