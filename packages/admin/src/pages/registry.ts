@@ -20,6 +20,7 @@ import DashboardPage from "./dashboard/index";
 import MediaLibraryPage from "./dashboard/media/index";
 import PluginDetailPage from "./dashboard/plugins/[slug]";
 import PluginSettingsPage from "./dashboard/plugins/[slug]/settings";
+import PluginBrowsePage from "./dashboard/plugins/browse";
 import PluginsOverviewPage from "./dashboard/plugins/index";
 import CollectionsLandingRedirect from "./dashboard/redirects/CollectionsLandingRedirect";
 import FieldGroupsLandingRedirect from "./dashboard/redirects/FieldGroupsLandingRedirect";
@@ -369,6 +370,17 @@ export const routeConfig: Record<string, RouteConfig> = {
   // Plugin routes
   [ROUTES.PLUGINS]: {
     component: PluginsOverviewPage,
+    type: "private",
+    requiredPermission: "manage-settings",
+  },
+  // `/admin/plugins/[slug]` matches `/admin/plugins/browse` too, so which page
+  // answers is decided rather than incidental. Two things decide it, and
+  // either alone is sufficient: `resolveRoute` tries an exact-match pass before
+  // the dynamic matcher, and the dynamic matcher returns the first pattern that
+  // matches in insertion order, which is this one. Kept above PLUGIN_DETAIL so
+  // the ordering half stays true if the exact pass is ever reworked.
+  [ROUTES.PLUGIN_BROWSE]: {
+    component: PluginBrowsePage,
     type: "private",
     requiredPermission: "manage-settings",
   },

@@ -127,6 +127,22 @@ export function SubSidebarContent({
           </p>
           <SidebarMenu>
             <DynamicPluginNav isActive={isActive} search={pluginSearch} />
+            {/* Below the installed plugins, not above: this panel is for
+                getting to what the project already has, and the directory is
+                the occasional trip. Not filtered by `pluginSearch` either —
+                that box searches installed plugins, and an entry that ignores
+                it while sitting among entries that obey it reads as a bug. */}
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                asChild
+                isActive={isActive(ROUTES.PLUGIN_BROWSE)}
+              >
+                <Link href={ROUTES.PLUGIN_BROWSE}>
+                  <Icons.Search className="h-4 w-4 shrink-0" />
+                  <span>Browse plugins</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
           </SidebarMenu>
         </div>
       </div>

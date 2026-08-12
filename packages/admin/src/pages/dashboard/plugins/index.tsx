@@ -10,6 +10,7 @@
  * @module pages/dashboard/plugins
  */
 
+import { Button } from "@nextlyhq/ui";
 import type React from "react";
 import { Suspense } from "react";
 
@@ -17,6 +18,7 @@ import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
+import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 
 import PluginsTable from "./components/PluginsTable";
@@ -52,6 +54,14 @@ const PluginsOverviewPage: React.FC = () => {
               whether it is enabled.
             </p>
           </div>
+
+          {/* In the header rather than only in the empty state: a project that
+              already has plugins is the one most likely to want another, and an
+              action that appears only while the list is empty is unreachable
+              exactly then. */}
+          <Button asChild variant="outline" size="sm">
+            <Link href={ROUTES.PLUGIN_BROWSE}>Browse plugins</Link>
+          </Button>
         </div>
 
         {/* Plugins table */}
