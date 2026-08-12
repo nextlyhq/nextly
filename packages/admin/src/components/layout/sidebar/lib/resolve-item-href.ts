@@ -4,13 +4,17 @@ import type { PluginMetadata } from "@admin/types/branding";
 
 import type { MainMenuItem } from "../sidebar-types";
 
-// Why: collections / singles primary-icon clicks navigate to the section
-// landing page smart-redirect routes pick the most-recently-
-// created record server-side). Plugins follows the same convention and lands
-// on the installed list, which today renders an empty table when nothing is
-// installed. Standalone plugins jump to their first registered collection.
-// Extracted to a pure helper so the routing logic is unit-testable without
-// mounting the full DualSidebar tree.
+// Where a primary sidebar icon points.
+//
+// Collections and singles land on their section page, whose smart-redirect
+// routes pick the most-recently-created record server-side. Plugins follows the
+// same convention and lands on the installed list, which renders an empty table
+// when nothing is installed. Standalone plugins have no section page, so they
+// jump to their first registered collection instead.
+//
+// A pure function of the item and the caller's capabilities: every destination
+// here is decided by those two, and nothing about the answer depends on the
+// sidebar being mounted.
 export function resolveItemHref(
   item: MainMenuItem,
   visibleStandalonePlugins: PluginMetadata[],

@@ -29,6 +29,7 @@ import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useCollections } from "@admin/hooks/queries";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { filterCollectionItems } from "@admin/lib/permissions/authorization";
+import { isCollectionPlacedElsewhere } from "@admin/lib/plugins/collection-placement";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { cn } from "@admin/lib/utils";
 import type { ApiCollection } from "@admin/types/entities";
@@ -111,10 +112,15 @@ export function DynamicPluginNav({
 
   // `error` is deliberately not read. The two things this panel renders have
   // different data sources: collection entries come from this query, and the
-  // overview link comes from admin-meta. A failure here empties `data`, which
-  // suppresses the collection entries on its own, and must not reach the
-  // overview link, which is still backed and still the only sidebar route to
-  // /admin/plugins on mobile.
+  // overview link comes from admin-meta, so a collections failure must not
+  // remove the overview link — on mobile it is the only sidebar route to
+  // /admin/plugins.
+  //
+  // Whether the collection entries survive is `data`'s business, not this
+  // flag's. A failed background refetch keeps the last successful result, so
+  // the entries stay; only a first load that never succeeded leaves `data`
+  // empty. Reading `error` here would blank the entries in the first case too,
+  // replacing a still-accurate list with nothing.
   const { data, isLoading } = useCollections(
     {
       pagination: { page: 0, pageSize: 100 },
@@ -155,9 +161,14 @@ export function DynamicPluginNav({
       const collectionSlugs = new Set(meta.collections ?? []);
       for (const collection of allPluginCollections) {
         if (collectionSlugs.has(collection.name)) {
-          const groupSlug = pluginSlug(collection.admin?.group || "");
-          if (groupSlug && !map.has(groupSlug)) {
-            map.set(groupSlug, meta);
+          // Keyed by the group NAME the entries below are keyed by, not by a
+          // slug of it. `admin.group` is optional and those collections are
+          // grouped under "Other"; deriving the key from the absent heading
+          // produced an empty string, which was skipped, so the plugin was
+          // never found and its placement read as unset.
+          const groupName = collection.admin?.group || "Other";
+          if (!map.has(groupName)) {
+            map.set(groupName, meta);
           }
         }
       }
@@ -165,11 +176,16 @@ export function DynamicPluginNav({
     return map;
   }, [pluginMetadata, allPluginCollections]);
 
-  // Helper: determine if a plugin group is placed in another sidebar section
-  // Uses config-only placement (no user overrides)
+  // Whether a plugin group is rendered in another sidebar section, from the
+  // config's placement only — user overrides do not apply here.
+  //
+  // Group-level, so it decides how the WHOLE entry renders: placed groups show
+  // a settings link, unplaced ones expand into their collections. Which
+  // individual collections may be listed is a per-collection question, and
+  // `isCollectionPlacedElsewhere` answers that one.
   const isPluginPlaced = React.useCallback(
-    (slug: string): boolean => {
-      const meta = groupToPluginMeta.get(slug);
+    (groupName: string): boolean => {
+      const meta = groupToPluginMeta.get(groupName);
       const placement = meta?.placement ?? meta?.group;
       if (!placement || placement === "plugins") return false;
       // "standalone" plugins get their own top-level sidebar icon, so treat as placed
@@ -197,13 +213,20 @@ export function DynamicPluginNav({
         pluginMap.set(groupName, {
           name: groupName,
           slug,
-          isPlaced: isPluginPlaced(slug),
+          isPlaced: isPluginPlaced(groupName),
           collections: [],
         });
       }
 
-      // Only add to sub-items if the collection is visible and permitted
-      if (visibleCollectionIds.has(collection.id)) {
+      // A sub-item must be visible, permitted, and not already rendered in
+      // another section. Placement is declared per collection, so it is decided
+      // per collection: `admin.group` is an optional heading, and a group-level
+      // answer cannot see a collection that declares none, which lists it here
+      // as well as wherever its plugin placed it.
+      if (
+        visibleCollectionIds.has(collection.id) &&
+        !isCollectionPlacedElsewhere(collection.name, pluginMetadata)
+      ) {
         pluginMap.get(groupName)!.collections.push(collection);
       }
     }
@@ -223,7 +246,13 @@ export function DynamicPluginNav({
     return Array.from(pluginMap.values()).sort((a, b) =>
       a.name.localeCompare(b.name)
     );
-  }, [allPluginCollections, visibleCollectionIds, isPluginPlaced, search]);
+  }, [
+    allPluginCollections,
+    visibleCollectionIds,
+    isPluginPlaced,
+    pluginMetadata,
+    search,
+  ]);
 
   // The overview link is shown only to users who can open the page it points
   // at: /admin/plugins is manage-settings guarded, and a collection reader
@@ -469,12 +498,9 @@ function CollapsedPluginDropdown({
                 </DropdownMenuItem>,
               ];
             }
-            // Only UNPLACED plugins contribute collections here. A placed
-            // plugin's collections already appear under Collections, Settings
-            // or its own standalone section, which is why the expanded view
-            // filters on the same flag; listing them again under Plugins would
-            // show one collection in two places.
-            if (plugin.isPlaced) return [];
+            // No placement check here: `plugin.collections` already excludes
+            // anything rendered in another section, so both this menu and the
+            // expanded view list the same set.
             return plugin.collections.map(collection => {
               const href = getCollectionUrl(collection);
               const active = isActive(href);

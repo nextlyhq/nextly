@@ -251,6 +251,111 @@ describe("DynamicPluginNav collapsed", () => {
   });
 
   /**
+   * The same omission, for a placed collection that declares no `admin.group`.
+   *
+   * `admin.group` is an optional heading, so these collections are grouped
+   * under "Other" and cannot be found by group at all. A group-keyed placement
+   * lookup answers "no placement" for them, which reads as "belongs under
+   * Plugins" — so the collection appears here AND under Settings, which is the
+   * duplicate the placement rule exists to prevent.
+   */
+  it("omits a placed collection that declares no display group", async () => {
+    mockCanManageSettings = false;
+    mockBranding = {
+      plugins: [
+        { name: "@acme/here", collections: ["widgets"], placement: "plugins" },
+        {
+          name: "@acme/elsewhere",
+          collections: ["gadgets"],
+          placement: "settings",
+        },
+      ],
+    } as unknown as AdminBranding;
+    mockCollectionCaps = {
+      widgets: { canRead: true },
+      gadgets: { canRead: true },
+    };
+    mockCollections = {
+      items: [
+        {
+          id: "c1",
+          name: "widgets",
+          labels: { plural: "Widgets" },
+          admin: { isPlugin: true, group: "Here" },
+        },
+        {
+          id: "c2",
+          name: "gadgets",
+          labels: { plural: "Gadgets" },
+          // No `group`. This is what the group-keyed lookup could not see.
+          admin: { isPlugin: true },
+        },
+      ],
+    };
+
+    const { container } = renderNav({ collapsed: true });
+    fireEvent.mouseEnter(container.querySelector("li")!);
+
+    // Positive control: the unplaced collection IS offered, so the absence
+    // below is about placement rather than about an empty menu.
+    expect(
+      await screen.findByRole("menuitem", { name: "Widgets" })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Gadgets" })).toBeNull();
+  });
+
+  /**
+   * Two plugins, both with group-less collections, disagreeing about placement.
+   *
+   * This is the case a group-level answer cannot get right at all, rather than
+   * one it happens to miss. Both collections are grouped under "Other", so a
+   * single flag on that group has to be true or false for both — and one of
+   * them is placed while the other is not. Only a per-collection rule can list
+   * one and omit the other.
+   */
+  it("separates two group-less collections that disagree about placement", async () => {
+    mockCanManageSettings = false;
+    mockBranding = {
+      plugins: [
+        { name: "@acme/stays", collections: ["widgets"] },
+        {
+          name: "@acme/moves",
+          collections: ["gadgets"],
+          placement: "settings",
+        },
+      ],
+    } as unknown as AdminBranding;
+    mockCollectionCaps = {
+      widgets: { canRead: true },
+      gadgets: { canRead: true },
+    };
+    mockCollections = {
+      items: [
+        {
+          id: "c1",
+          name: "widgets",
+          labels: { plural: "Widgets" },
+          admin: { isPlugin: true },
+        },
+        {
+          id: "c2",
+          name: "gadgets",
+          labels: { plural: "Gadgets" },
+          admin: { isPlugin: true },
+        },
+      ],
+    };
+
+    const { container } = renderNav({ collapsed: true });
+    fireEvent.mouseEnter(container.querySelector("li")!);
+
+    expect(
+      await screen.findByRole("menuitem", { name: "Widgets" })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Gadgets" })).toBeNull();
+  });
+
+  /**
    * Every destination the collapsed dropdown offers by default is
    * manage-settings guarded, so a collection reader would get a menu whose
    * every item redirects. They are offered their collections instead.
