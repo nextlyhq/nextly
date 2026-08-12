@@ -10,13 +10,7 @@ import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
-
-function toSlug(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
+import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 
 interface PluginSettingsPageProps {
   params?: { slug?: string };
@@ -47,7 +41,7 @@ function PluginSettingsContent({ activeSlug }: { activeSlug?: string }) {
   const branding = useBranding();
   const plugins = branding?.plugins ?? [];
   const plugin = activeSlug
-    ? plugins.find(p => toSlug(p.name) === activeSlug)
+    ? plugins.find(p => pluginSlug(p.name) === activeSlug)
     : undefined;
 
   const title = plugin?.appearance?.label ?? plugin?.name;

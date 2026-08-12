@@ -25,6 +25,7 @@ import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
+import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import type { PluginMetadata } from "@admin/types/branding";
 
 import { PluginStatusPill } from "./components/PluginsTable";
@@ -37,13 +38,6 @@ const PLACEMENT_LABELS: Record<string, string> = {
   plugins: "Plugins",
   standalone: "Standalone",
 };
-
-function toSlug(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
 
 interface PluginDetailPageProps {
   params?: { slug?: string };
@@ -76,7 +70,7 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
   const branding = useBranding();
   const plugins = branding?.plugins ?? [];
   const plugin = activeSlug
-    ? plugins.find(p => toSlug(p.name) === activeSlug)
+    ? plugins.find(p => pluginSlug(p.name) === activeSlug)
     : undefined;
 
   if (!plugin) {
@@ -166,7 +160,7 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
           {plugin.enabled !== false && plugin.settings?.component && (
             <Link
               href={buildRoute(ROUTES.PLUGIN_SETTINGS, {
-                slug: toSlug(plugin.name),
+                slug: pluginSlug(plugin.name),
               })}
               className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
             >
@@ -318,7 +312,7 @@ function Contributions({ plugin }: { plugin: PluginMetadata }) {
       label: "API routes",
       icon: Route,
       items: (plugin.routes ?? []).map(r => ({
-        primary: `${r.method} /api/plugins/${toSlug(plugin.name)}${r.path}`,
+        primary: `${r.method} /api/plugins/${pluginSlug(plugin.name)}${r.path}`,
       })),
     },
   ].filter(group => group.items.length > 0);

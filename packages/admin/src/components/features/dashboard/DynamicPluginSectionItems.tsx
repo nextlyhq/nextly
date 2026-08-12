@@ -16,20 +16,10 @@ import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useCollections } from "@admin/hooks/queries";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { filterCollectionItems } from "@admin/lib/permissions/authorization";
+import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { resolvePluginIcon } from "@admin/lib/plugins/resolve-plugin-icon";
 import type { PluginMetadata } from "@admin/types/branding";
 import type { ApiCollection } from "@admin/types/entities";
-
-/**
- * Derive a URL-friendly slug from a name.
- * e.g. "Form Builder" -> "form-builder"
- */
-function toSlug(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
 
 interface PluginGroup {
   meta: PluginMetadata;
@@ -91,7 +81,7 @@ export function DynamicPluginSectionItems({
     // Group collections by their plugin (match by collections list)
     const groups: PluginGroup[] = [];
     for (const meta of matchingPlugins) {
-      const slug = toSlug(meta.name);
+      const slug = pluginSlug(meta.name);
       const pluginCollectionSlugs = new Set(meta.collections ?? []);
       const collections = permittedCollections
         .filter(c => pluginCollectionSlugs.has(c.name))

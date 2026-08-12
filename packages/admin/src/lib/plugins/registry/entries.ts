@@ -25,10 +25,7 @@ export const REGISTRY_ENTRIES: RegistryPlugin[] = [
     category: "content",
     tags: ["blocks", "editor", "pages"],
     icon: { lucide: "LayoutTemplate" },
-    install: {
-      package: "@nextlyhq/plugin-page-builder",
-      configSnippet: "plugins: [pageBuilder()]",
-    },
+    configSnippet: "plugins: [pageBuilder()]",
     links: {
       homepage: "https://nextlyhq.com",
       repository: "https://github.com/nextlyhq/nextly",
@@ -42,10 +39,10 @@ export const REGISTRY_ENTRIES: RegistryPlugin[] = [
     category: "forms",
     tags: ["forms", "submissions"],
     icon: { lucide: "ClipboardList" },
-    install: {
-      package: "@nextlyhq/plugin-form-builder",
-      configSnippet: "plugins: [formBuilder()]",
-    },
+    // `formBuilderPlugin`, not `formBuilder()`: the factory returns a
+    // FormBuilderPluginResult whose definition is at `.plugin`, and the package
+    // exports the unwrapped value for exactly this use.
+    configSnippet: "plugins: [formBuilderPlugin]",
     links: {
       homepage: "https://nextlyhq.com",
       repository: "https://github.com/nextlyhq/nextly",
@@ -60,10 +57,9 @@ export const REGISTRY_ENTRIES: RegistryPlugin[] = [
     category: "seo",
     tags: ["seo", "meta"],
     icon: { lucide: "Search" },
-    install: {
-      package: "@nextlyhq/plugin-seo",
-      configSnippet: "plugins: [seo()]",
-    },
+    // `seoPlugin`, and `collections` is required: the plugin adds the SEO group
+    // only to the collections it is given, so a bare call does not type-check.
+    configSnippet: 'plugins: [seoPlugin({ collections: ["posts"] })]',
     links: {
       homepage: "https://nextlyhq.com",
       repository: "https://github.com/nextlyhq/nextly",

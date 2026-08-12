@@ -2,6 +2,7 @@ import type React from "react";
 
 import * as Icons from "@admin/components/icons";
 import { resolvePluginIcon } from "@admin/lib/plugins/resolve-plugin-icon";
+import { cn } from "@admin/lib/utils";
 import type { PluginMetadata } from "@admin/types/branding";
 
 interface PluginIconProps {
@@ -42,7 +43,16 @@ export function PluginIcon({
   if (source.kind === "asset") {
     // Decorative by default: the plugin's name is always rendered beside this,
     // so announcing the logo as well repeats it for a screen reader.
-    return <img src={source.src} alt={alt} className={className} />;
+    // object-contain, because every caller sizes this with equal h-* and w-*
+    // and the default object-fit of `fill` would squash a rectangular logo
+    // into that square.
+    return (
+      <img
+        src={source.src}
+        alt={alt}
+        className={cn("object-contain", className)}
+      />
+    );
   }
 
   const registry = Icons as unknown as Record<string, React.ElementType>;

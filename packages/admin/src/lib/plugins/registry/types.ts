@@ -23,12 +23,15 @@ export interface RegistryPlugin {
   category: PluginCategory;
   tags?: string[];
   icon: { lucide: string; asset?: string };
-  install: {
-    /** What to pass to the package manager. */
-    package: string;
-    /** The line to add inside `plugins: [...]` in nextly.config.ts. */
-    configSnippet: string;
-  };
+  /**
+   * The line to add inside `plugins: [...]` in nextly.config.ts.
+   *
+   * No package name beside it: that is `id`, and storing it twice means a
+   * rename can update one and leave the other, so the detail page would join
+   * on the new name while the install command still fetched the old one.
+   * Derive the command with `installCommand()`.
+   */
+  configSnippet: string;
   links?: { homepage?: string; repository?: string; docs?: string };
 }
 
