@@ -145,7 +145,8 @@ export interface RunMigrationArgs {
    * direction that matters: a staging database restored from production carries the same content
    * as production.
    *
-   * A dry run does not require it, because a dry run writes nothing.
+   * A dry run does not require it, because a dry run writes no content and records no marker.
+   * It is not read-only — see `dryRun` — but nothing it touches is a thing a backup would restore.
    */
   backupConfirmed?: boolean;
 }
@@ -173,7 +174,8 @@ export async function runFieldGroupMigration(
   // resumed run, already read a marker; a caller who forgot the acknowledgement would be told so
   // only after this had interfered with whatever else was trying to change schema.
   //
-  // A dry run is exempt because it writes nothing, and exempting it is what makes the gate usable:
+  // A dry run is exempt because it writes no content and records no marker, and exempting it is
+  // what makes the gate usable:
   // the operator's first action is to see the plan, and demanding they assert a backup before they
   // are allowed to look at what would happen teaches them to assert it without meaning it.
   if (!dryRun && !backupConfirmed) {
@@ -374,7 +376,14 @@ export async function runFieldGroupMigration(
         // carries its companion `_locales` rename on the SAME manifest entry, so reading `from`
         // and `to` off the entry reports one rename where two will happen -- and the one it omits
         // is the one an operator is least likely to predict.
-        const renames = reconciled.flatMap(entry => tableRenamesOf(entry));
+        // Entries the reconciliation found already applied are dropped. A resumed run starts
+        // after the recorded step and a torn step skips a source that is already absent, so
+        // reporting a satisfied entry tells the operator an object will be renamed that has
+        // already moved — on a resume, which is exactly when they are deciding whether the
+        // remaining work is safe to continue.
+        const renames = reconciled
+          .filter(entry => entry.satisfied !== true)
+          .flatMap(entry => tableRenamesOf(entry));
         logger.info?.("field-group migration dry run", {
           phase: FIELD_GROUP_MIGRATION_PHASE,
           direction,

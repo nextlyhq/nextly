@@ -25,4 +25,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-The field-group storage migration can now report what it would do without writing anything, and refuses to run for real unless the caller states that a restorable backup exists.
+The field-group storage migration can now report what it would rename without changing any content or recording that a run happened, and refuses to run for real unless the caller states that a restorable backup exists. A preview still claims the migration lock, so it needs a role that can write to Nextly's own lock table.
