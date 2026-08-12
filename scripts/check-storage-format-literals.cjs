@@ -62,7 +62,7 @@
  */
 
 const { execFileSync } = require("node:child_process");
-const { existsSync } = require("node:fs");
+const { existsSync, rmSync, writeFileSync } = require("node:fs");
 const path = require("node:path");
 
 const ROOT = path.resolve(__dirname, "..");
@@ -70,66 +70,44 @@ const ROOT = path.resolve(__dirname, "..");
 let failures = 0;
 
 /**
- * Prove the search apparatus can find something, and say how much it looked at.
+ * Run a known-forbidden fixture through the REAL scan before trusting any verdict below.
  *
- * 🔴 Without this the gate is indistinguishable from a working one when it scans nothing. Point it
- * at directories that do not exist and it prints seven ticks and "gate passed" and exits 0 — the
- * same bytes a real pass produces. A renamed directory, a changed include list or a bad exclude
- * would each retire the whole check silently, and the only signal would be its continued success.
+ * 🔴 An earlier version of this control ran its OWN `grep`, with its own include list and its own
+ * exclusions. That answers "can something find the catalog", which is a different question from
+ * "does the scan these checks depend on still work" — and it keeps answering yes after the real
+ * include list, exclusion set, allowlist or patterns have stopped matching. A control has to
+ * exercise the path it certifies, or it certifies a different path.
  *
- * Two parts, because they answer different questions. The path check catches a scope that moved.
- * The positive control catches a scan that is running but finding nothing — a broken pattern, a
- * grep that is not behaving as assumed — by hunting a string that must exist in the tree being
- * scanned and failing when it does not.
+ * So this writes a file that MUST be rejected into a scanned directory and runs the same scan
+ * every check below runs. If a plain forbidden literal sitting in ordinary product code does not
+ * come back as a hit, nothing below means anything.
  *
- * The count is printed rather than merely tested, so a scope that collapses PARTWAY shows up as a
- * number that got smaller. A verdict that carries its own domain is the only kind a reader can
- * check at a glance.
+ * Removed in a `finally`, and named so that a crash between writing and deleting leaves a file
+ * whose only possible purpose is obvious.
  */
-function assertScanCoversSomething(paths) {
-  const missing = paths.filter(p => !existsSync(path.join(ROOT, p)));
-  if (missing.length > 0) {
-    console.error(
-      `✗ scan paths do not exist: ${missing.join(", ")}\n` +
-        `  Every check below would pass by finding nothing.`
-    );
-    process.exit(1);
-  }
+function assertScanSeesAForbiddenLiteral() {
+  const relativePath = "packages/nextly/src/__storage-gate-selfcheck-fixture.ts";
+  const fixture = path.join(ROOT, relativePath);
 
-  // The catalog is the thing this gate exists to protect, so it is guaranteed to be inside the
-  // scanned tree. If the scan cannot see it, the scan is not working.
-  let files = [];
   try {
-    files = execFileSync(
-      "grep",
-      [
-        "-rlE",
-        "STORAGE_FORMAT",
-        ...paths,
-        "--include=*.ts",
-        "--exclude-dir=node_modules",
-        "--exclude-dir=dist",
-      ],
-      { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
-    )
-      .split("\n")
-      .filter(Boolean);
-  } catch (e) {
-    if (e.status !== 1) throw e;
-  }
+    // Not a comment, not a test file, not in an allowlisted path: none of the deliberate
+    // exemptions apply, so the only reason this could go unseen is a scan that stopped working.
+    writeFileSync(fixture, "export const planted = row._componentType;\n");
 
-  if (files.length === 0) {
-    console.error(
-      "✗ the scan found no reference to STORAGE_FORMAT anywhere in the scanned paths.\n" +
-        "  The catalog is inside that tree, so this means the search itself is not working " +
-        "and every check below would pass vacuously."
-    );
-    process.exit(1);
-  }
+    const hits = collectHits("_componentType");
+    if (!hits.some(line => line.includes(relativePath))) {
+      console.error(
+        "✗ the scan did not see a forbidden literal placed in product code.\n" +
+          "  Its include list, exclusions, allowlist or patterns have stopped matching, so every\n" +
+          "  check below would pass without examining anything."
+      );
+      process.exit(1);
+    }
 
-  console.log(
-    `scanning ${paths.join(", ")} — ${files.length} files reference the catalog\n`
-  );
+    console.log("scan self-check passed: a planted literal was seen\n");
+  } finally {
+    if (existsSync(fixture)) rmSync(fixture);
+  }
 }
 
 
@@ -162,7 +140,12 @@ const ALLOWED = [
 ];
 
 
-function grep(label, pattern, opts = {}) {
+/**
+ * The scan itself: everything deciding WHICH lines count as hits.
+ *
+ * Split from the reporting so the self-check can run the real one rather than a lookalike.
+ */
+function collectHits(pattern, opts = {}) {
   const {
     // 🔴 Every source extension the repository ships, not only TypeScript. A reader or writer of
     // the storage key added to an existing `.js` or `.mjs` file — a CLI bin, a build script, a
@@ -222,6 +205,13 @@ function grep(label, pattern, opts = {}) {
   // silently re-admit exactly those lines if they came back.
   const failing = lines;
 
+  return failing;
+}
+
+/** Run a scan and report its verdict. */
+function grep(label, pattern, opts = {}) {
+  const failing = collectHits(pattern, opts);
+
   if (failing.length > 0) {
     failures++;
     console.error(`✗ ${label} (${failing.length} hit(s)):`);
@@ -234,7 +224,7 @@ function grep(label, pattern, opts = {}) {
 
 }
 
-assertScanCoversSomething(["packages", "apps", "templates"]);
+assertScanSeesAForbiddenLiteral();
 
 // 🔴 BOTH generations are banned, not only the legacy one.
 //
