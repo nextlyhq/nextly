@@ -49,7 +49,10 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import { importedSpecifiers } from "@nextlyhq/module-specifiers";
+import {
+  importedSpecifiers,
+  UNRESOLVABLE_SPECIFIER,
+} from "@nextlyhq/module-specifiers";
 import { describe, expect, it } from "vitest";
 
 const SRC = join(__dirname);
@@ -109,6 +112,26 @@ function isShippedModule(entry: string): boolean {
  */
 function resolvesToForbidden(specifier: string): boolean {
   return specifier === FORBIDDEN || specifier.startsWith(`${FORBIDDEN}/`);
+}
+
+/**
+ * Whether a specifier stops this file being cleared.
+ *
+ * Two different reasons, and the second is easy to lose. A specifier that
+ * RESOLVES to the engine is the obvious one. A specifier the reader could not
+ * read — `import(name)`, `require(base + id)` — is the other: it is reported as
+ * {@link UNRESOLVABLE_SPECIFIER}, and passing that through a "does this name the
+ * engine" test answers `false`, which certifies a load nobody has read.
+ *
+ * This guard is allow-by-default: it names ONE forbidden package rather than
+ * listing what is permitted, so an unreadable specifier falls straight through
+ * unless it is rejected on purpose. `packages/builder` is deny-by-default and
+ * gets this for free, because a marker that matches no allowlist entry is
+ * already a violation there. The marker was designed for that shape; this
+ * consumer has to opt in.
+ */
+function blocksClearance(specifier: string): boolean {
+  return resolvesToForbidden(specifier) || specifier === UNRESOLVABLE_SPECIFIER;
 }
 
 /**
@@ -315,15 +338,43 @@ describe("this package takes no direct dependency on the block engine", () => {
     ).toBe(true);
   });
 
+  it("refuses to clear a file whose load it could not read", () => {
+    // A computed target cannot be resolved by reading the file, so the reader
+    // reports a marker rather than a name. Asked only "does this name the
+    // engine", the marker answers no — and the file is certified on the
+    // strength of a load nobody read.
+    //
+    // Driven through the reader rather than by handing the marker straight to
+    // the predicate: the two have to agree about what an unreadable load
+    // produces, and a test that supplies the marker itself would pass even if
+    // the reader stopped emitting it.
+    const computed = importedSpecifiers(
+      `const m = await import(name);`,
+      "module.ts"
+    );
+    expect(computed).toEqual([UNRESOLVABLE_SPECIFIER]);
+    expect(computed.some(blocksClearance)).toBe(true);
+
+    // And the reason it needs saying here at all: the narrower predicate this
+    // one wraps says no, because the marker is not the engine's name.
+    expect(computed.some(resolvesToForbidden)).toBe(false);
+
+    // An ordinary import is still cleared, so the guard has not become one that
+    // rejects everything.
+    expect(
+      importedSpecifiers('import { x } from "react";', "module.ts").some(
+        blocksClearance
+      )
+    ).toBe(false);
+  });
+
   it("imports it in no shipped source file", () => {
     // The manifest alone is not a boundary: under pnpm a package hoisted for
     // another workspace member stays importable from one whose own manifest
     // never declares it. The import is the thing that would actually resolve,
     // so the import is what is checked.
     const offenders = sourceFiles(SRC).filter(file =>
-      importedSpecifiers(readFileSync(file, "utf8"), file).some(
-        resolvesToForbidden
-      )
+      importedSpecifiers(readFileSync(file, "utf8"), file).some(blocksClearance)
     );
 
     expect(
