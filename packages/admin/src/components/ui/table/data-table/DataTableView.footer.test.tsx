@@ -99,6 +99,18 @@ describe("DataTableView footer", () => {
     expect(tokensOf(footer?.parentElement)).not.toContain("@md/table:border");
   });
 
+  it("still clips when the caller supplies the card", () => {
+    const [footer] = renderWithFooter(false);
+
+    // Clipping is not part of the card and must not travel with it. A parent
+    // can round its corners without clipping -- `DataTable` does exactly that,
+    // and it is the caller that passes bordered={false} -- so a globally
+    // coloured <thead> would paint square corners through the rounded parent.
+    expect(tokensOf(footer?.parentElement)).toContain(
+      "@md/table:overflow-hidden"
+    );
+  });
+
   it("renders nothing extra when no footer is given", () => {
     render(
       <DataTableView<Row>

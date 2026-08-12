@@ -339,9 +339,15 @@ export function DataTableView<Row extends object>({
           inside as the table's own footer. */}
       <div
         className={cn(
-          "flex flex-col gap-4 @md/table:block @md/table:gap-0",
+          // Clipping is NOT part of the card. The table view rounds its own
+          // corners through whatever encloses it, and a globally coloured
+          // <thead> paints square corners through a rounded parent that does
+          // not clip -- which the shared DataTable is, and it is the caller
+          // that passes bordered={false}. So this stays unconditional, as it
+          // was before the card moved onto this element.
+          "flex flex-col gap-4 @md/table:block @md/table:gap-0 @md/table:overflow-hidden",
           bordered &&
-            "@md/table:overflow-hidden @md/table:rounded-md @md/table:border @md/table:border-border @md/table:bg-card @md/table:text-card-foreground"
+            "@md/table:rounded-md @md/table:border @md/table:border-border @md/table:bg-card @md/table:text-card-foreground"
         )}
       >
         {/* Mobile / narrow: card view */}
