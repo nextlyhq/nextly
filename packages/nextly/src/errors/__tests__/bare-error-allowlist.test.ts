@@ -36,7 +36,7 @@ const packageRoot = resolve(
  * happening — the lint run stays green by construction. Requiring the same change to edit this
  * number puts the growth in the diff where review can see it.
  */
-const EXPECTED_ALLOWLIST_SIZE = 97;
+const EXPECTED_ALLOWLIST_SIZE = 98;
 
 const ALLOWLIST_FILE = "eslint-bare-error-allowlist.json";
 
@@ -44,23 +44,32 @@ const ALLOWLIST_FILE = "eslint-bare-error-allowlist.json";
  * Read as JSON rather than imported as a module: the list is data, and the ESLint config reads it
  * the same way. One file, two readers, no build step or declaration file between them.
  */
-function readAllowlist(): readonly string[] {
+function readAllowlist(): ReadonlyMap<string, number> {
   const parsed: unknown = JSON.parse(
     readFileSync(join(packageRoot, ALLOWLIST_FILE), "utf8")
   );
-  // Narrowed rather than asserted. A malformed list would otherwise reach the loop below as an
-  // empty or wrong-shaped value, and every assertion here is "count === 0" — so a file that
-  // parsed to nothing would report a perfectly clean allowlist.
-  if (
-    !Array.isArray(parsed) ||
-    !parsed.every((entry): entry is string => typeof entry === "string")
-  ) {
-    throw new TypeError(`${ALLOWLIST_FILE} must be an array of file paths`);
+  // Narrowed rather than asserted. A malformed file would otherwise reach the loops below as an
+  // empty or wrong-shaped value, and a file that parsed to nothing would report a perfectly
+  // clean allowlist rather than a broken one.
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new TypeError(
+      `${ALLOWLIST_FILE} must be an object mapping each exempted path to its throw count`
+    );
   }
-  return parsed;
+  const entries = new Map<string, number>();
+  for (const [path, count] of Object.entries(parsed)) {
+    if (typeof count !== "number" || !Number.isInteger(count) || count < 1) {
+      throw new TypeError(
+        `${ALLOWLIST_FILE}: ${path} must map to a positive integer, got ${String(count)}`
+      );
+    }
+    entries.set(path, count);
+  }
+  return entries;
 }
 
 const BARE_ERROR_ALLOWLIST = readAllowlist();
+const ALLOWLIST_PATHS = [...BARE_ERROR_ALLOWLIST.keys()];
 
 /**
  * A production file the allowlist does not cover, used to read the configured rule back and as
@@ -170,7 +179,7 @@ describe("the bare-Error guard", () => {
   it("does not reject the same throw in an allowlisted file", async () => {
     // The complement: proves the exemptions are what suppress the rule, rather than the rule
     // being inert everywhere.
-    const exempted = BARE_ERROR_ALLOWLIST[0];
+    const exempted = ALLOWLIST_PATHS[0];
     // Narrowed rather than asserted: an empty allowlist would otherwise reach `join` as
     // `undefined` and fail on a path error, which reads as a broken test rather than as the
     // control having nothing to run against.
@@ -190,8 +199,8 @@ describe("the bare-Error guard", () => {
 describe("the bare-Error allowlist", () => {
   it("holds no more entries than have been accepted", () => {
     expect(
-      BARE_ERROR_ALLOWLIST.length,
-      `${ALLOWLIST_FILE} has ${BARE_ERROR_ALLOWLIST.length} entries. If files were cleaned, ` +
+      ALLOWLIST_PATHS.length,
+      `${ALLOWLIST_FILE} has ${ALLOWLIST_PATHS.length} entries. If files were cleaned, ` +
         `lower EXPECTED_ALLOWLIST_SIZE to match. If an entry was ADDED, convert the file to ` +
         `NextlyError instead: this number may only go down.`
     ).toBe(EXPECTED_ALLOWLIST_SIZE);
@@ -203,7 +212,7 @@ describe("the bare-Error allowlist", () => {
     // since it does contain a real throw and so never reads as stale.
     const eslint = packageLinter();
     const redundant: string[] = [];
-    for (const entry of BARE_ERROR_ALLOWLIST) {
+    for (const entry of ALLOWLIST_PATHS) {
       if (await eslint.isPathIgnored(join(packageRoot, entry)))
         redundant.push(entry);
     }
@@ -216,16 +225,27 @@ describe("the bare-Error allowlist", () => {
     ).toEqual([]);
   }, 60_000);
 
-  it("lists no file that has already been cleaned", async () => {
-    const stale: string[] = [];
-    for (const entry of BARE_ERROR_ALLOWLIST) {
-      if ((await bareThrowCount(entry)) === 0) stale.push(entry);
+  it("exempts each file for exactly the throws it had, no more", async () => {
+    // Counted rather than merely non-zero, and that difference is the point. A file-wide
+    // exemption checked only for "still has at least one" lets an already-listed file gain new
+    // throws forever — and the listed files are the dispatchers and services edited most often,
+    // so the guard would be quietest exactly where it is needed most. Comparing the number
+    // rejects an ADDED throw and a REMOVED one alike: one fails the count upward, the other
+    // downward, and both have to be reflected in the file before the suite goes green.
+    const drifted: string[] = [];
+    for (const [entry, allowed] of BARE_ERROR_ALLOWLIST) {
+      const actual = await bareThrowCount(entry);
+      if (actual !== allowed) {
+        drifted.push(`${entry}: allowed ${allowed}, found ${actual}`);
+      }
     }
 
     expect(
-      stale,
-      `these files no longer throw a bare Error and must be removed from ` +
-        `${ALLOWLIST_FILE}, so the guard starts protecting them: ${stale.join(", ")}`
+      drifted,
+      `the recorded throw count is wrong for these files. A LOWER count means they were ` +
+        `cleaned — lower the number, or remove the entry entirely at zero, so the guard starts ` +
+        `protecting them. A HIGHER count means a new bare throw was added: use NextlyError ` +
+        `instead of raising the number. In ${ALLOWLIST_FILE}: ${drifted.join("; ")}`
     ).toEqual([]);
   }, 180_000);
 });

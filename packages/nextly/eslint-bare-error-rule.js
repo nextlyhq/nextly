@@ -14,8 +14,17 @@ import { fileURLToPath } from "node:url";
  */
 
 /**
- * Both spellings of a bare throw: `throw new Error(...)` and `throw Error(...)`. They produce the
- * same value, so rejecting only the first would leave the second as an unguarded path to it.
+ * Every built-in error constructor, not just `Error`.
+ *
+ * A `TypeError` carries no more code than an `Error` does, so the API layer reports it as a 500
+ * just the same — matching only `Error` would leave six spellings of the same problem unguarded,
+ * and the guard would read as complete while covering one of them.
+ *
+ * Both call forms are matched: `throw new X(...)` and `throw X(...)` produce the same value, so
+ * rejecting only the first leaves the second as an unguarded path to it.
+ *
+ * The name is anchored, so `NextlyError` and any other subclass a caller defines are unaffected —
+ * the rule is about throwing something that carries no code, not about the word "Error".
  *
  * What this does NOT match is a throw whose operand was built elsewhere — `const e = new Error();
  * throw e;` — and that is deliberate. Constructing an `Error` is legitimate throughout the
@@ -23,21 +32,39 @@ import { fileURLToPath } from "node:url";
  * callbacks. Matching construction rather than the throw would reject those, and the exemptions
  * needed to allow them would be indistinguishable from exemptions for real violations.
  */
+const BUILT_IN_ERROR_NAMES = [
+  "Error",
+  "TypeError",
+  "RangeError",
+  "SyntaxError",
+  "EvalError",
+  "ReferenceError",
+  "URIError",
+  "AggregateError",
+].join("|");
+
 export const BARE_ERROR_SELECTOR = [
-  "ThrowStatement > NewExpression[callee.name='Error']",
-  "ThrowStatement > CallExpression[callee.name='Error']",
+  `ThrowStatement > NewExpression[callee.name=/^(${BUILT_IN_ERROR_NAMES})$/]`,
+  `ThrowStatement > CallExpression[callee.name=/^(${BUILT_IN_ERROR_NAMES})$/]`,
 ].join(", ");
 
 export const BARE_ERROR_MESSAGE =
   "Throw a NextlyError, not a bare Error. A bare Error carries no code, so the API layer reports it as a 500 even when it is a caller-fixable refusal. Use NextlyError.validation / .notFound / .conflict / .internal, or `new NextlyError({ code, publicMessage })` for a code without a factory.";
 
 /**
- * Files that still throw a bare `Error`, exempt until they do not.
+ * Files that still throw a built-in error, exempt until they do not, mapped to HOW MANY throws
+ * each one is allowed to keep.
+ *
+ * The count is what makes the exemption shrink-only in both directions. A bare list of paths
+ * exempts a file wholesale, so a frequently edited service could keep gaining new throws forever
+ * while every check stayed green — the guard would be silent about exactly the files most likely
+ * to grow. Pinning the number means an added throw fails on the count and a removed one fails
+ * until the number is lowered.
  *
  * Held as JSON rather than as a module because it is data, and because a `.js` file is linted as
  * typed source by whichever config picks it up — which fails, since files beside a package's
  * config are outside its TypeScript project. `src/errors/__tests__/bare-error-allowlist.test.ts`
- * reads the same JSON and fails on any entry that no longer throws, so the list can only shrink.
+ * reads the same JSON and enforces the counts.
  */
 export const BARE_ERROR_ALLOWLIST = JSON.parse(
   readFileSync(
@@ -48,6 +75,9 @@ export const BARE_ERROR_ALLOWLIST = JSON.parse(
     "utf8"
   )
 );
+
+/** The exempted paths. ESLint takes globs; the counts are the test's business. */
+export const BARE_ERROR_ALLOWLIST_PATHS = Object.keys(BARE_ERROR_ALLOWLIST);
 
 /**
  * Build the config block.
@@ -68,7 +98,7 @@ export function bareErrorConfig(prefix = "") {
     // thing that must not appear.
     files: [`${prefix}src/**/*.ts`, `${prefix}src/**/*.tsx`],
     ignores: [
-      ...BARE_ERROR_ALLOWLIST.map(entry => `${prefix}${entry}`),
+      ...BARE_ERROR_ALLOWLIST_PATHS.map(entry => `${prefix}${entry}`),
       // Tests may throw whatever makes a failure legible; they never cross the API boundary.
       // The shared base config already ignores them globally, so this is what keeps the rule's
       // scope readable rather than what enforces it.
