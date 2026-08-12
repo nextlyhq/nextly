@@ -148,6 +148,20 @@ export function validateBreakpoints(set: BreakpointSet): BreakpointIssue[] {
     const widthsSeen = new Set<number>();
     let unboundedSeen = false;
     const limit = storedLimitFor(axis);
+    // WHICH rows the cap drops, decided the way the compiler decides it: it
+    // sorts widest-first and keeps the front of that list, so the casualties
+    // are the narrowest definitions, not the last ones stored. Marking by
+    // stored position instead would send an author to delete a breakpoint the
+    // compiler was going to keep — and would say nothing about the one it drops.
+    const overLimit = new Set(
+      defs
+        .map((def, index) => ({ def, index }))
+        .sort(
+          (a, b) => (b.def.maxWidth ?? Infinity) - (a.def.maxWidth ?? Infinity)
+        )
+        .slice(limit)
+        .map(entry => entry.index)
+    );
 
     defs.forEach((def, index) => {
       const at = (
@@ -220,11 +234,11 @@ export function validateBreakpoints(set: BreakpointSet): BreakpointIssue[] {
         widthsSeen.add(def.maxWidth);
       }
 
-      if (index >= limit) {
+      if (overLimit.has(index)) {
         at(
           "id",
           "over-axis-limit",
-          `An axis holds at most ${limit} breakpoints. This one would be dropped.`
+          `An axis holds at most ${limit} breakpoints, widest kept. This one would be dropped.`
         );
       }
     });

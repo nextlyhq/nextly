@@ -161,6 +161,26 @@ describe("definitions the compiler drops", () => {
     ]);
   });
 
+  it("marks the NARROWEST row when stored order is reversed", () => {
+    // The separating case. `rows()` above happens to be widest-first, so the
+    // last stored row is also the narrowest and a check keyed on stored
+    // position agrees with the compiler by coincidence. Reversed, they
+    // disagree: the compiler sorts widest-first and keeps the front, so it
+    // drops the narrowest — while stored position points at the widest, which
+    // it keeps. Directing an author to delete that one is worse than silence.
+    const narrowestFirst = Array.from({ length: 7 }, (_, i) => ({
+      id: `bp-${i}`,
+      label: `BP ${i}`,
+      maxWidth: 400 + i * 100,
+    }));
+
+    const reported = validateBreakpoints(set({ viewport: narrowestFirst }))
+      .filter(issue => issue.code === "over-axis-limit")
+      .map(issue => issue.index);
+
+    expect(reported).toEqual([0]);
+  });
+
   it("stores the full 7 on the container axis", () => {
     // The separating case: the container axis stores its own unbounded context,
     // so it keeps the whole cap. A validator applying the viewport's reduced

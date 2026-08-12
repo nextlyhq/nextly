@@ -284,7 +284,11 @@ export function BreakpointDialog({
                     return (
                       <div
                         key={row.key}
-                        className="grid grid-cols-[1fr_1fr_7rem_auto] items-start gap-2"
+                        // Stacked until there is room for four columns. At a
+                        // phone width the fixed grid left Name and Id about
+                        // 48px each, which is unreadable for an existing id and
+                        // unusable for typing a new one.
+                        className="grid grid-cols-1 items-start gap-2 sm:grid-cols-[1fr_1fr_7rem_auto]"
                       >
                         <Field
                           id={`${fieldId}-${row.key}-label`}
@@ -336,7 +340,10 @@ export function BreakpointDialog({
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className={cn(index === 0 && "mt-6")}
+                          className={cn(
+                            "justify-self-end",
+                            index === 0 && "sm:mt-6"
+                          )}
                           aria-label={`Remove ${row.label.trim() || "breakpoint"}`}
                           onClick={() => removeRow(axis, row.key)}
                         >
