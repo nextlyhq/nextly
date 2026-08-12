@@ -28,11 +28,15 @@ vi.mock("../../../../schemas/storage-format", async () => {
 });
 
 import {
+  clearFieldGroupType,
   currentFieldGroupTypeKey,
+  fieldGroupTypeKeys,
   isFieldGroupTypeKey,
   readFieldGroupType,
   writeFieldGroupType,
 } from "../field-group-type-key";
+
+import { COMPONENT_META_KEYS } from "../../services/field-group-utils";
 
 describe("after the catalog has been flipped to the new spelling", () => {
   it("the two catalogs really do agree, or this file proves nothing", () => {
@@ -70,5 +74,30 @@ describe("after the catalog has been flipped to the new spelling", () => {
     expect(
       readFieldGroupType({ _fieldGroupType: "new", _componentType: "old" })
     ).toBe("new");
+  });
+
+  it("removes the discriminator under EVERY spelling", () => {
+    // Clearing only the current spelling leaves a legacy-spelled document still carrying its
+    // type, so an object the caller has defined by that absence still reads as typed and the
+    // strip/tag pair stop being inverses of each other.
+    const instance: Record<string, unknown> = {
+      _componentType: "old",
+      _fieldGroupType: "new",
+      label: "kept",
+    };
+
+    clearFieldGroupType(instance);
+
+    expect(Object.keys(instance)).toEqual(["label"]);
+  });
+
+  it("treats every spelling as component metadata rather than authored data", () => {
+    // This set decides what is stripped as metadata before a write. A spelling missing from it is
+    // treated as a field the author meant to store, which is the opposite of the intent for a key
+    // that only ever announced the instance's type.
+    for (const key of fieldGroupTypeKeys) {
+      expect(COMPONENT_META_KEYS.has(key)).toBe(true);
+    }
+    expect(COMPONENT_META_KEYS.has("_componentType")).toBe(true);
   });
 });
