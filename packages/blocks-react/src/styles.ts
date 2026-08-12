@@ -1,7 +1,6 @@
 import {
   compilePageCss,
   declaresNoMarkup,
-  isConditionGated,
   isFetchableUrl,
   nodeAtPointer,
   nodeClassNames,
@@ -375,65 +374,46 @@ export function drawlessTestFor(
  */
 export function migrationChangedWhatDraws(
   stages: DocumentReadStages,
-  resolver: BlockResolver
+  resolver: BlockResolver,
+  styles: PageStyles | undefined
 ): boolean {
   if (stages.rewritten.length === 0) return false;
   const drawsNothing = drawlessTestFor(resolver);
-  // The engine's reported pointers are RESOLVED rather than matched against
-  // paths rebuilt here. Rebuilding them would be a second encoder of the same
-  // format: it agrees on every ordinary slot name and diverges on the ones the
-  // escaping exists for, so the mismatch appears only for the documents this
-  // check most needs to read.
-  // Which nodes the COMPILER would have put in the main sheet, mirrored from
-  // its own rule rather than approximated. `compile-page.ts` gates a node when
-  // an ancestor is gated, when the node is condition-gated, OR when it declares
-  // it draws nothing — and gating is inherited by the whole subtree, because a
-  // block that draws nothing places none of its slots' children.
-  //
-  // Two things this must get right, and an earlier version got both wrong:
-  //
-  // - it walks the STORED tree, because that is what the artifact was compiled
-  //   from. Walking the migrated one asks whether a node draws nothing NOW,
-  //   which is the question being answered, not the one being conditioned on.
-  // - it includes drawless ancestry, not condition gating alone. A descendant
-  //   of a drawless ancestor has no rules in the main sheet either, so treating
-  //   its flip as a repair withholds a sheet that never described it.
-  //
-  // Keyed by id rather than by object reference: the passes rebuild any parent
-  // they removed a child from, so a node that survived arrives as a different
-  // object. Ids are sound here because a document carrying duplicates never
-  // reaches this clause — both entry points test `hasDuplicateNodeIds` earlier
-  // in the same disjunction.
-  const describedByTheSheet = new Set<string>();
-  const collect = (
-    nodes: readonly BlockNode[],
-    ancestorGated: boolean
-  ): void => {
-    for (const node of nodes) {
-      const gated =
-        ancestorGated || isConditionGated(node) || drawsNothing(node);
-      if (!gated && typeof node.id === "string") {
-        describedByTheSheet.add(node.id);
-      }
-      const slots = node.slots;
-      if (slots === undefined) continue;
-      for (const children of Object.values(slots)) {
-        if (Array.isArray(children)) collect(children, gated);
-      }
-    }
-  };
-  if (Array.isArray(stages.sanitized.nodes)) {
-    collect(stages.sanitized.nodes, false);
-  }
+  const gatedRules = readableGatedRules(styles);
 
   return stages.rewritten.some(entry => {
-    const before = nodeAtPointer(stages.sanitized, entry.path);
     const after = nodeAtPointer(stages.migrated, entry.path);
-    if (before === undefined || after === undefined) return false;
-    if (typeof after.id !== "string" || !describedByTheSheet.has(after.id)) {
-      return false;
+    if (after === undefined) return false;
+    // Nothing to be stale about a node that draws nothing now either.
+    if (!drawsNothing(after)) return false;
+
+    // Whether the node DREW when the sheet was compiled is read off the sheet
+    // rather than recomputed. The compiler records every node it withheld, by
+    // id, under its own combined decision — condition, drawless, or inherited
+    // from an ancestor — so an entry means "these rules are not in `css`" and
+    // its absence means they are.
+    //
+    // Read rather than re-derived for two reasons. Reapplying the gating rule
+    // here is a second implementation of a decision the compiler owns, and
+    // three separate defects on this path have been exactly that. And the
+    // predicate cannot answer the question at all for a node whose migration
+    // RENAMED the prop `rendersNothing` reads: today's predicate over
+    // yesterday's props reports drawless for a node that drew, so the flip
+    // disappears. The artifact carries the answer the schema of the day
+    // produced, which is the only version-independent source there is.
+    if (gatedRules !== undefined) {
+      return (
+        typeof after.id === "string" &&
+        !Object.prototype.hasOwnProperty.call(gatedRules, after.id)
+      );
     }
-    return !drawsNothing(before) && drawsNothing(after);
+
+    // An artifact compiled before the per-node map existed carries no record,
+    // so the stored props are the only evidence left. This is the derivation
+    // above, kept ONLY for those artifacts and inheriting their limitation: a
+    // migration that renamed the prop the predicate reads is invisible here.
+    const before = nodeAtPointer(stages.sanitized, entry.path);
+    return before !== undefined && !drawsNothing(before);
   });
 }
 

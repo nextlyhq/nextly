@@ -325,7 +325,7 @@ export function PageRenderer({
     // was removed. Answering it here as well is the point — the two paths
     // agreeing is what stops a page rendered through this component keeping
     // rules the exported reader withholds for the same document.
-    migrationChangedWhatDraws(stages, resolver);
+    migrationChangedWhatDraws(stages, resolver, styles);
 
   // Reconciled through the SAME derivation every entry point that resolves a
   // stored page uses. What a caller supplies is not what a page compiles with:
