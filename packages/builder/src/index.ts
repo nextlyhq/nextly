@@ -11,10 +11,10 @@
  * preparation, condition gating and slot pruning are consumed from the engine's
  * own entry points, never reproduced here.
  *
- * It is held by review rather than by a test. Reimplementing rendering on React
- * and the engine imports exactly the same packages as delegating to the
- * renderer, so the layering guard cannot tell the two apart; it narrows what may
- * be imported, which makes the shortcut inconvenient rather than impossible.
+ * No test enforces it. Reimplementing rendering on React and the engine
+ * imports exactly the same packages as delegating to the renderer, so the
+ * layering guard cannot tell the two apart; it narrows what may be imported,
+ * which makes the shortcut inconvenient rather than impossible.
  *
  * That rule is not stylistic. `plugin-page-builder` carries a second renderer of
  * its own, and the two disagree about condition gating in OPPOSITE directions —
@@ -22,10 +22,11 @@
  * predicate would not have prevented that, because sharing a predicate does not
  * share the decision to call it; only sharing the entry point does.
  *
- * This entry exports no features yet. The package exists ahead of them so its
- * name is claimed on npm: trusted publishing cannot perform a package's first
- * publish, and the bootstrap script will not claim a name that is not already a
- * workspace package.
+ * **Public surface so far**: {@link BUILDER_PACKAGE_NAME}, and the frame
+ * geometry below. The editor itself is not exported yet — the package was
+ * created ahead of it so its name could be claimed on npm, because trusted
+ * publishing cannot perform a package's first publish and the bootstrap script
+ * will not claim a name that is not already a workspace package.
  *
  * @module @nextlyhq/builder
  */
@@ -41,3 +42,23 @@
  * than with a constant nothing reads yet.
  */
 export const BUILDER_PACKAGE_NAME = "@nextlyhq/builder" as const;
+
+/**
+ * The one mapping between the canvas frame and the host page.
+ *
+ * Exported because the acceptance harness measures against the SAME arithmetic
+ * the editor positions with. A browser test carrying its own copy certifies its
+ * own stale copy, and would keep passing through exactly the correction it
+ * exists to catch.
+ */
+export {
+  FrameGeometryError,
+  frameContentOrigin,
+  pointToCanvas,
+  pointToHost,
+  rectToHost,
+  type FrameGeometry,
+  type FrameInset,
+  type Point,
+  type Rect,
+} from "./geometry";
