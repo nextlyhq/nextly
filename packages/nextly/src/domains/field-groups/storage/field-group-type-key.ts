@@ -132,5 +132,12 @@ export function writeFieldGroupType(
   instance: Record<string, unknown>,
   type: string
 ): void {
+  // Every other spelling goes first, so an instance that arrived carrying the old key leaves
+  // carrying only the new one. Assigning without clearing emits BOTH on any instance read back
+  // from storage before the rewrite reached it — the read still resolves, but the document is now
+  // one a later reader must disambiguate, and the legacy set stops shrinking as writes happen.
+  // Canonicalising on write is what makes the migration finish by ordinary use rather than only by
+  // the rewrite pass.
+  clearFieldGroupType(instance);
   instance[currentFieldGroupTypeKey] = type;
 }

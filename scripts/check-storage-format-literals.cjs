@@ -146,7 +146,22 @@ function splitGrepLine(line) {
 
 function grep(label, pattern, opts = {}) {
   const {
-    include = ["*.ts", "*.tsx"],
+    // 🔴 Every source extension the repository ships, not only TypeScript. A reader or writer of
+    // the storage key added to an existing `.js` or `.mjs` file — a CLI bin, a build script, a
+    // template's runtime — is product code by every meaning that matters here, and a TS-only
+    // include list skips it while still reporting PASS. That is the narrowing failure this gate
+    // exists to prevent, committed by the gate itself: a check that cannot read part of its
+    // subject answers a smaller question and answers it in the affirmative.
+    include = [
+      "*.ts",
+      "*.tsx",
+      "*.js",
+      "*.jsx",
+      "*.mjs",
+      "*.cjs",
+      "*.mts",
+      "*.cts",
+    ],
     paths = ["packages", "apps", "templates"],
     allowMatches = [],
   } = opts;
