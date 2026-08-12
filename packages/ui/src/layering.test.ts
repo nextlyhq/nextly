@@ -398,9 +398,32 @@ describe("this package takes no direct dependency on the block engine", () => {
  * built output for these constructs means recognising every way a resolver can be stored and
  * retrieved: under a name, through an alias, destructured, on an object property, assigned after
  * declaration, reassigned before use. Each is a valid spelling, the set has no end, and the check
- * has to be right about all of them. A source ban is complete by construction — the constructs
- * simply are not present — and a bundled DEPENDENCY that uses one is caught by the artifact gate
- * as a package, which is the half a source ban cannot see.
+ * has to be right about all of them. A bundled DEPENDENCY that uses one is caught by the artifact
+ * gate as a package, which is the half a source ban cannot see.
+ *
+ * ## WHAT THIS BAN DOES NOT ESTABLISH
+ *
+ * Stated here rather than left to be discovered from a miss, because a green run reads as
+ * "this package resolves nothing at runtime" and that is stronger than what was checked.
+ *
+ * Each rule below is written to refuse by NAMING WHAT IS ALLOWED rather than by listing what is
+ * not — `import.meta` permits only `.url`, `process` only `.env`/`typeof`/a declaration, the
+ * loader module is banned by specifier through the shared reader, and the ambient names are
+ * refused outright. Within its reach that construction is complete: a spelling nobody has thought
+ * of is refused with the rest.
+ *
+ * Its REACH is the limit. This reads syntax, so it sees a route only where the route appears as
+ * syntax it recognises. Fourteen forms were added during review — computed member access, host
+ * objects that re-expose globals, dynamic evaluation, an absolute import, a manifest alias, an
+ * import into a path this scan skips — and each was a real gap found by someone looking, not by
+ * the check. There is no argument that the fifteenth does not exist.
+ *
+ * A boundary that does not depend on recognising anything is to BUILD the package into a project
+ * containing only the dependencies it is allowed to use, and run it: a load of anything else fails
+ * at that moment, whatever spelling produced it. That is complete in the dimension this is weak
+ * in, and blind where this is strong — it only sees code that actually executes, so a resolver
+ * behind a branch never taken is invisible to it, and visible here. Neither replaces the other.
+ * Tracked as its own task rather than grown into this file.
  */
 /**
  * The names that re-expose the global object, so `X.process` is the `process` binding itself.
