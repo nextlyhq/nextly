@@ -38,10 +38,16 @@ on:
 permissions:
   contents: read
 
-# Keyed by ref for pull requests, so a new push supersedes the run under review,
-# and by SHA otherwise, so two nightly runs never cancel each other.
+# Keyed by ref for pull requests, so a new push supersedes the run under review.
+#
+# Keyed by RUN for everything else, which makes the group unique and the
+# cancellation flag inert. Keying those by SHA reads as safe and is not: a manual
+# dispatch during a nightly, or two dispatches, evaluate to the same commit and
+# the second would kill the first. There is no case where one scheduled or
+# dispatched run should cancel another, so the group is per-run rather than
+# per-commit.
 concurrency:
-  group: package-smoke-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  group: package-smoke-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
