@@ -141,15 +141,18 @@ function namespaceOf(property: string): string {
  *   shape of a value with no business in a palette.
  *
  * Neither is enumerated here: both fall out of the namespace rule, so a new
- * Radix property needs no maintenance. Only `--font-inter` is named, below.
+ * Radix property needs no maintenance. Only the font variables are named below.
  */
 
 /**
  * The properties in a theme-owned namespace that the theme legitimately does
  * not declare. `next/font` self-hosts a face at build time and exposes it only
  * as a variable, so the host app authors these and `theme.css` merely reads
- * them (`--font-sans: var(--font-geist), Geist, ...`). The theme is their
- * consumer, not their author.
+ * them (`--font-sans: var(--font-geist, Geist), ui-sans-serif, ...`). The theme
+ * is their consumer, not their author.
+ *
+ * Because nothing in the repo declares them, every reference to one must carry a
+ * fallback argument; the assertion below enforces that.
  */
 const INJECTED_AT_RUNTIME = new Set(["--font-geist", "--font-geist-mono"]);
 

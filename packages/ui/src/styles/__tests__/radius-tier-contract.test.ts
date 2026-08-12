@@ -112,8 +112,9 @@ describe("radius tier contract", () => {
     expect(
       offenders,
       `rounded-xl / rounded-2xl are not part of the scale: the preset exports ` +
-        `only lg/md/sm, and both add to --radius instead of subtracting, so they ` +
-        `are 4px and 8px at the shipped --radius: 0.`
+        `only lg/md/sm, and both ADD to --radius instead of subtracting, so ` +
+        `they always sit rounder than the container tier and drift further as ` +
+        `the knob grows.`
     ).toEqual([]);
   });
 });
@@ -160,11 +161,6 @@ describe("the two tier documents", () => {
   }
 
   /**
-   * What each tier computes to at the shipped knob, derived from the theme's own
-   * `calc()` offsets. Reading the offsets rather than restating them keeps this
-   * correct if a step is ever re-spaced.
-   */
-  /**
    * The prose of a document, with the radius DECLARATIONS removed.
    *
    * Both assertions below ask what a document SAYS the shipped values are, and
@@ -191,6 +187,11 @@ describe("the two tier documents", () => {
     return new RegExp(`(?<![\\d.\\-])${length}\\b`).test(source);
   }
 
+  /**
+   * What each tier computes to at the shipped knob, derived from the theme's own
+   * `calc()` offsets. Reading the offsets rather than restating them keeps this
+   * correct if a step is ever re-spaced.
+   */
   const SHIPPED_TIERS = Object.fromEntries(
     TIERS.map(tier => {
       const declaration = new RegExp(
