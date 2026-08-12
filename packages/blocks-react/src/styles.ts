@@ -392,20 +392,35 @@ export function migrationChangedWhatDraws(
   // sheet is withheld entire — a far larger regression than the stale rules
   // this exists to drop.
   //
-  // Membership is by IDENTITY rather than by resolving the pointer again: the
-  // gating pass REMOVES nodes, so positions shift and the same pointer
-  // addresses a different node in that tree. Surviving nodes keep their
-  // reference, which is what makes the set meaningful.
-  const survivesGating = new Set<BlockNode>();
+  // Membership is by ID rather than by object identity or by resolving the
+  // pointer again. Both alternatives are wrong in a way that FAILS TO REPORT:
+  //
+  // - the pointer addresses a position, and gating REMOVES nodes, so the same
+  //   pointer names a different node in that tree;
+  // - object identity survives an untouched node but NOT an ancestor, because
+  //   the gating walk rebuilds any parent it removed a child from. An ancestor
+  //   that stayed visible, kept its rules in the main sheet, and turned drawless
+  //   is exactly the node this exists to catch, and it is exactly the one whose
+  //   reference changed.
+  //
+  // Ids are sound here because a document carrying duplicates never reaches this
+  // point: `storedSheetCannotDescribe` and `PageRenderer` both test
+  // `hasDuplicateNodeIds` earlier in the same disjunction, and the compiler
+  // refuses to style duplicated ids at all.
+  const survivesGating = new Set<string>();
   if (Array.isArray(stages.gated.nodes)) {
-    walkNodes(stages.gated.nodes, node => survivesGating.add(node));
+    walkNodes(stages.gated.nodes, node => {
+      if (typeof node.id === "string") survivesGating.add(node.id);
+    });
   }
 
   return stages.rewritten.some(entry => {
     const before = nodeAtPointer(stages.sanitized, entry.path);
     const after = nodeAtPointer(stages.migrated, entry.path);
     if (before === undefined || after === undefined) return false;
-    if (!survivesGating.has(after)) return false;
+    if (typeof after.id !== "string" || !survivesGating.has(after.id)) {
+      return false;
+    }
     return !drawsNothing(before) && drawsNothing(after);
   });
 }
