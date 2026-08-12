@@ -34,10 +34,13 @@ describe("PluginIcon", () => {
     expect(img).not.toBeNull();
     fireEvent.error(img!);
 
-    // The image is gone and something replaced it, rather than a broken glyph
-    // being left in place.
+    // The identity of the replacement is the point. Asserting only that the
+    // image went and something took its place passes equally when the caller
+    // fallback renders, which is the plausible broken version: the declared
+    // glyph is what the plugin asked for on this surface.
     expect(container.querySelector("img")).toBeNull();
-    expect(container).not.toBeEmptyDOMElement();
+    expect(container.querySelector(".lucide-puzzle")).not.toBeNull();
+    expect(container.querySelector(".lucide-package")).toBeNull();
   });
 
   /**
