@@ -170,9 +170,10 @@ const EMAIL_TEMPLATE_METHODS: Record<
     },
   },
   createTemplate: {
-    execute: async (svc, _p, body) => {
+    execute: async (svc, p, body) => {
       const template = await svc.templateService.createTemplate(
-        body as Parameters<typeof svc.templateService.createTemplate>[0]
+        body as Parameters<typeof svc.templateService.createTemplate>[0],
+        readAuthenticatedActor(p)
       );
       return respondMutation("Email template created.", template, {
         status: 201,
@@ -189,7 +190,8 @@ const EMAIL_TEMPLATE_METHODS: Record<
     execute: async (svc, p, body) => {
       const template = await svc.templateService.updateTemplate(
         p.templateId,
-        body as Parameters<typeof svc.templateService.updateTemplate>[1]
+        body as Parameters<typeof svc.templateService.updateTemplate>[1],
+        readAuthenticatedActor(p)
       );
       return respondMutation("Email template updated.", template);
     },
@@ -203,7 +205,10 @@ const EMAIL_TEMPLATE_METHODS: Record<
     // If templateService.deleteTemplate is later refactored to return
     // the deleted record, switch this back to respondMutation.
     execute: async (svc, p) => {
-      await svc.templateService.deleteTemplate(p.templateId);
+      await svc.templateService.deleteTemplate(
+        p.templateId,
+        readAuthenticatedActor(p)
+      );
       return respondAction("Email template deleted.", {
         templateId: p.templateId,
       });

@@ -2703,3 +2703,45 @@ describe("a step that names modifiers and no key", () => {
     ).toThrow();
   });
 });
+
+describe("an event the manager cannot read as a keystroke", () => {
+  /**
+   * `attach` listens on `document`, so everything dispatched on the page arrives here — not
+   * only events this library or the application created. Password managers, autofill shims and
+   * any code doing `new CustomEvent("keydown")` produce an object with no `key`, and the match
+   * path spreads it and calls `startsWith` on it.
+   */
+  it("ignores a synthetic keydown carrying no key", () => {
+    const manager = managerFor();
+    const run = vi.fn();
+    manager.register([binding("mod+k", run)], { name: "a", depth: 0 });
+
+    const synthetic = new CustomEvent("keydown", { bubbles: true });
+    expect(() =>
+      manager.handle(synthetic as unknown as KeyboardEvent)
+    ).not.toThrow();
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("leaves that event propagating rather than claiming it", () => {
+    // Reported as NOT consumed on purpose. An event this manager cannot interpret has to reach
+    // whichever listener does understand it; swallowing it would trade a crash for a key that
+    // silently stops working.
+    const manager = managerFor();
+    manager.register([binding("mod+k", vi.fn())], { name: "a", depth: 0 });
+
+    const synthetic = new CustomEvent("keydown", { bubbles: true });
+    expect(manager.handle(synthetic as unknown as KeyboardEvent)).toBe(false);
+  });
+
+  it("still handles a real keystroke that merely lacks modifiers", () => {
+    // The control. The guard admits on `key` being a STRING, not on the event being complete —
+    // a plain letter press carries no modifier flags worth speaking of and must still match.
+    const manager = managerFor();
+    const run = vi.fn();
+    manager.register([binding("g", run)], { name: "a", depth: 0 });
+
+    manager.handle(press("g"));
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+});

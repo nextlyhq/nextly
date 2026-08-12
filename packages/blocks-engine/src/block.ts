@@ -394,6 +394,7 @@ export interface AnyBlockDefinition
     | "localized"
     | "render"
     | "rendersNothing"
+    | "seo"
   > {
   example: { props: object; slots?: Record<string, BlockNode[]> };
   defaultProps?: object;
@@ -401,4 +402,18 @@ export interface AnyBlockDefinition
   localized?: string[];
   render(args: BlockRenderArgs<object, unknown>): BlockRenderResult;
   rendersNothing?(this: void, props: object): boolean;
+  /**
+   * Widened for the same reason as the members above, and it was the one member
+   * that was missed.
+   *
+   * Inherited unwidened, `seo` kept `BlockDefinition`'s default prop type, so a
+   * definition built by `defineBlock<CardProps>` carried
+   * `(props: CardProps) => ...` against this type's
+   * `(props: Record<string, unknown>) => ...`. Neither direction is assignable —
+   * an interface without an index signature is not a `Record<string, unknown>`,
+   * and a `Record<string, unknown>` is not a `CardProps` — so bivariance had
+   * nothing to fall back on, and EVERY typed definition was rejected by
+   * `registerBlocks` whether or not it contributed any SEO at all.
+   */
+  seo?(props: object): BlockSeoContribution | undefined;
 }

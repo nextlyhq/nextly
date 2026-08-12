@@ -8,7 +8,16 @@
     // The base config leaves this off, and without it the `.mjs` below is
     // included and then skipped — which is the same silent gap the comment
     // under `include` exists to avoid.
-    "allowJs": true
+    "allowJs": true,
+    "baseUrl": ".",
+    // The builder is imported for its coordinate mapping, and `check-types`
+    // deliberately does not build dependencies first — so resolving the package
+    // through its manifest would need a `dist` that a freshly installed tree
+    // does not have. Mapped to source instead, which is what `packages/admin`
+    // does for `nextly`.
+    "paths": {
+      "@nextlyhq/builder": ["../packages/builder/src"]
+    }
   },
   // Everything, deliberately. The two page-builder specs that rotted did so
   // because their package's tsconfig only included `src/**/*`, so an import of

@@ -4,6 +4,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
+import { canReadSystemResource } from "../../../auth/resource-readable";
 import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -38,6 +39,11 @@ import type {
   RelatedRowReadContext,
   TargetReadPolicy,
 } from "../../../services/collections/related-row-read-context";
+import {
+  applyMediaTrustBound,
+  boundRefuses,
+  callerId,
+} from "../../../services/collections/trust-bound";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { detachData } from "../../../shared/lib/detach";
@@ -288,6 +294,50 @@ function resolveNestedTarget(
 type RelatedRowAccess = RelatedRowReadContext;
 
 /**
+ * Whether this expansion may see a target's UNPUBLISHED rows.
+ *
+ * Deliberately not {@link trustsTarget}. Trust answers *who may read a row*;
+ * draft-ness answers *whether the row is ready to be read by anyone*, and a
+ * caller can be entitled to the first without the second.
+ *
+ * A caller that supplies `trusted` has declared it serves ONE FIXED AUDIENCE —
+ * that is the only reason to bound a bypass it already holds. Such a caller
+ * never inherits a widened lifecycle, even for a collection it explicitly
+ * trusts, because trusting a collection says its PUBLISHED content may be
+ * shown, not that its pending edits may. A public route is the case that makes
+ * this concrete: it pre-renders, so a draft pulled in through a relationship is
+ * written to a static artifact and outlives the row being unpublished.
+ *
+ * An unbounded trusted caller — the admin UI, a server task — keeps today's
+ * behaviour, because it has already decided who is asking.
+ */
+function widensLifecycle(access: RelatedRowAccess): boolean {
+  if (access.overrideAccess !== true) return false;
+  return access.trusted === undefined;
+}
+
+/**
+ * Whether this expansion may read ONE target collection trusted.
+ *
+ * `overrideAccess` alone says the CALLER is trusted. It says nothing about the
+ * collection a relationship happens to point at, which the caller never named
+ * and may not serve to the same audience. Asking per target is what lets a
+ * caller that knows its audience — a public route, say — keep the bypass for
+ * what it declared and read everything else as that audience would.
+ *
+ * Absent predicate means unchanged behaviour, so a caller that has already
+ * decided who is asking keeps today's semantics rather than being narrowed by
+ * a default it never chose.
+ */
+function trustsTarget(
+  access: RelatedRowAccess,
+  targetCollection: string
+): boolean {
+  if (access.overrideAccess !== true) return false;
+  return access.trusted === undefined || access.trusted(targetCollection);
+}
+
+/**
  * Options for relationship expansion.
  */
 export interface RelationshipExpansionOptions {
@@ -325,6 +375,12 @@ export interface RelationshipExpansionOptions {
    * skipped — a system caller has no reason to receive a password hash.
    */
   overrideAccess?: boolean;
+
+  /**
+   * Narrows `overrideAccess` to the collections a caller names, judged per
+   * expansion TARGET. See {@link RelatedRowAccess.trusted}.
+   */
+  trusted?: (collection: string) => boolean;
 
   /**
    * Opt in to evaluating the target collection's field read rules. Set by the
@@ -1323,7 +1379,8 @@ export class CollectionRelationshipService extends BaseService {
 
     const statusFilter = resolveStatusFilter({
       collectionHasStatus: hasStatus,
-      overrideAccess: access.overrideAccess === true,
+      // The LIFECYCLE question, not the trust question — see widensLifecycle.
+      overrideAccess: widensLifecycle(access),
       explicit: access.status,
     });
     return statusFilter?.value;
@@ -1398,11 +1455,30 @@ export class CollectionRelationshipService extends BaseService {
     if (!access.enforceCollectionAccess && !access.enforceFieldAccess) {
       return rows;
     }
-    if (access.overrideAccess) return rows;
+    if (trustsTarget(access, targetCollection)) return rows;
     if (rows.length === 0) return rows;
-    // System entities carry no stored collection rules; their secrets are
-    // stripped by name during redaction instead.
-    if (isSystemEntity(targetCollection)) return rows;
+    if (isSystemEntity(targetCollection)) {
+      // A system entity carries no stored collection rules, so the enforced
+      // path below has nothing to evaluate: its secrets are stripped by name
+      // during redaction and the row is returned. That is what a direct read
+      // gives a caller holding no bypass, and an enforced read keeps it.
+      //
+      // A caller that holds a bypass and REFUSED this target asked for the
+      // opposite. The bound means "read this as the caller would", and a direct
+      // read of `users` requires the `read-users` grant; with no stored policy
+      // to fall back on, that grant IS the whole rule. So the refusal is
+      // honoured by asking whether this caller holds it — the same question the
+      // refused DYNAMIC targets below are put to, rather than an assumption
+      // about who is asking. A route serving the public holds no grant and its
+      // refused rows stay withheld.
+      if (!boundRefuses(access, targetCollection)) return rows;
+      const readable = await canReadSystemResource(
+        targetCollection.toLowerCase(),
+        callerId(access),
+        access.authenticatedScope
+      );
+      return readable ? rows : [];
+    }
 
     const accessService = this.resolveAccessService();
 
@@ -1591,7 +1667,9 @@ export class CollectionRelationshipService extends BaseService {
       // satisfies the rule.
       const statusFilter = resolveStatusFilter({
         collectionHasStatus: policy.hasStatus,
-        overrideAccess: access.overrideAccess === true,
+        // Same lifecycle rule as the fetch, or a companion row admits a draft
+        // the row filter just excluded.
+        overrideAccess: widensLifecycle(access),
         // The same intent the fetch honoured. Re-resolving without it re-applies
         // the published-only default here, so a caller who asked to read
         // everything loses a draft row that the fetch above admitted.
@@ -2010,6 +2088,7 @@ export class CollectionRelationshipService extends BaseService {
       fieldAccessStage: options.fieldAccessStage,
       user: options.user,
       overrideAccess: options.overrideAccess,
+      trusted: options.trusted,
       authenticatedScope: options.authenticatedScope,
       locale: options.locale,
       status: options.status,
@@ -2193,7 +2272,10 @@ export class CollectionRelationshipService extends BaseService {
     // Batch fetch all media records at once
     if (allMediaIds.length > 0) {
       const uniqueMediaIds = [...new Set(allMediaIds)];
-      const mediaRecords = await this.fetchMediaByIds(uniqueMediaIds);
+      const mediaRecords = await applyMediaTrustBound(
+        await this.fetchMediaByIds(uniqueMediaIds),
+        access
+      );
 
       // Build lookup map for O(1) access
       for (const media of mediaRecords) {
@@ -2385,7 +2467,7 @@ export class CollectionRelationshipService extends BaseService {
     targetCollection: string,
     relatedIds: string[],
     field: FieldDefinition,
-    access: RelatedRowAccess = {}
+    access: RelatedRowAccess = { trusted: undefined }
   ): Promise<Map<string, Record<string, unknown>>> {
     const resultMap = new Map<string, Record<string, unknown>>();
 
@@ -2463,7 +2545,7 @@ export class CollectionRelationshipService extends BaseService {
     sourceCollectionName: string,
     sourceEntryIds: string[],
     field: FieldDefinition,
-    access: RelatedRowAccess = {}
+    access: RelatedRowAccess = { trusted: undefined }
   ): Promise<Map<string, Record<string, unknown>[]>> {
     const resultMap = new Map<string, Record<string, unknown>[]>();
 
@@ -2602,6 +2684,7 @@ export class CollectionRelationshipService extends BaseService {
       fieldAccessStage: options.fieldAccessStage,
       user: options.user,
       overrideAccess: options.overrideAccess,
+      trusted: options.trusted,
       authenticatedScope: options.authenticatedScope,
       locale: options.locale,
       status: options.status,
@@ -2931,7 +3014,10 @@ export class CollectionRelationshipService extends BaseService {
       // images appeared to vanish. The batch path above does not swallow here
       // either, so both expansions in this service fail the same way.
       const uniqueMediaIds = [...new Set(allMediaIds)];
-      const mediaRecords = await this.fetchMediaByIds(uniqueMediaIds);
+      const mediaRecords = await applyMediaTrustBound(
+        await this.fetchMediaByIds(uniqueMediaIds),
+        access
+      );
 
       // Build lookup map for O(1) access
       const mediaMap = new Map<string, Record<string, unknown>>();
@@ -3065,7 +3151,7 @@ export class CollectionRelationshipService extends BaseService {
   private async redactRelatedRows(
     targetCollection: string,
     rows: Record<string, unknown>[],
-    access: RelatedRowAccess = {}
+    access: RelatedRowAccess = { trusted: undefined }
   ): Promise<void> {
     if (rows.length === 0) return;
     // The system owner column must never ride along a populated relationship:
@@ -3901,7 +3987,8 @@ export class CollectionRelationshipService extends BaseService {
     access: RelatedRowAccess,
     redactions?: ReadAccessRedactions
   ): Promise<void> {
-    if (!access.enforceFieldAccess || access.overrideAccess) return;
+    if (!access.enforceFieldAccess || trustsTarget(access, targetCollection))
+      return;
     // Share `redactions` across the passes the walk makes over one row: a later
     // one restores what an earlier removed as evidence and re-judges the current
     // content, so a denied field a hook reintroduced or a row it changed is
@@ -3957,7 +4044,7 @@ export class CollectionRelationshipService extends BaseService {
   async fetchRelatedEntry(
     collectionName: string,
     entryId: string,
-    access: RelatedRowAccess = {}
+    access: RelatedRowAccess = { trusted: undefined }
   ): Promise<Record<string, unknown> | null> {
     try {
       const [readable] = await this.readTargetRows(
@@ -4041,7 +4128,7 @@ export class CollectionRelationshipService extends BaseService {
     // written in it. The target-entry fetch stays on the pool: related rows live
     // in another (already-committed) collection, so they need no tx visibility.
     executor?: RelationshipDbExecutor,
-    access: RelatedRowAccess = {}
+    access: RelatedRowAccess = { trusted: undefined }
   ): Promise<Record<string, unknown>[]> {
     // Same dual-aware target lookup as fetchManyToManyRelationsBatch above.
     // See that comment for the code-first vs UI-built shape rationale.

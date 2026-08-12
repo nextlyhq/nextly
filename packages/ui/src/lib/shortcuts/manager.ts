@@ -753,7 +753,22 @@ export function createShortcutManager(
   }
 
   function handle(event: KeyboardEvent): boolean {
-    // Checked FIRST: an owner closer to the keystroke has already answered it, and that stays
+    // An event this manager cannot read as a keystroke at all.
+    //
+    // `attach` listens on `document`, so EVERYTHING dispatched on the page arrives here,
+    // including synthetic events from code that is not ours -- `new CustomEvent("keydown")`,
+    // password managers, autofill shims. Those carry no `key`, and the match path spreads it
+    // (`[...key]`) and calls `startsWith` on it, both of which throw on `undefined`.
+    //
+    // Admitted ONCE, here, rather than defended at each read: `handle` is the only way in, and
+    // `key` is the only property whose absence throws. The modifier flags degrade to "no match"
+    // when undefined, and `getModifierState` is already optional-chained at both call sites.
+    //
+    // Reported as NOT consumed, so `attach` leaves it propagating: an event this manager cannot
+    // interpret must reach whatever listener does understand it.
+    if (typeof event.key !== "string") return false;
+
+    // Checked FIRST among real keystrokes: an owner closer to the keystroke has already answered it, and that stays
     // true even while an IME is composing. Reported as consumed so `attach` stops it
     // propagating — the manager runs no binding, but it is the one place that can keep a
     // window-level owner from acting on a key someone else already answered.

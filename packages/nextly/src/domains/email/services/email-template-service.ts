@@ -18,6 +18,7 @@ import { randomUUID } from "crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, eq, desc, isNull } from "drizzle-orm";
 
+import type { RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import type { PluginEmailTemplate } from "../../../plugins/contributions";
@@ -31,6 +32,11 @@ import type {
 } from "../../../schemas/email-templates/types";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import {
+  changedTemplateFields,
+  recordTemplateActivity,
+  type EmailTemplateActivityInput,
+} from "../template-activity";
 import type { EmailAttachmentInput } from "../types";
 
 import { interpolateTemplate } from "./template-engine";
@@ -117,6 +123,33 @@ export class EmailTemplateService extends BaseService {
   // ============================================================
 
   /**
+   * Record a template mutation without letting the trail decide the request.
+   *
+   * The write has already committed by the time this runs, so a failure to
+   * record must not be reported to the caller as a failed mutation — that would
+   * tell them the opposite of the truth. It must not be silent either: a trail
+   * that quietly stops being written is indistinguishable from a system nobody
+   * is changing, so the failure becomes a log line here.
+   */
+  private async recordActivity(
+    input: EmailTemplateActivityInput
+  ): Promise<void> {
+    try {
+      await recordTemplateActivity(input);
+    } catch (error) {
+      try {
+        this.logger.error("Failed to record email template activity", {
+          action: input.action,
+          templateId: input.templateId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } catch {
+        // A logger that throws must not take the mutation with it either.
+      }
+    }
+  }
+
+  /**
    * A layout row must contain exactly one `{{content}}` placeholder: zero
    * appends the body after the wrapper, and more than one drops the content
    * after the second marker when the layout is applied. Reject malformed
@@ -147,7 +180,8 @@ export class EmailTemplateService extends BaseService {
    * @throws NextlyError DUPLICATE if slug already exists
    */
   async createTemplate(
-    data: CreateEmailTemplateInput
+    data: CreateEmailTemplateInput,
+    actor?: RequestActor | null
   ): Promise<EmailTemplateRecord> {
     this.assertLayoutMarker(data.kind ?? "template", data.htmlContent);
     const id = randomUUID();
@@ -190,7 +224,17 @@ export class EmailTemplateService extends BaseService {
       throw NextlyError.fromDatabaseError(dbErr);
     }
 
-    return this.getTemplate(id);
+    const created = await this.getTemplate(id);
+    // Recorded after the insert commits, so a trail that cannot be written
+    // never turns a template that exists into a reported failure.
+    await this.recordActivity({
+      action: "create",
+      templateId: created.id,
+      templateName: created.name,
+      templateKind: created.kind,
+      actor,
+    });
+    return created;
   }
 
   /**
@@ -254,7 +298,8 @@ export class EmailTemplateService extends BaseService {
    */
   async updateTemplate(
     id: string,
-    data: UpdateEmailTemplateInput
+    data: UpdateEmailTemplateInput,
+    actor?: RequestActor | null
   ): Promise<EmailTemplateRecord> {
     const existing = await this.getTemplate(id);
 
@@ -301,7 +346,21 @@ export class EmailTemplateService extends BaseService {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
-    return this.getTemplate(id);
+    const updated = await this.getTemplate(id);
+    // Compared against the row as it was, so an update that submitted every
+    // field but moved none produces no entry. `updatedAt` is excluded: it moves
+    // on every write by definition and would make every no-op look like a
+    // change.
+    const { updatedAt: _ignored, ...touched } = updateData;
+    await this.recordActivity({
+      action: "update",
+      templateId: updated.id,
+      templateName: updated.name,
+      templateKind: updated.kind,
+      changedFields: changedTemplateFields({ ...existing }, touched),
+      actor,
+    });
+    return updated;
   }
 
   /**
@@ -314,7 +373,7 @@ export class EmailTemplateService extends BaseService {
    *
    * @throws NextlyError BUSINESS_RULE_VIOLATION if deleting the default layout
    */
-  async deleteTemplate(id: string): Promise<void> {
+  async deleteTemplate(id: string, actor?: RequestActor | null): Promise<void> {
     let template: EmailTemplateRecord | null = null;
     try {
       template = await this.getTemplate(id);
@@ -336,7 +395,6 @@ export class EmailTemplateService extends BaseService {
       throw new NextlyError({
         code: "BUSINESS_RULE_VIOLATION",
         publicMessage: "Cannot delete the default layout.",
-        statusCode: 422,
         logContext: { id, slug: template.slug },
       });
     }
@@ -344,6 +402,17 @@ export class EmailTemplateService extends BaseService {
     await this.db
       .delete(this.emailTemplates)
       .where(eq(this.emailTemplates.id, id));
+
+    // The name is read from the row fetched above: after the delete there is
+    // nothing left to label the entry with, and an unlabelled row is the one
+    // whose subject a reader can never recover.
+    await this.recordActivity({
+      action: "delete",
+      templateId: id,
+      templateName: template.name,
+      templateKind: template.kind,
+      actor,
+    });
   }
 
   // ============================================================

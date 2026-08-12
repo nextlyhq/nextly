@@ -130,6 +130,27 @@ export class SchemaRegistry {
     this.relationsCache = null;
   }
 
+  /**
+   * Forget one dynamic table, so the next lookup rebuilds it instead of adopting it.
+   *
+   * The counterpart `registerDynamicSchema` was missing. A caller that has changed a table's
+   * storage and then FAILED part way cannot say what shape the table now has — the change may have
+   * landed on one half and not the other — and there was previously no way to express that. Every
+   * such caller had to bind SOME shape, because `ensureSingleRuntimeTable` adopts a registration it
+   * did not make rather than rebuilding, so a wrong guess survived to the next restart.
+   *
+   * Retracting says the one thing such a caller always knows correctly: this is no longer
+   * describable from here. The rebuild that follows asks the database where the columns physically
+   * are, which is the answer a guess was standing in for.
+   */
+  retractDynamicSchema(tableName: string): void {
+    this.dynamicSchemas.delete(tableName);
+    this.dynamicEdges.delete(tableName);
+    // Same reason the registration path invalidates it: relations close over table objects, so a
+    // stale assembled config keeps traversing an object no longer registered.
+    this.relationsCache = null;
+  }
+
   // Look up a table object by SQL table name (for queries).
   // Checks dynamic schemas first since they may override static in edge cases.
   getTable(tableName: string): unknown {

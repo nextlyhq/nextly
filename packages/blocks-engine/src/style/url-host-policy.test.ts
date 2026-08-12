@@ -12,11 +12,17 @@ import { describe, expect, it } from "vitest";
 import { STYLE_CATALOG } from "./catalog";
 import type { StyleShape } from "./catalog-types";
 import { compilePageCss } from "./compile-page";
-import type { BlockDocument } from "../document";
+import type { BlockDocument, StyleValue } from "../document";
 import { DOCUMENT_FORMAT_VERSION } from "../document";
 
-/** A value the leaf will accept, carrying `url` at the given host. */
-type UrlWriter = (url: string) => unknown;
+/**
+ * A value the leaf will accept, carrying `url` at the given host.
+ *
+ * `StyleValue` rather than `unknown`: every branch below produces one, and
+ * declaring the wider type meant the compiler could not check that the values
+ * these tests build are values a document could actually hold.
+ */
+type UrlWriter = (url: string) => StyleValue;
 
 /**
  * One writer per URL-bearing LEAF in this shape, each placing the URL at that
@@ -69,7 +75,7 @@ const REFUSED = "https://cdn.refused.test/a.png";
 
 function compile(
   property: string,
-  value: unknown,
+  value: StyleValue,
   host?: (url: string) => boolean
 ) {
   const doc: BlockDocument = {
@@ -86,7 +92,11 @@ function compile(
     ],
   };
   return compilePageCss(doc, {
-    breakpoints: { base: {} },
+    // The real shape: two axes, each a list. The previous `{ base: {} }` named
+    // no axis at all, so nothing here described a breakpoint the compiler could
+    // find, and the fixture only worked because these cases live at the base
+    // state where no breakpoint lookup happens.
+    breakpoints: { viewport: [], container: [] },
     ...(host === undefined ? {} : { mayFetchUrl: host }),
   });
 }

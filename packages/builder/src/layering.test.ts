@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { collectModules, TEST_MODULE } from "./source-modules";
 
 /**
  * The package's layering contract, enforced rather than documented.
@@ -35,8 +36,8 @@ import { describe, expect, it } from "vitest";
  * `blocks-react` rather than reimplementing rendering on top of React and
  * `@nextlyhq/blocks-engine` is a property of what the code does, not of what it
  * imports, and both spellings import exactly the same packages. The allowlist
- * makes the shortcut inconvenient; it cannot make it impossible. Treat that rule
- * as a design constraint reviewed by people, not as one enforced here.
+ * makes the shortcut inconvenient; it cannot make it impossible. That rule is a
+ * design constraint, and nothing in this file enforces it.
  */
 
 // `import.meta.dirname` only exists from Node 20.11 and the package floor is
@@ -103,16 +104,14 @@ const UNRESOLVABLE_SPECIFIER = "<unresolvable-specifier>";
  * bundles it; a scan restricted to TypeScript would walk past the one file free to import
  * anything, with the typecheck none the wiser because `allowJs` is off.
  */
-const BUNDLED_MODULE = /\.(?:tsx?|jsx?|mjs|cjs)$/;
 
+/** The package's modules, by the shared rule; only the file reading is local. */
 function sourceFiles(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...sourceFiles(full));
-    else if (BUNDLED_MODULE.test(entry.name)) out.push(full);
-  }
-  return out;
+  return collectModules(
+    dir,
+    at => readdirSync(at, { withFileTypes: true }),
+    join
+  );
 }
 
 /**
@@ -475,6 +474,16 @@ describe("the builder's layering contract", () => {
     expect(files.some(f => f.endsWith("index.ts"))).toBe(true);
   });
 
+  it("reads every extension it claims to, not only the common ones", () => {
+    // `length > 0` and "an index.ts is present" both survive a walk narrowed to
+    // `.ts` alone, so neither separates full coverage from partial. A file in a
+    // less common extension has to be named for that.
+    //
+    // The scan going quiet on one extension is the dangerous direction: the
+    // files it stops reading are the ones it then reports clean.
+    expect(files.some(f => f.endsWith(".mts"))).toBe(true);
+  });
+
   it("never imports @nextlyhq/admin directly", () => {
     // The one route to admin is `@nextlyhq/plugin-sdk/admin`. Asserted as a
     // prefix so `@nextlyhq/admin/anything` is caught too — a subpath import is
@@ -493,7 +502,7 @@ describe("the builder's layering contract", () => {
   it("imports only what the contract allows", () => {
     const violations: string[] = [];
     for (const file of files) {
-      const inTest = /\.test\.tsx?$/.test(file);
+      const inTest = TEST_MODULE.test(file);
       for (const specifier of importsOf(file).filter(isBare)) {
         if (!isAllowed(specifier, inTest)) {
           violations.push(`${file}: ${specifier}`);
@@ -502,5 +511,56 @@ describe("the builder's layering contract", () => {
     }
 
     expect(violations).toEqual([]);
+  });
+
+  it("relaxes its allowlist only for files the runner actually runs", () => {
+    // The test above trusts `TEST_MODULE` to say which files may import
+    // `vitest` and `node:fs`. That trust is only sound while vitest RUNS
+    // everything `TEST_MODULE` matches: a config listing narrower globs would
+    // leave a file classified as a test, exempt from the allowlist, and never
+    // executed — so a shipped module could reach anything it liked by choosing
+    // its filename.
+    //
+    // Both now derive from one list, and this checks the config still asks for
+    // it rather than restating it. The assertion is syntactic because the
+    // question is syntactic: whether this file derives its globs or spells them
+    // out again. Importing the config to compare values is not available —
+    // `rootDir` is `src`, and reaching outside it fails `check-types` (TS6059).
+    const configPath = join(SRC_DIR, "..", "vitest.config.ts");
+    const config = ts.createSourceFile(
+      "vitest.config.ts",
+      readFileSync(configPath, "utf8"),
+      ts.ScriptTarget.ESNext,
+      true
+    );
+
+    let includeInitialiser: ts.Expression | undefined;
+    const visit = (node: ts.Node): void => {
+      if (
+        ts.isPropertyAssignment(node) &&
+        ts.isIdentifier(node.name) &&
+        node.name.text === "include"
+      ) {
+        includeInitialiser = node.initializer;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(config);
+
+    // Positive control: an `include` that stopped being found would make the
+    // assertion below vacuous, and this guard exists because a check that
+    // passes on nothing is the failure mode the package keeps paying for.
+    expect(
+      includeInitialiser,
+      "vitest.config.ts must set `include`"
+    ).toBeDefined();
+    expect(
+      includeInitialiser && ts.isIdentifier(includeInitialiser)
+        ? includeInitialiser.text
+        : config.text.slice(
+            includeInitialiser!.getStart(config),
+            includeInitialiser!.getEnd()
+          )
+    ).toBe("TEST_GLOBS");
   });
 });

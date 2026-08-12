@@ -46,6 +46,7 @@ import {
   type CollectionAccessRules,
   isSuperAdminContext,
 } from "../../../services/access";
+import { expansionAccess } from "../../../services/collections/trust-bound";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
@@ -810,6 +811,9 @@ export class SingleMutationService extends BaseService {
           operation: transitionOp,
           user: options.user,
           overrideAccess: options.overrideAccess,
+          // Narrows that bypass per RELATED collection. Absent means unchanged;
+          // dropping it here would silently restore the full bypass.
+          trusted: options.trusted,
           // NOT route-authorized: the route authorizes a Single write as
           // `update`, never as `publish`/`unpublish`, so the RBAC check for the
           // transition permission must actually run.
@@ -2286,10 +2290,18 @@ export class SingleMutationService extends BaseService {
         user: options.user,
       });
 
-      // 10.5. Expand upload fields with full media data
+      // 10.5. Expand upload fields with full media data.
+      //
+      // Carries the same caller as the relationship expansion below. Media is a
+      // system table with no stored rules, so a write that narrowed its bypass
+      // has refused that target like any other, and this expansion is the only
+      // one that reads it. The two are not alternatives: a Single holding
+      // uploads and no relationship field returns before the expansion below
+      // does anything, so a bound applied only there reaches nothing.
       updatedDoc = await this.queryService.expandUploadFields(
         updatedDoc,
-        fieldConfigs
+        fieldConfigs,
+        expansionAccess(options)
       );
 
       // 10.6. Expand relationship fields with full related entry data.
@@ -2314,6 +2326,9 @@ export class SingleMutationService extends BaseService {
           enforceFieldAccess: true,
           user: options.user,
           overrideAccess: options.overrideAccess,
+          // Narrows that bypass per RELATED collection. Absent means unchanged;
+          // dropping it here would silently restore the full bypass.
+          trusted: options.trusted,
           authenticatedScope: options.authenticatedScope,
           // The language just written: a target collection's read rule may
           // scope reads by one of its own localized fields, and that filter
@@ -2324,7 +2339,15 @@ export class SingleMutationService extends BaseService {
           // A trusted write sees the row it just wrote regardless of
           // lifecycle; an untrusted one gets the published default, the
           // same answer its own GET would give.
-          status: options.overrideAccess === true ? "all" : undefined,
+          // The row this write just produced, read back at its own lifecycle.
+          // Withheld from a BOUNDED caller because it propagates into
+          // relationship expansion, where an explicit `"all"` is honoured
+          // before the narrowed override is consulted — so the bound would be
+          // defeated by a status that was never asked for.
+          status:
+            options.overrideAccess === true && options.trusted === undefined
+              ? "all"
+              : undefined,
         }
       );
 

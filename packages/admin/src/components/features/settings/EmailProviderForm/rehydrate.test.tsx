@@ -241,6 +241,168 @@ describe("the same provider, changed by someone else while the form is open", ()
     ).toBe("Renaming In Progress");
   });
 
+  it("keeps a rename typed before the operator picked another type", async () => {
+    // The operator's OWN type change, not a remote one. Replacing the
+    // configuration has to leave every other field alone: the refetch below
+    // keeps only values that still differ from the form's baseline, so a
+    // rename folded into that baseline is overwritten by whatever the server
+    // holds — an edit lost with nothing on screen to say so.
+    //
+    // Distinct from the remote-type-change case above. That one arrives
+    // through the hydration guard; this one runs in the picker's own handler,
+    // and only this one can move the baseline under a field typed by hand.
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[ACME, OTHER_WITH_FIELD]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    const name = document.querySelector<HTMLInputElement>('input[name="name"]');
+    if (!name) throw new Error("expected the name field to render");
+    await user.clear(name);
+    await user.type(name, "Renaming In Progress");
+
+    await user.click(
+      screen.getByRole("button", { name: OTHER_WITH_FIELD.label })
+    );
+
+    // A change made elsewhere arrives on the next focus refetch.
+    rerender(
+      <EmailProviderForm
+        mode="edit"
+        provider={{
+          ...STORED,
+          name: "Renamed By Somebody Else",
+          updatedAt: "2026-02-02T00:00:00.000Z",
+        }}
+        descriptors={[ACME, OTHER_WITH_FIELD]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    expect(
+      document.querySelector<HTMLInputElement>('input[name="name"]')?.value
+    ).toBe("Renaming In Progress");
+  });
+
+  it("keeps the type the operator picked when a remote change arrives", async () => {
+    // The same loss on the field the operator actually changed. A selection
+    // folded into the baseline no longer differs from it, so the reconcile
+    // puts the record's type back and the form silently returns to the
+    // provider they had just moved away from.
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[ACME, OTHER_WITH_FIELD]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: OTHER_WITH_FIELD.label })
+    );
+
+    // A change to an unrelated field, made elsewhere.
+    rerender(
+      <EmailProviderForm
+        mode="edit"
+        provider={{
+          ...STORED,
+          fromName: "Changed Elsewhere",
+          updatedAt: "2026-02-02T00:00:00.000Z",
+        }}
+        descriptors={[ACME, OTHER_WITH_FIELD]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    // Asserted on BOTH cards. A single assertion that the record's type is
+    // deselected passes just as well on a form that lost its selection
+    // entirely.
+    expect(
+      screen.getByRole("button", { name: OTHER_WITH_FIELD.label })
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: ACME.label })).toHaveAttribute(
+      "aria-pressed",
+      "false"
+    );
+  });
+
+  it("keeps configuration typed under a picked type across TWO reconciles", async () => {
+    // Two refetches, not one. The first arrives while the record still holds
+    // the old type, so the configuration on screen is restored as not
+    // belonging to the record. The second arrives after the record has moved
+    // to the type the operator had already picked — the types now agree, so
+    // nothing restores anything, and whatever stopped differing from the
+    // form's baseline in between is replaced by the record's values.
+    //
+    // A single-refetch test cannot see this: it passes whether or not the
+    // restore preserved the difference that makes the value survive.
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[ACME, OTHER_WITH_FIELD]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: OTHER_WITH_FIELD.label })
+    );
+
+    const input = regionInput();
+    if (!input) throw new Error("expected the region field to render");
+    await user.clear(input);
+    await user.type(input, "typed-for-other");
+
+    // First refetch: an unrelated change, record still the old type.
+    rerender(
+      <EmailProviderForm
+        mode="edit"
+        provider={{
+          ...STORED,
+          fromName: "Changed Elsewhere",
+          updatedAt: "2026-02-02T00:00:00.000Z",
+        }}
+        descriptors={[ACME, OTHER_WITH_FIELD]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    // Second refetch: the record has moved to the type already on screen.
+    rerender(
+      <EmailProviderForm
+        mode="edit"
+        provider={{
+          ...STORED,
+          type: "other",
+          fromName: "Changed Elsewhere",
+          configuration: { region: "from-the-server" },
+          updatedAt: "2026-02-03T00:00:00.000Z",
+        }}
+        descriptors={[ACME, OTHER_WITH_FIELD]}
+        isPending={false}
+        onSubmit={() => {}}
+      />
+    );
+
+    expect(regionInput()?.value).toBe("typed-for-other");
+  });
+
   it("reconciles a change that carries the SAME timestamp", async () => {
     // MySQL stores `updated_at` as `datetime` with no fractional seconds, so
     // two writes inside one second come back indistinguishable. Keying on the
@@ -364,6 +526,258 @@ describe("the same provider, changed by someone else while the form is open", ()
     );
 
     expect(regionInput()?.value).toBe("half-typed");
+  });
+});
+
+describe("a descriptor that gains a field while the form is open", () => {
+  /**
+   * The stored type, declaring one field MORE than `ACME`.
+   *
+   * A boolean, because it is the case with no honest empty state: a text input
+   * renders blank whether it holds nothing or an empty string, while a switch
+   * has to draw itself on or off and so states a position the form does not
+   * hold.
+   */
+  const ACME_PLUS: EmailProviderDescriptor = {
+    type: "acme",
+    label: "Acme",
+    capabilities: {},
+    configFields: [
+      { name: "region", label: "Region", kind: "text", required: true },
+      { name: "sandbox", label: "Sandbox", kind: "boolean", default: true },
+    ],
+  };
+
+  async function submittedPayload(
+    payloads: EmailProviderPayload[]
+  ): Promise<EmailProviderPayload | undefined> {
+    const form = document.getElementById(EMAIL_PROVIDER_FORM_ID);
+    if (!form) throw new Error("expected the form to render");
+    fireEvent.submit(form);
+    await waitFor(() => expect(payloads.length).toBeGreaterThan(0));
+    return payloads[0];
+  }
+
+  it("initialises the new field instead of leaving it unset", async () => {
+    // The catalog refetches on mount and on focus, so a deployment that adds a
+    // configuration field to a type already in use arrives while forms are
+    // open. The record has not changed, so nothing else prompts a rehydrate.
+    //
+    // Asserted on the SUBMITTED PAYLOAD rather than the switch. The control
+    // draws its own empty state, so a switch reading "on" cannot distinguish a
+    // form holding `true` from one holding nothing at all — which is the
+    // disagreement being tested.
+    const submitted: EmailProviderPayload[] = [];
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[ACME]}
+        isPending={false}
+        onSubmit={payload => submitted.push(payload)}
+      />
+    );
+
+    rerender(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[ACME_PLUS]}
+        isPending={false}
+        onSubmit={payload => submitted.push(payload)}
+      />
+    );
+
+    expect((await submittedPayload(submitted))?.configuration).toMatchObject({
+      sandbox: true,
+    });
+  });
+
+  /** The OTHER type, declaring one field more than `OTHER_WITH_FIELD`. */
+  const OTHER_PLUS: EmailProviderDescriptor = {
+    type: "other",
+    label: "Other",
+    capabilities: {},
+    configFields: [
+      { name: "region", label: "Region", kind: "text", required: true },
+      { name: "sandbox", label: "Sandbox", kind: "boolean", default: true },
+    ],
+  };
+
+  it("initialises it for the type ON SCREEN, not the stored one", async () => {
+    // The operator has picked a type and not saved it, so the form is showing
+    // a provider the record is not. A field added to THAT type is the one that
+    // needs initialising; reconciling against the record's descriptor instead
+    // leaves it unset, and the switch draws a position the payload does not
+    // carry.
+    const user = userEvent.setup();
+    const submitted: EmailProviderPayload[] = [];
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[ACME, OTHER_WITH_FIELD]}
+        isPending={false}
+        onSubmit={payload => submitted.push(payload)}
+      />
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: OTHER_WITH_FIELD.label })
+    );
+
+    const input = regionInput();
+    if (!input) throw new Error("expected the region field to render");
+    await user.clear(input);
+    await user.type(input, "typed-for-other");
+
+    rerender(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[ACME, OTHER_PLUS]}
+        isPending={false}
+        onSubmit={payload => submitted.push(payload)}
+      />
+    );
+
+    expect((await submittedPayload(submitted))?.configuration).toMatchObject({
+      region: "typed-for-other",
+      sandbox: true,
+    });
+  });
+
+  it("starts it from the DESCRIPTOR when the record is another provider", async () => {
+    // A form showing a type its record is not. The record may still hold a
+    // value at the new field's path — field names are shared across providers,
+    // `apiKey` being declared by both built-in API ones — and seeding from it
+    // would carry one provider's setting into another's form, where nobody
+    // chose it and a save would persist it.
+    //
+    // The stored value has to DISAGREE with the declared default for the two
+    // sources to be distinguishable at all: stored `false` against a
+    // descriptor default of `true`.
+    const user = userEvent.setup();
+    const submitted: EmailProviderPayload[] = [];
+    const storedWithSandbox: EmailProviderRecord = {
+      ...STORED,
+      configuration: { region: "eu-west-1", sandbox: false },
+    };
+
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="edit"
+        provider={storedWithSandbox}
+        descriptors={[ACME, OTHER_WITH_FIELD]}
+        isPending={false}
+        onSubmit={payload => submitted.push(payload)}
+      />
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: OTHER_WITH_FIELD.label })
+    );
+
+    const input = regionInput();
+    if (!input) throw new Error("expected the region field to render");
+    await user.type(input, "typed-for-other");
+
+    rerender(
+      <EmailProviderForm
+        mode="edit"
+        provider={storedWithSandbox}
+        descriptors={[ACME, OTHER_PLUS]}
+        isPending={false}
+        onSubmit={payload => submitted.push(payload)}
+      />
+    );
+
+    // The new provider's declared default, not the old provider's stored value.
+    expect((await submittedPayload(submitted))?.configuration).toMatchObject({
+      sandbox: true,
+    });
+  });
+
+  it("initialises it on a CREATE form too", async () => {
+    // A create form is open across the same deployment and has no record at
+    // all, so a rule that reconciles against one never runs for it.
+    const user = userEvent.setup();
+    const submitted: EmailProviderPayload[] = [];
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="create"
+        descriptors={[ACME]}
+        isPending={false}
+        onSubmit={payload => submitted.push(payload)}
+      />
+    );
+
+    const name = document.querySelector<HTMLInputElement>('input[name="name"]');
+    const fromEmail = document.querySelector<HTMLInputElement>(
+      'input[name="fromEmail"]'
+    );
+    const region = regionInput();
+    if (!name || !fromEmail || !region) {
+      throw new Error("expected the create form's fields to render");
+    }
+    await user.type(name, "New Provider");
+    await user.type(fromEmail, "hello@example.com");
+    await user.type(region, "eu-west-1");
+
+    rerender(
+      <EmailProviderForm
+        mode="create"
+        descriptors={[ACME_PLUS]}
+        isPending={false}
+        onSubmit={payload => submitted.push(payload)}
+      />
+    );
+
+    expect((await submittedPayload(submitted))?.configuration).toMatchObject({
+      region: "eu-west-1",
+      sandbox: true,
+    });
+  });
+
+  it("leaves a field being edited alone while it does so", async () => {
+    // The constraint that makes the rule safe. A descriptor that RENAMES a
+    // field rather than adding one arrives at a path the form already holds,
+    // and initialising it would overwrite work in progress.
+    //
+    // Both halves are asserted together on purpose: the untouched field alone
+    // passes just as well on a rule that never ran at all, which is the
+    // failure this pair exists to separate.
+    const user = userEvent.setup();
+    const submitted: EmailProviderPayload[] = [];
+    const { rerender } = render(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[ACME]}
+        isPending={false}
+        onSubmit={payload => submitted.push(payload)}
+      />
+    );
+
+    const input = regionInput();
+    if (!input) throw new Error("expected the region field to render");
+    await user.clear(input);
+    await user.type(input, "typed-by-hand");
+
+    rerender(
+      <EmailProviderForm
+        mode="edit"
+        provider={STORED}
+        descriptors={[ACME_PLUS]}
+        isPending={false}
+        onSubmit={payload => submitted.push(payload)}
+      />
+    );
+
+    expect((await submittedPayload(submitted))?.configuration).toMatchObject({
+      region: "typed-by-hand",
+      sandbox: true,
+    });
   });
 });
 

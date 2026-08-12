@@ -1,11 +1,14 @@
 import {
   compilePageCss,
   declaresNoMarkup,
+  isFetchableUrl,
   nodeClassNames,
   walkNodes,
+  DEFAULT_LIMITS,
   type BlockDocument,
   type BlockNode,
   type CompiledPageCss,
+  type DocumentLimits,
   type RemotePatternInput,
   type NodeStyles,
   type StyleCompileContext,
@@ -481,6 +484,160 @@ export function fetchPolicyLabel(
  */
 export const UNIDENTIFIED_FETCH_POLICY = "unidentified-fetch-policy";
 
+/**
+ * Whether the artifact holds the OWN rules of every node the prune removed.
+ *
+ * "A map is present" is not coverage. A stored artifact can be stale relative to the document it
+ * is rendered with — compiled when one node was unconditional, so its rules are in `css`, while a
+ * different node was already gated and has an entry. The map exists, but it does not cover the
+ * node that was actually pruned, and serving the stored sheet publishes that node's rules and
+ * asset URLs.
+ *
+ * The compiler writes an entry for EVERY node it holds back, including one with no styles of its
+ * own, so an id missing from the map means the artifact was compiled when that node was still
+ * being served. That makes presence-per-removed-id an exact test rather than a heuristic.
+ *
+ * The ENTRY has to be usable, not merely present. A key whose value the delivery refuses to read
+ * certifies coverage that never reaches the sheet, which is the same divergence one value deeper.
+ *
+ * This is the NODE-LOCAL half on its own, because the two prunes that ask it need different
+ * amounts. Written once so neither can drift from the other on the part they share.
+ */
+export function gatedEntriesCoverRemovedNodes(
+  before: BlockDocument,
+  after: BlockDocument,
+  gated: Readonly<Record<string, unknown>>
+): boolean {
+  const surviving = new Set<string>();
+  walkNodes(after.nodes, node => surviving.add(node.id));
+  let covered = true;
+  walkNodes(before.nodes, node => {
+    if (surviving.has(node.id)) return;
+    if (!isRecordedGatedEntry(gated[node.id])) covered = false;
+  });
+  return covered;
+}
+
+/**
+ * Whether the artifact's gated map accounts for every node the visibility prune removed.
+ *
+ * The node-local rules, plus one thing more. The map holds a node's OWN rules; a block type's
+ * defaults are shared, emitted once per type into the main sheet, and stay there — so when pruning
+ * removes the last instance of a type, the stored sheet still publishes that type's defaults, and
+ * any `url(...)` in them, for a block nobody was served. Only a recompile can drop a type-level
+ * rule, so the artifact cannot cover this case and must not claim to.
+ *
+ * Asked HERE and not of a draws-nothing node, and the difference is what the two prunes are for. A
+ * condition withholds content from a reader, so the block a page was built from is itself part of
+ * what is being withheld and a rule naming that type says something. A block that draws nothing is
+ * an ordinary node the site uses and will draw again as soon as it is filled in; its type's
+ * defaults come from the block package rather than from the document, and refusing coverage over
+ * them would leave the drop unreachable for the page with one image and no second one.
+ */
+export function gatedMapCoversPrunedNodes(
+  before: BlockDocument,
+  after: BlockDocument,
+  gated: Readonly<Record<string, unknown>>
+): boolean {
+  const survivingTypes = new Set<string>();
+  walkNodes(after.nodes, node => survivingTypes.add(node.type));
+  const surviving = new Set<string>();
+  walkNodes(after.nodes, node => surviving.add(node.id));
+  let covered = gatedEntriesCoverRemovedNodes(before, after, gated);
+  walkNodes(before.nodes, node => {
+    if (surviving.has(node.id)) return;
+    if (!survivingTypes.has(node.type)) covered = false;
+  });
+  return covered;
+}
+
+/**
+ * Whether any id appears on more than one node.
+ *
+ * The compiler suppresses the node-local rules of every node sharing an id, so a stored sheet
+ * compiled from such a document is missing them — and stays missing them after a prune removes the
+ * duplicate that made the collision visible.
+ */
+export function hasDuplicateNodeIds(document: BlockDocument): boolean {
+  const seen = new Set<string>();
+  let duplicate = false;
+  walkNodes(document.nodes, node => {
+    if (seen.has(node.id)) duplicate = true;
+    seen.add(node.id);
+  });
+  return duplicate;
+}
+
+/** What a page must be recompiled WITH, and judged BY. */
+export interface EffectiveCompile {
+  /** The context to recompile with, or `undefined` when the caller gave none. */
+  context: StyleCompileContext | undefined;
+  /** The policy label to compare a stored sheet's stamp against. */
+  fetchPolicyId: string | undefined;
+}
+
+/**
+ * Reconcile what a CALLER supplied with what the stored artifact and the host
+ * already knew.
+ *
+ * A caller's raw context is not the context to compile with, and the three
+ * differences all fail silently:
+ *
+ * - **Scope lives on the ARTIFACT, not the context.** A caller normally omits it
+ *   for exactly that reason, so compiling with the raw context rebuilds a scoped
+ *   page unscoped and lets its selectors reach another document rendered beside
+ *   it. Only a STRING is carried over: the artifact is a database record, so its
+ *   `scope` can be null or a number, and the compiler dereferences it before any
+ *   block boundary exists — a malformed one would fail the whole page rather
+ *   than render it unstyled.
+ * - **Limits come from the caller's own cap**, which preparation already honours.
+ *   Compiling against the context's caps instead retains nodes whose styles were
+ *   never written, so the document holds nodes the class map does not name.
+ * - **A sheet with no policy stamp compares equal to no policy at all.** A caller
+ *   with its own `mayFetchUrl` and no `fetchPolicyId` would therefore reuse an
+ *   unstamped sheet under a predicate that never judged it. A caller's predicate
+ *   is authoritative and opaque — nothing here can tell one such function from
+ *   another — so absent a stated identity it gets one no artifact can carry, and
+ *   every stored sheet reads as compiled under another policy. Safe rather than
+ *   fast, and a caller wanting its sheets cached says which policy its predicate
+ *   IS.
+ *
+ * One derivation for every entry point that resolves a stored page. Two would
+ * agree on the day they were written, and the drift would be a page served with
+ * another page's selectors or with URLs the current policy refuses.
+ */
+export function effectiveCompile(args: {
+  styleContext: StyleCompileContext | undefined;
+  styles: PageStyles | undefined;
+  limits: DocumentLimits | undefined;
+  remotePatterns: readonly RemotePatternInput[] | undefined;
+}): EffectiveCompile {
+  const patterns = args.remotePatterns;
+  // A caller's OWN predicate wins: it is the more specific answer, and a host
+  // that passed one deliberately should not have it replaced by one derived
+  // from the pattern list.
+  const fetchPolicyId =
+    args.styleContext?.mayFetchUrl === undefined
+      ? fetchPolicyLabel(patterns)
+      : (args.styleContext.fetchPolicyId ?? UNIDENTIFIED_FETCH_POLICY);
+  if (args.styleContext === undefined)
+    return { context: undefined, fetchPolicyId };
+  return {
+    context: {
+      ...args.styleContext,
+      limits: args.limits ?? args.styleContext.limits ?? DEFAULT_LIMITS,
+      ...(patterns === undefined || args.styleContext.mayFetchUrl !== undefined
+        ? {}
+        : { mayFetchUrl: (url: string) => isFetchableUrl(url, patterns) }),
+      ...(args.styleContext.scope === undefined &&
+      typeof args.styles?.scope === "string"
+        ? { scope: args.styles.scope }
+        : {}),
+    },
+    fetchPolicyId,
+  };
+}
+
 /** Caller-supplied policy for one style resolution. */
 export interface ResolveStyleOptions {
   /**
@@ -549,8 +706,21 @@ export function resolvePageStyles(
   // to reuse a sheet from, but deciding that needs the rules rather than the
   // label, and a reader that has to reason about the rules is one that can get
   // it wrong quietly.
+  //
+  // A sheet compiled under an ANONYMOUS predicate is stale against every policy
+  // including no policy at all, which is why its own stamp is not enough to
+  // decide by. Two transitions make that concrete and they fail in opposite
+  // directions: to another anonymous predicate, where a stable sentinel would
+  // compare equal to itself and reuse CSS the new predicate never judged; and
+  // away from the predicate entirely, where absence is ALSO the honest stamp for
+  // an unrestricted compile, so a restrictive artifact would be reused and the
+  // URLs it dropped would stay missing for good. Neither a stable stamp nor an
+  // absent one separates those, so the stamp records what compiled the sheet and
+  // this comparison refuses it outright.
   const compiledUnderAnotherPolicy =
-    styles !== undefined && styles.fetchPolicyId !== options.fetchPolicyId;
+    styles !== undefined &&
+    (styles.fetchPolicyId !== options.fetchPolicyId ||
+      styles.fetchPolicyId === UNIDENTIFIED_FETCH_POLICY);
 
   if (
     styles &&

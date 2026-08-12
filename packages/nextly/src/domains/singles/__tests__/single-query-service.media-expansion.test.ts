@@ -15,6 +15,14 @@ import { getDialectTables } from "../../../database";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { SingleQueryService } from "../services/single-query-service";
 
+/**
+ * These cover media expansion itself, not the trust bound, so they read as a
+ * caller that narrowed nothing. Stated rather than defaulted: the parameter is
+ * required precisely because "no bound" and "forgot the caller" want opposite
+ * outcomes and look identical when omitted.
+ */
+const UNBOUNDED = { trusted: undefined } as const;
+
 // absolutizeMediaUrls resolves the app base URL through the validated env,
 // which unit tests don't populate; pin it like media-variant.test.ts does.
 vi.mock("../../../shared/lib/get-base-url", () => ({
@@ -72,7 +80,11 @@ describe("SingleQueryService.expandUploadFields — dialect-portable media fetch
     // Read the expanded field off the document's index signature rather than
     // asserting a shape onto SingleDocument: `images` is a user field, so the
     // document type says nothing about it.
-    const expanded: Row = await service.expandUploadFields(doc, uploadFields);
+    const expanded: Row = await service.expandUploadFields(
+      doc,
+      uploadFields,
+      UNBOUNDED
+    );
     const images = expanded.images as Row;
 
     // Surface the swallowed fetch error, if any, before asserting the shape.
@@ -115,7 +127,8 @@ describe("SingleQueryService.expandUploadFields — dialect-portable media fetch
     await expect(
       service.expandUploadFields(
         { id: "s1", images: "m1" } as never,
-        uploadFields
+        uploadFields,
+        UNBOUNDED
       )
     ).rejects.toThrow();
   });
@@ -125,7 +138,11 @@ describe("SingleQueryService.expandUploadFields — dialect-portable media fetch
     const service = makeService(db);
 
     const doc = { id: "s1", images: null } as never;
-    const expanded: Row = await service.expandUploadFields(doc, uploadFields);
+    const expanded: Row = await service.expandUploadFields(
+      doc,
+      uploadFields,
+      UNBOUNDED
+    );
 
     expect(expanded.images).toBeNull();
   });

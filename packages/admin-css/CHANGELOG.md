@@ -1,5 +1,402 @@
 # @nextlyhq/admin-css
 
+## 0.0.2-alpha.56
+
+### Patch Changes
+
+- [#633](https://github.com/nextlyhq/nextly/pull/633) [`175ed53`](https://github.com/nextlyhq/nextly/commit/175ed53cc50e162ae65e47fc73c139c254b89ab8) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - admin: render the email provider form from the server's provider descriptors
+
+  The provider form no longer knows any provider by name. It fetches the
+  registered types and their field metadata from the server and builds the
+  picker, the controls and the client-side validation from that, so a provider
+  contributed by a plugin is configurable in Settings without editing the admin.
+
+  Dotted field names are treated as paths, so a provider declaring `auth.pass`
+  stores `{ auth: { pass } }`, and a credential the user did not touch is
+  omitted from the update rather than overwritten with the mask that stood in for
+  it. A provider whose plugin has been removed renders read-only with its type
+  named instead of as a blank form.
+
+  Also fixes the Active toggle on the edit page, which was rendered and then left
+  out of the update payload, so pausing a provider silently did nothing.
+
+  nextly: record who created, changed, promoted or deleted an email provider
+
+  `email_providers` holds the credentials that send password-reset and
+  verification mail, so an actor who can edit a provider can point every
+  authentication email at a relay they control. That action previously left no
+  record. Create, update, delete and promote-to-default now write an activity
+  entry naming the actor, the provider and which fields changed.
+
+  Names, never values: an entry carries no part of the configuration, and a
+  configuration change is recorded as the single field name `configuration`
+  rather than by its inner paths. An update that moved nothing writes no entry
+  at all.
+
+  The provider screens also tell a catalog that could not be loaded apart from
+  one that merely could not be refreshed. A failed refresh keeps the descriptors
+  already fetched, so the type filter, the row labels and the form all still work
+  from them; the pages now say so instead of reporting the catalog unavailable,
+  and the edit page's Update button follows the form into read-only when the
+  cached catalog no longer lists the stored type.
+
+  Promoting a provider to default is one transaction. The demotion of the previous
+  default and the write that promotes previously committed separately, so a
+  promotion that matched nothing — a row deleted between the read and the write, an
+  insert the database refused — left the installation with no default provider at
+  all and nothing in the trail to say why.
+
+  Inside that transaction the demotion runs first. PostgreSQL carries a partial
+  unique index over `is_default = true` and checks it as each statement runs, so a
+  row taking the default while the incumbent still holds it is rejected outright.
+  A promotion that then matches no row — because the provider was deleted in the
+  meantime — throws rather than commits, which takes its own demotion back with
+  it.
+
+  A masked value is no longer written back over what it stood for. The read masks
+  a configuration path the provider does not describe — a credential left behind
+  by an upgrade, say — while the write stripped masks only from paths declared
+  secret, so a client echoing the configuration it was given replaced the real
+  stored value with eight bullet characters during an unrelated edit. Masking and
+  unmasking now ask one question.
+
+  Only a handover opens a transaction. Wrapping every provider write in one cost
+  correctness on SQLite, where the transaction is `BEGIN IMMEDIATE` on a single
+  shared connection: a second ordinary write arriving while the first was open
+  could not begin at all.
+
+  An edit form left open reconciles a newer version of the record it is showing.
+  The detail query refetches on focus, so a change made elsewhere used to be held
+  and written back on the next save, reverting it from an edit that never touched
+  those fields. Fields the operator has touched keep what they typed. If the
+  record's TYPE changed, the configuration is rebuilt from the new provider rather
+  than carried across — otherwise one provider's credential is submitted as
+  another's wherever both declare the same field name.
+
+  A stored value that predates a tightened constraint no longer blocks unrelated
+  edits. A provider upgrade that lowers `maxLength`, or narrows a numeric range,
+  made every provider holding an older value unrenameable and undeactivatable. The
+  provider's own parser stays the authority on what it accepts; the descriptor
+  governs replacements.
+
+  Provider metadata that no descriptor can publish is refused at registration
+  rather than at the first request for the catalog: `options` that is not an array
+  of `{ value, label }` on any field kind, two select options sharing a value, and
+  `capabilities` given as an array. One malformed provider previously took the
+  whole catalog endpoint down, and with it every provider's form.
+
+- [#653](https://github.com/nextlyhq/nextly/pull/653) [`3709979`](https://github.com/nextlyhq/nextly/commit/3709979d10c1301b7882ab0132af4b2347de47d6) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Route the admin panel's keyboard shortcuts through the shared shortcut manager, so one listener owns every key and precedence follows the component tree rather than mount order.
+
+- [#644](https://github.com/nextlyhq/nextly/pull/644) [`80ca19e`](https://github.com/nextlyhq/nextly/commit/80ca19e69f5e875f809291863d4c31d33e815554) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Refuse an unknown URL scheme in a block's attributes instead of naming the dangerous ones.
+
+  The guard every block prop that reaches an `href` or a `src` passes through was a BLOCKLIST: `javascript:`, `vbscript:` and `data:` were named and refused, and everything else was allowed. So `blob:` was allowed — and a `blob:` document runs in the origin that created it, which is the page's own. So were `filesystem:`, `about:`, `view-source:`, and whatever a browser ships next. A blocklist has to predict every dangerous scheme and misses the one nobody had heard of when it was written, which is the same reason the style compiler and the remote-host policy are both allowlists.
+
+  Four schemes are accepted now: `http` and `https` for a destination, `mailto` and `tel` for the two that open an app rather than a page and are the ordinary content of a contact button. A value carrying no scheme is untouched, so `/about`, `a.png`, `#top` and `//cdn.example/a.png` all still work — which hosts may be REACHED is a separate question, asked of the host policy by the blocks that fetch rather than of a list of schemes.
+
+  These are the same four the rich-text sanitizer already allows, and that is deliberate rather than a coincidence: it answers this identical question for stored rich text, and two surfaces of one product disagreeing about which schemes are safe is how a value refused inside a link body becomes acceptable in a button beside it. The admin's link editor keeps accepting a wider set for what an author may TYPE, because that is an input affordance and not the boundary.
+
+  The scheme is read from the value as the browser's parser will read it, and through the ENGINE's normalisation rather than a second copy of the rules — two spellings of one algorithm disagreeing is how a scheme hides from a check while still navigating. Tab, LF and CR are removed wherever they appear because the parser removes them; leading control characters and spaces are trimmed because the parser trims them.
+
+  An interior space is deliberately NOT removed, because the parser does not remove one either — it percent-encodes it. `hero image:1.png` is an ordinary relative path to a file whose name holds a space, and collapsing that to `heroimage:1.png` would invent a scheme nobody wrote and refuse the path. A control character still sitting inside the value after normalisation refuses it outright instead: one never appears in a URL anybody meant, since it has to be percent-encoded to survive, and its only use here is to split a scheme so a reader sees none where a browser may still see one.
+
+  The value returned is still the original trimmed string, so a legitimate URL is never silently rewritten.
+
+- [#643](https://github.com/nextlyhq/nextly/pull/643) [`07cd50f`](https://github.com/nextlyhq/nextly/commit/07cd50f4d9ed38ad5d8fbfa644358c17ec4a885b) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Page validation now refuses children stored under a slot on a block that holds none, not just on containers with the wrong slot name. Every block in the catalogue declares its structure where the check can read it without loading the block library.
+
+- [#636](https://github.com/nextlyhq/nextly/pull/636) [`b4e032b`](https://github.com/nextlyhq/nextly/commit/b4e032b862a85d9605360f1c0e3b65b4999cc882) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Page validation now knows what slots a block declares without the block library having to be loaded, so a page saved through the normal server path is checked rather than waved through. Three layout blocks move to the new source in this change; the rest follow.
+
+- [#640](https://github.com/nextlyhq/nextly/pull/640) [`19f35d9`](https://github.com/nextlyhq/nextly/commit/19f35d993da7242b084568c74765d75871b3c266) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Every block that can hold children now declares its slots where page validation can read them without loading the block library, so a page saved through the normal server path is checked against all of them rather than a few.
+
+- [#691](https://github.com/nextlyhq/nextly/pull/691) [`8f5d785`](https://github.com/nextlyhq/nextly/commit/8f5d785e2f1bf9614f5242e2c60ee76752d6983c) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Type-check `blocks-engine`'s test files, and stop Node globals reaching `src`.
+
+  Turning the check on surfaced a real defect in the published types:
+  `AnyBlockDefinition` widened every prop-consuming member except `seo`, so
+  `registerBlocks` rejected every definition built by `defineBlock<P>()` for any
+  interface `P` without an index signature — whether or not it contributed SEO.
+  `seo` is now widened like its siblings, so typed blocks register.
+
+- [#662](https://github.com/nextlyhq/nextly/pull/662) [`18b529b`](https://github.com/nextlyhq/nextly/commit/18b529b3509206a6b231fd004811a1fa0169f058) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - `@nextlyhq/blocks-react` now emits a prepared document's slots in the order the
+  block DEFINITION declares them, not the order they happen to be stored in.
+
+  The renderer asks for its slots by calling `renderSlot` once per declaration,
+  so declaration order is the order the page presents. This tree is documented as
+  the render-equivalent one, so carrying stored order left its own key order
+  describing a page nobody is served, and made two documents that render
+  identically compare as different.
+
+  A slot the definition declares but the document never stored stays ABSENT rather
+  than being added as an empty array: an empty slot renders nothing either way,
+  and adding it would rewrite every document that omits an optional slot.
+
+- [#687](https://github.com/nextlyhq/nextly/pull/687) [`e1d573e`](https://github.com/nextlyhq/nextly/commit/e1d573e2333fcd7f59eb96d688fe55c23aed9e49) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The page renderer and the shared read pipeline no longer keep separate copies of the passes a stored document goes through before it is read. Nothing changes for a reader; the two could previously drift, and a reader that skipped the gating pass would publish content the page deliberately withheld.
+
+- [#651](https://github.com/nextlyhq/nextly/pull/651) [`f054383`](https://github.com/nextlyhq/nextly/commit/f0543837d0a198d27dee073d078127d95d06f25f) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - `@nextlyhq/blocks-react` now exports the types its public API is written in.
+
+  `StyleCompileContext`, `BlockDocument` and `DocumentLimits` appeared in the built
+  declarations in parameter positions while being named in no export statement,
+  and `BreakpointSet` — the one field `StyleCompileContext` requires — was absent
+  from the surface entirely. A host could see the name it was required to pass and
+  had no way to write it down, because those types originate in
+  `@nextlyhq/blocks-engine`, which is a dependency of this package rather than a
+  peer.
+
+  The root entry now re-exports the engine types the surface is built from, and
+  the set is CLOSED: an exported type is only as writable as its parts, so a host
+  handed `BlockDefinition` could name it and still not write down the `supports`
+  object it must pass or the `seo()` contribution it must return. Everything
+  reachable from a re-exported type is re-exported too, so annotating any part of
+  the surface needs no second package.
+
+  They live on the root entry rather than `/next`, whose declarations import the
+  `next` and `nextly` peers a standalone install does not have.
+
+  A regression test asserts each is named in an EXPORT STATEMENT of the built
+  `.d.ts`, not merely present in the file, and derives what is required from the
+  declarations themselves — the entries from `package.json`, the obligation from
+  the engine's own composition — so the check grows with the API rather than with
+  someone remembering to extend a list.
+
+  `nextly`'s own route types are deliberately not re-exported: it is a peer
+  dependency, so a host names `ContentEntry`, `RenderContext` and the route shapes
+  from `nextly/runtime` where they live.
+
+- [#646](https://github.com/nextlyhq/nextly/pull/646) [`743772f`](https://github.com/nextlyhq/nextly/commit/743772f0e3515d2a2cc8cadc700fe45688f56d65) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Add the @nextlyhq/builder package, which will hold the visual page-builder editor. It ships no features yet, so there is nothing to install it for: it exists now so the editor arrives under a name that is already reserved and already versioned in lockstep with the rest. It requires React 19, matching the renderer it draws with (@nextlyhq/blocks-react).
+
+- [#660](https://github.com/nextlyhq/nextly/pull/660) [`ba3a72c`](https://github.com/nextlyhq/nextly/commit/ba3a72c8f664183587552cf88d50f1a13b8bc504) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Read and write hex colours from the server-safe colour entry point.
+
+- [#641](https://github.com/nextlyhq/nextly/pull/641) [`a2f2080`](https://github.com/nextlyhq/nextly/commit/a2f2080260f422a37dfc46d42a440c1976e6ae2f) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A content route no longer offers static generation it cannot perform.
+
+  `createContentRoute` and `createBlocksPage` read access-enforced content, so no
+  path they serve can be pre-rendered — and they now return no
+  `generateStaticParams` at all. Next classifies a route as static BECAUSE that
+  export exists, and every dynamic marking inside a static render is an error, so
+  an enforced route that also exported one answered 500 on every path whenever its
+  collection was empty at build time. Its runtime behaviour depended on whether
+  the database had rows in it when the build ran.
+
+  For public content that should be cached and pre-rendered, call the new
+  `createPublicContentRoute` / `createPublicBlocksPage`. They read trusted and do
+  return `generateStaticParams`.
+
+  Replaces the `overrideAccess` option on `ContentRouteConfig`, which had no
+  consumers: the posture is now stated by which factory you call.
+
+- [#657](https://github.com/nextlyhq/nextly/pull/657) [`5d6f049`](https://github.com/nextlyhq/nextly/commit/5d6f04923abc2459d78a0d7bba0a8f4c73b08fe1) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Refresh five transitive dependencies to their patched releases, clearing the six open Dependabot advisories on this repository.
+
+  `brace-expansion` to 5.0.9 (denial of service through unbounded intermediate arrays, bypassing the earlier mitigation), `fast-uri` to 3.1.5 (host confusion via a backslash authority introducer), `js-yaml` to 4.3.1 (quadratic CPU consumption resolving `!!omap`), `undici` to 7.29.0 (five advisories, the highest being cross-user information disclosure and a parse-time crash on degenerate private cache directives) and `dompurify` to 3.4.13.
+
+  The DOMPurify advisory is the one worth an explicit reachability answer, because two published packages sanitize with it. Reaching it needs `IN_PLACE` sanitization together with a hook that removes a containing element, and neither sanitizer is that shape: `sanitize-svg` hooks `uponSanitizeAttribute`, the embed sanitizer hooks `afterSanitizeAttributes`, both are attribute-level, and neither sets `IN_PLACE`. So the bump keeps a dependency on a supported release rather than closing a live hole. Both sanitizer suites pass on 3.4.13.
+
+  Each override floor is raised rather than left to resolve upward on its own, because all five were pinned in the lockfile at exactly the last vulnerable patch, and a floor that still admits a vulnerable version lets the next lockfile refresh land back on one.
+
+  These are `pnpm` overrides, so they govern this workspace's builds, CI and local development and do not travel with the published packages. What a consumer of `nextly` or `@nextlyhq/plugin-page-builder` resolves for these transitive dependencies is still decided by their own tree.
+
+- [#658](https://github.com/nextlyhq/nextly/pull/658) [`d23b9d7`](https://github.com/nextlyhq/nextly/commit/d23b9d7b657b8ade24794e25e8e3f9de7635c96f) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Report conflicting shortcut-provider options when neither provider attaches a listener.
+
+- [#670](https://github.com/nextlyhq/nextly/pull/670) [`3b88fff`](https://github.com/nextlyhq/nextly/commit/3b88fffbd0ad44664a700c70310759abadde4ca9) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A scoped API key is now judged on its own grants for every Direct API collection and single operation, not just some of them. Previously a key holding only update access could read through operations that forwarded the caller identity without the key scope, because the service fell back to the permissions of the user who issued the key.
+
+- [#661](https://github.com/nextlyhq/nextly/pull/661) [`edf2b04`](https://github.com/nextlyhq/nextly/commit/edf2b04eab4eb04aa0b4cb8505aa14baaa5d6c20) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Stop publishing the rules of a block that draws nothing.
+
+  A block can declare that its props make it draw nothing, and `core/image` with no source and `core/embed` with no `src` both do. The stylesheet did not consult that declaration, so every rule compiled for the markup such a node WOULD have drawn was still published — matching no element, and naming whatever it referenced. An image block waiting for its picture announced the URL of a background it never painted.
+
+  The declaration now reaches the style compiler, which holds those rules per node rather than emitting them into the main sheet, exactly as it already does for a condition-gated node. A page compiled since carries an entry for each drawless node, and the reader appends only the ones that draw.
+
+  What made this worth doing carefully is the direction it must NOT go. Dropping a node from the style input marks the document repaired, and a repaired document with nothing to recompile from has its whole stylesheet withheld. Blanking every rule on a page because one image is waiting for its picture is a far larger regression than the unused bytes it saves, and an unfilled image is an ordinary authoring state rather than the exceptional one the other prune cases describe. So a stored sheet that predates this keeps its node and ships whole; republishing the page compiles the entries and the drop starts working, with nothing to invalidate by hand.
+
+  `declaresNoMarkup` in `@nextlyhq/blocks-engine` is now the single implementation of the question. SEO derivation had its own copy and now shares this one, so the compiler, the renderer and the derived metadata cannot answer differently about the same node. It fails in the opposite direction to `isConditionGated`, and deliberately: an unreadable visibility condition must count as gated or hidden content leaks, while a block that throws or answers with a non-boolean must count as drawing or a node that is on the page loses everything derived about it.
+
+  Block-type default rules stay in the main sheet, because they come from the block package rather than from the document and a sibling of the same type that does draw still needs them.
+
+- [#645](https://github.com/nextlyhq/nextly/pull/645) [`249649e`](https://github.com/nextlyhq/nextly/commit/249649eb921b10f6d87d7a7049c04d355a3e5f93) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - nextly: record what email was sent, and what failed
+
+  A failed password-reset previously left no durable trace — the adapter threw,
+  the service returned `{ success: false }`, one line went to the process log,
+  and the operator learned from the user. Sends are now recorded in
+  `email_deliveries`.
+
+  The table stores a **hash** of the recipient rather than the address, and a
+  template slug rather than a rendered subject, so it answers "did this send" and
+  "how many failed" without answering "to whom". Provider failure messages have
+  address-shaped text removed before storage, because an SMTP rejection quotes
+  the recipient back at you.
+
+  This is a log, not a queue: nothing drains it, and the retry columns it carries
+  are reserved and inert so that adding a drain later is not a migration on a
+  table already holding history.
+
+  The recipient column is a KEYED hash rather than a bare digest. An email address
+  carries too little entropy for a plain SHA-256 to resist an offline dictionary,
+  so anyone holding the table could confirm whether a given person was written to.
+  Keying it with the install secret leaves the support lookup working unchanged
+  while making the column unreadable without that secret. The schema no longer
+  claims the table sits outside identity-erasure obligations, because a keyed hash
+  of an address is pseudonymised data rather than anonymised data.
+
+  A send whose bookkeeping fails after the provider accepted the message is no
+  longer reported as a provider failure. Acceptance is recorded the instant the
+  provider answers, so deriving the response cannot turn a delivered message into
+  a full set of failed rows, an after-send action told the send failed, and an
+  auth flow withholding a token.
+
+  Provider containment now covers the stages that run with parsed configuration:
+  building an adapter and probing a connection. A parser that derives a credential
+  left both quoting the derived value into a diagnostic that reached the failure
+  log, because the needles were computed from the stored form alone. A parser that
+  renames one is refused outright, for the same reason a parser that shortens one
+  already was.
+
+  The provider's own verdict survives a failure in the bookkeeping that follows
+  it. Recording only that the provider answered, and defaulting to success, turned
+  a refusal into a delivery and had an auth flow withhold its undelivered-token
+  fallback for a message that was never sent.
+
+  The notice written when a row is kept without its provider reference can no
+  longer change what happened. An installed logger that threw was caught by the
+  recovery's own handler and reported as a retry that failed, for a row sitting in
+  the table.
+
+- [#694](https://github.com/nextlyhq/nextly/pull/694) [`e0e7714`](https://github.com/nextlyhq/nextly/commit/e0e77147aa55d93d1bedfe5f3d7e67b4df2a8db4) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - fix(nextly): take the HTTP status from the error code, and record template changes
+
+  Eight throw sites restated a status the canonical map already answers, so the
+  number lived in two places and only one would be found by someone changing it.
+  The status now comes from the code alone.
+
+  Deleting an email provider nulls the reference on its delivery rows rather than
+  removing them, so the log stays evidence of what was sent. That behaviour now
+  has per-dialect coverage on PostgreSQL and SQLite, where it was previously
+  untested. MySQL still has no such constraint: adding one requires nulling
+  pre-existing dangling references first, which nothing in the schema pipeline
+  does yet.
+
+  Email template mutations now reach the activity log. A template decides what a
+  password-reset message says and who it appears to come from, and that change was
+  previously invisible after the fact. Entries carry field NAMES only.
+
+- [#626](https://github.com/nextlyhq/nextly/pull/626) [`fe694de`](https://github.com/nextlyhq/nextly/commit/fe694de18295a7a0266fda55a4bf770e7e4db341) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Email providers are now described by a definition, so a plugin can add one that works everywhere a built-in does.
+
+  A contributed provider could previously be registered but never configured: the REST API and the provider service both validated the type against a fixed list of the three built-ins, and `defineConfig` resolved providers through a hardcoded switch. Registration is now the only thing that decides which types exist.
+
+  A provider definition also declares its configuration fields, which values are secret, and how to validate them. Secrets are redacted because the provider says so rather than because a key name looked sensitive, and an invalid configuration is rejected when it is saved instead of when a send later fails.
+
+- [#690](https://github.com/nextlyhq/nextly/pull/690) [`968b7ce`](https://github.com/nextlyhq/nextly/commit/968b7ce98ce0a898e3e4e03f3370011249145f5f) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - fix(admin): replace one part of the email provider form without resetting the rest
+
+  Changing a provider type, or a plugin returning while the form is open, replaced
+  the configuration through a whole-form reset. That makes every current value the
+  form's new baseline, so fields it never meant to touch stop differing from it —
+  and reconciling a refetch keeps only what still differs. A rename typed before
+  either of those happened was silently overwritten by the record's own value.
+
+  Each of those now writes only the fields it means to, and a provider type chosen
+  in the picker is kept as the operator's until they save. A descriptor that gains
+  a configuration field while a form is open now initialises it, so a switch no
+  longer draws a position the form does not hold, and a field being edited is left
+  alone.
+
+- [#638](https://github.com/nextlyhq/nextly/pull/638) [`4b2c025`](https://github.com/nextlyhq/nextly/commit/4b2c0250d9f3c82ea4f3764069750c4407883221) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Ask one host list, from both channels a page fetches through.
+
+  `BlockHostPolicy` now carries `remotePatterns`, in the same shape a Nextly app already declares in `next.config` for `next/image`, so copying the entry across just works. A block writes an `<img src>` or an `<iframe src>`; a compiled stylesheet writes `url(...)` into a rule that fires on every page it applies to. Both turn a stored value into a request, and both now ask THIS list rather than each keeping its own, because a policy two surfaces answer differently is not a policy. The style channel asks it through the predicate the engine takes, so the two cannot drift.
+
+  `core/image` and `core/embed` consult it. For the image, the check is applied to whichever URL was SELECTED rather than to the typed one alone: a URL the resolver returned came out of a media record a person filled in, so it names a host on the same terms the typed prop does, and checking one of the pair leaves the other unbounded.
+
+  `core/embed` consults it, and an unlisted host renders nothing at all rather than an empty frame, for the reason the empty source already renders nothing: a frame with no usable source loads the page inside itself in several browsers. A caller who passed their own `mayFetchUrl` keeps it, since that is the more specific answer and deriving one here would silently replace it. Absent means unasked rather than allowed-nothing, so a host that configures no list renders exactly as it did before.
+
+  **Enforcement is per-renderer, and the type says so where someone reading it will find out.** The boundary cannot apply this on a block's behalf: it sees the element a block RETURNED, not the URLs the block chose, and an `<img src>` deep inside returned markup is indistinguishable to it from any other prop. The blocks shipped here consult the list; a block written outside this package is bounded by it only if it asks. A site wanting a hard limit should pair this with a content security policy, which the browser enforces whatever a block does.
+
+  `core/embed`'s `rendersNothing` still answers from its props alone, deliberately. The declaration is read without a render and so has no policy to consult; a URL the policy will refuse is reported there as output and then draws nothing. That direction costs an empty rule in a stylesheet, where the other would claim a drawing block draws nothing.
+
+  A stored stylesheet now records which policy compiled it. The artifact is a CACHE of a compile, and a cache is sound only when it is keyed on every input that compile used; the fetch list is such an input, because the same document compiled under two different lists produces two different sheets, one of which may name a host the other refuses. Without that key a sheet written before a policy existed keeps publishing `url(https://unlisted…)` on a site that has since forbidden it, with the block markup beside it bounded and the stylesheet not.
+
+  So `PageStyles` gains an opaque `fetchPolicyId`, derived from the patterns themselves rather than assigned, so it changes exactly when they do and there is nothing to remember to invalidate. A reader whose policy does not match the stamp treats the sheet the way it already treats one compiled from a larger tree: recompile when the inputs are there, withhold the CSS when they are not. A sheet that WAS compiled under the current policy is still served from the store, which is why this is a stamp rather than recompiling unconditionally: a site with a policy does not pay a compile per render.
+
+  `fetchPolicyLabel` is public because the write path needs it. A writer that could not compute the same label would stamp nothing, every stored sheet would read as stale, and a site with a policy would recompile for ever.
+
+  The type documentation no longer claims every field defaults closed, because two fields now default differently and a host reading the old sentence could omit configuration believing remote fetches were denied. `trustedFrameOrigins` defaults closed, since the grant it controls lets a frame script the page around it. `remotePatterns` defaults OPEN, because it arrived after the renderer shipped and defaulting it closed would stop every existing site loading its own images the day it upgraded.
+
+  `core/image` asks the list BEFORE choosing between its two candidates rather than after. Selecting first and filtering after meant a library image the site will not fetch beat a perfectly good typed URL and then took the whole block down with it: the author was left with nothing because of a setting they cannot see, while the fallback they wrote sat unused. Filtering first makes the block render the first candidate it is actually allowed to load, which is what a fallback is for — and it is what the link-preview path does with the same pair, so the page and the preview can no longer choose different images. A record whose URL is refused is dropped WHOLE, since its alt text and intrinsic size describe the asset that was refused.
+
+  The page-builder's own guidance is corrected in the same change. It told an integrator that `@nextlyhq/blocks-react` had no way to bound fetched hosts and to configure the separate page-builder renderer instead. That is now false, and believing it would leave the published page unbounded while the editor was configured — the editor refusing a host the live page then loads.
+
+- [#648](https://github.com/nextlyhq/nextly/pull/648) [`1ddda0f`](https://github.com/nextlyhq/nextly/commit/1ddda0ff4b976ea7f4f0e9f5a0d67d6d342d00c3) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Page editor: a page holding blocks under a slot that no longer exists now says so and offers to clear them. Such blocks are invisible on the canvas (a block only draws the slots it declares), so until now the page simply refused to save with nothing to select and nothing to delete. A bar above the editor names each affected block and where it sits, and removing one is a per-block choice that undo can reverse. Nothing is discarded automatically.
+
+- [#652](https://github.com/nextlyhq/nextly/pull/652) [`38135e8`](https://github.com/nextlyhq/nextly/commit/38135e8cf95b0ba2d444a296fd5b1c85b4d45647) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Render a very long list instead of losing the block that holds it.
+
+  `core/list` mapped its stored `items` with no cap. A document's own limits bound node count and depth but never the length of a prop array, so `items` arrives at whatever length was written — and past the renderer's inspection budget the normalizer refuses the whole output. An accidentally long list therefore cost the reader EVERY item and left a broken-block marker where the list should be, rather than costing only the items past the end.
+
+  The items are clamped, and sliced before they are mapped so an oversized array is never walked in full: the work this bounds is the work of reading it, not only of rendering it. The cap sits far above any list a person writes and far below the budget, so nothing hand-authored reaches it and the block still has room for its wrapper.
+
+- [#634](https://github.com/nextlyhq/nextly/pull/634) [`6823b57`](https://github.com/nextlyhq/nextly/commit/6823b57db4fd20fc329d853dc4bc7e7737e56d24) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Adopt a neutral admin theme. The admin palette is now achromatic in both modes, with every asserted contrast pairing clearing WCAG AA by a margin rather than sitting on the gate. Control boundaries (text inputs, selects, checkboxes, the table search field) move to a visible 3.4:1 edge, active sidebar rows are filled with the surface their ink is declared against, and the dark table header surface no longer carries a hue the rest of the palette dropped.
+
+- [#663](https://github.com/nextlyhq/nextly/pull/663) [`8b136ed`](https://github.com/nextlyhq/nextly/commit/8b136edce2f7bfd2c1cfeaaa56fe964a7569d5d9) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The page builder no longer renders a second `main` element. A page has one primary landmark, and the editor was adding another inside the admin’s own, which is invalid markup and gives screen readers two competing landmarks to choose between. The canvas pane is now a labelled region, so it is still announced and still reachable by landmark navigation.
+
+- [#686](https://github.com/nextlyhq/nextly/pull/686) [`68145f1`](https://github.com/nextlyhq/nextly/commit/68145f1ab90b2a188918a2e463302de66275c914) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The page builder now names itself in the admin. Its entry in the plugins list and on the dashboard showed the raw package specifier where other plugins show a readable name.
+
+- [#600](https://github.com/nextlyhq/nextly/pull/600) [`80723ec`](https://github.com/nextlyhq/nextly/commit/80723ecd758237170f67cde756385572eb7c8b52) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A preview link that names one entry no longer widens access to the rest of its collection: when the granted entry does not live at the requested path, the published-only fall-through now reads with the caller's own access instead of the trust the draft decision forced on.
+
+- [#601](https://github.com/nextlyhq/nextly/pull/601) [`264bda2`](https://github.com/nextlyhq/nextly/commit/264bda2eb787413b1c1f3de67361f882556aa6bf) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Minting a preview link now authorizes the entry it names, not just the collection: a caller bounded by a row-level rule can no longer mint a working link for a document they cannot read themselves.
+
+- [#609](https://github.com/nextlyhq/nextly/pull/609) [`db83c18`](https://github.com/nextlyhq/nextly/commit/db83c18c935f53d773ffa2001045a3697778800b) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Let a block render nothing without being reported as broken, and test the core primitives through the boundary that wraps them.
+
+  A block that deliberately renders nothing, such as an image with no usable source, was replaced by a broken-block diagnostic when its node also carried an anchor id. Rendering nothing is a decision rather than a failure, and the two now have different answers.
+
+  **Emptiness is judged only from what this renderer can vouch for**, which is the part worth reading twice. Two things earn the exemption: the block DECLARES that its props draw nothing, through the `rendersNothing` contract, which is computed from data this renderer already holds; or the output is a value this renderer OWNS — a primitive React draws as nothing, or an array `normalizeRenderable` materialised, walked by index exactly as React walks it.
+
+  Nothing else. A wrapper the block returned is never opened to see whether it is empty. Its children, a provider's `value`, an element's `key` and `ref`, a `Set`'s iterator and an array's iterator are all author-controlled, and React reads every one of them AGAIN after this check has returned — so an exemption granted on a reading React need not repeat is an exemption that can be wrong. It was wrong in five separate ways, two of which took the whole page rather than one block: an iterable that answered differently on each call, a `Set` carrying its own iterator, a getter hidden from enumeration, an inherited getter, and a stateful `children` accessor. The list of properties to probe was never going to close, because every one of them belongs to the author.
+
+  The cost is stated plainly: a block returning an empty fragment, an empty `Suspense`, a hidden `Activity` or an empty context provider, on a node that also asks for an anchor id, keeps its diagnostic. That block says `rendersNothing` if it means it, and then the exemption is granted from data rather than from a structure that can change underfoot.
+
+  The contract still covers every value React draws as nothing rather than the nullish pair alone. A plugin block written in the ordinary conditional form `render: () => enabled && <element />` returns `false` when disabled, an empty string arrives from a cleared value, and a map over an empty collection arrives as `[]`. A returned `Set` is materialised before it is read, so it counts too. `0` is deliberately excluded, since React renders it as the character zero: real output with no element to carry the node's fields.
+
+  A candidate URL clears BOTH filters before `core/image` chooses between them, and a media record whose URL either filter refuses is dropped whole. The two refuse different things — the scheme guard refuses a value that could execute, the host list refuses one the site will not fetch from — and this block had been caught twice applying one of them at one position of the resolver/typed-prop pair and not the other. The same pair reaches the link preview, so both run there too, and the preview publishes the URL in the form the guard normalised rather than the form it was handed.
+
+  `SuspenseList` joins the wrapper set the normalizer already accepted as renderable. A type accepted in one list and missing from the other is a wrapper walked to validate its children in one place and reported as output in the other.
+
+  The primitives were only ever tested by calling their render functions directly, which is not the path a page takes: the boundary appends the block type class, clones the node fields onto the root, and normalizes the output first. That gap is why this defect and two others reached main.
+
+- [#650](https://github.com/nextlyhq/nextly/pull/650) [`0585842`](https://github.com/nextlyhq/nextly/commit/0585842547da6da9b8e62c9599b52ea4dbac6e43) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A public content route no longer expands relations by default.
+
+  A trusted read propagates both its trust and a widened lifecycle into
+  relationship expansion: a populated target is read with access rules bypassed
+  AND `status: "all"`. At the inherited default of `depth: 1`, a page in a public
+  collection could therefore embed a draft or access-restricted row from a
+  collection appearing nowhere in the route config — and a public route
+  pre-renders that into a static artifact.
+
+  `createPublicContentRoute` and `createPublicBlocksPage` now default to
+  `depth: 0`. Setting `depth` explicitly restores expansion, and states that the
+  populated collections are public too.
+
+- [#654](https://github.com/nextlyhq/nextly/pull/654) [`a3e1849`](https://github.com/nextlyhq/nextly/commit/a3e1849eb52d8e71c9f549960e63e635a4d9d4dd) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Re-decide a held shortcut key on every repeat, so a binding whose action changes its own condition stops permitting the browser default.
+
+- [#678](https://github.com/nextlyhq/nextly/pull/678) [`ed5e26e`](https://github.com/nextlyhq/nextly/commit/ed5e26ecb8efbe990b9619d37a3d4296bfa46e49) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - stop the sidebar content panel from emitting a second main landmark
+
+- [#685](https://github.com/nextlyhq/nextly/pull/685) [`038935d`](https://github.com/nextlyhq/nextly/commit/038935d4e78aa74dc346f8c6b3d0aab16899dcd4) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A Single's schema change now applies its table change and writes its registry row in one place, and the row records the outcome the apply actually reached. Saving a Single that only toggles Internationalization or Draft/Published now records that its companion table was provisioned, and re-saving a Single whose table failed to create can rebuild it and report success instead of staying stuck on "failed" however many times it is retried.
+
+- [#635](https://github.com/nextlyhq/nextly/pull/635) [`9c12a68`](https://github.com/nextlyhq/nextly/commit/9c12a68e18de3637b14403ed66f0d7658cc0875e) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Let a site say which hosts its stylesheets may fetch from.
+
+  A stylesheet is a fetching surface. `background-image: url(...)` makes the browser request whatever it names, on every page the rule applies to, and until now the only limit on that was the scheme allowlist. That allowlist answers whether a URL is `http(s)` rather than `javascript:`; it has never had anything to say about WHICH host is reached. A value carrying no scheme at all can still name one, because `//cdn.example/a.png` inherits the page's protocol and nothing else, so a check reading "no scheme, therefore this origin" was wrong about exactly the case that reaches somewhere else. The comment saying so has been corrected, and it is no longer the only thing marking the gap.
+
+  `StyleCompileContext` now takes a `mayFetchUrl` predicate, forwarded to every URL a compile can emit. A PREDICATE rather than a list of patterns, so the engine holds no matching rules of its own and the caller keeps ONE answer for every channel it owns; which hosts a site trusts belongs to the site, not to the document format. Left undefined, nothing is asked and a compile behaves exactly as it did before, which is what every caller outside a configured site gets. The question is put last, to a value already known to be well formed, so a host rule is never the reason given for a value that was going to be refused anyway.
+
+  Coverage is proved rather than asserted. The test walks the catalog for every leaf that can carry a URL, places a refused host at each one and checks none reach the stylesheet, with an allowed host in the SAME position as the control — without it a compiler emitting nothing for that property would pass by writing no CSS at all. Deriving the positions from the catalog is the point: a written list is a snapshot, and the property added next month would not be in it while the suite still reported full coverage.
+
+  Two signatures grew a parameter and are now grouped rather than lengthened. `validateStyleValues` already took six positional arguments and `envelopeRules` ten, which is past where a call reads by position; a further optional would have sat beside one of a different type with nothing but that type to tell them apart, and a policy lost in a mis-slotted call leaves every URL in the document unasked about. `envelopeRules` takes a named object instead, so its arity goes down rather than up.
+
+- [#693](https://github.com/nextlyhq/nextly/pull/693) [`c4de051`](https://github.com/nextlyhq/nextly/commit/c4de0513f8d75dcf8a2fec5afe8168e48795165d) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Serving a page through the new `preparePageForRead` no longer publishes stylesheet rules for a block that is missing from the site, so an uninstalled plugin stops leaving its block defaults and named classes behind in the page CSS.
+
+- [#612](https://github.com/nextlyhq/nextly/pull/612) [`3278f13`](https://github.com/nextlyhq/nextly/commit/3278f139eeba5022edfc5ec6563a0ab4061921f3) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Add a keyboard shortcut manager to the UI kit: one listener, with precedence that follows the component tree.
+
+  Shortcuts registered per component could not decide who owned a key. `stopPropagation` does not stop other listeners on the same node, so every global handler ran and the winner was whichever component mounted first. Pressing Escape during a drag could cancel the drag and navigate away from the page at the same time.
+
+  `ShortcutProvider` installs the single listener. A nested `ShortcutScope` outranks the shell around it, and a layer marked `blocking` also swallows the keys it does not bind, so a drag or a modal can hold the keyboard for as long as it is up. `mod` resolves to Command on Apple platforms and Control elsewhere, sequences such as `g d` are supported, and modifier-carrying shortcuts still fire while the user is typing.
+
+- [#672](https://github.com/nextlyhq/nextly/pull/672) [`bb4ebd0`](https://github.com/nextlyhq/nextly/commit/bb4ebd06da5f31d2f41eb7ba233a5745a2e1ac00) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Schema Builder: a unique column that a database cannot index is no longer described two different ways. The rule deciding whether uniqueness is a named index or an inline constraint now lives in one place and is asked by the create path, the add-column path and the desired schema alike, so a reconcile no longer proposes a unique index the server refuses.
+
+- [#649](https://github.com/nextlyhq/nextly/pull/649) [`532ed04`](https://github.com/nextlyhq/nextly/commit/532ed04aea8e990e23998f8853037eb48927e5d5) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A column declared unique now gets a named unique index instead of an unnamed constraint written into the table itself.
+
+  An unnamed constraint is one the database names for you, and on SQLite that name is internal and cannot be referred to. Nothing could describe it afterwards, so the schema Nextly compared against never matched the table, and the only way SQLite could reconcile the two was to rebuild the whole table. Nextly refuses a rebuild it did not ask for, so the entire change was refused with it, including the parts that were only adding things. It also made such a column impossible to remove.
+
+- [#637](https://github.com/nextlyhq/nextly/pull/637) [`891ec3b`](https://github.com/nextlyhq/nextly/commit/891ec3b0eb968913727e78558a2cc2fdb4c9eb7c) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A repaired legacy column is now checked for JSON contents before it is converted, and the repair refuses without changing anything when the check fails. A field originally declared as text carries the same legacy column shape as a repeater, so the repair could be offered for prose — failing mid-migration on PostgreSQL, and on MySQL leaving the column renamed but unconverted because MySQL commits schema changes as it makes them.
+
 ## 0.0.2-alpha.55
 
 ### Patch Changes

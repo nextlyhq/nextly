@@ -17,6 +17,7 @@
  * @module api/email-templates-detail
  */
 
+import { actorFromAuthContext } from "../auth/request-actor";
 import { container } from "../di";
 import { getCachedNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
@@ -83,7 +84,7 @@ export const GET = withErrorHandler(
  */
 export const PATCH = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
-    await requireRouteAnyPermission(request, [
+    const auth = await requireRouteAnyPermission(request, [
       { action: "update", resource: "email-templates" },
       { action: "manage", resource: "email-templates" },
     ]);
@@ -106,7 +107,11 @@ export const PATCH = withErrorHandler(
     if (body.providerId !== undefined) updateData.providerId = body.providerId;
 
     const service = await getEmailTemplateService();
-    const template = await service.updateTemplate(id, updateData);
+    const template = await service.updateTemplate(
+      id,
+      updateData,
+      actorFromAuthContext(auth)
+    );
 
     return respondMutation("Email template updated.", template);
   }
@@ -129,7 +134,7 @@ export const PATCH = withErrorHandler(
  */
 export const DELETE = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
-    await requireRouteAnyPermission(request, [
+    const auth = await requireRouteAnyPermission(request, [
       { action: "delete", resource: "email-templates" },
       { action: "manage", resource: "email-templates" },
     ]);
@@ -137,7 +142,7 @@ export const DELETE = withErrorHandler(
     const { id } = await context.params;
     const service = await getEmailTemplateService();
 
-    await service.deleteTemplate(id);
+    await service.deleteTemplate(id, actorFromAuthContext(auth));
 
     // Service returns void. Echo the deleted id (named `templateId` to
     // match the dispatcher route's wire shape) so the admin can prune

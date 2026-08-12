@@ -17,6 +17,7 @@
     "@nextlyhq/adapter-drizzle": "workspace:*",
     "@nextlyhq/adapter-sqlite": "workspace:*",
     "@nextlyhq/admin": "workspace:*",
+    "@nextlyhq/builder": "workspace:*",
     "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/plugin-form-builder": "workspace:*",
     "@nextlyhq/plugin-page-builder": "workspace:*",

@@ -23,12 +23,11 @@
  */
 
 import type { RequestActor } from "../../auth/request-actor";
-import { container } from "../../di/container";
-import type {
-  ActivityLogAction,
-  ActivityLogService,
-} from "../../services/dashboard/activity-log-service";
-import { SYSTEM_CONTEXT } from "../../shared/types";
+import type { ActivityLogAction } from "../../services/dashboard/activity-log-service";
+import {
+  changedTopLevelFields,
+  recordSettingsActivity,
+} from "../audit/record-settings-activity";
 
 /**
  * The activity-log `collection` these entries are filed under.
@@ -60,91 +59,24 @@ export interface EmailProviderActivityInput {
 }
 
 /**
- * Whether this actor produces an entry.
- *
- * Only a signed-in person. An API key and an internal write carry no account,
- * and the trail's actor column is a user reference whose erasure state is
- * answered against the accounts table — a key's own id finds no account there
- * and would be filed as an already-erased identity, which is a worse record
- * than none.
- */
-function willRecord(
-  actor?: RequestActor | null
-): actor is RequestActor & { type: "user"; id: string } {
-  if (actor?.type !== "user" || !actor.id) return false;
-  // `SYSTEM_CONTEXT` carries the reserved user id `system`, so a seed or a
-  // migration with no transport actor to override it resolves to a USER actor.
-  // No account owns that id. Compared against the sentinel itself so the two
-  // cannot drift apart.
-  return actor.id !== SYSTEM_CONTEXT.user?.id;
-}
-
-/**
- * Whether this mutation moved anything worth an entry.
- *
- * An `update` that changed nothing still reaches here: the form submits every
- * field whether or not the operator touched it, and promoting a provider that
- * is already the default is an ordinary client retry. Both produce an entry the
- * feed renders as "updated Production SMTP", which is a claim that something
- * happened — and the whole value of this trail is that every entry means
- * something moved.
- *
- * Empty is only meaningful for an update. A create and a delete carry no field
- * list because the action already says what it did, so an absent list there is
- * a full description rather than an empty one.
- *
- * Decided here rather than at each call site, because there are two of them —
- * `updateProvider` and `setDefault` — and a comment in one claiming the other
- * already skipped is how they came to disagree.
- */
-function worthRecording(input: EmailProviderActivityInput): boolean {
-  if (input.action !== "update") return true;
-  return (input.changedFields?.length ?? 0) > 0;
-}
-
-/**
  * Record one provider mutation.
  *
- * Called AFTER the write commits, so it uses the standalone `logActivity`,
- * which swallows its own failures. That is the right direction here: the
- * mutation has already happened, and turning a completed credential change into
- * a reported failure because the trail could not be written would leave the
- * caller believing the opposite of the truth. The service logs the failure, so
- * a trail that stops being written is visible in the logs rather than silent.
- *
- * Never throws. An audit write that took the surrounding request down would
- * make the trail a liability rather than a record.
+ * Delegates to the shared settings seam, which owns the actor gate, the
+ * "an entry means something moved" rule, and the post-commit write. What stays
+ * here is what is specific to a provider: the collection it files under and the
+ * type it reports.
  */
 export async function recordProviderActivity(
   input: EmailProviderActivityInput
 ): Promise<void> {
-  if (!willRecord(input.actor)) return;
-  if (!worthRecording(input)) return;
-
-  let service: ActivityLogService;
-  try {
-    service = container.get<ActivityLogService>("activityLogService");
-  } catch {
-    // Absent registration is a boot-time fact about how the host assembled its
-    // container, not a write that failed.
-    return;
-  }
-
-  await service.logActivity({
-    userId: input.actor.id,
+  await recordSettingsActivity({
     action: input.action,
     collection: EMAIL_PROVIDER_ACTIVITY_COLLECTION,
-    entryId: input.providerId,
-    // Denormalized deliberately: the feed outlives the provider it names, and a
-    // deleted provider's row would otherwise be unlabelled — the one entry
-    // whose subject the reader can no longer recover any other way.
-    entryTitle: input.providerName,
-    metadata: {
-      providerType: input.providerType,
-      ...(input.changedFields && input.changedFields.length > 0
-        ? { changedFields: [...input.changedFields] }
-        : {}),
-    },
+    entityId: input.providerId,
+    entityTitle: input.providerName,
+    changedFields: input.changedFields,
+    metadata: { providerType: input.providerType },
+    actor: input.actor,
   });
 }
 
@@ -161,14 +93,5 @@ export function changedProviderFields(
   previous: Record<string, unknown>,
   incoming: Record<string, unknown>
 ): string[] {
-  const changed: string[] = [];
-  for (const [key, value] of Object.entries(incoming)) {
-    if (value === undefined) continue;
-    // Compared as JSON so a nested configuration object is judged by content
-    // rather than by identity, which would report every update as a change.
-    if (JSON.stringify(previous[key]) !== JSON.stringify(value)) {
-      changed.push(key);
-    }
-  }
-  return changed;
+  return changedTopLevelFields(previous, incoming);
 }
