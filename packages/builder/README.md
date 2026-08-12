@@ -3,21 +3,13 @@
 The visual page-builder editor: the shell, the canvas, and the op store that
 everything in it either produces or reads.
 
-<<<<<<< HEAD
 **The editor itself has not landed.** What ships today is the frame geometry —
-the one mapping between the canvas frame and the host page — plus the package
-name constant. See [Public surface](#public-surface). The package was created
-ahead of the editor so its name could be claimed on npm: trusted publishing
-cannot perform a package's first publish, and the bootstrap script will not
-claim a name that is not already a workspace package.
-=======
-**The editor itself has not landed.** What ships today is the op store — the
-vocabulary every edit is expressed in, and the function that applies one — plus
-the package name constant. See [Public surface](#public-surface). The package
-was created ahead of the editor so its name could be claimed on npm: trusted
-publishing cannot perform a package's first publish, and the bootstrap script
-will not claim a name that is not already a workspace package.
->>>>>>> 81bca7cf4 (docs(builder): describe what the package now ships and how to build it)
+the one mapping between the canvas frame and the host page — and the op store,
+the vocabulary every edit is expressed in, plus the package name constant. See
+[Public surface](#public-surface). The package was created ahead of the editor
+so its name could be claimed on npm: trusted publishing cannot perform a
+package's first publish, and the bootstrap script will not claim a name that is
+not already a workspace package.
 
 ## What this package is not
 
@@ -84,7 +76,6 @@ which packages a host loaded. The name and not the version: a version literal in
 source would be stale one release after it was written, because every release
 bumps this package in lockstep with its siblings.
 
-<<<<<<< HEAD
 ### Frame geometry
 
 The canvas renders inside an iframe while the editor's chrome — insertion
@@ -132,7 +123,9 @@ exercised without a browser and the DOM reads stay at the edge. The e2e
 acceptance suite adapts these rather than restating them: a browser harness
 carrying its own copy certifies its own copy, and would keep passing through
 exactly the correction it exists to catch.
-=======
+
+### The op store
+
 `applyOp(nodes, op)` — apply one edit to a forest, returning the new forest and
 the op that undoes it. Every change to a document goes through it: the canvas,
 the layers panel, the inspector and an agent all produce ops and nothing else,
@@ -149,7 +142,6 @@ recorded and its inverse would undo an edit that never happened.
 
 `AppliedOp`, `NodePatch` — the result shape and the fields an `update` may
 carry. `NodePatch` is read off the engine's own signature rather than restated.
->>>>>>> 81bca7cf4 (docs(builder): describe what the package now ships and how to build it)
 
 ## Development
 
