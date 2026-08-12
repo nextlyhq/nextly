@@ -340,7 +340,15 @@ export function specifiersIn(source, fileName) {
       ts.isForOfStatement(scope)
         ? scope.initializer
         : undefined;
-    if (initializer !== undefined && ts.isVariableDeclarationList(initializer)) {
+    // Only a `let`/`const` initializer makes the loop a scope. `for (var x = ...)` binds to the
+    // enclosing FUNCTION, and the hoisting walk above has already counted it there — claiming it
+    // here as well would make the loop look like the binding scope, which puts the declaration out
+    // of reach of a call after the loop in the same function.
+    if (
+      initializer !== undefined &&
+      ts.isVariableDeclarationList(initializer) &&
+      isBlockScoped(initializer)
+    ) {
       for (const declaration of initializer.declarations) {
         eachBoundName(declaration.name, add);
       }

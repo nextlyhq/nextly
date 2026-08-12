@@ -354,6 +354,8 @@ function exportedNames(source: string): string[] {
   // value is what a consumer importing the name receives.
   const typeSpace = new Set<string>();
   const valueSpace = new Set<string>();
+  // Names bound by an unmarked import, whose space the TARGET module decides.
+  const importedUnsettled = new Set<string>();
   for (const statement of tree.statements) {
     if (
       ts.isInterfaceDeclaration(statement) ||
@@ -375,24 +377,28 @@ function exportedNames(source: string): string[] {
     ) {
       valueSpace.add(statement.name.text);
     } else if (ts.isImportDeclaration(statement)) {
-      // An IMPORT binds a name too, and which space it lands in is written on the syntax:
-      // `import type { Foo }` marks the whole clause, `import { type Foo }` marks the element.
-      // Reading only the local declarations left an imported type looking like a value, so a
-      // declaration re-exporting one compared equal to a module publishing a real binding.
+      // An IMPORT binds a name too. A type-only spelling settles it — `import type { Foo }` marks
+      // the clause, `import { type Foo }` marks the element, and neither can be a value.
+      //
+      // An UNMARKED import settles nothing. `import { Foo } from "./helper.mjs"` publishes a value
+      // or a type depending on what `helper` declares, so treating it as a value let a declaration
+      // re-exporting an imported type compare equal to a module publishing a real binding. Those
+      // names go in neither space; the export branch refuses them.
       const clause = statement.importClause;
       if (clause === undefined) continue;
-      const space = clause.isTypeOnly ? typeSpace : valueSpace;
-      if (clause.name !== undefined) space.add(clause.name.text);
+      const unsettled = clause.isTypeOnly ? typeSpace : importedUnsettled;
+      if (clause.name !== undefined) unsettled.add(clause.name.text);
       const bindings = clause.namedBindings;
       if (bindings === undefined) continue;
       if (ts.isNamespaceImport(bindings)) {
-        space.add(bindings.name.text);
+        unsettled.add(bindings.name.text);
         continue;
       }
       for (const element of bindings.elements) {
-        (clause.isTypeOnly || element.isTypeOnly ? typeSpace : valueSpace).add(
-          element.name.text
-        );
+        (clause.isTypeOnly || element.isTypeOnly
+          ? typeSpace
+          : importedUnsettled
+        ).add(element.name.text);
       }
     }
   }
@@ -400,6 +406,10 @@ function exportedNames(source: string): string[] {
   /** Whether a name exported from a LOCAL binding exists only in type space. */
   const isTypeOnlyLocal = (local: string): boolean =>
     typeSpace.has(local) && !valueSpace.has(local);
+
+  /** Whether a name came from an import that does not say which space it occupies. */
+  const isUnsettledImport = (local: string): boolean =>
+    importedUnsettled.has(local) && !valueSpace.has(local);
 
   for (const statement of tree.statements) {
     if (ts.isExportAssignment(statement)) {
@@ -459,6 +469,13 @@ function exportedNames(source: string): string[] {
             continue;
           }
           if (isTypeOnlyLocal(local)) continue;
+          // Exported straight back out of an unmarked import, so the space is decided in the module
+          // it came from. Refused for the same reason a re-export is, which is the same statement
+          // written across two lines.
+          if (isUnsettledImport(local)) {
+            found.push(`<unsupported: export of imported ${local}>`);
+            continue;
+          }
           found.push(element.name.text);
         }
       }
@@ -708,13 +725,23 @@ describe("reading the names a module publishes", () => {
     expect(
       exportedNames(`import type Foo from "./x.mjs";\nexport { Foo };`)
     ).toEqual([]);
-    // The control, and the one that must not regress: an ordinary import re-exported IS a value.
+    // An UNMARKED import exported straight back out is refused rather than assumed to be a value.
+    // Whether `Foo` is one is decided in `./x.mjs`, so calling it a value here let a declaration
+    // re-exporting an imported type compare equal to a module publishing a real binding — the same
+    // hole as a re-export, written across two statements instead of one.
     expect(
       exportedNames(`import { Foo } from "./x.mjs";\nexport { Foo };`)
-    ).toEqual(["Foo"]);
+    ).toEqual(["<unsupported: export of imported Foo>"]);
     expect(
       exportedNames(`import Foo from "./x.mjs";\nexport { Foo };`)
-    ).toEqual(["Foo"]);
+    ).toEqual(["<unsupported: export of imported Foo>"]);
+    // The control: an import that is NOT exported settles nothing and is simply absent, so
+    // ordinary internal imports do not make a file unreadable.
+    expect(
+      exportedNames(
+        `import { readFileSync } from "node:fs";\nexport const read = () => readFileSync("x");`
+      )
+    ).toEqual(["read"]);
   });
 
   it("keeps a name that is a type AND a value", () => {

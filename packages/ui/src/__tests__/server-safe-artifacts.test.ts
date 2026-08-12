@@ -245,6 +245,40 @@ describe("reading an artifact's specifiers", () => {
     ).toEqual(["react"]);
   });
 
+  it("gives a for-loop var loader the function scope too", () => {
+    // The `for` initializer is a scope for `let`/`const` and NOT for `var`, which binds to the
+    // enclosing function like any other. Treating every initializer as a scope put the loader out
+    // of reach of a call after the loop.
+    expect(
+      read(`
+        function f() {
+          for (var resolve = import.meta.resolve; false; ) {}
+          return resolve("react");
+        }
+      `)
+    ).toEqual(["react"]);
+    // The shadowing mirror: a `var` in the initializer suppresses the ambient loader for the whole
+    // function, so this call loads nothing.
+    expect(
+      read(`
+        function f() {
+          for (var require = (name) => name; false; ) {}
+          return require("react");
+        }
+      `)
+    ).toEqual([]);
+    // The control that separates the two kinds: a `let` initializer stays with the loop, so it
+    // shadows nothing after it.
+    expect(
+      read(`
+        function f() {
+          for (let require = (name) => name; false; ) {}
+          return require("react");
+        }
+      `)
+    ).toEqual(["react"]);
+  });
+
   it("keeps every loader binding, not the last one declared under a name", () => {
     // Two scopes can each declare a resolver under the same name. Recording one scope per name let
     // the second declaration overwrite the first, so the earlier function's call stopped resolving
