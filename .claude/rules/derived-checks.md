@@ -84,10 +84,20 @@ So a derived check needs three things, and is usually written with one:
 1. **Derive the population** from the richest source available — the manifest,
    the registry, the config — not a hand-kept copy of it.
 2. **Assert the derivation is complete**, against that raw source and against
-   zero. `expect(derived).toHaveLength(Object.keys(raw).length)` catches a
-   narrowing transform that quietly selects a subset, and
-   `expect(raw.length).toBeGreaterThan(0)` catches the collapse where the source
-   read returns nothing and every remaining case passes over an empty matrix.
+   zero. With `raw` the source as read — usually an object, so count the same
+   key population on both sides rather than reaching for `.length` on one:
+
+   ```ts
+   const population = Object.keys(raw);
+   expect(derived).toHaveLength(population.length); // no narrowing transform
+   expect(population.length).toBeGreaterThan(0); // the source was really read
+   ```
+
+   The first catches a glob or predicate quietly selecting a subset. The second
+   catches the collapse where the read returns nothing and every remaining case
+   passes over an empty matrix — without it, `toHaveLength(0)` against an empty
+   source is a green that asserts nothing.
+
 3. **Pin by name the members whose absence would itself be the regression.**
 
 Each answers a different question. Deriving answers "did we forget to check
@@ -136,8 +146,14 @@ with an assertion that the replacement API is present:
 expect(typeof cfg.defineFieldGroup).toBe("function");
 ```
 
-Every prohibition needs that counterpart, and it is the half that gets skipped,
-because a prohibition passing feels like the check working.
+That counterpart is the half that gets skipped, because a prohibition passing
+feels like the check working. It is not unconditional though, and demanding it
+everywhere would contradict the pin rule above: a subject that may legitimately
+be empty — a feature-gated plugin registering no routes — has no required
+replacement to assert, and inventing one manufactures a contract the system does
+not have. Pair the prohibition with a presence assertion exactly when emptying
+the subject would itself break the contract, which is the same test as deciding
+what to pin by name.
 
 ## A pattern matching a common word is a narrowing check in reverse
 
@@ -316,15 +332,22 @@ believed**, because it looks like provenance rather than like a string somebody
 chose. It is a login, and in this repo many agents commit under one. Measured
 over the last 400 commits: 343 carry a single identity.
 
-So the field answers a narrower question than it appears to. It DOES separate
-one contributor from another — three distinct humans appear in that same range.
-It does NOT separate the many concurrent sessions sharing one credential, and no
-amount of reading it will, because the distinction was never recorded.
+And it is not a credential in any checkable sense either: the name comes from
+environment or configuration, so it is chosen rather than authenticated, two
+contributors can pick the same one, and one contributor can change theirs. So it
+does not reliably separate contributors, and it certainly does not separate the
+concurrent sessions sharing a single configured identity — that distinction was
+never recorded anywhere.
 
 Two different questions, and only one of them has a sound instrument:
 
-- **"did this line predate that change?"** — a fact about the tree.
-  `git show <ref>^:<path>` answers it exactly.
+- **"did this line predate that change?"** — a fact about the tree, and
+  `git show <ref>^:<path>` answers it for the ordinary case: a single-parent
+  commit where the path did not move. `^` selects the FIRST parent only, so
+  across a merge it cannot see a line that arrived on another branch, and it
+  looks the path up verbatim, so a rename reads as absence. Where either
+  applies, check each parent and follow the rename (`git log --follow`) before
+  claiming precedence.
 - **"who wrote this line?"** — `git log --format=%an` answers a question about a
   credential. Under a shared one it is a guess with a citation attached, which
   is worse than an obvious guess.
