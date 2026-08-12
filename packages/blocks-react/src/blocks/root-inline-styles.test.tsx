@@ -151,6 +151,17 @@ function contexts(): PageContext[] {
   };
   const budgetSpent = { ...answering, queries: { take: () => false } };
   const budgetAvailable = { ...answering, queries: { take: () => true } };
+  // The shape a ROUTED page actually has. `createStandaloneContext` is called
+  // once with both the locale and the query budget on it, so varying the two on
+  // separate contexts exercises each axis and never the state every real routed
+  // render is in — a block branching on the pair sees neither of the single-axis
+  // contexts. Both budget answers appear, because a localized page that has
+  // spent its allowance and one that has not take different paths.
+  const localizedBudgetSpent = { ...localized, queries: { take: () => false } };
+  const localizedBudgetAvailable = {
+    ...localized,
+    queries: { take: () => true },
+  };
   return [
     empty,
     answering,
@@ -160,6 +171,8 @@ function contexts(): PageContext[] {
     localized,
     budgetSpent,
     budgetAvailable,
+    localizedBudgetSpent,
+    localizedBudgetAvailable,
   ] as unknown as PageContext[];
 }
 
