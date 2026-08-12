@@ -265,6 +265,7 @@ export {
 export { migrateDocument, migrateProps, findMigrationGaps } from "./migration";
 export type {
   BlockMigrationInfo,
+  MigratedNode,
   MigrateFn,
   MigrateResult,
   MigrationFailure,

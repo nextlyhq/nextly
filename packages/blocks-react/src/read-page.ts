@@ -20,6 +20,7 @@
  */
 import type {
   BlockDocument,
+  BlockNode,
   RemotePatternInput,
   StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
@@ -29,8 +30,10 @@ import type {
   PrepareDocumentArgs,
 } from "./prepare-document";
 import { prepareDocumentReadStages, readingViewOf } from "./prepare-document";
+import type { BlockResolver } from "./resolver";
 import type { PageStyles } from "./styles";
 import {
+  drawlessTestFor,
   effectiveCompile,
   gatedMapCoversPrunedNodes,
   hasDuplicateNodeIds,
@@ -77,6 +80,89 @@ export interface PreparedPage {
 }
 
 /**
+ * Whether migration turned a node that DREW into one that draws nothing.
+ *
+ * The stored sheet was compiled while the node still drew, so its rules sit in
+ * the main `css` with no gated entry, and every later pass agrees the node is
+ * present and registered. Nothing else in this function can see it: the
+ * drawless predicate decides which per-node entries to APPEND and cannot
+ * withdraw a rule already embedded in the sheet, and the stage comparisons all
+ * read equal because no pass REMOVED anything. Only a recompile drops it.
+ *
+ * Asked ONLY of the nodes the engine reported rewriting. The predicate runs a
+ * block's own declaration, so asking it of every node on every read would put
+ * plugin code in the path of the ordinary case, where nothing migrated and the
+ * answer cannot have changed. That list is empty for any page whose nodes are
+ * already current, which is nearly all of them, and this returns before walking
+ * anything.
+ *
+ * The reverse flip needs no handling: a node that starts drawless and begins to
+ * draw has no rules in the stored sheet to be stale, and the recompile that
+ * gives it some is triggered by the sheet not describing it.
+ */
+function migrationChangedWhatDraws(
+  stages: DocumentReadStages,
+  resolver: BlockResolver
+): boolean {
+  if (stages.rewritten.length === 0) return false;
+  const drawsNothing = drawlessTestFor(resolver);
+  const rewrittenPaths = new Set(stages.rewritten.map(entry => entry.path));
+  let flipped = false;
+
+  // Walked in parallel so each reported node is compared against the props it
+  // was stored with. The paths come from the engine and address both trees,
+  // which is what makes the BEFORE state recoverable at all: after migration
+  // the pre-migration props exist nowhere else.
+  const visit = (before: unknown, after: unknown, path: string): void => {
+    if (flipped) return;
+    if (
+      typeof before !== "object" ||
+      before === null ||
+      typeof after !== "object" ||
+      after === null
+    ) {
+      return;
+    }
+    const priorNode = before as BlockNode;
+    const currentNode = after as BlockNode;
+    if (
+      rewrittenPaths.has(path) &&
+      !drawsNothing(priorNode) &&
+      drawsNothing(currentNode)
+    ) {
+      flipped = true;
+      return;
+    }
+    const priorSlots = priorNode.slots;
+    const currentSlots = currentNode.slots;
+    if (
+      typeof priorSlots !== "object" ||
+      priorSlots === null ||
+      typeof currentSlots !== "object" ||
+      currentSlots === null
+    ) {
+      return;
+    }
+    for (const [slot, children] of Object.entries(currentSlots)) {
+      const priorChildren = (priorSlots as Record<string, unknown>)[slot];
+      if (!Array.isArray(children) || !Array.isArray(priorChildren)) continue;
+      children.forEach((child, index) => {
+        visit(priorChildren[index], child, `${path}/slots/${slot}/${index}`);
+      });
+    }
+  };
+
+  const priorNodes = stages.sanitized.nodes;
+  const currentNodes = stages.migrated.nodes;
+  if (Array.isArray(priorNodes) && Array.isArray(currentNodes)) {
+    currentNodes.forEach((node, index) => {
+      visit(priorNodes[index], node, `/nodes/${index}`);
+    });
+  }
+  return flipped;
+}
+
+/**
  * Whether the passes changed the tree in a way a STORED stylesheet cannot
  * describe.
  *
@@ -108,15 +194,20 @@ export interface PreparedPage {
  *   gone for every visitor until the page is republished, while the tiers it
  *   pulled into the sheet stay behind.
  *
- * **Migration** is the exclusion. It allocates unconditionally, so comparing it
- * against the caps pass is true on every document ever read; included, every
- * page would report as repaired and every stored sheet would be withheld on the
- * happy path.
+ * **Migration** is the exclusion, as a STAGE COMPARISON. It allocates
+ * unconditionally, so comparing it against the caps pass is true on every
+ * document ever read; included that way, every page would report as repaired and
+ * every stored sheet would be withheld on the happy path.
+ *
+ * What migration can still do is change what a node DRAWS, and that is asked
+ * separately below — of the nodes the engine reported rewriting rather than by
+ * comparing the two documents, so the ordinary page pays nothing for it.
  */
 function storedSheetCannotDescribe(
   document: BlockDocument,
   stages: DocumentReadStages,
-  styles: PageStyles | undefined
+  styles: PageStyles | undefined,
+  resolver: BlockResolver
 ): boolean {
   const gatedRules = readableGatedRules(styles);
   // An ABSENT map means "compiled before the split existed", not "nothing was
@@ -128,7 +219,8 @@ function storedSheetCannotDescribe(
     stages.sanitized !== document ||
     hasDuplicateNodeIds(stages.migrated) ||
     (stages.gated !== stages.migrated && !gatingCovered) ||
-    stages.prepared !== stages.deduped
+    stages.prepared !== stages.deduped ||
+    migrationChangedWhatDraws(stages, resolver)
   );
 }
 
@@ -176,7 +268,7 @@ export function preparePageForRead(
     args.styles,
     compile.context,
     args.resolver,
-    storedSheetCannotDescribe(document, stages, args.styles),
+    storedSheetCannotDescribe(document, stages, args.styles, args.resolver),
     { fetchPolicyId: compile.fetchPolicyId }
   );
 
