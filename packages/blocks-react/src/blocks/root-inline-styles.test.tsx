@@ -820,45 +820,56 @@ describe("the detector itself", () => {
 });
 
 /**
- * The render matrix is deliberately exhaustive — every block, against every
- * host state, host policy and prop variant — so its cost grows with the block
- * library rather than staying fixed. Vitest's default 5s budget is a limit on
- * the MACHINE, not on the code: the work is CPU-bound server rendering, and a
- * CI runner executing several matrix legs at once is far slower than a
- * developer's machine, so the default turns a coverage-widening edit here into
- * an intermittent red that says nothing about the invariant. An explicit budget
- * keeps the failure meaningful: this test should fail because a block wrote an
- * inline style, never because a runner was busy.
+ * The per-block budget for one block's whole render matrix.
+ *
+ * Every host state, host policy and prop variant for a single block, which grows
+ * as those sets grow rather than staying fixed. Vitest's default is a limit on
+ * the MACHINE rather than on the code: the work is CPU-bound server rendering,
+ * and a runner executing several matrix legs at once is far slower than a
+ * developer's. An explicit budget keeps a red meaningful — this should fail
+ * because a block wrote an inline style, never because a runner was busy.
  */
-const EXHAUSTIVE_RENDER_TIMEOUT_MS = 60_000;
+const PER_BLOCK_RENDER_TIMEOUT_MS = 60_000;
 
 describe("a core block's root element", () => {
-  it(
-    "carries no inline style, and every block was actually reached",
-    async () => {
-      const results = await Promise.all(
-        coreBlocks.map(async block => {
-          const definition = block as AnyBlockDefinition;
-          return { name: definition.name, ...(await inspectBlock(definition)) };
-        })
+  // The exact set, not a floor, and asserted WITHOUT rendering anything. A
+  // minimum of ten is still met after one or two blocks are dropped from the
+  // export, and a per-block case only ever runs for what remains — so coverage
+  // would fall silently while every rendering case stayed green. Naming them
+  // makes a deletion a failure here and an addition a deliberate edit.
+  //
+  // Separate from the render cases deliberately: this is the ratchet, it costs
+  // nothing, and it must still fail when a block is removed rather than
+  // disappearing along with the case that would have caught it.
+  it("is drawn from exactly the expected block library", () => {
+    expect(
+      coreBlocks.map(block => (block as AnyBlockDefinition).name).sort()
+    ).toEqual(EXPECTED_BLOCKS);
+  });
+
+  // One case PER BLOCK rather than one case over all of them. A single case
+  // carries the whole matrix under one budget, so a slow runner fails it for a
+  // reason unrelated to the invariant and the report names no block; split, each
+  // block is bounded on its own, the failure names which block wrote the style,
+  // and the runner schedules the cases against its own concurrency limit instead
+  // of twelve unbounded chains started at once.
+  it.each(
+    coreBlocks.map(
+      block => [(block as AnyBlockDefinition).name, block] as const
+    )
+  )(
+    "%s carries no inline style, and was actually reached",
+    async (name, block) => {
+      const { reached, offenders } = await inspectBlock(
+        block as AnyBlockDefinition
       );
 
-      // The exact set, not a floor. A minimum of ten is still met after one or
-      // two blocks are dropped from the export, and the reachability check below
-      // only ever examines what remains — so coverage would fall silently while
-      // both assertions stayed green. Naming them makes a deletion a failure and
-      // an addition a deliberate edit here.
-      expect(results.map(result => result.name).sort()).toEqual(
-        EXPECTED_BLOCKS
-      );
-
-      // The vacuity control, BY NAME. A count is satisfied by any nine of twelve,
-      // so it cannot tell a library that grew a clean block from one whose
-      // riskiest block stopped being rendered.
-      expect(results.filter(r => !r.reached).map(r => r.name)).toEqual([]);
+      // The vacuity control. Without it a block that stopped rendering entirely
+      // reports no offenders and reads exactly like a clean one.
+      expect(reached, `${name} was never rendered`).toBe(true);
 
       expect(
-        [...new Set(results.flatMap(r => r.offenders))].sort(),
+        [...new Set(offenders)].sort(),
         "A block wrote an inline style on the element it was given a class for. " +
           "An inline declaration beats every class rule, so a style control " +
           "writing that property compiles CSS with no visible effect. Move the " +
@@ -866,6 +877,6 @@ describe("a core block's root element", () => {
           "tier beneath the node's own values."
       ).toEqual([]);
     },
-    EXHAUSTIVE_RENDER_TIMEOUT_MS
+    PER_BLOCK_RENDER_TIMEOUT_MS
   );
 });
