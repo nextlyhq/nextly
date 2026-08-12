@@ -747,11 +747,18 @@ describe("an op whose own shape is wrong", () => {
   });
 
   it.each<[string, () => Record<string, unknown>]>([
-    ["a function", () => ({ count: 1, formatter: () => "x" })],
-    ["a symbol", () => ({ tag: Symbol("x") })],
-    ["a nested undefined", () => ({ nested: { gone: undefined } })],
-    ["NaN", () => ({ ratio: Number.NaN })],
+    ["a function", () => ({ changed: "yes", formatter: () => "x" })],
+    ["a symbol", () => ({ changed: "yes", tag: Symbol("x") })],
+    [
+      "a nested undefined",
+      () => ({ changed: "yes", nested: { gone: undefined } }),
+    ],
+    ["NaN", () => ({ changed: "yes", ratio: Number.NaN })],
   ])("refuses a patch value JSON silently erases: %s", (_label, build) => {
+    // Each case carries a real change alongside the lossy value. Without one,
+    // `{ tag: Symbol() }` serializes to `{}` — identical to this node's empty
+    // props — and the op is refused as a no-op instead, so the assertion would
+    // pass with the domain check removed. Measured, not assumed.
     // The half a try/catch around `stringify` cannot see. These do not throw —
     // they are DROPPED or rewritten, so the live document keeps the value and
     // the stored op does not, and a crash replay rebuilds a different document
