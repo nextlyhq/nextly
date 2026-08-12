@@ -83,7 +83,7 @@ function isNodeBuiltin(spec) {
 
 /** Every relative specifier in a built module, ignoring bare and `node:` ones. */
 const SPECIFIER =
-  /from\s*["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|import\s*["']([^"']+)["']|\b_{0,2}require\(\s*["']([^"']+)["']\s*\)/g;
+  /from\s*["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|import\s*["']([^"']+)["']|\b_{0,2}require(?:\.resolve)?\(\s*["']([^"']+)["']\s*\)/g;
 
 function walk(entryFile) {
   const seen = new Set();
@@ -146,6 +146,7 @@ function selfCheck() {
     "stripped bare specifier": 'import { createHash } from "crypto";\n',
     "literal dynamic import": 'const f = await import("node:fs");\n',
     "esbuild CommonJS interop": 'const f = __require("node:fs");\n',
+    "resolve on the interop shim": 'const p = __require.resolve("fs");\n',
     "plain require call": 'const p = require("path");\n',
   };
 
