@@ -35,6 +35,7 @@ import type {
 } from "@nextlyhq/adapter-drizzle/types";
 
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { isFieldGroupTypeKey } from "../../field-groups/storage/field-group-type-key";
 
 import type { GeoFilter } from "./geo-utils";
 import { parseNearQuery, parseWithinQuery } from "./geo-utils";
@@ -708,8 +709,11 @@ export function extractComponentFieldConditions(
                 componentFieldPath,
                 operator: operator as QueryOperator,
                 value: operatorValue,
-                isComponentTypeFilter:
-                  componentFieldPath === STORAGE_FORMAT.wireTypeKey,
+                // The path comes from the caller's own query, so it may name any spelling the
+                // key has ever carried. Matching a single one turns an existing filter into an
+                // ordinary field lookup against a column that does not exist, which answers with
+                // the wrong rows rather than an error.
+                isComponentTypeFilter: isFieldGroupTypeKey(componentFieldPath),
               });
             }
           }
@@ -722,8 +726,7 @@ export function extractComponentFieldConditions(
             componentFieldPath,
             operator: "equals",
             value,
-            isComponentTypeFilter:
-              componentFieldPath === STORAGE_FORMAT.wireTypeKey,
+            isComponentTypeFilter: isFieldGroupTypeKey(componentFieldPath),
           });
         }
 

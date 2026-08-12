@@ -17,8 +17,12 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
-import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { storageTypeToken } from "../../shared/lib/plugin-storage";
+import {
+  clearFieldGroupType,
+  currentFieldGroupTypeKey,
+  readFieldGroupType,
+} from "../field-groups/storage/field-group-type-key";
 
 import type { ComponentSchemas } from "./restore-snapshot";
 
@@ -156,13 +160,13 @@ function tagValue(
   // stopping at the repeated slug would tag the first two levels and leave
   // every level below them bare.
   const ownFields = resolve?.(slug);
-  if (!ownFields) return { ...source, [STORAGE_FORMAT.wireTypeKey]: slug };
+  if (!ownFields) return { ...source, [currentFieldGroupTypeKey]: slug };
 
   seen.add(source);
   const inner = tagFieldsIn(source, ownFields, resolve, seen);
   seen.delete(source);
 
-  return { ...inner, [STORAGE_FORMAT.wireTypeKey]: slug };
+  return { ...inner, [currentFieldGroupTypeKey]: slug };
 }
 
 /**
@@ -191,8 +195,8 @@ function tagZoneRows(
   // The row's own type decides which schema its values belong to. A row whose
   // type is missing, or names a component the field does not allow, is left
   // alone rather than walked against a schema that may not describe it.
-  const rowType = source[STORAGE_FORMAT.wireTypeKey];
-  if (typeof rowType !== "string" || !allowed.includes(rowType)) return source;
+  const rowType = readFieldGroupType(source);
+  if (rowType === undefined || !allowed.includes(rowType)) return source;
 
   const ownFields = resolve?.(rowType);
   if (!ownFields) return source;
@@ -331,7 +335,7 @@ function stripSingleValue(
   const ownFields = resolve?.(slug);
   if (!ownFields) {
     const bare = { ...source };
-    delete bare[STORAGE_FORMAT.wireTypeKey];
+    clearFieldGroupType(bare);
     return bare;
   }
 
@@ -340,7 +344,7 @@ function stripSingleValue(
   seen.delete(source);
 
   const out = { ...inner };
-  delete out[STORAGE_FORMAT.wireTypeKey];
+  clearFieldGroupType(out);
   return out;
 }
 
@@ -359,8 +363,8 @@ function stripZoneRows(
   const source = value as Record<string, unknown>;
   if (seen.has(source)) return source;
 
-  const rowType = source[STORAGE_FORMAT.wireTypeKey];
-  if (typeof rowType !== "string" || !allowed.includes(rowType)) return source;
+  const rowType = readFieldGroupType(source);
+  if (rowType === undefined || !allowed.includes(rowType)) return source;
 
   const ownFields = resolve?.(rowType);
   if (!ownFields) return source;
@@ -491,13 +495,8 @@ export function rehydrateSnapshotDates(
     for (const instance of instances) {
       if (instance === null || typeof instance !== "object") continue;
       const rec = instance as Record<string, unknown>;
-      const tagged = rec[STORAGE_FORMAT.wireTypeKey];
-      const slug =
-        typeof tagged === "string"
-          ? tagged
-          : typeof single === "string"
-            ? single
-            : undefined;
+      const tagged = readFieldGroupType(rec);
+      const slug = tagged ?? (typeof single === "string" ? single : undefined);
       const compFields = slug ? componentSchemas?.get(slug)?.fields : undefined;
       if (compFields) {
         rehydrateSnapshotDates(rec, compFields, componentSchemas);

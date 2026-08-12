@@ -70,7 +70,7 @@ const ALLOWED = [
 ];
 
 /**
- * Known-outstanding sites: reported every run, but not yet failing.
+ * Known-outstanding sites: reported every run, not failing, and PINNED individually.
  *
  * `packages/admin` cannot reach the catalog — `STORAGE_FORMAT` is not exported from any surface
  * admin imports — so fixing these needs a public accessor export, which is an API decision rather
@@ -78,11 +78,43 @@ const ALLOWED = [
  * they exist and how many remain: an allowlist would make them disappear, and a gate whose output
  * shrinks silently is how the original 43 accumulated.
  *
- * This list must reach empty. It is not a place to move an inconvenient hit to.
+ * 🔴 Pinned as exact source text rather than as a path pattern, and that distinction is the whole
+ * point. A pattern like `^packages/admin/` exempts every file the directory will ever contain, so
+ * a NEW hardcoded reader lands reported-but-passing and CI stays green — which is the regression
+ * this gate exists to catch, reintroduced by the mechanism that was supposed to track its own
+ * debt. Matching the text means a known site is tolerated and anything else is not.
+ *
+ * Counted, not just matched: duplicating a pinned line is a new site, and a set would accept it.
+ *
+ * Line numbers are deliberately absent — they move under edits elsewhere in the file, and a pin
+ * that breaks on unrelated churn gets re-pinned reflexively, which is how a control stops being
+ * read. Text is stable while the site is unfixed, which is exactly as long as it needs to be.
+ *
+ * This list must reach empty, and the gate says so on every run. It is not a place to move an
+ * inconvenient hit to: the correct response to a new hit is the accessor, never a new line here.
  */
-const PENDING = [/^packages\/admin\//];
+const PENDING_OCCURRENCES = {
+  "packages/admin/src/components/features/entries/fields/structured/ComponentInput.tsx":
+    [
+      "defaultValues._componentType = componentType;",
+      "const currentType = currentData?._componentType as string | undefined;",
+      "const itemComponentType = itemData._componentType as",
+    ],
+  "packages/admin/src/components/features/versions/value-display/FieldValueDisplay.tsx":
+    [
+      "? (instance as { _componentType?: string })._componentType",
+      "? ((instance as { _componentType?: string })._componentType ?? null)",
+    ],
+};
 const PENDING_TRACKED_IN =
   "tasks/left-tasks/2026-08-12-0800-storage-key-read-by-literal-blocks-b2.md";
+
+/** Split a grep line into the path and the source text, dropping the line number. */
+function splitGrepLine(line) {
+  const m = /^([^:]+):(\d+):(.*)$/.exec(line);
+  if (!m) return null;
+  return { path: m[1], lineNo: m[2], text: m[3].trim() };
+}
 
 function grep(label, pattern, opts = {}) {
   const {
@@ -124,8 +156,30 @@ function grep(label, pattern, opts = {}) {
     // Comments and doc blocks describe the format; they do not read it.
     .filter(l => !/:\s*(\/\/|\*|\/\*)/.test(l.replace(/^[^:]*:\d+:/, ":")));
 
-  const pending = lines.filter(l => PENDING.some(p => p.test(l)));
-  const failing = lines.filter(l => !PENDING.some(p => p.test(l)));
+  // Classify each hit against the pinned occurrences. A hit is tolerated only when its file AND
+  // its source text are pinned, and only as many times as they were pinned; everything else fails,
+  // including a second copy of a pinned line.
+  const remainingBudget = new Map();
+  for (const [path, texts] of Object.entries(PENDING_OCCURRENCES)) {
+    for (const text of texts) {
+      const key = `${path}::${text}`;
+      remainingBudget.set(key, (remainingBudget.get(key) ?? 0) + 1);
+    }
+  }
+
+  const pending = [];
+  const failing = [];
+  for (const l of lines) {
+    const parsed = splitGrepLine(l);
+    const key = parsed ? `${parsed.path}::${parsed.text}` : null;
+    const budget = key ? (remainingBudget.get(key) ?? 0) : 0;
+    if (budget > 0) {
+      remainingBudget.set(key, budget - 1);
+      pending.push(l);
+    } else {
+      failing.push(l);
+    }
+  }
 
   if (failing.length > 0) {
     failures++;
@@ -139,9 +193,12 @@ function grep(label, pattern, opts = {}) {
 
   if (pending.length > 0) {
     console.log(
-      `  ⧗ ${pending.length} known-outstanding site(s) not yet failing — ${PENDING_TRACKED_IN}`
+      `  ⧗ ${pending.length} pinned known-outstanding site(s) not yet failing — ${PENDING_TRACKED_IN}`
     );
     for (const l of pending) console.log(`      ${l}`);
+    console.log(
+      `  ⧗ this list must reach empty; a NEW hit is a failure, never a new pin`
+    );
   }
 }
 
@@ -167,24 +224,34 @@ grep(
 
 // 2. The discriminator column. Catalog-resolvable, so a literal degrades rather than breaks —
 // but it degrades on exactly the databases that have migrated.
-grep(
-  "type column goes through the catalog (legacy spelling)",
-  "[\"'`]_component_type[\"'`]"
-);
-grep(
-  "type column goes through the catalog (target spelling)",
-  "[\"'`]_field_group_type[\"'`]"
-);
+//
+// 🔴 Matched WITHOUT requiring quotes. A quoted-only pattern reads as though it covers the name,
+// and misses `row._component_type` and `{ _field_group_type: value }` — ordinary TypeScript
+// property syntax, and the form a reader is most likely to write. The check that motivated the
+// rule was the one the pattern could not see. `\b` is sound here because the character before the
+// leading underscore is always a non-word one (`.`, a quote, a brace, whitespace).
+grep("type column goes through the catalog (legacy spelling)", "\\b_component_type\\b");
+grep("type column goes through the catalog (target spelling)", "\\b_field_group_type\\b");
 
 // 3. The registry table. Same shape as the column.
-grep(
-  "registry table goes through the catalog (legacy spelling)",
-  "[\"'`]dynamic_components[\"'`]"
-);
-grep(
-  "registry table goes through the catalog (target spelling)",
-  "[\"'`]dynamic_field_groups[\"'`]"
-);
+grep("registry table goes through the catalog (legacy spelling)", "\\bdynamic_components\\b");
+grep("registry table goes through the catalog (target spelling)", "\\bdynamic_field_groups\\b");
+
+// 4. 🔴 Reading the CATALOG for the content key, outside the accessor.
+//
+// The checks above ban writing the spelling out. They do not ban asking the catalog for it, and
+// that is not the same rule: `instance[STORAGE_FORMAT.wireTypeKey]` contains no literal, resolves
+// correctly, passes every check above — and still consults exactly ONE spelling, so after the flip
+// it reads a legacy-spelled document as untyped precisely as a hardcoded reader would.
+//
+// The property that actually matters is therefore not "no literals" but "the wire key is reached
+// only through the accessor", which is what this enforces. `field-group-type-key.ts` is where the
+// two catalogs are legitimately combined into a read order; the migration engine names both
+// because renaming one to the other is its job.
+//
+// Note this bans the catalog READ, not the catalog. Sibling `STORAGE_FORMAT` members — column
+// names, table prefixes — stay resolvable everywhere, because those a database can be asked about.
+grep("content type key is reached through the accessor", "\\bwireTypeKey\\b");
 
 if (failures > 0) {
   console.error(

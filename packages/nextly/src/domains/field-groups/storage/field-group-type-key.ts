@@ -50,13 +50,21 @@ import { MIGRATION_TARGET } from "../migration/manifest";
 const HISTORICAL_WIRE_TYPE_KEYS = ["_componentType"] as const;
 
 /**
- * Every spelling to try, most current first.
+ * Every spelling this key can appear under, most current first.
  *
  * The two catalogs still contribute, so a future rename is picked up without editing this list;
  * the pinned history is what survives their convergence. Deduplicated because before the flip the
  * catalogs differ and after it they do not, and a reader should not check one spelling twice.
+ *
+ * Exported because several callers need the SET rather than a single answer — building a set of
+ * metadata property names, removing the discriminator however it is spelled. Everything else in
+ * this file is derived from it rather than restating it, so the spellings are enumerated once.
+ *
+ * Order is significant and is the read order: a document carrying two spellings resolves to the
+ * most current one. Callers wanting a single spelling want `currentFieldGroupTypeKey`, which says
+ * so; indexing this is the same bug as hardcoding.
  */
-const READ_ORDER: readonly string[] = Array.from(
+export const fieldGroupTypeKeys: readonly string[] = Array.from(
   new Set([
     STORAGE_FORMAT.wireTypeKey,
     MIGRATION_TARGET.wireTypeKey,
@@ -76,7 +84,7 @@ export const currentFieldGroupTypeKey = STORAGE_FORMAT.wireTypeKey;
 export function readFieldGroupType(instance: unknown): string | undefined {
   if (typeof instance !== "object" || instance === null) return undefined;
   const record = instance as Record<string, unknown>;
-  for (const key of READ_ORDER) {
+  for (const key of fieldGroupTypeKeys) {
     const value = record[key];
     // A non-string is treated as absent rather than coerced. The value is a slug the caller looks
     // up, and a number or object stringifies into something that resolves to nothing while
@@ -95,7 +103,22 @@ export function readFieldGroupType(instance: unknown): string | undefined {
  * instance, and matching one spelling there drops or keeps the wrong half of a document.
  */
 export function isFieldGroupTypeKey(key: string): boolean {
-  return READ_ORDER.includes(key);
+  return fieldGroupTypeKeys.includes(key);
+}
+
+/**
+ * Remove the discriminator from an instance, under every spelling it may carry.
+ *
+ * Deleting only the current spelling leaves a legacy-spelled document still carrying its type,
+ * which matters because the callers are producing a value defined by that absence — a payload
+ * stripped back to the fields a schema names, so that a later restore prunes it against the
+ * component the field names now. A surviving discriminator makes that "stripped" object one the
+ * next reader still sees a type on, and the two halves of the round trip stop being inverses.
+ */
+export function clearFieldGroupType(instance: Record<string, unknown>): void {
+  for (const key of fieldGroupTypeKeys) {
+    delete instance[key];
+  }
 }
 
 /**
