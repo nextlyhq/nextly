@@ -165,9 +165,12 @@ function contexts(): PageContext[] {
     data: {
       find: () =>
         Promise.resolve({
+          // One numeric id, because `keyFor` names `typeof id === "number"` as
+          // a supported case and a collection on numeric primary keys is an
+          // ordinary collection. All-string rows leave that path unrendered.
           items: [
             { id: "e1", title: "An entry" },
-            { id: "e2", title: "Another entry" },
+            { id: 2, title: "Another entry" },
           ],
           total: 2,
         }),
@@ -486,6 +489,29 @@ function omittedVariants(
   return variants;
 }
 
+/**
+ * Prop sets carrying exactly ONE declared prop, with every other one absent.
+ *
+ * `omittedVariants` removes a single prop at a time, so it cannot produce the
+ * states that need two or more absent together — and blocks branch on those.
+ * `core/quote` renders a bare `<blockquote>` carrying the class only when
+ * attribution AND source are both empty, and a cite URL on that branch is a
+ * coherent, ordinary document: a quotation with a source link and nobody named.
+ * The base carries an attribution, so no single omission reaches it.
+ *
+ * Bounded at one variant per declared prop rather than every subset, which
+ * would be exponential. What that leaves uncovered is a branch needing a
+ * specific PAIR of props present while a third is absent.
+ */
+function soleVariants(
+  base: Record<string, unknown>,
+  schema: Record<string, unknown>
+): unknown[] {
+  return Object.keys(schema)
+    .filter(name => name in base)
+    .map(name => ({ [name]: base[name] }));
+}
+
 /** The prop sets each block is exercised with. */
 function propVariants(block: AnyBlockDefinition): unknown[] {
   const base = {
@@ -515,6 +541,8 @@ function propVariants(block: AnyBlockDefinition): unknown[] {
     ...variants,
     ...layered,
     ...omittedVariants([base, ...layered], schema),
+    ...soleVariants(base, schema),
+    ...layered.flatMap(layer => soleVariants(layer, schema)),
     ...malformedVariants(base, schema),
   ];
 }
