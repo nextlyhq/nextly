@@ -85,6 +85,19 @@ function assertScanSeesEveryPattern() {
   const fixture = path.join(ROOT, relativePath);
   const blind = [];
 
+  // 🔴 Refuse rather than overwrite. This writes to a fixed path and deletes it afterwards, so a
+  // real file sitting there — tracked, or someone's uncommitted work — would be replaced and then
+  // removed by merely RUNNING the gate. A check that destroys source to verify itself is a worse
+  // defect than the one it looks for, and the name being improbable is not a guarantee.
+  if (existsSync(fixture)) {
+    console.error(
+      `✗ ${relativePath} already exists.\n` +
+        "  The self-check writes and deletes that path, so it refuses to touch a file it did not\n" +
+        "  create. Move or remove it and run again."
+    );
+    process.exit(1);
+  }
+
   try {
     for (const check of CHECKS) {
       // Not a comment, not a test file, not an allowlisted path: none of the deliberate exemptions

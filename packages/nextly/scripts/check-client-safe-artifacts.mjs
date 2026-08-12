@@ -72,6 +72,13 @@ const pkg = JSON.parse(readFileSync(join(pkgRoot, "package.json"), "utf8"));
  * preserve it.
  */
 /**
+ * `$` belongs in the binding character class: esbuild names hoisted bindings `$foo`, and a class
+ * of `\w` alone skips `import { $foo } from "./chunk"` on one line, and `import $foo from ...`
+ * entirely. The multiline form survives either way because the closing `}` starts its own line,
+ * which is exactly the kind of partial coverage that reads as working.
+ */
+
+/**
  * Whether a specifier names a Node built-in, asked of Node itself.
  *
  * 🔴 Not derived from `builtinModules`. That array omits built-ins the runtime resolves — on this
@@ -91,7 +98,7 @@ function isNodeBuiltin(spec) {
 
 /** Every relative specifier in a built module, ignoring bare and `node:` ones. */
 const SPECIFIER =
-  /^\s*(?:}|\w[\w,\s{}*]*)?\s*from\s*["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|^\s*import\s*["']([^"']+)["']|\b_{0,2}require(?:\.resolve)?\(\s*["']([^"']+)["']\s*\)|process\.getBuiltinModule\(\s*["']([^"']+)["']\s*\)/gm;
+  /^\s*(?:}|[\w$][\w$,\s{}*]*)?\s*from\s*["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|^\s*import\s*["']([^"']+)["']|\b_{0,2}require(?:\.resolve)?\(\s*["']([^"']+)["']\s*\)|process\.getBuiltinModule\(\s*["']([^"']+)["']\s*\)/gm;
 
 function walk(entryFile) {
   const seen = new Set();
