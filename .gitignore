@@ -31,6 +31,12 @@ apps/playground/src/db/schemas/dynamic/*.ts
 .claude/*
 !.claude/rules/
 !.claude/skills/
+# The fallow agent gate is a control, not a preference: it blocks an agent's
+# `git commit`/`git push` when a whole-graph audit fails. Shared for the same
+# reason rules and skills are — one that only exists on the machine that ran
+# the installer enforces nothing for anyone else. Requires `jq` on PATH.
+!.claude/settings.json
+!.claude/hooks/
 
 # Testing
 coverage
