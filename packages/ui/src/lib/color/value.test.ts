@@ -73,6 +73,25 @@ describe("resolving a value to a colour", () => {
     expect(resolveColorValue({ $token: "color.ghost" }, tokens)).toBeNull();
   });
 
+  it.each(["constructor", "toString", "valueOf"])(
+    "answers null for the inherited name %s",
+    name => {
+      // A token name is a dot path with no reserved words, so these are legal
+      // names a site can define. Read off an ordinary object they resolve to
+      // functions from the prototype — not a colour, and not the null the
+      // signature promises.
+      expect(resolveColorValue({ $token: name }, tokens)).toBeNull();
+    }
+  );
+
+  it("still resolves a token the site DOES define", () => {
+    // The positive control for the three above: refusing every inherited name
+    // by refusing everything would satisfy them.
+    expect(resolveColorValue({ $token: "color.primary" }, tokens)).toBe(
+      "#3b82f6"
+    );
+  });
+
   it("answers null for a token when no lookup is supplied", () => {
     expect(resolveColorValue({ $token: "color.primary" })).toBeNull();
   });

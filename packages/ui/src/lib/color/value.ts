@@ -82,5 +82,11 @@ export function resolveColorValue(
   tokens: Readonly<Record<string, string>> = {}
 ): string | null {
   if (!isColorTokenValue(value)) return value;
-  return tokens[value.$token] ?? null;
+  // Own keys only. A token name is a dot path with no reserved words, so
+  // `constructor` and `toString` are legal names — and reading them off an
+  // ordinary object walks the prototype and answers with a FUNCTION, which is
+  // neither a colour nor the null this promises.
+  if (!Object.hasOwn(tokens, value.$token)) return null;
+  const resolved: unknown = tokens[value.$token];
+  return typeof resolved === "string" ? resolved : null;
 }
