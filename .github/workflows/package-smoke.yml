@@ -24,6 +24,12 @@ on:
   pull_request:
     paths:
       - "packages/ui/**"
+      # The lockfile decides what the build INLINES and which versions of the
+      # allow-listed packages the artifacts reach, so a lockfile-only change —
+      # a dependency bump, which arrives without touching a single source file —
+      # can alter the packed artifacts and introduce exactly the module-scope
+      # browser access this job exists to catch.
+      - "pnpm-lock.yaml"
       - ".github/workflows/package-smoke.yml"
 
 # Least privilege at the top. The one job that files an issue asks for more, so
@@ -183,15 +189,21 @@ jobs:
       # 22.12.0, so a floating leg reports a pass the floor never earned.
       #
       # The three floors come from the root `engines`
-      # (`^20.19.0 || ^22.12.0 || >=24.0.0`). The bare `24` leg is the other
-      # direction — the open-ended line's newest release, where the risk is Node
-      # removing or changing something rather than not having it yet.
+      # (`^20.19.0 || ^22.12.0 || >=24.0.0`).
+      #
+      # `latest` is the other direction, and it is deliberately not a pinned
+      # major. The third clause is OPEN-ENDED, so every release Node has made
+      # since 24 is a version these packages claim to support; pinning `24` there
+      # would test the newest 24.x and leave every later major unexercised while
+      # the manifest promised it worked. Resolving to whatever Node has shipped
+      # keeps the leg matched to the claim with no edit here when a major lands.
+      # A new major breaking this job is not noise — it is the `>=` being wrong.
       #
       # A pull request runs the LOWEST floor alone. Everything the newer lines
       # reject, 20.19.0 rejects too, plus the post-floor globals they accept, so
-      # one leg buys nearly all the signal at a quarter of the minutes.
+      # one leg buys nearly all the signal at a fraction of the minutes.
       matrix:
-        node: ${{ fromJSON(github.event_name == 'pull_request' && '["20.19.0"]' || '["20.19.0", "22.12.0", "24.0.0", "24"]') }}
+        node: ${{ fromJSON(github.event_name == 'pull_request' && '["20.19.0"]' || '["20.19.0", "22.12.0", "24.0.0", "latest"]') }}
 
     steps:
       - name: Checkout
