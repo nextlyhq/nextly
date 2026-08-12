@@ -165,17 +165,60 @@ export interface ContentRouteConfig<TNode> {
   /**
    * Relation depth for the resolved read.
    *
-   * **The default differs by factory, and the difference is a security one.**
-   * `createContentRoute` defaults to `1`, matching `resolveContent`.
-   * `createPublicContentRoute` defaults to `0` — a trusted read propagates both
-   * its trust and a widened lifecycle into relationship expansion, so a
-   * populated target would be read with access rules bypassed and drafts
-   * included, and a public route pre-renders that into a static artifact.
+   * **The defaults differ by factory.** `createContentRoute` defaults to `1`,
+   * matching `resolveContent`. `createPublicContentRoute` defaults to `0`, so a
+   * route that populates nothing performs no expansion at all.
    *
-   * Setting this on a public route restores expansion, and by setting it you
-   * state that the collections your pages populate are public too.
+   * Setting this on a public route enables expansion, bounded by
+   * {@link ContentRouteConfig.trustedCollections}: a target outside that set is
+   * read as a visitor would read it, and no target's drafts are admitted.
+   *
+   * A pre-rendered page is a point-in-time copy of everything it read, so a
+   * target's policy tightening after the build does not reach it — the same is
+   * true of the page's own content, and the remedy is the same: revalidate.
+   * Name the related collections in `tags` so a write to one busts this page.
    */
   depth?: number;
+  /**
+   * The collections this route's trust extends to, when it populates
+   * relationships.
+   *
+   * **Defaults to the route's own `collections`**, which is what the guide has
+   * always said this route means: the collections you list are the public ones.
+   * A page that populates a relationship reaches a collection you did NOT list
+   * — it was reached through a field — so without naming it, that target is
+   * read the way an anonymous visitor would read it: its own access rules
+   * apply, and only its published rows are returned.
+   *
+   * ```ts
+   * // Posts are public, and each one populates an author.
+   * createPublicContentRoute({
+   *   collections: ["posts"],
+   *   trustedCollections: ["posts", "authors"],
+   *   depth: 1,
+   *   render: ...,
+   * });
+   * ```
+   *
+   * **This only ever narrows.** Listing a collection here cannot grant more
+   * than the route already holds; omitting one means its rows are judged by
+   * their own rules rather than skipped wholesale.
+   *
+   * **Trusting a collection does NOT admit its drafts.** A public route
+   * pre-renders, so an unpublished row pulled in through a relationship is
+   * written to a static artifact and outlives the row being unpublished.
+   * Trusting a collection says its published content may be shown; nothing
+   * here can widen a lifecycle.
+   *
+   * **`createContentRoute` uses it too, and defaults it to NOTHING.** Its
+   * ordinary reads are enforced, where the bound decides nothing. A draft grant
+   * turns the bypass on for one request — but that grant authorizes ONE
+   * document and says nothing about what the document points at, including a
+   * sibling row in the same collection. So a preview populates enforced unless
+   * you name a target here, which is the same content an anonymous visitor
+   * would see beside the page being previewed.
+   */
+  trustedCollections?: string[];
   /** A booted Nextly instance (defaults to `getNextly()`). */
   nextly?: NextlyContentReader;
   /**
@@ -371,6 +414,34 @@ function buildRoute<TNode>(
 
   const collections = [...new Set(config.collections)];
 
+  // The set this route's bypass may reach, defaulting to the collections it
+  // serves — which is what the guide has always claimed this config means.
+  // Built once, at construction: the answer cannot vary per request, and a
+  // predicate rebuilt per read is a place for the two to disagree.
+  //
+  // Built for BOTH factories, and the DEFAULT differs because the two factories
+  // mean different things by listing a collection.
+  //
+  // A public route lists the collections it serves and declares them public, so
+  // trusting them is a restatement of what the factory already promised.
+  //
+  // An enforced route declares nothing public. Its bypass exists only while a
+  // draft grant is answering the path, and that grant authorizes ONE document —
+  // it says nothing about what that document points at, including a SIBLING row
+  // in the same collection. Defaulting to the route's own collections would let
+  // a preview of one page bypass a restricted sibling's rules through a
+  // relationship, which is a wider grant than the token gave.
+  //
+  // So an enforced route trusts NOTHING by default: its previews populate
+  // enforced, exactly as the page would render outside preview. A site that
+  // knows a relation target is public names it and gets the same treatment a
+  // public route gets.
+  const trustedCollections =
+    config.trustedCollections ?? (isPublic ? collections : []);
+  const trustedSet = new Set(trustedCollections);
+  // The predicate form, for the reads this module issues directly.
+  const trusted = (name: string): boolean => trustedSet.has(name);
+
   const getInstance = (): NextlyContentReader => config.nextly ?? getNextly();
 
   /** Whether this request may see unpublished edits at one collection + slug. */
@@ -433,6 +504,11 @@ function buildRoute<TNode>(
         // fall-through can hand the widening back instead of reading every row
         // in the collection as a trusted caller.
         callerOverrideAccess: overrideAccess,
+        // The bound travels with the grant. Every read `resolveContent` issues
+        // carries it — including the by-id re-read a draft grant triggers,
+        // which is a separate entry point into the same expansion. Passed as
+        // the LIST, because that layer caches and a predicate has no identity.
+        trustedCollections,
       });
       if (!entry) continue;
       // No identity check here, deliberately. Both halves a grant has to
@@ -470,12 +546,13 @@ function buildRoute<TNode>(
         try {
           result = await nextly.find({
             collection,
-            // The route's own depth, not the Direct API's default. This scan is
-            // a TRUSTED read on a public route, so an inherited expansion depth
-            // pulls related rows — draft ones included — through their nested
-            // hooks at build time, for a query that wants one column. It is the
-            // same posture the render and metadata reads carry; a scan that
-            // opted out of it would be the one read on the route that did not.
+            // The route's own depth, not the Direct API's default. This scan
+            // wants one column, so any expansion it inherits is work done for
+            // nothing — related rows pulled through their nested hooks at build
+            // time and discarded. It carries the route's depth rather than
+            // opting out so the scan reads under the same posture as the render
+            // and metadata reads; a scan that resolved a different set of paths
+            // than the route serves would be worse than a slow one.
             depth,
             // Lifecycle-aware publish scope — a no-op on status-less collections.
             status,
@@ -492,6 +569,12 @@ function buildRoute<TNode>(
             limit: MAX_STATIC_PARAMS_PER_PAGE,
             page,
             overrideAccess,
+            // This scan calls `find` DIRECTLY rather than through
+            // `resolveContent`, so it carries the bound independently — an
+            // option threaded through that helper never reaches here. It is
+            // also the PRE-RENDERING read: what it returns is written into a
+            // static artifact and served to everyone.
+            trusted,
             // The build-time scan is anonymous — pass an explicit `undefined`
             // so it can't inherit a default user configured on the reader.
             user: undefined,
@@ -628,24 +711,16 @@ export function createPublicContentRoute<TNode>(
   }
   return buildRoute(
     {
-      // Populated relations are NOT covered by the promise this factory makes.
+      // No expansion unless the site asks for it.
       //
-      // A trusted read propagates both its trust and a widened lifecycle into
-      // relationship expansion: a populated target is read with access rules
-      // bypassed AND `status: "all"`. So at the inherited default of `depth: 1`
-      // a page in a public collection can embed a DRAFT or access-restricted
-      // row from a collection that appears nowhere in this config — and this
-      // route pre-renders that into a static artifact, which publishing cannot
-      // be taken back from.
+      // What a populated target is read AS is settled by
+      // `trustedCollections` — outside that set a target is judged by its own
+      // rules and published-only, so enabling expansion does not widen what
+      // this route can publish. This default is about cost and surprise rather
+      // than exposure: a route that never populates relations should not pay
+      // for reads it did not ask for, and `depth` is the one dimension where an
+      // inherited value silently multiplies the work a page does.
       //
-      // Defaulting to no expansion makes the exposure something a site OPTS
-      // INTO rather than something it inherits. A site that populates relations
-      // sets `depth` itself, and by doing so states that those collections are
-      // public too.
-      //
-      // This bounds the blast radius; it does not fix the propagation. That
-      // still belongs where the trust is threaded, so a caller who sets `depth`
-      // gets the old behaviour in full.
       // Normalized AFTER the spread, not defaulted before it. An optional
       // property permits an EXPLICIT `undefined` — which forwarding a config
       // object produces routinely — and a spread overwrites with it, so

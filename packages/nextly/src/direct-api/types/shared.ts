@@ -400,6 +400,44 @@ export interface DirectAPIConfig {
   overrideAccess?: boolean;
 
   /**
+   * Which collections `overrideAccess` may actually reach, asked per RELATED
+   * collection as relationships are expanded.
+   *
+   * `overrideAccess: true` says the caller is trusted. It says nothing about
+   * the collection a relationship points at — that one was never named here,
+   * it was reached through a field — so a trusted read spreads its trust into
+   * every target it populates, along with a widened lifecycle that includes
+   * drafts.
+   *
+   * For a caller who has already decided who is asking, that is correct, and
+   * omitting this keeps exactly that behaviour. A caller serving ONE fixed
+   * audience is in the opposite position: it can state its trusted set up
+   * front, and anything outside it must be read as that audience would read
+   * it. A public route is the clearest case — it pre-renders, so a draft or
+   * access-restricted row pulled in through a relationship is written to a
+   * static artifact and outlives the row being unpublished.
+   *
+   * ```ts
+   * // A blog route that populates authors, and trusts nothing else.
+   * await nextly.find({
+   *   collection: "posts",
+   *   overrideAccess: true,
+   *   trusted: name => name === "posts" || name === "authors",
+   * });
+   * ```
+   *
+   * **This can only ever narrow.** It is evaluated as
+   * `overrideAccess && trusted(target)`, so supplying it removes trust the
+   * caller already had and can never grant trust it did not — the same shape
+   * as passing `overrideAccess: false`. A predicate rather than a list because
+   * the question is asked once per target at several points, and membership is
+   * often derivable rather than worth enumerating.
+   *
+   * @default undefined — every populated target inherits the caller's trust
+   */
+  trusted?: (collection: string) => boolean;
+
+  /**
    * User context for access control.
    *
    * Required when `overrideAccess` is `false`. Provides the user identity

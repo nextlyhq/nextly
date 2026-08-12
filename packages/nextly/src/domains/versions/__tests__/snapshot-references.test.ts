@@ -23,6 +23,19 @@ vi.mock("../../../di", () => ({
   }),
 }));
 
+// The system-resource read gate resolves RBAC from the container directly, so
+// that it can be reached from a leaf module without pulling in the one that
+// registers every service.
+vi.mock("../../../di/container", () => ({
+  container: {
+    has: (name: string) => name === "rbacAccessControlService",
+    get: (name: string) =>
+      name === "rbacAccessControlService"
+        ? { checkAccess: checkAccessSpy }
+        : {},
+  },
+}));
+
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { UserContext } from "../../singles/types";
 import { hydrateSnapshotReferences } from "../snapshot-references";

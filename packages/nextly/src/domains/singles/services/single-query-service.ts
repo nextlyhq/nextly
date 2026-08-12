@@ -39,7 +39,10 @@ import type { HookRegistry } from "../../../hooks/hook-registry";
 import type { HookContext } from "../../../hooks/types";
 import { keysToCamelCase, keysToSnakeCase } from "../../../lib/case-conversion";
 import { absolutizeMediaUrls } from "../../../lib/media-variant";
-import { resolveStatusFilter } from "../../../lib/status-filter";
+import {
+  expansionStatusScope,
+  resolveStatusFilter,
+} from "../../../lib/status-filter";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
 import type { CollectionAccessRules } from "../../../services/access";
@@ -50,6 +53,7 @@ import {
 import { GENERIC_DEFAULT_OWNER_FIELD } from "../../../services/access/types";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { RelatedRowReadContext } from "../../../services/collections/related-row-read-context";
+import { applyMediaTrustBound } from "../../../services/collections/trust-bound";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
@@ -465,6 +469,13 @@ export async function checkSingleAccess(params: {
   operation: "read" | "update" | "publish" | "unpublish";
   user?: UserContext;
   overrideAccess?: boolean;
+  /**
+   * Which collections a trusted read may reach as relationships are expanded,
+   * asked per RELATED collection. Absent means every populated target inherits
+   * the caller's trust. Evaluated as `overrideAccess && trusted(target)`, so it
+   * can only ever narrow. See {@link RelatedRowReadContext.trusted}.
+   */
+  trusted?: (collection: string) => boolean;
   routeAuthorized?: boolean;
   rbacAccessControlService?: RBACAccessControlService;
   // The caller's authenticated scope. A scoped API key is judged on its OWN
@@ -789,7 +800,14 @@ export class SingleQueryService extends BaseService {
 
     doc = this.deserializeJsonFields(doc, singleMeta.fields);
     params.captureReferences?.(doc);
-    doc = await this.expandUploadFields(doc, singleMeta.fields);
+    doc = await this.expandUploadFields(doc, singleMeta.fields, {
+      user: options.user,
+      overrideAccess: options.overrideAccess,
+      // Narrows that bypass per target, media included. Dropping it here would
+      // restore the full bypass for the one target this read expands directly.
+      trusted: options.trusted,
+      authenticatedScope: options.authenticatedScope,
+    });
     // The language this read resolved to, shared by both expansions below so a
     // related row and a related row inside a component are judged alike.
     const readLocale = this.resolveLocaleChain(
@@ -809,6 +827,9 @@ export class SingleQueryService extends BaseService {
         enforceCollectionAccess: true,
         user: options.user,
         overrideAccess: options.overrideAccess,
+        // Narrows that bypass per RELATED collection. Absent means unchanged;
+        // dropping it here would silently restore the full bypass.
+        trusted: options.trusted,
         authenticatedScope: options.authenticatedScope,
         // Collects the references a target collection refused, so the
         // completeness check below reads them as absent on purpose.
@@ -818,10 +839,11 @@ export class SingleQueryService extends BaseService {
         locale: readLocale,
         // Only "read everything" propagates, and only when asked for: the
         // admin sends it on every read, a public caller never does.
-        status:
-          options.status === "all" || options.overrideAccess === true
-            ? "all"
-            : undefined,
+        status: expansionStatusScope({
+          status: options.status,
+          overrideAccess: options.overrideAccess,
+          bounded: options.trusted !== undefined,
+        }),
       },
       strict,
       // The read path threads a caller, so the target collection's field rules
@@ -873,6 +895,9 @@ export class SingleQueryService extends BaseService {
             enforceCollectionAccess: true,
             user: options.user as Record<string, unknown> | undefined,
             overrideAccess: options.overrideAccess,
+            // Narrows that bypass per RELATED collection. Absent means unchanged;
+            // dropping it here would silently restore the full bypass.
+            trusted: options.trusted,
             // A relationship inside a component is populated by the same
             // service, so a refusal there has to reach the completeness check
             // too, and the rows of one population share a policy cache.
@@ -881,10 +906,11 @@ export class SingleQueryService extends BaseService {
             targetCompanions: new Map(),
             authenticatedScope: options.authenticatedScope,
             locale: readLocale,
-            status:
-              options.status === "all" || options.overrideAccess === true
-                ? "all"
-                : undefined,
+            status: expansionStatusScope({
+              status: options.status,
+              overrideAccess: options.overrideAccess,
+              bounded: options.trusted !== undefined,
+            }),
           },
           // Read errors otherwise become empty component values, which reads to a
           // rule exactly like a component that holds nothing.
@@ -2448,10 +2474,17 @@ export class SingleQueryService extends BaseService {
   /**
    * Expand upload fields with full media data.
    * Recursively handles upload fields nested inside repeater and group fields.
+   *
+   * The caller travels with the fetch because media is a system table with no
+   * stored rules: a trusted read that bounded its bypass has refused this
+   * target like any other, and only the caller can say what it may still see.
+   * The default is an unbounded read, which is what every caller that has no
+   * bypass to narrow is.
    */
   async expandUploadFields(
     doc: SingleDocument,
-    fields: FieldConfig[]
+    fields: FieldConfig[],
+    access: RelatedRowReadContext = { trusted: undefined }
   ): Promise<SingleDocument> {
     const allMediaIds = collectAllMediaIds(doc, fields);
     if (allMediaIds.length === 0) {
@@ -2459,7 +2492,10 @@ export class SingleQueryService extends BaseService {
     }
 
     const uniqueMediaIds = [...new Set(allMediaIds)];
-    const mediaRecords = await this.fetchMediaByIds(uniqueMediaIds);
+    const mediaRecords = await applyMediaTrustBound(
+      await this.fetchMediaByIds(uniqueMediaIds),
+      access
+    );
 
     const mediaMap = new Map<string, Record<string, unknown>>();
     for (const media of mediaRecords) {
@@ -2487,7 +2523,7 @@ export class SingleQueryService extends BaseService {
     // collection's fields. Enforcement is opt-in because a caller that has not
     // supplied a user is indistinguishable from an anonymous one here, and
     // enforcing for the former strips protected fields from everybody.
-    access: RelatedRowReadContext = {},
+    access: RelatedRowReadContext = { trusted: undefined },
     /**
      * Propagate expansion failures instead of returning the document
      * unexpanded. A response is better served incomplete than not at all, but a
@@ -2540,6 +2576,9 @@ export class SingleQueryService extends BaseService {
           enforceCollectionAccess: access.enforceCollectionAccess,
           user: access.user,
           overrideAccess: access.overrideAccess,
+          // Narrows that bypass per RELATED collection. Absent means unchanged;
+          // dropping it here would silently restore the full bypass.
+          trusted: access.trusted,
           authenticatedScope: access.authenticatedScope,
           withheldByAccess: access.withheldByAccess,
           locale: access.locale,

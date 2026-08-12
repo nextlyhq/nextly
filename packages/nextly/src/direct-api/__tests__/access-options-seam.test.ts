@@ -78,6 +78,24 @@ describe("the Direct API access seam", () => {
     ).toEqual([]);
   });
 
+  it("is the only way a namespace forwards the bound on that override", () => {
+    // `trusted` narrows `overrideAccess` per RELATED collection as
+    // relationships expand. Forwarding the grant without its bound is not a
+    // smaller version of the same thing — it is the ungated behaviour, and an
+    // expansion then reads every populated target trusted, drafts included,
+    // into a page a public route may pre-render.
+    const offenders = namespaceSources()
+      .filter(({ text }) => /\btrusted:\s*config\.trusted\b/.test(text))
+      .map(({ name }) => name);
+
+    expect(
+      offenders,
+      "these namespaces forward `trusted` inline; it belongs with " +
+        "`overrideAccess` in `accessOptions(config)` so a grant cannot travel " +
+        "without the bound that narrows it."
+    ).toEqual([]);
+  });
+
   it("is the only way a namespace forwards the access override", () => {
     const offenders = namespaceSources()
       .filter(({ text }) =>

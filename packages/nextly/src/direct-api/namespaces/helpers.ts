@@ -79,6 +79,7 @@ export function directApiActor(
 export interface AccessOptions {
   user?: UserContext;
   overrideAccess?: boolean;
+  trusted?: (collection: string) => boolean;
   authenticatedScope?: AuthenticatedScope;
 }
 
@@ -91,6 +92,13 @@ export interface AccessOptions {
  * together because a service that receives one without the other judges a
  * scoped key by its owner — the exact leak this exists to close.
  *
+ * `overrideAccess` grants the bypass and `trusted` bounds it, per RELATED
+ * collection, as relationships are expanded. They belong in one object for the
+ * same reason as the pair above: a flag separated from the bound that narrows
+ * it is how an option ends up honoured by some operations and not others, and
+ * an expansion that receives the grant without the bound reads every populated
+ * target trusted — including drafts, into a page that may be pre-rendered.
+ *
  * Spread this rather than listing the fields inline: an operation that forwards
  * `user` but not `authenticatedScope` compiles, runs, and silently authorizes
  * the key as its owner. `access-options-seam.test.ts` fails the build if a
@@ -100,6 +108,7 @@ export function accessOptions(config: DirectAPIConfig): AccessOptions {
   return {
     user: config.user,
     overrideAccess: config.overrideAccess,
+    trusted: config.trusted,
     authenticatedScope: config.actor,
   };
 }
@@ -120,10 +129,15 @@ export function accessOptions(config: DirectAPIConfig): AccessOptions {
  */
 export function callerAccess(
   config: DirectAPIConfig
-): Pick<DirectAPIConfig, "user" | "overrideAccess" | "actor"> {
+): Pick<DirectAPIConfig, "user" | "overrideAccess" | "trusted" | "actor"> {
   return {
     user: config.user,
     overrideAccess: config.overrideAccess,
+    // The bound travels with the grant here for the same reason it does in
+    // `accessOptions`, and the stakes are higher: a nested call that omits it
+    // re-enters `mergeConfig` and takes the INSTANCE default, so the caller's
+    // bound is not merely lost — it is replaced by an unbounded override.
+    trusted: config.trusted,
     actor: config.actor,
   };
 }
