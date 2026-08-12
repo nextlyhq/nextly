@@ -813,6 +813,27 @@ describe("a migration that changes whether a node draws", () => {
     expect(read.styles.css).toContain("color: teal");
   });
 
+  it("does not treat a MALFORMED gated entry as proof the node was withheld", () => {
+    // A stored map is input like any other. An entry whose value is not a
+    // string records nothing — delivery and pruning both ask
+    // `isRecordedGatedEntry` before believing one — so a node carrying such an
+    // entry still has its rules in the shared sheet. Reading key presence alone
+    // would conclude the compiler withheld it and keep serving those rules, and
+    // any `url(...)` inside them, after a migration made them stale.
+    const stored = sheetForDrawingPage();
+    const corrupted = {
+      ...stored,
+      gated: { ...(stored.gated ?? {}), a: null },
+    } as typeof stored;
+
+    const read = preparePageForRead(drawingPage, {
+      resolver: flipping,
+      styles: corrupted,
+    });
+
+    expect(read.styles.css).not.toContain("nx-bt-plugin--drawless");
+  });
+
   it("CONTROL: keeps the sheet when a migration leaves drawing alone", () => {
     // Without this the case above passes on an implementation that withholds
     // the sheet for ANY migrated node, which would blank the styling of every

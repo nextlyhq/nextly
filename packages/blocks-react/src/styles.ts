@@ -402,9 +402,15 @@ export function migrationChangedWhatDraws(
     // disappears. The artifact carries the answer the schema of the day
     // produced, which is the only version-independent source there is.
     if (gatedRules !== undefined) {
+      // Asked through `isRecordedGatedEntry`, the same predicate delivery and
+      // pruning coverage use, rather than by testing for the key. A stored map
+      // is input like any other: a row carrying `{ "a": null }` has the key and
+      // records nothing, so key presence alone would report the node withheld
+      // and keep serving rules — and any `url(...)` in them — that nothing
+      // accounts for.
       return (
         typeof after.id === "string" &&
-        !Object.prototype.hasOwnProperty.call(gatedRules, after.id)
+        !isRecordedGatedEntry(gatedRules[after.id])
       );
     }
 
