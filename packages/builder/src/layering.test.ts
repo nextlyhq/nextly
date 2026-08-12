@@ -4,7 +4,12 @@ import { fileURLToPath } from "node:url";
 
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { collectModules, TEST_MODULE } from "./source-modules";
+import {
+  collectModules,
+  MODULE_EXTENSIONS,
+  TEST_GLOBS,
+  TEST_MODULE,
+} from "./source-modules";
 
 /**
  * The package's layering contract, enforced rather than documented.
@@ -472,6 +477,26 @@ describe("the builder's layering contract", () => {
     // program has paid for repeatedly.
     expect(files.length).toBeGreaterThan(0);
     expect(files.some(f => f.endsWith("index.ts"))).toBe(true);
+  });
+
+  it("asks the runner to collect every extension it treats as a test", () => {
+    // Anchored HERE, in a `.ts` file, and not in the `.mts` control itself.
+    // That control proves the runner follows `.mts` by executing — but if the
+    // globs lose that extension the control stops being collected, so the
+    // evidence disappears with the behaviour it was evidence for, and the run
+    // simply reports fewer tests passing.
+    //
+    // This file is collected by any glob set that collects anything, so it
+    // survives to report the narrowing.
+    expect(TEST_GLOBS).toHaveLength(MODULE_EXTENSIONS.length);
+    for (const extension of MODULE_EXTENSIONS) {
+      expect(TEST_GLOBS).toContain(`src/**/*.test.${extension}`);
+    }
+    // And every glob names a file this package would classify as a test, so the
+    // runner and the allowlist cannot mean different things by the word.
+    for (const glob of TEST_GLOBS) {
+      expect(TEST_MODULE.test(glob)).toBe(true);
+    }
   });
 
   it("reads every extension it claims to, not only the common ones", () => {

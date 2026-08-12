@@ -77,8 +77,16 @@ async function mapped(
   // The scale is passed through rather than measured so that `mapped(page, 1)`
   // stays a coherent "what a naive implementation computes" — it gets the wrong
   // origin AND the wrong mapping, which is what the control below asserts.
+  // Border AND padding: the nested viewport begins at the content box, so both
+  // displace it. `clientLeft` alone is the reading that looks complete.
   const inset = await frameElement.evaluate<FrameInset, HTMLIFrameElement>(
-    el => ({ left: el.clientLeft, top: el.clientTop })
+    el => {
+      const style = getComputedStyle(el);
+      return {
+        left: el.clientLeft + parseFloat(style.paddingLeft || "0"),
+        top: el.clientTop + parseFloat(style.paddingTop || "0"),
+      };
+    }
   );
 
   const contentOrigin =
@@ -207,7 +215,7 @@ test("point 5: the mapping survives scroll and scale together", async ({
   expect(delta).toBeLessThanOrEqual(1);
 });
 
-test("point 5: the mapping survives a bordered frame under scale", async ({
+test("point 5: the mapping survives a bordered, padded frame under scale", async ({
   page,
   request,
 }) => {
@@ -219,23 +227,29 @@ test("point 5: the mapping survives a bordered frame under scale", async ({
   // where the content origin and the border-box corner are the same point. That
   // makes them all agree whether or not the inset is scaled — so none of them
   // can see this, and the fault would ship on the first bordered canvas.
-  await page
-    .locator("iframe")
-    .evaluate(
-      (el: HTMLIFrameElement) => (el.style.border = "8px solid transparent")
-    );
+  //
+  // Padding as well as a border, because the nested viewport begins at the
+  // CONTENT box: padding displaces it exactly as a border does, and a case
+  // setting only a border passes whether or not padding is accounted for.
+  await page.locator("iframe").evaluate((el: HTMLIFrameElement) => {
+    el.style.border = "8px solid transparent";
+    el.style.padding = "12px";
+  });
   await driver.setZoom(0.5);
 
   // Precondition, not decoration. If the canvas stylesheet wins over the inline
-  // border, `clientLeft` is 0, this silently becomes the at-rest case, and it
+  // style, the inset is 0, this silently becomes the at-rest case, and it
   // passes while testing nothing at all.
-  const inset = await page
+  const applied = await page
     .locator("iframe")
-    .evaluate((el: HTMLIFrameElement) => el.clientLeft);
+    .evaluate((el: HTMLIFrameElement) => ({
+      border: el.clientLeft,
+      padding: parseFloat(getComputedStyle(el).paddingLeft || "0"),
+    }));
   expect(
-    inset,
-    "the border must actually apply for this to test anything"
-  ).toBe(8);
+    applied,
+    "the border and padding must actually apply for this to test anything"
+  ).toEqual({ border: 8, padding: 12 });
 
   const scaled = worstDelta(await mapped(page, 0.5), await groundTruth(page));
   const raw = worstDelta(
@@ -244,13 +258,13 @@ test("point 5: the mapping survives a bordered frame under scale", async ({
   );
 
   test.info().annotations.push({
-    type: "delta-bordered-scaled",
-    description: `scaled=${scaled} raw=${raw} inset=${inset}`,
+    type: "delta-bordered-padded-scaled",
+    description: `scaled=${scaled} raw=${raw} border=${applied.border} padding=${applied.padding}`,
   });
 
-  // Both halves, for the same reason as the scale test. The first says scaling
-  // the inset is right; the second says it MATTERS — an 8px border at 50% puts
-  // the raw sum 4px out, so a regression to it cannot pass this quietly.
+  // Both halves, for the same reason as the scale test. The first says the
+  // full inset scaled is right; the second says it MATTERS — 20px of inset at
+  // 50% puts the raw sum 10px out, so a regression cannot pass this quietly.
   expect(scaled).toBeLessThanOrEqual(1);
   expect(raw).toBeGreaterThan(1);
 });

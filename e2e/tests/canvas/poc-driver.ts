@@ -184,14 +184,21 @@ export function createPocDriver(page: Page): CanvasDriver {
       // border has that gap from the first render, and it reads as "the
       // indicator feels slightly off" rather than as a fault.
       //
-      // Measured here, converted there. `clientLeft` is in the frame's own
-      // untransformed pixels while the box is post-transform, so the two cannot
-      // be added without the scale, and doing that sum at the call site is what
-      // put the same error in two files.
-      const inset = await frame.evaluate<FrameInset, HTMLIFrameElement>(el => ({
-        left: el.clientLeft,
-        top: el.clientTop,
-      }));
+      // Border AND padding. The nested viewport begins at the CONTENT box, so
+      // padding displaces it exactly as a border does — and `clientLeft` reports
+      // only the border, which is the reading that looks complete and is not.
+      //
+      // Measured here, converted there. These are the frame's own untransformed
+      // pixels while the box is post-transform, so the two cannot be added
+      // without the scale, and doing that sum at the call site is what put the
+      // same error in several files.
+      const inset = await frame.evaluate<FrameInset, HTMLIFrameElement>(el => {
+        const style = getComputedStyle(el);
+        return {
+          left: el.clientLeft + parseFloat(style.paddingLeft || "0"),
+          top: el.clientTop + parseFloat(style.paddingTop || "0"),
+        };
+      });
       return frameContentOrigin(box, inset, await frameScale());
     },
 
