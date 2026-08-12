@@ -17,6 +17,13 @@
  * a new server-safe subpath silently uncovered, which is the failure this check would be least
  * likely to notice — it would keep passing, on the entries someone remembered.
  *
+ * Deriving covers one direction only, and the other one matters just as much: a subpath RECLASSIFIED
+ * as client code leaves this list, and a shrinking derived list agrees with itself and reports a
+ * pass over less than it did yesterday. What stops that is `src/ui-surface.test.ts`, which compares
+ * the same derived set against the subpaths STABILITY.md names in prose, in both directions. The
+ * enumerated side lives there, where a deletion is loud, and the derived side lives here, where an
+ * addition is free.
+ *
  * Usage: node scripts/write-server-safe-rsc-app.mjs <directory>
  */
 import { mkdirSync, writeFileSync } from "node:fs";
