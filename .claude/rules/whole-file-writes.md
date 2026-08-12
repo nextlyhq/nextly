@@ -3,7 +3,9 @@
 # things follow. Any path can be clobbered, so no glob over filenames selects
 # the population; and the failure is a shell redirect, which reads nothing, so a
 # rule keyed to reading a matching path would be absent at exactly the moment it
-# applies.
+# applies. `derived-checks.md` matches by extension across the repo for the same
+# reason its own header gives: enumerating directories is how it kept missing the
+# code it is about.
 paths:
   - "**/*"
 ---
@@ -120,11 +122,16 @@ command is right by default:
 
 Then prove it, and prove it **before submitting**:
 
-- Compare the repaired path against its pre-write version —
-  `git diff <pre-write-rev> -- <path>` — and expect to see only the edit you
-  meant. The clobber and the restore both live inside one PR, so the branch
-  diffstat nets out and reads as though nothing happened; the summary is exactly
-  the artifact that hides this.
+- Compare the repaired path against **the same baseline you restored from**, and
+  expect to see only the edit you meant. Which command that is follows from that
+  choice, not from habit: `git diff <pre-write-rev> -- <path>` when the baseline
+  was a commit, and the bare `git diff -- <path>` — working tree against index —
+  when the index held the only surviving pre-write state. Reaching for `HEAD` in
+  that second case mixes the deliberate staged edits into the delta being
+  checked, so the proof reports a difference the recovery did not cause.
+- The reason this step is not optional: the clobber and the restore both live
+  inside one PR, so the branch diffstat nets out and reads as though nothing
+  happened. The summary is exactly the artifact that hides this.
 - The merge-commit content check in `verifying-merged-work.md` is a SEPARATE,
   post-merge confirmation. It cannot run while the PR is open, so it is not a
   substitute for the check above — by the time it is available, a broken config
