@@ -14,8 +14,6 @@ const require = createRequire(import.meta.url);
 const { version: coreVersion } = require("./package.json");
 
 // Server-only entry points that need Node.js shims (__dirname, import.meta.url, etc.)
-import { CLIENT_ENTRIES } from "./scripts/client-entries.mjs";
-
 const serverEntries = [
   "src/index.ts",
   // Testing subpath: createTestNextly harness (D46). Server-only.
@@ -81,9 +79,16 @@ const serverEntries = [
 
 // Client-safe entry points that should NOT have Node.js shims
 // These are imported in browser contexts (admin UI, client components)
-// Derived from the single declaration these and the artifact check share. Two hand-kept lists had
-// already drifted: the check covered `./field-catalog` and this one did not name it.
-const clientEntries = CLIENT_ENTRIES.map(entry => entry.source);
+// Entry points a browser bundle may reach. NOTE: membership here has no build effect — every
+// entry is concatenated into one `entry` under one config with `shims: false`. Keeping the list is
+// documentation of intent; nothing currently enforces that these are free of Node built-ins.
+const clientEntries = [
+  "src/config.ts",
+  "src/next.ts",
+  "src/field-group-type.ts",
+  // Pure serializable data, consumed by the admin's field pickers and by plugins.
+  "src/collections/fields/catalog.ts",
+];
 
 // Shared config options
 const sharedConfig = {
