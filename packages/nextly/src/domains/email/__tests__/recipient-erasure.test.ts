@@ -19,6 +19,7 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+import { NextlyError } from "../../../errors";
 import { getCoreSchema } from "../../../schemas";
 import type { Logger } from "../../../services/shared";
 import { createTableBody } from "../../schema/pipeline/sql-templates/create-table-body";
@@ -199,6 +200,37 @@ describe("erasing a recipient from the delivery log", () => {
     await erase(ERASED);
 
     expect(storedHashes().slice().sort()).toEqual(afterFirst);
+  });
+
+  it("a second pass catches a row written after the first", async () => {
+    // The race `deleteUser` sweeps for: a send already in flight when the
+    // deletion starts inserts its row after the in-transaction erasure has
+    // chosen its matches, so a live digest survives for an account that is
+    // gone. The post-commit pass exists to catch exactly this, and it only
+    // works because erasing twice is safe.
+    await erase(ERASED);
+    await service.record({
+      to: ERASED,
+      providerType: "smtp",
+      status: "sent",
+    });
+    expect(await service.list({ recipient: ERASED })).toHaveLength(1);
+
+    await erase(ERASED);
+
+    expect(await service.list({ recipient: ERASED })).toEqual([]);
+  });
+
+  it("reports a database failure as a NextlyError", async () => {
+    // The service method is reachable from application code, so a caller
+    // handling an erasure request has to be able to tell "this install has no
+    // such table" from "the connection dropped". A raw driver exception
+    // carries neither in a form the API layer can map.
+    sqlite.exec(`DROP TABLE "email_deliveries"`);
+
+    await expect(service.eraseRecipient(ERASED)).rejects.toBeInstanceOf(
+      NextlyError
+    );
   });
 
   it("does not suppress a later send to the same address", async () => {

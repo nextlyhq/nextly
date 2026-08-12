@@ -383,11 +383,21 @@ export class EmailDeliveryService extends BaseService {
    * and rolls back with the account removal.
    */
   async eraseRecipient(address: string): Promise<void> {
-    await eraseRecipientDeliveries(
-      this.db as Parameters<typeof eraseRecipientDeliveries>[0],
-      this.deliveries,
-      address
-    );
+    try {
+      await eraseRecipientDeliveries(
+        this.db as Parameters<typeof eraseRecipientDeliveries>[0],
+        this.deliveries,
+        address
+      );
+    } catch (err) {
+      // Converted like every other read and write on this service. A caller
+      // handling an erasure request needs to tell "the table is missing on this
+      // install" from "the connection dropped", and a raw driver exception
+      // carries neither in a form the API layer can map — it becomes a 500
+      // whatever it was. Rethrown rather than swallowed: unlike `record`, a
+      // failed erasure must not be reported as a completed one.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
+    }
   }
 
   /**

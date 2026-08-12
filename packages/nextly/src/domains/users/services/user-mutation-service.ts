@@ -1418,6 +1418,9 @@ export class UserMutationService extends BaseService {
     // permanently, since no later run revisits a deletion that has happened.
     // If the table really is absent, the UPDATE fails and takes the deletion
     // with it, which is the same invariant the audit erasure protects.
+    // Read from the preimage inside the transaction and used again after it
+    // commits, so it is declared out here rather than in the closure.
+    let deletedAddress: string | undefined;
     let deliveriesExist: boolean;
     try {
       deliveriesExist = await this.adapter.tableExists("email_deliveries");
@@ -1541,7 +1544,7 @@ export class UserMutationService extends BaseService {
         // rows keyed to it, so there is nothing here to erase — which is a
         // different outcome from an erasure that was skipped, and this is the
         // only shape that produces it.
-        const deletedAddress =
+        deletedAddress =
           typeof preimage.email === "string" ? preimage.email : undefined;
         if (deliveriesExist && deletedAddress !== undefined) {
           await eraseRecipientDeliveries(
@@ -1600,6 +1603,19 @@ export class UserMutationService extends BaseService {
           String(userId),
           new Date(),
           unstampedAuditTables
+        );
+      }
+      // The delivery log needs the same second pass and for the same reason: a
+      // send already in flight when the deletion started can insert its row
+      // after the in-transaction erasure has chosen its matches, leaving a live
+      // digest for an account that no longer exists. Erasing is idempotent —
+      // an already-erased row holds the sentinel, which no address hashes to —
+      // so a second pass over untouched rows costs one indexed update.
+      if (deliveriesExist && deletedAddress !== undefined) {
+        await eraseRecipientDeliveries(
+          this.db as Parameters<typeof eraseRecipientDeliveries>[0],
+          deliveriesTableFor(this.dialect),
+          deletedAddress
         );
       }
     } catch (err) {
