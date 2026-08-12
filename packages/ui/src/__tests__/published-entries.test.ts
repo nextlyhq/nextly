@@ -352,7 +352,13 @@ function exportedNames(source: string): string[] {
    * nested namespace counts only if it in turn holds a value, which is why this recurses.
    */
   const hasValueMember = (body: ts.ModuleBody | undefined): boolean => {
-    if (body === undefined || !ts.isModuleBlock(body)) return false;
+    if (body === undefined) return false;
+    // `declare namespace A.B { … }` stores `B` as `A`'s BODY rather than as a statement inside a
+    // block, so a check that only reads `ModuleBlock` finds no members and calls `A` type-only —
+    // while a consumer may use `A` as a runtime value. The dotted form is one declaration written
+    // as nested nodes, so it recurses.
+    if (ts.isModuleDeclaration(body)) return hasValueMember(body.body);
+    if (!ts.isModuleBlock(body)) return false;
     return body.statements.some(member => {
       if (
         ts.isInterfaceDeclaration(member) ||
@@ -908,6 +914,19 @@ describe("reading the names a module publishes", () => {
         `export declare namespace Foo { export { X } from "./other"; }`
       )
     ).toEqual(["Foo"]);
+  });
+
+  it("reads a dotted namespace as the nested declaration it is", () => {
+    // `A.B` is one declaration whose inner namespace is `A`'s body rather than a statement in a
+    // block. Reading only the block form found no members and called `A` type-only, so a module
+    // that omits `A` entirely compared equal to a declaration publishing it.
+    expect(
+      exportedNames(`export declare namespace A.B { const x: number; }`)
+    ).toEqual(["A"]);
+    // The control: nesting does not by itself make a value. All the way down, it is still types.
+    expect(
+      exportedNames(`export declare namespace A.B.C { interface X {} }`)
+    ).toEqual([]);
   });
 
   it("leaves out an ambient const enum", () => {

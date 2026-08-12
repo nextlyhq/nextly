@@ -405,6 +405,7 @@ describe("this package takes no direct dependency on the block engine", () => {
 const RUNTIME_RESOLVERS = [
   "require",
   "module",
+  "eval",
   "process.getBuiltinModule",
   "createRequire",
   "import.meta.resolve",
@@ -495,6 +496,17 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
     if (
       ts.isIdentifier(node) &&
       (node.text === "require" || node.text === "module") &&
+      !isMemberName(node)
+    ) {
+      found.push(node.text);
+    }
+    // Dynamic code evaluation puts the specifier in a STRING, where no visitor over syntax can
+    // see it — `eval('require("react")')` contains no `require` node at all. There is no reading
+    // of the source that recovers it, so the constructs themselves are refused: this package
+    // renders components and computes styles, and never has cause to build code at runtime.
+    if (
+      ts.isIdentifier(node) &&
+      (node.text === "eval" || node.text === "Function") &&
       !isMemberName(node)
     ) {
       found.push(node.text);
@@ -623,6 +635,19 @@ describe("this package resolves no module at runtime", () => {
     expect(
       runtimeResolversIn(`const p = process;\nexport const r = p;`, "a.ts")
     ).toEqual(["process"]);
+    // Dynamic evaluation hides the specifier in a string, so the construct is what is named.
+    expect(
+      runtimeResolversIn(
+        `export const load = () => eval('require("react")');`,
+        "a.ts"
+      )
+    ).toEqual(["eval"]);
+    expect(
+      runtimeResolversIn(
+        `export const load = new Function("return require")();`,
+        "a.ts"
+      )
+    ).toEqual(["Function"]);
     // The controls: ordinary code names none of them.
     expect(
       runtimeResolversIn(
@@ -670,14 +695,41 @@ describe("this package resolves no module at runtime", () => {
         // name goes through the dependency graph, which the artifact gate reads; everything else
         // names a file, and an absolute path names one just as a relative path does — a rule
         // written for `./` alone is walked around by `/abs/path/escape.mjs`.
-        .filter(specifier => specifier.startsWith(".") || isAbsolute(specifier))
-        // Compared after RESOLUTION, so a specifier that climbs out and back in is judged by where
-        // it lands rather than by how it is spelled.
-        .filter(specifier =>
-          relative(SRC, resolve(dirname(file), specifier)).startsWith("..")
+        .filter(
+          specifier =>
+            specifier.startsWith(".") ||
+            specifier.startsWith("#") ||
+            isAbsolute(specifier)
         )
+        .filter(specifier => {
+          // A `#alias` names a manifest-defined path, which this test cannot follow without
+          // reimplementing the `imports` resolution algorithm. It is reported OUTRIGHT rather than
+          // resolved — passing it to the path comparison below treats it as a relative name, which
+          // lands it inside `src` and clears it. The assertion after this one keeps the refusal
+          // from being a live restriction by pinning that no such alias is declared.
+          if (specifier.startsWith("#")) return true;
+          // Compared after RESOLUTION, so a specifier that climbs out and back in is judged by
+          // where it lands rather than by how it is spelled.
+          return relative(SRC, resolve(dirname(file), specifier)).startsWith(
+            ".."
+          );
+        })
         .map(specifier => `${file}: ${specifier}`)
     );
+
+    // The containment test above is only complete while `#alias` specifiers cannot resolve at all,
+    // and that is a property of the MANIFEST rather than of this file. Asserted rather than
+    // observed: an `imports` map added later would silently give shipped source a route out of
+    // `src` that reads as a bare specifier, and the previous version of this test recorded the
+    // absence as a fact checked once instead of a condition held.
+    const manifest = JSON.parse(
+      readFileSync(join(SRC, "..", "package.json"), "utf8")
+    ) as { imports?: Record<string, unknown> };
+    expect(
+      Object.keys(manifest.imports ?? {}),
+      "Adding an `imports` map gives shipped source a route out of `src` that the containment " +
+        "test cannot follow. Resolve those aliases here before declaring one."
+    ).toEqual([]);
 
     expect(
       escapes,
