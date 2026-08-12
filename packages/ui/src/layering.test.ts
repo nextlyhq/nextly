@@ -49,6 +49,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const SRC = join(__dirname);
@@ -65,35 +66,138 @@ const DEPENDENCY_FIELDS = [
 const FORBIDDEN = "@nextlyhq/blocks-engine";
 
 /**
- * The one matcher. Its positive control below reads THIS value rather than a
- * copy: a control with its own regex proves the copy works, and stays green
- * while the matcher it stands for drifts.
+ * Every module extension the bundler follows.
  *
- * WHAT A PASS DOES NOT MEAN. This matches the `from` spelling only. A bare
- * side-effect `import "@nextlyhq/blocks-engine"`, a dynamic `import(...)`, a
- * `require(...)`, an `import x = require(...)` and a `typeof import(...)` in
- * type position all reach the package and all pass this check. Reading
- * specifiers from the TypeScript AST is what covers them, and
- * `packages/builder/src/layering.test.ts` already does exactly that, with each
- * form and its reason written out.
- *
- * A second AST walker is not the answer here — that is the duplication this
- * file exists to argue against. The answer is one shared reader all three
- * layering tests call, which is a decision about where test infrastructure
- * crossing three packages lives. Until then this catches the common spelling
- * and every manifest declaration, and the limit is written down rather than
- * left to be inferred from a green run.
+ * Pinned as a literal, and wider than the `.ts`/`.tsx` a source tree usually
+ * holds: tsup follows a local `.mts` or `.cts` bridge as readily as a `.ts`
+ * one, so a scan that reads only the common two leaves a route into the bundle
+ * unwatched. The `.js` family is here for the same reason — nothing stops a
+ * shipped entry importing one.
  */
-const IMPORTS_FORBIDDEN = new RegExp(
-  `from\\s+["']${FORBIDDEN.replace("/", "\\/")}`
-);
+const MODULE_EXTENSIONS = [
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+] as const;
 
-/** Every `field.package` a manifest declares, across all four fields. */
-function declarationsIn(manifest: Record<string, unknown>): string[] {
+/**
+ * Whether a filename is a shipped module this scan must read.
+ *
+ * Separated from the directory walk so each extension can be exercised
+ * directly. Driving it through the filesystem instead means a route is only
+ * covered if a file with that extension happens to exist today.
+ */
+function isShippedModule(entry: string): boolean {
+  if (/\.(test|fixture)\./.test(entry)) return false;
+  return MODULE_EXTENSIONS.some(extension => entry.endsWith(extension));
+}
+
+/**
+ * Every module specifier a source text loads, read from the AST.
+ *
+ * A raw-text search cannot do this. It reports the specifier appearing in a
+ * COMMENT or a string as an import — a false positive, and the worse direction
+ * for a guard, because one that cries wolf about code the compiler never loads
+ * stops being read. It also misses a bare side-effect `import "pkg"`, a dynamic
+ * `import("pkg")` and a `require("pkg")`, none of which carry `from`.
+ *
+ * DELIBERATE DUPLICATION, and it is the thing this file otherwise argues
+ * against. `packages/builder/src/layering.test.ts` already has a fuller reader
+ * covering `import x = require(...)`, `typeof import(...)` in type position and
+ * JSDoc `@import`. One shared reader that all the layering tests call is what
+ * removes this copy. It exists meanwhile because a guard with FALSE POSITIVES
+ * is worse than a temporary second implementation: one that reports code the
+ * compiler never loads stops being read, and takes the true findings with it.
+ */
+function importedSpecifiers(text: string, fileName: string): string[] {
+  // The real filename, because TypeScript picks its parser from the extension.
+  // Reading a `.tsx` file as `.ts` parses `<div>` as a type assertion, and the
+  // malformed tree that follows hides every load inside JSX — which in this
+  // package is most of them. Required rather than defaulted: a caller that
+  // forgets restores exactly that blindness, and silently.
+  const source = ts.createSourceFile(
+    fileName,
+    text,
+    ts.ScriptTarget.ESNext,
+    true
+  );
+  const found: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteralLike(node.moduleSpecifier)
+    ) {
+      found.push(node.moduleSpecifier.text);
+    } else if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const loads =
+        callee.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(callee) && callee.text === "require");
+      const target = node.arguments[0];
+      if (loads && target && ts.isStringLiteralLike(target)) {
+        found.push(target.text);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+}
+
+/**
+ * Whether a module specifier loads the forbidden package.
+ *
+ * A SUBPATH counts. `@nextlyhq/blocks-engine/schema` reaches the same package
+ * through its export map, so an equality test on the package name admits the
+ * dependency through every subpath the engine publishes — and the subpaths are
+ * exactly where a narrow, tempting import lives. The trailing slash is what
+ * keeps a differently-named neighbour such as `@nextlyhq/blocks-engine-extra`
+ * from matching a prefix it merely starts with.
+ */
+function resolvesToForbidden(specifier: string): boolean {
+  return specifier === FORBIDDEN || specifier.startsWith(`${FORBIDDEN}/`);
+}
+
+/**
+ * Every `field.package` a manifest declares that RESOLVES to the forbidden
+ * package — by name, or through an npm alias.
+ *
+ * Keys alone are not the boundary. `"engine": "npm:@nextlyhq/blocks-engine@1"`
+ * declares the engine under a name of the author's choosing, so the key says
+ * `engine` and the source says `import ... from "engine"`: the manifest check
+ * and the import check both see a package they have never heard of, and both
+ * pass. The VALUE is where the real specifier lives.
+ *
+ * Both routes ask {@link resolvesToForbidden} rather than testing the string
+ * themselves. A second opinion about which package a name refers to is what
+ * makes a guard disagree with itself: a bare `npm:<pkg>` prefix test rejects
+ * `npm:@nextlyhq/blocks-engine-extra` — a legitimately different package — even
+ * while the import side is careful to allow it.
+ */
+function aliasedPackage(range: string): string | null {
+  if (!range.startsWith("npm:")) return null;
+  const target = range.slice("npm:".length);
+  // A scoped package opens with `@`, so the version delimiter is the LAST `@`
+  // rather than the first. An alias carrying no version is the whole remainder.
+  const versionAt = target.lastIndexOf("@");
+  return versionAt > 0 ? target.slice(0, versionAt) : target;
+}
+
+function forbiddenDeclarationsIn(manifest: Record<string, unknown>): string[] {
   return DEPENDENCY_FIELDS.flatMap(field =>
-    Object.keys((manifest[field] as Record<string, string>) ?? {}).map(
-      name => `${field}.${name}`
-    )
+    Object.entries((manifest[field] as Record<string, string>) ?? {})
+      .filter(([name, range]) => {
+        if (resolvesToForbidden(name)) return true;
+        const target = aliasedPackage(range);
+        return target !== null && resolvesToForbidden(target);
+      })
+      .map(([name]) => `${field}.${name}`)
   );
 }
 
@@ -112,9 +216,7 @@ function sourceFiles(dir: string): string[] {
     if (statSync(path).isDirectory()) {
       return entry === "__tests__" ? [] : sourceFiles(path);
     }
-    if (!/\.tsx?$/.test(entry)) return [];
-    if (/\.(test|fixture)\.tsx?$/.test(entry)) return [];
-    return [path];
+    return isShippedModule(entry) ? [path] : [];
   });
 }
 
@@ -135,7 +237,7 @@ describe("this package takes no direct dependency on the block engine", () => {
     ) as Record<string, unknown>;
 
     expect(
-      declarationsIn(manifest).filter(entry => entry.endsWith(`.${FORBIDDEN}`)),
+      forbiddenDeclarationsIn(manifest),
       "packages/ui is the block-agnostic layer. A component needing the block " +
         "model belongs in packages/builder, which already depends on the engine."
     ).toEqual([]);
@@ -163,21 +265,117 @@ describe("this package takes no direct dependency on the block engine", () => {
       // runtime dependencies entirely. A sentinel in ONE field at a time is the
       // only shape that fails when that field's route is missing.
       expect(
-        declarationsIn({ [field]: { [FORBIDDEN]: "workspace:*" } })
+        forbiddenDeclarationsIn({ [field]: { [FORBIDDEN]: "workspace:*" } })
       ).toEqual([`${field}.${FORBIDDEN}`]);
+      // The ALIAS route through the same field. `"engine": "npm:<pkg>@1"`
+      // declares the engine under a name of the author's choosing, so a check
+      // reading keys alone never sees the package it forbids.
+      expect(
+        forbiddenDeclarationsIn({
+          [field]: { engine: `npm:${FORBIDDEN}@1.0.0` },
+        })
+      ).toEqual([`${field}.engine`]);
     }
   );
+
+  it("names every module extension the bundler follows", () => {
+    // Pinned literally, for the reason the field list is: removing an
+    // extension deletes that extension's own case below, the suite shrinks by
+    // one, and every remaining case passes. A vanishing test reads exactly
+    // like a passing one.
+    expect([...MODULE_EXTENSIONS].sort()).toEqual([
+      ".cjs",
+      ".cts",
+      ".js",
+      ".jsx",
+      ".mjs",
+      ".mts",
+      ".ts",
+      ".tsx",
+    ]);
+  });
+
+  it.each(MODULE_EXTENSIONS)("scans a %s module", extension => {
+    // Per extension, asserted on the decision rather than through the
+    // filesystem: driving this off real files covers only the extensions that
+    // happen to exist today, and a `.mts` bridge importing the engine is
+    // exactly the file nobody has written yet.
+    expect(isShippedModule(`bridge${extension}`)).toBe(true);
+    expect(isShippedModule(`bridge.test${extension}`)).toBe(false);
+  });
+
+  it("skips a file the bundler does not follow", () => {
+    // The positive control for the two above: an `isShippedModule` returning
+    // true for everything satisfies every extension case.
+    expect(isShippedModule("theme.css")).toBe(false);
+    expect(isShippedModule("README.md")).toBe(false);
+  });
 
   it("is exercised — the import scan can find the specifier it hunts", () => {
     // An empty offender list is only evidence once the search is shown to
     // work. A renamed package or a typo in the pattern returns exactly the
     // same clean result as compliance does.
+    // Every form the reader claims, and the two it must NOT claim. The
+    // comment and string cases are the false positives a text search produces,
+    // and they are asserted here because that is where the reader's value is.
+    const read = (text: string): string[] =>
+      importedSpecifiers(text, "module.ts");
+
+    expect(read(`import { x } from "${FORBIDDEN}";`)).toContain(FORBIDDEN);
+    expect(read(`import "${FORBIDDEN}";`)).toContain(FORBIDDEN);
+    expect(read(`export { x } from "${FORBIDDEN}";`)).toContain(FORBIDDEN);
+    expect(read(`await import("${FORBIDDEN}");`)).toContain(FORBIDDEN);
+    expect(read(`require("${FORBIDDEN}");`)).toContain(FORBIDDEN);
+
+    expect(read(`// never import from "${FORBIDDEN}" here`)).toEqual([]);
+    expect(read(`const s = 'from "${FORBIDDEN}"';`)).toEqual([]);
+    expect(read('import { x } from "@nextlyhq/ui";')).toEqual(["@nextlyhq/ui"]);
+  });
+
+  it("reads a JSX module with the parser that extension needs", () => {
+    // The load is placed INSIDE a JSX expression on purpose. A `.tsx` file read
+    // as `.ts` parses `<div>` as a type assertion and recovers into a tree this
+    // visitor walks without finding anything, so the guard returns clean over a
+    // file it never really read. Most of this package is `.tsx`, which is what
+    // makes the blind spot worth a case of its own.
     expect(
-      IMPORTS_FORBIDDEN.test('import { x } from "@nextlyhq/blocks-engine";')
+      importedSpecifiers(
+        `export const C = () => <div>{require("${FORBIDDEN}")}</div>;`,
+        "component.tsx"
+      )
+    ).toContain(FORBIDDEN);
+  });
+
+  it("counts a subpath of the forbidden package, and only that package", () => {
+    // The export map is the open door: the package root may never be imported
+    // while a subpath delivers the same dependency. The neighbour case is the
+    // other half — a prefix test alone rejects a package that merely shares the
+    // opening characters, which is the false positive that gets a guard muted.
+    expect(resolvesToForbidden(FORBIDDEN)).toBe(true);
+    expect(resolvesToForbidden(`${FORBIDDEN}/schema`)).toBe(true);
+    expect(resolvesToForbidden(`${FORBIDDEN}-extra`)).toBe(false);
+    expect(resolvesToForbidden("@nextlyhq/ui")).toBe(false);
+
+    // The manifest side must agree, and it is a separate code path: a neighbour
+    // declared through an alias is a legal dependency, and a guard that fails
+    // the suite over one is a guard people start routing around.
+    expect(
+      forbiddenDeclarationsIn({
+        dependencies: { engine: `npm:${FORBIDDEN}-extra@1.0.0` },
+      })
+    ).toEqual([]);
+    // An alias carrying no version at all still resolves to a package.
+    expect(
+      forbiddenDeclarationsIn({ dependencies: { engine: `npm:${FORBIDDEN}` } })
+    ).toEqual(["dependencies.engine"]);
+
+    // Through the reader, because that is how the scan asks the question.
+    expect(
+      importedSpecifiers(
+        `import { s } from "${FORBIDDEN}/schema";`,
+        "module.ts"
+      ).some(resolvesToForbidden)
     ).toBe(true);
-    expect(IMPORTS_FORBIDDEN.test('import { x } from "@nextlyhq/ui";')).toBe(
-      false
-    );
   });
 
   it("imports it in no shipped source file", () => {
@@ -186,7 +384,9 @@ describe("this package takes no direct dependency on the block engine", () => {
     // never declares it. The import is the thing that would actually resolve,
     // so the import is what is checked.
     const offenders = sourceFiles(SRC).filter(file =>
-      IMPORTS_FORBIDDEN.test(readFileSync(file, "utf8"))
+      importedSpecifiers(readFileSync(file, "utf8"), file).some(
+        resolvesToForbidden
+      )
     );
 
     expect(

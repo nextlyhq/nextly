@@ -403,6 +403,14 @@ export { TableSkeleton } from "./components/table-skeleton";
 /** @experimental */
 export type { TableSkeletonProps } from "./components/table-skeleton";
 
+// Components — ColorPicker. A colour control that knows nothing about tokens:
+// a swatch carries an opaque `value` it hands back untouched, so a host storing
+// a token reference keeps it rather than receiving the colour it resolved to.
+/** @experimental */
+export { ColorPicker } from "./components/color-picker";
+/** @experimental */
+export type { ColorPickerProps, ColorSwatch } from "./components/color-picker";
+
 // Components — Breakpoints. Edits the widths a site's styles may respond to.
 /** @experimental */
 export { BreakpointDialog } from "./components/breakpoint-dialog";

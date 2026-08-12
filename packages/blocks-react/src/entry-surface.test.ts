@@ -133,6 +133,11 @@ const SOURCE_MODULES: ReadonlyArray<{
       "hasDuplicateNodeIds",
       "isRecordedGatedEntry",
       "isUsableGatedEntry",
+      // The newest member of that family, and the reason it lives here rather
+      // than beside either caller: a migration that turns a drawing node
+      // drawless leaves stale rules published, and a fix reaching only one
+      // entry point recreates the divergence this list exists to prevent.
+      "migrationChangedWhatDraws",
       "readableGatedRules",
     ],
   },
