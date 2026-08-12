@@ -375,8 +375,17 @@ function exportedNames(source: string): string[] {
       statement.name !== undefined &&
       ts.isIdentifier(statement.name)
     ) {
-      // Same exception as the export branch below: `import type Foo = require(...)` binds a type.
-      if (ts.isImportEqualsDeclaration(statement) && statement.isTypeOnly) {
+      // Two exceptions, both binding a name that no consumer can use as a VALUE:
+      // `import type Foo = require(...)`, and a `const enum`, whose members are inlined at each
+      // use site so the enum object itself is never emitted.
+      const typeOnlyAlias =
+        ts.isImportEqualsDeclaration(statement) && statement.isTypeOnly;
+      const constEnum =
+        ts.isEnumDeclaration(statement) &&
+        modifiersOf(statement).some(
+          modifier => modifier.kind === ts.SyntaxKind.ConstKeyword
+        );
+      if (typeOnlyAlias || constEnum) {
         typeSpace.add(statement.name.text);
       } else {
         valueSpace.add(statement.name.text);
@@ -516,11 +525,21 @@ function exportedNames(source: string): string[] {
     if (ts.isImportEqualsDeclaration(statement)) {
       // The export modifier is already required above, so reaching here means it is exported.
       //
-      // `export import type Foo = require("./foo.cjs")` is accepted syntax and publishes a TYPE:
-      // a consumer using it as a value gets TS1361. Recording it let a module exporting a real
-      // `Foo` compare equal to a declaration that offers none.
+      // `export import type Foo = require("./foo.cjs")` publishes a TYPE — a consumer using it as
+      // a value gets TS1361 — so it publishes no runtime binding at all.
       if (statement.isTypeOnly) continue;
-      found.push(statement.name.text);
+      // WITHOUT `type` it still might: the alias takes whatever space the target publishes, and a
+      // `foo.d.cts` doing `export =` on an interface makes this a type despite the spelling. That
+      // is decided in another module, so it is refused for the same reason a re-export is.
+      const target = statement.moduleReference;
+      const from =
+        ts.isExternalModuleReference(target) &&
+        ts.isStringLiteral(target.expression)
+          ? target.expression.text
+          : "?";
+      found.push(
+        `<unsupported: import-equals alias ${statement.name.text} from ${from}>`
+      );
       continue;
     }
     if (ts.isModuleDeclaration(statement)) {
@@ -532,6 +551,18 @@ function exportedNames(source: string): string[] {
       ts.isClassDeclaration(statement) ||
       ts.isEnumDeclaration(statement)
     ) {
+      // A `const enum` publishes no runtime binding: its members are inlined at each use site and
+      // the enum object is never emitted, so a consumer cannot reach `Mode` as a value. Recording
+      // it made a correct runtime OMISSION look like a divergence, and an erroneous runtime export
+      // of that name compare equal.
+      if (
+        ts.isEnumDeclaration(statement) &&
+        modifiersOf(statement).some(
+          modifier => modifier.kind === ts.SyntaxKind.ConstKeyword
+        )
+      ) {
+        continue;
+      }
       // `export default function build() {}` publishes `default`, not `build`: a consumer imports it
       // without naming it, and the local name is not part of the surface.
       if (isDefault) found.push("default");
@@ -658,15 +689,33 @@ describe("reading the names a module publishes", () => {
     ]);
   });
 
-  it("leaves out a type-only import-equals declaration", () => {
-    // Accepted syntax, and it publishes a TYPE — a consumer using it as a value gets TS1361. So a
-    // module exporting a real `Foo` compared equal to a declaration that offers none.
+  it("separates the two import-equals spellings, and refuses the ambiguous one", () => {
+    // `type` settles it: this publishes no runtime binding, and a consumer using it as a value
+    // gets TS1361.
     expect(
       exportedNames(`export import type Foo = require("./foo.cjs");`)
     ).toEqual([]);
-    // The control, one keyword apart: without `type` it publishes a value a consumer can import.
+    // WITHOUT `type` it is not settled here. The alias takes whatever space the target publishes,
+    // and a `foo.d.cts` doing `export =` on an interface makes this a type despite the spelling —
+    // so recording it as a value let a module exporting a real `Foo` compare equal to a
+    // declaration exposing none. Refused, like a re-export, because another module decides.
     expect(exportedNames(`export import Foo = require("./foo.cjs");`)).toEqual([
-      "Foo",
+      "<unsupported: import-equals alias Foo from ./foo.cjs>",
+    ]);
+  });
+
+  it("leaves out an ambient const enum", () => {
+    // A `const enum` member is inlined at each use site and the enum object is never emitted, so
+    // `Mode` is unreachable as a value. Recording it made a correct runtime OMISSION look like a
+    // divergence, and an erroneous runtime export of that name compare equal.
+    expect(exportedNames(`export declare const enum Mode { On = 1 }`)).toEqual(
+      []
+    );
+    expect(exportedNames(`export const enum Mode { On = 1 }`)).toEqual([]);
+    // The control, one keyword apart: an ordinary enum IS emitted and a consumer can use it.
+    expect(exportedNames(`export enum Mode { On = 1 }`)).toEqual(["Mode"]);
+    expect(exportedNames(`export declare enum Mode { On = 1 }`)).toEqual([
+      "Mode",
     ]);
   });
 
@@ -675,7 +724,7 @@ describe("reading the names a module publishes", () => {
     // name. It carries the export modifier while being neither a declaration nor an export
     // declaration, so it matched nothing.
     expect(exportedNames(`export import Foo = require("./foo.cjs");`)).toEqual([
-      "Foo",
+      "<unsupported: import-equals alias Foo from ./foo.cjs>",
     ]);
     // The control: WITHOUT the export modifier it is a local alias and publishes nothing.
     expect(exportedNames(`import Foo = require("./foo.cjs");`)).toEqual([]);
