@@ -46,11 +46,14 @@ function serialized(nodes: BlockNode[]): string {
 }
 
 /**
- * Apply an op as the author, then its inverse as undo, and hand back both.
+ * Apply an op, then its inverse, and hand back both.
  *
- * The inverse goes back in as `"undo"` because that is what it is. Applying it
- * as a fresh author edit would ask the author-facing checks about an op the
- * store derived itself, which is how an inverse becomes inapplicable.
+ * The inverse goes back through the SAME entry point with no exemption, which
+ * is the property being exercised: an op arrives from storage, so nothing could
+ * distinguish the store's own inverse from a forged one anyway. The lock rules
+ * are shaped so an inverse stays applicable without needing to be told it is
+ * one — an insert carrying a locked node is refused at the door precisely so
+ * its remove can never be blocked later.
  */
 function roundTrip(nodes: BlockNode[], op: BuilderOp) {
   const applied = applyOp(nodes, op);
@@ -635,7 +638,6 @@ describe("an op whose own shape is wrong", () => {
 
   it.each<[string, string]>([
     ["a null position", '{"kind":"insert","node":null,"at":null}'],
-    ["a position that is a string", '{"kind":"move","id":"a","at":"end"}'],
     ["an op that is null", "null"],
   ])("refuses %s as an OpError rather than crashing", (_label, json) => {
     let thrown: unknown;
@@ -651,6 +653,17 @@ describe("an op whose own shape is wrong", () => {
     // escaping this module reads to the caller as a bug in the editor.
     expect(thrown).toBeInstanceOf(OpError);
     expect(thrown).not.toBeInstanceOf(TypeError);
+  });
+
+  it("says a position that is not a record is not a record", () => {
+    // Asserting `OpError` alone proves nothing here: a string's `.index` is
+    // `undefined`, so the INDEX branch refuses it too and the test passes with
+    // the container guard removed. The message is what separates which branch
+    // spoke, and the container branch is the one that stops a property access
+    // on a non-object.
+    expect(() =>
+      applyOp(forest(), persisted('{"kind":"move","id":"a","to":"end"}'))
+    ).toThrow(/names nowhere/);
   });
 
   it.each<[string, string]>([
