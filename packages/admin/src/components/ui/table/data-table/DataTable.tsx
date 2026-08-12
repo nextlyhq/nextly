@@ -262,8 +262,12 @@ export function DataTable<Row extends object>({
 
       {/* One bordered surface holds the table and its pagination; the
           pagination supplies its own top border as the divider. Bordering them
-          separately would double the outline and open a gap between them. */}
-      <div className="rounded-md border border-border bg-card text-card-foreground">
+          separately would double the outline and open a gap between them.
+          `overflow-hidden` because the pagination paints a background to this
+          box's edge: at any nonzero `--radius` an unclipped child fills square
+          across the parent's curve, which is the corollary the radius contract
+          in `theme.css` states. */}
+      <div className="overflow-hidden rounded-md border border-border bg-card text-card-foreground">
         <DataTableView<Row>
           columns={columns}
           rows={rows}

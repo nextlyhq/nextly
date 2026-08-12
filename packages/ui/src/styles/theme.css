@@ -418,16 +418,18 @@
    * rounded-xl / rounded-2xl are NOT tiers of this knob. `tailwind-preset.ts`
    * exports only lg/md/sm, so a plugin using the preset gets Tailwind's fixed
    * 0.75rem / 1rem for them, detached from --radius; and the definitions below
-   * add to the knob rather than subtracting, so at the shipped --radius: 0 they
-   * resolve to 4px and 8px — visibly round inside a square admin. Nothing in the
-   * repo uses them. Treat them as off-contract and pick from sm/md/lg.
+   * ADD to the knob rather than subtracting, so they always sit rounder than
+   * the container tier and drift further as the knob grows. Nothing in the repo
+   * uses them. Treat them as off-contract and pick from sm/md/lg.
    *
-   * What --radius: 0 really does: `lg` is 0, and `sm` and `md` compute to -4px
-   * and -2px. They render square only because border-radius clamps a negative
-   * length to 0 at used-value time. The token itself stays negative, so reading
-   * `--radius-sm` for padding, an inset, or through getComputedStyle yields
-   * -4px, not 0. Anything that consumes a step as a length rather than as a
-   * corner must clamp it itself.
+   * At the shipped 0.5rem the three tiers are 4px, 6px and 8px. All positive,
+   * which matters: `sm` and `md` SUBTRACT from the knob, so a knob under 4px
+   * makes them negative. They still render square, because border-radius clamps
+   * a negative length to 0 at used-value time — but the token keeps its
+   * negative value, so reading `--radius-sm` for a padding, an inset, or
+   * through getComputedStyle yields -4px rather than 0. Anything consuming a
+   * step as a LENGTH rather than as a corner must clamp it itself, and that
+   * obligation returns the moment someone dials the knob back down.
    *
    * A site that genuinely must stay square keeps `rounded-none` WITH an inline
    * comment saying why — overlapped-border strips, full-bleed fills inside an
@@ -519,11 +521,34 @@
  * and it shadows the real weight utility rather than adding to it.
  * ============================================ */
 @theme {
-  --font-sans: var(--font-inter), Inter, sans-serif;
+  /* The host app supplies the face through the variable; the family name is the
+   * var()'s own FALLBACK ARGUMENT, covering a host that installed the font
+   * without `next/font`, and the generic stack after it covers a host that did
+   * neither. Naming only the family would resolve to nothing under `next/font`,
+   * which self-hosts the face and exposes it ONLY as a variable -- a bare
+   * "Geist" there silently falls through to the system sans.
+   *
+   * The fallback has to sit INSIDE the parentheses. A family listed after the
+   * closing `)` is not reached when the variable is undefined: an unresolved
+   * `var()` with no fallback makes the whole declaration invalid at
+   * computed-value time, which for an inherited property like font-family means
+   * the element inherits its parent's face and the entire stack is discarded.
+   * The comma list looks like a fallback chain and is not one, so a host that
+   * skipped the variable rendered in whatever the page already used rather than
+   * in the generic sans this stack names.
+   *
+   * These are declared in a non-inline `@theme`, so they are emitted into
+   * `:root` and substitution happens THERE, not on the consuming element. A
+   * host must expose the variable at or above that scope -- `next/font`'s
+   * generated class belongs on `<html>`. On `<body>` the variable is invisible
+   * to this declaration no matter how it is spelled. */
+  --font-sans:
+    var(--font-geist, Geist), ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", sans-serif;
   --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
   --font-mono:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    "Courier New", monospace;
+    var(--font-geist-mono, "Geist Mono"), ui-monospace, SFMono-Regular, Menlo,
+    Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 
   /* Body text, captions */
   --font-weight-normal: 400;
@@ -825,7 +850,10 @@
   /* red-500 */
 
   /* Design tokens */
-  --radius: 0px;
+  /* The one corner knob. Every tier below derives from it, so this single
+   * declaration re-rounds the whole admin and a plugin built against the
+   * published preset re-rounds with it. */
+  --radius: 0.5rem;
 
   /* Control sizing — derived from a single height knob so control density
    * scales from one place. Steps map to the control size variants:

@@ -6,14 +6,27 @@ import {
   QueryProvider,
   ThemeProvider,
 } from "@nextlyhq/admin";
-import { Inter } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
-const inter = Inter({
-  variable: "--font-inter",
+// Self-hosted at build time by `next/font`, which exposes the face only as a
+// CSS variable -- the admin theme names that variable first for exactly this
+// reason. Weights are the four the design system declares; the rest would ship
+// bytes nothing renders.
+const geistSans = Geist({
+  variable: "--font-geist",
   subsets: ["latin"],
   display: "swap",
-  weight: ["400", "500", "600", "700"], // Only load weights used in design system
+  weight: ["400", "500", "600", "700"],
+});
+
+// The mono face the admin reaches for on code surfaces: the API playground
+// editor, ids, and inline code.
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+  display: "swap",
+  weight: ["400", "500"],
 });
 
 export default function RootLayout({
@@ -24,7 +37,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={inter.variable}
+      className={`${geistSans.variable} ${geistMono.variable}`}
       /**
        * suppressHydrationWarning is needed to prevent hydration errors caused by
        * browser extensions (e.g., Bitwarden, password managers) that inject
