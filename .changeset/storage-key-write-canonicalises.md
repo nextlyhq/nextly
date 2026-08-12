@@ -24,4 +24,4 @@
 "@nextlyhq/builder": patch
 ---
 
-A field group instance saved through the shared accessor now carries only the current spelling of its type key. Previously an instance loaded from storage before the rename kept its old key alongside the new one, so saving it produced a document carrying both.
+A version snapshot now records each field group instance under one spelling of its type key. An entry captured before the storage rename, restored, and captured again previously kept its old key alongside the new one, so the snapshot announced the same instance's type twice.
