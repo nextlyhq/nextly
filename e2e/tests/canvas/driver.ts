@@ -176,3 +176,64 @@ export interface CanvasDriver {
   /** Apply a CSS transform scale to the canvas frame. */
   setZoom(scale: number): Promise<void>;
 }
+
+/**
+ * A reader a canvas cannot answer, because of how it is built rather than
+ * because it is broken.
+ *
+ * The PoC draws its insertion indicator INSIDE the iframe with CSS; the v2
+ * canvas must draw it in host chrome. A driver for the first cannot report
+ * where a host overlay is, and pretending otherwise would make an acceptance
+ * test pass on a canvas that does not meet the requirement.
+ *
+ * Thrown with the reason named, so an expected failure records WHY the canvas
+ * falls short. A test that fails because the page never loaded and one that
+ * fails because the canvas genuinely lacks the property are the same colour;
+ * only the message separates them, and a target nobody can read is a target
+ * that silently stops being one.
+ */
+export class CanvasCapabilityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CanvasCapabilityError";
+  }
+}
+
+/**
+ * Readers the twelve-point acceptance suite needs beyond a drag.
+ *
+ * Separate from {@link CanvasDriver} because these describe the canvas's
+ * CHROME rather than its drag mechanics, and because every one of them is a
+ * property the v2 canvas must have and the PoC need not. A driver that cannot
+ * answer throws {@link CanvasCapabilityError} rather than guessing.
+ */
+export interface CanvasChromeReader {
+  /**
+   * How many insertion-indicator elements exist, and whether they live in the
+   * host document or inside the canvas frame.
+   *
+   * Both halves in one reader because the requirement is one claim: exactly one
+   * indicator, drawn in parent chrome. Asking them separately invites a canvas
+   * that satisfies each and neither together — one host indicator plus a
+   * leftover inside the frame answers "one" to a host-scoped count.
+   */
+  readIndicators(): Promise<{ count: number; host: "document" | "frame" }>;
+
+  /**
+   * Whether the canvas is showing an explicit invalid-drop state.
+   *
+   * A canvas that simply shows nothing over an illegal target is
+   * indistinguishable from one that has not decided yet, and the author cannot
+   * tell "you may not drop here" from "the drag broke".
+   */
+  readsInvalidTarget(): Promise<boolean>;
+
+  /** Scroll offset inside the canvas frame, for autoscroll assertions. */
+  canvasScrollTop(): Promise<number>;
+
+  /** Begin dragging a block that is already in the canvas, by its id. */
+  startDragOfBlock(id: string): Promise<void>;
+
+  /** How many entries the editor's undo history holds. */
+  undoDepth(): Promise<number>;
+}
