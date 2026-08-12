@@ -112,6 +112,16 @@ export interface CanvasDriver {
   isEditorPresent(): Promise<boolean>;
 
   /** Press the pointer at a top-level viewport point and pass the drag threshold. */
+  /**
+   * Press Escape and nothing else.
+   *
+   * Separate from {@link CanvasDriver.cancel}, which releases the pointer
+   * immediately afterwards: a test that reads drag state through `cancel`
+   * cannot distinguish Escape ending the drag from the mouse-up ending it, so a
+   * canvas with a dead Escape handler satisfies it.
+   */
+  pressEscape(): Promise<void>;
+
   startDragAt(point: Point): Promise<void>;
   /**
    * Press the pointer WITHOUT passing the drag threshold.

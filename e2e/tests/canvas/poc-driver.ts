@@ -317,6 +317,15 @@ export function createPocDriver(page: Page): CanvasDriver {
       await page.mouse.up();
     },
 
+    async pressEscape() {
+      // Escape ALONE, with no mouse release after it. `cancel` sends both, so a
+      // test reading drag state through it cannot tell "Escape ended the drag"
+      // from "releasing the button did" — and a canvas whose Escape handler
+      // does nothing passes. Anything asserting Escape's own effect has to
+      // observe the state between the two.
+      await page.keyboard.press("Escape");
+    },
+
     async cancel() {
       await page.keyboard.press("Escape");
       await page.mouse.up();
@@ -588,7 +597,12 @@ export function createPocChromeReader(page: Page): CanvasChromeReader {
             `is no host overlay whose count and owner can be reported`
         );
       }
-      return { count: inHost, host: "document" as const };
+      // The TOTAL, which is what the comment above always claimed and the
+      // return never delivered. With one indicator in each document the old
+      // host-scoped count answered "one" and satisfied the requirement while
+      // two were visible on screen — the precise case a single claim about
+      // "one indicator, in host chrome" exists to refuse.
+      return { count: inHost + inFrame, host: "document" as const };
     },
 
     readsInvalidTarget(): Promise<boolean> {

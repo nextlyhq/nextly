@@ -587,11 +587,24 @@ test.describe("a canvas any Nextly editor could ship", () => {
     );
     await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
     await dragFromPanel(driver);
+
+    // A precondition with teeth: if the drag never started, "not dragging"
+    // below is satisfied by absence and the target passes on nothing.
+    expect(
+      await driver.isDragging(),
+      "the drag must be running before Escape can end it"
+    ).toBe(true);
+
+    // Escape ALONE. `cancel` releases the pointer straight after, so reading
+    // the state through it cannot tell Escape ending the drag from the
+    // mouse-up ending it — and a dead Escape handler passes.
+    await driver.pressEscape();
+    const afterEscape = await driver.isDragging();
     await driver.cancel();
 
     // Marked HERE, not on the declaration, so a failed seed or a broken
     // driver is a real failure rather than another expected one.
     test.fail(true, "the drag state stays set after Escape");
-    expect(await driver.isDragging(), "Escape must end the drag").toBe(false);
+    expect(afterEscape, "Escape must end the drag").toBe(false);
   });
 });
