@@ -1,22 +1,65 @@
 {
-  "$schema": "https://turborepo.com/schema.json",
+  "$schema": "https://turbo.build/schema.json",
   "extends": ["//"],
   "tasks": {
-    // Only this package's suite reads files OUTSIDE its own directory: it checks the RSC job's
-    // Node legs against the root `engines.node`, so a change to either the workflow or the root
-    // manifest must move this task's hash — otherwise CI replays the previous pass in exactly the
-    // commit that changed the wiring the suite exists to compare.
-    //
-    // Declared HERE rather than on the root `test` task. There, the two entries become inputs to
-    // every package's tests, so a workflow edit invalidates the whole monorepo's unit-test cache
-    // and reruns suites that cannot read either file.
-    //
-    // `$TURBO_DEFAULT$` keeps the package's own files as inputs, since a task definition in a
-    // package configuration REPLACES the root's `inputs` rather than adding to it. Restating the
-    // root's curated globs here would be a second copy of that list, and the copy is what drifts.
     "test": {
+      // The release-tag guard reads this package's OWN `dist/index.d.ts`: the
+      // tags it checks are written by the declaration bundler, so there is
+      // nothing to assert against until the package is built, and the root task
+      // depends on `^build`, which builds dependencies and not this package.
+      //
+      // This makes turbo do that one build, in order, and cache it. The runs
+      // turbo never sees — `pnpm --filter @nextlyhq/ui test`, and the watch,
+      // UI and coverage entry points, none of which read this file — are
+      // covered instead by `ensureDeclarations()` in the surface suite's
+      // `beforeAll`, which rebuilds the declarations itself. It rebuilds every
+      // time rather than testing for staleness, so the two do build twice on
+      // a cache miss; that is the deliberate trade, because deciding whether
+      // `dist` was current meant re-implementing turbo's input tracking and
+      // every error in it passed stale declarations.
+      "dependsOn": ["$TURBO_EXTENDS$", "build"],
+      // The contrast alpha-utilities guard scans admin and plugin source, so
+      // those trees are real inputs to this package's tests. $TURBO_EXTENDS$
+      // inherits the root test inputs (so they stay in sync and nothing is
+      // dropped) and appends the scanned call-site trees, so a faint alpha
+      // utility added in a call-site package invalidates the cached pass
+      // instead of hiding behind it. The root task supplies dependsOn / cache.
       "inputs": [
-        "$TURBO_DEFAULT$",
+        "$TURBO_EXTENDS$",
+        "vitest.config.ts",
+        "$TURBO_ROOT$/packages/admin/src/**",
+        "$TURBO_ROOT$/packages/plugin-form-builder/src/**",
+        "$TURBO_ROOT$/packages/plugin-page-builder/src/**",
+        // The RSC-matrix suite reads the root manifest and the package-smoke
+        // workflow, comparing the job's Node legs against `engines.node`. Listed
+        // here rather than on the root task: there they become inputs to every
+        // package's tests, so a workflow edit invalidates the whole monorepo's
+        // unit-test cache and reruns suites that cannot read either file.
+        "$TURBO_ROOT$/package.json",
+        "$TURBO_ROOT$/.github/workflows/package-smoke.yml"
+      ]
+    },
+    "test:coverage": {
+      // The same ordering as `test`, for the same reason. Inheriting only
+      // `^build` from the root left this task with no edge to this package's
+      // own `build`, so turbo was free to schedule them together: the surface
+      // suite's `beforeAll` runs `tsup` while `build:js` is removing `dist`
+      // underneath it, and a coverage task starting mid-build reads
+      // half-written artifacts. Coverage asserts on the same declarations
+      // `test` does, so it needs the same guarantee that they exist and are
+      // not being rewritten.
+      "dependsOn": ["$TURBO_EXTENDS$", "build"],
+      "inputs": [
+        "$TURBO_EXTENDS$",
+        "vitest.config.ts",
+        "$TURBO_ROOT$/packages/admin/src/**",
+        "$TURBO_ROOT$/packages/plugin-form-builder/src/**",
+        "$TURBO_ROOT$/packages/plugin-page-builder/src/**",
+        // The RSC-matrix suite reads the root manifest and the package-smoke
+        // workflow, comparing the job's Node legs against `engines.node`. Listed
+        // here rather than on the root task: there they become inputs to every
+        // package's tests, so a workflow edit invalidates the whole monorepo's
+        // unit-test cache and reruns suites that cannot read either file.
         "$TURBO_ROOT$/package.json",
         "$TURBO_ROOT$/.github/workflows/package-smoke.yml"
       ]
