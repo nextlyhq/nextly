@@ -2,6 +2,7 @@ import {
   compilePageCss,
   declaresNoMarkup,
   isFetchableUrl,
+  nodeAtPointer,
   nodeClassNames,
   walkNodes,
   DEFAULT_LIMITS,
@@ -14,6 +15,7 @@ import {
   type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 
+import type { DocumentReadStages } from "./prepare-document";
 import type { BlockResolver } from "./resolver";
 import { pruneNodes } from "./visibility";
 
@@ -347,6 +349,46 @@ export function drawlessTestFor(
   blocks: BlockResolver
 ): (node: BlockNode) => boolean {
   return node => declaresNoMarkup(node, type => blocks.get(type));
+}
+
+/**
+ * Whether migration turned a node that DREW into one that draws nothing.
+ *
+ * The stored sheet was compiled while the node still drew, so its rules sit in
+ * the main `css` with no gated entry, and every later pass agrees the node is
+ * present and registered. Nothing else in this function can see it: the
+ * drawless predicate decides which per-node entries to APPEND and cannot
+ * withdraw a rule already embedded in the sheet, and the stage comparisons all
+ * read equal because no pass REMOVED anything. Only a recompile drops it.
+ *
+ * Asked ONLY of the nodes the engine reported rewriting. The predicate runs a
+ * block's own declaration, so asking it of every node on every read would put
+ * plugin code in the path of the ordinary case, where nothing migrated and the
+ * answer cannot have changed. That list is empty for any page whose nodes are
+ * already current, which is nearly all of them, and this returns before walking
+ * anything.
+ *
+ * The reverse flip needs no handling: a node that starts drawless and begins to
+ * draw has no rules in the stored sheet to be stale, and the recompile that
+ * gives it some is triggered by the sheet not describing it.
+ */
+export function migrationChangedWhatDraws(
+  stages: DocumentReadStages,
+  resolver: BlockResolver
+): boolean {
+  if (stages.rewritten.length === 0) return false;
+  const drawsNothing = drawlessTestFor(resolver);
+  // The engine's reported pointers are RESOLVED rather than matched against
+  // paths rebuilt here. Rebuilding them would be a second encoder of the same
+  // format: it agrees on every ordinary slot name and diverges on the ones the
+  // escaping exists for, so the mismatch appears only for the documents this
+  // check most needs to read.
+  return stages.rewritten.some(entry => {
+    const before = nodeAtPointer(stages.sanitized, entry.path);
+    const after = nodeAtPointer(stages.migrated, entry.path);
+    if (before === undefined || after === undefined) return false;
+    return !drawsNothing(before) && drawsNothing(after);
+  });
 }
 
 function withGatedRules(
