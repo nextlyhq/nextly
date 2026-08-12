@@ -262,9 +262,15 @@ export {
   styleGroupKeys,
 } from "./style/supports-map";
 
-export { migrateDocument, migrateProps, findMigrationGaps } from "./migration";
+export {
+  migrateDocument,
+  migrateProps,
+  findMigrationGaps,
+  nodeAtPointer,
+} from "./migration";
 export type {
   BlockMigrationInfo,
+  MigratedNode,
   MigrateFn,
   MigrateResult,
   MigrationFailure,

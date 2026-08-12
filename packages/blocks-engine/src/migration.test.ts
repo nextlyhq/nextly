@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import type { BlockDocument } from "./document";
 import type { MigrationSource } from "./migration";
-import { findMigrationGaps, migrateDocument, migrateProps } from "./migration";
+import {
+  findMigrationGaps,
+  migrateDocument,
+  migrateProps,
+  nodeAtPointer,
+} from "./migration";
 
 /** A migration source from a plain record of type → info. */
 function source(
@@ -257,5 +262,301 @@ describe("migrateDocument", () => {
     const { doc: out, failures } = migrateDocument(doc, src);
     expect(failures).toEqual([]);
     expect(out.nodes[0]).toMatchObject({ version: 9, props: { x: 1 } });
+  });
+});
+
+/**
+ * The report of rewritten nodes, guarded at the PRODUCER.
+ *
+ * A reader uses `rewritten` to decide which nodes still need examining, so the
+ * load-bearing property is COMPLETENESS, not brevity: a node missing from the
+ * report is silently exempted from whatever the reader was checking, with no
+ * error and no slow path to notice. Guarding a consumer cannot see that — a
+ * report naming three of four nodes still gets its three read correctly — so
+ * these assert the report against an independent walk of the two documents.
+ */
+describe("migrateDocument's report of what it rewrote", () => {
+  const src = source({
+    "core/heading": {
+      version: 3,
+      migrate: {
+        1: (p: Record<string, unknown>) => ({ ...p, level: p.level ?? 2 }),
+        2: (p: Record<string, unknown>) => ({ ...p, align: "start" }),
+      },
+    },
+    "core/box": { version: 1 },
+    "core/broken": {
+      version: 2,
+      migrate: {
+        1: () => {
+          throw new Error("nope");
+        },
+      },
+    },
+    "core/half-broken": {
+      version: 3,
+      migrate: {
+        1: (p: Record<string, unknown>) => ({ ...p, one: true }),
+        2: () => {
+          throw new Error("nope");
+        },
+      },
+    },
+  });
+
+  /**
+   * Every node whose OWN props object was replaced, found by comparing the two
+   * documents rather than by asking the report.
+   *
+   * Derived independently on purpose: a check that reconstructed the report the
+   * way the producer builds it would agree with a broken producer. Props
+   * identity is the separating signal — a parent rebuilt because a child moved
+   * keeps the very same props object.
+   */
+  function propsReplaced(
+    before: BlockDocument,
+    after: BlockDocument
+  ): string[] {
+    const found: string[] = [];
+    const walk = (a: unknown, b: unknown, path: string): void => {
+      if (
+        typeof a !== "object" ||
+        a === null ||
+        typeof b !== "object" ||
+        b === null
+      ) {
+        return;
+      }
+      const nodeA = a as Record<string, unknown>;
+      const nodeB = b as Record<string, unknown>;
+      if (nodeA.props !== nodeB.props) found.push(path);
+      const slotsA = nodeA.slots;
+      const slotsB = nodeB.slots;
+      if (
+        typeof slotsA === "object" &&
+        slotsA !== null &&
+        typeof slotsB === "object" &&
+        slotsB !== null
+      ) {
+        for (const slot of Object.keys(slotsB as Record<string, unknown>)) {
+          const childrenA = (slotsA as Record<string, unknown>)[slot];
+          const childrenB = (slotsB as Record<string, unknown>)[slot];
+          if (!Array.isArray(childrenA) || !Array.isArray(childrenB)) continue;
+          childrenB.forEach((child, index) => {
+            walk(childrenA[index], child, `${path}/slots/${slot}/${index}`);
+          });
+        }
+      }
+    };
+    const nodesA = before.nodes;
+    const nodesB = after.nodes;
+    if (Array.isArray(nodesA) && Array.isArray(nodesB)) {
+      nodesB.forEach((node, index) => {
+        walk(nodesA[index], node, `/nodes/${index}`);
+      });
+    }
+    return found;
+  }
+
+  it("names a rewritten node NESTED IN A SLOT, which a top-level walk misses", () => {
+    const doc: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "outer",
+          type: "core/box",
+          version: 1,
+          props: {},
+          slots: {
+            children: [
+              { id: "inner", type: "core/heading", version: 1, props: {} },
+            ],
+          },
+        },
+      ],
+    } as unknown as BlockDocument;
+
+    const { doc: out, rewritten } = migrateDocument(doc, src);
+
+    // The separating case. The outer box is at its current version and is
+    // rebuilt ONLY because its child changed, so a report keyed on reference
+    // inequality would name it and a report that never descended would name
+    // nothing at all. Exactly one node was actually rewritten.
+    expect(rewritten).toEqual([
+      {
+        path: "/nodes/0/slots/children/0",
+        id: "inner",
+        type: "core/heading",
+        fromVersion: 1,
+        toVersion: 3,
+      },
+    ]);
+    expect(propsReplaced(doc, out)).toEqual(["/nodes/0/slots/children/0"]);
+  });
+
+  it("names every node whose props were replaced, and no others", () => {
+    const doc: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "current", type: "core/box", version: 1, props: { a: 1 } },
+        { id: "old", type: "core/heading", version: 1, props: {} },
+        {
+          id: "parent",
+          type: "core/box",
+          version: 1,
+          props: {},
+          slots: {
+            children: [
+              { id: "deep", type: "core/heading", version: 2, props: {} },
+              { id: "steady", type: "core/box", version: 1, props: {} },
+            ],
+          },
+        },
+      ],
+    } as unknown as BlockDocument;
+
+    const { doc: out, rewritten } = migrateDocument(doc, src);
+
+    // Compared as SETS against the independent walk. Asserting the report is
+    // non-empty, or that each reported node really changed, would both pass on
+    // a report that dropped one — the direction that matters is the walk's
+    // finding being a subset of the report's.
+    expect(rewritten.map(entry => entry.path).sort()).toEqual(
+      propsReplaced(doc, out).sort()
+    );
+    expect(rewritten.map(entry => entry.path).sort()).toEqual([
+      "/nodes/1",
+      "/nodes/2/slots/children/0",
+    ]);
+  });
+
+  it("names a PARTIALLY migrated node, at the version it reached", () => {
+    const doc: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "h", type: "core/half-broken", version: 1, props: { keep: 1 } },
+      ],
+    };
+
+    const { doc: out, rewritten, failures } = migrateDocument(doc, src);
+
+    // Step 1 ran and step 2 threw, so the props are neither the stored ones nor
+    // the current shape. A reader told this node was untouched would carry a
+    // conclusion drawn from props that no longer exist. `toVersion` is the
+    // level actually REACHED, not the definition's.
+    expect(failures).toHaveLength(1);
+    expect(rewritten).toEqual([
+      {
+        path: "/nodes/0",
+        id: "h",
+        type: "core/half-broken",
+        fromVersion: 1,
+        toVersion: 2,
+      },
+    ]);
+    expect(propsReplaced(doc, out)).toEqual(["/nodes/0"]);
+  });
+
+  it("does NOT name a node whose FIRST step threw, leaving props untouched", () => {
+    const doc: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "b", type: "core/broken", version: 1, props: { keep: 1 } }],
+    };
+
+    const { doc: out, rewritten, failures } = migrateDocument(doc, src);
+
+    // The node IS flagged and DOES fail, but nothing ran, so its props are the
+    // stored object and anything derived from them still holds. Reporting it
+    // would be reporting the failure rather than the rewrite, and the two come
+    // apart exactly here — which is why the report is keyed on the props object
+    // rather than on the version stamp or on `migrationFailed`.
+    expect(failures).toHaveLength(1);
+    expect(out.nodes[0]).toMatchObject({ migrationFailed: true });
+    expect(rewritten).toEqual([]);
+    expect(propsReplaced(doc, out)).toEqual([]);
+  });
+
+  it("is empty when nothing was rewritten", () => {
+    const doc: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "t", type: "core/box", version: 1, props: {} }],
+    };
+
+    const { doc: out, rewritten } = migrateDocument(doc, src);
+
+    expect(rewritten).toEqual([]);
+    expect(propsReplaced(doc, out)).toEqual([]);
+  });
+});
+
+describe("resolving a reported pointer", () => {
+  const src = source({
+    "core/heading": {
+      version: 2,
+      migrate: { 1: (p: Record<string, unknown>) => ({ ...p, level: 2 }) },
+    },
+    "core/box": { version: 1 },
+  });
+
+  it("addresses a node in a slot whose NAME needs escaping", () => {
+    // The separating case. A slot called `hero/main` produces a pointer with the
+    // slash escaped, so a consumer that rebuilds paths by joining raw names
+    // looks up a pointer the producer never wrote — and misses the node
+    // silently, which is indistinguishable from the node not having changed.
+    const doc: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "outer",
+          type: "core/box",
+          version: 1,
+          props: {},
+          slots: {
+            "hero/main": [
+              { id: "deep", type: "core/heading", version: 1, props: {} },
+            ],
+          },
+        },
+      ],
+    } as unknown as BlockDocument;
+
+    const { doc: out, rewritten } = migrateDocument(doc, src);
+
+    expect(rewritten).toHaveLength(1);
+    expect(rewritten[0]?.path).toBe("/nodes/0/slots/hero~1main/0");
+    // Resolves in BOTH documents, which is what lets a caller recover the props
+    // a node was stored with after migration has replaced them.
+    expect(nodeAtPointer(out, rewritten[0]!.path)).toMatchObject({
+      id: "deep",
+      version: 2,
+    });
+    expect(nodeAtPointer(doc, rewritten[0]!.path)).toMatchObject({
+      id: "deep",
+      version: 1,
+    });
+    // The naive join, for contrast: it addresses nothing.
+    expect(nodeAtPointer(out, "/nodes/0/slots/hero/main/0")).toBeUndefined();
+  });
+
+  it("answers undefined rather than a neighbour for a bad index", () => {
+    const doc: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "a", type: "core/box", version: 1, props: {} }],
+    };
+    expect(nodeAtPointer(doc, "/nodes/0")).toMatchObject({ id: "a" });
+    // `01` and `1.0` both coerce to a valid index numerically; RFC 6901 says a
+    // non-canonical index addresses nothing, and silently returning element 0
+    // would hand a caller the wrong node's props.
+    expect(nodeAtPointer(doc, "/nodes/01")).toBeUndefined();
+    expect(nodeAtPointer(doc, "/nodes/1.0")).toBeUndefined();
+    expect(nodeAtPointer(doc, "/nodes/-1")).toBeUndefined();
+    expect(nodeAtPointer(doc, "")).toBeUndefined();
   });
 });
