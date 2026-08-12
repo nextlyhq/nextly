@@ -275,6 +275,29 @@ The tell is a check whose correctness depends on how some other system chose to
 spell something. Ask instead what property makes the answer true, and query
 that. It is usually available and it usually costs the same.
 
+**A commit's author field is one of these, and it is the one most likely to be
+believed**, because it looks like provenance rather than like a string somebody
+chose. It is a login, and in this repo many agents commit under one. Measured
+over the last 400 commits: 343 carry a single identity.
+
+So the field answers a narrower question than it appears to. It DOES separate
+one contributor from another — three distinct humans appear in that same range.
+It does NOT separate the many concurrent sessions sharing one credential, and no
+amount of reading it will, because the distinction was never recorded.
+
+Two different questions, and only one of them has a sound instrument:
+
+- **"did this line predate that change?"** — a fact about the tree.
+  `git show <ref>^:<path>` answers it exactly.
+- **"who wrote this line?"** — `git log --format=%an` answers a question about a
+  credential. Under a shared one it is a guess with a citation attached, which
+  is worse than an obvious guess.
+
+This surfaced while attributing a comment in `export-contract.test.ts`. The
+precedence claim was settled from the tree and held; the authorship claim around
+it could not have been settled at all, in either direction. `gh pr list --author
+@me` has the same shape — it filters by credential and reads as ownership.
+
 **"Structural" is not automatically "coarse", and the first two above are where
 that bites.** Replacing a name with a broader property is only correct when the
 broader property still separates the cases you must tell apart:
