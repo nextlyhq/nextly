@@ -1458,3 +1458,32 @@ describe("containers JSON cannot carry whole", () => {
     ).toThrow(/addresses 2 nodes/);
   });
 });
+
+describe("a document already past its limits", () => {
+  it("still allows the removal that would bring it back under", () => {
+    // A site that lowers its caps leaves existing documents over them. A check
+    // reading only the RESULT refuses every edit to such a document, including
+    // the removals that fix it, so the author is locked out of repairing the
+    // only thing that can help.
+    const tight: DocumentLimits = { ...DEFAULT_LIMITS, maxNodes: 1 };
+    const over = doc([node("a"), node("b")]);
+
+    const applied = applyOp(over, { kind: "remove", id: "b" }, tight);
+    expect(countNodes(applied.document.nodes)).toBe(1);
+  });
+
+  it("still refuses an edit that makes the overage worse", () => {
+    // The separating property. Allowing shrinkage must not become allowing
+    // anything: a document over its cap may be repaired, not grown.
+    const tight: DocumentLimits = { ...DEFAULT_LIMITS, maxNodes: 1 };
+    const over = doc([node("a"), node("b")]);
+
+    expect(() =>
+      applyOp(
+        over,
+        { kind: "insert", node: node("c"), at: { index: 0 } },
+        tight
+      )
+    ).toThrow(OpError);
+  });
+});

@@ -750,12 +750,22 @@ function assertNodeShape(
  * a second contract to keep in step.
  */
 function assertFitsCaps(
+  before: BlockDocument,
   result: BlockDocument,
   verb: string,
   limits: DocumentLimits
 ): void {
+  // Judged against where the document STARTED, not against the limit alone. A
+  // site that lowers its caps leaves existing documents already over them, and
+  // a check reading only the result refuses every edit to such a document —
+  // including the removals that would bring it back under. The author is locked
+  // out of repairing the only thing that can fix it.
+  //
+  // So an edit is refused when it crosses a cap the document was inside, or
+  // makes an existing overage worse. An edit that shrinks an over-large
+  // document is always allowed, even while it stays over.
   const total = countNodes(result.nodes);
-  if (total > limits.maxNodes) {
+  if (total > limits.maxNodes && total > countNodes(before.nodes)) {
     throw new OpError(
       `${verb}: this would leave the document holding ${String(total)} nodes, ` +
         `past the ${String(limits.maxNodes)} a document may hold. The edit would ` +
@@ -766,7 +776,7 @@ function assertFitsCaps(
   // puts the document past what the engine will store, with the same result:
   // the edit applies, enters history, and every save afterwards is refused.
   const bytes = documentBytes(result);
-  if (bytes > limits.maxBytes) {
+  if (bytes > limits.maxBytes && bytes > documentBytes(before)) {
     throw new OpError(
       `${verb}: this would leave the document at ${String(bytes)} bytes, past ` +
         `the ${String(limits.maxBytes)} it may hold. The edit would ` +
@@ -1077,7 +1087,7 @@ export function applyOp(
       );
       // Measured on the placed forest rather than on the loose subtree, which
       // is what makes an insert into a slot count the slot's own key.
-      assertFitsCaps(withNodes(document, placed), "insert", limits);
+      assertFitsCaps(document, withNodes(document, placed), "insert", limits);
       return {
         document: withNodes(document, placed),
         inverse: { kind: "remove", id: op.node.id },
@@ -1168,7 +1178,7 @@ export function applyOp(
       // A move keeps the node count and can still grow the document: relocating
       // into a slot the parent did not have yet adds that slot's name to what is
       // stored, and a long enough name crosses the byte cap on its own.
-      assertFitsCaps(withNodes(document, moved), "move", limits);
+      assertFitsCaps(document, withNodes(document, moved), "move", limits);
       return {
         document: withNodes(document, moved),
         inverse: { kind: "move", id: op.id, to: positionOf(location) },
@@ -1226,7 +1236,7 @@ export function applyOp(
       // cap: one large string in `props` is a document the engine will refuse
       // to store, written by an edit nothing objected to.
       const updated = updateNode(nodes, op.id, { ...op.patch, ...removals });
-      assertFitsCaps(withNodes(document, updated), "update", limits);
+      assertFitsCaps(document, withNodes(document, updated), "update", limits);
       return {
         document: withNodes(document, updated),
         inverse: {
