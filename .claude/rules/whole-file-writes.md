@@ -1,16 +1,16 @@
 ---
-# Build configuration is where this costs the most, because no suite reads it —
-# but the failure is the write, not the format, so the paths cover every config
-# a whole-file write plausibly lands on.
+# Scoped to everything, and the first draft's path list is why. It named
+# `tsup.config.ts` and `vitest.config.ts` and therefore missed
+# `packages/nextly/tsup.config.js`, `packages/ui/tsup.server-safe.config.ts`,
+# `packages/*/vitest.integration.config.ts` and `apps/playground/next.config.ts`
+# — an enumeration of spellings, in a rule about not enumerating.
+#
+# The deeper reason is that a path-scoped rule loads when a matching path is
+# READ or EDITED, and the failure here is a shell redirect that reads nothing.
+# The rule would have been absent at exactly the moment it applies. This is a
+# property of the ACT, not of the file type.
 paths:
-  - "**/turbo.json"
-  - "**/turbo.jsonc"
-  - "**/tsconfig*.json"
-  - "**/package.json"
-  - "**/tsup.config.ts"
-  - "**/vitest.config.ts"
-  - "**/*.yml"
-  - "**/*.yaml"
+  - "**/*"
 ---
 
 ## A whole-file write is a delete plus a create
@@ -24,7 +24,8 @@ know exists; they overwrite one they are sure does not. So the precaution is not
 "be careful with destructive commands" — it is to READ the path first, and treat
 a successful read as a refusal to write blind. Under an editing tool that
 requires a prior read, use it; reaching for the shell to write a file the tool
-would have made you read is how the requirement gets bypassed.
+would have made you read is how the requirement gets bypassed, and it is the
+bypass rather than the command that does the damage.
 
 `turbo.json` in `packages/ui` was replaced this way. It lost
 `dependsOn: ["$TURBO_EXTENDS$", "build"]` on both `test` and `test:coverage`,
@@ -35,10 +36,11 @@ everything.
 
 They are worth knowing individually, because each looks like good news:
 
-1. **The diffstat shows deletions on a file you believe you are creating.**
-   `61 ++---` on a new file is not a formatting artifact. A created file has no
-   deleted lines. This is the cheapest tell and the one most easily read past,
-   because by then the write has already succeeded and attention has moved on.
+1. **The diffstat shows deletions on a file you believe you are creating.** A
+   created file has no deleted lines, so a single `-` in its `++---` bar is
+   conclusive, whatever the counts. This is the cheapest tell and the one most
+   easily read past, because by then the write has already succeeded and
+   attention has moved on.
 
 2. **A metric improves far more than the change should explain.** "1264 inputs
    became 119" was recorded as evidence that the new scoping was tight. It was
@@ -52,13 +54,15 @@ They are worth knowing individually, because each looks like good news:
    been doing the thing you are adding, you did not add it; you replaced
    something that already worked.
 
-## Why configuration specifically
+## Why build configuration is the worst place for it
 
 The clobber survived `lint`, `check-types` and the full unit suite, because no
 test asserts on build configuration. Product code has a suite standing behind
-it; a `turbo.json`, a `tsconfig`, a workflow file and a `package.json` have only
-the diff. Green after touching one of these is not corroboration — it is the
-absence of any instrument.
+it; a `turbo.json`, a `tsconfig`, a `tsup.config.*`, a `vitest.*.config.*`, a
+`next.config.*`, a workflow file and a `package.json` have only the diff. Green
+after touching one of these is not corroboration — it is the absence of any
+instrument. That list is examples rather than a boundary: the property is "no
+suite reads it", not the filename.
 
 The consequence is delayed and looks unrelated. Dropping this package's own
 `build` from `dependsOn` leaves the root task's `^build`, which builds
@@ -84,13 +88,29 @@ drop whatever the root supplies.
 
 ## Restoring, and proving the restore
 
-`git checkout origin/main -- <path>` puts the file back, and re-applies the
-edit as an append. Two follow-ups make the difference between believing it and
-knowing it:
+The target is the **pre-write** content of that path, which is not a fixed
+command — name it before running anything:
 
-- `git checkout -- <path>` restores to the last COMMIT, not to the state before
-  your write. Commit or stash deliberate work first, or the restore takes that
-  with it.
-- Verify by CONTENT in the merge commit, not by "I restored it" —
-  see `verifying-merged-work.md`. The clobber and the restore both live inside
-  one PR, so the diffstat nets out and reads as though nothing happened.
+- **`git checkout -- <path>` restores from the INDEX, not from a commit.** If
+  the clobbered content was staged it repairs nothing, and if deliberate earlier
+  edits were staged it reinstates those. `git checkout HEAD -- <path>` is the
+  form that goes to the last commit.
+- **`git checkout origin/main -- <path>` is right only when the branch has made
+  no committed change to that path.** Otherwise it discards this PR's own
+  earlier edits along with the clobber, while looking like a clean repair. Check
+  that condition — `git log <base>..HEAD -- <path>` — rather than reaching for
+  the command because it worked somewhere else.
+- Whichever source you take, the deliberate edit is then re-applied on top as an
+  APPEND. The restore does not carry it.
+
+Then prove it, and prove it **before submitting**:
+
+- Compare the repaired path against its pre-write version —
+  `git diff <pre-write-rev> -- <path>` — and expect to see only the edit you
+  meant. The clobber and the restore both live inside one PR, so the branch
+  diffstat nets out and reads as though nothing happened; the summary is exactly
+  the artifact that hides this.
+- The merge-commit content check in `verifying-merged-work.md` is a SEPARATE,
+  post-merge confirmation. It cannot run while the PR is open, so it is not a
+  substitute for the check above — by the time it is available, a broken config
+  has already merged.
