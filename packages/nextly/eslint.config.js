@@ -1,7 +1,12 @@
 import { config } from "@nextlyhq/eslint-config/base";
 
+import { bareErrorConfig } from "./eslint-bare-error-rule.js";
+
 export default [
   ...config,
+  // Globs are relative to packages/nextly/ because the lint command runs `eslint .` from this
+  // directory. The repository-root config mounts the same builder with a path prefix.
+  bareErrorConfig(),
   // F1 PR 1 + F11 PR 5: bans on imports from the deployed app's
   // runtime code (the request graph + boot path).
   //
@@ -88,6 +93,10 @@ export default [
       "node_modules/**",
       "test-*.ts",
       "tsup.config.js",
+      // Config for the rule above, not source. Same treatment as the other root-level
+      // config files: outside the TS project service, so linting it as typed source
+      // fails to parse.
+      "eslint-bare-error-rule.js",
       "vitest.config.ts",
       "vitest.*.config.ts",
       "scripts/*.cjs",
