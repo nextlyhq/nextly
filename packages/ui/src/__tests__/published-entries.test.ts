@@ -6,7 +6,13 @@
  * JavaScript target, two subpaths sharing one artifact — and a check exercised only against the
  * real map would be asserting that today's map is acceptable, which is a different claim.
  */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path, { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -633,12 +639,31 @@ describe("the hand-written declaration beside the module", () => {
     ]);
   });
 
-  it("declares exactly the bindings the module exports", () => {
-    const runtime = names("published-entries.mjs");
-    expect(
-      runtime.length,
-      "no exported functions were found to compare"
-    ).toBeGreaterThan(0);
-    expect(names("published-entries.d.mts")).toEqual(runtime);
+  // DISCOVERED rather than listed. A named pair covers the module someone remembered, and a second
+  // `.mjs` that grows a declaration beside it drifts unwatched — which is how a declaration went on
+  // advertising five helpers after their implementations were deleted.
+  const pairs = readdirSync(scripts)
+    .filter(file => file.endsWith(".d.mts"))
+    .map(declaration => ({
+      declaration,
+      module: `${declaration.slice(0, -".d.mts".length)}.mjs`,
+    }));
+
+  it("has a declaration to check, so the rule cannot pass vacuously", () => {
+    expect(pairs.map(pair => pair.declaration)).toContain(
+      "published-entries.d.mts"
+    );
   });
+
+  it.each(pairs)(
+    "$declaration declares exactly the bindings $module exports",
+    ({ declaration, module }) => {
+      const runtime = names(module);
+      expect(
+        runtime.length,
+        `no exported bindings were found in ${module} to compare`
+      ).toBeGreaterThan(0);
+      expect(names(declaration)).toEqual(runtime);
+    }
+  );
 });
