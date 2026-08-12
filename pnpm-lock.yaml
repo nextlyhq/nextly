@@ -159,6 +159,9 @@ importers:
       '@nextlyhq/blocks-react':
         specifier: workspace:^
         version: link:../../packages/blocks-react
+      '@nextlyhq/builder':
+        specifier: workspace:*
+        version: link:../../packages/builder
       '@nextlyhq/plugin-form-builder':
         specifier: workspace:^
         version: link:../../packages/plugin-form-builder

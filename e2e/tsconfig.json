@@ -9,6 +9,11 @@
     // included and then skipped — which is the same silent gap the comment
     // under `include` exists to avoid.
     "allowJs": true,
+    // The builder is mapped to SOURCE below, so its `.tsx` modules are
+    // typechecked here even though nothing in this package writes JSX. Without
+    // this, adding any component to that package breaks `e2e`'s check-types
+    // with `--jsx is not set` — a failure in a package that changed nothing.
+    "jsx": "react-jsx",
     "baseUrl": ".",
     // The builder is imported for its coordinate mapping, and `check-types`
     // deliberately does not build dependencies first — so resolving the package
