@@ -673,19 +673,19 @@ export function FieldEditor({ field, allFields, onUpdate }: FieldEditorProps) {
           <TabsList className="w-full justify-start gap-0">
             <TabsTrigger
               value="general"
-              className="w-full rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-background/50 transition-all"
+              className="w-full data-[state=active]:bg-background/50"
             >
               General
             </TabsTrigger>
             <TabsTrigger
               value="validation"
-              className="w-full rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-background/50 transition-all"
+              className="w-full data-[state=active]:bg-background/50"
             >
               Validation
             </TabsTrigger>
             <TabsTrigger
               value="conditional"
-              className="w-full rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-background/50 transition-all"
+              className="w-full data-[state=active]:bg-background/50"
             >
               Conditional
             </TabsTrigger>

@@ -48,7 +48,7 @@ const PRIMITIVE = resolve(PACKAGES, "ui/src/components/tabs.tsx");
  * it; the inline-style and `borderBottom*` patterns cover doing it in JS, which
  * is how the real violation escaped a class-based reading.
  */
-const FORBIDDEN: Array<{ pattern: RegExp; why: string }> = [
+const ELEMENT_RULES: Array<{ pattern: RegExp; why: string }> = [
   {
     pattern: /<Tabs(?:List|Trigger)[^>]*\bborder-b-[^\s"'}]+/,
     why: "sets its own bottom border — the underline IS the active state, and the primitive draws it",
@@ -61,11 +61,13 @@ const FORBIDDEN: Array<{ pattern: RegExp; why: string }> = [
     pattern: /<Tabs(?:List|Trigger)[^>]*\bstyle=/,
     why: "styles the tab inline, which no class-based override can be reasoned about alongside",
   },
-  {
-    pattern: /borderBottomColor|borderBottomWidth|borderBottom:/,
-    why: "drives the underline from JS instead of the primitive's data-[state=active]",
-  },
 ];
+
+/** Checked over the whole file: a computed underline colour need not sit in the tag. */
+const INDICATOR_IN_JS = {
+  pattern: /borderBottomColor|borderBottomWidth|borderBottom:/,
+  why: "drives the underline from JS instead of the primitive's data-[state=active]",
+};
 
 /** Every `.tsx` under `packages/`, excluding build output and the primitive. */
 function sourceFiles(dir: string, found: string[] = []): string[] {
@@ -99,6 +101,16 @@ interface Violation {
   why: string;
 }
 
+/**
+ * Each `<TabsList ...>` / `<TabsTrigger ...>` opening tag, attributes included.
+ *
+ * Matched over the WHOLE source rather than line by line, because JSX puts one
+ * attribute per line as soon as an element has more than two — so a per-line
+ * scan only ever sees the single-line call sites and reports the multi-line ones
+ * as clean. That is the shape this contract is most likely to be broken in.
+ */
+const TAB_ELEMENT = /<Tabs(?:List|Trigger)[^>]*>/g;
+
 function violations(): Violation[] {
   const found: Violation[] = [];
   for (const file of sourceFiles(PACKAGES)) {
@@ -107,16 +119,38 @@ function violations(): Violation[] {
     if (!source.includes("<TabsList") && !source.includes("<TabsTrigger")) {
       continue;
     }
+    const relative = file.replace(`${REPO}/`, "");
+    const lineOf = (index: number): number =>
+      source.slice(0, index).split("\n").length;
+
+    for (const element of source.matchAll(TAB_ELEMENT)) {
+      const text = element[0];
+      // A commented-out example documents; it does not style.
+      if (
+        text
+          .split("\n")
+          .every(line => isComment(line) || line.trim().length === 0)
+      ) {
+        continue;
+      }
+      for (const { pattern, why } of ELEMENT_RULES) {
+        if (pattern.test(text)) {
+          found.push({ file: relative, line: lineOf(element.index), why });
+        }
+      }
+    }
+
+    // Driving the underline from JS is not confined to the opening tag — the
+    // value can be computed anywhere in the component — so this one is checked
+    // over the file, scoped to files that render tabs at all.
     source.split("\n").forEach((line, index) => {
       if (isComment(line)) return;
-      for (const { pattern, why } of FORBIDDEN) {
-        if (pattern.test(line)) {
-          found.push({
-            file: file.replace(`${REPO}/`, ""),
-            line: index + 1,
-            why,
-          });
-        }
+      if (INDICATOR_IN_JS.pattern.test(line)) {
+        found.push({
+          file: relative,
+          line: index + 1,
+          why: INDICATOR_IN_JS.why,
+        });
       }
     });
   }
@@ -139,9 +173,19 @@ describe("the tab indicator contract", () => {
     // The positive control: the patterns must actually match the shape they
     // describe. Without this, a regex that can never match anything passes the
     // suite while checking nothing.
-    const sample = `<TabsTrigger value="x" style={{ borderBottomColor: "red" }} className="border-b-2">`;
-    const matched = FORBIDDEN.filter(({ pattern }) => pattern.test(sample));
-    expect(matched.length).toBeGreaterThanOrEqual(3);
+    // Multi-line on purpose: the single-line form is the one a naive scan
+    // already catches, so a control written that way proves the least.
+    const sample = [
+      "<TabsTrigger",
+      '  value="x"',
+      '  className="border-b-0 rounded-md"',
+      ">",
+    ].join("\n");
+    const matched = ELEMENT_RULES.filter(({ pattern }) => pattern.test(sample));
+    expect(matched.length).toBeGreaterThanOrEqual(2);
+    expect(
+      INDICATOR_IN_JS.pattern.test('style={{ borderBottomColor: "red" }}')
+    ).toBe(true);
   });
 
   it("no call site overrides the tab indicator", () => {
