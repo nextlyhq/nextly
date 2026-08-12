@@ -46,16 +46,20 @@ describe("deriving the Node legs from a supported range", () => {
   it("tests every released major above an open clause, not just its endpoints", () => {
     // `>=24.0.0` promises 24, 25 and 26 alike. The floor plus the newest release leaves 25
     // unexercised, and a regression confined to it reaches consumers with every leg green.
+    //
+    // Each is named by its own FLOOR. A bare `25` is a selector `setup-node` resolves to the
+    // newest 25.x, which is not the version the range promises — the same mistake the closed
+    // clauses avoid, and the gap is where an API added after 25.0.0 lives.
     expect(matrixFor(">=24.0.0", [22, 24, 25, 26])).toEqual([
       "24.0.0",
-      "25",
-      "26",
+      "25.0.0",
+      "26.0.0",
     ]);
   });
 
   it("picks up a new major without an edit here", () => {
     // The property that makes this worth deriving at all.
-    expect(matrixFor(">=24.0.0", [24, 25, 26, 27])).toContain("27");
+    expect(matrixFor(">=24.0.0", [24, 25, 26, 27])).toContain("27.0.0");
   });
 
   it("names no major that has not been released", () => {
@@ -73,6 +77,18 @@ describe("deriving the Node legs from a supported range", () => {
 
   it("selects the lowest floor for a pull request", () => {
     expect(lowestFloor("^20.19.0 || ^22.12.0 || >=24.0.0")).toBe("20.19.0");
+  });
+
+  it("selects the lowest floor however the clauses are ordered", () => {
+    // A semver union has no required order, so this states the same contract as the ascending
+    // spelling above. Reading the first clause would run Node 24 on every pull request while the
+    // real floor went unexercised — and every synchronisation check here would still be green,
+    // because they compare the matrix to the range rather than to what the range MEANS.
+    expect(lowestFloor(">=24.0.0 || ^20.19.0")).toBe("20.19.0");
+    expect(lowestFloor("^22.12.0 || ^20.19.0")).toBe("20.19.0");
+    // Ordering is numeric, not lexicographic: "9.0.0" must not beat "10.0.0" by string compare.
+    expect(lowestFloor("^10.0.0 || ^9.0.0")).toBe("9.0.0");
+    expect(lowestFloor("^20.9.0 || ^20.19.0")).toBe("20.9.0");
   });
 
   it("reads this repository's own range without throwing", () => {

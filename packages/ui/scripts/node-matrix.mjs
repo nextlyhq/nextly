@@ -55,22 +55,38 @@ export function matrixFor(range, releasedMajors) {
     }
     const floor = Number(open[1]);
     versions.push(`${open[1]}.${open[2]}.${open[3]}`);
-    // Every major ABOVE the open floor that exists. The floor's own major is already covered by the
-    // exact floor version pushed above.
+    // Every major ABOVE the open floor that exists, named by its own FLOOR rather than by the bare
+    // major. `setup-node` resolves `25` to the newest 25.x, which is not the version the range
+    // promises — the same defect the closed clauses avoid by naming exact floors, and the gap is
+    // exactly where an API added after 25.0.0 lives.
     for (const major of [...new Set(releasedMajors)].sort((a, b) => a - b)) {
-      if (major > floor) versions.push(String(major));
+      if (major > floor) versions.push(`${major}.0.0`);
     }
   }
   return versions;
 }
 
-/** The single lowest floor, which is the one leg a pull request runs. */
+/**
+ * The single lowest floor, which is the one leg a pull request runs.
+ *
+ * Compared NUMERICALLY rather than taken from the front of the list. A semver union has no required
+ * order, so `>=24.0.0 || ^20.19.0` states the same contract as `^20.19.0 || >=24.0.0` — and reading
+ * the first clause would run Node 24 on every pull request while the real floor went unexercised,
+ * with every synchronisation check still green.
+ */
 export function lowestFloor(range) {
-  const first = matrixFor(range, [])[0];
-  if (first === undefined) {
+  const floors = matrixFor(range, []);
+  if (floors.length === 0) {
     throw new Error("engines.node named no versions, so no leg could be selected.");
   }
-  return first;
+  const parts = version => version.split(".").map(Number);
+  return floors.reduce((lowest, candidate) => {
+    const [major, minor, patch] = parts(candidate);
+    const [lowMajor, lowMinor, lowPatch] = parts(lowest);
+    if (major !== lowMajor) return major < lowMajor ? candidate : lowest;
+    if (minor !== lowMinor) return minor < lowMinor ? candidate : lowest;
+    return patch < lowPatch ? candidate : lowest;
+  });
 }
 
 /** Every major with at least one release, read from Node's own index. */

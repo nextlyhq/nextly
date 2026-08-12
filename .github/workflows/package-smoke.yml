@@ -350,7 +350,7 @@ jobs:
           else
             # printf keeps the multi-line body inside this YAML block scalar;
             # a raw multi-line string here would dedent and break the file.
-            body=$(printf 'The nightly package-smoke workflow failed. Run: %s\n\nOne of three things: the packed tarballs no longer install/import in a clean project, `create-nextly-app` no longer scaffolds an app that builds, a subpath declared server-safe no longer survives a real Next.js Server Component build, or the Node legs could not be derived from the engines range. The last one names a Node version in the job title, and a failure on the floor leg alone means the subpath uses something newer than the oldest supported Node. See the run logs for the failing job.' "$RUN_URL")
+            body=$(printf 'The nightly package-smoke workflow failed. Run: %s\n\nOne of four things: the packed tarballs no longer install/import in a clean project, `create-nextly-app` no longer scaffolds an app that builds, a subpath declared server-safe no longer survives a real Next.js Server Component build, or the Node legs could not be derived from the engines range. The server-safe build names its Node version in the job title, and a failure on the floor leg alone means the subpath uses something newer than the oldest supported Node. See the run logs for the failing job.' "$RUN_URL")
             gh issue create --repo "${{ github.repository }}" \
               --title "Nightly package smoke is failing" \
               --label ci-nightly-failure \
