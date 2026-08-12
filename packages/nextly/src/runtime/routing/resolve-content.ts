@@ -144,6 +144,26 @@ export interface ResolveContentOptions {
    */
   overrideAccess?: boolean;
   /**
+   * Which collections that trust may reach as relationships are expanded.
+   *
+   * A route lists the collections it SERVES; a page populating a relationship
+   * reaches one it did not list. Without this, every populated target inherits
+   * the route's bypass. Named collections are read trusted; the rest are read
+   * as a visitor would read them.
+   *
+   * Only ever narrows, and never admits a target's drafts — see
+   * `ContentRouteConfig.trustedCollections`.
+   *
+   * **A list rather than the predicate the read layer takes, because this
+   * layer CACHES.** Two routes differing only in what they trust produce
+   * different rows, so the bound has to be part of the cache identity — and a
+   * function has none. Taking the data means the key and the predicate are
+   * derived from one value that cannot disagree with itself; taking a
+   * predicate plus a separate key would be two options a caller can get out of
+   * step.
+   */
+  trustedCollections?: readonly string[];
+  /**
    * What the CALLER authorized, before a draft decision widened it.
    *
    * A route forces `overrideAccess` on so a granted entry can be reached at
@@ -249,6 +269,7 @@ export async function resolveContent(
       sort: "id",
       depth,
       overrideAccess: callerOverrideAccess,
+      trusted,
       user,
       ...(options.richTextFormat
         ? { richTextFormat: options.richTextFormat }
@@ -274,6 +295,7 @@ export async function resolveContent(
             draft: true,
             depth,
             overrideAccess,
+            trusted,
             user,
             ...(options.richTextFormat
               ? { richTextFormat: options.richTextFormat }
@@ -307,6 +329,7 @@ export async function resolveContent(
         depth,
         // Enforce the collection's read policy unless the caller opts out.
         overrideAccess,
+        trusted,
         // Pass the user explicitly (even `undefined`) so an anonymous read
         // CLEARS any default user configured on the reader instead of merging
         // over it — otherwise a reader booted with a default identity would make
@@ -346,6 +369,7 @@ export async function resolveContent(
           draft: true,
           depth,
           overrideAccess,
+          trusted,
           user,
           ...(options.richTextFormat
             ? { richTextFormat: options.richTextFormat }
@@ -383,6 +407,30 @@ export async function resolveContent(
   // one thing a preview must not do, and per-request freshness is exactly what
   // a preview wants. It also removes any path by which a draft entry could be
   // handed to a request that never asked for one.
+  // Sorted and de-duplicated so the same set written two ways is one cache
+  // identity, and so the predicate and the key are built from one value.
+  const trustedNames =
+    options.trustedCollections === undefined
+      ? undefined
+      : [...new Set(options.trustedCollections)].sort();
+  const trusted =
+    trustedNames === undefined
+      ? undefined
+      : (name: string): boolean => trustedNames.includes(name);
+
+  // A bounded read stays cacheable. Its refused targets are judged by stored
+  // policies and a policy change writes no row, so no content tag busts and an
+  // entry can outlive a tightening — but that staleness is not something the
+  // bound introduces. A pre-rendered page is a point-in-time copy of everything
+  // it read, and a policy tightening after the build leaves the whole page
+  // stale, bounded targets or not. The remedy is revalidation: the `tags`
+  // option names the related collections a populated read depends on.
+  //
+  // Per-request rendering is not available as an alternative here anyway. The
+  // only escape from caching in this module is `markDynamic()`, and the one
+  // factory that reaches this path, `createPublicContentRoute`, exports
+  // `generateStaticParams` — so marking its render dynamic would contradict
+  // what the route has already told Next, exactly as `draft` would.
   const cacheable = overrideAccess && !user && !draft;
   if (!cacheable) {
     // Bypassing `unstable_cache` alone does not opt out of Next's Full Route
@@ -414,6 +462,16 @@ export async function resolveContent(
       // not be "json"), so key it as "inherit" — never as a concrete format — so
       // an explicit-format call can't reuse an inherited-shape cache entry.
       options.richTextFormat ?? "inherit",
+      // The bound changes which related rows come back, so two routes that
+      // differ only in what they trust must not share an entry.
+      //
+      // JSON rather than a join, because the encoding has to be INJECTIVE over
+      // an unvalidated string array: `["a", "b"]` and `["a,b"]` join to the
+      // same text while trusting different sets, and any sentinel string is a
+      // legal collection slug that a one-element array could collide with.
+      // `JSON.stringify` distinguishes all three — `null` for an unbounded read
+      // cannot be produced by any array.
+      JSON.stringify(trustedNames ?? null),
     ],
     // Trusted reads don't depend on an access decision, so tag-only busting is
     // safe; an explicit positive `revalidate` adds a time-based safety net, and

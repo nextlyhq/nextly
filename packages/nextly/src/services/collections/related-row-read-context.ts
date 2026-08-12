@@ -48,6 +48,26 @@ export interface RelatedRowReadContext {
   overrideAccess?: boolean;
 
   /**
+   * Which collections `overrideAccess` may actually reach, when the caller can
+   * name them.
+   *
+   * A trusted read that populates a relationship reads the TARGET trusted too,
+   * and the target's collection was never named by the caller — it was reached
+   * through a field. For a caller who has already decided who is asking, that
+   * is correct and this stays absent: the Direct API's semantics are unchanged.
+   *
+   * A caller serving one fixed audience is in the opposite position. It can
+   * state its trusted set up front, and anything outside that set must be read
+   * as the audience would read it. Supplying this narrows the bypass to the
+   * collections named, per TARGET, at every fetch the expansion performs.
+   *
+   * A predicate rather than a list because the decision is asked once per
+   * target collection at four separate points, and a caller may derive
+   * membership rather than enumerate it.
+   */
+  trusted: ((collection: string) => boolean) | undefined;
+
+  /**
    * The caller's authenticated scope. A scoped API key is judged on its OWN
    * stamped grant and never on its owner's roles, so a super-admin-owned key
    * must not inherit the bypass its owner's session would get.

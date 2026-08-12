@@ -279,6 +279,12 @@ export class CollectionsHandler {
       userRoles?: string[];
       user?: UserContext;
       overrideAccess?: boolean;
+      /**
+       * Which collections a trusted read may reach as relationships are expanded.
+       * Absent means every populated target inherits the caller's trust. Only ever
+       * narrows, and never admits a target's drafts.
+       */
+      trusted?: (collection: string) => boolean;
       routeAuthorized?: boolean;
     },
   >(params: T): Omit<T, "userName" | "userEmail" | "userRoles"> {
@@ -532,6 +538,12 @@ export class CollectionsHandler {
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
     /**
+     * Which collections a trusted read may reach as relationships are expanded.
+     * Absent means every populated target inherits the caller's trust. Only ever
+     * narrows, and never admits a target's drafts.
+     */
+    trusted?: (collection: string) => boolean;
+    /**
      * The route already ran the coarse RBAC gate, so skip only that redundant
      * re-check while the stored read rules (owner-only scoping, role-based,
      * custom) still run. The query service folds an owner-only rule into the SQL
@@ -584,6 +596,12 @@ export class CollectionsHandler {
       actor?: RequestActor;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
+      /**
+       * Which collections a trusted read may reach as relationships are expanded.
+       * Absent means every populated target inherits the caller's trust. Only ever
+       * narrows, and never admits a target's drafts.
+       */
+      trusted?: (collection: string) => boolean;
       /** Write locale (i18n M5) — translatable values stored for this language. */
       locale?: string;
       /**
@@ -642,6 +660,12 @@ export class CollectionsHandler {
     user?: UserContext;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /**
+     * Which collections a trusted read may reach as relationships are expanded.
+     * Absent means every populated target inherits the caller's trust. Only ever
+     * narrows, and never admits a target's drafts.
+     */
+    trusted?: (collection: string) => boolean;
     /**
      * Draft/Published filter override (only effective when collection.status
      * === true). Public callers default to 'published'; trusted callers can
@@ -709,6 +733,12 @@ export class CollectionsHandler {
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
     /**
+     * Which collections a trusted read may reach as relationships are expanded.
+     * Absent means every populated target inherits the caller's trust. Only ever
+     * narrows, and never admits a target's drafts.
+     */
+    trusted?: (collection: string) => boolean;
+    /**
      * The route already ran the coarse RBAC gate, so skip only that redundant
      * re-check while the stored read rules (owner-only scoping, role-based,
      * custom) still run. Forwarded to the query service, which counts under the
@@ -756,6 +786,12 @@ export class CollectionsHandler {
       user?: UserContext;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
+      /**
+       * Which collections a trusted read may reach as relationships are expanded.
+       * Absent means every populated target inherits the caller's trust. Only ever
+       * narrows, and never admits a target's drafts.
+       */
+      trusted?: (collection: string) => boolean;
       /** Who performed the write, recorded on the outbox event. */
       actor?: RequestActor;
       /** Write locale (i18n M5) — translatable values updated for this language. */
@@ -820,6 +856,12 @@ export class CollectionsHandler {
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
     /**
+     * Which collections a trusted read may reach as relationships are expanded.
+     * Absent means every populated target inherits the caller's trust. Only ever
+     * narrows, and never admits a target's drafts.
+     */
+    trusted?: (collection: string) => boolean;
+    /**
      * Set by the REST dispatcher to attest the route middleware already ran the
      * RBAC/code-access gate, so the entry service skips only that redundant
      * re-check. Never inferred from a userId.
@@ -851,6 +893,12 @@ export class CollectionsHandler {
     actor?: RequestActor;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /**
+     * Which collections a trusted read may reach as relationships are expanded.
+     * Absent means every populated target inherits the caller's trust. Only ever
+     * narrows, and never admits a target's drafts.
+     */
+    trusted?: (collection: string) => boolean;
     /**
      * Set by the REST dispatcher to attest the route middleware already ran
      * the RBAC/code-access gate, so the entry service skips only that redundant
@@ -898,6 +946,12 @@ export class CollectionsHandler {
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
     /**
+     * Which collections a trusted read may reach as relationships are expanded.
+     * Absent means every populated target inherits the caller's trust. Only ever
+     * narrows, and never admits a target's drafts.
+     */
+    trusted?: (collection: string) => boolean;
+    /**
      * Set by the REST dispatcher to attest the route middleware already ran
      * the RBAC/code-access gate, so the entry service skips only that redundant
      * re-check. Never inferred from a userId — a caller attributing a user for
@@ -942,6 +996,12 @@ export class CollectionsHandler {
     user?: UserContext;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /**
+     * Which collections a trusted read may reach as relationships are expanded.
+     * Absent means every populated target inherits the caller's trust. Only ever
+     * narrows, and never admits a target's drafts.
+     */
+    trusted?: (collection: string) => boolean;
     /**
      * Set by the REST dispatcher to attest the route middleware already ran
      * the RBAC/code-access gate, so the entry service skips only that redundant
@@ -991,6 +1051,12 @@ export class CollectionsHandler {
       user?: UserContext;
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
+      /**
+       * Which collections a trusted read may reach as relationships are expanded.
+       * Absent means every populated target inherits the caller's trust. Only ever
+       * narrows, and never admits a target's drafts.
+       */
+      trusted?: (collection: string) => boolean;
       /** Route auth already ran; response is still redacted for this user */
       routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
@@ -1045,6 +1111,12 @@ export class CollectionsHandler {
       /** When true, bypass all access control checks */
       overrideAccess?: boolean;
       /**
+       * Which collections a trusted read may reach as relationships are expanded.
+       * Absent means every populated target inherits the caller's trust. Only ever
+       * narrows, and never admits a target's drafts.
+       */
+      trusted?: (collection: string) => boolean;
+      /**
        * Set by the REST dispatcher to attest the route middleware already ran
        * the RBAC/code-access gate, so the entry service skips only that
        * redundant re-check. Never inferred from a userId.
@@ -1082,6 +1154,12 @@ export class CollectionsHandler {
     user?: UserContext;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /**
+     * Which collections a trusted read may reach as relationships are expanded.
+     * Absent means every populated target inherits the caller's trust. Only ever
+     * narrows, and never admits a target's drafts.
+     */
+    trusted?: (collection: string) => boolean;
     /**
      * Set by the REST dispatcher to attest the route middleware already ran
      * the RBAC/code-access gate, so the entry service skips only that redundant

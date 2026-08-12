@@ -2404,6 +2404,12 @@ export class CollectionMutationService extends BaseService {
        */
       actor?: RequestActor;
       overrideAccess?: boolean;
+      /**
+       * Which collections a trusted read may reach as relationships are expanded.
+       * Absent means every populated target inherits the caller's trust. Only ever
+       * narrows. See {@link RelatedRowReadContext.trusted}.
+       */
+      trusted?: (collection: string) => boolean;
       /** Write locale (i18n M5): translatable values are stored for this language. */
       locale?: string;
       // Set by the REST dispatcher: route-level authorization already ran, so
@@ -3253,6 +3259,11 @@ export class CollectionMutationService extends BaseService {
               enforceFieldAccess: true,
               user: params.user,
               overrideAccess: params.overrideAccess,
+              // A mutation response is a READ of the related rows, so it is
+              // bounded exactly as a GET would be. Without this the item a
+              // write returns expands every target fully trusted, which is the
+              // same exposure through a different verb.
+              trusted: params.trusted,
               authenticatedScope: params.authenticatedScope,
               // The language just written, so a target collection whose read
               // rule filters on one of its own localized fields is judged in
@@ -3263,7 +3274,10 @@ export class CollectionMutationService extends BaseService {
               // A trusted write sees the row it just wrote regardless of
               // lifecycle; an untrusted one gets the published default, the
               // same answer its own GET would give.
-              status: params.overrideAccess === true ? "all" : undefined,
+              status:
+                params.overrideAccess === true && params.trusted === undefined
+                  ? "all"
+                  : undefined,
             }
           );
         } catch (expansionError) {
@@ -4430,6 +4444,12 @@ export class CollectionMutationService extends BaseService {
        */
       actor?: RequestActor;
       overrideAccess?: boolean;
+      /**
+       * Which collections a trusted read may reach as relationships are expanded.
+       * Absent means every populated target inherits the caller's trust. Only ever
+       * narrows. See {@link RelatedRowReadContext.trusted}.
+       */
+      trusted?: (collection: string) => boolean;
       /** Write locale (i18n M5): translatable values are updated for this language only. */
       locale?: string;
       // Set by the REST dispatcher: route-level authorization already ran, so
@@ -6420,6 +6440,11 @@ export class CollectionMutationService extends BaseService {
               enforceFieldAccess: true,
               user: params.user,
               overrideAccess: params.overrideAccess,
+              // A mutation response is a READ of the related rows, so it is
+              // bounded exactly as a GET would be. Without this the item a
+              // write returns expands every target fully trusted, which is the
+              // same exposure through a different verb.
+              trusted: params.trusted,
               authenticatedScope: params.authenticatedScope,
               // The language just written, so a target collection whose read
               // rule filters on one of its own localized fields is judged in
@@ -6430,7 +6455,10 @@ export class CollectionMutationService extends BaseService {
               // A trusted write sees the row it just wrote regardless of
               // lifecycle; an untrusted one gets the published default, the
               // same answer its own GET would give.
-              status: params.overrideAccess === true ? "all" : undefined,
+              status:
+                params.overrideAccess === true && params.trusted === undefined
+                  ? "all"
+                  : undefined,
             }
           );
         } catch (expansionError) {

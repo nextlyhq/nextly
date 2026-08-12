@@ -451,7 +451,7 @@ export class FieldGroupQueryService extends BaseService {
       fallbackLocale,
       executor,
       strict = false,
-      access = {},
+      access = { trusted: undefined },
     } = params;
     const entryId = entry.id as string;
     if (!entryId) return entry;
@@ -542,7 +542,7 @@ export class FieldGroupQueryService extends BaseService {
       select,
       locale,
       fallbackLocale,
-      access = {},
+      access = { trusted: undefined },
     } = params;
     if (entries.length === 0) return entries;
 
@@ -646,7 +646,7 @@ export class FieldGroupQueryService extends BaseService {
     fallbackLocale?: string | false,
     executor?: unknown,
     strict = false,
-    access: ComponentReadAccess = {}
+    access: ComponentReadAccess = { trusted: undefined }
   ): Promise<Record<string, unknown> | null> {
     const meta = await this.registryService.getComponent(
       componentSlug,
@@ -696,7 +696,7 @@ export class FieldGroupQueryService extends BaseService {
     fallbackLocale?: string | false,
     executor?: unknown,
     strict = false,
-    access: ComponentReadAccess = {}
+    access: ComponentReadAccess = { trusted: undefined }
   ): Promise<Record<string, unknown>[]> {
     const meta = await this.registryService.getComponent(
       componentSlug,
@@ -748,7 +748,7 @@ export class FieldGroupQueryService extends BaseService {
     fallbackLocale?: string | false,
     executor?: unknown,
     strict = false,
-    access: ComponentReadAccess = {}
+    access: ComponentReadAccess = { trusted: undefined }
   ): Promise<Record<string, unknown>[]> {
     const allowedSlugs = field.components ?? [];
     const allRows: {
@@ -825,7 +825,7 @@ export class FieldGroupQueryService extends BaseService {
     currentDepth: number,
     locale?: string,
     fallbackLocale?: string | false,
-    access: ComponentReadAccess = {}
+    access: ComponentReadAccess = { trusted: undefined }
   ): Promise<Map<string, unknown>> {
     const meta = await this.registryService.getComponent(componentSlug);
     const componentFields = meta.fields;
@@ -882,7 +882,7 @@ export class FieldGroupQueryService extends BaseService {
     currentDepth: number,
     locale?: string,
     fallbackLocale?: string | false,
-    access: ComponentReadAccess = {}
+    access: ComponentReadAccess = { trusted: undefined }
   ): Promise<Map<string, unknown>> {
     const meta = await this.registryService.getComponent(componentSlug);
     const componentFields = meta.fields;
@@ -936,7 +936,7 @@ export class FieldGroupQueryService extends BaseService {
     currentDepth: number,
     locale?: string,
     fallbackLocale?: string | false,
-    access: ComponentReadAccess = {}
+    access: ComponentReadAccess = { trusted: undefined }
   ): Promise<Map<string, unknown>> {
     const allowedSlugs = field.components ?? [];
 
@@ -1175,7 +1175,7 @@ export class FieldGroupQueryService extends BaseService {
     componentFields: FieldConfig[],
     depth: number,
     currentDepth: number,
-    access: ComponentReadAccess = {}
+    access: ComponentReadAccess = { trusted: undefined }
   ): Promise<Record<string, unknown>> {
     if (!this.relationshipService) {
       return componentData;
@@ -1205,6 +1205,9 @@ export class FieldGroupQueryService extends BaseService {
           enforceCollectionAccess: access.enforceCollectionAccess,
           user: access.user,
           overrideAccess: access.overrideAccess,
+          // Narrows that bypass per RELATED collection. Absent means unchanged;
+          // dropping it here would silently restore the full bypass.
+          trusted: access.trusted,
           authenticatedScope: access.authenticatedScope,
           targetPolicies: access.targetPolicies,
           targetCompanions: access.targetCompanions,
@@ -1230,7 +1233,7 @@ export class FieldGroupQueryService extends BaseService {
     componentFields: FieldConfig[],
     depth: number,
     currentDepth: number,
-    access: ComponentReadAccess = {}
+    access: ComponentReadAccess = { trusted: undefined }
   ): Promise<Record<string, unknown>[]> {
     if (!this.relationshipService || depth === 0 || currentDepth >= depth) {
       return componentDataArray;

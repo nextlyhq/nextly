@@ -43,6 +43,14 @@ export interface UserContext {
  */
 export interface GetSingleOptions {
   /**
+   * Which collections a trusted read may reach as relationships are expanded,
+   * asked per RELATED collection. Absent means every populated target inherits
+   * the caller's trust, which is unchanged behaviour. Evaluated as
+   * `overrideAccess && trusted(target)`, so it can only ever narrow.
+   */
+  trusted?: (collection: string) => boolean;
+
+  /**
    * Depth for relationship expansion.
    * @default 2
    */
@@ -113,6 +121,14 @@ export interface GetSingleOptions {
  * Options for updating a Single document.
  */
 export interface UpdateSingleOptions {
+  /**
+   * Which collections a trusted read may reach as relationships are expanded,
+   * asked per RELATED collection. Absent means every populated target inherits
+   * the caller's trust, which is unchanged behaviour. Evaluated as
+   * `overrideAccess && trusted(target)`, so it can only ever narrow.
+   */
+  trusted?: (collection: string) => boolean;
+
   /**
    * Set when this write restores an earlier version, recording which one on the
    * version it captures. Lineage cannot be inferred afterwards: a restore is an

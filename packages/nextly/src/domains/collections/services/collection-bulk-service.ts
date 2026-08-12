@@ -216,6 +216,12 @@ export class CollectionBulkService extends BaseService {
     overrides?: Record<string, unknown>;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
+    /**
+     * Which collections a trusted read may reach as relationships are expanded.
+     * Absent means every populated target inherits the caller's trust. Only ever
+     * narrows. See {@link RelatedRowReadContext.trusted}.
+     */
+    trusted?: (collection: string) => boolean;
     /** Route auth already ran the create RBAC gate; skip only that re-check. */
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
@@ -239,12 +245,24 @@ export class CollectionBulkService extends BaseService {
       // Draft visibility is limited to trusted (overrideAccess) callers: route
       // auth attested create, not the right to read unpublished rows, so a
       // route/untrusted duplicate keeps the default published-only visibility.
-      const sourceStatus = params.overrideAccess ? "all" : undefined;
+      // Scoped to the SOURCE ROW, not to what it points at. A bounded caller
+      // must not have this reach expansion: `expansionStatusScope` cannot tell
+      // a manufactured `"all"` from one the caller asked for, and would carry
+      // it into every rejected target — whose drafts would then be COPIED into
+      // the new row, outliving the refusal as data.
+      const sourceStatus =
+        params.overrideAccess && params.trusted === undefined
+          ? "all"
+          : undefined;
       const sourceResult = await this.queryService.getEntry({
         collectionName: params.collectionName,
         entryId: params.entryId,
         user: params.user,
         overrideAccess: params.overrideAccess,
+        // The source read expands relationships, so the caller's bound has to
+        // reach it: without this a duplicate COPIES rows out of a collection
+        // the caller refused to trust, and the copy outlives the refusal.
+        trusted: params.trusted,
         status: sourceStatus,
         context: params.context,
         // Judge the source read on the key's OWN read grant: a create-scoped key

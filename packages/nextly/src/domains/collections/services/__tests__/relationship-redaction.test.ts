@@ -65,6 +65,98 @@ function adapterReturning(row: Record<string, unknown> | null) {
 }
 
 describe("relationship expansion secret redaction", () => {
+  it("withholds a system-entity row a bounded caller refused", async () => {
+    // A system entity has no stored collection rules, so the enforced path has
+    // nothing to evaluate — the row is normally returned with its secrets
+    // stripped. That is right for a caller with no bypass and wrong for one
+    // that holds a bypass and did not name this target: the bound means "read
+    // this as the audience would", and an anonymous audience cannot read
+    // `users` at all. Stripping the password hash leaves email and name.
+    const service = new CollectionRelationshipService(
+      adapterReturning({
+        id: "u1",
+        email: "a@b.co",
+        name: "Ada",
+        password_hash: "$2b$12$storedhashstoredhashstored",
+      }),
+      silentLogger(),
+      {} as never,
+      {} as never
+    );
+
+    const related = await service.fetchRelatedEntry("users", "u1", {
+      enforceCollectionAccess: true,
+      overrideAccess: true,
+      trusted: () => false,
+      trustedIsSet: undefined,
+    } as never);
+
+    expect(related).toBeNull();
+  });
+
+  it("returns a refused system-entity row to a caller that holds the grant", async () => {
+    // A refused target is judged by the CALLER's own read grant, not by an
+    // assumption that the caller is anonymous. `trusted` is a public Direct API
+    // option, so a bounded read can carry a real audience — and a caller
+    // holding `read-users` is entitled to what a direct read would give it,
+    // which is how the same caller's refused DYNAMIC targets are judged too.
+    const service = new CollectionRelationshipService(
+      adapterReturning({ id: "u1", email: "a@b.co", name: "Ada" }),
+      silentLogger(),
+      {} as never,
+      {} as never
+    );
+
+    const related = await service.fetchRelatedEntry("users", "u1", {
+      enforceCollectionAccess: true,
+      overrideAccess: true,
+      trusted: () => false,
+      authenticatedScope: { actorType: "apiKey", permissions: ["read-users"] },
+    });
+
+    expect(related).toMatchObject({ id: "u1", email: "a@b.co" });
+  });
+
+  it("withholds it from a bounded caller whose scope lacks that grant", async () => {
+    // The other half: a scope is authoritative in BOTH directions, so a key
+    // without the grant is refused however privileged its owner.
+    const service = new CollectionRelationshipService(
+      adapterReturning({ id: "u1", email: "a@b.co" }),
+      silentLogger(),
+      {} as never,
+      {} as never
+    );
+
+    const related = await service.fetchRelatedEntry("users", "u1", {
+      enforceCollectionAccess: true,
+      overrideAccess: true,
+      trusted: () => false,
+      authenticatedScope: { actorType: "apiKey", permissions: ["read-posts"] },
+    });
+
+    expect(related).toBeNull();
+  });
+
+  it("still returns a system-entity row for a caller with no bypass", async () => {
+    // The positive control, and it is load-bearing: without it the check above
+    // passes for a change that withholds system entities from EVERY enforced
+    // read, which is every ordinary page that populates an author.
+    const service = new CollectionRelationshipService(
+      adapterReturning({ id: "u1", email: "a@b.co" }),
+      silentLogger(),
+      {} as never,
+      {} as never
+    );
+
+    const related = await service.fetchRelatedEntry("users", "u1", {
+      enforceCollectionAccess: true,
+      overrideAccess: false,
+      trusted: () => false,
+    } as never);
+
+    expect(related).toMatchObject({ id: "u1", email: "a@b.co" });
+  });
+
   it("strips the users password hash from an expanded system-entity relation", async () => {
     const service = new CollectionRelationshipService(
       adapterReturning({
@@ -261,7 +353,11 @@ describe("relationship expansion secret redaction", () => {
       const related = await serviceWithTarget().fetchRelatedEntry(
         "members",
         "m1",
-        { enforceFieldAccess: true, user: { id: "u1", roles: ["editor"] } }
+        {
+          trusted: undefined,
+          enforceFieldAccess: true,
+          user: { id: "u1", roles: ["editor"] },
+        }
       );
 
       expect(related).toMatchObject({ id: "m1", email: "a@b.co" });
@@ -272,7 +368,11 @@ describe("relationship expansion secret redaction", () => {
       const related = await serviceWithTarget().fetchRelatedEntry(
         "members",
         "m1",
-        { enforceFieldAccess: true, user: { id: "u2", roles: ["finance"] } }
+        {
+          trusted: undefined,
+          enforceFieldAccess: true,
+          user: { id: "u2", roles: ["finance"] },
+        }
       );
 
       expect(related).toMatchObject({ salary: 120000 });
@@ -284,7 +384,7 @@ describe("relationship expansion secret redaction", () => {
       const related = await serviceWithTarget().fetchRelatedEntry(
         "members",
         "m1",
-        { enforceFieldAccess: true }
+        { trusted: undefined, enforceFieldAccess: true }
       );
 
       expect(related).not.toHaveProperty("salary");
@@ -294,7 +394,44 @@ describe("relationship expansion secret redaction", () => {
       const related = await serviceWithTarget().fetchRelatedEntry(
         "members",
         "m1",
-        { enforceFieldAccess: true, overrideAccess: true }
+        { trusted: undefined, enforceFieldAccess: true, overrideAccess: true }
+      );
+
+      expect(related).toMatchObject({ salary: 120000 });
+    });
+
+    it("withholds the field when the caller does not trust this target", async () => {
+      // `overrideAccess` says the CALLER is trusted; it says nothing about a
+      // collection reached through a relationship, which the caller never named.
+      // A caller that can state its trusted set keeps the bypass for what it
+      // declared, and everything outside is read as its audience would read it.
+      const related = await serviceWithTarget().fetchRelatedEntry(
+        "members",
+        "m1",
+        {
+          enforceFieldAccess: true,
+          overrideAccess: true,
+          trusted: () => false,
+        }
+      );
+
+      expect(related).toMatchObject({ id: "m1", email: "a@b.co" });
+      expect(related).not.toHaveProperty("salary");
+    });
+
+    it("keeps the field when the caller names THIS target as trusted", async () => {
+      // The positive control, and it is what makes the case above evidence.
+      // Without it, a predicate ignored entirely and a predicate that denies
+      // everything produce the same result, and the check passes for a seam
+      // that was never wired to the target's identity at all.
+      const related = await serviceWithTarget().fetchRelatedEntry(
+        "members",
+        "m1",
+        {
+          enforceFieldAccess: true,
+          overrideAccess: true,
+          trusted: collection => collection === "members",
+        }
       );
 
       expect(related).toMatchObject({ salary: 120000 });
@@ -316,6 +453,7 @@ describe("relationship expansion secret redaction", () => {
       );
 
       const related = await service.fetchRelatedEntry("members", "m1", {
+        trusted: undefined,
         enforceFieldAccess: true,
         overrideAccess: true,
       });
@@ -367,6 +505,7 @@ describe("relationship expansion secret redaction", () => {
       );
 
       const related = await service.fetchRelatedEntry("members", "m1", {
+        trusted: undefined,
         enforceFieldAccess: true,
         user: { id: "u1" },
       });
@@ -418,7 +557,7 @@ describe("relationship expansion secret redaction", () => {
           type: "relationship",
           options: { targetLabelField: "codename" },
         } as never,
-        { enforceFieldAccess: true, user: { id: "u1" } }
+        { trusted: undefined, enforceFieldAccess: true, user: { id: "u1" } }
       );
 
       const related = map.get("m1");
@@ -435,7 +574,11 @@ describe("relationship expansion secret redaction", () => {
       const related = await serviceWithTarget().fetchRelatedEntry(
         "members",
         "m1",
-        { enforceFieldAccess: true, user: { id: "u1", roles: ["editor"] } }
+        {
+          trusted: undefined,
+          enforceFieldAccess: true,
+          user: { id: "u1", roles: ["editor"] },
+        }
       );
 
       expect(related).not.toHaveProperty("salary");
@@ -539,7 +682,11 @@ describe("related-row re-derivation keeps per-field presentation", () => {
       author: { id: "a1", name: "Ada", handle: "adah", label: "Ada" },
       reviewer: { id: "a1", name: "Ada", handle: "adah", label: "adah" },
     };
-    const access = { enforceFieldAccess: true, user: { id: "u1" } };
+    const access = {
+      enforceFieldAccess: true,
+      user: { id: "u1" },
+      trusted: undefined,
+    };
     const state = service.createNestedHookState();
 
     await service.applyNestedFieldHooks(entry, "posts", access, state);
