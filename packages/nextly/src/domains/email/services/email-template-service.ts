@@ -35,6 +35,7 @@ import { BaseService } from "../../../shared/base-service";
 import {
   changedTemplateFields,
   recordTemplateActivity,
+  type EmailTemplateActivityInput,
 } from "../template-activity";
 import type { EmailAttachmentInput } from "../types";
 
@@ -122,6 +123,33 @@ export class EmailTemplateService extends BaseService {
   // ============================================================
 
   /**
+   * Record a template mutation without letting the trail decide the request.
+   *
+   * The write has already committed by the time this runs, so a failure to
+   * record must not be reported to the caller as a failed mutation — that would
+   * tell them the opposite of the truth. It must not be silent either: a trail
+   * that quietly stops being written is indistinguishable from a system nobody
+   * is changing, so the failure becomes a log line here.
+   */
+  private async recordActivity(
+    input: EmailTemplateActivityInput
+  ): Promise<void> {
+    try {
+      await recordTemplateActivity(input);
+    } catch (error) {
+      try {
+        this.logger.error("Failed to record email template activity", {
+          action: input.action,
+          templateId: input.templateId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } catch {
+        // A logger that throws must not take the mutation with it either.
+      }
+    }
+  }
+
+  /**
    * A layout row must contain exactly one `{{content}}` placeholder: zero
    * appends the body after the wrapper, and more than one drops the content
    * after the second marker when the layout is applied. Reject malformed
@@ -199,7 +227,7 @@ export class EmailTemplateService extends BaseService {
     const created = await this.getTemplate(id);
     // Recorded after the insert commits, so a trail that cannot be written
     // never turns a template that exists into a reported failure.
-    await recordTemplateActivity({
+    await this.recordActivity({
       action: "create",
       templateId: created.id,
       templateName: created.name,
@@ -324,15 +352,12 @@ export class EmailTemplateService extends BaseService {
     // on every write by definition and would make every no-op look like a
     // change.
     const { updatedAt: _ignored, ...touched } = updateData;
-    await recordTemplateActivity({
+    await this.recordActivity({
       action: "update",
       templateId: updated.id,
       templateName: updated.name,
       templateKind: updated.kind,
-      changedFields: changedTemplateFields(
-        existing as unknown as Record<string, unknown>,
-        touched
-      ),
+      changedFields: changedTemplateFields({ ...existing }, touched),
       actor,
     });
     return updated;
@@ -381,7 +406,7 @@ export class EmailTemplateService extends BaseService {
     // The name is read from the row fetched above: after the delete there is
     // nothing left to label the entry with, and an unlabelled row is the one
     // whose subject a reader can never recover.
-    await recordTemplateActivity({
+    await this.recordActivity({
       action: "delete",
       templateId: id,
       templateName: template.name,

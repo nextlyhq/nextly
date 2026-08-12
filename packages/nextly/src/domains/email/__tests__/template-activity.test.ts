@@ -78,6 +78,7 @@ describe("email template activity", () => {
     );
 
     logged.length = 0;
+    vi.mocked(logger.error).mockClear();
     container.register("activityLogService", () => ({
       logActivity: (input: LogActivityInput) => {
         logged.push(input);
@@ -88,7 +89,7 @@ describe("email template activity", () => {
 
   afterEach(() => {
     sqlite.close();
-    container.clear?.();
+    container.clear();
   });
 
   it("records a create under its own collection", async () => {
@@ -167,6 +168,33 @@ describe("email template activity", () => {
 
   it("records nothing for a write with no signed-in actor", async () => {
     await service.createTemplate(INPUT, null);
+    expect(logged).toHaveLength(0);
+  });
+
+  it("does not fail the mutation when the trail cannot be written", async () => {
+    // The write has already committed by the time recording runs, so reporting
+    // a failure here would tell the caller the opposite of the truth.
+    container.register("activityLogService", () => ({
+      logActivity: () => Promise.reject(new Error("activity log is down")),
+    }));
+
+    const created = await service.createTemplate(INPUT, ACTOR);
+    expect(created.name).toBe("Password reset");
+
+    // Not silent, though. A trail that stops being written must be visible
+    // somewhere, or it is indistinguishable from a system nobody is changing.
+    expect(logger.error).toHaveBeenCalledWith(
+      "Failed to record email template activity",
+      expect.objectContaining({ action: "create" })
+    );
+  });
+
+  it("records nothing for an API-key actor", async () => {
+    // Reachable in production: an API-key request produces `{ type: "apiKey" }`,
+    // and the two absence cases below cover only a missing actor and the system
+    // one. The trail's actor column is a user reference, so a key's own id finds
+    // no account and would be filed as an already-erased identity.
+    await service.createTemplate(INPUT, { type: "apiKey", id: "key-1" });
     expect(logged).toHaveLength(0);
   });
 

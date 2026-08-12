@@ -106,10 +106,11 @@ function worthRecording(input: SettingsActivityInput): boolean {
 /**
  * Record one settings mutation.
  *
- * Never throws. An audit write that took the surrounding request down would
- * make the trail a liability rather than a record; the service logs its own
- * failures, so a trail that stops being written is visible in the logs rather
- * than silent.
+ * PROPAGATES a write failure to its caller, which is what makes the failure
+ * visible: each caller wraps this and logs against the resource it was
+ * recording. An audit write that took the surrounding request down would make
+ * the trail a liability rather than a record, so the caller swallows it after
+ * logging — but a seam that swallowed it here would leave nothing to log.
  */
 export async function recordSettingsActivity(
   input: SettingsActivityInput
@@ -126,6 +127,11 @@ export async function recordSettingsActivity(
     return;
   }
 
+  // Deliberately NOT wrapped in a catch here. A rejection has to reach the
+  // caller's own handler, which logs it against the resource being recorded —
+  // swallowing it at this seam would make a trail that stopped being written
+  // invisible, which is worse than the failure it hides. Callers own the
+  // never-throw guarantee and the log line that goes with it.
   await service.logActivity({
     userId: input.actor.id,
     action: input.action,

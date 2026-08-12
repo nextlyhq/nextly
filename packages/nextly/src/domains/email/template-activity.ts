@@ -8,12 +8,15 @@
  * from no action after the fact: the activity log existed and this domain never
  * wrote to it.
  *
- * **Field NAMES only, and not all of them.** `subject`, `htmlContent` and
- * `plainTextContent` are message CONTENT. Naming them is fine — that is a field
- * name, not a value — but nothing from inside them may reach a row that more
- * people can read than can read the template. The two names worth reading later
- * are `fromOverride` and `layoutId`: one changes who the mail claims to be
- * from, the other changes the shell every message is rendered into.
+ * **Field NAMES only.** EVERY changed top-level name is recorded, content
+ * fields included: `subject` and `htmlContent` are named when they move, because
+ * a name is not a value and "the wording changed" is the fact worth keeping.
+ * What must never reach the row is anything from INSIDE them — that row is read
+ * by more people than can read the template.
+ *
+ * `fromOverride` and `layoutId` are the highest-signal of those names rather
+ * than the only ones: one changes who the mail claims to be from, the other
+ * changes the shell every message is rendered into.
  *
  * @module domains/email/template-activity
  */
