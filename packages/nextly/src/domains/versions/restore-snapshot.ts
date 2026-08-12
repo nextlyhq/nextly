@@ -18,8 +18,11 @@
 
 import type { FieldConfig } from "../../collections/fields/types";
 import { IMMUTABLE_SYSTEM_FIELDS_ANY_ENTITY } from "../../lib/immutable-system-fields";
-import { STORAGE_FORMAT } from "../../schemas/storage-format";
-import { readFieldGroupType } from "../field-groups/storage/field-group-type-key";
+import {
+  currentFieldGroupTypeKey,
+  isFieldGroupTypeKey,
+  readFieldGroupType,
+} from "../field-groups/storage/field-group-type-key";
 import { isFieldLocalized } from "../i18n/classify-fields";
 
 /**
@@ -402,17 +405,23 @@ function pruneContainerValue(
     // Only for component instances. A group or repeater is ordinary JSON, where
     // a stale key that happens to be called `id` is exactly the kind of unknown
     // key this function exists to remove.
-    if (
-      isComponentValue &&
-      (key === STORAGE_FORMAT.wireTypeKey || key === "id")
-    ) {
+    if (isComponentValue && (isFieldGroupTypeKey(key) || key === "id")) {
       // The type marker exists to record what the snapshot captured, and it has
       // already done its work above by selecting this row's schema. Carrying it
       // into the payload is only safe where the write path consumes it, which
       // is the dynamic zone alone. A single component nested in a group or
       // repeater is written as part of that container's JSON, and a marker left
       // inside would be stored verbatim and then served by ordinary reads.
-      if (key === STORAGE_FORMAT.wireTypeKey && !storesType) continue;
+      if (isFieldGroupTypeKey(key)) {
+        if (!storesType) continue;
+        // 🔴 Normalised onto the spelling this version WRITES, not copied under the one the
+        // snapshot happened to use. A snapshot captured after the storage rename carries the
+        // other spelling, and the save path consumes exactly one — so copying the key verbatim
+        // leaves the row untyped downstream, and an untyped dynamic-zone row is SKIPPED, which
+        // deletes the instance it was meant to restore.
+        out[currentFieldGroupTypeKey] = child;
+        continue;
+      }
       out[key] = child;
       continue;
     }
@@ -495,7 +504,7 @@ function retainsNothing(pruned: unknown): boolean {
     if (typeof row !== "object" || row === null) return false;
     const keys = Object.keys(row);
     if (keys.length === 0) return false;
-    return keys.every(k => k === "id" || k === STORAGE_FORMAT.wireTypeKey);
+    return keys.every(k => k === "id" || isFieldGroupTypeKey(k));
   };
 
   if (Array.isArray(pruned)) {
@@ -530,7 +539,7 @@ function withoutTypeMarker(value: unknown): unknown {
 
   const out: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if (key !== STORAGE_FORMAT.wireTypeKey) out[key] = child;
+    if (!isFieldGroupTypeKey(key)) out[key] = child;
   }
   return out;
 }

@@ -451,10 +451,12 @@ export class FieldGroupMutationService extends BaseService {
       const slugs = new Set<string>();
       if (field.components && field.components.length > 0) {
         for (const instance of resolveZoneInstances(field, value)) {
-          const type = (instance as Record<string, unknown> | null)?.[
-            STORAGE_FORMAT.wireTypeKey
-          ];
-          if (typeof type === "string" && field.components.includes(type)) {
+          // Asked through the same reader the WRITE uses. This preflight exists to raise a
+          // conflict before the transaction opens, so it has to judge exactly the instances the
+          // write will accept — an instance the write recognises but this does not skips the
+          // check entirely and fails later, inside the transaction or at the driver.
+          const type = readFieldGroupType(instance);
+          if (type !== undefined && field.components.includes(type)) {
             slugs.add(type);
           }
         }

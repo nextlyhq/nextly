@@ -135,24 +135,45 @@ function grep(label, pattern, opts = {}) {
   }
 }
 
-// 1. 🔴 The content key. No catalog can describe a key inside a row, so a literal here is the
-// one spelling a database cannot be asked about — read it wrong and the instance loses its type.
+// 🔴 BOTH generations are banned, not only the legacy one.
+//
+// The target spellings are what a migrated database actually uses, so a literal reading
+// `_fieldGroupType` is wrong on precisely the installs the migration has already reached — and it
+// is the spelling someone writing new code AFTER the flip would naturally reach for. Guarding only
+// the legacy names would enforce the single-catalog rule on the generation that is on its way out
+// while leaving the incoming one unguarded, which is the wrong half.
+//
+// 1. The content key, in both generations. No catalog can describe a key inside a row, so a
+// literal here is the one spelling a database cannot be asked about — read it wrong and the
+// instance loses its type.
 grep(
-  "content type key goes through STORAGE_FORMAT.wireTypeKey",
+  "content type key goes through the catalog (legacy spelling)",
   "_componentType"
+);
+grep(
+  "content type key goes through the catalog (target spelling)",
+  "_fieldGroupType"
 );
 
 // 2. The discriminator column. Catalog-resolvable, so a literal degrades rather than breaks —
 // but it degrades on exactly the databases that have migrated.
 grep(
-  "type column goes through STORAGE_FORMAT.columns.type",
+  "type column goes through the catalog (legacy spelling)",
   "[\"'`]_component_type[\"'`]"
+);
+grep(
+  "type column goes through the catalog (target spelling)",
+  "[\"'`]_field_group_type[\"'`]"
 );
 
 // 3. The registry table. Same shape as the column.
 grep(
-  "registry table goes through STORAGE_FORMAT.registryTable",
+  "registry table goes through the catalog (legacy spelling)",
   "[\"'`]dynamic_components[\"'`]"
+);
+grep(
+  "registry table goes through the catalog (target spelling)",
+  "[\"'`]dynamic_field_groups[\"'`]"
 );
 
 if (failures > 0) {

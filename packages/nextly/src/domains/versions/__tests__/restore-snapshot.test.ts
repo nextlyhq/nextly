@@ -329,6 +329,35 @@ describe("buildRestorePayload — layered schemas", () => {
     expect(droppedFields).toEqual(["auth"]);
   });
 
+  it("normalises a discriminator captured under the other spelling onto the write key", () => {
+    // 🔴 A snapshot taken after the storage rename records the type under the OTHER spelling.
+    // Recognising it is not enough — the pruning below keeps only what it recognises as row
+    // metadata, so an unrecognised discriminator is DROPPED and the row arrives untyped. The
+    // save path skips an untyped dynamic-zone row and then deletes the live instance that was
+    // not in the incoming set, which turns a restore into a deletion.
+    //
+    // Emitting it under the CURRENT spelling rather than copying the key verbatim is what makes
+    // the payload writable: the save path consumes exactly one spelling.
+    const zone = [
+      { name: "blocks", type: "component", components: ["banner"] },
+    ] as FieldConfig[];
+    const schemas = componentSchemasOf({
+      banner: [{ name: "heading", type: "text" }] as FieldConfig[],
+    });
+
+    const { payload, droppedFields } = buildRestorePayload(
+      { blocks: [{ id: "row-1", _fieldGroupType: "banner", heading: "Hi" }] },
+      zone,
+      { ...ctx, componentSchemas: schemas }
+    );
+
+    expect(payload).toEqual({
+      blocks: [{ id: "row-1", _componentType: "banner", heading: "Hi" }],
+    });
+    // The discriminator was carried, not quietly discarded as an unknown key.
+    expect(droppedFields).toEqual([]);
+  });
+
   it("keeps a component instance id so the row is updated, not replaced", () => {
     // The save path uses the id to update the existing row; without it a
     // restore deletes and reinserts instances, taking their per-locale

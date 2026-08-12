@@ -65,6 +65,18 @@ export function readFieldGroupType(instance: unknown): string | undefined {
 }
 
 /**
+ * Whether a property name is one of this key's spellings.
+ *
+ * Asked by code that walks a document key by key rather than looking the value up — pruning a
+ * restore payload, deciding whether a row carries anything but metadata, stripping the marker
+ * before storage. Those places cannot use `readFieldGroupType` because they hold a KEY, not an
+ * instance, and matching one spelling there drops or keeps the wrong half of a document.
+ */
+export function isFieldGroupTypeKey(key: string): boolean {
+  return READ_ORDER.includes(key);
+}
+
+/**
  * Stamp the type onto an instance, under the spelling this version writes.
  *
  * Mutates rather than copying, because the callers are building an object they own — a form's
