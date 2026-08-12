@@ -180,12 +180,18 @@ Measured here, scanning every open PR for the 22 forbidden identifiers in
 `export-contract.test.ts`. **Three successive refinements, each of which felt
 like rigour, and all three were unsound in the same direction:**
 
-| pass                                            | result                              | sound? |
-| ----------------------------------------------- | ----------------------------------- | ------ |
-| substring match on added lines                  | 10 PRs flagged                      | noisy  |
-| ...restricted to lines containing `export`      | 4 lines, one PR, all prose comments | NO     |
-| ...word boundary, dropping `component`          | 0                                   | NO     |
-| all 22 names, word boundary, **every hit read** | 43 hits, all prose, **0 real**      | yes    |
+| pass                                            | result                              |
+| ----------------------------------------------- | ----------------------------------- |
+| substring match on added lines                  | 10 PRs flagged                      |
+| ...restricted to lines containing `export`      | 4 lines, one PR, all prose comments |
+| ...word boundary, dropping `component`          | 0                                   |
+| all 22 names, word boundary, **every hit read** | 43 hits, all prose, **0 real**      |
+
+🔴 **No regex pass was sound, including the last one.** A pattern cannot tell a
+binding from prose, so every row above is a pattern that would have missed a
+real re-export written slightly differently. What settled the question was
+READING all 43 hits. Crediting the fourth pattern would repeat the error this
+section is about — the refinement was not what made the answer trustworthy.
 
 Each middle pass is worth naming, because they are the same mistake escalating.
 
