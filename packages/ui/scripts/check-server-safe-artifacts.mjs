@@ -503,24 +503,34 @@ export function specifiersIn(source, fileName) {
         }
       }
     }
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
-      const init = node.initializer;
-      const declaredIn = nearestBindingScope(node.name, node.name.text);
-      if (
-        init !== undefined &&
-        ts.isCallExpression(init) &&
-        namesFactory(init.expression)
-      ) {
-        addLoader(node.name.text, declaredIn);
-      } else if (init !== undefined && namesMetaResolve(init)) {
+    // A name takes a loader in two ways that look different and mean the same: a declaration with
+    // an initializer, and a later ASSIGNMENT to an already-declared name. `let load; load =
+    // import.meta.resolve` survives the bundler intact and left no record anywhere, so reading only
+    // initializers made the whole form invisible. Both are reduced to (name, value) here.
+    const takes = (nameNode, value) => {
+      if (value === undefined || !ts.isIdentifier(nameNode)) return;
+      const declaredIn = nearestBindingScope(nameNode, nameNode.text);
+      if (ts.isCallExpression(value) && namesFactory(value.expression)) {
+        addLoader(nameNode.text, declaredIn);
+      } else if (namesMetaResolve(value)) {
         // `const resolve = import.meta.resolve` hands the resolver on as a value, and calling it
         // through that name names a package exactly as calling it in place does.
-        addLoader(node.name.text, declaredIn);
-      } else if (init !== undefined && ts.isIdentifier(init)) {
+        addLoader(nameNode.text, declaredIn);
+      } else if (ts.isIdentifier(value)) {
         // `const again = load` hands the loader on under another name. Recorded now and resolved
         // below, because the assignment can appear in any order in emitted output.
-        aliases.push([node.name.text, init, declaredIn]);
+        aliases.push([nameNode.text, value, declaredIn]);
       }
+    };
+
+    if (ts.isVariableDeclaration(node)) {
+      takes(node.name, node.initializer);
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken
+    ) {
+      takes(node.left, node.right);
     }
     ts.forEachChild(node, collectLoaders);
   };

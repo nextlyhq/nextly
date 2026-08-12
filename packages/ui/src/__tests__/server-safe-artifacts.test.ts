@@ -245,6 +245,42 @@ describe("reading an artifact's specifiers", () => {
     ).toEqual(["react"]);
   });
 
+  it("sees a loader assigned after it is declared", () => {
+    // A name takes a loader two ways that look different and mean the same: a declaration with an
+    // initializer, and a later assignment. Reading only initializers made the assignment form
+    // invisible, and it survives the bundler intact while leaving no metafile record.
+    expect(
+      read(
+        `let load;\nload = import.meta.resolve;\nexport const r = load("react");`
+      )
+    ).toEqual(["react"]);
+    expect(
+      read(`
+        import { createRequire } from "node:module";
+        let load;
+        load = createRequire(import.meta.url);
+        export const r = load("react");
+      `)
+    ).toEqual(["node:module", "react"]);
+    // Handed on by assignment rather than by declaration, which the alias chain must also follow.
+    expect(
+      read(
+        `const a = import.meta.resolve;\nlet b;\nb = a;\nexport const r = b("react");`
+      )
+    ).toEqual(["react"]);
+    // The controls: an assignment of something that is not a loader makes none, and a binding that
+    // encloses the call still shadows it.
+    expect(
+      read(`let x;\nx = somethingElse;\nexport const r = x("react");`)
+    ).toEqual([]);
+    expect(
+      read(`
+        const resolve = import.meta.resolve;
+        function f(resolve) { return resolve("react"); }
+      `)
+    ).toEqual([]);
+  });
+
   it("reads a destructuring key in every spelling", () => {
     // `{ resolve: load }` names the key with an identifier and `{ ["resolve"]: load }` with a
     // literal wrapped in a ComputedPropertyName — one node kind deeper, so a check reading the
