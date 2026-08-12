@@ -1,64 +1,47 @@
 /**
- * Verify that a server-safe entry point, as BUILT, runs on a server.
+ * Verify that a server-safe entry point, as BUILT, reaches nothing a server cannot have.
  *
  * The directive guard next to this one answers a different question: whether the artifact carries
  * a `"use client"` banner. An artifact can be free of that banner and still be unusable from a
- * Server Component, because the banner is not what breaks it — importing React is, or touching
- * `document` while the module body evaluates.
+ * Server Component, because the banner is not what breaks it — importing React is.
  *
  * This reads the BUILT files rather than the sources, and that is the point. A source scan has to
  * predict what the bundler will do: which specifier a bare import resolves to, whether an
  * extensionless path picks the `.ts` or the `.tsx`, whether a folded expression like
  * `import("re" + "act")` reaches React, which type-only imports are erased. Every one of those is
- * already decided here. What is left is a short, finite list of external specifiers, and a file
- * that either evaluates under Node or does not.
+ * already decided by the time these files exist. What is left is a short, finite list of external
+ * specifiers, read two ways because either alone fails open:
  *
- * Two questions, one per way of crossing the boundary:
+ * 1. **What SURVIVED as an import.** Every module specifier still named in the artifact, and in
+ *    every chunk reachable from it, must be on the allow-list. First-party code is bundled in, so
+ *    what remains is exactly the external packages, and JSX has already become a
+ *    `react/jsx-runtime` import by the time it gets here.
  *
- * 1. **Does it evaluate?** Each artifact is imported into a FRESH process, which is Node with no
- *    DOM. A module reading `document` where its body runs throws, and nothing has to recognise the
- *    spelling of the read for that to happen. This is the complete answer to the browser-global
- *    question, in place of enumerating globals and the syntax that dereferences them.
+ * 2. **What was INLINED.** A bundled dependency leaves no import to find: tsup treats
+ *    `dependencies` as external and copies anything else into the artifact whole, so a
+ *    `devDependencies` package is present with no specifier naming it. The build's own metafile is
+ *    the record of what it read, and that is what this asks rather than the text.
  *
- *    One process per artifact rather than one for all of them, because a consumer imports ONE
- *    entry point. Shared, every artifact's verdict depended on the ones before it: enumerating
- *    what may leak covers the names on the list and nothing else, and ordinary state is on no
- *    list — a module populating `globalThis`, filling a registry or patching a prototype leaves
- *    the next artifact evaluating against an environment no consumer has. A fresh process cannot
- *    carry any of it.
- *
- * 2. **What does it reach?** Every module specifier surviving in the artifact must be on the
- *    allow-list. First-party code is bundled in, so what remains is exactly the external packages,
- *    and JSX has already become a `react/jsx-runtime` import by the time it gets here.
+ * Both readings are bounded by files the build has already written, and neither predicts anything.
  *
  * ## What this proves, and what it does not
  *
- * The evaluation runs on the Node that runs the BUILD, with the web globals Node has added since
- * the supported floor removed first. That is enough to answer the browser-global question for the
- * whole `engines` range, because those globals are the only difference that a deletion can model.
+ * It answers what an artifact REACHES, not whether it RUNS. A module whose body touches
+ * `document` while it evaluates imports no differently from one that does not, and nothing here
+ * would see it.
  *
- * It is NOT enough for built-in MODULES, nor for METHODS added to objects that already existed.
- * An artifact importing something added after the floor — `node:sqlite`, say — resolves on a
- * current build machine and fails on the floor with `ERR_UNKNOWN_BUILTIN_MODULE`; one calling
- * `Object.groupBy` or `Promise.withResolvers` runs here and throws there. Deleting globals emulates
- * neither, and deleting MEMBERS is worse than not trying: a global is one property nothing internal
- * depends on, while a method belongs to an object every module in the process shares, this check
- * included, so removing it manufactures failures rather than finding them. The list would also be
- * unbounded and hand-maintained, which is the shape the rest of this file exists to avoid.
- *
- * Only running this gate under the oldest supported Node settles any of it; nothing here can. The
- * build currently selects Node 22 through `.nvmrc`, so the floor is not what this answers for.
- *
- * It answers IMPORT safety, not call safety. `export const cn = () => document.body` imports
- * cleanly and throws when a Server Component calls it. Catching that means analysing browser
- * globals in deferred code — every way a name can be bound, shadowed or consumed — which is the
- * unbounded source-level problem reading the artifact exists to avoid.
+ * That question is answered where it can be answered honestly, in the package smoke workflow,
+ * which builds a real Next.js app and imports these entry points from a Server Component.
+ * Answering it here instead means SIMULATING a consumer's environment, and then the check is only
+ * ever as good as the difference it modelled — Node version, `NODE_ENV`, which web globals exist,
+ * what an artifact may schedule for after the import returns. Every gap in that model is a pass
+ * the consumer does not get, and the list of gaps has no end. A real build has no model in it.
  *
  * The runtime-resolution recognition below — `require`, `createRequire`, `module.require`,
  * `import.meta.resolve` — is DEFENCE IN DEPTH rather than a boundary, and it is best-effort by
- * design. Naming a module without importing it is outside both questions by construction: the
- * bundler never resolves it, so it is in no metafile record, and importing the artifact succeeds
- * because loading the package succeeds. Every spelling recognised has another behind it.
+ * design. Naming a module without importing it is outside the question by construction: the
+ * bundler never resolves it, so it appears in no metafile record. Every spelling recognised has
+ * another behind it.
  *
  * The two halves of that list are limited by different things, and only one of them has a boundary
  * behind it. The CommonJS loader needs `node:module`, which cannot be imported from this package's
@@ -68,19 +51,12 @@
  * dependency using either is caught as a package by the metafile instead.
  *
  * The other residual, stated rather than implied: an ALLOWED package could itself grow a React
- * dependency, and importing React under Node does not throw, so neither question would notice.
- * The allow-list is two pure string utilities and every addition to it is a deliberate decision,
- * which is the control on that.
+ * dependency, and nothing here would notice. The allow-list is two pure string utilities and every
+ * addition to it is a deliberate decision, which is the control on that.
  */
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
-import { createRequire, isBuiltin } from "node:module";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
+import { isBuiltin } from "node:module";
 import { dirname as pathDirname, join } from "node:path";
-
-/** The directory part of an output-relative file name, or "" for a flat one. */
-const dirname = file =>
-  file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : "";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import ts from "typescript";
@@ -90,99 +66,11 @@ import {
   serverSafeArtifacts,
 } from "./published-entries.mjs";
 
+/** The directory part of an output-relative file name, or "" for a flat one. */
+const dirname = file =>
+  file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : "";
+
 const DIST = join(pathDirname(fileURLToPath(import.meta.url)), "..", "dist");
-
-/**
- * How long one artifact gets to import before the child is killed.
- *
- * Bounded because an artifact that leaves an active handle — a module-scope `setInterval`, an open
- * socket — finishes importing and never lets its process exit, and an unbounded wait would hang
- * `build:js` until CI's job timeout with nothing said about which artifact did it. Generous
- * relative to the work: these are small modules whose imports take milliseconds, so the deadline
- * is only ever reached by an artifact that is not going to finish.
- */
-const EVALUATION_TIMEOUT_MS = 30_000;
-
-/**
- * The variables an evaluation child is allowed to see.
- *
- * An ALLOW-list, because the question is not "which variables are dangerous" but "which does the
- * child need". A deny-list answers the first, and the first has no end: stripping `NODE_OPTIONS`
- * left `CI`, and stripping `CI` would leave `GITHUB_ACTIONS`, `npm_lifecycle_event` and every
- * variable a future runner invents. A published artifact reads `process.env` in a consumer's app,
- * where none of the build's variables exist, so the environment that answers for that consumer is
- * the empty one plus what Node itself needs to start.
- *
- * `NODE_ENV` is deliberately absent: it is set per evaluation, once for each state under test.
- */
-const CHILD_ENVIRONMENT_KEEPS = [
-  // Node resolves its own executable by absolute path, but a spawned process without PATH cannot
-  // find anything it shells out to, and the failure looks like a broken check rather than a
-  // deliberate restriction.
-  "PATH",
-  "Path",
-  // Windows will not start a process without these.
-  "SystemRoot",
-  "SYSTEMROOT",
-  "COMSPEC",
-  "TEMP",
-  "TMP",
-  // Some platforms resolve a home-relative cache during module loading.
-  "HOME",
-  "USERPROFILE",
-];
-
-/**
- * The environment one evaluation child starts from, at one `NODE_ENV` state.
- *
- * `undefined` REMOVES the variable rather than setting it empty. `process.env.NODE_ENV === ""` and
- * `process.env.NODE_ENV === undefined` are different values, and a branch reading the second would
- * go unevaluated while this reported that it had covered the unset case.
- *
- * @param {string | undefined} nodeEnv
- */
-function childEnvironment(nodeEnv) {
-  /** @type {Record<string, string>} */
-  const base = {};
-  for (const key of CHILD_ENVIRONMENT_KEEPS) {
-    const value = process.env[key];
-    if (value !== undefined) base[key] = value;
-  }
-  return nodeEnv === undefined ? base : { ...base, NODE_ENV: nodeEnv };
-}
-/**
- * The `NODE_ENV` values an artifact is evaluated under. `undefined` means the variable is ABSENT.
- *
- * A module-scope branch on `NODE_ENV` is ordinary in published React code and only one side of it
- * runs per evaluation, so a single value leaves the others unevaluated:
- * `if (process.env.NODE_ENV === "production") document.title` reaches the DOM for the consumer it
- * was written for and for nobody else.
- *
- * Three states rather than two, because unset is not a synonym for development. `process.env.NODE_ENV`
- * is then `undefined`, so `=== "development"` is false and `!== "production"` is true -- a branch can
- * select the unset case specifically, and the build itself sets nothing, which makes it the state
- * this check runs in by default.
- */
-const EVALUATED_NODE_ENVS = [undefined, "production", "development"];
-
-/** This file, re-invoked as the child that evaluates one artifact. */
-const SELF = fileURLToPath(import.meta.url);
-
-/**
- * Node's own `process.exit`, captured before anything can replace it.
- *
- * The child installs an interceptor around the artifact's import, so every failure path has to end
- * the process through THIS rather than through whatever `process.exit` currently is. Reaching for
- * the live one recorded the check's own exit as the artifact's and reported a thrown module as one
- * that called `process.exit`.
- */
-const realExit = process.exit.bind(process);
-
-/** Cleared only by reaching the end of the run, so an artifact ending the process is not a pass. */
-let completed = false;
-
-/** The artifact being evaluated, for the message if one of them ends the process. */
-let importing = null;
 
 /**
  * Every module specifier the built artifact still names.
@@ -454,8 +342,7 @@ export function packageOf(specifier) {
  * A split build does not put an entry's dependencies in the entry. With code splitting on — tsup's
  * default — `utils.mjs` can be nothing but `export { x } from "./chunk-abc.mjs"`, and the chunk is
  * where `react` would appear. Scanning only the named entry exempts exactly the file that holds
- * what this is looking for, and the evaluation does not catch it either, because importing React
- * under Node succeeds.
+ * what this is looking for.
  *
  * `read` returns the file's text, or null when it is absent — reported rather than thrown, so a
  * missing chunk is a named failure instead of a stack trace from inside the walk.
@@ -633,331 +520,9 @@ export function bundledPackages(metafile, outputNames) {
   return [...packages];
 }
 
-/**
- * Globals whose presence means this is not a bare server.
- *
- * Only the two that no Node release has ever defined. Anything Node has adopted, or may adopt,
- * belongs in {@link ADDED_AFTER_SUPPORTED_FLOOR} instead — probing for one of those reports a DOM
- * on an ordinary build machine and the check refuses to run rather than checking anything.
- */
-const DOM_ONLY_GLOBALS = ["window", "document"];
-
-/**
- * Web globals Node has added since the oldest release this package supports.
- *
- * Evaluating the artifact proves it runs on a server, and "a server" has to mean every Node in the
- * supported range rather than whichever one happens to run the build. `navigator` arrived in v21
- * and web storage is arriving now, so a module-scope `navigator.userAgent` evaluates cleanly on a
- * modern build machine and throws for a consumer on the floor. Removing them first makes the
- * evaluation answer the question the package's `engines` range actually asks.
- *
- * Deleting a name that is not there is a no-op, so a name can be listed before the Node that
- * defines it ships, and a name Node later removes costs nothing.
- *
- * The failure direction is deliberate: a name MISSING from this list leaves the gate permissive —
- * an artifact using it passes here and breaks on the floor — while a name wrongly present only
- * makes the gate stricter than the floor requires. Erring toward permissive is right for a check
- * wired into the build, where a false alarm blocks work that is actually fine.
- */
-const ADDED_AFTER_SUPPORTED_FLOOR = [
-  // v21. Node exposes the instance AND the constructor, and removing one leaves the other
-  // reachable, so both names are needed for the emulation to hold.
-  "navigator",
-  "Navigator",
-  // Unflagged in v22; behind --experimental-websocket on the floor.
-  "WebSocket",
-  // Web storage, arriving across v22 and still flag-gated on the floor.
-  "localStorage",
-  "sessionStorage",
-  "Storage",
-  // v24.
-  "CloseEvent",
-  "EventSource",
-  // Post-floor JavaScript globals rather than web ones, and absent on the floor all the same.
-  "Iterator",
-  "AsyncDisposableStack",
-  "DisposableStack",
-  "Float16Array",
-  "SuppressedError",
-  // Not in any release the floor covers; listed ahead of the Node that ships it.
-  "URLPattern",
-];
-
-/**
- * Post-floor globals present in `scope`.
- *
- * The mirror of {@link domGlobalsPresent}, for the names the floor restriction removed. An
- * artifact that installs one puts it back for everything imported afterwards, so this is asked
- * between imports rather than once at the start.
- *
- * @param {Record<string, unknown>} scope
- * @returns {string[]}
- */
-export function floorGlobalsPresent(scope = globalThis) {
-  return ADDED_AFTER_SUPPORTED_FLOOR.filter(name => name in scope);
-}
-
-/**
- * Take the environment down to the oldest supported Node before evaluating anything.
- *
- * Reports the globals it could NOT remove rather than proceeding, because a non-configurable
- * leftover would let an artifact evaluate against a capability the floor does not have — the same
- * vacuous pass this file exists to prevent, one level down.
- *
- * @param {Record<string, unknown>} scope
- * @returns {{ stubborn: string[], restore: () => void }}
- */
-export function restrictToSupportedFloor(scope = globalThis) {
-  /** @type {Array<[string, PropertyDescriptor]>} */
-  const removed = [];
-  const stubborn = [];
-  for (const name of ADDED_AFTER_SUPPORTED_FLOOR) {
-    if (!(name in scope)) continue;
-    const descriptor = Object.getOwnPropertyDescriptor(scope, name);
-    // Asked BEFORE deleting rather than after. This module is ESM, so it runs in strict mode,
-    // where `delete` on a non-configurable property throws instead of returning false — the
-    // reporting path below would never be reached, and the build would fail with a raw TypeError
-    // in place of the explanation.
-    if (descriptor !== undefined && !descriptor.configurable) {
-      stubborn.push(name);
-      continue;
-    }
-    delete scope[name];
-    if (name in scope) {
-      stubborn.push(name);
-      continue;
-    }
-    if (descriptor) removed.push([name, descriptor]);
-  }
-  return {
-    stubborn,
-    restore: () => {
-      for (const [name, descriptor] of removed) {
-        Object.defineProperty(scope, name, descriptor);
-      }
-    },
-  };
-}
-
-/**
- * Refuse to run where a DOM exists.
- *
- * The evaluation check is only meaningful in an environment that has no `document` to find. Run
- * under jsdom, or in a browser-like runtime, every artifact would import cleanly and the check
- * would report a pass it never made. Naming that as a failure keeps it from passing vacuously.
- *
- * @returns {string[]} the DOM globals that should not be here
- */
-export function domGlobalsPresent(scope = globalThis) {
-  // Presence of the BINDING, not of a value. A preload or instrumentation hook that defines
-  // `globalThis.document` as `undefined` leaves `document?.title` evaluating happily here while
-  // throwing `ReferenceError` in ordinary Node, and a value comparison reads that as a bare
-  // server.
-  return DOM_ONLY_GLOBALS.filter(name => name in scope);
-}
-
-/**
- * What one child's result says about its artifact, or null when it evaluated cleanly.
- *
- * Three ways for the answer to be absent rather than negative, and they are reported apart from a
- * verdict because "the artifact is bad" and "the check could not run" call for different action.
- * A signalled child in particular reports `status: null`, which compares unequal to 0 and would
- * otherwise be described with the word `null` where a reason belongs.
- *
- * @param {string} file
- * @param {{ error?: Error & { code?: string }, status: number | null, signal?: string | null, stderr?: string }} run
- * @returns {string | null}
- */
-export function childOutcome(file, run) {
-  // A child that had to be killed at the deadline is a VERDICT, not a failure to evaluate: the
-  // import either never finished or left a handle keeping the process alive, and an entry point
-  // that does either hangs whatever imports it. Reported before the general spawn-failure branch,
-  // which would otherwise describe it as "could not be evaluated" and hide a real defect.
-  if (
-    run.error !== undefined &&
-    run.error !== null &&
-    run.error.code === "ETIMEDOUT"
-  ) {
-    return (
-      `${file} was still running ${EVALUATION_TIMEOUT_MS}ms after it was imported. A server-safe ` +
-      `entry point must finish initializing and leave nothing holding the process open.`
-    );
-  }
-  if (run.error !== undefined && run.error !== null) {
-    return (
-      `${file} could not be evaluated: ${run.error.message}. The check cannot report on an ` +
-      `artifact it never ran.`
-    );
-  }
-  if (run.status === 0) return null;
-  if (run.status === null) {
-    return (
-      `${file} ended on signal ${run.signal} while being evaluated, so no verdict was reached. ` +
-      `An entry point that ends the process during initialization would end a consumer's server ` +
-      `the same way.`
-    );
-  }
-  // The child names the failure and this names the artifact, so neither is written twice. A child
-  // that failed silently still has to say something, or the report would name a file and no reason.
-  const said = (run.stderr ?? "").trim();
-  return said === ""
-    ? `${file} exited ${run.status} while being evaluated, saying nothing about why.`
-    : `${file} ${said}`;
-}
-
-/**
- * The resources present after an import that were not present before it, as a multiset.
- *
- * Counted rather than compared as sets: an artifact that adds a second `Timeout` beside one this
- * process already had is adding one, and a set difference reports nothing.
- *
- * @param {readonly string[]} before
- * @param {readonly string[]} after
- * @returns {string[]}
- */
-export function remaining(before, after) {
-  const spare = [...before];
-  const added = [];
-  for (const resource of after) {
-    const at = spare.indexOf(resource);
-    if (at === -1) added.push(resource);
-    else spare.splice(at, 1);
-  }
-  return added;
-}
-
-/**
- * Evaluate ONE artifact in this process, which the parent has just started for it alone.
- *
- * Sharing a process across artifacts made every artifact's verdict depend on the ones before it.
- * Enumerating what may leak — the DOM globals, then the post-floor ones — answers for the names on
- * those lists and for nothing else, and ordinary state is not on any list: a module setting
- * `globalThis.cache`, populating a registry, or monkey-patching a prototype leaves the next
- * artifact evaluating against an environment no consumer has. A fresh process cannot carry any of
- * it, which settles the whole class rather than the part that was enumerated.
- *
- * @param {string} file
- */
-/**
- * Report why an artifact failed and end the child on the spot.
- *
- * Immediately, and with `process.exit` rather than `exitCode`, because the artifact may have
- * SCHEDULED an exit of its own: `setTimeout(() => process.exit(0))` fires after this function
- * returns and overwrites the status the parent reads, so a verdict set and then returned from is a
- * verdict the artifact can overrule. Completion is marked first so the end-of-run assertion does
- * not also fire for a run that reached a conclusion.
- *
- * @param {string} why
- * @returns {never}
- */
-function failEvaluation(why) {
-  console.error(why);
-  completed = true;
-  realExit(1);
-}
-
-async function evaluateOne(file) {
-  const contaminated = domGlobalsPresent();
-  if (contaminated.length > 0) {
-    failEvaluation(
-      `this environment defines ${contaminated.join(", ")}, so importing an artifact proves ` +
-        `nothing about a server`
-    );
-  }
-
-  // Down to the oldest supported Node BEFORE the import, so the evaluation answers for the whole
-  // `engines` range rather than for the build machine. Not restored: the process exits next.
-  const floor = restrictToSupportedFloor();
-  if (floor.stubborn.length > 0) {
-    failEvaluation(
-      `${floor.stubborn.join(", ")} could not be removed from this environment, so the artifact ` +
-        `could evaluate against a capability the oldest supported Node does not have`
-    );
-  }
-
-  const full = join(DIST, file);
-
-  // `process.exit` is captured and replaced BEFORE the import. An artifact that ends the process
-  // is a defect whenever it does it, and the timing decides only whether THIS child lives long
-  // enough to see it: a scheduled exit on an unrefed timer never fires here, because nothing keeps
-  // a short-lived child alive, while a consumer's server has work to do and the same timer ends it.
-  // Intercepting removes the dependence on timing entirely -- the call is the defect, not its
-  // arrival.
-  /** @type {number | undefined} */
-  let exitAttempt;
-  process.exit = code => {
-    exitAttempt = typeof code === "number" ? code : 0;
-    // Returning rather than exiting lets the caller carry on, so the report names the artifact
-    // rather than this process vanishing mid-verdict.
-    return undefined;
-  };
-
-  // What this process is holding open BEFORE the artifact runs, so only what the ARTIFACT adds is
-  // reported. The stdio pipes are here on every run and are not the artifact's doing.
-  const before = process.getActiveResourcesInfo();
-  importing = file;
-  try {
-    // The CJS artifacts go through `require` because `import()` of a `.cjs` file gives back its
-    // exports without running it as CommonJS.
-    if (file.endsWith(".cjs")) createRequire(import.meta.url)(full);
-    else await import(pathToFileURL(full).href);
-  } catch (error) {
-    failEvaluation(
-      `threw while being imported under Node: ` +
-        `${error instanceof Error ? error.message : String(error)}. A server-safe entry point ` +
-        `must evaluate on a bare server, on its own`
-    );
-  }
-  importing = null;
-
-  // A turn of the TIMERS phase, so a timer that is already due gets its chance to run. A
-  // `setImmediate` yield is not enough and was measured not to be: it resolves in the check phase,
-  // which runs after timers, so a due unrefed timer stays pending. Scheduling through `setTimeout`
-  // puts this continuation in the same phase as the artifact's own timer, behind it in the queue.
-  //
-  // This is one turn, not a wait. An artifact whose exit is scheduled far enough out still escapes,
-  // and nothing here can close that without waiting an unbounded time; what it removes is the
-  // dependence on a child being short-lived, which is what made an ALREADY-DUE exit invisible.
-  await new Promise(resolve => setTimeout(resolve, 0));
-
-  process.exit = realExit;
-  if (exitAttempt !== undefined) {
-    failEvaluation(
-      `called process.exit(${exitAttempt}) while being imported, or scheduled a call that ran ` +
-        `immediately afterwards. A server-safe entry point must not end its consumer's process.`
-    );
-  }
-
-  // What the artifact left RUNNING. Reaching the end of the import is not the same as being
-  // finished: a module-scope `setInterval` keeps its consumer's process alive forever, and a
-  // `setTimeout(() => process.exit(0))` lets this child exit 0 before the timer fires, so the
-  // parent reads a clean status for an artifact that would end a server. Neither is visible in the
-  // import's return value; both are visible here.
-  const left = remaining(before, process.getActiveResourcesInfo());
-  if (left.length > 0) {
-    failEvaluation(
-      `left ${left.join(", ")} running after it was imported. A server-safe entry point must ` +
-        `finish initializing and leave nothing holding, or ending, its consumer's process`
-    );
-  }
-
-  // Still asked, because this artifact putting a browser global into its OWN consumer's
-  // environment is a defect whatever the next artifact does. What the fresh process removes is
-  // one artifact's leak deciding another's verdict, not the leak itself.
-  const installed = [...domGlobalsPresent(), ...floorGlobalsPresent()];
-  if (installed.length > 0) {
-    failEvaluation(
-      `installed ${installed.join(", ")} while being imported. A server-safe entry point must ` +
-        `not put a browser global into its consumer's environment`
-    );
-  }
-}
-
 async function main() {
   const problems = [];
 
-  // Neither the environment check nor the floor restriction is done here any more: this process
-  // imports no artifact, and each child applies both to itself before the one import it makes.
   const artifacts = serverSafeArtifacts();
 
   // One read per format rather than per artifact; the build writes one file for each.
@@ -1041,32 +606,6 @@ async function main() {
           `published-entries.mjs needs a deliberate addition.`
       );
     }
-
-    // Evaluated, not merely read: this is what makes the browser-global question complete. One
-    // fresh process per artifact, so nothing an earlier one did to the environment can decide a
-    // later one's verdict — which is the state a consumer importing this entry ALONE is in.
-    for (const nodeEnv of EVALUATED_NODE_ENVS) {
-      const problem = childOutcome(
-        file,
-        spawnSync(process.execPath, [SELF, "--evaluate", file], {
-          encoding: "utf8",
-          timeout: EVALUATION_TIMEOUT_MS,
-          env: childEnvironment(nodeEnv),
-          // A directory created for this evaluation alone, and empty. The shared system temp
-          // directory is neutral but not ISOLATED: one artifact, or the same artifact under an
-          // earlier `NODE_ENV`, can leave a file there that a later evaluation then finds, so a
-          // relative read would succeed for a reason no consumer shares. Fresh per run, it cannot.
-          cwd: mkdtempSync(join(tmpdir(), "nx-server-safe-")),
-        })
-      );
-      // Named with the environment, because "utils.mjs threw" is a different report to act on
-      // depending on which branch did it, and the runs are otherwise identical.
-      if (problem !== null) {
-        problems.push(
-          `${problem} (NODE_ENV=${nodeEnv === undefined ? "unset" : nodeEnv})`
-        );
-      }
-    }
   }
 
   if (artifacts.length === 0) {
@@ -1083,8 +622,8 @@ async function main() {
   }
 
   console.log(
-    `Server-safe artifact check passed (${artifacts.join(", ")} import cleanly under Node and ` +
-      `reach only ${[...SERVER_SAFE_ALLOWED_PACKAGES].join(", ")}).`
+    `Server-safe artifact check passed (${artifacts.join(", ")} reach only ` +
+      `${[...SERVER_SAFE_ALLOWED_PACKAGES].join(", ")}).`
   );
 }
 
@@ -1093,26 +632,5 @@ if (
   process.argv[1] &&
   pathToFileURL(process.argv[1]).href === import.meta.url
 ) {
-  // An artifact is EVALUATED here, so it can call `process.exit` and take this process with it —
-  // before any verdict is printed, and with whatever status it chose, which the shell would read
-  // as a passing gate. Completion is asserted rather than assumed: reaching the end of `main` is
-  // what clears this, and anything else exits non-zero naming the artifact being imported.
-  process.on("exit", () => {
-    if (completed) return;
-    console.error(
-      `Server-safe artifact check did not finish${
-        importing === null ? "" : ` — it was importing ${importing}`
-      }. An artifact that ends the process during module initialization would end a consumer's server the same way.`
-    );
-    if (process.exitCode === 0 || process.exitCode === undefined) {
-      process.exitCode = 1;
-    }
-  });
-  // `--evaluate <file>` is this file run as its own child, importing one artifact into a process
-  // started for it alone. The parent reads the exit status; the assertion above is what stops an
-  // artifact calling `process.exit(0)` from being read as a clean evaluation.
-  const evaluating = process.argv[2] === "--evaluate" ? process.argv[3] : null;
-  if (evaluating !== null) await evaluateOne(evaluating);
-  else await main();
-  completed = true;
+  await main();
 }

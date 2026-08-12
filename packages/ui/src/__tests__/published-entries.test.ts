@@ -601,8 +601,37 @@ describe("the hand-written declaration beside the module", () => {
     "..",
     "scripts"
   );
+  // A marker means the reader met syntax it will not model, and it has to STOP the comparison
+  // rather than take part in one. Both surfaces are collected the same way, so the same
+  // unsupported syntax on each side — the natural shape, since a star export is added to a module
+  // and its declaration together — produces the same marker twice and the two lists compare equal
+  // while none of the bindings it publishes has been compared at all.
+  const bindings = (file: string, source: string): string[] => {
+    const found = exportedNames(source);
+    const unreadable = found.filter(name => name.startsWith("<unsupported:"));
+    if (unreadable.length > 0) {
+      throw new Error(
+        `${file} uses syntax this reader will not model (${unreadable.join(", ")}), so the ` +
+          `bindings it publishes were never listed. Name them explicitly, or teach the reader ` +
+          `to resolve them.`
+      );
+    }
+    return found;
+  };
+
   const names = (file: string): string[] =>
-    exportedNames(readFileSync(path.join(scripts, file), "utf8"));
+    bindings(file, readFileSync(path.join(scripts, file), "utf8"));
+
+  it("refuses a surface it could not read, rather than comparing markers", () => {
+    expect(() =>
+      bindings("published-entries.mjs", `export * from "./helper.mjs";`)
+    ).toThrow(/will not model/);
+    // The control: an ordinary surface is still read and returned, so the refusal above is the
+    // marker's doing and not a helper that rejects everything.
+    expect(bindings("published-entries.mjs", `export const x = 1;`)).toEqual([
+      "x",
+    ]);
+  });
 
   it("declares exactly the bindings the module exports", () => {
     const runtime = names("published-entries.mjs");

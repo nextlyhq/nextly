@@ -1,10 +1,10 @@
 /**
  * The reading the artifact gate does, checked against sources it will never see in a build.
  *
- * The gate itself runs in `build:js` and is the real assertion: it imports every built server-safe
- * artifact under Node and compares what each one reaches against the allow-list. What it cannot do
- * is prove it would still catch a crossing that is not currently present — the artifacts are clean,
- * so every run of it passes for the same reason whether the reading is right or wrong.
+ * The gate itself runs in `build:js` and is the real assertion: it compares what each built
+ * server-safe artifact reaches against the allow-list. What it cannot do is prove it would still
+ * catch a crossing that is not currently present — the artifacts are clean, so every run of it
+ * passes for the same reason whether the reading is right or wrong.
  *
  * These cover that: the specifier reader and the package classifier are exercised against the
  * spellings a bundler emits, including the ones that would let a real dependency through unseen.
@@ -16,16 +16,11 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
-  childOutcome,
-  remaining,
-  disallowedSpecifiers,
-  domGlobalsPresent,
-  floorGlobalsPresent,
   bundledPackages,
+  disallowedSpecifiers,
   packageOf,
   packageOfInput,
   reachedFrom,
-  restrictToSupportedFloor,
   specifiersIn,
 } from "../../scripts/check-server-safe-artifacts.mjs";
 import { SERVER_SAFE_ALLOWED_PACKAGES } from "../../scripts/published-entries.mjs";
@@ -547,198 +542,5 @@ describe("reading what the build bundled", () => {
     // An absent entry means the question was not answered. Returning an empty list would read as
     // "nothing bundled", which is the failure this whole check exists to prevent.
     expect(bundledPackages({ outputs: {} }, "dist/utils.mjs")).toBeNull();
-  });
-});
-
-describe("the vacuity guard", () => {
-  it("names the globals that mean this is not a bare server", () => {
-    expect(domGlobalsPresent({ document: {}, window: {} })).toEqual([
-      "window",
-      "document",
-    ]);
-  });
-
-  it("probes only globals no Node release has ever defined", () => {
-    // Node has had `navigator` since v21 and is adopting web storage now. Probing for either would
-    // report a DOM on an ordinary build machine, and the gate would refuse to run rather than
-    // check anything — turning a real assertion into a hard failure.
-    expect(
-      domGlobalsPresent({ navigator: {}, localStorage: {}, sessionStorage: {} })
-    ).toEqual([]);
-  });
-
-  it("reads the binding, not its value", () => {
-    // A preload that defines `globalThis.document` as `undefined` leaves `document?.title`
-    // evaluating happily while ordinary Node throws `ReferenceError`. Comparing the VALUE against
-    // undefined reports that environment as a bare server.
-    expect(domGlobalsPresent({ document: undefined })).toEqual(["document"]);
-  });
-
-  it("passes on a real server, so the gate is reachable here", () => {
-    // The positive control for the two above: this suite runs in Node, and the gate's precondition
-    // has to actually hold there or it would never assert anything in the build either.
-    expect(domGlobalsPresent()).toEqual([]);
-  });
-});
-
-describe("restricting to the oldest supported Node", () => {
-  it("removes a global that a newer Node added, and puts it back", () => {
-    // Without this the artifact is evaluated against the build machine's capabilities rather than
-    // the floor of the `engines` range, and a module-scope `navigator.userAgent` passes here while
-    // throwing for a consumer on Node 20.
-    const scope: Record<string, unknown> = { navigator: { userAgent: "x" } };
-    const floor = restrictToSupportedFloor(scope);
-    expect(floor.stubborn).toEqual([]);
-    expect("navigator" in scope).toBe(false);
-    floor.restore();
-    expect(scope.navigator).toEqual({ userAgent: "x" });
-  });
-
-  it("reports a global it could not remove rather than proceeding", () => {
-    // A leftover would let an artifact evaluate against a capability the floor does not have —
-    // the same vacuous pass this file exists to prevent, one level down.
-    const scope: Record<string, unknown> = {};
-    Object.defineProperty(scope, "navigator", {
-      value: {},
-      configurable: false,
-    });
-    expect(restrictToSupportedFloor(scope).stubborn).toEqual(["navigator"]);
-  });
-
-  it("removes the constructor as well as the instance", () => {
-    // Node exposes `navigator` AND `Navigator`; removing one leaves the other reachable, so a
-    // module-scope `Navigator.prototype` would still evaluate here and throw on the floor.
-    const scope: Record<string, unknown> = {
-      navigator: {},
-      Navigator: () => {},
-    };
-    restrictToSupportedFloor(scope);
-    expect("navigator" in scope).toBe(false);
-    expect("Navigator" in scope).toBe(false);
-  });
-
-  it("names a post-floor global that reappeared", () => {
-    // Asked BETWEEN imports. An artifact that installs `navigator` puts it back for everything
-    // evaluated afterwards, and those entries then pass against a runtime no consumer has.
-    //
-    // The fixture is one name per Node version that added one above the `engines` floor of 20.19:
-    // `navigator` in 21, `WebSocket` unflagged in 22.4, and `Iterator`, `Float16Array` and
-    // `SuppressedError` in 24. Each is present on the build machine and absent on the oldest
-    // runtime a consumer may use, which is the whole reason the scope is restricted before an
-    // artifact is imported.
-    expect(
-      floorGlobalsPresent({
-        navigator: {},
-        WebSocket: class {},
-        Iterator: class {},
-        Float16Array: class {},
-        SuppressedError: class {},
-      })
-    ).toEqual([
-      "navigator",
-      "WebSocket",
-      "Iterator",
-      "Float16Array",
-      "SuppressedError",
-    ]);
-    expect(floorGlobalsPresent({ clean: 1 })).toEqual([]);
-  });
-
-  it("leaves a scope that never had them untouched", () => {
-    const scope: Record<string, unknown> = { untouched: 1 };
-    const floor = restrictToSupportedFloor(scope);
-    expect(floor.stubborn).toEqual([]);
-    floor.restore();
-    expect(scope).toEqual({ untouched: 1 });
-  });
-});
-
-describe("what an artifact left running", () => {
-  it("names what appeared, not what was already there", () => {
-    // The stdio pipes are present on every run and are not the artifact's doing.
-    expect(
-      remaining(["PipeWrap", "PipeWrap"], ["PipeWrap", "PipeWrap"])
-    ).toEqual([]);
-    expect(
-      remaining(["PipeWrap", "PipeWrap"], ["PipeWrap", "PipeWrap", "Timeout"])
-    ).toEqual(["Timeout"]);
-  });
-
-  it("counts duplicates, so a second one of the same kind is reported", () => {
-    // A set difference answers "nothing new" here, and an artifact adding a timer beside an
-    // existing one is adding a timer.
-    expect(remaining(["Timeout"], ["Timeout", "Timeout"])).toEqual(["Timeout"]);
-  });
-
-  it("says nothing about a resource that went away", () => {
-    // Fewer resources than before is not this check's concern; only additions are the artifact's.
-    expect(remaining(["Timeout", "PipeWrap"], ["PipeWrap"])).toEqual([]);
-  });
-});
-
-describe("reading one artifact's own process", () => {
-  const ran = (over: Record<string, unknown>) =>
-    childOutcome("utils.mjs", { status: 0, stderr: "", ...over });
-
-  it("passes a child that exited cleanly", () => {
-    expect(ran({})).toBeNull();
-  });
-
-  it("reports the child's reason without repeating the artifact name", () => {
-    // The child names the failure and the parent names the file. Written at both ends, the report
-    // reads the name twice and the reason once.
-    expect(
-      ran({ status: 1, stderr: "installed document while being imported\n" })
-    ).toBe("utils.mjs installed document while being imported");
-  });
-
-  it("still reports a child that failed and said nothing", () => {
-    // A file name with no reason is what this avoids: the exit status is all there is to give.
-    expect(ran({ status: 3, stderr: "  \n" })).toContain("exited 3");
-  });
-
-  it("separates a signalled child from a verdict about the artifact", () => {
-    // `status` is null for a signalled child, which is unequal to 0 and would otherwise be
-    // described with the word "null" where the reason belongs.
-    const said = ran({ status: null, signal: "SIGKILL", stderr: "" });
-    expect(said).toContain("SIGKILL");
-    expect(said).not.toContain("null");
-  });
-
-  it("calls a child killed at the deadline a defect, not an unrunnable check", () => {
-    // An artifact that leaves a handle open finishes importing and never lets its process exit.
-    // Read as a spawn failure it would be reported as "could not be evaluated", which hides it.
-    // Annotated as the declaration types it, rather than left to `Object.assign` to widen. The
-    // implementation reads `error.code`, so a caller that cannot SET it is a caller the published
-    // signature does not actually serve.
-    const timedOut: Error & { code?: string } = Object.assign(
-      new Error("ETIMEDOUT"),
-      { code: "ETIMEDOUT" }
-    );
-    const said = ran({ error: timedOut, status: null });
-    expect(said).toContain("still running");
-    expect(said).not.toContain("could not be evaluated");
-  });
-
-  it("accepts a spawn result carrying the code the timeout branch reads", () => {
-    // Called DIRECTLY with a literal rather than through `ran`, whose parameter is
-    // `Record<string, unknown>` and therefore checks nothing. Excess-property checking fires only
-    // on a fresh literal at the call site, so this is the only shape that holds the published
-    // signature to what the implementation reads -- `error.code`, which a declaration typing
-    // `error` as a plain `Error` rejects.
-    expect(
-      childOutcome("utils.mjs", {
-        error: { name: "Error", message: "timed out", code: "ETIMEDOUT" },
-        status: null,
-      })
-    ).toContain("still running");
-  });
-
-  it("separates a child that never started from one that failed", () => {
-    // "The artifact is bad" and "the check could not run" call for different action, and a spawn
-    // that never happened is the second.
-    expect(ran({ error: new Error("EAGAIN"), status: null })).toContain(
-      "could not be evaluated"
-    );
   });
 });
