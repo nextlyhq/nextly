@@ -451,6 +451,12 @@ function assertNoTargetConflict(
   }
 }
 
+/** One physical table move: the name it leaves, and the name it takes. */
+export interface TableRename {
+  from: string;
+  to: string;
+}
+
 /**
  * Every physical table an entry moves: its own, and its companion's.
  *
@@ -458,9 +464,7 @@ function assertNoTargetConflict(
  * entry, so name checks have to see it even though it no longer has one of its
  * own. Column entries move no table and contribute nothing.
  */
-export function tableRenamesOf(
-  entry: ManifestEntry
-): { from: string; to: string }[] {
+export function tableRenamesOf(entry: ManifestEntry): TableRename[] {
   if (entry.kind === "column") return [];
   const own = { from: entry.from, to: entry.to };
   return entry.companion === undefined ? [own] : [own, entry.companion];
