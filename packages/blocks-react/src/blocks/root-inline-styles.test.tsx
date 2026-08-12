@@ -20,6 +20,13 @@
  * has an unbounded surface — it already missed a block that assembled a
  * `CSSProperties` object separately and applied it as `style={hasStyle ? s : undefined}` —
  * whereas the output either carries the attribute or does not.
+ *
+ * The output has to be AWAITED. Several blocks are async server components, so a
+ * walk over what `render` returns synchronously reaches a promise, finds no
+ * element on it, and reports them clean — which is how a first version of this
+ * silently exempted `core/image`, `core/button` and `core/collection-loop`, the
+ * three most likely to carry a computed style. Coverage is therefore asserted
+ * per block by name rather than as a count.
  */
 import { describe, expect, it } from "vitest";
 
@@ -64,6 +71,14 @@ function renderArgs<P>(props: P): BlockRenderArgs<P> {
   } as BlockRenderArgs<P>;
 }
 
+/** A block's output, whether it renders synchronously or as a server component. */
+async function rendered<P>(block: {
+  render: (args: BlockRenderArgs<P>) => ReactNode | Promise<ReactNode>;
+  example: { props: P };
+}): Promise<ReactNode> {
+  return await block.render(renderArgs(block.example.props));
+}
+
 /** Every element in a render result, the root included. */
 function elementsIn(node: ReactNode): ReactElement[] {
   if (!isValidElement(node)) {
@@ -89,46 +104,61 @@ function classCarriers(node: ReactNode): ReactElement<{ style?: unknown }>[] {
 }
 
 describe("a core block's root element", () => {
-  const drawn = coreBlocks.filter(block => {
-    // A block whose example props make it draw nothing has no root to inspect.
-    // Filtered explicitly rather than silently skipped, so the count below
-    // reports what was actually examined.
-    const output = block.render(renderArgs(block.example.props));
-    return classCarriers(output).length > 0;
+  /**
+   * Which blocks put their class on something, resolved once.
+   *
+   * Named rather than counted. A count is satisfied by any nine of twelve, so it
+   * cannot tell a library that grew a clean block from one whose riskiest block
+   * stopped being reached — and the second is exactly what happened here.
+   */
+  async function inspectable(): Promise<
+    Map<string, ReactElement<{ style?: unknown }>[]>
+  > {
+    const found = new Map<string, ReactElement<{ style?: unknown }>[]>();
+    for (const block of coreBlocks) {
+      const carriers = classCarriers(await rendered(block));
+      if (carriers.length > 0) found.set(block.name, carriers);
+    }
+    return found;
+  }
+
+  it("reaches every block that draws, named rather than counted", async () => {
+    const found = await inspectable();
+    const missing = coreBlocks
+      .map(block => block.name)
+      .filter(name => !found.has(name));
+
+    // EVERY core block is reached, `core/collection-loop` included — it draws its
+    // empty state when no provider answers rather than drawing nothing. A name
+    // appearing here means the walk stopped finding that block, and the
+    // assertion below would then pass by never running against it.
+    expect(missing).toEqual([]);
   });
 
-  it("inspects most of the library, so the rule is not vacuous", () => {
-    // The guard's own positive control. Every assertion below is satisfied by a
-    // block that renders nothing, by a walk that never reaches an element, and
-    // by a class name that stopped matching — all of which look identical to a
-    // clean library. This is the assertion that separates them.
-    expect(coreBlocks.length).toBeGreaterThan(5);
-    expect(drawn.length).toBeGreaterThan(coreBlocks.length / 2);
-  });
-
-  it.each(drawn.map(block => [block.name, block] as const))(
-    "%s renders no inline style on the element carrying its class",
-    (name, block) => {
-      const offenders = classCarriers(
-        block.render(renderArgs(block.example.props))
-      ).filter(element => element.props.style !== undefined);
-
+  it("puts no inline style on the element it was given a class for", async () => {
+    const found = await inspectable();
+    const offenders: string[] = [];
+    for (const [name, carriers] of found) {
+      const inline = carriers.filter(el => el.props.style !== undefined);
       if (ALLOWED.has(name)) {
         expect(
-          offenders.length,
+          inline.length,
           `${name} is allow-listed but no longer needs it: ${ALLOWED.get(name) ?? ""}`
         ).toBeGreaterThan(0);
-        return;
+        continue;
       }
-
-      expect(
-        offenders.map(element => JSON.stringify(element.props.style)),
-        `${name} puts an inline style on the element it was given a class for. ` +
-          "An inline declaration beats every class rule, so a style control " +
-          "writing that property compiles CSS with no visible effect. Move the " +
-          "default to `baseStyles`, which the compiler emits as the block-type " +
-          "tier beneath the node's own values."
-      ).toEqual([]);
+      for (const el of inline) {
+        offenders.push(`${name}: ${JSON.stringify(el.props.style)}`);
+      }
     }
-  );
+
+    expect(
+      offenders,
+      "A block put an inline style on the element it was given a class for. " +
+        "An inline declaration beats every class rule, so a style control " +
+        "writing that property compiles CSS with no visible effect. Move the " +
+        "default to `baseStyles`, which the compiler emits as the block-type " +
+        "tier beneath the node's own values."
+    ).toEqual([]);
+  });
 });
