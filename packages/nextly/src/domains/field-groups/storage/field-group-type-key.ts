@@ -140,12 +140,54 @@ export function clearFieldGroupType(instance: Record<string, unknown>): void {
  * So a declared discriminator constrains the argument to itself, and anything else — a plain
  * record, a deserialised payload — keeps the unconstrained `string` it needs.
  */
-type WritableFieldGroupType<T> =
-  T extends Record<typeof currentFieldGroupTypeKey, infer Declared>
-    ? Declared extends string
-      ? Declared
-      : string
-    : string;
+type UnionToIntersection<U> = (
+  U extends unknown ? (x: U) => void : never
+) extends (x: infer I) => void
+  ? I
+  : never;
+
+/** Whether `T` is a union of more than one member. */
+type IsUnion<T> = [T] extends [UnionToIntersection<T>] ? false : true;
+
+type WritableFieldGroupType<T> = [T] extends [
+  Record<typeof currentFieldGroupTypeKey, infer Declared>,
+]
+  ? [Declared] extends [string]
+    ? // 🔴 A union of tagged instances is REJECTED rather than offered every member's tag. A
+      // dynamic zone is generated as `Hero | Cta`, and a distributive conditional would produce
+      // `"hero" | "cta"` — so retagging a hero as a cta would compile, change only the
+      // discriminator, and leave hero-shaped data sitting behind a cta type. Narrow the value
+      // first; there is no correct tag to write onto a value whose type is still undecided.
+      IsUnion<T> extends true
+      ? never
+      : Declared
+    : string
+  : string;
+
+/**
+ * Whether an instance is of a given field group, narrowing it when it is.
+ *
+ * The reader alone cannot narrow: it returns `string | undefined`, which has no relationship to
+ * the value, so `switch (readFieldGroupType(block))` leaves a generated `Hero | Cta` union exactly
+ * as wide as it was and every member-specific property inaccessible inside the matching branch.
+ * That pushes callers back to reading the raw key, which is the one thing this module exists to
+ * stop.
+ *
+ * `Extract` falls back to `T` when it matches nothing, so a caller holding a single concrete type,
+ * or a plain record, keeps what it had instead of being narrowed to `never`.
+ */
+export function isFieldGroupType<T, K extends string>(
+  instance: T,
+  type: K
+): instance is NarrowedFieldGroup<T, K> {
+  return readFieldGroupType(instance) === type;
+}
+
+type NarrowedFieldGroup<T, K extends string> = [
+  Extract<T, Record<typeof currentFieldGroupTypeKey, K>>,
+] extends [never]
+  ? T
+  : Extract<T, Record<typeof currentFieldGroupTypeKey, K>>;
 
 export function writeFieldGroupType<T extends object>(
   instance: T,

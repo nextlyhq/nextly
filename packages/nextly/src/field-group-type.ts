@@ -14,15 +14,19 @@
  * an internal detail instead of a breaking change for every consumer.
  *
  * ```ts
- * import { readFieldGroupType } from "nextly/field-group-type";
+ * import { isFieldGroupType } from "nextly/field-group-type";
  *
  * for (const block of page.body) {
- *   switch (readFieldGroupType(block)) {
- *     case "hero":
- *       return <Hero {...block} />;
- *   }
+ *   if (isFieldGroupType(block, "hero")) return <Hero {...block} />;
  * }
  * ```
+ *
+ * 🔴 Use the predicate, not a `switch` on `readFieldGroupType`. A dynamic zone is generated as a
+ * UNION, and the reader returns `string | undefined` — a value with no relationship to the
+ * instance — so a `switch` on it leaves the union exactly as wide as it was and every
+ * member-specific property inaccessible inside the matching branch. `readFieldGroupType` is for
+ * when the slug itself is the answer (logging it, keying a map); `isFieldGroupType` is for
+ * deciding what a value IS.
  *
  * ## Why its own entry rather than `nextly/field-groups`
  *
@@ -46,5 +50,6 @@
 
 export {
   readFieldGroupType,
+  isFieldGroupType,
   writeFieldGroupType,
 } from "./domains/field-groups/storage/field-group-type-key";
