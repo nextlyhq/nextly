@@ -128,9 +128,28 @@ export function clearFieldGroupType(instance: Record<string, unknown>): void {
  * default values, or a row being assembled. A copy would be the safer default in general; here it
  * would silently drop the assignment for every caller that does not use the return value.
  */
+/**
+ * The type a given instance is allowed to be told it is.
+ *
+ * 🔴 A generated field group declares its discriminator as a LITERAL — the generator emits
+ * `_componentType: "hero"` — so a signature taking any `string` lets `writeFieldGroupType(hero,
+ * "cta")` compile, mutate the value at runtime, and leave TypeScript still narrowing it as a hero.
+ * Every discriminated-union branch downstream then routes cta data through hero-only code, and the
+ * compiler agrees with the wrong answer.
+ *
+ * So a declared discriminator constrains the argument to itself, and anything else — a plain
+ * record, a deserialised payload — keeps the unconstrained `string` it needs.
+ */
+type WritableFieldGroupType<T> =
+  T extends Record<typeof currentFieldGroupTypeKey, infer Declared>
+    ? Declared extends string
+      ? Declared
+      : string
+    : string;
+
 export function writeFieldGroupType<T extends object>(
   instance: T,
-  type: string
+  type: WritableFieldGroupType<T>
 ): void {
   // Every other spelling goes first, so an instance that arrived carrying the old key leaves
   // carrying only the new one. Assigning without clearing emits BOTH on any instance read back

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import * as config from "../config";
 import * as database from "../database";
 import * as fieldCatalog from "../collections/fields/catalog";
+import * as fieldGroupType from "../field-group-type";
 import * as root from "../index";
 import * as schemas from "../schemas";
 
@@ -42,9 +43,19 @@ const ENTRY_POINTS: Array<[string, Record<string, unknown>]> = [
   ["nextly/schemas", schemas as Record<string, unknown>],
   ["nextly/database", database as Record<string, unknown>],
   ["nextly/field-catalog", fieldCatalog as Record<string, unknown>],
+  ["nextly/field-group-type", fieldGroupType as Record<string, unknown>],
 ];
 
+// 🔴 Pinned alongside the generated cases. `it.each` derives one case per entry, so REMOVING an
+// entry deletes its own case and the suite shrinks by one while every remaining case passes — a
+// vanished test reads exactly like a passing one. This asserts the matrix itself.
+const PUBLISHED_ENTRY_POINT_COUNT = 6;
+
 describe("published export surface", () => {
+  it("checks every published entry point", () => {
+    expect(ENTRY_POINTS).toHaveLength(PUBLISHED_ENTRY_POINT_COUNT);
+  });
+
   it.each(ENTRY_POINTS)(
     "%s exposes no legacy component names",
     (_name, mod) => {
