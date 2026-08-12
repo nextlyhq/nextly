@@ -22,6 +22,7 @@
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
 "@nextlyhq/builder": patch
+"@nextlyhq/module-specifiers": patch
 ---
 
 Field group instances now report their stored type through `nextly/field-group-type`, a new entry point that reads whichever spelling a document carries and writes the current one. The admin editor uses it, so content saved before and after the storage rename stays readable and selectable in both.
