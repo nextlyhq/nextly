@@ -24,18 +24,25 @@
  * enumerated side lives there, where a deletion is loud, and the derived side lives here, where an
  * addition is free.
  *
- * Usage: node scripts/write-server-safe-rsc-app.mjs <directory>
+ * Usage:
+ *   node scripts/write-server-safe-rsc-app.mjs <directory>            write the app
+ *   node scripts/write-server-safe-rsc-app.mjs --verify <directory>   check what the build produced
+ *
+ * The two modes share this file, and therefore share ONE derivation of the subpath list. Split
+ * across a generator and a separate verifier, the verifier is free to check a different set to the
+ * one that was written, and it would report a pass over whichever set it had.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { publishedEntries } from "./published-entries.mjs";
 
-const target = process.argv[2];
+const verifying = process.argv[2] === "--verify";
+const target = verifying ? process.argv[3] : process.argv[2];
 if (target === undefined) {
   console.error(
-    "Usage: node scripts/write-server-safe-rsc-app.mjs <directory>. The directory is where the " +
-      "app is written; it is created if it does not exist."
+    "Usage: node scripts/write-server-safe-rsc-app.mjs [--verify] <directory>. The directory is " +
+      "where the app is written; it is created if it does not exist."
   );
   process.exit(1);
 }
@@ -50,6 +57,65 @@ if (serverSafe.length === 0) {
       "nothing."
   );
   process.exit(1);
+}
+
+/**
+ * The file a BUILD-TIME render writes, and nothing else does.
+ *
+ * `next build` exits 0 for a route it classifies as dynamic too, where the render is deferred to
+ * the first request. Reading the exit code alone would then report that the module bodies ran when
+ * they had only been compiled, and a future release changing how a route is classified would
+ * weaken this check without touching it.
+ */
+const PRERENDERED = join(target, ".next", "server", "app", "index.html");
+
+if (verifying) {
+  if (!existsSync(PRERENDERED)) {
+    console.error(
+      `${PRERENDERED} does not exist, so the route was compiled but never rendered at build time. ` +
+        `A server-safe entry point is only proven by a render that actually ran.`
+    );
+    process.exit(1);
+  }
+  const html = readFileSync(PRERENDERED, "utf8");
+
+  // Matched on ATTRIBUTES rather than on the visible text. React separates adjacent expressions in
+  // a text node with `<!-- -->` comments, so the rendered prose reads `./utils<!-- -->: <!-- -->1`
+  // and a literal search for what the page appears to say finds nothing.
+  const missing = [];
+  const empty = [];
+  for (const entry of serverSafe) {
+    const match = html.match(
+      new RegExp(
+        `data-subpath="${entry.subpath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}" data-exports="(\\d+)"`
+      )
+    );
+    if (match === null) missing.push(entry.subpath);
+    // A namespace with no bindings means the import resolved to something empty, which renders the
+    // same as a real module and would otherwise read as a pass.
+    else if (Number(match[1]) === 0) empty.push(entry.subpath);
+  }
+
+  if (missing.length > 0 || empty.length > 0) {
+    if (missing.length > 0) {
+      console.error(
+        `The prerendered page does not report ${missing.join(", ")}, so ${missing.length === 1 ? "that subpath was" : "those subpaths were"} ` +
+          `not imported by the Server Component that was built.`
+      );
+    }
+    if (empty.length > 0) {
+      console.error(
+        `${empty.join(", ")} rendered with no exports, so the import resolved to an empty module.`
+      );
+    }
+    process.exit(1);
+  }
+
+  console.log(
+    `Prerendered at build time, reporting all ${serverSafe.length} server-safe subpaths ` +
+      `(${serverSafe.map(entry => entry.subpath).join(", ")}).`
+  );
+  process.exit(0);
 }
 
 /** The bare specifier a consumer writes for a subpath: `./color` is imported as `<pkg>/color`. */
@@ -86,7 +152,13 @@ export default function Page() {
   return (
     <main>
       {imported.map(entry => (
-        <p key={entry.subpath}>
+        // The attributes are what the verifier reads. Rendered text is separated by React comment
+        // markers between adjacent expressions, so an attribute is the stable form.
+        <p
+          key={entry.subpath}
+          data-subpath={entry.subpath}
+          data-exports={entry.exports}
+        >
           {entry.subpath}: {entry.exports} exports
         </p>
       ))}

@@ -176,19 +176,22 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      # Nightly runs every line the package's `engines` range admits, LOW END
-      # INCLUDED. The web globals Node adds over time are what make a
-      # server-safe claim version-dependent: a module reading `navigator` at
-      # module scope builds cleanly on 22 and 24 and throws for a consumer on
-      # the floor, so a matrix without the floor answers only for the machines
-      # we happen to run on.
+      # EXACT floors, not major selectors. `20` resolves to the newest 20.x,
+      # which is not the version the `engines` range promises to support, and
+      # the gap is precisely where this job's signal lives: a global added in
+      # 22.13 is present on the newest 22.x and absent for a consumer pinned to
+      # 22.12.0, so a floating leg reports a pass the floor never earned.
       #
-      # A pull request runs the FLOOR alone. It is the leg that catches the most
-      # for this property — everything the newer lines reject, 20 rejects too,
-      # plus the post-floor globals they accept — so one leg per PR buys nearly
-      # all of the signal at a third of the minutes.
+      # The three floors come from the root `engines`
+      # (`^20.19.0 || ^22.12.0 || >=24.0.0`). The bare `24` leg is the other
+      # direction — the open-ended line's newest release, where the risk is Node
+      # removing or changing something rather than not having it yet.
+      #
+      # A pull request runs the LOWEST floor alone. Everything the newer lines
+      # reject, 20.19.0 rejects too, plus the post-floor globals they accept, so
+      # one leg buys nearly all the signal at a quarter of the minutes.
       matrix:
-        node: ${{ fromJSON(github.event_name == 'pull_request' && '[20]' || '[20, 22, 24]') }}
+        node: ${{ fromJSON(github.event_name == 'pull_request' && '["20.19.0"]' || '["20.19.0", "22.12.0", "24.0.0", "24"]') }}
 
     steps:
       - name: Checkout
@@ -225,10 +228,20 @@ jobs:
       - name: Write the Server Component app
         run: node packages/ui/scripts/write-server-safe-rsc-app.mjs /tmp/rsc-app
 
+      # Majors are pinned so a Next or React release cannot turn this nightly red
+      # for a reason that has nothing to do with the package under test; moving
+      # to the next major is then a deliberate edit here. Patches and minors
+      # still flow, which is where a genuine RSC behaviour change would arrive.
+      #
+      # One React major rather than the `^18 || ^19` the package accepts as a
+      # peer, because React's version cannot decide this question: a server-safe
+      # subpath may not reach React at all, and the artifact gate enforces that
+      # against an allow-list of two string utilities. The PAGE uses React; the
+      # subpaths under test do not.
       - name: Install Next.js and the packed UI tarball
         run: |
           cd /tmp/rsc-app
-          npm install next react react-dom /tmp/ui-pack/*.tgz --no-audit --no-fund
+          npm install next@16 react@19 react-dom@19 /tmp/ui-pack/*.tgz --no-audit --no-fund
 
       # An App Router page is prerendered during the build, so every module the
       # Server Component imports is evaluated in a real server render. A module
@@ -238,6 +251,15 @@ jobs:
         run: |
           cd /tmp/rsc-app
           npx next build
+
+      # The build exiting 0 is not the whole assertion. Next also exits 0 for a
+      # route it classifies as DYNAMIC, where the render is deferred to the first
+      # request and the module bodies have only been compiled. This reads the
+      # prerendered HTML the build wrote and requires every server-safe subpath
+      # to appear in it with a non-empty export count, which only a render that
+      # actually ran can produce.
+      - name: Verify the route was prerendered, naming every subpath
+        run: node packages/ui/scripts/write-server-safe-rsc-app.mjs --verify /tmp/rsc-app
 
   # A red nightly must surface without anyone watching the Actions tab. A red
   # pull request does not need an issue filed: it is already red on the PR, in
@@ -267,7 +289,7 @@ jobs:
           else
             # printf keeps the multi-line body inside this YAML block scalar;
             # a raw multi-line string here would dedent and break the file.
-            body=$(printf 'The nightly package-smoke workflow failed. Run: %s\n\nEither the packed tarballs no longer install/import in a clean project, or `create-nextly-app` no longer scaffolds an app that builds. See the run logs for the failing job.' "$RUN_URL")
+            body=$(printf 'The nightly package-smoke workflow failed. Run: %s\n\nOne of three things: the packed tarballs no longer install/import in a clean project, `create-nextly-app` no longer scaffolds an app that builds, or a subpath declared server-safe no longer survives a real Next.js Server Component build. The last one names a Node version in the job title, and a failure on the floor leg alone means the subpath uses something newer than the oldest supported Node. See the run logs for the failing job.' "$RUN_URL")
             gh issue create --repo "${{ github.repository }}" \
               --title "Nightly package smoke is failing" \
               --label ci-nightly-failure \
