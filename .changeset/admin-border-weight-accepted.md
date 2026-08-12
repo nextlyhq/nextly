@@ -47,3 +47,7 @@ to a contrast ratio at all.
 
 Dark mode is unchanged apart from `--nx-success`, which moves a step lighter to
 clear its minimum on the muted surface with the margin the suite requires.
+
+Checkbox and radio take a new `--nx-control-border` rather than following the
+field border down. A field is identifiable without its edge; an unchecked box is
+only the box, so its boundary is held to 3:1 with no acceptance.
