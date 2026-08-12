@@ -25,6 +25,7 @@
 import {
   findNode,
   isNodeType,
+  MAX_DEPTH,
   isNodeVersion,
   isPlainRecord,
   walkNodes,
@@ -148,6 +149,26 @@ const PATCH_FIELDS: { readonly [K in keyof Required<NodePatch>]: true } = {
 /** A field name an update may address. */
 type PatchField = keyof typeof PATCH_FIELDS;
 
+/**
+ * Whether a slot name can be stored and read back as its own key.
+ *
+ * ONE policy, asked wherever a slot name appears — a destination position and a
+ * slot carried inside an inserted subtree are the same question, and answering
+ * it in only one place is what let a subtree smuggle in the name a position
+ * could not.
+ *
+ * The rejected names are the ones `Object.prototype` owns. Reading
+ * `slots[name]` for one of those answers with an inherited member instead of
+ * `undefined`, and ASSIGNING it — which the engine does when it rebuilds a slot
+ * map — sets the prototype rather than creating an own property, dropping that
+ * whole child list. Asked of `Object.prototype` rather than matched against a
+ * written list, because the list everyone writes is `__proto__` and
+ * `constructor` while `toString` behaves identically.
+ */
+function isUsableSlotName(name: string): boolean {
+  return !Object.prototype.hasOwnProperty.call(Object.prototype, name);
+}
+
 function isPatchField(key: string): key is PatchField {
   return Object.hasOwn(PATCH_FIELDS, key);
 }
@@ -187,29 +208,67 @@ function isStringArray(value: unknown): boolean {
 }
 
 /**
- * A value's serialized form, or a refusal if it has none.
+ * A value rendered for a diagnostic, without ever throwing.
  *
- * The op layer compares patch values by serializing them, because a persisted
- * patch is freshly parsed and never shares a reference with the node's own
- * value. That comparison is where a value with no JSON form surfaces: a
- * `BigInt` and a cycle both make `JSON.stringify` throw a native `TypeError`,
- * which would leave this module as an editor crash rather than as the refusal
- * it promises for a bad op.
- *
- * The type cannot prevent it — `props` is `Record<string, unknown>`, so
- * `{ count: 1n }` is statically legal — and the value would not survive storage
- * anyway, so refusing it is the same answer the next read would give.
+ * `JSON.stringify` is not usable here: a bigint makes it throw, and the branches
+ * that need to describe a value are the rejection branches — so building the
+ * message about a bad value would itself fail, and the caller would meet a
+ * `TypeError` in place of the refusal this module promises.
  */
-function serialize(value: unknown, id: string): string {
-  try {
-    return JSON.stringify(value) ?? "undefined";
-  } catch (cause) {
-    throw new OpError(
-      `update: a value for "${id}" cannot be written down. A patch is stored as ` +
-        `JSON, so a value with no JSON form — a bigint, a cycle — could not be ` +
-        `replayed or undone even if it applied. Cause: ${String(cause)}`
-    );
+function describe(value: unknown): string {
+  if (typeof value === "string") return `"${value}"`;
+  if (typeof value === "bigint") return `${String(value)}n`;
+  if (typeof value === "object" && value !== null) {
+    return Array.isArray(value) ? "an array" : "an object";
   }
+  return String(value);
+}
+
+/**
+ * Whether a value is one JSON can carry without changing it.
+ *
+ * An op is stored as JSON, so a value outside that domain does not survive the
+ * round trip — and the two ways it fails to survive need the same answer for
+ * opposite reasons:
+ *
+ * - a bigint or a cycle makes `JSON.stringify` THROW, which is loud;
+ * - a function, a symbol or an `undefined` inside an object is dropped
+ *   SILENTLY, which is worse. The live document keeps the value, the persisted
+ *   op does not, and a crash replay rebuilds a different document than the one
+ *   the author was looking at.
+ *
+ * Checking the domain answers both. A catch around `stringify` only ever
+ * answers the first, which is why it is not what this does.
+ *
+ * `NaN` and the infinities are excluded for the same reason: they serialize to
+ * `null`, so the value that comes back is not the value written.
+ */
+function isJsonValue(value: unknown, seen: Set<object> = new Set()): boolean {
+  if (value === null) return true;
+  if (typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "object") return false;
+
+  const held = value;
+  // A cycle has no JSON form, and without this the walk would not return.
+  if (seen.has(held)) return false;
+  seen.add(held);
+
+  if (Array.isArray(value)) {
+    // By index: `every` skips holes, and a hole serializes as `null`.
+    for (let index = 0; index < value.length; index += 1) {
+      if (!isJsonValue(value[index], seen)) return false;
+    }
+    seen.delete(held);
+    return true;
+  }
+
+  if (!isPlainRecord(value)) return false;
+  for (const entry of Object.values(value)) {
+    if (!isJsonValue(entry, seen)) return false;
+  }
+  seen.delete(held);
+  return true;
 }
 
 function isStringRecord(value: unknown): boolean {
@@ -319,7 +378,7 @@ function accepted(
 function assertPatchNames(op: Extract<BuilderOp, { kind: "update" }>): void {
   if (!isPlainRecord(op.patch)) {
     throw new OpError(
-      `update: a patch of ${JSON.stringify(op.patch)} names no fields. An ` +
+      `update: a patch of ${describe(op.patch)} names no fields. An ` +
         `update carries a record of the values to write.`
     );
   }
@@ -345,16 +404,27 @@ function assertPatchNames(op: Extract<BuilderOp, { kind: "update" }>): void {
     // then on, with nothing between the op and the tree to notice.
     if (!NODE_FIELDS[key].holds(value)) {
       throw new OpError(
-        `update: "${key}" cannot hold ${JSON.stringify(value)}. Writing it ` +
+        `update: "${key}" cannot hold ${describe(value)}. Writing it ` +
           `would leave the node holding a value of the wrong kind, which every ` +
           `later read treats as data.`
+      );
+    }
+    // The JSON domain, checked rather than inferred from `stringify` not
+    // throwing. A function or a symbol inside `props` is DROPPED silently, so
+    // the live document would keep it while the stored op did not — and a
+    // crash replay would rebuild a different document than the author saw.
+    if (!isJsonValue(value)) {
+      throw new OpError(
+        `update: "${key}" holds a value JSON cannot carry unchanged. A patch ` +
+          `is stored as JSON, so a value it drops or rewrites would replay as ` +
+          `something else — or not at all.`
       );
     }
   }
 
   if (op.unset !== undefined && !isStringArray(op.unset)) {
     throw new OpError(
-      `update: an unset of ${JSON.stringify(op.unset)} names no fields. It is ` +
+      `update: an unset of ${describe(op.unset)} names no fields. It is ` +
         `a list of field names.`
     );
   }
@@ -393,16 +463,37 @@ function assertPatchNames(op: Extract<BuilderOp, { kind: "update" }>): void {
  */
 function assertNodeShape(node: BlockNode, verb: string): void {
   const seen = new Set<unknown>();
-  const visit = (candidate: unknown, path: string): void => {
+  // An explicit stack rather than recursion. A well-formed but very deep
+  // subtree from an agent exhausts the JavaScript stack, and a `RangeError`
+  // leaving this module is the same failure as any other native throw: the
+  // caller cannot tell a bad op from a broken editor.
+  const pending: Array<{ candidate: unknown; path: string; depth: number }> = [
+    { candidate: node, path: "the node", depth: 1 },
+  ];
+
+  while (pending.length > 0) {
+    const entry = pending.pop();
+    if (entry === undefined) break;
+    const { candidate, path, depth } = entry;
+
+    // The engine's own limit, asked rather than restated. A subtree deeper than
+    // a document may hold is refused here rather than after it is placed.
+    if (depth > MAX_DEPTH) {
+      throw new OpError(
+        `${verb}: ${path} is nested deeper than ${String(MAX_DEPTH)} levels, ` +
+          `which is as deep as a document goes.`
+      );
+    }
+
     if (!isPlainRecord(candidate)) {
       throw new OpError(
-        `${verb}: ${path} is ${JSON.stringify(candidate)}, which is not a node. ` +
+        `${verb}: ${path} is ${describe(candidate)}, which is not a node. ` +
           `A node is a record with an id, a type, a version and props.`
       );
     }
     // A subtree arriving from an in-process caller can be cyclic — JSON cannot
-    // express that, but a caller holding live objects can, and the walk below
-    // would not return.
+    // express that, but a caller holding live objects can, and the walk would
+    // not return.
     if (seen.has(candidate)) {
       throw new OpError(
         `${verb}: ${path} appears inside itself. A node cannot contain the ` +
@@ -421,27 +512,39 @@ function assertNodeShape(node: BlockNode, verb: string): void {
       }
       if (!contract.holds(value)) {
         throw new OpError(
-          `${verb}: ${path}.${field} cannot hold ${JSON.stringify(value)}.`
+          `${verb}: ${path}.${field} cannot hold ${describe(value)}.`
         );
       }
     }
 
     const slots: unknown = candidate.slots;
-    if (isPlainRecord(slots)) {
-      for (const [slot, children] of Object.entries(slots)) {
-        const list = children as unknown[];
-        // An INDEX loop, for the same reason the string-array check uses one:
-        // `forEach` skips holes, so a sparse slot array would be walked as
-        // though the missing entries were not there. They serialize as `null`,
-        // and a `null` in a child list is not a node.
-        for (let index = 0; index < list.length; index += 1) {
-          visit(list[index], `${path}.slots.${slot}[${index}]`);
-        }
+    if (!isPlainRecord(slots)) continue;
+    for (const [slot, children] of Object.entries(slots)) {
+      // The same policy a destination position is held to. A subtree carrying
+      // `slots.__proto__` reaches the engine's slot rebuild, where assigning
+      // that name sets the prototype instead of creating an own key and the
+      // whole child list disappears during an unrelated later edit.
+      if (!isUsableSlotName(slot)) {
+        throw new OpError(
+          `${verb}: ${path} carries a slot named "${slot}", which every object ` +
+            `already inherits. Its children could not be told apart from that ` +
+            `member, and rebuilding the slot map would drop them.`
+        );
+      }
+      const list = children as unknown[];
+      // An INDEX loop, for the same reason the string-array check uses one:
+      // `forEach` skips holes, so a sparse slot array would be walked as
+      // though the missing entries were not there. They serialize as `null`,
+      // and a `null` in a child list is not a node.
+      for (let index = 0; index < list.length; index += 1) {
+        pending.push({
+          candidate: list[index],
+          path: `${path}.slots.${slot}[${index}]`,
+          depth: depth + 1,
+        });
       }
     }
-  };
-
-  visit(node, "the node");
+  }
 }
 
 /**
@@ -456,9 +559,7 @@ function assertNodeShape(node: BlockNode, verb: string): void {
  */
 function assertNodeId(id: string, verb: string): void {
   if (!isNonEmptyString(id)) {
-    throw new OpError(
-      `${verb}: an id of ${JSON.stringify(id)} addresses no node.`
-    );
+    throw new OpError(`${verb}: an id of ${describe(id)} addresses no node.`);
   }
 }
 
@@ -495,21 +596,21 @@ function assertPosition(at: TreePosition, verb: string): void {
   // the editor, rather than the refusal this module promises for a bad op.
   if (!isPlainRecord(at)) {
     throw new OpError(
-      `${verb}: a position of ${JSON.stringify(at)} names nowhere. A position ` +
+      `${verb}: a position of ${describe(at)} names nowhere. A position ` +
         `is a record carrying an index, and a parent and slot when it is not at ` +
         `the document root.`
     );
   }
   if (!Number.isInteger(at.index) || at.index < 0) {
     throw new OpError(
-      `${verb}: an index of ${JSON.stringify(at.index)} names no position. ` +
+      `${verb}: an index of ${describe(at.index)} names no position. ` +
         `A missing or non-numeric index reaches the splice as NaN and puts the ` +
         `node at the front of its parent, which reads as a deliberate move.`
     );
   }
   if (at.parentId !== undefined && typeof at.parentId !== "string") {
     throw new OpError(
-      `${verb}: a parent id of ${JSON.stringify(at.parentId)} addresses nothing.`
+      `${verb}: a parent id of ${describe(at.parentId)} addresses nothing.`
     );
   }
   // A slot name that names an inherited member. `insertNode` reads
@@ -522,10 +623,7 @@ function assertPosition(at: TreePosition, verb: string): void {
   // Asked of `Object.prototype` rather than matched against a written list:
   // the list everyone writes is "__proto__" and "constructor", and "toString"
   // breaks it exactly the same way.
-  if (
-    typeof at.slot === "string" &&
-    Object.prototype.hasOwnProperty.call(Object.prototype, at.slot)
-  ) {
+  if (typeof at.slot === "string" && !isUsableSlotName(at.slot)) {
     throw new OpError(
       `${verb}: "${at.slot}" is not a usable slot name. It resolves to a ` +
         `member every object inherits, so the document's own children could ` +
@@ -535,7 +633,7 @@ function assertPosition(at: TreePosition, verb: string): void {
   if (at.parentId !== undefined && typeof at.slot !== "string") {
     throw new OpError(
       `${verb}: a position inside "${at.parentId}" must name its slot as a ` +
-        `string; ${JSON.stringify(at.slot)} would create a child region no ` +
+        `string; ${describe(at.slot)} would create a child region no ` +
         `block declared.`
     );
   }
@@ -620,7 +718,7 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
   // refusal says which op was wrong and why.
   if (!isPlainRecord(op)) {
     throw new OpError(
-      `an op of ${JSON.stringify(op)} is not an edit. Every op is a record ` +
+      `an op of ${describe(op)} is not an edit. Every op is a record ` +
         `naming its kind.`
     );
   }
@@ -768,8 +866,10 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
       // freshly parsed, so `{ props: {} }` is never the same object as the
       // node's `{}` and a reference test calls every replayed op a change —
       // which is the invisible history entry this guard exists to refuse.
+      // Safe to serialize: `assertPatchNames` has already refused any value
+      // outside the JSON domain, so neither side can make `stringify` throw.
       const same = (a: unknown, b: unknown): boolean =>
-        a === b || serialize(a, op.id) === serialize(b, op.id);
+        a === b || JSON.stringify(a) === JSON.stringify(b);
       const changesSomething = touched.some(key =>
         (op.unset ?? []).includes(key)
           ? held[key] !== undefined
@@ -803,7 +903,7 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
       // promises.
       const unreachable: never = op;
       throw new OpError(
-        `unknown op kind: ${JSON.stringify((unreachable as { kind?: unknown }).kind)}. ` +
+        `unknown op kind: ${describe((unreachable as { kind?: unknown }).kind)}. ` +
           `This document may have been edited by a newer version of the editor.`
       );
     }

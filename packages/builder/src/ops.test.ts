@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { applyOp, OpError, type BuilderOp, type NodePatch } from "./ops";
 
-import { updateNode, type BlockNode } from "@nextlyhq/blocks-engine";
+import { MAX_DEPTH, updateNode, type BlockNode } from "@nextlyhq/blocks-engine";
 
 function node(id: string, slots?: Record<string, BlockNode[]>): BlockNode {
   return {
@@ -744,6 +744,98 @@ describe("an op whose own shape is wrong", () => {
     }
     expect(thrown).toBeInstanceOf(OpError);
     expect(thrown).not.toBeInstanceOf(TypeError);
+  });
+
+  it.each<[string, () => Record<string, unknown>]>([
+    ["a function", () => ({ count: 1, formatter: () => "x" })],
+    ["a symbol", () => ({ tag: Symbol("x") })],
+    ["a nested undefined", () => ({ nested: { gone: undefined } })],
+    ["NaN", () => ({ ratio: Number.NaN })],
+  ])("refuses a patch value JSON silently erases: %s", (_label, build) => {
+    // The half a try/catch around `stringify` cannot see. These do not throw —
+    // they are DROPPED or rewritten, so the live document keeps the value and
+    // the stored op does not, and a crash replay rebuilds a different document
+    // than the author was looking at. Loud failures were already refused; this
+    // is the quiet one.
+    expect(() =>
+      applyOp(forest(), {
+        kind: "update",
+        id: "a",
+        patch: { props: build() },
+      })
+    ).toThrow(OpError);
+  });
+
+  it("builds its refusal without serializing the value it is rejecting", () => {
+    // The rejection branch has to DESCRIBE the bad value, and a bigint makes
+    // `JSON.stringify` throw — so the message about the bad op would itself
+    // fail and the caller would meet a TypeError instead of the refusal.
+    let thrown: unknown;
+    try {
+      applyOp(forest(), {
+        kind: "update",
+        id: "a",
+        patch: { attributes: { x: 1n } as unknown as Record<string, string> },
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(OpError);
+    expect(thrown).not.toBeInstanceOf(TypeError);
+  });
+
+  it("refuses a slot named after an inherited member inside a subtree", () => {
+    // The same name `assertPosition` refuses at a destination. Accepting it
+    // here let a subtree smuggle in what a position could not: the engine
+    // rebuilds slot maps by assigning `slots[name]`, and for this name that
+    // sets the prototype instead of creating an own key, so the whole child
+    // list disappears during an unrelated later edit.
+    const parent = node("holder");
+    parent.slots = { ["__proto__"]: [node("kid")] } as Record<
+      string,
+      BlockNode[]
+    >;
+    expect(() =>
+      applyOp(forest(), { kind: "insert", node: parent, at: { index: 0 } })
+    ).toThrow(OpError);
+  });
+
+  it("refuses a subtree deeper than a document may hold", () => {
+    // Recursion exhausted the stack on this and left a RangeError, which the
+    // caller cannot tell from a broken editor. The walk is iterative and asks
+    // the engine's own limit.
+    let deep = node("leaf-0");
+    for (let level = 1; level <= 10_000; level += 1) {
+      const parent = node(`level-${level}`);
+      parent.slots = { main: [deep] };
+      deep = parent;
+    }
+
+    let thrown: unknown;
+    try {
+      applyOp(forest(), { kind: "insert", node: deep, at: { index: 0 } });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(OpError);
+    expect(thrown).not.toBeInstanceOf(RangeError);
+  });
+
+  it("still accepts a subtree nested as deep as a document allows", () => {
+    // The control. A bound set too tight would refuse documents the engine
+    // itself accepts, and every assertion above would still pass.
+    let deep = node("deep-leaf");
+    for (let level = 1; level < MAX_DEPTH; level += 1) {
+      const parent = node(`deep-${level}`);
+      parent.slots = { main: [deep] };
+      deep = parent;
+    }
+    const applied = applyOp(forest(), {
+      kind: "insert",
+      node: deep,
+      at: { index: 0 },
+    });
+    expect(applied.nodes[0]?.id).toBe(`deep-${MAX_DEPTH - 1}`);
   });
 
   it("refuses a hole in an inserted slot array", () => {
