@@ -1,9 +1,8 @@
 /**
  * Derive a plugin's admin slug from its package name.
  *
- * `"@acme/p"` becomes `"acme-p"`. One implementation for the whole admin:
- * before this existed, `PluginsTable` carried a private copy, so a table row
- * and the router could in principle disagree about where a plugin lives.
+ * `"@acme/p"` becomes `"acme-p"`. One implementation for the whole admin, so
+ * a table row and the router cannot disagree about where a plugin lives.
  *
  * The algorithm mirrors `pluginAdminSlug` in core, which derives the same slug
  * server-side for a different consumer (host `pluginOverrides` lookups and
