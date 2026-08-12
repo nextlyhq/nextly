@@ -71,3 +71,27 @@ export {
  * `clientLeft`/`clientTop` left three call sites short by the padding.
  */
 export { frameInsetOf } from "./geometry-dom";
+
+/**
+ * @experimental The editor shell: rail, one switched panel, canvas, inspector,
+ * and the bars around them. Presentational — selection arrives as props.
+ */
+export { BuilderShell } from "./builder-shell";
+export type { BuilderShellProps } from "./builder-shell";
+
+/**
+ * @experimental The shell's own decisions: which panels the rail offers, the
+ * bounds handed to the panel library, and the preference port.
+ */
+export {
+  LEFT_PANELS,
+  MIN_CANVAS_WIDTH,
+  MIN_SHELL_WIDTH,
+  PANEL_BOUNDS,
+  RAIL_WIDTH,
+} from "./shell-state";
+export type {
+  LeftPanel,
+  PreferenceStore,
+  ShellPreferences,
+} from "./shell-state";

@@ -1,0 +1,70 @@
+/**
+ * The editor chrome's own token layer.
+ *
+ * Named `--nx-builder-*` and kept separate from `--nx-*` on purpose. The admin's
+ * tokens describe a CMS reading surface; the builder's chrome sits around a
+ * canvas showing the USER'S site, and the two have opposite jobs at the same
+ * moment: the canvas must look like the finished page, so the frame around it
+ * has to recede rather than compete. Sharing one palette makes every later
+ * chrome adjustment a change to the admin as well.
+ *
+ * Values derive from the admin tokens rather than restating colours, so a host
+ * that re-themes the admin moves the builder with it. The chrome is a SHIFT of
+ * that palette, not a second one.
+ *
+ * This layer is also where the ratified template-scope tint lands when there is
+ * a template scope to signal — PB-D17's "template scope = tinted chrome". It is
+ * a second value set for these variables, not a new component, which is why the
+ * F7 primitive list was the wrong home for it.
+ */
+
+.nx-builder-chrome {
+  /* The frame behind rail, panels and bars. Deliberately not `--nx-background`:
+     the canvas uses that, and the frame must read as a layer behind it. */
+  --nx-builder-surface: var(--nx-muted);
+  --nx-builder-surface-raised: var(--nx-background);
+  --nx-builder-border: var(--nx-border);
+  --nx-builder-text: var(--nx-foreground);
+  --nx-builder-text-muted: var(--nx-muted-foreground);
+  /* The rail's selected item, and the only accent the chrome spends. */
+  --nx-builder-accent: var(--nx-primary);
+  --nx-builder-accent-text: var(--nx-primary-foreground);
+
+  background-color: var(--nx-builder-surface);
+  color: var(--nx-builder-text);
+}
+
+/**
+ * Enhanced contrast, per the PB-D17 a11y addendum.
+ *
+ * Driven by the platform preference rather than a setting, because a user who
+ * has asked their OS for more contrast has already answered this question. The
+ * border is the token that moves: chrome boundaries at rest are deliberately
+ * quiet, and quiet is exactly what fails at higher contrast needs.
+ */
+@media (prefers-contrast: more) {
+  .nx-builder-chrome {
+    --nx-builder-border: var(--nx-foreground);
+    --nx-builder-text-muted: var(--nx-foreground);
+  }
+}
+
+/**
+ * Motion is opt-in, not opt-out.
+ *
+ * Panel switches and rail transitions animate only where the user has not asked
+ * for reduced motion. Written as a positive query rather than
+ * `prefers-reduced-motion: reduce` disabling things, so the default for an
+ * unstated preference is stillness.
+ */
+.nx-builder-chrome * {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .nx-builder-chrome [data-builder-animates] {
+    transition:
+      background-color 120ms ease,
+      color 120ms ease;
+  }
+}
