@@ -35,7 +35,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { publishedEntries } from "./published-entries.mjs";
+import { publishedEntries } from "./published-entries.js";
 
 const verifying = process.argv[2] === "--verify";
 const target = verifying ? process.argv[3] : process.argv[2];
@@ -112,7 +112,8 @@ if (verifying) {
     // A namespace with no bindings means the import resolved to something empty, which renders the
     // same as a real module and would otherwise read as a pass. An element carrying the subpath but
     // no count is the same absence of evidence.
-    if (exported === null || Number(exported[1]) === 0) empty.push(entry.subpath);
+    if (exported === null || Number(exported[1]) === 0)
+      empty.push(entry.subpath);
   }
 
   if (missing.length > 0 || empty.length > 0) {
@@ -157,14 +158,17 @@ if (verifying) {
 }
 
 /** The bare specifier a consumer writes for a subpath: `./color` is imported as `<pkg>/color`. */
-const specifier = subpath =>
+const specifier = (subpath: string): string =>
   subpath === "." ? "@nextlyhq/ui" : `@nextlyhq/ui/${subpath.slice(2)}`;
 
 // A NAMESPACE import, so this holds whatever each subpath exports without naming any binding. The
 // alternative is a list of names per subpath, which is the hand-written list this file exists to
 // avoid, one level down.
 const imports = serverSafe
-  .map((entry, index) => `import * as entry${index} from "${specifier(entry.subpath)}";`)
+  .map(
+    (entry, index) =>
+      `import * as entry${index} from "${specifier(entry.subpath)}";`
+  )
   .join("\n");
 
 // Every namespace is READ, and the result is rendered. An import whose binding is never used is
@@ -237,7 +241,11 @@ const requireCheck = `const assert = require("node:assert");
 const { writeFileSync } = require("node:fs");
 const { join } = require("node:path");
 
-const subpaths = ${JSON.stringify(serverSafe.map(entry => specifier(entry.subpath)), null, 2)};
+const subpaths = ${JSON.stringify(
+  serverSafe.map(entry => specifier(entry.subpath)),
+  null,
+  2
+)};
 
 for (const subpath of subpaths) {
   const loaded = require(subpath);
@@ -258,7 +266,10 @@ console.log(\`Required \${subpaths.length} server-safe subpaths through the Comm
 `;
 
 mkdirSync(join(target, "app"), { recursive: true });
-writeFileSync(join(target, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+writeFileSync(
+  join(target, "package.json"),
+  `${JSON.stringify(manifest, null, 2)}\n`
+);
 writeFileSync(join(target, "app", "page.jsx"), page);
 writeFileSync(join(target, "app", "layout.jsx"), layout);
 writeFileSync(join(target, "require-check.cjs"), requireCheck);

@@ -63,7 +63,7 @@ import ts from "typescript";
 import {
   SERVER_SAFE_ALLOWED_PACKAGES,
   serverSafeArtifacts,
-} from "./published-entries.mjs";
+} from "./published-entries.js";
 
 /** The directory part of an output-relative file name, or "" for a flat one. */
 const dirname = file =>
@@ -361,7 +361,7 @@ export function packageOf(specifier) {
  * Every emitted file reachable from one artifact, following the relative specifiers between them.
  *
  * A split build does not put an entry's dependencies in the entry. With code splitting on — tsup's
- * default — `utils.mjs` can be nothing but `export { x } from "./chunk-abc.mjs"`, and the chunk is
+ * default — `utils.mjs` can be nothing but `export { x } from "./chunk-abc.js"`, and the chunk is
  * where `react` would appear. Scanning only the named entry exempts exactly the file that holds
  * what this is looking for.
  *

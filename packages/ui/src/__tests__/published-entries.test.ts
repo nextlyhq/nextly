@@ -25,7 +25,7 @@ import {
   derivePublishedEntries,
   serverSafeBuildEntries,
   type DeclaredBarrel,
-} from "../../scripts/published-entries.mjs";
+} from "../../scripts/published-entries.js";
 
 /** The four conditions a JavaScript entry point has to name. */
 function conditions(name: string): Record<string, Record<string, string>> {

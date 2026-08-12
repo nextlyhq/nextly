@@ -42,8 +42,11 @@ const RELEASE_INDEX = "https://nodejs.org/dist/index.json";
  * @param {readonly number[]} releasedMajors every major with at least one release
  * @returns {string[]}
  */
-export function matrixFor(range, releasedMajors) {
-  const versions = [];
+export function matrixFor(
+  range: string,
+  releasedMajors: readonly number[]
+): string[] {
+  const versions: string[] = [];
   for (const clause of range.split("||").map(part => part.trim())) {
     const caret = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(clause);
     const open = /^>=(\d+)\.(\d+)\.(\d+)$/.exec(clause);
@@ -80,12 +83,14 @@ export function matrixFor(range, releasedMajors) {
  * the first clause would run Node 24 on every pull request while the real floor went unexercised,
  * with every synchronisation check still green.
  */
-export function lowestFloor(range) {
+export function lowestFloor(range: string): string {
   const floors = matrixFor(range, []);
   if (floors.length === 0) {
-    throw new Error("engines.node named no versions, so no leg could be selected.");
+    throw new Error(
+      "engines.node named no versions, so no leg could be selected."
+    );
   }
-  const parts = version => version.split(".").map(Number);
+  const parts = (version: string): number[] => version.split(".").map(Number);
   return floors.reduce((lowest, candidate) => {
     const [major, minor, patch] = parts(candidate);
     const [lowMajor, lowMinor, lowPatch] = parts(lowest);
@@ -104,13 +109,16 @@ async function releasedMajors() {
         `rather than running a narrower matrix, which would pass while covering less.`
     );
   }
-  const releases = await response.json();
-  return releases.map(release => Number(release.version.slice(1).split(".")[0]));
+  // The index is an array of `{ version: "vX.Y.Z" }`; narrowed here rather than trusted, since
+  // `response.json()` is `any` and a shape change would otherwise surface as a wrong matrix.
+  const releases = (await response.json()) as readonly { version: string }[];
+  return releases.map(release =>
+    Number(release.version.slice(1).split(".")[0])
+  );
 }
 
 const invokedDirectly =
-  process.argv[1] !== undefined &&
-  process.argv[1].endsWith("node-matrix.mjs");
+  process.argv[1] !== undefined && process.argv[1].endsWith("node-matrix.ts");
 
 if (invokedDirectly) {
   const flags = new Set(process.argv.slice(2));
@@ -131,7 +139,9 @@ if (invokedDirectly) {
   if (flags.has("--github")) {
     const out = process.env.GITHUB_OUTPUT;
     if (out === undefined) {
-      console.error("GITHUB_OUTPUT is not set, so the matrix could not be published.");
+      console.error(
+        "GITHUB_OUTPUT is not set, so the matrix could not be published."
+      );
       process.exit(1);
     }
     appendFileSync(out, `versions=${payload}\n`);
