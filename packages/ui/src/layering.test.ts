@@ -1064,11 +1064,21 @@ describe("this package resolves no module at runtime", () => {
         path,
         readFileSync(path, "utf8")
       );
+      // A failed parse leaves `config` undefined, which yields empty options and an empty alias
+      // list — the same answer as "there are no aliases". Reported as a failure of the CHECK
+      // rather than allowed to read as a clean result.
+      expect(parsed.error, `${name} must be parseable`).toBeUndefined();
       const resolved = ts.parseJsonConfigFileContent(
         parsed.config,
         ts.sys,
         join(SRC, "..")
       );
+      expect(
+        resolved.errors.map(diagnostic =>
+          ts.flattenDiagnosticMessageText(diagnostic.messageText, " ")
+        ),
+        `${name} must resolve, including anything it extends`
+      ).toEqual([]);
       return Object.keys(resolved.options.paths ?? {}).map(
         alias => `${name}: ${alias}`
       );

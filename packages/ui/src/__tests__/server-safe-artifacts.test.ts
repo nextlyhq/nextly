@@ -136,28 +136,14 @@ describe("reading an artifact's specifiers", () => {
     expect(read(`const react = require("react");`)).toEqual(["react"]);
   });
 
-  it("does not treat a local helper of the same name as the loader", () => {
-    // The name proves nothing; where it came from does. A module defining its own `createRequire`
-    // has no dependency on Node's, and reading one in would reject an artifact that imports
-    // nothing at all.
-    expect(
-      read(`
-        const createRequire = (base) => (name) => base + name;
-        export const x = createRequire("")("react-dom");
-      `)
-    ).toEqual([]);
-  });
-
-  it("does not treat an unrelated function as a loader", () => {
-    // The control: only a name assigned FROM `createRequire` counts, or every one-argument call
-    // with a string would be read as a module load.
-    expect(
-      read(`
-        const load = (name) => name.toUpperCase();
-        export const x = load("react");
-      `)
-    ).toEqual([]);
-  });
+  // Two cases were removed here rather than repaired: one asserting a locally defined
+  // `createRequire` is not read as the ambient one, and one asserting an unrelated single-argument
+  // function is not read as a loader. Both returned `[]` whatever the reader did, because
+  // `specifiersIn` no longer inspects `createRequire` at all — the loader tracking they described
+  // was deleted when this scan was reduced to reading import specifiers, and the runtime-resolution
+  // question moved to the source ban in `src/layering.test.ts`. Obsolete rather than redundant, so
+  // there is no remaining file to point at for the behaviour: it is not checked here because it is
+  // not done here.
 
   it("refuses a specifier it cannot read, rather than passing it", () => {
     // A bundler folds `"re" + "act"` to React. This does not evaluate expressions, so the honest

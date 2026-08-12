@@ -122,8 +122,11 @@ describe("the workflow's use of that derivation", () => {
     // The whole condition, not just its tail. Matching only `pull_request' &&` accepts
     // `github.event_name != 'pull_request'`, which reverses the two matrices while satisfying
     // every assertion here — the plausible broken form this test exists to exclude.
+    // Anchored to the WHOLE `${{ … }}` expression. A prefix match accepts a trailing
+    // `&& fromJSON('["unexpected"]')`, which satisfies every assertion here while selecting a
+    // third matrix — the same class as the operand swap and the inverted condition below it.
     const chosen =
-      /github\.event_name\s*==\s*'pull_request'\s*&&\s*([^|]+?)\s*\|\|\s*(\S+?)\s*\)/.exec(
+      /^\s*node:\s*\$\{\{\s*fromJSON\(\s*github\.event_name\s*==\s*'pull_request'\s*&&\s*([^|]+?)\s*\|\|\s*([^)]+?)\s*\)\s*\}\}\s*$/.exec(
         line as string
       );
     expect(

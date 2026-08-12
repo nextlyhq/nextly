@@ -43,8 +43,19 @@ export function bundledPackages(
       string,
       {
         inputs?: Record<string, unknown>;
-        /** What the bundler RESOLVED without inlining; read for resolver-only dependencies. */
-        imports?: readonly { path?: string; kind?: string }[];
+        /**
+         * What the bundler RESOLVED without inlining; read for resolver-only dependencies.
+         *
+         * `external` is part of the record esbuild emits and is what separates a real dependency
+         * from an internal chunk, so the declaration carries it. Omitting a field the fixtures
+         * and the bundler both produce makes the declaration describe something narrower than
+         * the data it types.
+         */
+        imports?: readonly {
+          path?: string;
+          kind?: string;
+          external?: boolean;
+        }[];
       }
     >;
   },
