@@ -55,6 +55,14 @@ export type ErasableDeliveriesTable = Table & { recipientHash: Column };
  * stored value is the sentinel, which no address hashes to. Running this twice
  * therefore touches nothing the second time, without needing a guard to say so.
  *
+ * The dialects do not agree on how this column compares: MySQL's default
+ * `varchar` collation is case- and pad-insensitive, while Postgres and SQLite
+ * compare exactly. That is safe here only because of what gets written —
+ * `hashRecipient` emits lowercase hex and the sentinel is lowercase letters, so
+ * no two distinct stored values differ only by case or trailing space, and the
+ * comparison lands on the same rows everywhere. Change either spelling and the
+ * dialects stop agreeing, silently and only on MySQL.
+ *
  * Rows written AFTER this returns are untouched and carry a live digest again.
  * That is correct: erasure is a statement about the record as it stands, not a
  * standing instruction to stop recording. Suppressing future rows would require
