@@ -13,6 +13,7 @@
  */
 
 import type { FieldConfig } from "nextly/config";
+import { readFieldGroupType } from "nextly/field-group-type";
 import type { ReactNode } from "react";
 
 import { Badge } from "@admin/components/ui";
@@ -414,15 +415,12 @@ function componentFieldsFor(
   return childFields(field);
 }
 
-/** Child fields for one component instance, keyed by its `_componentType`. */
+/** Child fields for one component instance, keyed by the field group type it announces. */
 function componentChildFields(
   field: FieldConfig,
   instance: unknown
 ): FieldConfig[] {
-  const typeName =
-    typeof instance === "object" && instance !== null
-      ? (instance as { _componentType?: string })._componentType
-      : undefined;
+  const typeName = readFieldGroupType(instance);
 
   return componentFieldsFor(field, typeName);
 }
@@ -502,10 +500,7 @@ defineValueDisplay(["component"], ({ value, field }) => {
   return (
     <div className="flex flex-col gap-3">
       {instances.map((instance, i) => {
-        const typeName =
-          typeof instance === "object" && instance !== null
-            ? ((instance as { _componentType?: string })._componentType ?? null)
-            : null;
+        const typeName = readFieldGroupType(instance) ?? null;
         return (
           <div key={i} className="border border-border p-3">
             {typeName ? (
