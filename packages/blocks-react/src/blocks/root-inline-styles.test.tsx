@@ -178,6 +178,32 @@ function contexts(): PageContext[] {
     resolveMedia: () =>
       Promise.resolve({ id: "m2", url: "https://example.com/y.png" }),
   };
+  // One dimension without the other. `renderImage` spreads `width` and `height`
+  // through SEPARATE conditionals, so the two are independent branches and a
+  // record carrying one is as valid as a record carrying both or neither — a
+  // library that measured an image and lost one field is the ordinary way to
+  // get here. Two hosts rather than one, because a single record cannot be
+  // width-only and height-only at the same time.
+  const widthOnlyMedia = {
+    ...answering,
+    resolveMedia: () =>
+      Promise.resolve({
+        id: "m3",
+        url: "https://example.com/w.png",
+        alt: "w",
+        width: 640,
+      }),
+  };
+  const heightOnlyMedia = {
+    ...answering,
+    resolveMedia: () =>
+      Promise.resolve({
+        id: "m4",
+        url: "https://example.com/h.png",
+        alt: "h",
+        height: 480,
+      }),
+  };
   const budgetSpent = { ...answering, queries: { take: () => false } };
   const budgetAvailable = { ...answering, queries: { take: () => true } };
   // The shape a ROUTED page actually has. `createStandaloneContext` is called
@@ -203,6 +229,8 @@ function contexts(): PageContext[] {
     localizedBudgetSpent,
     localizedBudgetAvailable,
     answeringRichly,
+    widthOnlyMedia,
+    heightOnlyMedia,
   ] as unknown as PageContext[];
 }
 
