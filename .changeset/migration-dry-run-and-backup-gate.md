@@ -22,6 +22,7 @@
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
 "@nextlyhq/builder": patch
+"@nextlyhq/module-specifiers": patch
 ---
 
 The field-group storage migration can now report what it would do without writing anything, and refuses to run for real unless the caller states that a restorable backup exists.
