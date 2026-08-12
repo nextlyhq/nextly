@@ -75,6 +75,71 @@ which packages a host loaded. The name and not the version: a version literal in
 source would be stale one release after it was written, because every release
 bumps this package in lockstep with its siblings.
 
+### The editor shell
+
+```tsx
+import { BuilderShell } from "@nextlyhq/builder";
+import "@nextlyhq/builder/styles.css"; // required — see below
+
+<BuilderShell
+  onExit={() => router.push("/admin/pages")}
+  renderPanel={panel => <MyPanel kind={panel} />}
+  inspector={<MyInspector />}
+  topBar={<MyTopBar />}
+  breadcrumb={<MyBreadcrumb />}
+>
+  <MyCanvas />
+</BuilderShell>;
+```
+
+**The stylesheet is not optional and nothing will tell you if you forget it.**
+The shell renders its markup, carries its class names, and lays out as a stack
+of full-width blocks — which reads as a layout bug rather than a missing import.
+It is a separate subpath because a stylesheet a bundler cannot tree-shake should
+be a decision the host makes, not a side effect of importing a component.
+
+**The shell is presentational, and that is a contract rather than a current
+state.** It owns which panel is open and how wide the regions are — chrome
+state, its own business. It owns nothing about the document, so selection
+arrives as a prop.
+
+That split is not tidiness. Document ops INVALIDATE selection: a remove deletes
+the selected node, a move relocates it. Selection held inside the shell would
+have to be updated in step with every op, which is two things changing together.
+Held outside, it can be DERIVED from the post-op document — "does this id still
+resolve?" — which cannot go out of step because there is only one thing to read.
+
+Content arrives as slots, so a layers panel, an inserter and an inspector can be
+built without this component changing. It knows the SHAPE of the editor and
+never what fills it.
+
+**Chrome preferences go through a port, not `localStorage`.** `store` takes
+`{ read, write }`; the default reads `localStorage` in a browser and remembers
+nothing anywhere else, so a server render is a default rather than a crash. A
+host that already keeps user preferences server-side supplies its own and the
+shell needs no change.
+
+Preferences are restored AFTER mount, deliberately. Reading them in the state
+initializer makes the server emit the defaults and the first client render emit
+the restored layout, which React treats as a hydration failure and repairs by
+discarding the subtree.
+
+**Below 1280px the shell does not compress.** It says where to edit instead and
+keeps the exit reachable. An editor that merely gets cramped is worse than one
+that states its requirement, because the author otherwise discovers the limit by
+failing at a task.
+
+**Widths are solved by `react-resizable-panels`, not here.** The bounds are
+declared — `PANEL_BOUNDS`, `MIN_CANVAS_WIDTH`, `RAIL_WIDTH` — and handed to it.
+The canvas floor is expressed as the canvas panel's own minimum, which is what
+makes it a joint constraint: at 1280px both panels at their individual maximums
+would leave the canvas narrower than either of them, with no per-panel bound
+violated, because the constraint was never per-panel.
+
+The persisted layout is PROPORTIONAL. A pixel layout is wrong on the next
+monitor; the pixel bounds still hold because the library re-applies them to
+whatever the proportions resolve to.
+
 ### Frame geometry
 
 The canvas renders inside an iframe while the editor's chrome — insertion
@@ -137,6 +202,10 @@ pnpm run build         # tsup
 ```
 
 ## Peer dependencies
+
+`lucide-react` for the rail's icons, declared as a peer for the reason
+`@nextlyhq/ui` declares it as one: an icon set resolved once by the host rather
+than bundled per package.
 
 React 19, matching the renderer it draws with. `@nextlyhq/blocks-react` requires
 `react: ^19.0.0`, and it is a dependency here rather than a peer, so a React 18
