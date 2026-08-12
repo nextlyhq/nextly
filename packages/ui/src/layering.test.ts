@@ -68,6 +68,21 @@ const FORBIDDEN = "@nextlyhq/blocks-engine";
  * The one matcher. Its positive control below reads THIS value rather than a
  * copy: a control with its own regex proves the copy works, and stays green
  * while the matcher it stands for drifts.
+ *
+ * WHAT A PASS DOES NOT MEAN. This matches the `from` spelling only. A bare
+ * side-effect `import "@nextlyhq/blocks-engine"`, a dynamic `import(...)`, a
+ * `require(...)`, an `import x = require(...)` and a `typeof import(...)` in
+ * type position all reach the package and all pass this check. Reading
+ * specifiers from the TypeScript AST is what covers them, and
+ * `packages/builder/src/layering.test.ts` already does exactly that, with each
+ * form and its reason written out.
+ *
+ * A second AST walker is not the answer here — that is the duplication this
+ * file exists to argue against. The answer is one shared reader all three
+ * layering tests call, which is a decision about where test infrastructure
+ * crossing three packages lives. Until then this catches the common spelling
+ * and every manifest declaration, and the limit is written down rather than
+ * left to be inferred from a green run.
  */
 const IMPORTS_FORBIDDEN = new RegExp(
   `from\\s+["']${FORBIDDEN.replace("/", "\\/")}`
