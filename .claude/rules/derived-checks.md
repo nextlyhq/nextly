@@ -66,20 +66,35 @@ Two rules follow, and the second is the one that gets missed:
 
 Deriving fixes drift. It does not fix removal, and those are different failures:
 
-- **The subject gains a member the check forgot** → deriving makes this
-  impossible. The case exists the moment the member does.
-- **The subject LOSES a member** → still silent. The derived population shrinks
-  with it, every remaining case passes, and the suite reports green over a
-  subject that stopped doing something.
+- **The subject gains a member the check forgot** → deriving fixes this, but
+  only when the derivation is TOTAL. Read the whole manifest and every new member
+  gets a case the moment it exists. Reach it through a glob, a predicate or a
+  filter and a member landing outside that selection still generates nothing —
+  the derivation has merely moved the hand-kept list into a pattern.
+- **The subject LOSES a member** → still silent, always. The derived population
+  shrinks with it, every remaining case passes, and the suite reports green over
+  a subject that stopped doing something.
 
 A derived check inherits its subject's blind spots: it can only assert about
 what the subject currently says. Removing the subject removes the assertion —
 and removes its test alongside, so the count drops without a failure.
 
-So: **derive the population, pin by name the members whose absence would itself
-be the regression.** Deriving answers "did we forget to check something that
-exists". A by-name pin answers "did something stop existing". Most checks need
-both and are written with only the first.
+So a derived check needs three things, and is usually written with one:
+
+1. **Derive the population** from the richest source available — the manifest,
+   the registry, the config — not a hand-kept copy of it.
+2. **Assert the derivation is complete**, against that raw source and against
+   zero. `expect(derived).toHaveLength(Object.keys(raw).length)` catches a
+   narrowing transform that quietly selects a subset, and
+   `expect(raw.length).toBeGreaterThan(0)` catches the collapse where the source
+   read returns nothing and every remaining case passes over an empty matrix.
+3. **Pin by name the members whose absence would itself be the regression.**
+
+Each answers a different question. Deriving answers "did we forget to check
+something that exists". The completeness assertion answers "is the derivation
+still seeing everything" — without it, step 1 has only relocated the hand-kept
+list into a pattern nobody rereads. A by-name pin answers "did something stop
+existing", which neither of the others can see.
 
 Worked example, from this repo. `packages/nextly/src/__tests__/export-contract.test.ts`
 hand-listed 6 entry points while `package.json` published 42, and pinned the
@@ -125,40 +140,55 @@ matching too MUCH, and it fails more convincingly, because a hit reads as
 evidence while a miss reads as nothing.
 
 Measured here, scanning every open PR for the 22 forbidden identifiers in
-`export-contract.test.ts`. The count fell to nothing under each refinement:
+`export-contract.test.ts`. **Three successive refinements, each of which felt
+like rigour, and all three were unsound in the same direction:**
 
-| pass                                            | result                              |
-| ----------------------------------------------- | ----------------------------------- |
-| substring match on added lines                  | **10 PRs flagged**                  |
-| ...restricted to lines containing `export`      | 4 lines, one PR, all prose comments |
-| word-boundary match on the 21 DISTINCTIVE names | **0**                               |
+| pass                                            | result                              | sound? |
+| ----------------------------------------------- | ----------------------------------- | ------ |
+| substring match on added lines                  | 10 PRs flagged                      | noisy  |
+| ...restricted to lines containing `export`      | 4 lines, one PR, all prose comments | NO     |
+| ...word boundary, dropping `component`          | 0                                   | NO     |
+| all 22 names, word boundary, **every hit read** | 43 hits, all prose, **0 real**      | yes    |
 
-Every hit came from `component`, the one entry in the list that is also an
-ordinary English word: "renders the same detail-page component type". Acting on
-the first number would have meant warning ten lanes about nothing.
+Each middle pass is worth naming, because they are the same mistake escalating.
 
-Note the middle pass, because it is the more instructive failure. Filtering to
-lines containing `export` looks like the rigorous move and is itself unsound: a
+**Filtering to lines containing `export`** drops the case it exists to catch: a
 re-export inside a block puts the binding on its own line, so `  ComponentConfig,`
-carries no `export` and the filter drops the exact case it was written to catch.
-One narrowing check laid over one widening one, each hiding the other's defect.
+carries no `export` at all.
+
+**Dropping `component` from the list** was worse, and it was mine. The
+justification was that it is an ordinary English word producing only prose hits —
+true of the hits, and irrelevant to the question. `component` is itself one of
+the 22 forbidden exports, so the refined scan could no longer see a PR
+re-exporting it. **The refinement excluded exactly one name, and it was the one
+most likely to be re-exported by accident**, being the shortest and most natural
+to reach for.
+
+So the clean zero was produced by a scan that had been narrowed until it could
+not fail. That it agreed with the honest answer is luck, and the agreement is
+what would have stopped anyone looking.
+
+The sound method was the unglamorous one: keep all 22, accept 43 hits, and read
+them. **A count is not a finding until something has looked at what it counted**,
+and "I filtered it" is not the same as having looked.
 
 An identifier list containing an ordinary word is the tell. Match at a
-granularity the language distinguishes — a word boundary, a parsed binding — or
-read every hit before reporting a number. **A count is not a finding until
-something has looked at what it counted**, and "I filtered it" is not the same
-as having looked.
+granularity the language distinguishes — a parsed binding, not a regex — or read
+every hit. Do not drop the awkward name; the awkward name is why the check
+exists.
 
 The generalisation is worth more than the instance: **when you refine a check,
-ask what the refinement EXCLUDES, not only what it admits.** Two people refined
-this same scan on the same day and both narrowed the question instead of
-sharpening the answer — one restricted the path set on the reasoning that only
-one package publishes entry points, the other restricted the line set to those
-containing `export`. Each refinement felt like rigour and each silently dropped
-cases the unrefined version would have surfaced.
+ask what the refinement EXCLUDES, not only what it admits.** Three refinements of
+one scan in one day, by two people, all narrowing the question rather than
+sharpening the answer — one restricted the path set, one the line set, one the
+name set.
 
 A refinement that cannot be stated as "this excludes X, and X cannot matter
-because Y" is a guess wearing the costume of precision.
+because Y" is a guess wearing the costume of precision. Note that the third
+refinement CAN be given that sentence — "this excludes `component`, and
+`component` cannot matter because its hits are prose" — and the sentence is
+false. Writing it down is what exposes it; the excluded thing has to be checked,
+not merely named.
 
 Worth separating the SCAN from the GUARD here, because conflating them nearly
 put a false limitation into this file. A diff-text scan cannot see
