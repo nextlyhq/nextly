@@ -24,4 +24,4 @@
 "@nextlyhq/builder": patch
 ---
 
-Add an experimental ColorPicker to @nextlyhq/ui. It knows nothing about design tokens: a swatch carries an opaque value the component hands back untouched, so a host storing a token reference keeps it rather than receiving the colour that token happened to resolve to.
+Add an experimental ColorPicker to @nextlyhq/ui, with the pointer-to-colour geometry behind it on the server-safe @nextlyhq/ui/color entry. The picker knows nothing about design tokens: a swatch carries an opaque value it hands back untouched, so a host storing a token reference keeps it rather than receiving the colour that token happened to resolve to.

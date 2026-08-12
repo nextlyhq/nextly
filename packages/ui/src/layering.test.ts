@@ -109,11 +109,10 @@ function isShippedModule(entry: string): boolean {
  * DELIBERATE DUPLICATION, and it is the thing this file otherwise argues
  * against. `packages/builder/src/layering.test.ts` already has a fuller reader
  * covering `import x = require(...)`, `typeof import(...)` in type position and
- * JSDoc `@import`, and the fix is one shared reader all three layering tests
- * call — specified in `tasks/OPEN-2026-08-12-breakpoint-rules-duplicated.md`,
- * with ownership cleared. This narrower copy exists only because shipping a
- * guard with false positives is worse than shipping a temporary second
- * implementation, and the extraction deletes it.
+ * JSDoc `@import`. One shared reader that all the layering tests call is what
+ * removes this copy. It exists meanwhile because a guard with FALSE POSITIVES
+ * is worse than a temporary second implementation: one that reports code the
+ * compiler never loads stops being read, and takes the true findings with it.
  */
 function importedSpecifiers(text: string): string[] {
   const source = ts.createSourceFile(
