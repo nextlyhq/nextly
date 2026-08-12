@@ -413,13 +413,11 @@ function pruneContainerValue(
       // repeater is written as part of that container's JSON, and a marker left
       // inside would be stored verbatim and then served by ordinary reads.
       if (isFieldGroupTypeKey(key)) {
-        if (!storesType) continue;
-        // 🔴 Normalised onto the spelling this version WRITES, not copied under the one the
-        // snapshot happened to use. A snapshot captured after the storage rename carries the
-        // other spelling, and the save path consumes exactly one — so copying the key verbatim
-        // leaves the row untyped downstream, and an untyped dynamic-zone row is SKIPPED, which
-        // deletes the instance it was meant to restore.
-        out[currentFieldGroupTypeKey] = child;
+        // 🔴 Every raw discriminator entry is SKIPPED here; the resolved one is stamped once,
+        // after the loop. Writing each raw value onto the current key as it is encountered lets
+        // object insertion order decide the winner, which overrides both the precedence and the
+        // non-string rejection the reader already applied — a document carrying a good value
+        // under one spelling and a junk value under another would emit the junk.
         continue;
       }
       out[key] = child;
@@ -486,6 +484,18 @@ function pruneContainerValue(
       allowedHere !== null && !fieldNamesMultipleComponents(field)
         ? withoutTypeMarker(kept)
         : kept;
+  }
+
+  // 🔴 The discriminator is stamped ONCE, from the value the reader already resolved, under the
+  // spelling this version writes. Doing it here rather than inside the loop is what makes the
+  // emitted type the one the schema was chosen by: the loop sees raw entries in insertion order
+  // and cannot honour the reader's precedence or its rejection of a non-string.
+  //
+  // `storesType` gates it because only a dynamic zone consumes the marker. A single component
+  // nested in a group or repeater is written as part of that container's JSON, and a marker left
+  // inside would be stored verbatim and then served by ordinary reads.
+  if (isComponentValue && storesType && rowType !== undefined) {
+    out[currentFieldGroupTypeKey] = rowType;
   }
 
   return out;

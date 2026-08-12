@@ -32,14 +32,36 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { MIGRATION_TARGET } from "../migration/manifest";
 
 /**
- * Every spelling this key has ever had, current first.
+ * Spellings this key has carried in a RELEASED version, pinned as literals.
  *
- * Derived from the two catalogs rather than listed, so a rename that edits either one is picked up
- * here without a second edit. Deduplicated because the two are the SAME string until the flip
- * happens, and a reader should not check one spelling twice.
+ * 🔴 Deliberately not derived, and this is the one place in this file where a hardcoded storage
+ * spelling is correct.
+ *
+ * Deriving the read order from the two catalogs looks like the tidy answer and is wrong in one
+ * specific release: the moment `STORAGE_FORMAT.wireTypeKey` is flipped to the target spelling, the
+ * two catalogs hold the SAME string, a derived set collapses to one entry, and the legacy spelling
+ * stops being read — in exactly the release where almost every stored document still uses it. The
+ * dual read would disappear at the instant it started to matter.
+ *
+ * A historical spelling has no source once the catalog has moved past it. Nothing but a literal
+ * can hold it, so it is held here, next to the reader that needs it, rather than left to be
+ * reconstructed from constants that converge.
+ */
+const HISTORICAL_WIRE_TYPE_KEYS = ["_componentType"] as const;
+
+/**
+ * Every spelling to try, most current first.
+ *
+ * The two catalogs still contribute, so a future rename is picked up without editing this list;
+ * the pinned history is what survives their convergence. Deduplicated because before the flip the
+ * catalogs differ and after it they do not, and a reader should not check one spelling twice.
  */
 const READ_ORDER: readonly string[] = Array.from(
-  new Set([STORAGE_FORMAT.wireTypeKey, MIGRATION_TARGET.wireTypeKey])
+  new Set([
+    STORAGE_FORMAT.wireTypeKey,
+    MIGRATION_TARGET.wireTypeKey,
+    ...HISTORICAL_WIRE_TYPE_KEYS,
+  ])
 );
 
 /** The spelling new documents are written under. */

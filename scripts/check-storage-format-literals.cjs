@@ -51,9 +51,19 @@ let failures = 0;
  *   indirectly — a test that cannot say `_componentType` cannot pin the storage format.
  */
 const ALLOWED = [
+  // The catalogs themselves, where the strings are DEFINED.
   /packages\/nextly\/src\/schemas\/storage-format\.ts:/,
+  // 🔴 Named FILE by file, not by directory. A directory exemption covers whatever is added to it
+  // later, so a new reader dropped beside these would inherit their licence to hardcode and the
+  // gate would report success — the exact regression it exists to catch. Adding a file here should
+  // require justifying it, which a folder pattern silently skips.
+  /packages\/nextly\/src\/domains\/field-groups\/storage\/field-group-type-key\.ts:/,
+  /packages\/nextly\/src\/domains\/field-groups\/storage\/resolve-storage-names\.ts:/,
+  // The migration engine is exempt as a DIRECTORY, and that one is deliberate: renaming one
+  // spelling to the other is the whole of its job, so every file in it names both by construction.
+  // Narrowing it to a file list would be a list that has to be edited for each new step, which is
+  // the same failure in slower form.
   /packages\/nextly\/src\/domains\/field-groups\/migration\//,
-  /packages\/nextly\/src\/domains\/field-groups\/storage\//,
   /__tests__\//,
   /\.test\.tsx?:/,
   /\.test-d\.ts:/,
