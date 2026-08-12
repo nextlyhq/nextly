@@ -3,10 +3,12 @@
 The visual page-builder editor: the shell, the canvas, and the op store that
 everything in it either produces or reads.
 
-**It ships no features yet.** The package exists ahead of them so its name is
-claimed on npm — trusted publishing cannot perform a package's first publish, and
-the bootstrap script will not claim a name that is not already a workspace
-package. There is nothing to install it for until the editor lands.
+**The editor itself has not landed.** What ships today is the frame geometry —
+the one mapping between the canvas frame and the host page — plus the package
+name constant. See [Public surface](#public-surface). The package was created
+ahead of the editor so its name could be claimed on npm: trusted publishing
+cannot perform a package's first publish, and the bootstrap script will not
+claim a name that is not already a workspace package.
 
 ## What this package is not
 
@@ -72,6 +74,48 @@ Adding an allowlist entry is a deliberate act with a reason recorded beside it.
 which packages a host loaded. The name and not the version: a version literal in
 source would be stale one release after it was written, because every release
 bumps this package in lockstep with its siblings.
+
+### Frame geometry
+
+The canvas renders inside an iframe while the editor's chrome — insertion
+indicator, selection outlines, drag affordances — is drawn in the host document
+above it. Every one of those asks the same question: where is this canvas
+rectangle, in host coordinates? It is answered here and nowhere else, because
+two modules computing it separately agree on the day they are written and drift
+the first time anything changes.
+
+`FrameGeometry` — how the frame sits in the host: an `origin` and a `scale`.
+The origin is where the frame's CONTENT viewport lands, not its border box.
+Scroll inside the frame is deliberately not a field: a rectangle read from
+inside is already relative to the frame's viewport, so subtracting its scroll
+would count it twice.
+
+`frameContentOrigin(borderBox, inset, scale)` — build that origin from what the
+DOM reports. `getBoundingClientRect` gives the BORDER box while the inset
+(`clientLeft`/`clientTop`) is in the frame's own untransformed pixels, so the
+inset has to be scaled before it is added. Getting that wrong misplaces every
+overlay by `(1 - scale) * inset`, which is zero at 100% and therefore invisible
+in the state a canvas is developed in.
+
+`pointToHost` / `pointToCanvas` — a point across the frame, in either
+direction. Exact inverses rather than two mappings written to match, because
+hit-testing a pointer and drawing an overlay use opposite directions of the
+same question.
+
+`rectToHost` — a rectangle across the frame, size scaled with it. An overlay
+sized from the unscaled rectangle is correct at 100% and wrong everywhere else.
+
+`FrameGeometryError` — thrown when a frame describes no mapping: a zero,
+negative or non-finite scale, or a non-finite origin. Thrown rather than
+defaulted, because every value that could stand in is wrong in a way that looks
+right, and an overlay silently drawn in the wrong place is the failure this
+module exists to prevent.
+
+The functions take plain numbers rather than DOM nodes, so the mapping can be
+exercised without a browser and the DOM reads stay at the edge. The e2e
+acceptance suite adapts these rather than restating them: a browser harness
+carrying its own copy certifies its own copy, and would keep passing through
+exactly the correction it exists to catch.
 
 ## Development
 

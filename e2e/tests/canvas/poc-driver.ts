@@ -7,7 +7,12 @@ import { expect, type Frame, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "../support/admin";
 
-import { mapFrameRectToHost } from "./coordinate-mapping";
+import {
+  frameContentOrigin,
+  mapFramePointToHost,
+  mapFrameRectToHost,
+  type FrameInset,
+} from "./coordinate-mapping";
 import type {
   ActiveTargetReader,
   CanvasDriver,
@@ -83,12 +88,24 @@ export function createPocDriver(page: Page): CanvasDriver {
     return frame;
   }
 
-  /** The frame's current transform scale; 1 when untransformed. */
+  /**
+   * The frame's current transform scale; 1 when untransformed.
+   *
+   * Reported as measured, including zero. A collapsed frame maps the whole
+   * canvas onto a point, and the mapping refuses it — but only if the number
+   * reaches the mapping, so this must not substitute a usable-looking value for
+   * an unusable one.
+   *
+   * `|| 1` is what did that: it reads as "default when absent" and also fires
+   * on a measured 0. It is not needed for the untransformed case either, since
+   * `getComputedStyle` reports `"none"` there and `DOMMatrixReadOnly` parses
+   * that to the identity, whose `a` is already 1.
+   */
   async function frameScale(): Promise<number> {
     return page.evaluate(() => {
       const frame = document.querySelector("iframe");
       if (!(frame instanceof HTMLElement)) return 1;
-      return new DOMMatrixReadOnly(getComputedStyle(frame).transform).a || 1;
+      return new DOMMatrixReadOnly(getComputedStyle(frame).transform).a;
     });
   }
 
@@ -156,9 +173,26 @@ export function createPocDriver(page: Page): CanvasDriver {
     },
 
     async frameOrigin() {
-      const box = await page.locator("iframe").boundingBox();
+      const frame = page.locator("iframe");
+      const box = await frame.boundingBox();
       if (!box) throw new Error("canvas iframe has no box");
-      return { x: box.x, y: box.y };
+      // The CONTENT origin, not the border-box corner. `boundingBox()` reports
+      // the border box, while every rectangle read inside the frame is relative
+      // to the content viewport — so on a frame with any border the two differ
+      // by `clientLeft`/`clientTop` and every mapped point lands a couple of
+      // pixels out. A canvas that does not reset the browser's default iframe
+      // border has that gap from the first render, and it reads as "the
+      // indicator feels slightly off" rather than as a fault.
+      //
+      // Measured here, converted there. `clientLeft` is in the frame's own
+      // untransformed pixels while the box is post-transform, so the two cannot
+      // be added without the scale, and doing that sum at the call site is what
+      // put the same error in two files.
+      const inset = await frame.evaluate<FrameInset, HTMLIFrameElement>(el => ({
+        left: el.clientLeft,
+        top: el.clientTop,
+      }));
+      return frameContentOrigin(box, inset, await frameScale());
     },
 
     async readBlockBoxes() {
@@ -212,7 +246,15 @@ export function createPocDriver(page: Page): CanvasDriver {
       let best = -1;
       let bestDistance = Number.POSITIVE_INFINITY;
       rects.forEach((rect, index) => {
-        const centre = origin.y + (rect.y + rect.height / 2) * scale;
+        // Mapped by the shared helper rather than multiplied out here. Written
+        // inline this is two numbers scaled and added, which is exactly the
+        // shape no import scan can tell from ordinary arithmetic — so it is the
+        // one that drifts silently when the mapping is corrected.
+        const centre = mapFramePointToHost(
+          { x: 0, y: rect.y + rect.height / 2 },
+          origin,
+          scale
+        ).y;
         const distance = Math.abs(pointerY - centre);
         if (distance < bestDistance) {
           bestDistance = distance;
@@ -453,8 +495,12 @@ export function createPocDriver(page: Page): CanvasDriver {
       );
       if (!inFrame) return null;
 
-      const frameOrigin = await page.locator("iframe").boundingBox();
-      if (!frameOrigin) return null;
+      // The driver's own content origin, not a second reading of the frame's
+      // box. `boundingBox()` reports the BORDER box, so building the origin
+      // here would place every indicator rectangle `inset * scale` out on any
+      // bordered canvas — the same fault, in a third place, which is the sign
+      // that no caller should be assembling this at all.
+      const origin = await driver.frameOrigin();
 
       // Read the live transform rather than assume 1. Without this the rect
       // reported under a scaled canvas is wrong by the scale factor, and a
@@ -462,11 +508,7 @@ export function createPocDriver(page: Page): CanvasDriver {
       // wrong, not because the canvas is.
       const scale = await frameScale();
 
-      return mapFrameRectToHost(
-        inFrame,
-        { x: frameOrigin.x, y: frameOrigin.y },
-        scale
-      );
+      return mapFrameRectToHost(inFrame, origin, scale);
     },
 
     async readTreeShape() {
