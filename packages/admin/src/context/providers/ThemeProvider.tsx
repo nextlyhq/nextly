@@ -139,11 +139,17 @@ function ThemeSync() {
  * - Dark mode sites will appear dark, light mode sites will appear light
  * - User can override by setting their own preference in the UI
  *
- * **IMPORTANT**: This provider must be used within a Next.js app that has
- * loaded the Inter font. The consuming app is responsible for:
- * - Loading Inter font via next/font/google
- * - Providing --font-inter CSS variable
+ * **IMPORTANT**: the admin's type is supplied by the host, not by this package.
+ * The consuming app is responsible for:
+ * - Loading Geist and Geist Mono via next/font/google
+ * - Exposing them as the `--font-geist` and `--font-geist-mono` variables
  * - Importing Nextly styles
+ *
+ * The theme names those variables FIRST in its font stacks and falls back to a
+ * generic sans, so a host that skips this renders in the system face rather
+ * than breaking. `next/font` self-hosts a face and exposes it only as a
+ * variable, which is why the variable rather than the family name is what the
+ * host has to provide.
  *
  * @example
  * ```tsx

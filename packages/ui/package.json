@@ -102,6 +102,7 @@
   "devDependencies": {
     "@nextlyhq/admin-css": "workspace:*",
     "@nextlyhq/eslint-config": "workspace:*",
+    "@nextlyhq/module-specifiers": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@tailwindcss/cli": "^4.3.2",
     "@testing-library/react": "^16.3.0",

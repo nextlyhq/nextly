@@ -48,6 +48,7 @@ import type {
   BlockDocument,
   BlockNode,
   DocumentLimits,
+  MigratedNode,
   StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 
@@ -216,6 +217,16 @@ export interface DocumentReadStages {
   sanitized: BlockDocument;
   /** After migration to the current format. */
   migrated: BlockDocument;
+  /**
+   * Every node migration rewrote the props of, as the engine reported them.
+   *
+   * Carried rather than re-derived. The two documents above make it LOOK
+   * recoverable by comparing node references, but that answers the question a
+   * second time from an invariant asserted only for top-level nodes — and a
+   * parent rebuilt because a child moved compares unequal while its own props
+   * never changed.
+   */
+  rewritten: MigratedNode[];
   /** After condition-gated nodes are withheld. */
   gated: BlockDocument;
   /** After addresses are made unique over what will render. */
@@ -253,7 +264,10 @@ export function prepareDocumentReadStages(
 
   const limits = args.limits ?? args.styleContext?.limits ?? DEFAULT_LIMITS;
   const sanitized = sanitizeDocument(document, limits);
-  const { doc } = migrateDocument(sanitized, migrationSourceFor(args.resolver));
+  const { doc, rewritten } = migrateDocument(
+    sanitized,
+    migrationSourceFor(args.resolver)
+  );
   // The predicate matters as much as the pass: a placeholder replaces its whole
   // subtree, so a child under one holds no address on the page. Deduping without
   // it lets that unreachable child RESERVE an id and drop the later node that
@@ -284,6 +298,7 @@ export function prepareDocumentReadStages(
   return {
     sanitized,
     migrated: doc,
+    rewritten,
     gated,
     deduped: visible,
     prepared,

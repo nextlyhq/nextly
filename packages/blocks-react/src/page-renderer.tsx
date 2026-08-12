@@ -25,6 +25,7 @@ import {
   gatedEntriesCoverRemovedNodes,
   gatedMapCoversPrunedNodes,
   hasDuplicateNodeIds,
+  migrationChangedWhatDraws,
   readableGatedRules,
   resolvePageStyles,
   styleTextForInjection,
@@ -317,7 +318,14 @@ export function PageRenderer({
     (pruned !== doc && !gatingCoveredByArtifact) ||
     visible !== pruned ||
     (drawlessInput !== visible && !drawlessCoveredByArtifact) ||
-    placeholderDropped !== visible;
+    placeholderDropped !== visible ||
+    // Asked through the SAME function the exported read path uses. A migration
+    // can turn a node that drew into one that draws nothing, and no comparison
+    // above can see it: every pass returns what it was given, because nothing
+    // was removed. Answering it here as well is the point — the two paths
+    // agreeing is what stops a page rendered through this component keeping
+    // rules the exported reader withholds for the same document.
+    migrationChangedWhatDraws(stages, resolver);
 
   // Reconciled through the SAME derivation every entry point that resolves a
   // stored page uses. What a caller supplies is not what a page compiles with:

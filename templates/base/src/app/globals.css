@@ -8,8 +8,11 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  /* Fallback arguments, not a trailing family list: an unresolved var() with no
+     fallback invalidates the whole declaration rather than falling through to
+     what comes after the closing paren. */
+  --font-sans: var(--font-geist, ui-sans-serif), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono, ui-monospace), monospace;
 }
 
 @media (prefers-color-scheme: dark) {

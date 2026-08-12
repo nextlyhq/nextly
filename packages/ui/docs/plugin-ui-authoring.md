@@ -88,8 +88,8 @@ Do not hardcode hex, `rgb()`, `rgba()`, or named colors. The only literals allow
 
 ### Corner radius: pick a tier, never a value
 
-The admin ships square today (`--radius: 0`), but the whole scale derives from that one
-knob, so an operator who sets `--radius: 12px` re-rounds every surface at once. Your plugin
+The admin ships rounded today (`--radius: 0.5rem`), and the whole scale derives from that
+one knob, so an operator who sets `--radius: 0` squares every surface at once. Your plugin
 keeps up with that only if it picks a **tier by element category** rather than writing a
 length. Hardcoding a corner — `rounded-none` just as much as `rounded-[6px]` or
 `border-radius: 4px` — pins your UI at that value and opts it out of the knob.
@@ -113,14 +113,16 @@ Four consequences worth internalising:
 - **`rounded-xl` and `rounded-2xl` are not tiers of this knob.** The preset exports only
   `lg`, `md` and `sm`, so a plugin built against it gets Tailwind's fixed `0.75rem` /
   `1rem` for those two, detached from `--radius`. Inside the admin's own build they are
-  defined, but as `--radius + 4px` and `--radius + 8px`, so at the shipped `--radius: 0`
-  they resolve to `4px` and `8px` — visibly round inside a square admin. Pick from
-  `sm` / `md` / `lg`.
-- **`--radius: 0` is not "every step is zero".** `--radius-lg` is `0`, but `--radius-sm`
-  and `--radius-md` compute to `-4px` and `-2px`. They _render_ square only because
-  `border-radius` clamps a negative length to `0`. The token keeps its negative value, so
-  reading a step for padding, for an inset, or through `getComputedStyle` gives you `-4px`,
-  not `0`. Clamp it yourself if you consume a step as a length rather than as a corner.
+  defined, but as `--radius + 4px` and `--radius + 8px`, so at the shipped `--radius: 0.5rem`
+  they resolve to `12px` and `16px` — rounder than the container tier, and drifting further
+  as the knob grows. Pick from `sm` / `md` / `lg`.
+- **A low knob drives the lower steps negative.** At the shipped `0.5rem` the three tiers
+  are `4px`, `6px` and `8px`, all positive. But `sm` and `md` SUBTRACT from the knob, so
+  anything under `4px` — `--radius: 0` most obviously — computes them to `-4px` and `-2px`.
+  They _render_ square only because `border-radius` clamps a negative length to `0` at
+  used-value time. The token keeps its negative value, so reading a step for padding, for an
+  inset, or through `getComputedStyle` gives you `-4px`, not `0`. Clamp it yourself if you
+  consume a step as a length rather than as a corner.
 - **A rounded container must handle full-bleed children.** If a child paints a background
   all the way to the container's edge (a tinted footer, a sticky header, a hover row), give
   the container `overflow-hidden` or give the child a matching corner with

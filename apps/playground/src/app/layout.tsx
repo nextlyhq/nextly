@@ -6,91 +6,27 @@ import {
   QueryProvider,
   ThemeProvider,
 } from "@nextlyhq/admin";
-import {
-  Geist,
-  Geist_Mono,
-  IBM_Plex_Mono,
-  Inter,
-  JetBrains_Mono,
-  Lora,
-  Open_Sans,
-  Plus_Jakarta_Sans,
-  Source_Serif_4,
-} from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
-const inter = Inter({
-  variable: "--font-inter",
-  subsets: ["latin"],
-  display: "swap",
-  weight: ["400", "500", "600", "700"], // Only load weights used in design system
-});
-
-// Self-hosted at build time (no runtime CDN fetch) so the Ink theme lab
-// variant, which sets its serif token to var(--font-source-serif), has a
-// real font to fall back on instead of the browser's default serif.
-const sourceSerif = Source_Serif_4({
-  variable: "--font-source-serif",
-  subsets: ["latin"],
-  display: "swap",
-});
-
-// Same reasoning as sourceSerif above, for the Blueprint theme lab variant's
-// var(--font-ibm-plex-mono) monospace token.
-const ibmPlexMono = IBM_Plex_Mono({
-  variable: "--font-ibm-plex-mono",
-  subsets: ["latin"],
-  display: "swap",
-  weight: ["400", "500", "600"],
-});
-
-/**
- * The remaining faces the shortlisted presets name.
- *
- * A preset's font stack is data, and `next/font` does not resolve a bare
- * family name -- it generates a class and a variable, and a stack saying
- * "Plus Jakarta Sans, sans-serif" simply falls through to the system sans.
- * Every preset therefore previewed in Inter no matter what it declared, so the
- * typography axis of the comparison was measuring one font nine times.
- *
- * Loaded here rather than fetched at runtime for the same reason the two
- * above are: self-hosted at build time, no CDN request while comparing.
- * Variable fonts, so no weight list -- the whole axis is available.
- */
-const plusJakartaSans = Plus_Jakarta_Sans({
-  variable: "--font-plus-jakarta-sans",
-  subsets: ["latin"],
-  display: "swap",
-});
-
-const openSans = Open_Sans({
-  variable: "--font-open-sans",
-  subsets: ["latin"],
-  display: "swap",
-});
-
-const lora = Lora({
-  variable: "--font-lora",
-  subsets: ["latin"],
-  display: "swap",
-});
-
-const jetBrainsMono = JetBrains_Mono({
-  variable: "--font-jetbrains-mono",
-  subsets: ["latin"],
-  display: "swap",
-});
-
-const geist = Geist({
+// Self-hosted at build time by `next/font`, which exposes the face only as a
+// CSS variable -- the admin theme names that variable first for exactly this
+// reason. Weights are the four the design system declares; the rest would ship
+// bytes nothing renders.
+const geistSans = Geist({
   variable: "--font-geist",
   subsets: ["latin"],
   display: "swap",
+  weight: ["400", "500", "600", "700"],
 });
 
+// The mono face the admin reaches for on code surfaces: the API playground
+// editor, ids, and inline code.
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
   display: "swap",
+  weight: ["400", "500"],
 });
 
 export default function RootLayout({
@@ -101,17 +37,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={[
-        inter.variable,
-        sourceSerif.variable,
-        ibmPlexMono.variable,
-        plusJakartaSans.variable,
-        openSans.variable,
-        lora.variable,
-        jetBrainsMono.variable,
-        geist.variable,
-        geistMono.variable,
-      ].join(" ")}
+      className={`${geistSans.variable} ${geistMono.variable}`}
       /**
        * suppressHydrationWarning is needed to prevent hydration errors caused by
        * browser extensions (e.g., Bitwarden, password managers) that inject

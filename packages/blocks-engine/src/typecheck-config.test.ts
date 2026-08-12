@@ -110,3 +110,82 @@ describe("both configs actually run", () => {
     expect(script).toContain("-p tsconfig.tests.json");
   });
 });
+
+/**
+ * How long one program construction gets.
+ *
+ * Building a TypeScript program reads and parses every file it reaches: under a
+ * second on an idle machine, several times that on a CI runner sharing a host
+ * with other matrices. Vitest's default is 5s, and the equivalent pair in
+ * `packages/ui` crossed it there while passing locally — reddening `main` and
+ * three unrelated lanes' pull requests, which is the expensive direction for a
+ * check to fail in.
+ *
+ * Raised rather than the work reduced, because what makes the control slow is
+ * the thing it exists to prove: that the reader FINDS node types when they are
+ * present. A cheaper control would be a control of something else.
+ */
+const PROGRAM_TIMEOUT_MS = 60_000;
+
+/**
+ * The node type files a config's program actually loads.
+ *
+ * Built through the compiler rather than by spawning `tsc --listFiles`, which
+ * answers the same question a second or two slower and puts a subprocess in a
+ * unit suite. The two were checked against each other and agree.
+ *
+ * The directory separators in the pattern are load-bearing. pnpm encodes peer
+ * dependencies into its directory names, so `vitest@4.1.10_@types+node@20.19.17`
+ * is an ordinary package folder with nothing to do with node types — matching
+ * `@types` and `node` loosely counts those and reports a leak that is not there.
+ */
+function nodeTypeFilesIn(configName: string): string[] {
+  const configPath = join(PACKAGE_DIR, configName);
+  const { config, error } = ts.readConfigFile(configPath, ts.sys.readFile);
+  // An unreadable config resolves to an empty program, and an empty program
+  // loads no node types — so without this the guard passes by failing to ask.
+  expect(error, `${configName} could not be read`).toBeUndefined();
+  const parsed = ts.parseJsonConfigFileContent(config, ts.sys, PACKAGE_DIR);
+  expect(
+    parsed.fileNames.length,
+    `${configName} matched no files`
+  ).toBeGreaterThan(0);
+  const program = ts.createProgram(parsed.fileNames, parsed.options);
+  return program
+    .getSourceFiles()
+    .map(file => file.fileName)
+    .filter(name => name.includes("/@types/node/"));
+}
+
+describe("what the shipping program actually loads", () => {
+  it(
+    "loads no node type file into the shipping program",
+    { timeout: PROGRAM_TIMEOUT_MS },
+    () => {
+      // The PROPERTY, where every assertion above reads a SETTING. `types`
+      // governs only the automatic inclusion of `node_modules/@types/*`; it does
+      // nothing about a `/// <reference types="node" />` inside a `.d.ts` the
+      // program already includes. A dependency whose types carry one reopens
+      // this hole with `types: []` still written down and every config
+      // assertion above still green.
+      //
+      // Not hypothetical. In `blocks-react` that same line is inert: Next's
+      // `dist/types.d.ts` references node and 63 type files load anyway. The
+      // line works here and not there, so whether it works is a property of the
+      // dependency graph rather than of the line, and only the outcome can be
+      // asserted.
+      expect(nodeTypeFilesIn("tsconfig.json")).toEqual([]);
+    }
+  );
+
+  it(
+    "loads them into the test program, so the reader can tell the two apart",
+    { timeout: PROGRAM_TIMEOUT_MS },
+    () => {
+      // The positive control. Without it an empty result above cannot be told
+      // from a reader that finds nothing under any circumstances — a wrong
+      // path, a config that resolved no files, a filter matching nothing.
+      expect(nodeTypeFilesIn("tsconfig.tests.json").length).toBeGreaterThan(0);
+    }
+  );
+});

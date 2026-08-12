@@ -16,15 +16,7 @@
     "db:seed": "tsx --env-file=.env scripts/seed.ts",
     "dev:reset": "tsx --env-file=.env scripts/reset.ts",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "theme:audit": "tsx scripts/audit-themes.mjs",
-    "theme:capture": "tsx scripts/capture-themes.mjs",
-    "theme:capture:setup": "playwright install chromium",
-    "theme:contrast-report": "tsx scripts/generate-contrast-report.mjs",
-    "theme:import-presets": "tsx scripts/import-tweakcn.mjs",
-    "theme:margins": "tsx scripts/audit-margins.mjs",
-    "theme:solve": "tsx scripts/solve-margin.mjs",
-    "theme:solve-lightness": "tsx scripts/solve-calm.mts"
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@nextlyhq/adapter-drizzle": "workspace:^",

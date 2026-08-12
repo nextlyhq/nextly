@@ -42,3 +42,22 @@ export {
  * opaque, so a value reads back the way it was entered.
  */
 export { parseHex, toHex } from "./hex";
+
+/**
+ * @experimental The mapping between a pointer on a picker surface and a colour.
+ *
+ * Server-safe because it is arithmetic on numbers, and separate from the
+ * component because a saturation square cannot be measured by rendering it:
+ * jsdom reports every element as zero-sized, so a component test of the mapping
+ * measures nothing and passes whatever it does.
+ */
+export {
+  hueAt,
+  huePosition,
+  hueSliderValue,
+  pointOnSurface,
+  saturationValueAt,
+  surfacePointFor,
+} from "./picker-geometry";
+/** @experimental */
+export type { SurfacePoint } from "./picker-geometry";

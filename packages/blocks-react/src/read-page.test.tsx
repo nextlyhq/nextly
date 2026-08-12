@@ -621,3 +621,107 @@ describe("the reading view", () => {
     expect(read.document?.nodes.map(node => node.id)).toEqual(["a", "b"]);
   });
 });
+
+/**
+ * A block whose v2 migration turns a drawing node into a drawless one.
+ *
+ * Version 2 with a step from 1, so a node stored at v1 migrates on read. The
+ * step forces `draw: false`, which is exactly what `rendersNothing` keys on —
+ * so the node drew when the sheet was compiled and draws nothing when it is
+ * read back.
+ */
+const flipsToDrawless = defineBlock<{ draw: boolean }>({
+  name: "plugin/drawless",
+  version: 2,
+  description: "Draws only when told to, and v2 stops telling it to.",
+  example: { props: { draw: true } },
+  defaultProps: { draw: false },
+  migrate: { 1: props => ({ ...props, draw: false }) },
+  rendersNothing: props => props.draw !== true,
+  render: ({ props, className }) =>
+    props.draw ? <p className={className}>drawn</p> : null,
+});
+
+/** The same block at v2 whose migration leaves drawing alone. */
+const staysDrawing = defineBlock<{ draw: boolean }>({
+  name: "plugin/drawless",
+  version: 2,
+  description: "Draws only when told to, and v2 keeps telling it to.",
+  example: { props: { draw: true } },
+  defaultProps: { draw: false },
+  migrate: { 1: props => ({ ...props, note: "v2" }) },
+  rendersNothing: props => props.draw !== true,
+  render: ({ props, className }) =>
+    props.draw ? <p className={className}>drawn</p> : null,
+});
+
+describe("a migration that changes whether a node draws", () => {
+  const flipping = createBlockResolver([
+    flipsToDrawless as AnyBlockDefinition,
+    box as AnyBlockDefinition,
+    text as AnyBlockDefinition,
+  ]);
+  const notFlipping = createBlockResolver([
+    staysDrawing as AnyBlockDefinition,
+    box as AnyBlockDefinition,
+    text as AnyBlockDefinition,
+  ]);
+
+  /**
+   * A page whose drawless-capable node IS drawing when the sheet is compiled.
+   *
+   * The shared fixture above stores `draw: false`, so its node never drew and a
+   * migration cannot flip it — the case under test needs the opposite starting
+   * state, and using the shared one would pass for the wrong reason.
+   */
+  const drawingPage: BlockDocument = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: [
+      {
+        id: "a",
+        type: "plugin/drawless",
+        version: 1,
+        props: { draw: true },
+        classes: ["only-a"],
+        styles: { base: { base: { color: "rebeccapurple" } } },
+      },
+    ],
+  };
+
+  /** Compiled by the WRITE path, against the version the node was stored at. */
+  function sheetForDrawingPage(): ReturnType<typeof resolvePageStyles> {
+    return resolvePageStyles(drawingPage, undefined, context, withPlugin);
+  }
+
+  it("withholds a sheet compiled while the node still drew", () => {
+    // Every stage comparison reads EQUAL here: nothing was truncated, gated,
+    // deduplicated or placeholdered, and the node is registered and present in
+    // the tree the reader gets. The only evidence is that migration rewrote its
+    // props and the answer to "does this draw" moved with them.
+    const stored = sheetForDrawingPage();
+    expect(stored.css).toContain("nx-bt-plugin--drawless");
+
+    const read = preparePageForRead(drawingPage, {
+      resolver: flipping,
+      styles: stored,
+    });
+
+    expect(read.styles.css).not.toContain("nx-bt-plugin--drawless");
+    expect(read.styles.css).not.toContain("nx-c-only-a");
+  });
+
+  it("CONTROL: keeps the sheet when a migration leaves drawing alone", () => {
+    // Without this the case above passes on an implementation that withholds
+    // the sheet for ANY migrated node, which would blank the styling of every
+    // page holding a node behind its definition — a far larger regression than
+    // the one being fixed, and one that also produces a green above.
+    const read = preparePageForRead(drawingPage, {
+      resolver: notFlipping,
+      styles: sheetForDrawingPage(),
+    });
+
+    expect(read.styles.css).toContain("nx-bt-plugin--drawless");
+    expect(read.styles.css).toContain("nx-c-only-a");
+  });
+});

@@ -10,8 +10,8 @@
  * @module domains/webhooks/envelope
  */
 
-import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { defineOwnProperty } from "../../shared/lib/own-property";
+import { readFieldGroupType } from "../field-groups/storage/field-group-type-key";
 
 import { componentTypeSegment } from "./expand-component-fields";
 import type {
@@ -83,9 +83,9 @@ function stripValue(
     // Two member types can share a field name with only one marking it
     // sensitive, so those denials are recorded under a type-tagged path and
     // only apply to instances of that type.
-    const componentType = (value as { _componentType?: unknown })[
-      STORAGE_FORMAT.wireTypeKey
-    ];
+    // Asked rather than indexed, so an instance stored under either spelling still resolves to
+    // the type its denial paths are recorded under.
+    const componentType = readFieldGroupType(value);
     const prefixes =
       typeof componentType === "string"
         ? [

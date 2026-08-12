@@ -16,6 +16,7 @@
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { FieldConfig } from "../../collections/fields/types";
+import { readFieldGroupType } from "../field-groups/storage/field-group-type-key";
 import type { UserContext } from "../singles/types";
 
 import {
@@ -78,8 +79,10 @@ function componentChildFieldsFor(
     componentFields?: FieldConfig[];
     componentSchemas?: Record<string, { fields?: FieldConfig[] }>;
   };
+  // Asked rather than read: a snapshot was written under the schema of its day, which may be
+  // either side of the storage migration's rename of this key.
   const type = isPlainObject(instance)
-    ? (instance as { _componentType?: string })._componentType
+    ? readFieldGroupType(instance)
     : undefined;
   if (type && enriched.componentSchemas?.[type]?.fields) {
     return enriched.componentSchemas[type].fields ?? [];

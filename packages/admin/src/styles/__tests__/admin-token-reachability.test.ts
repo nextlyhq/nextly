@@ -106,7 +106,21 @@ function declaredIn(css: string): Set<string> {
  * direction for this check, and the reason it is not worth parsing three
  * languages to remove.
  */
-const REFERENCE = /var\(\s*(--[a-z][a-z0-9-]*?)\s*(?=[),])/g;
+const REFERENCE = /var\(\s*(--[a-z][a-z0-9-]*?)\s*(?=([),]))/g;
+
+/**
+ * Every `var()` reference in a source, with whether it supplied a fallback
+ * argument. The character the name runs into decides it: `,` opens a fallback,
+ * `)` closes the reference without one.
+ */
+function referencesIn(
+  source: string
+): { name: string; hasFallback: boolean }[] {
+  return [...source.matchAll(REFERENCE)].map(([, name, next]) => ({
+    name,
+    hasFallback: next === ",",
+  }));
+}
 
 /**
  * The first segment of a custom property: `--nx-card` and `--nx-border` are both
@@ -127,16 +141,20 @@ function namespaceOf(property: string): string {
  *   shape of a value with no business in a palette.
  *
  * Neither is enumerated here: both fall out of the namespace rule, so a new
- * Radix property needs no maintenance. Only `--font-inter` is named, below.
+ * Radix property needs no maintenance. Only the font variables are named below.
  */
 
 /**
- * The one property in a theme-owned namespace that the theme legitimately does
- * not declare. `--font-inter` is injected by `next/font` at runtime and read
- * from inside `theme.css` itself (`--font-sans: var(--font-inter), Inter, ...`),
- * so the theme is its consumer, not its author.
+ * The properties in a theme-owned namespace that the theme legitimately does
+ * not declare. `next/font` self-hosts a face at build time and exposes it only
+ * as a variable, so the host app authors these and `theme.css` merely reads
+ * them (`--font-sans: var(--font-geist, Geist), ui-sans-serif, ...`). The theme
+ * is their consumer, not their author.
+ *
+ * Because nothing in the repo declares them, every reference to one must carry a
+ * fallback argument; the assertion below enforces that.
  */
-const INJECTED_AT_RUNTIME = new Set(["--font-inter"]);
+const INJECTED_AT_RUNTIME = new Set(["--font-geist", "--font-geist-mono"]);
 
 const themeCss = readFileSync(resolve(repo, THEME), "utf8");
 const declaredByTheme = declaredIn(themeCss);
@@ -181,15 +199,63 @@ describe("admin tokens are reachable by a palette change", () => {
     expect([...namespaces].some(space => space !== "--nx")).toBe(true);
   });
 
-  it("still needs its one runtime-injected exception", () => {
-    // An exception nobody rechecks outlives its reason. If `--font-inter` is no
-    // longer consumed, or the theme starts declaring it, the entry should go
-    // rather than sit here explaining a situation that has changed.
-    const consumed = sources.some(path =>
-      readFileSync(resolve(repo, path), "utf8").includes("var(--font-inter)")
-    );
-    expect(consumed).toBe(true);
-    expect(declaredByTheme.has("--font-inter")).toBe(false);
+  it("still needs each runtime-injected exception", () => {
+    // An exception nobody rechecks outlives its reason. Each entry has to still
+    // be consumed somewhere and still be absent from the theme; one that is no
+    // longer either should go rather than sit here explaining a situation that
+    // has changed.
+    //
+    // Derived from the set rather than naming a font, so swapping the typeface
+    // is one edit here instead of two that can disagree. Matched through the
+    // reference reader rather than as a substring, because `var(--font-geist)`
+    // is not a substring of `var(--font-geist, Geist)` and a substring test
+    // would read the fallback form as "no longer consumed".
+    for (const name of INJECTED_AT_RUNTIME) {
+      const consumed = sources.some(path =>
+        referencesIn(readFileSync(resolve(repo, path), "utf8")).some(
+          reference => reference.name === name
+        )
+      );
+      expect(consumed, `${name} is exempted but no longer consumed`).toBe(true);
+      expect(
+        declaredByTheme.has(name),
+        `${name} is exempted but the theme now declares it`
+      ).toBe(false);
+    }
+  });
+
+  it("gives every runtime-injected reference a fallback argument", () => {
+    // These are the tokens nothing in the repo declares, so whether they resolve
+    // is the host's choice. A bare `var(--x)` that the host did not define is
+    // invalid at computed-value time, and that invalidates the WHOLE
+    // declaration rather than just the one family: an inherited property falls
+    // back to the parent's value, so a font stack listing six generic families
+    // after the reference yields none of them and the element renders in
+    // whatever its ancestor used.
+    //
+    // A family listed after the closing paren therefore reads as a fallback
+    // chain without being one. Only an argument INSIDE the parentheses is
+    // reached, which is what this requires.
+    const bare: string[] = [];
+    for (const path of sources) {
+      for (const reference of referencesIn(
+        readFileSync(resolve(repo, path), "utf8")
+      )) {
+        if (!INJECTED_AT_RUNTIME.has(reference.name)) continue;
+        if (reference.hasFallback) continue;
+        bare.push(`  ${reference.name} — ${path}`);
+      }
+    }
+
+    expect(
+      bare.sort(),
+      `These references name a token no stylesheet in the repo declares, and ` +
+        `supply no fallback, so a host that does not inject it loses the ` +
+        `entire declaration rather than falling through to the rest of the ` +
+        `stack. Move the default inside the parentheses — ` +
+        `\`var(--font-geist, Geist)\`, not \`var(--font-geist), Geist\`:\n` +
+        bare.join("\n")
+    ).toEqual([]);
   });
 
   it("reads declarations the way a stylesheet is written, not as lines", () => {

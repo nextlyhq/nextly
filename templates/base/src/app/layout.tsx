@@ -2,8 +2,14 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
+/**
+ * Named `--font-geist` rather than `--font-geist-sans` because that is the
+ * variable the admin theme reads. `next/font` self-hosts the face and exposes it
+ * only through this variable, so a name the theme does not know leaves the admin
+ * falling back to the system sans while the app's own pages render in Geist.
+ */
 const geistSans = Geist({
-  variable: "--font-geist-sans",
+  variable: "--font-geist",
   subsets: ["latin"],
 });
 
@@ -32,12 +38,16 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
-        {children}
-      </body>
+    // The font variables belong on <html>: the admin theme declares --font-sans
+    // in a non-inline @theme, which emits it into :root and resolves the
+    // reference THERE. A variable exposed lower down, on <body>, is invisible to
+    // that declaration however it is spelled.
+    <html
+      lang="en"
+      className={`${geistSans.variable} ${geistMono.variable}`}
+      suppressHydrationWarning
+    >
+      <body className="antialiased">{children}</body>
     </html>
   );
 }
