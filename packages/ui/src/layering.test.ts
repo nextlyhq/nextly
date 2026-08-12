@@ -46,7 +46,7 @@
  * boundary has to be one something FAILS at.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 
 import {
   importedSpecifiers,
@@ -403,8 +403,9 @@ describe("this package takes no direct dependency on the block engine", () => {
  * as a package, which is the half a source ban cannot see.
  */
 const RUNTIME_RESOLVERS = [
+  "require",
+  "module",
   "createRequire",
-  "module.require",
   "import.meta.resolve",
 ];
 
@@ -429,6 +430,39 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
     );
   };
 
+  /**
+   * Whether an identifier sits in a slot that NAMES a member, rather than referring to a binding.
+   *
+   * `holder.require` and `{ require: fn }` spell the word without reaching the ambient loader — the
+   * key belongs to some other object. Everything else is treated as a reference, including a
+   * DECLARATION of the name: `const require = …` shadows it, and a shipped module that introduces
+   * either name is refused rather than scope-analysed, which is the analysis this boundary exists
+   * to avoid needing.
+   */
+  const isMemberName = (node: ts.Identifier): boolean => {
+    const parent = node.parent;
+    if (parent === undefined) return false;
+    if (ts.isPropertyAccessExpression(parent)) return parent.name === node;
+    if (ts.isQualifiedName(parent)) return parent.right === node;
+    if (ts.isBindingElement(parent)) return parent.propertyName === node;
+    if (ts.isImportSpecifier(parent) || ts.isExportSpecifier(parent)) {
+      return parent.propertyName === node;
+    }
+    if (
+      ts.isPropertyAssignment(parent) ||
+      ts.isPropertySignature(parent) ||
+      ts.isPropertyDeclaration(parent) ||
+      ts.isMethodSignature(parent) ||
+      ts.isMethodDeclaration(parent) ||
+      ts.isGetAccessorDeclaration(parent) ||
+      ts.isSetAccessorDeclaration(parent) ||
+      ts.isEnumMember(parent)
+    ) {
+      return parent.name === node;
+    }
+    return false;
+  };
+
   const visit = (node: ts.Node): void => {
     // `import.meta` is checked as a WHITELIST rather than by hunting for `.resolve`, and that is
     // what makes this bounded where the artifact scan was not. Hunting means enumerating the ways
@@ -448,14 +482,18 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
         readsMember(read, "url");
       if (!isUrl) found.push("import.meta.resolve");
     }
-    // `module.require(...)`, which survives a format guard into a CommonJS build.
+    // The ambient CommonJS names are refused OUTRIGHT, not in the shapes that call them. A rule
+    // written for `module.require(...)` is walked around by `module["req" + "uire"](...)`, and one
+    // written for `require(...)` by `const load = require`, because both describe a use rather than
+    // the name. Neither identifier is a reference a shipped module has any reason to make — the
+    // package is authored as ESM and there are none today — so the name itself is the boundary,
+    // and any use of it, including one nobody has thought of, is refused by construction.
     if (
-      readsMember(node, "require") &&
-      ts.isIdentifier((node as ts.PropertyAccessExpression).expression) &&
-      ((node as ts.PropertyAccessExpression).expression as ts.Identifier)
-        .text === "module"
+      ts.isIdentifier(node) &&
+      (node.text === "require" || node.text === "module") &&
+      !isMemberName(node)
     ) {
-      found.push("module.require");
+      found.push(node.text);
     }
     ts.forEachChild(node, visit);
   };
@@ -498,7 +536,7 @@ describe("this package resolves no module at runtime", () => {
     ).toEqual(["createRequire"]);
     expect(
       runtimeResolversIn(`const m = require("node:module");`, "a.ts")
-    ).toEqual(["createRequire"]);
+    ).toEqual(["require", "createRequire"]);
     expect(
       runtimeResolversIn(`import m = require("node:module");`, "a.ts")
     ).toEqual(["createRequire"]);
@@ -511,12 +549,31 @@ describe("this package resolves no module at runtime", () => {
         "a.ts"
       )
     ).toEqual(["import.meta.resolve"]);
+    // The ambient names are refused wherever they are REFERENCED, so the shapes below are controls
+    // on the boundary rather than an inventory of what it recognises: a call, a computed member
+    // that folds to one at build time, a bare alias never called here, and a local declaration
+    // that shadows the name.
     expect(
       runtimeResolversIn(`export const r = module.require("x");`, "a.ts")
-    ).toEqual(["module.require"]);
+    ).toEqual(["module"]);
     expect(
-      runtimeResolversIn(`export const r = module["require"]("x");`, "a.ts")
-    ).toEqual(["module.require"]);
+      runtimeResolversIn(
+        `export const r = module["req" + "uire"]("x");`,
+        "a.ts"
+      )
+    ).toEqual(["module"]);
+    expect(
+      runtimeResolversIn(
+        `const load = require;\nexport const r = load("react");`,
+        "a.ts"
+      )
+    ).toEqual(["require"]);
+    expect(
+      runtimeResolversIn(`export const r = require("x");`, "a.ts")
+    ).toEqual(["require"]);
+    expect(
+      runtimeResolversIn(`const module = {};\nexport const m = module;`, "a.ts")
+    ).toEqual(["module"]);
     // Stored, aliased or destructured, the CONSTRUCT is still named in the source — which is what
     // makes a source ban bounded where reading the built artifact was not.
     expect(
@@ -540,6 +597,33 @@ describe("this package resolves no module at runtime", () => {
         `const holder = { require: (n) => n };\nholder.require("x");`,
         "a.ts"
       )
+    ).toEqual([]);
+  });
+
+  // The ban above reads the files `sourceFiles(SRC)` returns, so it is only a boundary while that
+  // set is CLOSED. A shipped module importing a relative path out of `src` puts the imported file
+  // in the bundle without putting it in the scan, and every gate then agrees the package is clean:
+  // the reader never opens the file, and the bundler records a package-local input rather than a
+  // dependency. Making the tree un-leavable is what keeps the enumeration complete — the
+  // alternative, following the entries' transitive graph, re-derives module resolution here and
+  // inherits every disagreement with the resolver that actually runs.
+  it("reaches no file outside the tree the ban reads", () => {
+    const escapes = sourceFiles(SRC).flatMap(file =>
+      importedSpecifiers(readFileSync(file, "utf8"), file)
+        .filter(specifier => specifier.startsWith("."))
+        // Compared after RESOLUTION, so a specifier that climbs out and back in is judged by where
+        // it lands rather than by how it is spelled.
+        .filter(specifier =>
+          relative(SRC, resolve(dirname(file), specifier)).startsWith("..")
+        )
+        .map(specifier => `${file}: ${specifier}`)
+    );
+
+    expect(
+      escapes,
+      "A shipped source may only import relative paths inside `src`. A file outside it is bundled " +
+        "into the published artifact without being read by the runtime-resolution ban above, so a " +
+        "resolver placed there passes every gate."
     ).toEqual([]);
   });
 
