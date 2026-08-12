@@ -274,6 +274,8 @@ This gate reads the DIFF, and is deliberately not the same check as CI. `.github
 
 The gate needs `jq` on PATH. Without it `fallow-gate.sh` prints one line to stderr and exits 0 — so a machine missing `jq` has the gate installed and auditing nothing.
 
+`FALLOW_AUDIT_BASE` is pinned to `origin/main` in `.claude/settings.json`. Left unset, the audit takes its base from the merge-base with the branch's UPSTREAM, which is the remote tracking branch — stale on any branch whose local commits are not pushed, and after a rebase that means the diff carries every commit `main` gained since. Measured here: 319 changed files and a `fail` verdict on a branch whose actual diff was nine commits. Every pull request in this repo targets `main`, so naming it removes the guesswork.
+
 For non-skill agents, treat the task map below as the local onboarding source: run the listed fallow command before destructive edits, before commits, and before pull request handoff.
 
 ## Fallow task map
