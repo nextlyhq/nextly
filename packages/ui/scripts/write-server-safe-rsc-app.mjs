@@ -69,6 +69,16 @@ if (serverSafe.length === 0) {
  */
 const PRERENDERED = join(target, ".next", "server", "app", "index.html");
 
+/**
+ * The file the CommonJS probe writes as its LAST act, and nothing else does.
+ *
+ * A module calling `process.exit(0)` while it initializes ends that probe with a success status
+ * before its assertions, its remaining subpaths, or its final log ever run — so the exit code
+ * alone reports a pass for the one defect that stops the check happening at all. Reaching the end
+ * is the only thing that produces this.
+ */
+const SENTINEL = "require-check.done";
+
 if (verifying) {
   if (!existsSync(PRERENDERED)) {
     console.error(
@@ -111,9 +121,28 @@ if (verifying) {
     process.exit(1);
   }
 
+  // The CommonJS probe ran to completion. Checked here rather than by its own exit status, which
+  // an artifact can set to 0 from inside the very import being checked.
+  const sentinel = join(target, SENTINEL);
+  if (!existsSync(sentinel)) {
+    console.error(
+      `${sentinel} does not exist, so the CommonJS probe did not reach the end of its run. An ` +
+        `artifact that ends the process while it initializes would end a consumer's the same way.`
+    );
+    process.exit(1);
+  }
+  const reached = Number(readFileSync(sentinel, "utf8").trim());
+  if (reached !== serverSafe.length) {
+    console.error(
+      `The CommonJS probe recorded ${reached} subpaths where ${serverSafe.length} are declared ` +
+        `server-safe, so the two halves of this check are reading different sets.`
+    );
+    process.exit(1);
+  }
+
   console.log(
     `Prerendered at build time, reporting all ${serverSafe.length} server-safe subpaths ` +
-      `(${serverSafe.map(entry => entry.subpath).join(", ")}).`
+      `(${serverSafe.map(entry => entry.subpath).join(", ")}), and the CommonJS probe completed.`
   );
   process.exit(0);
 }
@@ -196,6 +225,8 @@ const manifest = {
 // installed package, through the same export map's `require` condition, on the same Node. A `.cjs`
 // file inside a `"type": "module"` package is CommonJS regardless of the manifest.
 const requireCheck = `const assert = require("node:assert");
+const { writeFileSync } = require("node:fs");
+const { join } = require("node:path");
 
 const subpaths = ${JSON.stringify(serverSafe.map(entry => specifier(entry.subpath)), null, 2)};
 
@@ -207,6 +238,12 @@ for (const subpath of subpaths) {
     \`\${subpath} resolved through the require condition but exported nothing\`
   );
 }
+
+// Written LAST, and the workflow requires it. A module calling \`process.exit(0)\` while it
+// initializes ends this process with a success status before the assertion above, the remaining
+// subpaths, or this line ever run — so the exit code alone reports a pass for the one defect that
+// stops the check from happening at all. Only reaching the end can produce this file.
+writeFileSync(join(__dirname, "${SENTINEL}"), \`\${subpaths.length}\\n\`);
 
 console.log(\`Required \${subpaths.length} server-safe subpaths through the CommonJS condition.\`);
 `;

@@ -270,16 +270,22 @@ jobs:
       # prerendered HTML the build wrote and requires every server-safe subpath
       # to appear in it with a non-empty export count, which only a render that
       # actually ran can produce.
-      - name: Verify the route was prerendered, naming every subpath
-        run: node packages/ui/scripts/write-server-safe-rsc-app.mjs --verify /tmp/rsc-app
-
       # The page above reaches only the `import` condition, so the `.cjs` targets are published and
       # never evaluated even though the export map promises them. This loads them the way a
       # CommonJS consumer does: same install, same export map, same Node.
+      #
+      # Its exit status is deliberately NOT the assertion — a module ending the process during
+      # initialization exits 0 from inside the import being checked. The verify step below reads
+      # the marker it writes on completion instead.
       - name: Evaluate the CommonJS targets the export map also publishes
         run: |
           cd /tmp/rsc-app
           node require-check.cjs
+
+      # Runs LAST, because it audits both halves: that the route was rendered at build time rather
+      # than merely compiled, and that the CommonJS probe reached the end of its own run.
+      - name: Verify the render happened and both halves covered every subpath
+        run: node packages/ui/scripts/write-server-safe-rsc-app.mjs --verify /tmp/rsc-app
 
   # A red nightly must surface without anyone watching the Actions tab. A red
   # pull request does not need an issue filed: it is already red on the PR, in
