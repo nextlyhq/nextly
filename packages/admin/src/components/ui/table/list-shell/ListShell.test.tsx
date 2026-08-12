@@ -31,9 +31,27 @@ function renderShell() {
 describe("ListShell", () => {
   it("puts the pagination inside the same card as the table", () => {
     const { table, pagination } = renderShell();
+    const card = table.parentElement;
 
-    // Siblings, not a table in a card with pagination outside it.
-    expect(pagination.parentElement).toBe(table.parentElement);
+    // Containment rather than parent identity: pagination is wrapped so it can
+    // carry a mobile-only gap, so it is a descendant of the card and not a
+    // sibling of the table. What must stay true is that the card encloses both
+    // — a pagination outside it is the detached bar this shell exists to end.
+    expect(card).not.toBeNull();
+    expect(card?.contains(pagination)).toBe(true);
+  });
+
+  it("separates the pagination only where there is no card", () => {
+    const { pagination } = renderShell();
+    const wrapper = pagination.parentElement;
+
+    // Below the breakpoint the rows are individual cards with no enclosing
+    // edge, so the pagination needs the surrounding rhythm's gap; at and above
+    // it the card exists and the pagination's own `border-t` is the divider,
+    // so the gap must collapse or the footer detaches again.
+    const classes = [...(wrapper?.classList ?? [])];
+    expect(classes).toContain("mt-4");
+    expect(classes).toContain("@md/list:mt-0");
   });
 
   it("makes that shared parent the bordered card", () => {

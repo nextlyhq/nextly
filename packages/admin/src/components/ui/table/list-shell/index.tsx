@@ -58,7 +58,13 @@ export function ListShell({
           against its `overflow-hidden`. */}
       <div className="@md/list:overflow-hidden @md/list:rounded-md @md/list:border @md/list:border-border @md/list:bg-card @md/list:text-card-foreground">
         {children}
-        {pagination}
+        {/* Pagination is a footer only where there is a card to be the footer
+            OF. Below the breakpoint the rows are separate cards and there is no
+            enclosing edge, so its own `border-t` would land against the last
+            card's rounded corner and read as a hairline stuck to it. There it
+            gets the gap the surrounding rhythm uses instead, and the divider
+            does the work only once the card exists. */}
+        {pagination && <div className="mt-4 @md/list:mt-0">{pagination}</div>}
       </div>
     </div>
   );

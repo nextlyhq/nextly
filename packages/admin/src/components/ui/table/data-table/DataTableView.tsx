@@ -286,6 +286,21 @@ export function DataTableView<Row extends object>({
   const colSpan =
     visibleColumns.length + (selection ? 1 : 0) + (hasRowActions ? 1 : 0);
 
+  // A failed request and an empty result are different facts, and only one of
+  // them can be true. Rendering the table anyway pairs "could not load" with
+  // "no users available", which states as data what is actually the absence of
+  // an answer. Rows that survive an earlier fetch are still worth showing, so
+  // only the row-less case replaces the table outright.
+  if (error && rows.length === 0) {
+    return (
+      <div className={cn("@container/table w-full", className)}>
+        <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+          <TableError message={error} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={cn("@container/table w-full", className)}>
       {error && (

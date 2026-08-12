@@ -65,8 +65,27 @@ loaded state jumps to a detached bar 16px lower.
 wrapper. Fourteen call sites pass border and background classes in three
 spellings; all are inert. Only width utilities do anything.
 
-**A — `px-2 py-4 p-4` on the skeleton footer** in six files. `p-4` wins, so
-`px-2 py-4` is dead.
+**A — `px-2 py-4 p-4` on the skeleton footer** in six files. **`p-4` is the dead
+one**, and this entry originally said the opposite, which is the reason it is
+written out here rather than left as a one-line conclusion.
+
+Which class wins is decided by EMISSION ORDER in the built stylesheet, not by
+how specific the selector looks or by which is written last in the `className`.
+All three have equal specificity, and Tailwind emits them in this order:
+
+```
+.p-4    65517
+.px-2   66148
+.py-4   67031
+```
+
+Both axis utilities come after the shorthand, so `p-4` sets nothing that
+survives. Removing the axis pair does not tidy a redundancy — it widens the
+footer from 8px to 16px horizontally.
+
+The general form, worth more than this instance: **"one of these classes is
+redundant" is a claim about the compiled artifact.** Read the built CSS before
+acting on it; the source cannot tell you.
 
 ### A — migration progress
 
