@@ -7,7 +7,7 @@
 # Test info
 
 - Name: acceptance.spec.ts >> a canvas any Nextly editor could ship >> shifts no existing block when its drop zones appear
-- Location: acceptance.spec.ts:214:3
+- Location: acceptance.spec.ts:267:3
 
 # Error details
 

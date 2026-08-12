@@ -7,7 +7,7 @@
 # Test info
 
 - Name: acceptance.spec.ts >> a canvas any Nextly editor could ship >> holds its target through a jitter at a zone boundary
-- Location: acceptance.spec.ts:175:3
+- Location: acceptance.spec.ts:228:3
 
 # Error details
 

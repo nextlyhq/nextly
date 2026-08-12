@@ -7,7 +7,7 @@
 # Test info
 
 - Name: acceptance.spec.ts >> a canvas any Nextly editor could ship >> reaches a drop zone on the fixture the hysteresis probe uses
-- Location: acceptance.spec.ts:155:3
+- Location: acceptance.spec.ts:208:3
 
 # Error details
 

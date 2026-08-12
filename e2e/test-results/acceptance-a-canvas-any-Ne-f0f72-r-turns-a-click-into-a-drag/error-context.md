@@ -7,7 +7,7 @@
 # Test info
 
 - Name: acceptance.spec.ts >> a canvas any Nextly editor could ship >> never turns a click into a drag
-- Location: acceptance.spec.ts:139:3
+- Location: acceptance.spec.ts:192:3
 
 # Error details
 

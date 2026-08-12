@@ -7,7 +7,7 @@
 # Test info
 
 - Name: acceptance.spec.ts >> a canvas any Nextly editor could ship >> shows an explicit state over an invalid target
-- Location: acceptance.spec.ts:295:3
+- Location: acceptance.spec.ts:367:3
 
 # Error details
 

@@ -7,7 +7,7 @@
 # Test info
 
 - Name: acceptance.spec.ts >> a canvas any Nextly editor could ship >> autoscrolls toward an edge and stops at the bounds
-- Location: acceptance.spec.ts:331:3
+- Location: acceptance.spec.ts:403:3
 
 # Error details
 

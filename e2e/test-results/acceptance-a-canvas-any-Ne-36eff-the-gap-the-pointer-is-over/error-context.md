@@ -7,7 +7,7 @@
 # Test info
 
 - Name: acceptance.spec.ts >> a canvas any Nextly editor could ship >> puts the indicator in the gap the pointer is over
-- Location: acceptance.spec.ts:265:3
+- Location: acceptance.spec.ts:335:3
 
 # Error details
 

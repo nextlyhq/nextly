@@ -7,7 +7,7 @@
 # Test info
 
 - Name: acceptance.spec.ts >> a canvas any Nextly editor could ship >> ends the drag when Escape cancels
-- Location: acceptance.spec.ts:502:3
+- Location: acceptance.spec.ts:581:3
 
 # Error details
 

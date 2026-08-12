@@ -7,7 +7,7 @@
 # Test info
 
 - Name: acceptance.spec.ts >> a canvas any Nextly editor could ship >> stays responsive dragging over a large tree
-- Location: acceptance.spec.ts:370:3
+- Location: acceptance.spec.ts:444:3
 
 # Error details
 

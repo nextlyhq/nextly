@@ -7,7 +7,7 @@
 # Test info
 
 - Name: acceptance.spec.ts >> a canvas any Nextly editor could ship >> drives a canvas drag with the same engine as a panel drag
-- Location: acceptance.spec.ts:439:3
+- Location: acceptance.spec.ts:513:3
 
 # Error details
 

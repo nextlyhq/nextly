@@ -7,7 +7,7 @@
 # Test info
 
 - Name: acceptance.spec.ts >> a canvas any Nextly editor could ship >> leaves the document and the editor intact when Escape cancels
-- Location: acceptance.spec.ts:479:3
+- Location: acceptance.spec.ts:558:3
 
 # Error details
 

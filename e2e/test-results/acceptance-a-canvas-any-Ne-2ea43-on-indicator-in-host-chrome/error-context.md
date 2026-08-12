@@ -7,7 +7,7 @@
 # Test info
 
 - Name: acceptance.spec.ts >> a canvas any Nextly editor could ship >> draws exactly one insertion indicator, in host chrome
-- Location: acceptance.spec.ts:241:3
+- Location: acceptance.spec.ts:296:3
 
 # Error details
 

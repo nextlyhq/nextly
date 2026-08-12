@@ -121,19 +121,72 @@ test.describe("a canvas any Nextly editor could ship", () => {
   }) => {
     note(PLAN_POINT.collisionByDepth, "B-6");
     await driver.mountTree(await seedPage(request, NESTED_FIXTURE));
-    // Onto a zone first. Reading a target at the canvas centre answers -1 from
-    // dead space, and -1 against a real index reads as a collision resolved
-    // wrongly rather than as a pointer that was never over anything.
-    const active = await dragOntoZone(driver);
 
-    // The geometrically nearest zone and the active zone must agree. Both the
-    // stale-rect and the unscaled-transform failures select a zone that is not
-    // the nearest, so agreement catches them with no tolerance to tune.
+    // INSIDE the nested container, not merely somewhere on the canvas. The
+    // point of depth resolution is that two containers both contain the
+    // pointer and the innermost has to win, so a pointer that never entered
+    // `nx-inner` cannot separate that from ordinary nearest-zone handling.
+    const boxes = await driver.readBlockBoxes();
+    const first = boxes.find(box => box.id === "nx-inner-0");
+    const second = boxes.find(box => box.id === "nx-inner-1");
+    expect(
+      first && second,
+      "the nested children must be measurable, or the pointer cannot be aimed"
+    ).toBeTruthy();
+
+    // Enter `nx-inner` at its top, then descend until a zone activates. A
+    // fixed y guesses at where the zones are and lands in the dead space
+    // between them as often as not, which reports "no owner" and looks like a
+    // depth failure rather than a pointer that was never over a zone.
+    await driver.startDragAt(await driver.dragSourceCentre());
+    const from = driver.pointer();
+    await driver.moveBy(
+      first!.left + first!.width / 2 - from.x,
+      first!.top - from.y
+    );
+    const reached = await dragUntilTarget(driver);
+    expect(
+      reached,
+      "the drag must reach a zone inside the nested container"
+    ).toBeGreaterThanOrEqual(0);
+
+    // Everything above ran unprotected: the seed, the measurement and reaching
+    // a zone at all are harness concerns and a failure in them is real.
+    //
+    // What follows is the shortfall. Measured: descending from the top of
+    // `nx-inner` finds no active zone until y=384, past the container's own
+    // bottom edge at 320 — this canvas creates gap zones at the outer level
+    // only, so there is no inner zone for the innermost container to own.
+    test.fail(
+      true,
+      "no drop zone exists inside a nested container; the nearest is below it"
+    );
+
+    // And it must still be inside `nx-inner` after that descent, or the walk
+    // carried the pointer out the bottom and the ownership below is about a
+    // different container entirely.
+    const pointerY = driver.pointer().y;
+    expect(
+      pointerY,
+      "the descent must not leave the nested container"
+    ).toBeLessThanOrEqual(second!.top + second!.height);
+
+    const owner = await driver.readActiveZoneOwner();
+    const active = await driver.readActiveTarget();
     const nearest = await driver.nearestZoneToPointer();
     await driver.cancel();
-    expect(active, "the active zone must be the one under the pointer").toBe(
-      nearest
-    );
+
+    // The separating property, and the one the previous version never asked:
+    // the zone under the pointer must belong to the INNERMOST container. A
+    // canvas that always lets the outer container win passes an
+    // active-equals-nearest check and fails this.
+    expect(
+      owner,
+      "the innermost container under the pointer must own the drop zone"
+    ).toBe("nx-inner");
+    // Kept as well, because it catches a different fault: a stale rect or an
+    // unscaled transform selects a zone that is not the nearest at all.
+    expect(active, "and it must be the zone nearest the pointer").toBe(nearest);
   });
 
   test("never turns a click into a drag", async ({ request }) => {

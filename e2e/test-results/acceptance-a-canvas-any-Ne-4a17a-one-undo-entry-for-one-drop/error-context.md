@@ -7,7 +7,7 @@
 # Test info
 
 - Name: acceptance.spec.ts >> a canvas any Nextly editor could ship >> records exactly one undo entry for one drop
-- Location: acceptance.spec.ts:404:3
+- Location: acceptance.spec.ts:478:3
 
 # Error details
 
