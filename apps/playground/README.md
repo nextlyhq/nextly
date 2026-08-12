@@ -91,3 +91,26 @@ apps/playground/
 ├── scripts/__tests__/           # vitest tests for the dev helpers
 └── .env.example                 # SQLite default
 ```
+
+## The theme lab
+
+There was a `src/theme-lab/` here: a harness that rendered nine candidate
+admin themes side by side so one could be chosen. One was, and it is the theme
+`packages/ui/src/styles/theme.css` ships today, so the harness has been
+removed along with its `theme:*` scripts and the eight extra `next/font`
+faces its presets previewed in.
+
+The presets themselves, including the two that came closest, are recoverable
+from the commit that removed them:
+
+```
+git log --diff-filter=D -- apps/playground/src/theme-lab/themes
+git show <sha>^:apps/playground/src/theme-lab/themes/tweakcn.generated.ts
+```
+
+Kept as history rather than as a file, because a config nothing loads is not
+kept up to date and reads as authoritative long after it stops being true.
+
+What did NOT go is the part that guards the shipped theme:
+`packages/ui/src/styles/contrast/` still measures every token pairing against
+its WCAG threshold with a margin, and runs in CI.
