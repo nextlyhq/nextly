@@ -61,19 +61,29 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   checkout, measured with the cache forced off so the numbers are of work that
   actually ran:
 
-  | command                                         | result on a clean tree                             |
-  | ----------------------------------------------- | -------------------------------------------------- |
-  | `pnpm turbo run check-types --continue --force` | 6 of 21 successful, 18 packages reporting `TS2307` |
-  | `pnpm turbo run lint --continue --force`        | 8 of 22 successful                                 |
+  | command                                         | result on a clean tree                              |
+  | ----------------------------------------------- | --------------------------------------------------- |
+  | `pnpm turbo run check-types --continue --force` | 6 of 21 successful, 15 packages failing on `TS2307` |
+  | `pnpm turbo run lint --continue --force`        | 8 of 22 successful                                  |
 
   `check-types` fails because a workspace import resolves through the sibling's
   package exports to a `dist/index.d.ts` that does not exist yet. `lint` fails
   for the same underlying reason through a different rule: `import-x/no-unresolved`
   resolves the same specifiers, so an unbuilt sibling is an unresolved import.
 
-  Run `pnpm build` first. A per-package `pnpm --filter <pkg>^... build` builds
-  only that package's dependencies and is enough when you are checking one
-  package, but the failure is workspace-wide rather than local to one package.
+  Run `pnpm build` first. The failure is workspace-wide rather than local to one
+  package, so the whole-repo build is the honest default.
+
+  To check one package, build it WITH its dependencies:
+
+  ```
+  pnpm --filter <pkg>... build      # trailing ... includes <pkg> itself
+  ```
+
+  Not `<pkg>^...`. `pnpm recursive --help` defines that form as the dependencies
+  "without including the matched packages", so the package's own `dist` stays
+  absent — and `lint` then fails on its self-imports, which is the same missing
+  build wearing a different rule's error message.
 
   **Measure these with `--force`.** Turbo caches both tasks, and a cached task
   reports `Tasks: N successful` without running anything — so a warm cache from
