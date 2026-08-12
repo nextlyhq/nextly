@@ -115,9 +115,11 @@ list into a pattern nobody rereads. A by-name pin answers "did something stop
 existing", which neither of the others can see.
 
 Worked example, from this repo. `packages/nextly/src/__tests__/export-contract.test.ts`
-hand-listed 6 entry points while `package.json` published 42, and pinned the
+hand-listed 5 entry points while `package.json` published 41, and pinned the
 expected count beside the list it counted — so both sides moved together and a
-new subpath was never checked.
+new subpath was never checked. `696281d12` then published a 42nd subpath and
+replaced the hand-written matrix in the same commit, which is why no single
+revision shows the gap at its widest.
 
 It now does all three. The matrix comes from `Object.keys(manifest.exports)`,
 which is TOTAL — the whole manifest, with no predicate or glob between, which is
