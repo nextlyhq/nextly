@@ -551,9 +551,70 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
     return RESTRICTED_GLOBALS.has(key.text) ? key.text : undefined;
   };
 
+  /**
+   * Whether a host-object reference is CAPTURED — bound to a name, passed, or stored.
+   *
+   * Aliasing is what defeats a rule that requires the receiver to be the literal host:
+   * `const host = globalThis; host.process` reaches the same binding through a name, and
+   * recognising that means following a value through a binding, which is dataflow rather than
+   * syntax. So capture itself is refused, and the three NON-capturing uses are allowed instead:
+   * testing with `typeof`, testing membership with `in`, and reading a member off it. That is a
+   * statement about what may be DONE with the object rather than a list of spellings, so an alias
+   * created in a way nobody has thought of is refused with the rest.
+   *
+   * `as`, `!` and parentheses are unwrapped on the way up: they change the type or the grouping,
+   * never which object is in hand, and real code cast `window` before reading a member off it.
+   */
+  const capturesHost = (node: ts.Identifier): boolean => {
+    let child: ts.Node = node;
+    let parent = node.parent;
+    while (
+      parent !== undefined &&
+      (ts.isAsExpression(parent) ||
+        ts.isParenthesizedExpression(parent) ||
+        ts.isNonNullExpression(parent) ||
+        ts.isSatisfiesExpression(parent))
+    ) {
+      child = parent;
+      parent = parent.parent;
+    }
+    if (parent === undefined) return true;
+    // Reading a member off it, which the member rules then judge on their own terms.
+    if (
+      (ts.isPropertyAccessExpression(parent) ||
+        ts.isElementAccessExpression(parent)) &&
+      parent.expression === child
+    ) {
+      return false;
+    }
+    // `typeof host`, and `"name" in host` — neither yields a reference to the object.
+    if (ts.isTypeOfExpression(parent)) return false;
+    if (
+      ts.isBinaryExpression(parent) &&
+      parent.operatorToken.kind === ts.SyntaxKind.InKeyword &&
+      parent.right === child
+    ) {
+      return false;
+    }
+    // A declaration of the name, or any type position, introduces no value.
+    if (ts.isVariableDeclaration(parent) && parent.name === child) return false;
+    if (ts.isTypeReferenceNode(parent) || ts.isTypeQueryNode(parent)) {
+      return false;
+    }
+    return true;
+  };
+
   const visit = (node: ts.Node): void => {
     const restricted = readsRestrictedGlobal(node);
     if (restricted !== undefined) found.push(restricted);
+    if (
+      ts.isIdentifier(node) &&
+      GLOBAL_OBJECTS.has(node.text) &&
+      !isMemberName(node) &&
+      capturesHost(node)
+    ) {
+      found.push(node.text);
+    }
     // `import.meta` is checked as a WHITELIST rather than by hunting for `.resolve`, and that is
     // what makes this bounded where the artifact scan was not. Hunting means enumerating the ways
     // a resolver can be reached — `.resolve`, `["resolve"]`, `const { resolve } = import.meta`,
@@ -745,6 +806,23 @@ describe("this package resolves no module at runtime", () => {
     expect(
       runtimeResolversIn(`export const r = globalThis["require"]("x");`, "a.ts")
     ).toEqual(["require"]);
+    // Capturing the host defeats any rule keyed to the literal receiver, so capture is what is
+    // refused — an alias, an argument, a stored reference.
+    expect(
+      runtimeResolversIn(
+        `const host = globalThis;\nexport const r = host.process;`,
+        "a.ts"
+      )
+    ).toEqual(["globalThis"]);
+    expect(
+      runtimeResolversIn(
+        `const host = globalThis as unknown as Record<string, unknown>;\nexport const r = host;`,
+        "a.ts"
+      )
+    ).toEqual(["globalThis"]);
+    expect(
+      runtimeResolversIn(`export const r = use(globalThis);`, "a.ts")
+    ).toEqual(["globalThis"]);
     // The controls: ordinary code names none of them.
     expect(
       runtimeResolversIn(
@@ -758,6 +836,20 @@ describe("this package resolves no module at runtime", () => {
     // An unrelated literal key off a host object is not a restricted global.
     expect(
       runtimeResolversIn(`export const w = globalThis["fetch"];`, "a.ts")
+    ).toEqual([]);
+    // The three NON-capturing uses, copied from `color-picker.tsx` so the rule is pinned against
+    // real code rather than against an idea of it.
+    expect(
+      runtimeResolversIn(
+        `export const has = typeof window !== "undefined" && "EyeDropper" in window;`,
+        "a.ts"
+      )
+    ).toEqual([]);
+    expect(
+      runtimeResolversIn(
+        `export const c = (window as unknown as Record<string, unknown>).EyeDropper;`,
+        "a.ts"
+      )
     ).toEqual([]);
     expect(
       runtimeResolversIn(
