@@ -6,7 +6,7 @@
  * icon only opens this panel rather than navigating, so a panel with no link
  * leaves `/admin/plugins` unreachable from anywhere in the UI.
  */
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AdminBranding } from "@admin/types/branding";
@@ -50,12 +50,31 @@ const noop = () => false;
 // The real provider rather than a mocked `useSidebar`: the component reads
 // collapsed state from it, so a stub would let a change to that contract pass
 // unnoticed here.
-function renderNav() {
+function renderNav({ collapsed = false }: { collapsed?: boolean } = {}) {
   return render(
-    <SidebarProvider>
+    <SidebarProvider defaultOpen={!collapsed}>
       <DynamicPluginNav isActive={noop} />
     </SidebarProvider>
   );
+}
+
+/** A plugin owning one collection this user is permitted to read. */
+function givePluginWithReadableCollection() {
+  mockBranding = {
+    plugins: [{ name: "@acme/p", collections: ["widgets"] }],
+  } as unknown as AdminBranding;
+  mockCollectionCaps = { widgets: { canRead: true } };
+  mockCollections = {
+    items: [
+      {
+        id: "c1",
+        name: "widgets",
+        label: "Widgets",
+        labels: { plural: "Widgets" },
+        admin: { isPlugin: true, group: "Acme" },
+      },
+    ],
+  };
 }
 
 afterEach(() => {
@@ -144,5 +163,38 @@ describe("DynamicPluginNav", () => {
     expect(
       screen.getAllByRole("link", { name: /installed plugins/i })
     ).toHaveLength(1);
+  });
+});
+
+describe("DynamicPluginNav collapsed", () => {
+  it("offers the guarded destinations to a user who can open them", async () => {
+    givePluginWithReadableCollection();
+
+    const { container } = renderNav({ collapsed: true });
+    fireEvent.mouseEnter(container.querySelector("li")!);
+
+    expect(
+      await screen.findByRole("menuitem", { name: /installed plugins/i })
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * Every destination the collapsed dropdown offers by default is
+   * manage-settings guarded, so a collection reader would get a menu whose
+   * every item redirects. They are offered their collections instead.
+   */
+  it("offers a collection reader their collections, not guarded pages", async () => {
+    givePluginWithReadableCollection();
+    mockCanManageSettings = false;
+
+    const { container } = renderNav({ collapsed: true });
+    fireEvent.mouseEnter(container.querySelector("li")!);
+
+    expect(
+      await screen.findByRole("menuitem", { name: "Widgets" })
+    ).toHaveAttribute("href", "/admin/collections/widgets");
+    expect(
+      screen.queryByRole("menuitem", { name: /installed plugins/i })
+    ).toBeNull();
   });
 });

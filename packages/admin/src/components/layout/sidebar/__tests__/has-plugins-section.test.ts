@@ -5,7 +5,6 @@ import { hasPluginsSection } from "../lib/has-plugins-section";
 const SETTLED = {
   isPending: false,
   hasVisiblePluginCollection: false,
-  installedPluginCount: 0,
 };
 
 describe("hasPluginsSection", () => {
@@ -39,7 +38,7 @@ describe("hasPluginsSection", () => {
     expect(
       hasPluginsSection(
         { canManageSettings: false, canViewCollections: false },
-        { ...SETTLED, installedPluginCount: 3 }
+        SETTLED
       )
     ).toBe(false);
   });
@@ -67,13 +66,18 @@ describe("hasPluginsSection", () => {
     ).toBe(true);
   });
 
-  it("shows it for a collection reader when plugins are installed", () => {
+  /**
+   * A collection reader whose plugins own no collection they may see has no
+   * reachable destination in the panel: the overview and the per-plugin pages
+   * are both manage-settings guarded. The rail item would open an empty panel.
+   */
+  it("hides it from a collection reader whose plugins expose nothing to them", () => {
     expect(
       hasPluginsSection(
         { canManageSettings: false, canViewCollections: true },
-        { ...SETTLED, installedPluginCount: 1 }
+        SETTLED
       )
-    ).toBe(true);
+    ).toBe(false);
   });
 
   /**

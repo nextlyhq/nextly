@@ -3,35 +3,29 @@ import type { AdminCapabilities } from "@admin/types/permissions";
 interface PluginsSectionInputs {
   /** True while permissions or the collections query are still resolving. */
   isPending: boolean;
-  /** True when at least one plugin-owned collection is visible in this section. */
+  /** True when at least one plugin-owned collection is visible to this user. */
   hasVisiblePluginCollection: boolean;
-  /** How many plugins `/api/admin-meta` reports as registered. */
-  installedPluginCount: number;
 }
 
 /**
  * Whether the Plugins entry appears in the primary rail.
  *
- * Extracted for the same reason `resolveItemHref` was: the decision is a pure
- * function of a few inputs, and reaching it through a rendered `DualSidebar`
- * needs the branding, media, permission and collection providers all stood up.
- * A test that cannot reach the real predicate proves nothing about what the
- * rail renders, which is the failure this file exists to prevent. Only the
- * plugins predicate is extracted, because it is the one whose rule changed;
- * the sibling sections keep their inline form until they need the same.
+ * The rail item exists to open the plugins panel, so it is shown exactly when
+ * that panel has a destination this user can reach. The two arms below are the
+ * two kinds of destination, and they admit different users:
  *
- * Two arms, and they admit different users on purpose:
+ * - `canManageSettings` reaches `/admin/plugins`, which is guarded by that
+ *   permission. It needs nothing installed: the page lists installed plugins
+ *   and its empty state explains that plugins are added through the Nextly
+ *   config, so a project with none still has somewhere to go.
+ * - `canViewCollections` plus a visible plugin-owned collection reaches that
+ *   collection through the panel. Such a user does not get the overview link,
+ *   which is why the collection itself has to be the reachable thing.
  *
- * - `canManageSettings` shows the entry unconditionally, including on a fresh
- *   project with nothing installed. `/admin/plugins` is the installed-plugins
- *   list; today its empty state explains that plugins are added to the Nextly
- *   config, and it offers no directory or install action. Hiding the entry
- *   until a plugin exists means a new project cannot reach even that
- *   explanation.
- * - The collections arm keeps the entry for a user who can read a plugin-owned
- *   collection but cannot manage settings. They reach that collection through
- *   the sub-sidebar; `resolveItemHref` deliberately does not navigate them to
- *   the guarded page.
+ * A global installed count is deliberately not an input. It answers "does the
+ * project have plugins", not "can this user reach any of them", and for a
+ * collection reader whose plugin is metadata-only or whose collections are all
+ * denied those differ: the rail item would open a panel with nothing in it.
  *
  * @module components/layout/sidebar/lib/has-plugins-section
  */
@@ -46,9 +40,7 @@ export function hasPluginsSection(
 
   if (!capabilities.canViewCollections) return false;
 
-  return (
-    inputs.isPending ||
-    inputs.hasVisiblePluginCollection ||
-    inputs.installedPluginCount > 0
-  );
+  // Pending counts as reachable so the entry does not flicker out and back in
+  // while the collections query resolves.
+  return inputs.isPending || inputs.hasVisiblePluginCollection;
 }

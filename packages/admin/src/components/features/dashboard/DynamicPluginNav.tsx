@@ -245,6 +245,8 @@ export function DynamicPluginNav({
         isActive={isActive}
         isAnyActive={isAnyPluginActive}
         getPluginUrl={getPluginUrl}
+        getCollectionUrl={getCollectionUrl}
+        canOpenPluginPages={canOpenOverview}
       />
     );
   }
@@ -347,11 +349,21 @@ function CollapsedPluginDropdown({
   isActive,
   isAnyActive,
   getPluginUrl,
+  getCollectionUrl,
+  canOpenPluginPages,
 }: {
   plugins: PluginEntry[];
   isActive: (href?: string) => boolean;
   isAnyActive: boolean;
   getPluginUrl: (slug: string) => string;
+  getCollectionUrl: (collection: ApiCollection) => string;
+  /**
+   * Whether this user can open `/admin/plugins` and the per-plugin detail
+   * pages, both guarded by `manage-settings`. When false the dropdown offers
+   * the plugin's collections instead, which are what such a user came here to
+   * reach; listing the guarded pages would make every item a redirect.
+   */
+  canOpenPluginPages: boolean;
 }) {
   const [isOpen, setIsOpen] = React.useState(false);
   const timeoutRef = React.useRef<NodeJS.Timeout | null>(null);
@@ -401,38 +413,68 @@ function CollapsedPluginDropdown({
           <DropdownMenuLabel>Plugins</DropdownMenuLabel>
           <DropdownMenuSeparator />
           {/* The overview stays reachable even when no plugin owns a
-              collection — metadata-only plugins are listed there. */}
-          <DropdownMenuItem asChild>
-            <Link
-              href={ROUTES.PLUGINS}
-              data-active={isActive(ROUTES.PLUGINS) ? "true" : undefined}
-              className={cn(
-                "flex w-full cursor-pointer items-center gap-2 transition-none admin-dropdown-item",
-                isActive(ROUTES.PLUGINS) && "font-bold!"
-              )}
-            >
-              <Package className="h-4 w-4" />
-              <span>Installed Plugins</span>
-            </Link>
-          </DropdownMenuItem>
-          {plugins.map(plugin => {
-            const href = getPluginUrl(plugin.slug);
-            const active = isActive(href);
-            return (
-              <DropdownMenuItem key={plugin.slug} asChild>
-                <Link
-                  href={href}
-                  data-active={active ? "true" : undefined}
-                  className={cn(
-                    "flex w-full cursor-pointer items-center gap-2 transition-none admin-dropdown-item",
-                    active && "font-bold!"
-                  )}
-                >
-                  <Package className="h-4 w-4" />
-                  <span>{plugin.name}</span>
-                </Link>
-              </DropdownMenuItem>
-            );
+              collection: metadata-only plugins are listed there. */}
+          {canOpenPluginPages && (
+            <DropdownMenuItem asChild>
+              <Link
+                href={ROUTES.PLUGINS}
+                data-active={isActive(ROUTES.PLUGINS) ? "true" : undefined}
+                className={cn(
+                  "flex w-full cursor-pointer items-center gap-2 transition-none admin-dropdown-item",
+                  isActive(ROUTES.PLUGINS) && "font-bold!"
+                )}
+              >
+                <Package className="h-4 w-4" />
+                <span>Installed Plugins</span>
+              </Link>
+            </DropdownMenuItem>
+          )}
+          {plugins.flatMap(plugin => {
+            // A user who can open plugin pages navigates by plugin. One who
+            // cannot navigates to the collections themselves, which are the
+            // only destinations here they are permitted to reach.
+            if (canOpenPluginPages) {
+              const href = getPluginUrl(plugin.slug);
+              const active = isActive(href);
+              return [
+                <DropdownMenuItem key={plugin.slug} asChild>
+                  <Link
+                    href={href}
+                    data-active={active ? "true" : undefined}
+                    className={cn(
+                      "flex w-full cursor-pointer items-center gap-2 transition-none admin-dropdown-item",
+                      active && "font-bold!"
+                    )}
+                  >
+                    <Package className="h-4 w-4" />
+                    <span>{plugin.name}</span>
+                  </Link>
+                </DropdownMenuItem>,
+              ];
+            }
+            return plugin.collections.map(collection => {
+              const href = getCollectionUrl(collection);
+              const active = isActive(href);
+              const label =
+                collection.labels?.plural ||
+                collection.label ||
+                collection.name;
+              return (
+                <DropdownMenuItem key={collection.id} asChild>
+                  <Link
+                    href={href}
+                    data-active={active ? "true" : undefined}
+                    className={cn(
+                      "flex w-full cursor-pointer items-center gap-2 transition-none admin-dropdown-item",
+                      active && "font-bold!"
+                    )}
+                  >
+                    <Package className="h-4 w-4" />
+                    <span>{label}</span>
+                  </Link>
+                </DropdownMenuItem>
+              );
+            });
           })}
         </DropdownMenuContent>
       </DropdownMenu>

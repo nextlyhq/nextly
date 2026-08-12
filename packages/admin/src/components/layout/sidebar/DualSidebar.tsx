@@ -231,7 +231,6 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       const placement = getCollectionPlacement(collection);
       return !placement || placement === "plugins";
     }),
-    installedPluginCount: branding?.plugins?.length ?? 0,
   });
 
   const hasMediaSection = hasPermissionDataPending
