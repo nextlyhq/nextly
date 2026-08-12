@@ -99,7 +99,8 @@ export function restrictToSupportedFloor(scope?: Record<string, unknown>): {
 export function childOutcome(
   file: string,
   run: {
-    error?: Error;
+    /** Node sets `code` on a spawn failure; `ETIMEDOUT` is the deadline being reached. */
+    error?: Error & { code?: string };
     status: number | null;
     signal?: string | null;
     stderr?: string;

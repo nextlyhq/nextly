@@ -726,7 +726,7 @@ export function domGlobalsPresent(scope = globalThis) {
  * otherwise be described with the word `null` where a reason belongs.
  *
  * @param {string} file
- * @param {{ error?: Error, status: number | null, signal?: string | null, stderr?: string }} run
+ * @param {{ error?: Error & { code?: string }, status: number | null, signal?: string | null, stderr?: string }} run
  * @returns {string | null}
  */
 export function childOutcome(file, run) {

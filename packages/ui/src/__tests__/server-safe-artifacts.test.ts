@@ -670,12 +670,30 @@ describe("reading one artifact's own process", () => {
   it("calls a child killed at the deadline a defect, not an unrunnable check", () => {
     // An artifact that leaves a handle open finishes importing and never lets its process exit.
     // Read as a spawn failure it would be reported as "could not be evaluated", which hides it.
-    const timedOut = Object.assign(new Error("ETIMEDOUT"), {
-      code: "ETIMEDOUT",
-    });
+    // Annotated as the declaration types it, rather than left to `Object.assign` to widen. The
+    // implementation reads `error.code`, so a caller that cannot SET it is a caller the published
+    // signature does not actually serve.
+    const timedOut: Error & { code?: string } = Object.assign(
+      new Error("ETIMEDOUT"),
+      { code: "ETIMEDOUT" }
+    );
     const said = ran({ error: timedOut, status: null });
     expect(said).toContain("still running");
     expect(said).not.toContain("could not be evaluated");
+  });
+
+  it("accepts a spawn result carrying the code the timeout branch reads", () => {
+    // Called DIRECTLY with a literal rather than through `ran`, whose parameter is
+    // `Record<string, unknown>` and therefore checks nothing. Excess-property checking fires only
+    // on a fresh literal at the call site, so this is the only shape that holds the published
+    // signature to what the implementation reads -- `error.code`, which a declaration typing
+    // `error` as a plain `Error` rejects.
+    expect(
+      childOutcome("utils.mjs", {
+        error: { name: "Error", message: "timed out", code: "ETIMEDOUT" },
+        status: null,
+      })
+    ).toContain("still running");
   });
 
   it("separates a child that never started from one that failed", () => {
