@@ -6,10 +6,16 @@
  * to NULL the reference rather than to remove the evidence or to refuse the
  * delete.
  *
- * Run per dialect because the constraint that does the nulling is declared
- * three times, once per schema module, and only the database can be asked
- * whether it is really there. A green SQLite run says nothing about MySQL —
- * which is precisely where the constraint was absent.
+ * Run per dialect because the constraint that does the nulling is declared once
+ * per schema module, and only the database can be asked whether it is really
+ * there. A green run on one dialect says nothing about another.
+ *
+ * MySQL is deliberately ABSENT from the table below. It does not declare the
+ * constraint yet, and it cannot until the schema pipeline nulls pre-existing
+ * dangling references first — MySQL refuses to add a foreign key while any row
+ * violates it, so applying it alone would fail against exactly the databases
+ * that need repairing. Asserting MySQL's current behaviour here would record
+ * the gap as intended behaviour, which is the opposite of what a test is for.
  *
  * Tables are created from the PRODUCTION definitions through drizzle-kit rather
  * than from DDL written here, so the fixture cannot drift from the schema it is
@@ -28,17 +34,14 @@
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
 import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { getDrizzleKitForDialect } from "../../../database/drizzle-kit-lazy";
-import { emailDeliveriesMysql } from "../../../schemas/email-deliveries/mysql";
 import { emailDeliveriesPg } from "../../../schemas/email-deliveries/postgres";
 import { emailDeliveriesSqlite } from "../../../schemas/email-deliveries/sqlite";
-import { emailProvidersMysql } from "../../../schemas/email-providers/mysql";
 import { emailProvidersPg } from "../../../schemas/email-providers/postgres";
 import { emailProvidersSqlite } from "../../../schemas/email-providers/sqlite";
 import { splitStatements } from "../../schema/pipeline/sql-statement-utils";
@@ -60,12 +63,6 @@ const DIALECTS: Array<{
     url: process.env.TEST_POSTGRES_URL ?? null,
     make: url => createPostgresAdapter({ url }) as unknown as TestAdapter,
     tables: { emailProvidersPg, emailDeliveriesPg },
-  },
-  {
-    dialect: "mysql",
-    url: process.env.TEST_MYSQL_URL ?? null,
-    make: url => createMySqlAdapter({ url }) as unknown as TestAdapter,
-    tables: { emailProvidersMysql, emailDeliveriesMysql },
   },
   {
     dialect: "sqlite",

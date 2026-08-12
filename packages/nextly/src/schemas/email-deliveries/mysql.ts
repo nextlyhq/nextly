@@ -18,28 +18,30 @@ import {
   index,
 } from "drizzle-orm/mysql-core";
 
-import { emailProvidersMysql } from "../email-providers/mysql";
-
 export const emailDeliveriesMysql = mysqlTable(
   "email_deliveries",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
 
     /**
-     * Nulled when the provider it names is deleted, matching PostgreSQL and
-     * SQLite. The row survives the provider: `provider_type` beside it keeps
-     * every delivery meaningful without the join, so the log stays evidence of
-     * what was sent after the credentials are gone.
+     * No foreign key, unlike PostgreSQL and SQLite.
      *
-     * The referenced column is `varchar(36)` on both sides. MySQL requires a
-     * foreign key's columns to match in type and collation, so the two are
-     * declared identically rather than left to a default that differs per
-     * server.
+     * A deleted provider therefore leaves this pointing at a row that is gone,
+     * rather than being nulled: nothing in the service clears it, and there is
+     * no constraint here to do it instead.
+     *
+     * Declaring one is correct and is NOT safe to do on its own. An existing
+     * installation can already hold these dangling values, and MySQL refuses to
+     * add the constraint while any row violates it (`ERROR 1452`), so core
+     * reconciliation would fail against exactly the databases that need the
+     * repair. The rows have to be nulled BEFORE the constraint is applied, and
+     * nothing in the schema pipeline does that yet.
+     *
+     * Readers must not assume it resolves. `provider_type` beside it keeps
+     * every row meaningful without the join, and no read path follows this id
+     * expecting to find a provider.
      */
-    providerId: varchar("provider_id", { length: 36 }).references(
-      () => emailProvidersMysql.id,
-      { onDelete: "set null" }
-    ),
+    providerId: varchar("provider_id", { length: 36 }),
 
     providerType: varchar("provider_type", { length: 50 }).notNull(),
     templateSlug: varchar("template_slug", { length: 255 }),

@@ -30,10 +30,12 @@ Eight throw sites restated a status the canonical map already answers, so the
 number lived in two places and only one would be found by someone changing it.
 The status now comes from the code alone.
 
-On MySQL, deleting an email provider left its delivery rows pointing at a row
-that no longer existed; PostgreSQL and SQLite already nulled the reference. All
-three now agree, and the delivery row survives its provider either way, because
-the log is evidence of what was sent rather than a view of current settings.
+Deleting an email provider nulls the reference on its delivery rows rather than
+removing them, so the log stays evidence of what was sent. That behaviour now
+has per-dialect coverage on PostgreSQL and SQLite, where it was previously
+untested. MySQL still has no such constraint: adding one requires nulling
+pre-existing dangling references first, which nothing in the schema pipeline
+does yet.
 
 Email template mutations now reach the activity log. A template decides what a
 password-reset message says and who it appears to come from, and that change was
