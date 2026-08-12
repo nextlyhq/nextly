@@ -65,12 +65,10 @@ export interface Rect {
  * indicator feels slightly off" rather than as a bug.
  *
  * Build one with {@link frameContentOrigin} rather than adding that correction
- * at the call site. An earlier version of this note pushed the arithmetic out to
- * "whoever reads the DOM", on the grounds that only the caller holds
- * `clientLeft`. That reasoning conflated the DOM READ with the arithmetic that
- * follows it: reading `clientLeft` needs a browser, turning it into an origin is
- * three multiplications over plain numbers. Two callers duly wrote the
- * correction themselves, and both wrote it the same way round and both wrong.
+ * at the call site. Reading `clientLeft` needs a browser; turning it into an
+ * origin is arithmetic over plain numbers, and splitting the two puts the sum
+ * in every caller that measured a frame — where each writes it separately and
+ * a correction reaches only the one being edited.
  *
  * `scale` is the visual scale the host applies to the frame: a zoomed-out canvas
  * at 50% has `scale: 0.5`.
