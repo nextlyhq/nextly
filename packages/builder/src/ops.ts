@@ -26,7 +26,6 @@ import {
   countNodes,
   DEFAULT_MAX_DOCUMENT_BYTES,
   documentBytes,
-  DOCUMENT_FORMAT_VERSION,
   findNode,
   isNodeType,
   MAX_DEPTH,
@@ -39,6 +38,7 @@ import {
   moveNode,
   removeNode,
   updateNode,
+  type BlockDocument,
   type BlockNode,
   type NodeLocation,
   type TreePosition,
@@ -658,8 +658,8 @@ function assertNodeShape(node: BlockNode, verb: string): void {
  * bound asks `MAX_DEPTH`: a second opinion about how large a document may be is
  * a second contract to keep in step.
  */
-function assertFitsCaps(result: BlockNode[], verb: string): void {
-  const total = countNodes(result);
+function assertFitsCaps(result: BlockDocument, verb: string): void {
+  const total = countNodes(result.nodes);
   if (total > MAX_NODES) {
     throw new OpError(
       `${verb}: this would leave the document holding ${String(total)} nodes, ` +
@@ -670,11 +670,7 @@ function assertFitsCaps(result: BlockNode[], verb: string): void {
   // Size as well as count. A single large string passes a node count and still
   // puts the document past what the engine will store, with the same result:
   // the edit applies, enters history, and every save afterwards is refused.
-  const bytes = documentBytes({
-    formatVersion: DOCUMENT_FORMAT_VERSION,
-    kind: "page",
-    nodes: result,
-  });
+  const bytes = documentBytes(result);
   if (bytes > DEFAULT_MAX_DOCUMENT_BYTES) {
     throw new OpError(
       `${verb}: this would leave the document at ${String(bytes)} bytes, past ` +
@@ -829,8 +825,20 @@ function priorValues(
 
 /** The result of applying one op: the new forest, and the op that undoes it. */
 export interface AppliedOp {
-  readonly nodes: BlockNode[];
+  readonly document: BlockDocument;
   readonly inverse: BuilderOp;
+}
+
+/**
+ * The same document with a new forest in it.
+ *
+ * Spread rather than rebuilt, so `settings`, `assets` and any field the format
+ * gains later survive an edit without this module being taught about them. A
+ * synthesized envelope silently drops whatever it does not name, and what it
+ * drops is invisible until something reads the field that vanished.
+ */
+function withNodes(document: BlockDocument, nodes: BlockNode[]): BlockDocument {
+  return { ...document, nodes };
 }
 
 /**
@@ -848,7 +856,17 @@ export interface AppliedOp {
  * several edits could have produced the difference, and for a move between two
  * positions holding identical nodes there is no unique answer.
  */
-export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
+export function applyOp(document: BlockDocument, op: BuilderOp): AppliedOp {
+  // The document itself, before its forest is read. An op arrives beside a
+  // document from storage, so neither is more trustworthy than the other.
+  if (!isPlainRecord(document) || !Array.isArray(document.nodes)) {
+    throw new OpError(
+      `a document of ${describe(document)} holds no forest to edit. Every ` +
+        `document is a record whose nodes are an array.`
+    );
+  }
+  const nodes = document.nodes;
+
   // The op itself, before its discriminant is read. `op.kind` on a `null`
   // leaves this module as a TypeError, which a caller cannot distinguish from
   // the editor having a bug — and the whole point of `OpError` is that a
@@ -893,9 +911,9 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
       );
       // Measured on the placed forest rather than on the loose subtree, which
       // is what makes an insert into a slot count the slot's own key.
-      assertFitsCaps(placed, "insert");
+      assertFitsCaps(withNodes(document, placed), "insert");
       return {
-        nodes: placed,
+        document: withNodes(document, placed),
         inverse: { kind: "remove", id: op.node.id },
       };
     }
@@ -922,10 +940,13 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
       // recoverable from the forest afterwards, which is the whole reason the
       // inverse cannot be computed later.
       return {
-        nodes: accepted(
-          nodes,
-          removeNode(nodes, op.id),
-          `remove: the document did not accept removing "${op.id}".`
+        document: withNodes(
+          document,
+          accepted(
+            nodes,
+            removeNode(nodes, op.id),
+            `remove: the document did not accept removing "${op.id}".`
+          )
         ),
         inverse: { kind: "insert", node, at: positionOf(location) },
       };
@@ -975,9 +996,9 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
       // A move keeps the node count and can still grow the document: relocating
       // into a slot the parent did not have yet adds that slot's name to what is
       // stored, and a long enough name crosses the byte cap on its own.
-      assertFitsCaps(moved, "move");
+      assertFitsCaps(withNodes(document, moved), "move");
       return {
-        nodes: moved,
+        document: withNodes(document, moved),
         inverse: { kind: "move", id: op.id, to: positionOf(location) },
       };
     }
@@ -1032,9 +1053,9 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
       // cap: one large string in `props` is a document the engine will refuse
       // to store, written by an edit nothing objected to.
       const updated = updateNode(nodes, op.id, { ...op.patch, ...removals });
-      assertFitsCaps(updated, "update");
+      assertFitsCaps(withNodes(document, updated), "update");
       return {
-        nodes: updated,
+        document: withNodes(document, updated),
         inverse: {
           kind: "update",
           id: op.id,

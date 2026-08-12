@@ -9,6 +9,7 @@ import {
   MAX_DEPTH,
   MAX_NODES,
   updateNode,
+  type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
@@ -37,6 +38,18 @@ function forest(): BlockNode[] {
 }
 
 /**
+ * A forest in the envelope `applyOp` takes.
+ *
+ * The op layer works on documents rather than bare forests because the byte cap
+ * is a property of the DOCUMENT: a synthetic envelope omits `settings` and
+ * `assets`, and a cap measured without them passes edits the engine then
+ * refuses to store.
+ */
+function doc(nodes: BlockNode[] = forest()): BlockDocument {
+  return { formatVersion: DOCUMENT_FORMAT_VERSION, kind: "page", nodes };
+}
+
+/**
  * A document's identity is its SERIALIZED form.
  *
  * These documents live in a `json()` column, so what round-trips is what
@@ -59,8 +72,8 @@ function serialized(nodes: BlockNode[]): string {
  * its remove can never be blocked later.
  */
 function roundTrip(nodes: BlockNode[], op: BuilderOp) {
-  const applied = applyOp(nodes, op);
-  const undone = applyOp(applied.nodes, applied.inverse);
+  const applied = applyOp(doc(nodes), op);
+  const undone = applyOp(applied.document, applied.inverse);
   return { applied, undone };
 }
 
@@ -126,8 +139,8 @@ describe("an op and its inverse", () => {
 
     // The op did something. Without this the round trip is satisfied by an op
     // that no-ops and an inverse that no-ops with it.
-    expect(serialized(applied.nodes)).not.toBe(serialized(before));
-    expect(serialized(undone.nodes)).toBe(serialized(before));
+    expect(serialized(applied.document.nodes)).not.toBe(serialized(before));
+    expect(serialized(undone.document.nodes)).toBe(serialized(before));
   });
 });
 
@@ -210,9 +223,9 @@ describe("the inverse is derived from the document, not from the caller", () => 
     });
 
     const persisted = JSON.parse(JSON.stringify(applied.inverse)) as BuilderOp;
-    const undone = applyOp(applied.nodes, persisted);
+    const undone = applyOp(applied.document, persisted);
 
-    expect(JSON.stringify(undone.nodes)).toBe(JSON.stringify(before));
+    expect(JSON.stringify(undone.document.nodes)).toBe(JSON.stringify(before));
   });
 });
 
@@ -224,7 +237,7 @@ describe("an op that cannot apply", () => {
   ])("refuses rather than doing nothing: %s", (_label, op) => {
     // A silent no-op would still be recorded by the history, and its inverse
     // would then undo an edit that never happened.
-    expect(() => applyOp(forest(), op)).toThrow(OpError);
+    expect(() => applyOp(doc(), op)).toThrow(OpError);
   });
 
   it.each<[string, BuilderOp]>([
@@ -245,14 +258,14 @@ describe("an op that cannot apply", () => {
     // same tree — the reference changed and nothing else did. Accepting that
     // puts an entry in the history whose undo has no visible effect, and a user
     // pressing undo expects the last thing they SAW to come back.
-    expect(() => applyOp(forest(), op)).toThrow(OpError);
+    expect(() => applyOp(doc(), op)).toThrow(OpError);
   });
 
   it("refuses to insert an id the document already holds", () => {
     // Two nodes with one id makes every later op ambiguous about which it
     // addresses, and the ambiguity surfaces as the wrong node moving.
     expect(() =>
-      applyOp(forest(), { kind: "insert", node: node("b"), at: { index: 0 } })
+      applyOp(doc(), { kind: "insert", node: node("b"), at: { index: 0 } })
     ).toThrow(OpError);
   });
 
@@ -307,7 +320,7 @@ describe("an op that cannot apply", () => {
     // RESULT rather than restating those rules is what keeps the fifth reason
     // from being admitted silently — which for a history means an entry for an
     // edit that never happened, whose inverse throws when someone undoes it.
-    expect(() => applyOp(forest(), op)).toThrow(OpError);
+    expect(() => applyOp(doc(), op)).toThrow(OpError);
   });
 });
 
@@ -343,7 +356,7 @@ describe("an op that came back from storage", () => {
     // vanish from the inverse without an error.
     expect(() =>
       applyOp(
-        forest(),
+        doc(),
         persisted('{"kind":"update","id":"a","patch":{"__proto__":{"x":1}}}')
       )
     ).toThrow(OpError);
@@ -354,7 +367,7 @@ describe("an op that came back from storage", () => {
     // undo that cannot find what it is meant to restore.
     expect(() =>
       applyOp(
-        forest(),
+        doc(),
         persisted('{"kind":"update","id":"a","patch":{},"unset":["id"]}')
       )
     ).toThrow(OpError);
@@ -365,7 +378,7 @@ describe("an op that came back from storage", () => {
     // them is not a node, and no inverse could put one back.
     expect(() =>
       applyOp(
-        forest(),
+        doc(),
         persisted('{"kind":"update","id":"a","patch":{},"unset":["version"]}')
       )
     ).toThrow(OpError);
@@ -376,7 +389,7 @@ describe("an op that came back from storage", () => {
     // serializes to `{}`, so the same op replayed after a crash does nothing.
     // Removal has a spelling that survives; this insists on it.
     expect(() =>
-      applyOp(forest(), {
+      applyOp(doc(), {
         kind: "update",
         id: "a",
         patch: { customCss: undefined },
@@ -389,13 +402,13 @@ describe("an op that came back from storage", () => {
     // reference test cannot see it: `updateNode` allocates regardless, so the
     // values have to be compared.
     expect(() =>
-      applyOp(forest(), { kind: "update", id: "a", patch: { version: 1 } })
+      applyOp(doc(), { kind: "update", id: "a", patch: { version: 1 } })
     ).toThrow(OpError);
   });
 
   it("refuses an unset of a field the node does not have", () => {
     expect(() =>
-      applyOp(forest(), {
+      applyOp(doc(), {
         kind: "update",
         id: "a",
         unset: ["customCss"],
@@ -421,7 +434,7 @@ describe("an op that came back from storage", () => {
       // still produces a NEW forest — so the acceptance check reads them as edits
       // that worked. `{}` splices at NaN and lands the node at the front; a null
       // slot creates a child region literally named "null".
-      expect(() => applyOp(forest(), persisted(text))).toThrow(OpError);
+      expect(() => applyOp(doc(), persisted(text))).toThrow(OpError);
     }
   );
 
@@ -431,7 +444,7 @@ describe("an op that came back from storage", () => {
     // change and the no-op guard stops guarding anything.
     expect(() =>
       applyOp(
-        forest(),
+        doc(),
         persisted('{"kind":"update","id":"a","patch":{"props":{}}}')
       )
     ).toThrow(OpError);
@@ -440,12 +453,12 @@ describe("an op that came back from storage", () => {
   it("still accepts an ordinary persisted update", () => {
     // The control. Every refusal above is narrow, and a guard that rejected
     // real ops too would pass all of them while breaking the product.
-    const { nodes } = applyOp(
-      forest(),
+    const { document } = applyOp(
+      doc(),
       persisted('{"kind":"update","id":"a","patch":{"name":"Hero"}}')
     );
 
-    expect(JSON.stringify(nodes)).toContain("Hero");
+    expect(JSON.stringify(document.nodes)).toContain("Hero");
   });
 });
 
@@ -474,7 +487,7 @@ describe("a node its author locked", () => {
     // `BlockNode.locked` documents itself as an author-facing policy flag that
     // the pure tree primitives do not read, which makes this module the boundary
     // that enforces it. Nothing below here will.
-    expect(() => applyOp(withLocked(), op)).toThrow(OpError);
+    expect(() => applyOp(doc(withLocked()), op)).toThrow(OpError);
   });
 
   it("cannot be inserted, because that insert could not be undone", () => {
@@ -483,7 +496,7 @@ describe("a node its author locked", () => {
     // removed. Accepting the insert would put the document one edit from a
     // state its own undo could not leave, so the door is the place to refuse.
     expect(() =>
-      applyOp(forest(), {
+      applyOp(doc(), {
         kind: "insert",
         node: { ...node("pasted"), locked: true },
         at: { index: 0 },
@@ -496,7 +509,7 @@ describe("a node its author locked", () => {
     // un-undoable state arrive one level down, which is exactly how the remove
     // check was wrong before this.
     expect(() =>
-      applyOp(forest(), {
+      applyOp(doc(), {
         kind: "insert",
         node: node("wrapper", { main: [{ ...node("inner"), locked: true }] }),
         at: { index: 0 },
@@ -514,7 +527,7 @@ describe("a node its author locked", () => {
     ];
 
     expect(() =>
-      applyOp(nested, { kind: "move", id: "outer", to: { index: 1 } })
+      applyOp(doc(nested), { kind: "move", id: "outer", to: { index: 1 } })
     ).toThrow(OpError);
   });
 
@@ -526,7 +539,7 @@ describe("a node its author locked", () => {
       node("outer", { main: [{ ...node("b"), locked: true }] }),
     ];
 
-    expect(() => applyOp(nested, { kind: "remove", id: "outer" })).toThrow(
+    expect(() => applyOp(doc(nested), { kind: "remove", id: "outer" })).toThrow(
       OpError
     );
   });
@@ -536,13 +549,13 @@ describe("a node its author locked", () => {
     // deleted, not against being edited. A lock that also froze styling would
     // be a different feature, and asserting only the refusals above would not
     // notice it had become one.
-    const { nodes } = applyOp(withLocked(), {
+    const { document } = applyOp(doc(withLocked()), {
       kind: "update",
       id: "b",
       patch: { customCss: ".x { color: red }" },
     });
 
-    expect(JSON.stringify(nodes)).toContain("color: red");
+    expect(JSON.stringify(document.nodes)).toContain("color: red");
   });
 });
 
@@ -574,12 +587,12 @@ describe("an op whose own shape is wrong", () => {
       migrationFailed: false,
     };
 
-    const applied = applyOp(forest(), {
+    const applied = applyOp(doc(), {
       kind: "insert",
       node: complete,
       at: { index: 0 },
     });
-    expect(applied.nodes[0]?.id).toBe("complete");
+    expect(applied.document.nodes[0]?.id).toBe("complete");
   });
 
   it.each<[string, string]>([
@@ -636,7 +649,7 @@ describe("an op whose own shape is wrong", () => {
     // Every one of these produces a NEW forest if it reaches the engine, so the
     // acceptance check reads it as an edit that worked and the document keeps
     // whatever arrived.
-    expect(() => applyOp(forest(), persisted(json))).toThrow(OpError);
+    expect(() => applyOp(doc(), persisted(json))).toThrow(OpError);
   });
 
   it.each<[string, string]>([
@@ -645,7 +658,7 @@ describe("an op whose own shape is wrong", () => {
   ])("refuses %s as an OpError rather than crashing", (_label, json) => {
     let thrown: unknown;
     try {
-      applyOp(forest(), persisted(json));
+      applyOp(doc(), persisted(json));
     } catch (error) {
       thrown = error;
     }
@@ -665,7 +678,7 @@ describe("an op whose own shape is wrong", () => {
     // spoke, and the container branch is the one that stops a property access
     // on a non-object.
     expect(() =>
-      applyOp(forest(), persisted('{"kind":"move","id":"a","to":"end"}'))
+      applyOp(doc(), persisted('{"kind":"move","id":"a","to":"end"}'))
     ).toThrow(/names nowhere/);
   });
 
@@ -681,9 +694,7 @@ describe("an op whose own shape is wrong", () => {
     // changes is the DIAGNOSIS — "addresses no node" sends the reader to the
     // op, "no node with id" sends them hunting for a deleted block — so the
     // diagnosis is what has to be asserted.
-    expect(() => applyOp(forest(), persisted(json))).toThrow(
-      /addresses no node/
-    );
+    expect(() => applyOp(doc(), persisted(json))).toThrow(/addresses no node/);
   });
 
   it.each<[string, string]>([
@@ -698,7 +709,7 @@ describe("an op whose own shape is wrong", () => {
     );
     let thrown: unknown;
     try {
-      applyOp(forest(), op);
+      applyOp(doc(), op);
     } catch (error) {
       thrown = error;
     }
@@ -716,26 +727,26 @@ describe("an op whose own shape is wrong", () => {
     // hold something no read can accept.
     const sparse = Array<string>(1);
     expect(() =>
-      applyOp(forest(), { kind: "update", id: "a", patch: { classes: sparse } })
+      applyOp(doc(), { kind: "update", id: "a", patch: { classes: sparse } })
     ).toThrow(OpError);
   });
 
   it("still accepts an ordinary slot name and an ordinary class list", () => {
     // The control for both guards above. A check that refused every slot name,
     // or every array, would satisfy them while making the editor unusable.
-    const inserted = applyOp(forest(), {
+    const inserted = applyOp(doc(), {
       kind: "insert",
       node: node("kid"),
       at: { parentId: "outer", slot: "main", index: 0 },
     });
-    expect(inserted.nodes[0]?.slots?.main?.[0]?.id).toBe("kid");
+    expect(inserted.document.nodes[0]?.slots?.main?.[0]?.id).toBe("kid");
 
-    const updated = applyOp(forest(), {
+    const updated = applyOp(doc(), {
       kind: "update",
       id: "a",
       patch: { classes: ["one", "two"] },
     });
-    expect(updated.nodes).toBeDefined();
+    expect(updated.document.nodes).toBeDefined();
   });
 
   it.each<[string, () => Record<string, unknown>]>([
@@ -755,7 +766,7 @@ describe("an op whose own shape is wrong", () => {
     // refusal it promises. The value would not survive storage anyway.
     let thrown: unknown;
     try {
-      applyOp(forest(), {
+      applyOp(doc(), {
         kind: "update",
         id: "a",
         patch: { props: build() },
@@ -786,7 +797,7 @@ describe("an op whose own shape is wrong", () => {
     // than the author was looking at. Loud failures were already refused; this
     // is the quiet one.
     expect(() =>
-      applyOp(forest(), {
+      applyOp(doc(), {
         kind: "update",
         id: "a",
         patch: { props: build() },
@@ -800,7 +811,7 @@ describe("an op whose own shape is wrong", () => {
     // fail and the caller would meet a TypeError instead of the refusal.
     let thrown: unknown;
     try {
-      applyOp(forest(), {
+      applyOp(doc(), {
         kind: "update",
         id: "a",
         patch: { attributes: { x: 1n } as unknown as Record<string, string> },
@@ -839,7 +850,7 @@ describe("an op whose own shape is wrong", () => {
     // divergence as a function value, reached through the KEY rather than the
     // value.
     expect(() =>
-      applyOp(forest(), {
+      applyOp(doc(), {
         kind: "update",
         id: "a",
         patch: { props: build() },
@@ -855,7 +866,7 @@ describe("an op whose own shape is wrong", () => {
     const patch: Record<string, unknown> = { name: "changed" };
     (patch as Record<string | symbol, unknown>)[Symbol("lost")] = "x";
     expect(() =>
-      applyOp(forest(), {
+      applyOp(doc(), {
         kind: "update",
         id: "a",
         patch: patch as NodePatch,
@@ -870,7 +881,7 @@ describe("an op whose own shape is wrong", () => {
     const list: string[] = ["a", "b"];
     (list as unknown as Record<string, unknown>).note = "secret";
     expect(() =>
-      applyOp(forest(), {
+      applyOp(doc(), {
         kind: "update",
         id: "a",
         patch: { classes: list },
@@ -883,7 +894,7 @@ describe("an op whose own shape is wrong", () => {
     // patch, would satisfy the two assertions above while refusing all real
     // edits — and `length` is an own property of every array, so a rule that
     // forgot to expect it would do exactly that.
-    const applied = applyOp(forest(), {
+    const applied = applyOp(doc(), {
       kind: "update",
       id: "a",
       patch: { classes: ["one", "two"], name: "fine" },
@@ -898,7 +909,7 @@ describe("an op whose own shape is wrong", () => {
     const heavy = node("heavy");
     heavy.props = { text: "x".repeat(DEFAULT_MAX_DOCUMENT_BYTES) };
     expect(() =>
-      applyOp(forest(), { kind: "insert", node: heavy, at: { index: 0 } })
+      applyOp(doc(), { kind: "insert", node: heavy, at: { index: 0 } })
     ).toThrow(OpError);
   });
 
@@ -912,19 +923,19 @@ describe("an op whose own shape is wrong", () => {
       ),
     };
     expect(() =>
-      applyOp(forest(), { kind: "insert", node: wide, at: { index: 0 } })
+      applyOp(doc(), { kind: "insert", node: wide, at: { index: 0 } })
     ).toThrow(OpError);
   });
 
   it("still accepts an insert that fits", () => {
     // The control. A cap computed wrongly — counting the whole forest twice,
     // say — would refuse ordinary inserts while satisfying the test above.
-    const applied = applyOp(forest(), {
+    const applied = applyOp(doc(), {
       kind: "insert",
       node: node("modest"),
       at: { index: 0 },
     });
-    expect(applied.nodes[0]?.id).toBe("modest");
+    expect(applied.document.nodes[0]?.id).toBe("modest");
   });
 
   it("refuses a slot named after an inherited member inside a subtree", () => {
@@ -939,7 +950,7 @@ describe("an op whose own shape is wrong", () => {
       BlockNode[]
     >;
     expect(() =>
-      applyOp(forest(), { kind: "insert", node: parent, at: { index: 0 } })
+      applyOp(doc(), { kind: "insert", node: parent, at: { index: 0 } })
     ).toThrow(OpError);
   });
 
@@ -956,7 +967,7 @@ describe("an op whose own shape is wrong", () => {
 
     let thrown: unknown;
     try {
-      applyOp(forest(), { kind: "insert", node: deep, at: { index: 0 } });
+      applyOp(doc(), { kind: "insert", node: deep, at: { index: 0 } });
     } catch (error) {
       thrown = error;
     }
@@ -973,12 +984,12 @@ describe("an op whose own shape is wrong", () => {
       parent.slots = { main: [deep] };
       deep = parent;
     }
-    const applied = applyOp(forest(), {
+    const applied = applyOp(doc(), {
       kind: "insert",
       node: deep,
       at: { index: 0 },
     });
-    expect(applied.nodes[0]?.id).toBe(`deep-${MAX_DEPTH - 1}`);
+    expect(applied.document.nodes[0]?.id).toBe(`deep-${MAX_DEPTH - 1}`);
   });
 
   it("refuses a hole in an inserted slot array", () => {
@@ -988,7 +999,7 @@ describe("an op whose own shape is wrong", () => {
     const parent = node("holder");
     parent.slots = { main: Array<BlockNode>(1) };
     expect(() =>
-      applyOp(forest(), { kind: "insert", node: parent, at: { index: 0 } })
+      applyOp(doc(), { kind: "insert", node: parent, at: { index: 0 } })
     ).toThrow(OpError);
   });
 
@@ -998,7 +1009,7 @@ describe("an op whose own shape is wrong", () => {
     const cyclic = node("loop");
     cyclic.slots = { main: [cyclic] };
     expect(() =>
-      applyOp(forest(), { kind: "insert", node: cyclic, at: { index: 0 } })
+      applyOp(doc(), { kind: "insert", node: cyclic, at: { index: 0 } })
     ).toThrow(OpError);
   });
 });
@@ -1010,7 +1021,7 @@ describe("an edit measured against what it would actually produce", () => {
     // store. Without the check the edit applies, enters history, and every
     // save afterwards fails on a document the author cannot repair by undoing.
     expect(() =>
-      applyOp(forest(), {
+      applyOp(doc(), {
         kind: "update",
         id: "a",
         patch: { props: { text: "x".repeat(DEFAULT_MAX_DOCUMENT_BYTES) } },
@@ -1045,7 +1056,7 @@ describe("an edit measured against what it would actually produce", () => {
     ).toBeLessThanOrEqual(DEFAULT_MAX_DOCUMENT_BYTES);
 
     expect(() =>
-      applyOp(base, {
+      applyOp(doc(base), {
         kind: "insert",
         node: incoming,
         at: { parentId: "outer", slot, index: 0 },
@@ -1068,7 +1079,7 @@ describe("a value that computes itself", () => {
     // a plain data property. The document and its own persisted form disagree
     // about what that key even is, and nothing reports it.
     expect(() =>
-      applyOp(forest(), {
+      applyOp(doc(), {
         kind: "update",
         id: "a",
         patch: { props: withAccessor(() => "computed") },
@@ -1089,7 +1100,7 @@ describe("a value that computes itself", () => {
       }),
     };
 
-    expect(() => applyOp(forest(), { kind: "update", id: "a", patch })).toThrow(
+    expect(() => applyOp(doc(), { kind: "update", id: "a", patch })).toThrow(
       OpError
     );
     expect(reads, "the getter must never be invoked").toBe(0);
@@ -1102,11 +1113,77 @@ describe("a value that computes itself", () => {
     Object.defineProperty(classes, "0", { get: () => "x", enumerable: true });
 
     expect(() =>
-      applyOp(forest(), {
+      applyOp(doc(), {
         kind: "update",
         id: "a",
         patch: { props: { classes } },
       })
     ).toThrow(OpError);
+  });
+});
+
+describe("the document envelope an edit is measured inside", () => {
+  /** A document carrying enough media ids to sit just under the byte cap. */
+  function heavyEnvelope(): BlockDocument {
+    const base = doc();
+    const spare = DEFAULT_MAX_DOCUMENT_BYTES - documentBytes(base) - 2048;
+    const id = "m".repeat(64);
+    return {
+      ...base,
+      assets: { mediaIds: Array(Math.floor(spare / 68)).fill(id) },
+    };
+  }
+
+  it("counts assets and settings toward the byte cap", () => {
+    const heavy = heavyEnvelope();
+    // Sized against the space the ENVELOPE leaves, so the result is over the
+    // cap by construction rather than by a guess about encoding overhead.
+    const remaining = DEFAULT_MAX_DOCUMENT_BYTES - documentBytes(heavy);
+    const filler = node("filler");
+    filler.props = { text: "x".repeat(remaining + 1024) };
+    const insert: BuilderOp = {
+      kind: "insert",
+      node: filler,
+      at: { index: 0 },
+    };
+
+    expect(() => applyOp(heavy, insert)).toThrow(OpError);
+
+    // The separating property, stated as a comparison rather than as a size.
+    // The SAME insert into the SAME forest without that envelope is accepted,
+    // so what refuses it is the envelope and nothing else — which is exactly
+    // what a cap measured on a synthesized `{ nodes }` document cannot see.
+    expect(() => applyOp(doc(), insert)).not.toThrow();
+  });
+
+  it("carries settings and assets through an edit", () => {
+    // An envelope rebuilt field by field drops whatever it was not taught
+    // about, and the loss is invisible until something reads the missing field.
+    const withAssets: BlockDocument = {
+      ...doc(),
+      assets: { mediaIds: ["kept-through-the-edit"] },
+    };
+    const applied = applyOp(withAssets, {
+      kind: "update",
+      id: "a",
+      patch: { name: "Hero" },
+    });
+
+    expect(applied.document.assets).toEqual({
+      mediaIds: ["kept-through-the-edit"],
+    });
+    expect(applied.document.kind).toBe(withAssets.kind);
+    expect(applied.document.formatVersion).toBe(withAssets.formatVersion);
+  });
+
+  it("refuses a value that is not a document", () => {
+    // An op arrives beside a document from storage, so neither is more
+    // trustworthy than the other.
+    expect(() =>
+      applyOp({ formatVersion: 1, kind: "page" } as unknown as BlockDocument, {
+        kind: "remove",
+        id: "a",
+      })
+    ).toThrow(/holds no forest/);
   });
 });
