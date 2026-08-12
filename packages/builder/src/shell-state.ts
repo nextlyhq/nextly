@@ -50,36 +50,39 @@ export function isLeftPanel(value: unknown): value is LeftPanel {
 /**
  * Width bounds for the two resizable regions, in CSS pixels.
  *
- * Lower bounds are the point below which the region stops being usable rather
- * than round numbers: a layers tree needs room for an indent plus a label, and
- * the inspector carries two-column controls. Upper bounds keep the canvas —
- * the thing being edited — the largest region at the minimum supported width.
+ * DECLARED here and enforced by `react-resizable-panels`, which takes pixel
+ * bounds directly (`minSize={240}`) and solves them — including which region
+ * yields when a window resize leaves no room. This module deliberately does NOT
+ * solve them a second time: a hand-rolled clamp beside a library that already
+ * constrains the same drag is two answers to one question, and the two disagree
+ * the first time the library changes how it distributes a shortfall.
+ *
+ * Lower bounds are the point below which a region stops being usable rather than
+ * round numbers: a layers tree needs an indent plus a label, and the inspector
+ * carries two-column controls.
+ *
+ * `MIN_CANVAS_WIDTH` is the reason bounds cannot be read per-panel. At the
+ * minimum supported viewport, both panels at their individual maximums leave the
+ * canvas at 232px — narrower than either panel, in an editor whose subject IS
+ * the canvas — and no per-panel bound is violated, because the constraint was
+ * never per-panel. Expressed as the canvas panel's OWN minimum, the library
+ * enforces it jointly during a drag.
  */
 export const PANEL_BOUNDS = {
   left: { min: 240, max: 480, initial: 300 },
   inspector: { min: 280, max: 520, initial: 320 },
 } as const;
 
-export type PanelRegion = keyof typeof PANEL_BOUNDS;
+/** The rail's fixed width in CSS pixels (PB-D17: 48px, icons only). */
+export const RAIL_WIDTH = 48;
 
 /**
- * A width brought inside its region's bounds.
+ * The narrowest the canvas may become before a drag stops taking from it.
  *
- * Clamped rather than rejected. A width arrives from a drag that continues past
- * the edge and from a stored preference written when the bounds were different;
- * in both cases the nearest legal width is what the author meant, and refusing
- * would leave the panel at whatever it was.
- *
- * A value that is not a finite number — `NaN` from a malformed stored string,
- * `Infinity` from a division — answers the region's initial width rather than
- * propagating. `Math.min`/`Math.max` pass `NaN` straight through, so a bare
- * clamp would store it and the panel would collapse.
+ * The canvas is the thing being edited, so it is the region with a floor rather
+ * than the one that absorbs whatever is left.
  */
-export function clampPanelWidth(region: PanelRegion, width: number): number {
-  const { min, max, initial } = PANEL_BOUNDS[region];
-  if (!Number.isFinite(width)) return initial;
-  return Math.min(max, Math.max(min, width));
-}
+export const MIN_CANVAS_WIDTH = 480;
 
 /**
  * The narrowest viewport the full shell is supported at (PB-D17 D10-5).
@@ -97,91 +100,31 @@ export function fitsFullShell(viewportWidth: number): boolean {
   return viewportWidth >= MIN_SHELL_WIDTH;
 }
 
-/** The rail's fixed width in CSS pixels (PB-D17: 48px, icons only). */
-export const RAIL_WIDTH = 48;
-
-/**
- * The narrowest the canvas may become before a panel drag stops taking from it.
- *
- * The canvas is the thing being edited, so it is the region with a floor rather
- * than the one that absorbs whatever is left.
- */
-export const MIN_CANVAS_WIDTH = 480;
-
-/**
- * Both panel widths, brought inside bounds that DEPEND ON EACH OTHER.
- *
- * Per-panel bounds alone are the wrong model, and the arithmetic says so: at the
- * minimum supported viewport with both panels at their individual maximums the
- * canvas is 232px — narrower than either panel, in an editor whose subject is
- * the canvas. Nothing about either panel's own bounds is violated, because the
- * constraint was never per-panel.
- *
- * So the canvas floor is enforced jointly, and the panels give way in a defined
- * order: the INSPECTOR yields first, then the left panel. That order is not
- * arbitrary — the left panel is the one the author opened deliberately from the
- * rail and can dismiss with the same click, while the inspector is always
- * present. Taking from the deliberate choice first would read as the editor
- * undoing an action.
- *
- * Panels below their own minimum are not squeezed further; a viewport too narrow
- * to hold both at minimum plus the canvas floor is one where
- * {@link fitsFullShell} is already false, and the shell shows the narrow-viewport
- * path instead of a broken layout.
- */
-export function fitPanels(input: {
-  viewportWidth: number;
-  leftWidth: number;
-  inspectorWidth: number;
-  leftOpen: boolean;
-}): { leftWidth: number; inspectorWidth: number } {
-  const leftWidth = clampPanelWidth("left", input.leftWidth);
-  const inspectorWidth = clampPanelWidth("inspector", input.inspectorWidth);
-  const occupiedLeft = input.leftOpen ? leftWidth : 0;
-
-  const spare =
-    input.viewportWidth -
-    RAIL_WIDTH -
-    occupiedLeft -
-    inspectorWidth -
-    MIN_CANVAS_WIDTH;
-  if (spare >= 0) return { leftWidth, inspectorWidth };
-
-  // The inspector yields first, never below its own minimum.
-  const inspectorGive = Math.min(
-    -spare,
-    inspectorWidth - PANEL_BOUNDS.inspector.min
-  );
-  const fittedInspector = inspectorWidth - inspectorGive;
-  const stillOver = -spare - inspectorGive;
-  if (stillOver <= 0 || !input.leftOpen) {
-    return { leftWidth, inspectorWidth: fittedInspector };
-  }
-
-  const leftGive = Math.min(stillOver, leftWidth - PANEL_BOUNDS.left.min);
-  return { leftWidth: leftWidth - leftGive, inspectorWidth: fittedInspector };
-}
-
 /**
  * What the shell remembers between sessions.
  *
- * Widths and the open panel only. Deliberately NOT selection, scroll position
- * or anything describing the document: those belong to the document's own
- * state, and persisting a copy here is a second source that goes stale the
- * first time the document changes underneath it.
+ * The layout is stored as the PROPORTIONAL map `react-resizable-panels` reports
+ * from `onLayoutChanged` — panel id to a percentage — never as pixel widths. A
+ * pixel layout is wrong on the next monitor; a proportional one survives a
+ * window resize, and the pixel BOUNDS still hold because the library re-applies
+ * them to whatever the proportions resolve to.
+ *
+ * Deliberately NOT stored: selection, scroll position, or anything describing
+ * the document. Those belong to the document's own state, and a copy here is a
+ * second source that goes stale the first time the document changes underneath
+ * it.
  */
 export interface ShellPreferences {
   leftPanel: LeftPanel | null;
-  leftWidth: number;
-  inspectorWidth: number;
   leftPinned: boolean;
+  /** Panel id to percentage, or null when the author has never resized. */
+  layout: Record<string, number> | null;
 }
 
 export const DEFAULT_PREFERENCES: ShellPreferences = {
   leftPanel: null,
-  leftWidth: PANEL_BOUNDS.left.initial,
-  inspectorWidth: PANEL_BOUNDS.inspector.initial,
   leftPinned: true,
+  layout: null,
 };
 
 /**
@@ -202,12 +145,32 @@ export interface PreferenceStore {
 }
 
 /**
+ * A stored layout, accepted only if every entry is a usable percentage.
+ *
+ * Partial acceptance would be worse than rejection here: the library
+ * distributes a layout across ALL panels, so a map missing one or carrying a
+ * `NaN` resolves to a layout nobody chose. The whole map is the unit.
+ */
+function isLayout(value: unknown): value is Record<string, number> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  return (
+    entries.length > 0 &&
+    entries.every(
+      ([, size]) =>
+        typeof size === "number" && Number.isFinite(size) && size > 0
+    )
+  );
+}
+
+/**
  * Preferences parsed from whatever was stored.
  *
  * Every field is validated separately and falls back on its own, rather than
- * one malformed field discarding the rest. A stored width from an older release
- * with different bounds should move the panel, not reset the author's panel
- * choice alongside it.
+ * one malformed field discarding the rest. A layout written under a different
+ * panel set should reset the layout, not the author's panel choice with it.
  */
 export function readPreferences(store: PreferenceStore): ShellPreferences {
   let raw: unknown;
@@ -226,22 +189,11 @@ export function readPreferences(store: PreferenceStore): ShellPreferences {
 
   return {
     leftPanel: isLeftPanel(record.leftPanel) ? record.leftPanel : null,
-    leftWidth: clampPanelWidth(
-      "left",
-      typeof record.leftWidth === "number"
-        ? record.leftWidth
-        : PANEL_BOUNDS.left.initial
-    ),
-    inspectorWidth: clampPanelWidth(
-      "inspector",
-      typeof record.inspectorWidth === "number"
-        ? record.inspectorWidth
-        : PANEL_BOUNDS.inspector.initial
-    ),
     leftPinned:
       typeof record.leftPinned === "boolean"
         ? record.leftPinned
         : DEFAULT_PREFERENCES.leftPinned,
+    layout: isLayout(record.layout) ? record.layout : null,
   };
 }
 
