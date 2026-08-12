@@ -294,6 +294,44 @@ const REPRESENTATIVE: ReadonlyMap<string, readonly unknown[]> = new Map([
  * other — so individual and conjunction coverage would silently disagree about
  * which branches exist.
  */
+/**
+ * Values a stored node can hold that the schema's OWN bounds exclude.
+ *
+ * A declared range describes what the editor offers, not what the row contains.
+ * Nothing revalidates a stored document against a later schema, so a node
+ * written before a bound existed, migrated, or hand-edited arrives outside it —
+ * and blocks carry explicit code for exactly that. `core/collection-loop` says
+ * so in as many words and clamps in `safeLimit`, so a fixture staying inside
+ * `1..100` renders the clamp inert and every branch behind it unreached.
+ *
+ * Derived from each entry's own bounds rather than listed, so a block that
+ * declares a range gets its edges exercised without an edit here. `Math.floor`
+ * earns the non-integer: a stored number is not obliged to be whole.
+ */
+function outOfRangeValuesFor(entry: Record<string, unknown>): unknown[] {
+  if (entry.type !== "number") return [];
+  const min = typeof entry.min === "number" ? entry.min : 1;
+  const max = typeof entry.max === "number" ? entry.max : 100;
+  return [0, -1, min - 1, max + 1, min + 0.5];
+}
+
+/**
+ * Arrays whose MEMBERS are malformed, which a wrong top-level type cannot reach.
+ *
+ * `malformedVariants` replaces a whole prop, so an array prop becomes a number
+ * or null and the member-handling code is skipped entirely. A stored array with
+ * a member of the wrong type is a different state, and the one `core/list`
+ * coerces per item — `stored.slice(...).map(item => text(item))` exists for it.
+ *
+ * Not covered here, deliberately: the `MAX_ITEMS` slice cap. Reaching it needs
+ * an array of a thousand members rendered under every host state and policy,
+ * which buys one branch at a cost the whole matrix pays.
+ */
+function malformedMemberArraysFor(entry: Record<string, unknown>): unknown[] {
+  if (entry.type !== "array") return [];
+  return [[42], [null], [{}], ["ok", 42]];
+}
+
 function alternativesFor(
   schema: Record<string, unknown>
 ): Map<string, readonly unknown[]> {
@@ -307,7 +345,13 @@ function alternativesFor(
     const declared: unknown = (entry as { type?: unknown }).type;
     const values =
       typeof declared === "string" ? REPRESENTATIVE.get(declared) : undefined;
-    if (values !== undefined) alternatives.set(name, values);
+    const record = entry as Record<string, unknown>;
+    const stored = [
+      ...(values ?? []),
+      ...outOfRangeValuesFor(record),
+      ...malformedMemberArraysFor(record),
+    ];
+    if (stored.length > 0) alternatives.set(name, stored);
   }
   return alternatives;
 }
