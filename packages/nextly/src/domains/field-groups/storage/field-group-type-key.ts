@@ -29,7 +29,7 @@
  */
 
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
-import { MIGRATION_TARGET } from "../migration/manifest";
+import { MIGRATION_TARGET } from "../migration/target";
 
 /**
  * Spellings this key has carried in a RELEASED version, pinned as literals.
