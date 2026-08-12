@@ -128,8 +128,8 @@ export function clearFieldGroupType(instance: Record<string, unknown>): void {
  * default values, or a row being assembled. A copy would be the safer default in general; here it
  * would silently drop the assignment for every caller that does not use the return value.
  */
-export function writeFieldGroupType(
-  instance: Record<string, unknown>,
+export function writeFieldGroupType<T extends object>(
+  instance: T,
   type: string
 ): void {
   // Every other spelling goes first, so an instance that arrived carrying the old key leaves
@@ -138,6 +138,11 @@ export function writeFieldGroupType(
   // one a later reader must disambiguate, and the legacy set stops shrinking as writes happen.
   // Canonicalising on write is what makes the migration finish by ordinary use rather than only by
   // the rewrite pass.
-  clearFieldGroupType(instance);
-  instance[currentFieldGroupTypeKey] = type;
+  // Widened to a record for the mutation only. The parameter is `T extends object` because the
+  // generated field-group interfaces are interfaces without an index signature, so requiring
+  // `Record<string, unknown>` made the published writer reject Nextly's own generated types and
+  // forced every caller into a cast — the cast belongs here once, not at every call site.
+  const record = instance as Record<string, unknown>;
+  clearFieldGroupType(record);
+  record[currentFieldGroupTypeKey] = type;
 }

@@ -33,9 +33,13 @@
  *
  * ## What is deliberately not exported
  *
- * The full set of spellings and the bulk removal helper stay internal. They serve code that walks
- * a document key by key — pruning a restore payload, stripping markers before storage — and
- * exporting them would invite callers to reimplement the read rather than ask for it.
+ * The full set of spellings, the bulk removal helper, and the key itself stay internal.
+ *
+ * 🔴 The key most of all. Publishing it invites `instance[currentFieldGroupTypeKey]`, which reads
+ * ONE spelling and answers `undefined` for a document written on the other side of the rename —
+ * reintroducing, through the public surface, the exact incompatibility these functions exist to
+ * hide. It would also make a future rename a breaking change to this package's API, for a value
+ * this module describes as an internal detail.
  *
  * @module field-group-type
  */
@@ -43,5 +47,4 @@
 export {
   readFieldGroupType,
   writeFieldGroupType,
-  currentFieldGroupTypeKey,
 } from "./domains/field-groups/storage/field-group-type-key";
