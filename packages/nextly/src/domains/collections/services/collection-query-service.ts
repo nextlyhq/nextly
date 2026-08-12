@@ -86,6 +86,7 @@ import {
 } from "../../../types/pagination";
 import type { PaginatedResponse } from "../../../types/pagination";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { resolveTypeColumns } from "../../field-groups/storage/resolve-storage-names";
 import {
   buildCompanionExists,
@@ -3136,7 +3137,9 @@ export class CollectionQueryService extends BaseService {
     const instance = value as Record<string, unknown>;
     // A dynamic-zone row records the component it holds; a single-component field
     // takes it from the field's declared slug.
-    const tagged = instance._componentType;
+    // Asked rather than read: the stored spelling of this key changes with the storage
+    // migration, and a row written under the other one would read as untagged.
+    const tagged = readFieldGroupType(instance);
     const declared = (field as { component?: unknown }).component;
     const slug =
       typeof tagged === "string"

@@ -26,6 +26,7 @@ import {
   resolveCompanionSchemaReadiness,
   type CompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { currentFieldGroupTypeKey } from "../storage/field-group-type-key";
 
 import {
   DEFAULT_COMPONENT_DEPTH,
@@ -1108,7 +1109,7 @@ export class FieldGroupQueryService extends BaseService {
     result.id = row.id;
 
     if (includeComponentType && row[STORAGE_FORMAT.columns.type]) {
-      result[STORAGE_FORMAT.wireTypeKey] = row[STORAGE_FORMAT.columns.type];
+      result[currentFieldGroupTypeKey] = row[STORAGE_FORMAT.columns.type];
     }
 
     const fieldByColumn = new Map<string, FieldConfig>();

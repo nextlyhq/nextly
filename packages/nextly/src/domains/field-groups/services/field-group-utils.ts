@@ -1,6 +1,7 @@
 import type { FieldConfig } from "../../../collections/fields/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
+import { fieldGroupTypeKeys } from "../storage/field-group-type-key";
 
 /**
  * Default relationship expansion depth for component data.
@@ -23,7 +24,11 @@ export const POPULATE_INTERNAL_COLUMNS: ReadonlySet<string> = new Set([
  */
 export const COMPONENT_META_KEYS: ReadonlySet<string> = new Set([
   "id",
-  STORAGE_FORMAT.wireTypeKey,
+  // Every spelling of the discriminator, not just the one written today. This set decides what
+  // counts as metadata rather than authored data, so a spelling missing from it is treated as a
+  // field the caller meant to store — which is the opposite of the intent for a key that only
+  // ever announced the instance's type.
+  ...fieldGroupTypeKeys,
   STORAGE_FORMAT.columns.order,
   STORAGE_FORMAT.columns.parentId,
   STORAGE_FORMAT.columns.parentTable,
@@ -44,7 +49,16 @@ export interface ComponentRow {
   _parent_table: string;
   _parent_field: string;
   _order: number;
-  _component_type: string | null;
+  /**
+   * The discriminator column is admitted by the index signature, not declared.
+   *
+   * Declaring it would fix one spelling into the type while the storage migration renames the
+   * column, so the declaration would describe a migrated table incorrectly — and it bought no
+   * narrowing that the index signature does not already give, since every reader addresses the
+   * column through `STORAGE_FORMAT.columns.type` rather than by writing the name.
+   *
+   * The sibling columns stay declared because the migration does not rename them.
+   */
   created_at: string;
   updated_at: string;
   [key: string]: unknown;
@@ -55,7 +69,13 @@ export interface ComponentRow {
  */
 export interface ComponentInstanceData {
   id?: string;
-  _componentType?: string;
+  /**
+   * The type discriminator is reached through `readFieldGroupType`, not declared here.
+   *
+   * Naming the key in this shape would fix ONE spelling into the type, and the storage migration
+   * renames it — so the declaration would go stale exactly when a document could carry either
+   * one. The index signature below already admits it; the accessor is what knows which.
+   */
   [key: string]: unknown;
 }
 

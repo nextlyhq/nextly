@@ -40,7 +40,6 @@ import {
   readRevalidateConfig,
 } from "../../../revalidation/intent-builders";
 import type { RevalidationIntent } from "../../../revalidation/types";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import {
   AccessControlService,
   type CollectionAccessRules,
@@ -68,6 +67,7 @@ import {
   stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
+import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
   isBlank,
@@ -149,18 +149,12 @@ function writtenComponentInstances(
   const instances = Array.isArray(value) ? value : value != null ? [value] : [];
   const out: Array<{ slug: string; data: Record<string, unknown> }> = [];
   for (const instance of instances) {
-    if (
-      instance &&
-      typeof instance === "object" &&
-      STORAGE_FORMAT.wireTypeKey in instance &&
-      typeof (instance as { _componentType?: unknown })[
-        STORAGE_FORMAT.wireTypeKey
-      ] === "string"
-    ) {
+    // Asked rather than indexed. Indexing the catalog reads exactly one spelling, so an
+    // instance written under the other one is skipped silently — and skipping is what loses it.
+    const slug = readFieldGroupType(instance);
+    if (slug !== undefined) {
       out.push({
-        slug: (instance as { _componentType: string })[
-          STORAGE_FORMAT.wireTypeKey
-        ],
+        slug,
         data: instance as Record<string, unknown>,
       });
     }

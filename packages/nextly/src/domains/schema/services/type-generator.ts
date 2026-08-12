@@ -43,8 +43,8 @@ import { NextlyError } from "../../../errors";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
+import { currentFieldGroupTypeKey } from "../../field-groups/storage/field-group-type-key";
 
 import {
   asScalarStorageField,
@@ -642,7 +642,7 @@ export class TypeGenerator {
     lines.push(`export interface ${interfaceName} {`);
     lines.push("  id: string;");
     // Add discriminator property for type narrowing in dynamic zones
-    lines.push(`  ${STORAGE_FORMAT.wireTypeKey}: "${component.slug}";`);
+    lines.push(`  ${currentFieldGroupTypeKey}: "${component.slug}";`);
 
     // Generate field types
     for (const field of component.fields) {
