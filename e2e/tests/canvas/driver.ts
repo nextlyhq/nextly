@@ -290,3 +290,32 @@ export async function dragUntilTarget(
   }
   return -1;
 }
+
+/**
+ * Carries a panel drag to a point, measuring from where the pointer ACTUALLY is.
+ *
+ * `startDragAt` is contractually allowed to move past the drag activation
+ * threshold, and the PoC driver shifts 12px doing so. A delta computed from the
+ * SOURCE point therefore overshoots by exactly that, and a replacement driver
+ * with different activation motion overshoots by a different amount — which
+ * defeats the seam this suite exists to keep swappable.
+ *
+ * Shared rather than repeated: three suites carried their own copy of this
+ * arithmetic and each got the same thing wrong, so correcting one left two.
+ *
+ * In steps rather than one jump, because a single move is a teleport and a
+ * canvas that commits on dwell answers a teleport differently from a gesture.
+ */
+export async function dragPointerTo(
+  driver: CanvasDriver,
+  target: Point,
+  steps = 8
+): Promise<void> {
+  const from = driver.pointer();
+  for (let step = 0; step < steps; step += 1) {
+    await driver.moveBy(
+      (target.x - from.x) / steps,
+      (target.y - from.y) / steps
+    );
+  }
+}

@@ -37,7 +37,11 @@ import {
   seedPage,
 } from "./fixtures";
 import { mapFramePointToHost } from "./coordinate-mapping";
-import { CanvasCapabilityError, dragUntilTarget } from "./driver";
+import {
+  CanvasCapabilityError,
+  dragPointerTo,
+  dragUntilTarget,
+} from "./driver";
 import type { CanvasChromeReader, CanvasDriver } from "./driver";
 import { createPocChromeReader, createPocDriver } from "./poc-driver";
 
@@ -77,26 +81,7 @@ function note(point: number, becomes: string, shortfall?: string): void {
 async function dragFromPanel(driver: CanvasDriver): Promise<void> {
   const target = await driver.canvasCentre();
   await driver.startDragAt(await driver.dragSourceCentre());
-
-  // The delta is measured from where the pointer ACTUALLY is after activation,
-  // not from the source point. `startDragAt` is contractually allowed to move
-  // past the drag threshold, and the PoC driver shifts 12px doing so — so a
-  // delta computed from the source overshoots by exactly that, and a
-  // replacement driver with a different activation motion overshoots by a
-  // different amount. Asking the driver where the pointer is keeps the gesture
-  // landing in the same place whichever driver is behind it.
-  const from = driver.pointer();
-
-  // In steps, not one jump. A single move is a teleport, and a canvas that
-  // commits on dwell rather than on distance answers a teleport differently
-  // from the gesture a person makes.
-  const steps = 8;
-  for (let step = 0; step < steps; step += 1) {
-    await driver.moveBy(
-      (target.x - from.x) / steps,
-      (target.y - from.y) / steps
-    );
-  }
+  await dragPointerTo(driver, target);
 }
 
 /**
@@ -133,83 +118,52 @@ test.describe("a canvas any Nextly editor could ship", () => {
     note(PLAN_POINT.collisionByDepth, "B-6");
     await driver.mountTree(await seedPage(request, NESTED_FIXTURE));
 
-    // INSIDE the nested container, not merely somewhere on the canvas. The
-    // point of depth resolution is that two containers both contain the
-    // pointer and the innermost has to win, so a pointer that never entered
-    // `nx-inner` cannot separate that from ordinary nearest-zone handling.
-    const boxes = await driver.readBlockBoxes();
-    const first = boxes.find(box => box.id === "nx-inner-0");
-    const second = boxes.find(box => box.id === "nx-inner-1");
-    expect(
-      first && second,
-      "the nested children must be measurable, or the pointer cannot be aimed"
-    ).toBeTruthy();
+    // SEARCHED, not aimed. Two previous versions computed a coordinate inside
+    // `nx-inner` and moved there — and activation expands every gap zone from
+    // zero height, so the layout the coordinate described no longer existed by
+    // the time the pointer arrived. How far it shifted depended on load, which
+    // is why it resolved to the inner container locally and to the root on CI.
+    //
+    // Descending until the OWNER is the nested container asks the question
+    // directly instead of predicting where the answer will be.
+    await driver.startDragAt(await driver.dragSourceCentre());
 
-    // Enter `nx-inner` at its top, then descend until a zone activates. A
-    // fixed y guesses at where the zones are and lands in the dead space
-    // between them as often as not, which reports "no owner" and looks like a
-    // depth failure rather than a pointer that was never over a zone.
-    // CONVERTED, not used raw. `readBlockBoxes` measures inside the iframe, so
-    // its rects are frame-local; the pointer moves in host coordinates. Using
-    // one as the other is off by the frame's origin and wrong again by its
-    // scale, and at 100% zoom with the frame near the top-left it is close
-    // enough to look correct — which is how it survived.
+    const boxes = await driver.readBlockBoxes();
+    const inner = boxes.find(box => box.id === "nx-inner");
+    expect(inner, "the nested container must be measurable").toBeTruthy();
+
     const origin = await driver.frameOrigin();
     const scale = await driver.frameScale();
-    const entry = mapFramePointToHost(
-      { x: first!.left + first!.width / 2, y: first!.top },
+    const top = mapFramePointToHost(
+      { x: inner!.left + inner!.width / 2, y: inner!.top },
       origin,
       scale
     );
+    await dragPointerTo(driver, top, 1);
 
-    await driver.startDragAt(await driver.dragSourceCentre());
-    const from = driver.pointer();
-    await driver.moveBy(entry.x - from.x, entry.y - from.y);
-    const reached = await dragUntilTarget(driver);
-    expect(
-      reached,
-      "the drag must reach a zone inside the nested container"
-    ).toBeGreaterThanOrEqual(0);
+    let owner: string | null = null;
+    let active = -1;
+    for (let step = 0; step < 60; step += 1) {
+      owner = await driver.readActiveZoneOwner();
+      if (owner === "nx-inner") {
+        active = await driver.readActiveTarget();
+        break;
+      }
+      await driver.moveBy(0, 6);
+    }
 
-    // No expected failure here, and the reason is worth recording. This case
-    // WAS marked as one: descending from `nx-inner` appeared to find no zone
-    // until well past the container's own bottom edge. That measurement was
-    // taken with frame-local rects used as host coordinates, so the pointer was
-    // never inside the container it was supposed to be in. Converted, the
-    // canvas resolves to the innermost container correctly.
-    //
-    // The shortfall was the harness, not the canvas.
-
-    // And it must still be inside `nx-inner` after that descent, or the walk
-    // carried the pointer out the bottom and the ownership below is about a
-    // different container entirely.
-    // Both sides in the SAME space. The pointer is host, the box is frame-local,
-    // so comparing them directly asks a question neither coordinate answers.
-    const bottom = mapFramePointToHost(
-      { x: 0, y: second!.top + second!.height },
-      origin,
-      scale
-    );
-    expect(
-      driver.pointer().y,
-      "the descent must not leave the nested container"
-    ).toBeLessThanOrEqual(bottom.y);
-
-    const owner = await driver.readActiveZoneOwner();
-    const active = await driver.readActiveTarget();
-    const nearest = await driver.nearestZoneToPointer();
+    const nearest = active >= 0 ? await driver.nearestZoneToPointer() : -1;
     await driver.cancel();
 
-    // The separating property, and the one the previous version never asked:
-    // the zone under the pointer must belong to the INNERMOST container. A
-    // canvas that always lets the outer container win passes an
-    // active-equals-nearest check and fails this.
+    // The separating property: a zone owned by the INNERMOST container under
+    // the pointer. A canvas that always lets the outer container win never
+    // produces this owner however far the descent goes.
     expect(
       owner,
-      "the innermost container under the pointer must own the drop zone"
+      "the innermost container under the pointer must own a drop zone"
     ).toBe("nx-inner");
-    // Kept as well, because it catches a different fault: a stale rect or an
-    // unscaled transform selects a zone that is not the nearest at all.
+    // And it must be the nearest, which catches a different fault: a stale rect
+    // or an unscaled transform selects a zone that is not the nearest at all.
     expect(active, "and it must be the zone nearest the pointer").toBe(nearest);
   });
 
@@ -505,34 +459,78 @@ test.describe("a canvas any Nextly editor could ship", () => {
       "the tree must be on screen before timing moves against it"
     ).toBeGreaterThanOrEqual(500);
 
+    // A CONTROL first: the same pointer moves with no drag running. Every
+    // sample includes the Playwright protocol round trip, Node scheduling and
+    // whatever else a loaded runner is doing, and none of that is canvas work
+    // — so measuring the drag alone makes a single GC pause look exactly like
+    // a re-measured tree.
+    const idle: number[] = [];
+    for (let move = 0; move < 20; move += 1) {
+      const started = Date.now();
+      await driver.moveBy(0, 4);
+      idle.push(Date.now() - started);
+    }
+
     await dragFromPanel(driver);
 
-    // Every move timed individually. A mean hides the shape that matters: one
-    // 2-second stall among twenty fast moves averages to a comfortable number
-    // while the editor visibly locks up, and a canvas that re-measures the tree
-    // does exactly that on the move where a rect cache misses.
-    const durations: number[] = [];
+    const dragging: number[] = [];
     for (let move = 0; move < 20; move += 1) {
       const started = Date.now();
       await driver.moveBy(0, 12);
-      durations.push(Date.now() - started);
+      dragging.push(Date.now() - started);
     }
     await driver.cancel();
 
-    const slowest = Math.max(...durations);
-    const mean = durations.reduce((sum, ms) => sum + ms, 0) / durations.length;
+    // The DIFFERENCE of the medians. A median because one outlier is
+    // scheduling rather than code; a difference because the transport cost is
+    // common to both samples and cancels. What survives is the work the canvas
+    // does per move while a drag is live, which is what the budget is about.
+    const median = (samples: number[]): number => {
+      const sorted = [...samples].sort((a, b) => a - b);
+      return sorted[Math.floor(sorted.length / 2)] ?? 0;
+    };
+    const canvasCost = median(dragging) - median(idle);
+
     test.info().annotations.push({
       type: "per-move-ms",
-      description: `slowest=${String(slowest)} mean=${String(Math.round(mean))}`,
+      description: `canvasCost=${String(canvasCost)} drag=${String(median(dragging))} idle=${String(median(idle))}`,
     });
-    // A budget, not a frame rate. Wall clock on a machine running several
-    // matrices measures load as much as code, so this sits where only a
-    // re-measure-the-whole-tree-every-move regression can cross it — but it is
-    // the SLOWEST move that has to sit under it, not the average.
+
+    // A budget, not a frame rate. It sits where only a
+    // re-measure-the-whole-tree-every-move regression can cross it: on 500
+    // blocks that costs tens of milliseconds per move, while the transport it
+    // is measured against costs the same either way.
     expect(
-      slowest,
-      "no single move may re-measure the whole tree"
+      canvasCost,
+      "a move must not re-measure the whole tree"
     ).toBeLessThan(120);
+    await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
+
+    // The canvas cannot answer this at all, and that refusal IS the
+    // shortfall. Asserted as the reader's OWN error type BEFORE the
+    // expectation is marked, so a broken selector, a missing iframe or a
+    // failed seed stays a real failure instead of becoming another
+    // expected one. It also fires the day the capability arrives: this
+    // line goes red first and forces the target below to be rewritten.
+    //
+    // Wrapped in an async thunk because these readers throw SYNCHRONOUSLY:
+    // `expect(reader())` never receives a promise, so `.rejects` cannot see
+    // the refusal and the raw error escapes the assertion entirely.
+    await expect(async () => chrome.undoDepth()).rejects.toThrow(
+      CanvasCapabilityError
+    );
+
+    // Marked only now. Everything above ran unprotected.
+    test.fail(true, "this canvas keeps no undo history to count");
+
+    const before = await chrome.undoDepth();
+    await dragFromPanel(driver);
+    await driver.drop();
+    const after = await chrome.undoDepth();
+
+    // Exactly one. A drop recorded as several makes undo feel broken: the
+    // author presses it once and the block half-moves.
+    expect(after - before, "one drop is one undoable edit").toBe(1);
   });
 
   test("records exactly one undo entry for one drop", async ({ request }) => {

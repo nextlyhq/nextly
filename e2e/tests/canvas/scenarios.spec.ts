@@ -11,7 +11,7 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { dragUntilTarget } from "./driver";
+import { dragPointerTo, dragUntilTarget } from "./driver";
 import type { ActiveTargetTransition, CanvasDriver } from "./driver";
 import { EXTREME_RATIO_FIXTURE, FLAT_LIST_FIXTURE, seedPage } from "./fixtures";
 import { createPocDriver } from "./poc-driver";
@@ -48,10 +48,11 @@ test.use({ viewport: { width: 2560, height: 1400 } });
 /** Step the pointer down until a drop zone becomes active, and report where. */
 /** Begin a drag from the insert panel and carry the pointer over the canvas. */
 async function startPanelDrag(driver: CanvasDriver) {
-  const source = await driver.dragSourceCentre();
   const target = await driver.canvasCentre();
-  await driver.startDragAt(source);
-  await driver.moveBy(target.x - source.x, target.y - source.y);
+  await driver.startDragAt(await driver.dragSourceCentre());
+  // Shared, because the delta must be measured from the post-activation
+  // pointer rather than from the source point.
+  await dragPointerTo(driver, target, 1);
 }
 
 /**
