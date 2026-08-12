@@ -245,6 +245,42 @@ describe("reading an artifact's specifiers", () => {
     ).toEqual(["react"]);
   });
 
+  it("reads a destructured resolver from a declaration or an assignment alike", () => {
+    // A declaration destructures through a BINDING PATTERN and an assignment through an OBJECT
+    // LITERAL — different node types for one operation. Read separately they drift, which is how
+    // the assignment form stayed invisible after the declaration form was covered.
+    //
+    // The full cross product, because each cell arrived as its own finding when they did not share
+    // a reader: {declaration, assignment} x {shorthand, renamed, computed key}.
+    const forms = [
+      `const { resolve } = import.meta;`,
+      `const { resolve: load } = import.meta;`,
+      `const { ["resolve"]: load } = import.meta;`,
+      `let resolve; ({ resolve } = import.meta);`,
+      `let load; ({ resolve: load } = import.meta);`,
+      `let load; ({ ["resolve"]: load } = import.meta);`,
+    ];
+    for (const form of forms) {
+      const name = form.includes("load") ? "load" : "resolve";
+      expect(read(`${form}\nexport const r = ${name}("react");`), form).toEqual(
+        ["react"]
+      );
+    }
+    // The controls, one per way of being near-miss: a different property, and the same shape off
+    // an object that is not `import.meta`.
+    expect(
+      read(`const { url } = import.meta;\nexport const r = url("react");`)
+    ).toEqual([]);
+    expect(
+      read(`let u; ({ url: u } = import.meta);\nexport const r = u("react");`)
+    ).toEqual([]);
+    expect(
+      read(
+        `let load; ({ resolve: load } = someLib);\nexport const r = load("react");`
+      )
+    ).toEqual([]);
+  });
+
   it("sees a loader assigned after it is declared", () => {
     // A name takes a loader two ways that look different and mean the same: a declaration with an
     // initializer, and a later assignment. Reading only initializers made the assignment form

@@ -467,40 +467,79 @@ export function specifiersIn(source, fileName) {
 
   const aliases = [];
   const collectLoaders = node => {
-    // `const { resolve } = import.meta` binds the resolver without ever naming
-    // `import.meta.resolve`, so the initializer check below never sees it and the declaration is
-    // not an identifier either. Handled first, because both guards there would reject it.
-    if (
-      ts.isVariableDeclaration(node) &&
-      ts.isObjectBindingPattern(node.name) &&
-      node.initializer !== undefined &&
-      ts.isMetaProperty(node.initializer) &&
-      node.initializer.keywordToken === ts.SyntaxKind.ImportKeyword &&
-      node.initializer.name.text === "meta"
-    ) {
-      for (const element of node.name.elements) {
-        // Only the `resolve` property is a loader; `const { url } = import.meta` is not.
-        //
-        // The key is read in BOTH spellings: `{ resolve: load }` names it with an identifier and
-        // `{ ["resolve"]: load }` with a string literal, and a rule written for one is a rule the
-        // other walks around — the same drift `readsMember` exists to prevent for member access.
-        // A COMPUTED key wraps its literal in a `ComputedPropertyName`, so the literal is one level
-        // down and a check reading the property name directly sees a node of the wrong kind.
-        const named = element.propertyName ?? element.name;
-        const source = ts.isComputedPropertyName(named)
-          ? named.expression
-          : named;
-        const keyed =
-          (ts.isIdentifier(source) && source.text === "resolve") ||
-          ((ts.isStringLiteral(source) ||
-            ts.isNoSubstitutionTemplateLiteral(source)) &&
-            source.text === "resolve");
-        if (keyed && ts.isIdentifier(element.name)) {
-          addLoader(
-            element.name.text,
-            nearestBindingScope(element.name, element.name.text)
-          );
+    /** Whether a key node names `resolve`, in every spelling a key can take. */
+    const namesResolveKey = key => {
+      if (key === undefined) return false;
+      // A COMPUTED key wraps its literal one level down, so reading the key node directly sees a
+      // node of the wrong kind rather than a non-matching name.
+      const inner = ts.isComputedPropertyName(key) ? key.expression : key;
+      if (ts.isIdentifier(inner)) return inner.text === "resolve";
+      return (
+        (ts.isStringLiteral(inner) ||
+          ts.isNoSubstitutionTemplateLiteral(inner)) &&
+        inner.text === "resolve"
+      );
+    };
+
+    /** Whether an expression is `import.meta` itself. */
+    const isImportMeta = value =>
+      value !== undefined &&
+      ts.isMetaProperty(value) &&
+      value.keywordToken === ts.SyntaxKind.ImportKeyword &&
+      value.name.text === "meta";
+
+    /**
+     * Names bound to `import.meta.resolve` by destructuring, in either target form.
+     *
+     * A DECLARATION destructures through a binding pattern (`const { resolve: load } = …`) and an
+     * ASSIGNMENT through an object literal (`({ resolve: load } = …)`) — different node types for
+     * one operation. Read separately they drift, which is how the assignment form stayed invisible
+     * after the declaration form was covered, so both are reduced here to (key, boundName).
+     */
+    const destructuredResolvers = target => {
+      const bound = [];
+      if (ts.isObjectBindingPattern(target)) {
+        for (const element of target.elements) {
+          if (
+            namesResolveKey(element.propertyName ?? element.name) &&
+            ts.isIdentifier(element.name)
+          ) {
+            bound.push(element.name);
+          }
         }
+        return bound;
+      }
+      if (!ts.isObjectLiteralExpression(target)) return bound;
+      for (const property of target.properties) {
+        if (
+          ts.isShorthandPropertyAssignment(property) &&
+          namesResolveKey(property.name)
+        ) {
+          bound.push(property.name);
+        } else if (
+          ts.isPropertyAssignment(property) &&
+          namesResolveKey(property.name) &&
+          ts.isIdentifier(property.initializer)
+        ) {
+          bound.push(property.initializer);
+        }
+      }
+      return bound;
+    };
+
+    // `const { resolve } = import.meta` binds the resolver without ever naming
+    // `import.meta.resolve`, so the value check below never sees it and the target is not an
+    // identifier either. Handled first, because both guards there would reject it. Only the
+    // `resolve` property is a loader; `const { url } = import.meta` is not.
+    const destructuredFrom = ts.isVariableDeclaration(node)
+      ? [node.name, node.initializer]
+      : ts.isBinaryExpression(node) &&
+          node.operatorToken.kind === ts.SyntaxKind.EqualsToken
+        ? [node.left, node.right]
+        : undefined;
+    if (destructuredFrom !== undefined && isImportMeta(destructuredFrom[1])) {
+      for (const name of destructuredResolvers(destructuredFrom[0])) {
+        addLoader(name.text, nearestBindingScope(name, name.text));
       }
     }
     // A name takes a loader in two ways that look different and mean the same: a declaration with
