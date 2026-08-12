@@ -161,25 +161,6 @@ const TRIGGER_INDICATOR =
   "rounded-none! border-b-2! -mb-0.5! data-[state=active]:border-b-primary! data-[state=active]:text-primary! data-[state=inactive]:border-transparent! data-[state=inactive]:text-muted-foreground! hover:text-primary! hover:border-primary!";
 
 /**
- * TabsTrigger - Clickable tab button
- *
- * Design Specs:
- * - Border-radius: none (Gmail-style underline tabs)
- * - Padding: 6px 16px (px-4 py-2)
- * - Font: text-sm (14px), font-medium (500)
- * - Transition: 150ms (design system standard)
- * - Active state: blue text with blue bottom  border border-border (2px)
- * - Hover: blue text with blue bottom  border border-border
- * - Gmail-inspired clean underline style
- *
- * Accessibility:
- * - Keyboard navigation: Arrow keys, Home, End
- * - Focus ring: 2px with offset (WCAG 2.2 compliant)
- * - Disabled state: pointer-events-none, opacity-50
- * - Data attributes: [data-state="active|inactive"], [data-disabled]
- * @public
- */
-/**
  * Inline declarations the primitive owns, removed from a caller's `style`.
  *
  * An inline style beats every class, important or not, so it is the one route
@@ -218,6 +199,25 @@ function withoutOwnedProperties(
   return removed ? kept : style;
 }
 
+/**
+ * TabsTrigger - Clickable tab button
+ *
+ * Design Specs:
+ * - Border-radius: none (Gmail-style underline tabs)
+ * - Padding: 6px 16px (px-4 py-2)
+ * - Font: text-sm (14px), font-medium (500)
+ * - Transition: 150ms (design system standard)
+ * - Active state: blue text with blue bottom  border border-border (2px)
+ * - Hover: blue text with blue bottom  border border-border
+ * - Gmail-inspired clean underline style
+ *
+ * Accessibility:
+ * - Keyboard navigation: Arrow keys, Home, End
+ * - Focus ring: 2px with offset (WCAG 2.2 compliant)
+ * - Disabled state: pointer-events-none, opacity-50
+ * - Data attributes: [data-state="active|inactive"], [data-disabled]
+ * @public
+ */
 const TabsTrigger = forwardRef<TabsTriggerRef, TabsTriggerProps>(
   ({ className, style, ...props }, ref) => (
     <Trigger
