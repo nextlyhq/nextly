@@ -25,6 +25,7 @@
 import {
   countNodes,
   DEFAULT_LIMITS,
+  DOCUMENT_FORMAT_VERSION,
   documentBytes,
   findNode,
   isNodeType,
@@ -749,6 +750,114 @@ function assertNodeShape(
  * bound asks `MAX_DEPTH`: a second opinion about how large a document may be is
  * a second contract to keep in step.
  */
+/**
+ * Refuses a forest nested deeper than the limit allows.
+ *
+ * Iterative, bounded by the limit itself, so a deep document cannot overflow
+ * the stack before being refused. Judged against `before` on the same
+ * repairability rule as the other caps: a document already too deep may be
+ * edited toward shallower, just not deeper.
+ */
+/**
+ * Refuses a forest holding anything that is not a node, at ANY depth.
+ *
+ * A top-level-only pass leaves a valid root whose slot holds a `null`, and the
+ * helpers then read `.id` off it — so the failure arrives as a TypeError from
+ * inside the engine rather than as a refusal naming the malformed document,
+ * which is the whole reason ops refuse with `OpError`.
+ *
+ * Iterative, so a deep document cannot overflow the stack on the way to being
+ * refused.
+ */
+function assertForestEntries(nodes: BlockNode[]): void {
+  const pending: unknown[] = [...nodes];
+  while (pending.length > 0) {
+    const entry = pending.pop();
+    if (!isPlainRecord(entry)) {
+      throw new OpError(
+        `a document holding ${describe(entry)} among its nodes is malformed. ` +
+          `Every entry in a forest is a node, at every depth.`
+      );
+    }
+    // Read as `unknown` rather than cast: the entry has only been established
+    // as a record, so claiming it is a BlockNode here would assert the very
+    // thing this walk exists to check.
+    const slots: unknown = entry.slots;
+    if (slots === undefined) continue;
+    if (!isPlainRecord(slots)) {
+      throw new OpError(
+        `a node whose slots are ${describe(slots)} is malformed. Slots name ` +
+          `child regions and each holds a list.`
+      );
+    }
+    for (const children of Object.values(slots)) {
+      if (!Array.isArray(children)) {
+        throw new OpError(
+          `a slot holding ${describe(children)} is malformed. Each slot holds ` +
+            `a list of nodes.`
+        );
+      }
+      pending.push(...children);
+    }
+  }
+}
+
+function assertDepthWithin(
+  node: BlockNode,
+  depth: number,
+  maxDepth: number,
+  verb: string,
+  before: BlockDocument
+): void {
+  const pending: { node: BlockNode; depth: number }[] = [{ node, depth }];
+  let deepest = 0;
+  while (pending.length > 0) {
+    const entry = pending.pop();
+    if (entry === undefined) break;
+    if (entry.depth > deepest) deepest = entry.depth;
+    if (entry.depth > maxDepth && deepest > depthOf(before.nodes)) {
+      throw new OpError(
+        `${verb}: this would leave the document nested ${String(entry.depth)} ` +
+          `levels deep, past the ${String(maxDepth)} it may hold.`
+      );
+    }
+    const slots = entry.node.slots;
+    if (slots === undefined) continue;
+    for (const children of Object.values(slots)) {
+      if (!Array.isArray(children)) continue;
+      for (const child of children) {
+        if (isPlainRecord(child)) {
+          pending.push({ node: child, depth: entry.depth + 1 });
+        }
+      }
+    }
+  }
+}
+
+/** The deepest level any node in a forest sits at. */
+function depthOf(nodes: BlockNode[]): number {
+  let deepest = 0;
+  const pending: { node: BlockNode; depth: number }[] = nodes
+    .filter(isPlainRecord)
+    .map(node => ({ node, depth: 1 }));
+  while (pending.length > 0) {
+    const entry = pending.pop();
+    if (entry === undefined) break;
+    if (entry.depth > deepest) deepest = entry.depth;
+    const slots = entry.node.slots;
+    if (slots === undefined) continue;
+    for (const children of Object.values(slots)) {
+      if (!Array.isArray(children)) continue;
+      for (const child of children) {
+        if (isPlainRecord(child)) {
+          pending.push({ node: child, depth: entry.depth + 1 });
+        }
+      }
+    }
+  }
+  return deepest;
+}
+
 function assertFitsCaps(
   before: BlockDocument,
   result: BlockDocument,
@@ -764,6 +873,12 @@ function assertFitsCaps(
   // So an edit is refused when it crosses a cap the document was inside, or
   // makes an existing overage worse. An edit that shrinks an over-large
   // document is always allowed, even while it stays over.
+  // Depth on the RESULT, for the same reason as count and bytes: checking only
+  // the incoming subtree misses the depth its PLACEMENT creates. A shallow
+  // subtree dropped into a deep slot produces a forest deeper than either part.
+  for (const entry of result.nodes) {
+    assertDepthWithin(entry, 1, limits.maxDepth, verb, before);
+  }
   const total = countNodes(result.nodes);
   if (total > limits.maxNodes && total > countNodes(before.nodes)) {
     throw new OpError(
@@ -1027,14 +1142,20 @@ export function applyOp(
   // primitive passes the array check and then reaches helpers that read `.id`
   // off it, so the failure surfaces as a TypeError from inside the engine
   // rather than as a refusal naming the malformed document.
-  for (const entry of nodes) {
-    if (!isPlainRecord(entry)) {
-      throw new OpError(
-        `a document holding ${describe(entry)} among its nodes is malformed. ` +
-          `Every entry in a forest is a node.`
-      );
-    }
+  // The format this module knows how to edit. A document written by a newer
+  // version may carry fields with meanings this code does not have, and editing
+  // it with current semantics silently rewrites them. Refused rather than
+  // guessed: an editor that cannot read a document should say so, not save over
+  // it.
+  if (document.formatVersion !== DOCUMENT_FORMAT_VERSION) {
+    throw new OpError(
+      `a document in format ${describe(document.formatVersion)} cannot be ` +
+        `edited by this version, which writes format ` +
+        `${String(DOCUMENT_FORMAT_VERSION)}. Editing it would rewrite fields ` +
+        `whose meaning this code does not know.`
+    );
   }
+  assertForestEntries(nodes);
 
   // The op itself, before its discriminant is read. `op.kind` on a `null`
   // leaves this module as a TypeError, which a caller cannot distinguish from

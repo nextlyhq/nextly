@@ -1495,3 +1495,48 @@ describe("a document already past its limits", () => {
     ).toThrow(OpError);
   });
 });
+
+describe("what the boundary checks before editing at all", () => {
+  it("refuses a document written in a newer format", () => {
+    // A newer version may carry fields whose meaning this code does not have,
+    // and editing with current semantics silently rewrites them. An editor that
+    // cannot read a document should say so rather than save over it.
+    const future: BlockDocument = {
+      ...doc(),
+      formatVersion: (DOCUMENT_FORMAT_VERSION + 1) as never,
+    };
+    expect(() => applyOp(future, { kind: "remove", id: "a" })).toThrow(
+      /cannot be edited by this version/
+    );
+  });
+
+  it("refuses a malformed node nested inside a slot", () => {
+    // A top-level-only pass leaves this: a valid root whose slot holds a null,
+    // which reaches helpers reading `.id` off it.
+    const rotten = [node("outer", { main: [null as unknown as BlockNode] })];
+    expect(() => applyOp(doc(rotten), { kind: "remove", id: "outer" })).toThrow(
+      /at every depth/
+    );
+  });
+
+  it("refuses a placement that would nest the result too deep", () => {
+    // Depth checked on the RESULT, not only the incoming subtree: a shallow
+    // subtree dropped into a deep slot produces a forest deeper than either.
+    // The incoming subtree is 2 deep and the fixture is 2 deep, so neither
+    // breaches the cap alone — only the PLACEMENT does, which is the whole
+    // point. Inserting a childless node here would sit at the existing depth
+    // and be correctly allowed.
+    const shallow: DocumentLimits = { ...DEFAULT_LIMITS, maxDepth: 2 };
+    expect(() =>
+      applyOp(
+        doc(),
+        {
+          kind: "insert",
+          node: node("fresh", { main: [node("deeper")] }),
+          at: { parentId: "outer", slot: "main", index: 0 },
+        },
+        shallow
+      )
+    ).toThrow(/levels deep/);
+  });
+});
