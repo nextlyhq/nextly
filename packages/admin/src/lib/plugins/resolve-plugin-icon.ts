@@ -24,6 +24,43 @@ export type PluginIconSource =
  *
  * @module lib/plugins/resolve-plugin-icon
  */
+/**
+ * Resolve an icon from several candidates in precedence order.
+ *
+ * Each candidate is exhausted before the next is consulted, so a candidate
+ * that declares only a glyph beats a later one that ships an image. That is
+ * the intended reading: a plugin declaring a lucide name and no asset is
+ * saying which glyph represents it, and a catalogue entry further down the
+ * list is a curated guess about a plugin nobody has loaded.
+ *
+ * Exists so the catalogue can prefer an installed plugin's own appearance
+ * without restating the asset-then-glyph chain. Two chains would agree today
+ * and disagree the first time either gains a step.
+ */
+export function resolvePluginIconFrom(
+  candidates: readonly (Pick<PluginMetadata, "appearance"> | undefined)[],
+  opts: { fallback: string; allowAsset: false }
+): Extract<PluginIconSource, { kind: "lucide" }>;
+export function resolvePluginIconFrom(
+  candidates: readonly (Pick<PluginMetadata, "appearance"> | undefined)[],
+  opts: { fallback: string; allowAsset?: boolean }
+): PluginIconSource;
+export function resolvePluginIconFrom(
+  candidates: readonly (Pick<PluginMetadata, "appearance"> | undefined)[],
+  opts: { fallback: string; allowAsset?: boolean }
+): PluginIconSource {
+  for (const candidate of candidates) {
+    const asset = candidate?.appearance?.iconAsset;
+    if (asset && opts.allowAsset !== false)
+      return { kind: "asset", src: asset };
+
+    const name = candidate?.appearance?.icon;
+    if (name) return { kind: "lucide", name };
+  }
+
+  return { kind: "lucide", name: opts.fallback };
+}
+
 /** A surface that cannot render an image always gets the lucide variant. */
 export function resolvePluginIcon(
   meta: Pick<PluginMetadata, "appearance">,
@@ -52,11 +89,5 @@ export function resolvePluginIcon(
     allowAsset?: boolean;
   }
 ): PluginIconSource {
-  const asset = meta.appearance?.iconAsset;
-  if (asset && opts.allowAsset !== false) return { kind: "asset", src: asset };
-
-  const name = meta.appearance?.icon;
-  if (name) return { kind: "lucide", name };
-
-  return { kind: "lucide", name: opts.fallback };
+  return resolvePluginIconFrom([meta], opts);
 }

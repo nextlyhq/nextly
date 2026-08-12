@@ -25,6 +25,7 @@ import type {
   PluginCategory,
   PluginDefinition,
 } from "./plugin-context";
+import { pluginAdminSlug } from "./plugin-slug";
 import { validatedClientConfig } from "./validate-client-config";
 
 /**
@@ -131,15 +132,12 @@ export interface PluginAdminMeta {
 }
 
 /**
- * Derive a plugin's admin slug from its name (e.g. `"@acme/p"` → `"acme-p"`),
- * used to look up host `pluginOverrides` and to namespace plugin admin routes.
+ * Re-exported from `./plugin-slug`, which has no imports so the admin can take
+ * the same implementation from `nextly/config` without this module's
+ * dependencies. Kept exported here because this is where every existing
+ * server-side caller imports it from.
  */
-export function pluginAdminSlug(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
+export { pluginAdminSlug } from "./plugin-slug";
 
 /**
  * The value if it survives a JSON round trip unchanged, otherwise `undefined`.
