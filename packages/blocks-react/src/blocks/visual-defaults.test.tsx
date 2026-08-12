@@ -99,16 +99,37 @@ async function rootOf(block: DrawableBlock): Promise<string> {
 }
 
 describe("a core block's root element", () => {
-  it("covers every block in the library", () => {
-    // The count must not fall silently: a library that stopped being enumerated would leave every
-    // assertion below vacuously true, and a green suite is exactly what that looks like.
-    expect(DRAWABLE.length).toBeGreaterThan(10);
+  it("covers exactly the blocks the library publishes", () => {
+    // The exact SET, not a floor. A library of 12 that loses one still clears "more than 10", and
+    // the dropped block then stops being checked with nothing to show for it. Naming them also
+    // makes the failure say WHICH block appeared or vanished, which a count cannot.
+    expect([...DRAWABLE.map(block => block.name)].sort()).toEqual([
+      "core/box",
+      "core/button",
+      "core/collection-loop",
+      "core/divider",
+      "core/embed",
+      "core/heading",
+      "core/image",
+      "core/list",
+      "core/quote",
+      "core/section",
+      "core/spacer",
+      "core/text",
+    ]);
   });
 
   it.each(DRAWABLE.map(block => [block.name, block] as const))(
     "%s writes no inline style",
     async (_name, block) => {
-      expect(await rootOf(block)).not.toContain("style=");
+      const root = await rootOf(block);
+      // Asserted BEFORE the absence below, which is otherwise satisfied by absence: a block whose
+      // example renders nothing, or whose opening tag this helper failed to find, yields "" and
+      // passes a `not.toContain` while never having been checked at all.
+      expect(root).toMatch(/^<[a-zA-Z]/);
+      // The attribute, not the substring. `data-style="compact"` contains `style=` and is not an
+      // inline declaration, and a guard that rejects it costs an unrelated change a red build.
+      expect(root).not.toMatch(/\sstyle=/);
     }
   );
 
