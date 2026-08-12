@@ -152,3 +152,15 @@ export {
 } from "./collections/fields/guards";
 
 export type * from "./collections/fields/types";
+
+// Plugin identity and classification. Both modules are import-free, so the
+// admin can share the exact implementations the server uses without pulling
+// the plugin runtime into a browser bundle. Sharing them is the point: a slug
+// derived two ways produces dead links, and a category vocabulary held in two
+// places starts accepting values plugins cannot declare.
+export {
+  PLUGIN_CATEGORIES,
+  isPluginCategory,
+  type PluginCategory,
+} from "./plugins/plugin-categories";
+export { pluginAdminSlug } from "./plugins/plugin-slug";

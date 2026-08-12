@@ -1,9 +1,10 @@
 /**
- * The controlled vocabulary a plugin declares in `category`.
+ * The category vocabulary, from core, plus the admin's labels for it.
  *
- * This lived inside the plugin detail page component until a second page
- * needed it. A page component is the wrong home for a vocabulary two pages
- * share: the second consumer copies it, and the copies drift.
+ * The vocabulary itself is core's: it is what `definePlugin` accepts, so a
+ * second list here would let the catalogue reject a category a plugin can
+ * legally declare, or accept one it cannot. Only the human labels are the
+ * admin's own, because only the admin renders them.
  *
  * The vocabulary is deliberately narrow. `marketing` and `storage` are NOT
  * members and are the two most commonly reached for: an SEO plugin is `seo`,
@@ -12,21 +13,21 @@
  *
  * @module lib/plugins/plugin-categories
  */
+import {
+  PLUGIN_CATEGORIES,
+  isPluginCategory,
+  type PluginCategory,
+} from "nextly/config";
 
-export const PLUGIN_CATEGORIES = [
-  "content",
-  "forms",
-  "seo",
-  "media",
-  "commerce",
-  "integration",
-  "dev-tools",
-  "other",
-] as const;
+export { PLUGIN_CATEGORIES, isPluginCategory, type PluginCategory };
 
-export type PluginCategory = (typeof PLUGIN_CATEGORIES)[number];
-
-/** Human labels for the vocabulary. */
+/**
+ * Human labels for the vocabulary.
+ *
+ * `Record<PluginCategory, string>` rather than a partial map: adding a
+ * category to core without a label here is then a type error at build time
+ * instead of a raw slug appearing in the UI.
+ */
 export const CATEGORY_LABELS: Record<PluginCategory, string> = {
   content: "Content",
   forms: "Forms",
@@ -37,22 +38,6 @@ export const CATEGORY_LABELS: Record<PluginCategory, string> = {
   "dev-tools": "Dev Tools",
   other: "Other",
 };
-
-/**
- * Narrow a plugin's free-form `category` to the vocabulary.
- *
- * A third-party plugin can declare anything, so callers rendering
- * `PluginMetadata` must keep tolerating an unknown value rather than throwing.
- * This exists so our OWN catalogue can be checked at build time instead.
- */
-export function isPluginCategory(
-  value: string | undefined
-): value is PluginCategory {
-  return (
-    value !== undefined &&
-    (PLUGIN_CATEGORIES as readonly string[]).includes(value)
-  );
-}
 
 /** The label for a category, or the raw value when a plugin declares its own. */
 export function categoryLabel(value: string | undefined): string | undefined {
