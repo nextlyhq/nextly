@@ -360,7 +360,7 @@ export default function RoleTable() {
                 onChange={setSearch}
                 placeholder="Search roles by name"
                 isLoading={isLoading}
-                className="max-w-sm flex-1 border-border bg-background text-foreground"
+                className="max-w-sm flex-1"
               />
 
               <div className="flex items-center gap-2">

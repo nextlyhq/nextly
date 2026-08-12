@@ -3,6 +3,7 @@
 import * as React from "react";
 
 import { Loader2, Search, X } from "@admin/components/icons";
+import { Input } from "@admin/components/ui";
 import { cn } from "@admin/lib/utils";
 
 import type { SearchBarProps } from "./types";
@@ -150,18 +151,37 @@ export const SearchBar = React.forwardRef<HTMLInputElement, SearchBarProps>(
     return (
       <div className={cn("relative w-full max-w-lg", className)}>
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        {/* The edge uses border-input (a visible 3:1 boundary) rather than the
-            decorative border-border: an empty field has nothing else to
-            identify it. */}
-        <input
+        {/* Composes Input rather than restating its classes. The copy this
+            replaced had drifted from the original in twelve ways that a reader
+            comparing them would not notice: no `aria-invalid` or
+            `data-[invalid=true]` handling at all, so a search field could not
+            show an error state; `focus:border-primary` without the `!` Input
+            uses, so the focus ring lost to any later border utility; and no
+            `selection:*` colours, `placeholder:opacity-50` or
+            `disabled:pointer-events-none`.
+
+            It also meant palette work reached every input EXCEPT this one,
+            because the border token was named in two places and only one of
+            them was maintained. Only the search-specific parts stay here: room
+            for the leading icon and the trailing clear button. */}
+        <Input
           {...props}
           ref={ref}
-          type="text"
+          // `search`, not `text`: assistive technology announces it as a search
+          // field, and the suite has asserted this since it was written. The
+          // native WebKit cancel button is suppressed because this component
+          // renders its own clear affordance, which also handles focus return.
+          type="search"
           placeholder={placeholder}
           value={internalValue}
           onChange={handleChange}
           aria-busy={isLoading}
-          className="h-10 w-full rounded-md border border-input bg-background text-foreground pl-10 pr-10 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus:outline-none focus:border-primary disabled:cursor-not-allowed disabled:opacity-50 transition-all"
+          // The hook the suite has always queried. It was never rendered, so
+          // every test in the file errored on the query and the component has
+          // had no working coverage at all -- which is how twelve behavioural
+          // differences from Input accumulated without anything failing.
+          data-testid="search-input"
+          className="h-10 pl-10 pr-10 [&::-webkit-search-cancel-button]:appearance-none"
         />
 
         {/* Right side icons (clear button + loading spinner) */}

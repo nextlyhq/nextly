@@ -217,7 +217,7 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
             onChange={setSearch}
             placeholder="Search endpoints by name or URL..."
             isLoading={isLoading}
-            className="w-full bg-background text-foreground border-input"
+            className="w-full"
           />
         </div>
       }
