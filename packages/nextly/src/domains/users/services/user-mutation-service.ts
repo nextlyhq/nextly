@@ -56,6 +56,8 @@ import {
   generateInviteTokenValue,
 } from "../../auth/lib/invite-token";
 import { affectedRowCount } from "../../auth/services/auth-service";
+import { deliveriesTableFor } from "../../email/deliveries-table";
+import { eraseRecipientDeliveries } from "../../email/erase-recipient";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
 
@@ -1406,6 +1408,22 @@ export class UserMutationService extends BaseService {
     } catch (err) {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
+    // Asked out here for the same reason as the two above: a failed statement
+    // aborts an open Postgres transaction, and there would be no way back.
+    //
+    // A probe that cannot answer is treated as "present" so the erasure is
+    // ATTEMPTED. The alternative direction is worse in a way that is hard to
+    // see later: reading a transient metadata failure as "no such table" would
+    // delete the account and leave its delivery rows behind, silently and
+    // permanently, since no later run revisits a deletion that has happened.
+    // If the table really is absent, the UPDATE fails and takes the deletion
+    // with it, which is the same invariant the audit erasure protects.
+    let deliveriesExist: boolean;
+    try {
+      deliveriesExist = await this.adapter.tableExists("email_deliveries");
+    } catch {
+      deliveriesExist = true;
+    }
     // The two answer a legacy shape differently, because what happens to an
     // un-erased row differs. A legacy `activity_log` still cascades from the
     // account, so its rows go with the deletion and there is nothing left to
@@ -1501,6 +1519,35 @@ export class UserMutationService extends BaseService {
             String(userId),
             new Date(),
             unstampedAuditTables
+          );
+        }
+
+        // Strip the person out of the delivery log for the same reason, and in
+        // the same transaction: those rows carry a keyed hash of the address,
+        // and an install holds the key — so they go on answering "was this
+        // person written to, and when" for an account that no longer exists.
+        // The row itself stays, because "how many sends failed last week"
+        // belongs to the install rather than to the recipient.
+        //
+        // Keyed on the ADDRESS, not the user id: the table records every
+        // recipient, and most of them never had an account. This call therefore
+        // covers the deleted account's own address and nothing else — someone
+        // who was only ever a recipient is erased by calling
+        // `eraseRecipientDeliveries` directly, since no account deletion will
+        // ever fire for them.
+        //
+        // Narrowed rather than asserted, because the preimage select resolves
+        // to an untyped row. An account carrying no address has no delivery
+        // rows keyed to it, so there is nothing here to erase — which is a
+        // different outcome from an erasure that was skipped, and this is the
+        // only shape that produces it.
+        const deletedAddress =
+          typeof preimage.email === "string" ? preimage.email : undefined;
+        if (deliveriesExist && deletedAddress !== undefined) {
+          await eraseRecipientDeliveries(
+            txDb,
+            deliveriesTableFor(this.dialect),
+            deletedAddress
           );
         }
 

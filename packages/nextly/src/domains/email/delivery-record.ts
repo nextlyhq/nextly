@@ -213,6 +213,45 @@ export function mailboxOf(address: string): string {
 }
 
 /**
+ * The stored digest for an address, however the caller wrote it.
+ *
+ * Every path that turns an address into something comparable against
+ * `recipient_hash` goes through here: the reader that looks a person up, and
+ * the erasure that removes them. Composing `mailboxOf` and `hashRecipient` at
+ * each call site instead would be two spellings of one question, and they would
+ * agree until one of them gained a normalisation step — at which point an
+ * erasure would quietly stop matching the rows a lookup still finds, which is
+ * the failure this table cannot afford to have silently.
+ */
+export function recipientDigest(address: string): string {
+  return hashRecipient(mailboxOf(address));
+}
+
+/**
+ * Written over `recipient_hash` when a person is erased.
+ *
+ * `hashRecipient` always emits 64 hex characters, so a value that is not one
+ * cannot be confused with a live digest and no second column is needed to
+ * record the erased state. Nothing it can emit equals this, which is what makes
+ * an erased row unreachable rather than merely hard to find: every lookup
+ * hashes the caller's address before comparing, so there is no address anyone
+ * can supply that matches these rows again.
+ *
+ * A value rather than NULL because `recipient_hash` is declared NOT NULL in all
+ * three dialect schemas AND again in the hand-written SQLite DDL in
+ * `database/sqlite-core-tables.ts`. Relaxing it would mean changing two
+ * unlinked declarations to cover SQLite alone, and a change that reached only
+ * the declaration one of them shares would leave the column missing on the
+ * dialect new installs default to.
+ */
+export const ERASED_RECIPIENT_HASH = "erased";
+
+/** Whether a stored digest belongs to someone who has been erased. */
+export function isErasedRecipientHash(hash: string): boolean {
+  return hash === ERASED_RECIPIENT_HASH;
+}
+
+/**
  * The mailbox out of whatever a provider reports as a refused recipient.
  *
  * `rejected` is provider-supplied, and nodemailer reports either a plain

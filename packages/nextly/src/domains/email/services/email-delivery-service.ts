@@ -22,15 +22,17 @@ import { and, desc, eq } from "drizzle-orm";
 
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
-import { emailDeliveriesMysql } from "../../../schemas/email-deliveries/mysql";
-import { emailDeliveriesPg } from "../../../schemas/email-deliveries/postgres";
-import { emailDeliveriesSqlite } from "../../../schemas/email-deliveries/sqlite";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import {
+  deliveriesTableFor,
+  type EmailDeliveriesTable,
+} from "../deliveries-table";
+import {
   EMAIL_RETENTION_CLASS,
   hashRecipient,
-  mailboxOf,
+  isErasedRecipientHash,
+  recipientDigest,
   storableError,
   type EmailDeliveryInput,
   type EmailDeliveryRecipientKind,
@@ -62,11 +64,6 @@ function describeUnknownError(value: unknown): string {
   }
 }
 
-type EmailDeliveriesTable =
-  | typeof emailDeliveriesPg
-  | typeof emailDeliveriesMysql
-  | typeof emailDeliveriesSqlite;
-
 /**
  * A row as the three dialect tables produce it.
  *
@@ -95,13 +92,50 @@ export interface EmailDeliveryRecord {
   providerId: string | null;
   providerType: string;
   templateSlug: string | null;
-  recipientHash: string;
+  /**
+   * The stored digest, or null once this recipient has been erased.
+   *
+   * Null rather than the raw sentinel so a reader never has to know what the
+   * erased state is spelled as. The column is NOT NULL, so there is no "no
+   * value recorded" case for null to be confused with: it means erased and
+   * nothing else.
+   */
+  recipientHash: string | null;
   recipientKind: EmailDeliveryRecipientKind;
   status: EmailDeliveryStatus;
   attemptCount: number;
   error: string | null;
   messageId: string | null;
   createdAt: Date;
+}
+
+/**
+ * A stored row as a reader sees it.
+ *
+ * Every read path returns rows through here rather than building the record
+ * inline, so the erased state is translated once. A future single-row getter
+ * that mapped its own columns would hand back the raw sentinel, and it would
+ * look correct beside a listing that does not — so the translation lives where
+ * a new caller gets it by construction instead of by noticing.
+ */
+function toDeliveryRecord(row: EmailDeliveryRow): EmailDeliveryRecord {
+  return {
+    id: row.id,
+    providerId: row.providerId,
+    providerType: row.providerType,
+    templateSlug: row.templateSlug,
+    // The sentinel is a storage detail: it exists because the column is NOT
+    // NULL, and a reader has no use for the spelling.
+    recipientHash: isErasedRecipientHash(row.recipientHash)
+      ? null
+      : row.recipientHash,
+    recipientKind: row.recipientKind as EmailDeliveryRecipientKind,
+    status: row.status as EmailDeliveryStatus,
+    attemptCount: row.attemptCount,
+    error: row.error,
+    messageId: row.messageId,
+    createdAt: row.createdAt,
+  };
 }
 
 /** How a caller narrows a listing. */
@@ -118,25 +152,7 @@ export class EmailDeliveryService extends BaseService {
 
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
-
-    switch (this.dialect) {
-      case "postgresql":
-        this.deliveries = emailDeliveriesPg;
-        break;
-      case "mysql":
-        this.deliveries = emailDeliveriesMysql;
-        break;
-      case "sqlite":
-        this.deliveries = emailDeliveriesSqlite;
-        break;
-      default:
-        throw NextlyError.internal({
-          logContext: {
-            reason: "unsupported dialect for the email delivery log",
-            dialect: String(this.dialect),
-          },
-        });
-    }
+    this.deliveries = deliveriesTableFor(this.dialect);
   }
 
   /**
@@ -365,8 +381,9 @@ export class EmailDeliveryService extends BaseService {
             // The MAILBOX, as the writer stored it. A caller asking about
             // `Jane <jane@example.com>` is asking about `jane@example.com`,
             // and hashing what they typed answers "no record" for a message
-            // that was sent.
-            hashRecipient(mailboxOf(options.recipient))
+            // that was sent. The same function the erasure uses, so a lookup
+            // and a removal can never disagree about which rows are a person's.
+            recipientDigest(options.recipient)
           )
         : undefined,
       options.status !== undefined
@@ -403,18 +420,6 @@ export class EmailDeliveryService extends BaseService {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
-    return (rows as EmailDeliveryRow[]).map(row => ({
-      id: row.id,
-      providerId: row.providerId,
-      providerType: row.providerType,
-      templateSlug: row.templateSlug,
-      recipientHash: row.recipientHash,
-      recipientKind: row.recipientKind as EmailDeliveryRecipientKind,
-      status: row.status as EmailDeliveryStatus,
-      attemptCount: row.attemptCount,
-      error: row.error,
-      messageId: row.messageId,
-      createdAt: row.createdAt,
-    }));
+    return (rows as EmailDeliveryRow[]).map(toDeliveryRecord);
   }
 }
