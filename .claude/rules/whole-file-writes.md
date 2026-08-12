@@ -49,13 +49,22 @@ Resolve it with something that exists everywhere this repo runs — CI covers
 Ubuntu, macOS and Windows:
 
 ```
-node -e 'console.log(require("fs").realpathSync(process.argv[1]))' -- <path>
+node -e 'const {realpathSync}=require("fs"), {join,dirname,basename}=require("path");
+const p=process.argv[1];
+console.log(join(realpathSync(dirname(p)), basename(p)))' -- <path>
 ```
 
+Resolve the PARENT and re-attach the leaf, rather than resolving the whole path.
+`realpathSync` throws `ENOENT` on a path that does not exist, and the file not
+existing is the case a blind write is legitimately for — resolving the leaf
+would reject every genuinely new file, which is the outcome this rule is meant
+to permit. The parent is what carries the symlink risk, and it exists.
+
 `readlink -f` is a GNU extension, absent from POSIX and from Windows shells, so
-it is not the portable instruction even where it happens to work. If resolution
-FAILS, stop rather than falling back to the unresolved path: not knowing which
-file you are about to replace is the condition this whole rule is about.
+it is not the portable instruction even where it happens to work. If resolving
+the PARENT fails, stop rather than falling back to the unresolved path: not
+knowing which directory you are about to write into is the condition this whole
+rule is about.
 
 `turbo.json` in `packages/ui` was replaced this way. It lost
 `dependsOn: ["$TURBO_EXTENDS$", "build"]` on both `test` and `test:coverage`,
@@ -76,16 +85,26 @@ reapplied and then clobbered, and edits that were only ever in the working tree
 are in none of them. Enumerating the cases is how this section kept being wrong;
 what settles it is naming the revision and CHECKING it holds what you expect:
 
-- `git show <rev>:<path>` prints a candidate's copy — `HEAD`, a stash
-  (`stash@{0}`), any commit — and `git show :<path>` prints the index copy.
-  Read the one you intend to restore from BEFORE restoring, and confirm it
-  contains the pre-write content rather than assuming it does.
+- `git show <rev>:<path>` prints a candidate's copy — `HEAD`, a stash, any
+  commit — and `git show :<path>` prints the index copy. Read the one you intend
+  to restore from BEFORE restoring, and confirm it contains the pre-write
+  content rather than assuming it does.
+- **A command that prints nothing has not shown you the file is absent.** It is
+  equally the shape of asking the wrong question, and two ways of doing that are
+  easy to hit here. `<rev>:<path>` names a path inside the revision's TREE, so
+  the absolute path a symlink resolver just produced is not a valid argument and
+  every candidate reads as missing; convert to repository-relative first. And a
+  path that was untracked when it was stashed is not in the stash commit at all
+  — `git stash -u` puts it in the stash's THIRD parent, reachable as
+  `stash@{n}^3:<path>` — so the obvious query says absent while git holds an
+  exact copy.
 - The reading commands follow from that choice. Against a commit,
   `git diff <rev> -- <path>`; against the index, the bare `git diff -- <path>`,
   which is working tree versus index. Note that `git status` shows only `MM` and
   reveals neither.
 
-**If no revision holds it, stop.** Say so and look outside git — editor local
+**If no revision holds it — and you have established that rather than inferred
+it from an empty result — stop.** Say so and look outside git — editor local
 history, a backup, an open buffer. A recovery that cannot recover is worth
 naming as one; running the steps anyway converts a known loss into an unnoticed
 one, because the resulting diff looks entirely clean.
