@@ -146,13 +146,27 @@ type UnionToIntersection<U> = (
   ? I
   : never;
 
+/**
+ * Every spelling a declared discriminator may use, as TYPES.
+ *
+ * 🔴 The runtime accessor reads all of them; the type helpers below must too, or they answer for a
+ * narrower world than the functions they describe. A payload interface generated on the other side
+ * of the rename declares the other key, and a helper keyed on only the current one falls through
+ * to `string` — re-admitting exactly the retagging the constraint exists to reject.
+ */
+type FieldGroupTypeKeyName =
+  | typeof STORAGE_FORMAT.wireTypeKey
+  | typeof MIGRATION_TARGET.wireTypeKey;
+
+/** The literal a value declares its type as, under whichever spelling it uses. */
+type DeclaredFieldGroupType<T> = T[Extract<keyof T, FieldGroupTypeKeyName>];
+
 /** Whether `T` is a union of more than one member. */
 type IsUnion<T> = [T] extends [UnionToIntersection<T>] ? false : true;
 
-type WritableFieldGroupType<T> = [T] extends [
-  Record<typeof currentFieldGroupTypeKey, infer Declared>,
-]
-  ? [Declared] extends [string]
+type WritableFieldGroupType<T> = [DeclaredFieldGroupType<T>] extends [never]
+  ? string
+  : [DeclaredFieldGroupType<T>] extends [string]
     ? // 🔴 A union of tagged instances is REJECTED rather than offered every member's tag. A
       // dynamic zone is generated as `Hero | Cta`, and a distributive conditional would produce
       // `"hero" | "cta"` — so retagging a hero as a cta would compile, change only the
@@ -160,9 +174,8 @@ type WritableFieldGroupType<T> = [T] extends [
       // first; there is no correct tag to write onto a value whose type is still undecided.
       IsUnion<T> extends true
       ? never
-      : Declared
-    : string
-  : string;
+      : DeclaredFieldGroupType<T>
+    : string;
 
 /**
  * Whether an instance is of a given field group, narrowing it when it is.
@@ -184,10 +197,10 @@ export function isFieldGroupType<T, K extends string>(
 }
 
 type NarrowedFieldGroup<T, K extends string> = [
-  Extract<T, Record<typeof currentFieldGroupTypeKey, K>>,
+  Extract<T, Record<Extract<keyof T, FieldGroupTypeKeyName>, K>>,
 ] extends [never]
   ? T
-  : Extract<T, Record<typeof currentFieldGroupTypeKey, K>>;
+  : Extract<T, Record<Extract<keyof T, FieldGroupTypeKeyName>, K>>;
 
 export function writeFieldGroupType<T extends object>(
   instance: T,
