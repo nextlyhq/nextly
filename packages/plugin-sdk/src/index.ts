@@ -17,6 +17,16 @@
 export { definePlugin } from "nextly";
 
 /**
+ * Plugin identity and classification.
+ * @experimental `PLUGIN_CATEGORIES` and `isPluginCategory` enumerate and narrow
+ *   the vocabulary `category` accepts; `pluginAdminSlug` derives the identifier
+ *   the admin addresses a plugin by (`"@acme/p"` → `"acme-p"`), which is the
+ *   same derivation the admin routes on. No first-party plugin consumes them
+ *   yet (D55).
+ */
+export { PLUGIN_CATEGORIES, isPluginCategory, pluginAdminSlug } from "nextly";
+
+/**
  * Core plugin contract types.
  * @public `PluginDefinition`, `PluginContributions`, `PluginContext`,
  *   `PluginPermission`, `PermissionSlug`, `ServiceOpts`, `AuthUser`.
