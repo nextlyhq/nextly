@@ -323,6 +323,12 @@ function exportedNames(source: string): string[] {
   const starred = [
     ...source.matchAll(/^export \* from\s*["']([^"']+)["']/gm),
   ].map(match => `<star export from ${match[1]!}>`);
+  // `export * as colors from "./color.mjs"` publishes ONE binding named `colors`, so it is neither
+  // a star export whose names live elsewhere nor a braced list. Matched by neither, it was invisible
+  // on both sides at once.
+  const namespaced = [...source.matchAll(/^export \* as (\w+) from/gm)].map(
+    match => match[1]!
+  );
   const listed = [...source.matchAll(/^export \{([^}]*)\}/gm)]
     .flatMap(match => match[1]!.split(","))
     .map(part => {
@@ -333,7 +339,13 @@ function exportedNames(source: string): string[] {
     })
     .filter(name => name.length > 0 && name !== "type");
   return [
-    ...new Set([...declared, ...byDefault, ...starred, ...listed]),
+    ...new Set([
+      ...declared,
+      ...byDefault,
+      ...starred,
+      ...namespaced,
+      ...listed,
+    ]),
   ].sort();
 }
 
@@ -377,6 +389,19 @@ describe("reading the names a module publishes", () => {
     expect(
       exportedNames(`export { extra as renamed } from "./other.mjs";`)
     ).toEqual(["renamed"]);
+  });
+
+  it("records a namespace re-export, which publishes exactly one name", () => {
+    // `export * as colors from "./color.mjs"` is neither a star export whose names live elsewhere
+    // nor a braced list, so it matched nothing and was invisible on both sides at once.
+    expect(exportedNames(`export * as colors from "./color.mjs";`)).toEqual([
+      "colors",
+    ]);
+    // The control: it must not also be read as an unenumerable star export, or the two forms would
+    // report the same thing and the binding's NAME would be lost.
+    expect(
+      exportedNames(`export * as colors from "./color.mjs";`)
+    ).not.toContain("<star export from ./color.mjs>");
   });
 
   it("records a star re-export by its source, since its names are in another file", () => {

@@ -397,6 +397,34 @@ describe("reading what the build bundled", () => {
     expect(bundledPackages(metafile, "dist/utils.mjs")).toEqual(["culori"]);
   });
 
+  it("reads a resolver-only dependency from the build's import record", () => {
+    // `require.resolve` reaches a package that appears in no input and in no surviving specifier,
+    // so the consumer without that dependency gets MODULE_NOT_FOUND. The bundler records it under
+    // `imports`, and the declaration has to admit that property or typed callers cannot pass a
+    // real metafile at all.
+    // Passed INLINE on purpose. Excess-property checking only fires on a fresh object literal at
+    // the call site, so binding it to a variable first would typecheck against a declaration that
+    // omits `imports` and prove nothing about the declaration.
+    expect(
+      bundledPackages(
+        {
+          outputs: {
+            "dist/utils.mjs": {
+              inputs: {},
+              imports: [
+                {
+                  path: "node_modules/culori/index.js",
+                  kind: "require-resolve",
+                },
+              ],
+            },
+          },
+        },
+        "dist/utils.mjs"
+      )
+    ).toEqual(["culori"]);
+  });
+
   it("aggregates the inputs of every output reached from the entry", () => {
     // Splitting can leave the entry holding only its own source while a chunk beside it owns the
     // bundled dependency. Reading the entry alone leaves the chunk's inputs unread, even though

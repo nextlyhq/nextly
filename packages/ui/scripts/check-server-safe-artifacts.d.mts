@@ -38,7 +38,16 @@ export function packageOfInput(input: string): string | null;
  * than an empty result, since a bundled package leaves no import for the specifier scan to find.
  */
 export function bundledPackages(
-  metafile: { outputs?: Record<string, { inputs?: Record<string, unknown> }> },
+  metafile: {
+    outputs?: Record<
+      string,
+      {
+        inputs?: Record<string, unknown>;
+        /** What the bundler RESOLVED without inlining; read for resolver-only dependencies. */
+        imports?: readonly { path?: string; kind?: string }[];
+      }
+    >;
+  },
   outputNames: string | string[]
 ): string[] | null;
 

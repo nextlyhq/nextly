@@ -95,6 +95,20 @@ const DIST = join(pathDirname(fileURLToPath(import.meta.url)), "..", "dist");
  */
 const EVALUATION_TIMEOUT_MS = 30_000;
 
+/**
+ * This process's environment with anything that would PRELOAD code into the child removed.
+ *
+ * A fresh process is only isolated if it starts empty. `NODE_OPTIONS` carrying `--require` or
+ * `--import` runs a module before the artifact does, and that module can install exactly the state
+ * a separate process was started to exclude — so an artifact depending on it would evaluate here
+ * and fail for a consumer whose environment sets nothing. Inherited from the build, which may be
+ * running under monitoring that sets it, so it is dropped rather than trusted.
+ */
+function environmentWithoutPreloads() {
+  const { NODE_OPTIONS: _preloads, ...rest } = process.env;
+  return rest;
+}
+
 /** This file, re-invoked as the child that evaluates one artifact. */
 const SELF = fileURLToPath(import.meta.url);
 
@@ -878,6 +892,7 @@ async function main() {
       spawnSync(process.execPath, [SELF, "--evaluate", file], {
         encoding: "utf8",
         timeout: EVALUATION_TIMEOUT_MS,
+        env: environmentWithoutPreloads(),
       })
     );
     if (problem !== null) problems.push(problem);
