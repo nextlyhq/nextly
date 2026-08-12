@@ -16,6 +16,7 @@ import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useCollections } from "@admin/hooks/queries";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { filterCollectionItems } from "@admin/lib/permissions/authorization";
+import { resolvePluginIcon } from "@admin/lib/plugins/resolve-plugin-icon";
 import type { PluginMetadata } from "@admin/types/branding";
 import type { ApiCollection } from "@admin/types/entities";
 
@@ -168,11 +169,20 @@ export function DynamicPluginSectionItems({
                     collection.label ||
                     collection.name;
 
-                  // Resolve icon: collection icon > plugin appearance icon > Database default
+                  // A collection's own icon wins: this row IS the collection,
+                  // and the plugin's icon is only a stand-in for one that
+                  // declares none. Below that the shared chain decides, so
+                  // asset-over-lucide precedence lives in one place.
+                  //
+                  // Lucide branch only, for the same reason as the sidebar
+                  // rail: this renders an ElementType looked up by name, so a
+                  // shipped image has nowhere to go here.
+                  const resolved = resolvePluginIcon(group.meta, {
+                    fallback: "Database",
+                  });
                   const iconName =
                     collection.admin?.icon ||
-                    group.meta.appearance?.icon ||
-                    "Database";
+                    (resolved.kind === "lucide" ? resolved.name : "Database");
                   const IconComponent =
                     (Icons as Record<string, React.ElementType>)[iconName] ||
                     Database;

@@ -20,6 +20,8 @@ import {
   filterCollectionItems,
   filterSingleItems,
 } from "@admin/lib/permissions/authorization";
+import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
+import { resolvePluginIcon } from "@admin/lib/plugins/resolve-plugin-icon";
 import { cn } from "@admin/lib/utils";
 import type { ApiCollection } from "@admin/types/entities";
 
@@ -97,11 +99,15 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       Array<{ item: MainMenuItem; order: number }>
     >();
     for (const sp of visibleStandalonePlugins) {
-      const slug = sp.name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "");
-      const iconName = sp.appearance?.icon || "Database";
+      const slug = pluginSlug(sp.name);
+      // Resolved through the shared chain so asset precedence is decided in one
+      // place. This surface renders the lucide branch only: a menu item stores
+      // an ElementType and is rendered as `<Icon className=... />`, so a shipped
+      // image has nowhere to go without changing that data model. A plugin that
+      // ships only an asset therefore shows the fallback here while showing its
+      // logo in the plugins table and on its detail page.
+      const resolved = resolvePluginIcon(sp, { fallback: "Database" });
+      const iconName = resolved.kind === "lucide" ? resolved.name : "Database";
       const IconComponent = iconMap[iconName] || Database;
       // The former top-level Users icon is gone; User Management now lives
       // under Settings, so a plugin still declaring `after: "users"` is anchored

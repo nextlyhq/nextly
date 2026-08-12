@@ -1,9 +1,7 @@
 "use client";
 
 import { Badge } from "@nextlyhq/ui";
-import type React from "react";
 
-import * as Icons from "@admin/components/icons";
 import {
   BookOpen,
   ExternalLink,
@@ -21,25 +19,15 @@ import {
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
+import { PluginIcon } from "@admin/components/shared/plugin-icon";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
+import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
 import type { PluginMetadata } from "@admin/types/branding";
 
 import { PluginStatusPill } from "./components/PluginsTable";
-
-/** Human labels for the category vocabulary plugins declare. */
-const CATEGORY_LABELS: Record<string, string> = {
-  content: "Content",
-  forms: "Forms",
-  seo: "SEO",
-  media: "Media",
-  commerce: "Commerce",
-  integration: "Integration",
-  "dev-tools": "Dev Tools",
-  other: "Other",
-};
 
 const PLACEMENT_LABELS: Record<string, string> = {
   collections: "Collections",
@@ -117,9 +105,6 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
   }
 
   const title = plugin.appearance?.label ?? plugin.name;
-  const iconName = plugin.appearance?.icon || "Package";
-  const IconComponent =
-    (Icons as Record<string, React.ElementType>)[iconName] || Package;
 
   return (
     <div>
@@ -136,7 +121,13 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
       <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-start gap-4">
           <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-primary/5">
-            <IconComponent className="h-6 w-6 text-primary" />
+            {/* Package, not Database: this page presents a plugin as the
+                package you installed rather than as its collections. */}
+            <PluginIcon
+              plugin={plugin}
+              fallback="Package"
+              className="h-6 w-6 text-primary"
+            />
           </div>
           <div className="space-y-1">
             <div className="flex flex-wrap items-center gap-3">
@@ -152,7 +143,7 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
                   variant="default"
                   className="text-xs font-normal text-muted-foreground"
                 >
-                  {CATEGORY_LABELS[plugin.category] ?? plugin.category}
+                  {categoryLabel(plugin.category)}
                 </Badge>
               )}
             </div>
