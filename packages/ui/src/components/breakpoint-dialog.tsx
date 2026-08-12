@@ -108,7 +108,13 @@ function toDraft(axis: BreakpointAxis, defs: BreakpointDef[]): DraftRow[] {
 function toDef(row: DraftRow): BreakpointDef {
   const width = row.width.trim();
   return {
-    id: row.id.trim(),
+    // A SAVED id is passed through byte for byte. The engine uses it verbatim
+    // as the key stored styles are filed under, so trimming one that arrived
+    // with surrounding whitespace would re-key it on an unrelated width edit
+    // and detach those styles — the loss the field being read-only exists to
+    // prevent, reintroduced underneath it. A row added here has no styles
+    // behind it yet, so trimming what was just typed is safe and expected.
+    id: row.isNew ? row.id.trim() : row.id,
     label: row.label.trim(),
     ...(width === "" ? {} : { maxWidth: Number(width) }),
   };

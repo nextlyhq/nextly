@@ -132,6 +132,26 @@ describe("a saved breakpoint's id", () => {
     expect(id.readOnly).toBe(true);
   });
 
+  it("survives an unrelated edit byte for byte", () => {
+    // The engine files stored styles under the id VERBATIM, so normalising one
+    // that arrived with surrounding whitespace re-keys it on a width edit and
+    // detaches those styles — underneath a field the author cannot even type
+    // in. Trimming looks like tidying and is a rename.
+    const value: BreakpointSet = {
+      viewport: [{ id: " tablet ", label: "Tablet", maxWidth: 991 }],
+      container: [],
+    };
+    const onSave = open(value);
+
+    fireEvent.change(screen.getByDisplayValue("991"), {
+      target: { value: "768" },
+    });
+    fireEvent.click(saveButton());
+
+    const saved = onSave.mock.calls[0]?.[0] as BreakpointSet;
+    expect(saved.viewport[0]?.id).toBe(" tablet ");
+  });
+
   it("is editable on a row added in this session", () => {
     // The separating case: a blanket read-only id would make it impossible to
     // name a NEW breakpoint, so the test must distinguish the two.
