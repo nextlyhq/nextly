@@ -45,10 +45,16 @@ export function PluginIcon({
   // icon it replaced. On failure the component re-resolves with assets
   // disallowed, so it lands on whatever lucide name the plugin declared beside
   // the asset before reaching the caller's fallback.
-  const [assetFailed, setAssetFailed] = useState(false);
+  // The failed URL rather than a boolean. A boolean survives client-side
+  // navigation between two plugin detail pages, because the router renders the
+  // same component type without a key, so React keeps the state: one plugin's
+  // broken logo would suppress the next plugin's working one. Keying on the
+  // source means a different asset is always attempted.
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const declaredAsset = plugin.appearance?.iconAsset;
   const source = resolvePluginIcon(plugin, {
     fallback,
-    allowAsset: !assetFailed,
+    allowAsset: declaredAsset !== undefined && declaredAsset !== failedSrc,
   });
 
   if (source.kind === "asset") {
@@ -61,7 +67,7 @@ export function PluginIcon({
       <img
         src={source.src}
         alt={alt}
-        onError={() => setAssetFailed(true)}
+        onError={() => setFailedSrc(source.src)}
         className={cn("object-contain", className)}
       />
     );
