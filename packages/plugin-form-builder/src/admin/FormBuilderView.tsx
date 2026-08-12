@@ -508,8 +508,12 @@ function FormBuilderViewInner({
                     focus ring and the disabled state all come from the shared
                     primitive; restating them here is how two copies of one
                     appearance start drifting. `gap-0` and the scroll behaviour
-                    are genuinely local: this strip can overflow its container. */}
-                <TabsList className="bg-transparent justify-start gap-0 max-w-full overflow-x-auto">
+                    are genuinely local: this strip can overflow its container.
+                    `-mb-px` is too: the header above draws its own 1px bottom
+                    divider, and pulling the strip down over it lets the active
+                    tab's underline REPLACE that divider rather than stack a
+                    2px mark on top of a 1px one. */}
+                <TabsList className="bg-transparent justify-start gap-0 -mb-px max-w-full overflow-x-auto">
                   {mainTabs.map(tab => (
                     <TabsTrigger
                       key={tab.value}

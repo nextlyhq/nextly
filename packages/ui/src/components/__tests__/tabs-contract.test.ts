@@ -3,9 +3,10 @@
  *
  * `Tabs` is an underline control: the active state is a 2px bottom border on the
  * trigger, and the trigger is square so that border runs flush to its edges. The
- * primitive already applies the border, both state colours, the hover colour and
- * the focus ring — so a call site that restates any of them owns a second copy
- * of one appearance, and the copies drift the moment either changes.
+ * primitive already applies the border, both state colours, the hover colour,
+ * the focus ring and the disabled treatment — so a call site that restates any
+ * of them owns a second copy of one appearance, and the copies drift the moment
+ * either changes.
  *
  * Checked rather than declared, and the reason is worth stating: `cn()` merges
  * through tailwind-merge, so a later class legitimately overrides an earlier
@@ -19,103 +20,171 @@
  * that looks the same on the day it is written. A check reports disagreement and
  * leaves the value movable; that is the one wanted here.
  *
- * LAYOUT overrides stay allowed on purpose. Nine call sites pass things like
- * `justify-start`, `grid-cols-2`, `h-8`, `overflow-x-auto` and `gap-0`, and they
- * are correct — a tab strip in a dialog is a different shape from one in a
- * sheet. Only the indicator is closed.
+ * WHETHER A CLASS OVERRIDES IS NOT DECIDED HERE. It is decided by asking
+ * tailwind-merge, the resolver that decides it at runtime: a call site's classes
+ * are merged onto the primitive's, and anything the primitive declared that does
+ * not survive is an override. Enumerating forbidden utilities instead is the
+ * thing this replaced, and it failed the same way four times — `border-b-0` was
+ * covered while `border-0`, `border-y-0`, `border-[0px]` and a bare `border-b`
+ * all removed the underline and read as clean, as did `rounded`. Each was a
+ * patch to a list, and the list can never be finished: Tailwind decides what
+ * spells an override, and it adds utilities.
+ *
+ * Importance needs a second pass, because tailwind-merge groups BY importance:
+ * `focus-visible:!ring-0` does not displace `focus-visible:ring-2`, both survive
+ * the merge, and CSS then resolves in the caller's favour. So the same question
+ * is asked again with importance stripped, which is what makes an important
+ * override visible.
+ *
+ * LAYOUT overrides stay allowed on purpose, and fall out of the same mechanism
+ * rather than needing an exception: `w-full`, `px-0`, `justify-start`, `gap-0`
+ * and a per-state surface tint displace nothing the primitive owns, so they
+ * merge cleanly and are not reported.
  *
  * WHAT THIS CANNOT SEE, stated here because a verdict is read where it is
  * printed and a reader has no other way to learn the scope:
  *
- * - a class arriving through an identifier defined in another module
- *   (`className={imported}`); string literals reachable inside a template or a
- *   conditional ARE read, so only a fully opaque value hides
+ * - a class arriving through an identifier defined in ANOTHER module; literals
+ *   reachable inside a template or a conditional in THIS file are read
  * - a class arriving through `{...props}`
  * - Radix `asChild`, where the slotted child's `className` is merged after the
  *   wrapper's and never appears on a `Tabs*` element at all
+ * - a local declaration shadowing an imported tag inside a narrower scope
  *
  * A green run therefore means "no call site was observed repainting the
  * indicator", not "no call site can". The primitive is deliberately left
- * overridable, so completeness was never available; this bounds the shape
- * violations actually take here.
+ * overridable, so completeness was never available.
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { twMerge } from "tailwind-merge";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
+import { Tabs, TabsList, TabsTrigger } from "../tabs";
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../../..");
-const PACKAGES = resolve(REPO, "packages");
+
+/**
+ * Every first-party tree, not only `packages`.
+ *
+ * `apps/playground` declares `@nextlyhq/ui` as a dependency and `templates` is
+ * what a scaffolded project starts from, so a tab call site in either is a
+ * first-party consumer. Omitting them would mean reporting repository-wide
+ * conformance from a subset of the repository.
+ */
+const SCAN_ROOTS = ["packages", "apps", "templates"].map(r => resolve(REPO, r));
 
 /** The primitive itself declares the contract; it is not a call site. */
-const PRIMITIVE = resolve(PACKAGES, "ui/src/components/tabs.tsx");
-
-/** The components whose appearance the primitive owns. */
-const OWNED_TAGS = ["TabsList", "TabsTrigger"];
-
-/** The module a call site reaches the primitive through. */
-const OWNING_MODULE = "@nextlyhq/ui";
+const PRIMITIVE = resolve(REPO, "packages/ui/src/components/tabs.tsx");
 
 /**
- * What a call site may not put in a `className`.
+ * The modules a call site reaches the primitive through.
  *
- * One entry per appearance category the primitive declares, because a contract
- * that names five categories and checks two reports conformance on the three it
- * never looked at. Each is a way of taking an appearance over rather than
- * positioning the control.
- *
- * The state rules are scoped to ink and border deliberately: a call site may
- * still tint its own surface per state, and `FieldEditor` legitimately does with
- * `data-[state=active]:bg-background/50` — the panel behind the strip is its
- * own, while the letterform colour and the underline are not.
+ * `@nextlyhq/admin` is here because it re-exports these components verbatim
+ * (`src/index.ts`, `src/components/ui/index.ts`), so a consumer importing from
+ * it renders exactly this primitive.
  */
-const CLASS_RULES: Array<{ pattern: RegExp; why: string }> = [
-  {
-    pattern: /\bborder-b-[^\s"'`}]+/,
-    why: "sets its own bottom border — the underline IS the active state, and the primitive draws it",
-  },
-  {
-    pattern: /\brounded-[^\s"'`}]+/,
-    why: "sets a corner — tabs are square so the underline stays flush, pinned by radius-tier-contract",
-  },
-  {
-    pattern: /\bdata-\[state=(?:active|inactive)\]:(?:text|border)-/,
-    why: "repaints a state's ink or border — the primitive drives both from the same data attribute",
-  },
-  {
-    pattern: /\bhover:(?:text|border)-/,
-    why: "repaints the hover state, which the primitive already matches to the active colour",
-  },
-  {
-    pattern: /\bfocus-visible:(?:ring|outline)/,
-    why: "redraws the focus ring, which is a 2px WCAG 2.2 treatment the primitive applies uniformly",
-  },
-  {
-    pattern: /\bdisabled:/,
-    why: "restates the disabled treatment the primitive applies",
-  },
-];
+const OWNING_MODULES = ["@nextlyhq/ui", "@nextlyhq/admin"];
+
+/** The components whose appearance the primitive owns, by exported name. */
+const OWNED_EXPORTS = ["TabsList", "TabsTrigger"];
 
 /**
- * Inline declarations the primitive owns, looked for anywhere in a file that
- * renders tabs.
+ * The appearance the primitive declares, taken from what it RENDERS.
  *
- * Separate from the class rules because a computed underline colour need not sit
- * on the element: the real violation built it in React state several hundred
- * lines away and passed it down.
+ * Rendered rather than read out of the source, because the question is what the
+ * component applies — a class sitting in a dead constant or a comment is not
+ * appearance, and a witness that greps the file cannot tell the two apart.
  */
+function renderedClasses(slot: string): string {
+  const html = renderToStaticMarkup(
+    createElement(
+      Tabs,
+      { defaultValue: "a" },
+      createElement(
+        TabsList,
+        null,
+        createElement(TabsTrigger, { value: "a" }, "A")
+      )
+    )
+  );
+  const element = new RegExp(`data-slot="${slot}"[^>]*`).exec(html)?.[0] ?? "";
+  return /class="([^"]*)"/.exec(element)?.[1] ?? "";
+}
+
+/**
+ * Which of a component's own classes a call site may not displace.
+ *
+ * The primitive's full class list also carries layout — `inline-flex`, `h-10`,
+ * `px-4` — which a surface is entitled to change, so the owned set is the
+ * appearance half of it. Selected by concern rather than listed, so a change to
+ * the primitive's colours or spacing moves this with it.
+ */
+const APPEARANCE =
+  /(?:^|:)(?:-?mb-|border|rounded)|^(?:data-\[state=|hover:|focus-visible:|disabled:)/;
+
+function ownedClassesOf(slot: string): string[] {
+  return renderedClasses(slot)
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter(c => APPEARANCE.test(c));
+}
+
+const OWNED_BY_SLOT: Record<string, string[]> = {
+  TabsList: ownedClassesOf("tabs-list"),
+  TabsTrigger: ownedClassesOf("tabs-trigger"),
+};
+
+/** The same class list with every important marker removed. */
+function withoutImportance(classes: string): string {
+  return classes.replace(/!/g, "");
+}
+
+/**
+ * Which of a component's owned classes a caller's `className` displaces.
+ *
+ * Asked of tailwind-merge rather than answered here, because tailwind-merge is
+ * what answers it in the browser. The second pass exists because it groups by
+ * importance, so an important caller utility survives beside the primitive's
+ * unimportant one and then wins in CSS — invisible to a survival test until
+ * importance is removed from both sides of the comparison.
+ */
+function displacedBy(exported: string, classes: string): string[] {
+  const owned = OWNED_BY_SLOT[exported] ?? [];
+  const base = owned.join(" ");
+  const survives = (candidate: string): Set<string> =>
+    new Set(twMerge(base, candidate).split(/\s+/));
+  const direct = survives(classes);
+  const unimportant = survives(withoutImportance(classes));
+  const passed = new Set(classes.split(/\s+/).filter(Boolean));
+  return owned.filter(
+    c =>
+      !direct.has(c) ||
+      !unimportant.has(c) ||
+      // A byte-identical restatement displaces nothing, so the merge cannot see
+      // it — and it is still a second copy of one appearance, which is what
+      // drifts when the primitive changes and the call site does not.
+      passed.has(c)
+  );
+}
+
+/** Inline declarations the primitive owns; an inline style beats every class. */
 const OWNED_STYLE_PROPERTIES = [
   "borderBottom",
   "borderBottomColor",
   "borderBottomStyle",
   "borderBottomWidth",
+  "borderRadius",
 ];
 
-/** Every `.tsx` under `packages/`, excluding build output and the primitive. */
+/** Every `.tsx` under a scan root, excluding build output and the primitive. */
 function sourceFiles(dir: string, found: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     if (entry === "node_modules" || entry === "dist" || entry === ".turbo") {
@@ -125,8 +194,7 @@ function sourceFiles(dir: string, found: string[] = []): string[] {
     if (statSync(full).isDirectory()) {
       // `__tests__` is skipped deliberately: a test may construct violating
       // markup on purpose to show a rule fires, and scanning it would report
-      // the proof as the problem. No test file renders tabs today, so this
-      // bounds a future one rather than an existing exception.
+      // the proof as the problem.
       if (entry !== "__tests__") sourceFiles(full, found);
     } else if (entry.endsWith(".tsx") && full !== PRIMITIVE) {
       found.push(full);
@@ -140,16 +208,10 @@ function sourceFiles(dir: string, found: string[] = []): string[] {
  *
  * A pattern bounded by the next `>` cannot delimit a JSX element: the `>` in
  * `onClick={() => {}} className="border-b-0"` closes the match, leaving the
- * class outside it, so an override reads as conforming. A pattern beginning at
- * `<TabsTrigger` cannot see a comment marker either, since the marker sits
- * before the match starts, so a JSX example inside a docblock reads as a live
- * call site. Both are the same defect — the delimiters of a JSX element are
- * grammatical, and no character-class approximation of them holds.
- *
- * A parser resolves both by construction, and makes three further things
- * readable that no pattern reaches: attributes individually rather than as tag
- * text, string literals nested inside a template or a conditional, and a tag
- * bound to the component through a local alias.
+ * class outside it. A pattern beginning at `<TabsTrigger` cannot see a comment
+ * marker either, since the marker sits before the match starts. Both follow
+ * from the delimiters of a JSX element being grammatical, so no character-class
+ * approximation of them holds.
  */
 function parse(file: string, source: string): ts.SourceFile {
   return ts.createSourceFile(
@@ -161,41 +223,60 @@ function parse(file: string, source: string): ts.SourceFile {
   );
 }
 
+/** A specifier that reaches this primitive: the owning packages, or `./tabs`. */
+function reachesThePrimitive(specifier: string): boolean {
+  if (OWNING_MODULES.includes(specifier)) return true;
+  // Relative only. `some-other-library/tabs` also ends in `tabs` and is a
+  // different component entirely, so a bare suffix test claims files this
+  // primitive has nothing to do with.
+  return specifier.startsWith(".") && /(^|\/)tabs$/.test(specifier);
+}
+
+interface Ownership {
+  /** Tags written plainly: `TabsTrigger`, or an alias of it. */
+  names: Set<string>;
+  /** Namespaces whose qualified tags are owned: `UI` in `<UI.TabsTrigger>`. */
+  namespaces: Set<string>;
+}
+
 /**
- * The local names that refer to an owned component in this file.
+ * Which tags in this file render an owned component, and under what exported
+ * name.
  *
  * Resolved from the IMPORT rather than from the spelling. A name is a claim
  * made by whoever wrote the file, and two files can spell the same identifier
- * for different components: one defining its own `TabsList`, or importing a
- * `TabsTrigger` from some other library, would otherwise be held to this
- * primitive's contract and fail for carrying a corner it is entitled to.
- *
- * Two bindings are followed because both render the same component under
- * another tag: an import alias (`import { TabsTrigger as Trigger }`) and a
- * re-binding (`const Trigger = TabsTrigger`). Within the file only — a name
- * assigned in another module stays opaque, and the docblock says so.
- *
- * A relative specifier counts too, so a future call site inside `packages/ui`
- * reaching `../tabs` directly is covered rather than silently exempt.
+ * for different components: one defining its own `TabsList`, or importing that
+ * name from another library, would otherwise be held to this contract and fail
+ * for a corner it is entitled to.
  */
-function importsTheOwningModule(node: ts.ImportDeclaration): boolean {
-  if (!ts.isStringLiteral(node.moduleSpecifier)) return false;
-  const from = node.moduleSpecifier.text;
-  return from === OWNING_MODULE || /(^|\/)tabs$/.test(from);
-}
-
-function ownedTagNames(sourceFile: ts.SourceFile): Set<string> {
+function ownershipIn(sourceFile: ts.SourceFile): {
+  ownership: Ownership;
+  exportedNameOf: Map<string, string>;
+} {
   const names = new Set<string>();
+  const namespaces = new Set<string>();
+  const exportedNameOf = new Map<string, string>();
+
   const visit = (node: ts.Node): void => {
-    if (ts.isImportDeclaration(node) && importsTheOwningModule(node)) {
+    if (
+      ts.isImportDeclaration(node) &&
+      ts.isStringLiteral(node.moduleSpecifier) &&
+      reachesThePrimitive(node.moduleSpecifier.text)
+    ) {
       const bindings = node.importClause?.namedBindings;
       if (bindings && ts.isNamedImports(bindings)) {
         for (const specifier of bindings.elements) {
-          // `propertyName` is the exported name when the import is aliased, and
-          // absent otherwise — so the exported name is whichever is present.
+          // `propertyName` holds the exported name when the import is aliased,
+          // and is absent otherwise.
           const exported = (specifier.propertyName ?? specifier.name).text;
-          if (OWNED_TAGS.includes(exported)) names.add(specifier.name.text);
+          if (OWNED_EXPORTS.includes(exported)) {
+            names.add(specifier.name.text);
+            exportedNameOf.set(specifier.name.text, exported);
+          }
         }
+      }
+      if (bindings && ts.isNamespaceImport(bindings)) {
+        namespaces.add(bindings.name.text);
       }
     }
     if (
@@ -206,11 +287,33 @@ function ownedTagNames(sourceFile: ts.SourceFile): Set<string> {
       names.has(node.initializer.text)
     ) {
       names.add(node.name.text);
+      const exported = exportedNameOf.get(node.initializer.text);
+      if (exported) exportedNameOf.set(node.name.text, exported);
     }
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
-  return names;
+  return { ownership: { names, namespaces }, exportedNameOf };
+}
+
+/** The exported name an element's tag renders, or undefined if not owned. */
+function exportedTagOf(
+  tag: ts.JsxTagNameExpression,
+  ownership: Ownership,
+  exportedNameOf: Map<string, string>
+): string | undefined {
+  if (ts.isIdentifier(tag)) return exportedNameOf.get(tag.text);
+  // `<UI.TabsTrigger>` is a property access, not an identifier, so a traversal
+  // testing only for identifiers walks straight past a namespace import.
+  if (
+    ts.isPropertyAccessExpression(tag) &&
+    ts.isIdentifier(tag.expression) &&
+    ownership.namespaces.has(tag.expression.text) &&
+    OWNED_EXPORTS.includes(tag.name.text)
+  ) {
+    return tag.name.text;
+  }
+  return undefined;
 }
 
 /**
@@ -241,25 +344,110 @@ function literalStrings(node: ts.Node, found: string[] = []): string[] {
   return found;
 }
 
+/**
+ * The object an element's `style` prop resolves to, if it can be read here.
+ *
+ * Followed to a variable declared in the same file, because the real violation
+ * built its value away from the element. Scanning every property assignment in
+ * the file instead would fail a surface for an unrelated
+ * `const dividerStyle = { borderBottomColor }` that never reaches a tab.
+ */
+function styleObjectFor(
+  attribute: ts.JsxAttribute,
+  sourceFile: ts.SourceFile
+): ts.ObjectLiteralExpression | undefined {
+  const initializer = attribute.initializer;
+  if (!initializer || !ts.isJsxExpression(initializer)) return undefined;
+  const expression = initializer.expression;
+  if (!expression) return undefined;
+  if (ts.isObjectLiteralExpression(expression)) return expression;
+  if (!ts.isIdentifier(expression)) return undefined;
+
+  let resolved: ts.ObjectLiteralExpression | undefined;
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === expression.text &&
+      node.initializer &&
+      ts.isObjectLiteralExpression(node.initializer)
+    ) {
+      resolved = node.initializer;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return resolved;
+}
+
+/** An owned inline property declared anywhere inside an object literal. */
+function ownedStyleProperty(
+  object: ts.ObjectLiteralExpression
+): string | undefined {
+  let found: string | undefined;
+  const visit = (node: ts.Node): void => {
+    if (ts.isPropertyAssignment(node)) {
+      // `.text` rather than `getText()`: the latter includes the quotes of a
+      // `{ "borderBottomColor": c }` key, so a quoted property compares unequal
+      // to every name in the list and passes.
+      const name = ts.isIdentifier(node.name)
+        ? node.name.text
+        : ts.isStringLiteral(node.name)
+          ? node.name.text
+          : undefined;
+      if (name && OWNED_STYLE_PROPERTIES.includes(name)) found ??= name;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(object);
+  return found;
+}
+
 interface Violation {
   file: string;
   line: number;
   why: string;
 }
 
-/** Every owned element in a file, with its attributes. */
-function ownedElements(
-  sourceFile: ts.SourceFile
-): Array<ts.JsxOpeningElement | ts.JsxSelfClosingElement> {
-  const names = ownedTagNames(sourceFile);
-  const found: Array<ts.JsxOpeningElement | ts.JsxSelfClosingElement> = [];
+function violationsIn(file: string, source: string): Violation[] {
+  const sourceFile = parse(file, source);
+  const { ownership, exportedNameOf } = ownershipIn(sourceFile);
+  const found: Violation[] = [];
+  const at = (node: ts.Node): number =>
+    sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line +
+    1;
+
   const visit = (node: ts.Node): void => {
-    if (
-      (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) &&
-      ts.isIdentifier(node.tagName) &&
-      names.has(node.tagName.text)
-    ) {
-      found.push(node);
+    if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const exported = exportedTagOf(node.tagName, ownership, exportedNameOf);
+      if (exported) {
+        for (const attribute of node.attributes.properties) {
+          if (!ts.isJsxAttribute(attribute)) continue;
+          const name = attribute.name.getText(sourceFile);
+          if (name === "style") {
+            const object = styleObjectFor(attribute, sourceFile);
+            const property = object && ownedStyleProperty(object);
+            if (property) {
+              found.push({
+                file,
+                line: at(attribute),
+                why: `sets \`${property}\` inline, which beats every class the primitive applies`,
+              });
+            }
+            continue;
+          }
+          if (name !== "className" || !attribute.initializer) continue;
+          const classes = literalStrings(attribute.initializer).join(" ");
+          const displaced = displacedBy(exported, classes);
+          if (displaced.length > 0) {
+            found.push({
+              file,
+              line: at(attribute),
+              why: `displaces ${displaced.join(", ")} — the primitive owns that appearance, and every surface should change with it`,
+            });
+          }
+        }
+      }
     }
     ts.forEachChild(node, visit);
   };
@@ -267,160 +455,130 @@ function ownedElements(
   return found;
 }
 
-function violationsIn(file: string, source: string): Violation[] {
-  const sourceFile = parse(file, source);
-  const found: Violation[] = [];
-  const at = (node: ts.Node): number =>
-    sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line +
-    1;
-
-  for (const element of ownedElements(sourceFile)) {
-    for (const attribute of element.attributes.properties) {
-      if (!ts.isJsxAttribute(attribute)) continue;
-      const name = attribute.name.getText(sourceFile);
-      if (name === "style") {
-        found.push({
-          file,
-          line: at(attribute),
-          why: "styles the tab inline — use spacing and sizing utilities, which a theme can move",
-        });
-        continue;
-      }
-      if (name !== "className" || !attribute.initializer) continue;
-      const classes = literalStrings(attribute.initializer).join(" ");
-      for (const { pattern, why } of CLASS_RULES) {
-        if (pattern.test(classes))
-          found.push({ file, line: at(attribute), why });
-      }
-    }
-  }
-
-  // Only meaningful in a file that renders tabs at all — `borderBottomColor` on
-  // an unrelated element is not this contract's business.
-  if (found.length > 0 || ownedElements(sourceFile).length > 0) {
-    const visit = (node: ts.Node): void => {
-      if (
-        ts.isPropertyAssignment(node) &&
-        OWNED_STYLE_PROPERTIES.includes(node.name.getText(sourceFile))
-      ) {
-        found.push({
-          file,
-          line: at(node),
-          why: "drives the underline from JS instead of the primitive's data-[state=active]",
-        });
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(sourceFile);
-  }
-  return found;
+function scanned(): string[] {
+  return SCAN_ROOTS.flatMap(root => sourceFiles(root));
 }
 
 function violations(): Violation[] {
   const found: Violation[] = [];
-  for (const file of sourceFiles(PACKAGES)) {
+  for (const file of scanned()) {
     const source = readFileSync(file, "utf8");
-    // Cheap reject first: most files never mention tabs at all. Keyed on the
-    // imported names rather than on tag text, so an aliased render is not
-    // skipped before it is parsed.
-    if (!OWNED_TAGS.some(tag => source.includes(tag))) continue;
-    found.push(
-      ...violationsIn(file.replace(`${REPO}/`, ""), source).map(v => ({
-        ...v,
-        file: v.file,
-      }))
-    );
+    // Cheap reject: most files never mention tabs at all.
+    if (!OWNED_EXPORTS.some(tag => source.includes(tag))) continue;
+    found.push(...violationsIn(file.replace(`${REPO}/`, ""), source));
   }
   return found;
 }
 
 describe("the tab indicator contract", () => {
-  it("still has a contract to enforce", () => {
-    // The structural witness. This check exists only because the primitive owns
-    // the indicator; if it stops drawing one, the check is not merely unscoped,
-    // it is meaningless — so its absence must go red rather than green.
+  it("still has an indicator to protect", () => {
+    // The structural witness. This check exists only because the primitive
+    // draws an indicator; if it stops, the check is not merely unscoped, it is
+    // meaningless, so its absence must go red rather than green.
     //
-    // Asserted on the underline itself rather than on a named constant: the
-    // primitive is free to be reorganised, and a check tied to an identifier
-    // would report a rename as a lost contract.
-    const primitive = readFileSync(PRIMITIVE, "utf8");
-    expect(primitive).toMatch(/\bborder-b-2\b/);
-    expect(primitive).toMatch(/data-\[state=active\]:border-b-/);
+    // Read from the RENDERED element rather than from the file's text. A
+    // constant left behind by a refactor, or an example in a docblock, keeps a
+    // grep of the source satisfied while the trigger renders nothing — and the
+    // suite would go on forbidding call sites from supplying an indicator the
+    // primitive no longer has.
+    const trigger = OWNED_BY_SLOT.TabsTrigger;
+    expect(trigger).toContain("border-b-2");
+    expect(trigger.some(c => /^data-\[state=active\]:/.test(c))).toBe(true);
+    expect(OWNED_BY_SLOT.TabsList).toContain("rounded-none");
   });
 
   it("finds files to check, so a clean result means conforming and not unscanned", () => {
     // The instrument control. Every assertion below is "nothing was found",
     // which a broken path, a wrong extension or an over-eager skip would also
-    // produce — and it would read as compliance.
-    const scanned = sourceFiles(PACKAGES).filter(file =>
-      OWNED_TAGS.some(tag => readFileSync(file, "utf8").includes(tag))
+    // produce, and it would read as compliance.
+    const rendering = scanned().filter(file =>
+      OWNED_EXPORTS.some(tag => readFileSync(file, "utf8").includes(tag))
     );
-    expect(scanned.length).toBeGreaterThan(5);
+    expect(rendering.length).toBeGreaterThan(5);
   });
 
   /** Every probe imports the way a real call site does, so tags resolve. */
-  const IMPORT = `import { TabsList, TabsTrigger } from "${OWNING_MODULE}";\n`;
+  const IMPORT = `import { TabsList, TabsTrigger } from "@nextlyhq/ui";\n`;
 
   it.each([
+    // The shapes a pattern-based scan returned clean on. Each removes the
+    // underline or the corner outright.
+    ["a zero border shorthand", '<TabsTrigger className="border-0" />'],
+    ["an axis border shorthand", '<TabsTrigger className="border-y-0" />'],
+    ["an arbitrary border width", '<TabsTrigger className="border-[0px]" />'],
+    ["a bare border-b", '<TabsTrigger className="border-b" />'],
+    ["a bare rounded", '<TabsList className="rounded" />'],
+    ["an explicit border-b-0", '<TabsTrigger className="border-b-0" />'],
+    ["a corner", '<TabsList className="rounded-md" />'],
+    // Important variants. tailwind-merge keeps these beside the primitive's
+    // unimportant declaration, so they survive the merge and win in CSS.
+    [
+      "an important focus ring",
+      '<TabsTrigger className="focus-visible:!ring-0" />',
+    ],
+    [
+      "an important state ink",
+      '<TabsTrigger className="data-[state=active]:!text-destructive" />',
+    ],
+    // Categories the primitive declares.
+    [
+      "a state ink override",
+      '<TabsTrigger className="data-[state=active]:text-destructive" />',
+    ],
+    ["a hover override", '<TabsTrigger className="hover:text-foreground" />'],
+    ["a disabled override", '<TabsTrigger className="disabled:opacity-100" />'],
+    // Shapes the grammar hides from a pattern.
     [
       "a forbidden class after an arrow-function prop",
       '<TabsTrigger onClick={() => {}} className="border-b-0">x</TabsTrigger>',
     ],
     [
-      "a forbidden class in a self-closing element",
-      '<TabsList className="rounded-md" />',
-    ],
-    [
       "a forbidden class inside a template literal",
-      "<TabsTrigger className={`shrink-0 ${x} border-b-4`}>x</TabsTrigger>",
+      "<TabsTrigger className={`shrink-0 ${x} border-b-4`} />",
     ],
     [
       "a forbidden class in one branch of a conditional",
-      '<TabsTrigger className={on ? "border-b-2 border-primary" : "x"}>x</TabsTrigger>',
+      '<TabsTrigger className={on ? "border-b-2 border-primary" : "x"} />',
     ],
-    ["an inline style", "<TabsList style={{ width: 320 }} />"],
+    // Inline styles, including the quoted-key spelling.
     [
-      "an underline colour computed in JS",
-      "const s = { borderBottomColor: c };\n<TabsList />",
+      "an inline underline colour",
+      "<TabsTrigger style={{ borderBottomColor: c }} />",
     ],
+    [
+      "a quoted inline underline colour",
+      '<TabsTrigger style={{ "borderBottomColor": c }} />',
+    ],
+    [
+      "an inline style built away from the element",
+      "const s = { borderBottomColor: c };\n<TabsTrigger style={s} />",
+    ],
+    // Bindings.
     [
       "a violation on a locally aliased tag",
       'const Trigger = TabsTrigger;\n<Trigger className="border-b-0" />',
     ],
-    // One per appearance category the contract claims. A category the primitive
-    // declares and the rules never read reports conformance it did not check.
-    [
-      "an active-state ink override",
-      '<TabsTrigger className="data-[state=active]:text-destructive">x</TabsTrigger>',
-    ],
-    [
-      "an inactive-state border override",
-      '<TabsTrigger className="data-[state=inactive]:border-primary">x</TabsTrigger>',
-    ],
-    [
-      "a hover override",
-      '<TabsTrigger className="hover:border-transparent">x</TabsTrigger>',
-    ],
-    [
-      "a focus-ring override",
-      '<TabsTrigger className="focus-visible:ring-0">x</TabsTrigger>',
-    ],
-    [
-      "a disabled-state override",
-      '<TabsTrigger className="disabled:opacity-100">x</TabsTrigger>',
-    ],
   ])("catches %s", (_label, body) => {
-    // The positive controls. Each is a shape the previous pattern-based scan
-    // returned clean on, or a category no version of it read at all. Without
-    // these, a rule that can never match anything passes the suite while
-    // checking nothing.
+    // The positive controls. Each is a shape an earlier version returned clean
+    // on, or a category it never read. Without these, a check that can never
+    // report anything passes the suite while checking nothing.
     expect(violationsIn("probe.tsx", IMPORT + body)).not.toEqual([]);
   });
 
   it("catches a violation reached through an import alias", () => {
-    const source =
-      `import { TabsTrigger as Trigger } from "${OWNING_MODULE}";\n` +
-      '<Trigger className="rounded-md" />';
+    const source = `import { TabsTrigger as Trigger } from "@nextlyhq/ui";\n<Trigger className="rounded-md" />`;
+    expect(violationsIn("probe.tsx", source)).not.toEqual([]);
+  });
+
+  it("catches a violation reached through a namespace import", () => {
+    const source = `import * as UI from "@nextlyhq/ui";\n<UI.TabsTrigger className="border-b-0" />`;
+    expect(violationsIn("probe.tsx", source)).not.toEqual([]);
+  });
+
+  it("catches a violation reached through the admin re-export", () => {
+    // `@nextlyhq/admin` re-exports these components verbatim, so a consumer
+    // importing from it renders exactly this primitive.
+    const source = `import { TabsTrigger } from "@nextlyhq/admin";\n<TabsTrigger className="border-b-0" />`;
     expect(violationsIn("probe.tsx", source)).not.toEqual([]);
   });
 
@@ -438,8 +596,20 @@ describe("the tab indicator contract", () => {
       '<TabsList className="justify-start gap-0 overflow-x-auto h-8" />',
     ],
     [
+      "sizing and padding on a trigger",
+      '<TabsTrigger className="w-full px-0 shrink-0 whitespace-nowrap" />',
+    ],
+    [
       "a per-state surface tint, which the surface owns",
-      '<TabsTrigger className="w-full data-[state=active]:bg-background/50">x</TabsTrigger>',
+      '<TabsTrigger className="w-full data-[state=active]:bg-background/50" />',
+    ],
+    [
+      "a hairline offset on the strip, which owns no bottom margin",
+      '<TabsList className="-mb-px" />',
+    ],
+    [
+      "an unrelated inline style on a tab",
+      "<TabsList style={{ width: 320 }} />",
     ],
     [
       "an unrelated element carrying a corner",
@@ -448,24 +618,37 @@ describe("the tab indicator contract", () => {
   ])("does not report %s", (_label, body) => {
     // The complement, and the reason this is a contract rather than a ban. A
     // check that flags a documented example or a legitimate layout class gets
-    // switched off, and then it enforces nothing at all. The surface tint is
-    // load-bearing: a real call site depends on it.
+    // switched off, and then it enforces nothing at all. Several of these are
+    // load-bearing: real call sites depend on them.
     expect(violationsIn("probe.tsx", IMPORT + body)).toEqual([]);
   });
 
-  it("does not claim a same-named component from another module", () => {
-    // Ownership follows the import, not the spelling. A file with its own
-    // `TabsList`, or one importing that name from elsewhere, is entitled to any
-    // corner it likes, and holding it to this contract would fail the whole UI
-    // suite over a component this primitive has nothing to do with.
-    const imported =
-      'import { TabsList } from "some-other-library";\n' +
-      '<TabsList className="rounded-md border-b-0" />';
-    expect(violationsIn("probe.tsx", imported)).toEqual([]);
-    const local =
-      "function TabsList() { return null; }\n" +
-      '<TabsList className="rounded-md" />';
-    expect(violationsIn("probe.tsx", local)).toEqual([]);
+  it("does not report an unrelated style defined in a file that renders tabs", () => {
+    // The value never reaches a tab. Walking every property assignment in the
+    // file would fail the whole UI suite over a divider elsewhere on the page.
+    const source = `${IMPORT}const dividerStyle = { borderBottomColor: c };\n<div style={dividerStyle} />\n<TabsList />`;
+    expect(violationsIn("probe.tsx", source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      "a same-named component from another library",
+      'import { TabsList } from "some-other-library";\n<TabsList className="rounded-md border-b-0" />',
+    ],
+    [
+      "a same-named component from a non-relative tabs path",
+      'import { TabsList } from "some-other-library/tabs";\n<TabsList className="rounded-md" />',
+    ],
+    [
+      "a locally declared component of the same name",
+      'function TabsList() { return null; }\n<TabsList className="rounded-md" />',
+    ],
+  ])("does not claim %s", (_label, source) => {
+    // Ownership follows the import, not the spelling. Holding an unrelated
+    // component to this contract would fail the whole UI suite over something
+    // this primitive has nothing to do with, and that is how a check gets
+    // switched off.
+    expect(violationsIn("probe.tsx", source)).toEqual([]);
   });
 
   it("no call site overrides the tab indicator", () => {

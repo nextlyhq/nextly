@@ -22,6 +22,7 @@
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
 "@nextlyhq/builder": patch
+"@nextlyhq/module-specifiers": patch
 ---
 
 Tabs now look the same everywhere.
