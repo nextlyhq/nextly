@@ -121,6 +121,35 @@ describe("reporting a problem", () => {
   });
 });
 
+describe("a saved breakpoint's id", () => {
+  it("cannot be retyped, because stored styles are filed under it", () => {
+    // `onSave` carries only the breakpoint set. A rename here would leave every
+    // NodeStyles entry keyed by the old id, and the compiler would stop
+    // emitting those styles on every page that used them, reporting nothing.
+    open(stored());
+    const id = screen.getByDisplayValue("tablet") as HTMLInputElement;
+
+    expect(id.readOnly).toBe(true);
+  });
+
+  it("is editable on a row added in this session", () => {
+    // The separating case: a blanket read-only id would make it impossible to
+    // name a NEW breakpoint, so the test must distinguish the two.
+    open(stored());
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Add breakpoint" })[0]
+    );
+
+    const blank = screen
+      .getAllByRole("textbox")
+      .filter(el => (el as HTMLInputElement).value === "");
+    expect(blank.length).toBeGreaterThan(0);
+    expect(blank.every(el => (el as HTMLInputElement).readOnly === false)).toBe(
+      true
+    );
+  });
+});
+
 describe("the draft", () => {
   it("does not mutate the set it was given", () => {
     const value = stored();
