@@ -171,10 +171,17 @@ describe("the bare-Error guard", () => {
     // The complement: proves the exemptions are what suppress the rule, rather than the rule
     // being inert everywhere.
     const exempted = BARE_ERROR_ALLOWLIST[0];
-    expect(exempted).toBeDefined();
+    // Narrowed rather than asserted: an empty allowlist would otherwise reach `join` as
+    // `undefined` and fail on a path error, which reads as a broken test rather than as the
+    // control having nothing to run against.
+    if (exempted === undefined) {
+      throw new TypeError(
+        `${ALLOWLIST_FILE} is empty; there is nothing to exempt`
+      );
+    }
     const ruleIds = await bareThrowRuleIds(
-      exempted as string,
-      readFileSync(join(packageRoot, exempted as string), "utf8") + PROBE_SOURCE
+      exempted,
+      readFileSync(join(packageRoot, exempted), "utf8") + PROBE_SOURCE
     );
     expect(ruleIds).not.toContain("no-restricted-syntax");
   }, 60_000);
