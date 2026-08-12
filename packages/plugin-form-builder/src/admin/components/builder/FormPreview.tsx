@@ -286,6 +286,8 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
             value={device}
             onValueChange={value => setDevice(value as "desktop" | "mobile")}
           >
+            {/* No corner override: the primitive already guarantees square,
+                and a call site restating it is how the guarantee gets forked. */}
             <TabsList>
               <TabsTrigger value="desktop" className="gap-1.5">
                 <Monitor className="h-3.5 w-3.5" aria-hidden="true" />

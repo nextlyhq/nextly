@@ -754,6 +754,8 @@ export function Inspector() {
           minHeight: 0,
         }}
       >
+        {/* Spacing utilities rather than an inline pixel margin, so this strip
+            moves with the design tokens like every other admin surface. */}
         <TabsList className="mx-3 mt-2.5">
           <TabsTrigger value="content">Content</TabsTrigger>
           <TabsTrigger value="style">Style</TabsTrigger>

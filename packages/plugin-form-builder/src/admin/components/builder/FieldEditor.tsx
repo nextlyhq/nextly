@@ -670,6 +670,9 @@ export function FieldEditor({ field, allFields, onUpdate }: FieldEditorProps) {
       >
         {/* Semantic border token so the tab-bar bottom edge is visible at the 3:1 UI minimum. */}
         <div className="border-b bg-muted border-border">
+          {/* Layout only. The underline, its colours and the square corner come
+              from the shared primitive; `w-full` spreads the triggers evenly and
+              the active tint is this panel's own surface treatment. */}
           <TabsList className="w-full justify-start gap-0">
             <TabsTrigger
               value="general"

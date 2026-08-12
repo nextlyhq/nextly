@@ -110,15 +110,49 @@ const TabsList = forwardRef<TabsListRef, TabsListProps>(
       ref={ref}
       data-slot="tabs-list"
       className={cn(
-        // Square corners: underline tabs, so the list never draws a rounded surface.
-        "inline-flex h-10 items-center justify-center gap-1 rounded-none p-0 text-muted-foreground",
-        className
+        "inline-flex h-10 items-center justify-center gap-1 p-0 text-muted-foreground",
+        className,
+        // Last in the merge, so no call site can round the strip: these are
+        // underline tabs and the list never draws a rounded surface.
+        "rounded-none"
       )}
       {...props}
     />
   )
 );
 TabsList.displayName = List.displayName;
+
+/**
+ * What a caller may change: size, spacing, weight, local surface tints.
+ *
+ * First in the merge, so a call site that passes `h-8`, `w-full` or `px-0`
+ * overrides these — a tab strip in a dialog is a different shape from one in a
+ * sheet, and that is a layout decision the surface owns.
+ */
+const TRIGGER_LAYOUT =
+  "inline-flex items-center justify-center whitespace-nowrap bg-transparent px-4 py-2 text-sm font-medium cursor-pointer transition-all duration-200 relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed";
+
+/**
+ * What a caller may NOT change: the underline that IS the active state.
+ *
+ * Placed AFTER `className` in the merge rather than before it. `cn()` resolves
+ * through tailwind-merge, so the last class on a property wins — putting these
+ * last means a call site cannot take the indicator over, whatever route the
+ * class arrives by. That matters because the routes are unbounded: a literal
+ * `className`, an identifier, a spread, an aliased import. A source scan sees
+ * only the first; the merge order sees all of them, because it acts on the
+ * resolved value rather than on the text that produced it.
+ *
+ * Square is part of the indicator, not a decoration: the border has to run
+ * flush to the trigger's edges. `radius-tier-contract` pins the same fact.
+ *
+ * This does not cover an INLINE STYLE — a `style` prop beats any class by CSS
+ * specificity, and no merge order changes that. That gap is what
+ * `__tests__/tabs-contract.test.ts` scans for, and it is the only thing it has
+ * to scan for now.
+ */
+const TRIGGER_INDICATOR =
+  "rounded-none border-b-2 -mb-0.5 data-[state=active]:border-b-primary! data-[state=active]:text-primary data-[state=inactive]:border-transparent data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary";
 
 /**
  * TabsTrigger - Clickable tab button
@@ -144,12 +178,7 @@ const TabsTrigger = forwardRef<TabsTriggerRef, TabsTriggerProps>(
     <Trigger
       ref={ref}
       data-slot="tabs-trigger"
-      className={cn(
-        // Square corners: the active state is a 2px bottom border that has to
-        // run the full width of the trigger.
-        "inline-flex items-center justify-center whitespace-nowrap rounded-none bg-transparent px-4 py-2 text-sm font-medium cursor-pointer transition-all duration-200 border-b-2 relative -mb-0.5 data-[state=active]:border-b-primary! data-[state=active]:text-primary data-[state=inactive]:border-transparent data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed",
-        className
-      )}
+      className={cn(TRIGGER_LAYOUT, className, TRIGGER_INDICATOR)}
       {...props}
     />
   )

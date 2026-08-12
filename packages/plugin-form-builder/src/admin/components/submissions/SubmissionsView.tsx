@@ -479,6 +479,8 @@ export function SubmissionsView({ collectionSlug }: SubmissionsViewProps) {
               setOpenId(null);
             }}
           >
+            {/* No corner override: square is the primitive's guarantee, not
+                this view's decision. */}
             <TabsList>
               {STATUS_TABS.map(tab => (
                 <TabsTrigger key={tab.value} value={tab.value}>
