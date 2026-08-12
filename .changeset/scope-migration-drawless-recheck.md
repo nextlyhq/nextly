@@ -22,6 +22,7 @@
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
 "@nextlyhq/builder": patch
+"@nextlyhq/module-specifiers": patch
 ---
 
 A page whose stylesheet is reused now keeps it when a block migration turns a
