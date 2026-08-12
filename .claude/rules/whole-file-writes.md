@@ -41,9 +41,21 @@ destroyed a different file.
 Testing the leaf is not enough, and this is the trap: with `linkdir -> real`,
 `test -L linkdir/file.txt` is FALSE — the file itself is regular — while the
 write still lands in `real/file.txt`. Any component can be the link. So resolve
-the whole path unconditionally with `readlink -f` and treat the RESULT as the
-path being written, rather than inspecting components for links. Then every
-check in this rule runs against the file that actually changed.
+the whole path unconditionally and treat the RESULT as the path being written,
+rather than inspecting components for links. Then every check in this rule runs
+against the file that actually changed.
+
+Resolve it with something that exists everywhere this repo runs — CI covers
+Ubuntu, macOS and Windows:
+
+```
+node -e 'console.log(require("fs").realpathSync(process.argv[1]))' -- <path>
+```
+
+`readlink -f` is a GNU extension, absent from POSIX and from Windows shells, so
+it is not the portable instruction even where it happens to work. If resolution
+FAILS, stop rather than falling back to the unresolved path: not knowing which
+file you are about to replace is the condition this whole rule is about.
 
 `turbo.json` in `packages/ui` was replaced this way. It lost
 `dependsOn: ["$TURBO_EXTENDS$", "build"]` on both `test` and `test:coverage`,
@@ -57,23 +69,26 @@ write. So the baseline is chosen once, and each command follows from it. Getting
 this wrong is not a smaller version of the same answer — it silently swaps which
 content is being judged.
 
-Ask them in this order, because the first question that answers YES settles it:
+The question is not "which of these two is it". Any of the last commit, the
+index, a retained stash, or nothing in git at all can hold that content — an
+untracked or ignored file was never in either, a stash holds edits that were
+reapplied and then clobbered, and edits that were only ever in the working tree
+are in none of them. Enumerating the cases is how this section kept being wrong;
+what settles it is naming the revision and CHECKING it holds what you expect:
 
-1. **Did the path carry deliberate UNSTAGED edits that were never committed or
-   stashed?** Then **git holds no copy of the pre-write state, and the procedure
-   stops here.** This takes precedence even when staged edits ALSO existed — the
-   index preserves only the staged subset, so restoring from it produces a
-   convincing delta that silently drops the unstaged lines. Say so and go
-   outside git: the editor's local history, a backup, an open buffer. A recovery
-   that cannot recover is worth naming as one; running the steps anyway converts
-   a known loss into an unnoticed one.
-2. **Were there deliberate STAGED edits (and no unstaged ones)?** The index holds
-   the pre-write state, `HEAD` never did, and comparisons are the bare
-   `git diff -- <path>`, which is working tree against index. Inspect the staged
-   copy with `git diff --cached HEAD -- <path>` or `git show :<path>`; note that
-   `git status` shows only `MM` and reveals none of it.
-3. **Otherwise** the last commit held it: the baseline is `HEAD`, and comparisons
-   take the form `git diff HEAD -- <path>`.
+- `git show <rev>:<path>` prints a candidate's copy — `HEAD`, a stash
+  (`stash@{0}`), any commit — and `git show :<path>` prints the index copy.
+  Read the one you intend to restore from BEFORE restoring, and confirm it
+  contains the pre-write content rather than assuming it does.
+- The reading commands follow from that choice. Against a commit,
+  `git diff <rev> -- <path>`; against the index, the bare `git diff -- <path>`,
+  which is working tree versus index. Note that `git status` shows only `MM` and
+  reveals neither.
+
+**If no revision holds it, stop.** Say so and look outside git — editor local
+history, a backup, an open buffer. A recovery that cannot recover is worth
+naming as one; running the steps anyway converts a known loss into an unnoticed
+one, because the resulting diff looks entirely clean.
 
 Both failure directions are live, which is why this is not a detail. Comparing
 against `HEAD` when the index is the baseline reports the staged additions as
@@ -89,12 +104,17 @@ They are worth knowing individually, because each looks like good news:
 1. **The diffstat shows deletions on a file you believe you are creating**, read
    against the baseline named above. A created file has no deleted lines, so one
    `-` in its `++---` bar settles it — but only when the comparison starts from
-   before the file existed. A bare `git diff --stat` against the wrong baseline
-   answers a different question: with `HEAD` as the baseline it reports
-   deletions for a genuinely new path that was staged and then shortened, firing
-   on a file that really is new. This is the cheapest tell and the one most
-   easily read past, because by then the write has already succeeded and
-   attention has moved on.
+   before the file existed.
+
+   Read against the wrong baseline it answers a different question. A genuinely
+   new path that was STAGED and then shortened shows deletions under the bare
+   `git diff --stat`, which compares the working tree with the index where the
+   longer version now sits; against `HEAD`, where the path does not exist at
+   all, the same file shows additions only. So the bare form is the one that
+   fires on a file that really is new, and it fires exactly when the baseline
+   section says the index is NOT the baseline. This is the cheapest tell and the
+   one most easily read past, because by then the write has already succeeded
+   and attention has moved on.
 
 2. **A metric improves far more than the change should explain.** "1264 inputs
    became 119" was recorded as evidence that the new scoping was tight. It was
@@ -162,23 +182,15 @@ drop whatever the root supplies.
 
 ## Restoring, and proving the restore
 
-Recovery is where this rule stops being a procedure, deliberately. The full
-matter of which git revision holds a given pre-write state is a large surface —
-seven successive corrections to this section all found real defects in it — and
-a manual that is right about six cases and silent about the seventh reads as
-complete. Three things are worth stating; the rest is the situation in front of
-you.
+Recovery is deliberately not a procedure here. Which revision holds a given
+pre-write state depends on how the work reached the tree — committed, staged,
+stashed, or never recorded — and a manual that covers most of those and is
+silent about the rest reads as complete, which is worse than being brief. Three
+things are worth stating; the rest is the situation in front of you.
 
-**1. Identify which revision actually holds the pre-write content, before
-running anything.** No command is right by default. Ask in this order, first YES
-settles it:
-
-- Deliberate edits that were never committed or stashed, staged or not? Then
-  **git does not hold it, and this is where the procedure stops.** Say so and
-  look outside git — editor local history, a backup, an open buffer. Running the
-  steps anyway converts a known loss into an unnoticed one.
-- Otherwise it is a commit or the index, and the reading commands follow from
-  the baseline section above.
+**1. Identify which revision actually holds the pre-write content, and read it,
+before running anything.** That is the baseline question above, including its
+stop condition. No command is right by default.
 
 **2. The restore does not carry your edit.** Re-apply it on top as the delta it
 actually was — an append only where the edit was additive; for a removal or a
