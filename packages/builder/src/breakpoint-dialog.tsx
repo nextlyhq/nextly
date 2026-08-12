@@ -16,7 +16,7 @@ import { Plus, Trash2, TriangleAlert } from "lucide-react";
 import * as React from "react";
 
 import {
-  BASE_BREAKPOINT_ID,
+  BASE_BREAKPOINT,
   BREAKPOINT_AXES,
   inCascadeOrder,
   storedLimitFor,
@@ -271,7 +271,7 @@ export function BreakpointDialog({
 
                 {axis === "viewport" && (
                   <p className="text-muted-foreground border-border rounded-md border border-dashed px-3 py-2 text-xs">
-                    <span className="font-mono">{BASE_BREAKPOINT_ID}</span> is
+                    <span className="font-mono">{BASE_BREAKPOINT}</span> is
                     built in and always applies. It uses one of this
                     axis&rsquo;s {limit + 1} slots, leaving {limit}.
                   </p>

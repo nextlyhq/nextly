@@ -30,6 +30,8 @@
  * @module breakpoints
  */
 import {
+  BASE_BREAKPOINT,
+  BREAKPOINT_AXES,
   MAX_BREAKPOINTS_PER_AXIS,
   type BreakpointAxis,
   type BreakpointDef,
@@ -37,29 +39,25 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 /**
- * The reserved id for the unconditional context.
+ * Re-exported from the engine, not restated.
  *
- * The compiler inserts this itself and claims the id before reading settings,
- * so a stored definition that reuses it contributes nothing at all.
+ * Every one of these is a value the COMPILER decides and this editor only
+ * reports on, so a local copy is a second opinion that drifts silently:
+ *
+ * - `BASE_BREAKPOINT` — the reserved id for the unconditional context. The
+ *   compiler claims it before reading settings, so a stored definition reusing
+ *   it contributes nothing. A local `"base"` literal would keep rejecting the
+ *   old id and start accepting a renamed one, admitting definitions compilation
+ *   drops.
+ * - `BREAKPOINT_AXES` — not merely a list. The engine reads it as cascade
+ *   PRECEDENCE and uses the order to decide which cross-axis duplicate wins, so
+ *   a second array that reorders marks the opposite definition as the duplicate.
+ * - `MAX_BREAKPOINTS_PER_AXIS` — the cap the compiler enforces while emitting.
  *
  * @experimental
  */
-export const BASE_BREAKPOINT_ID = "base";
-
-/**
- * Re-exported from the engine so a consumer of this module needs one import,
- * while the VALUE still has exactly one definition — the engine's.
- *
- * @experimental
- */
-export { MAX_BREAKPOINTS_PER_AXIS };
+export { BASE_BREAKPOINT, BREAKPOINT_AXES, MAX_BREAKPOINTS_PER_AXIS };
 export type { BreakpointAxis, BreakpointDef, BreakpointSet };
-
-/** @experimental */
-export const BREAKPOINT_AXES: readonly BreakpointAxis[] = [
-  "viewport",
-  "container",
-];
 
 /**
  * Why a definition would not survive compilation.
@@ -131,7 +129,7 @@ export function validateBreakpoints(set: BreakpointSet): BreakpointIssue[] {
   // Seeded with the reserved id, which the compiler claims before it reads any
   // stored definition — so a definition naming it is a duplicate of something
   // the author cannot see in the list.
-  const claimedIds = new Set<string>([BASE_BREAKPOINT_ID]);
+  const claimedIds = new Set<string>([BASE_BREAKPOINT]);
 
   for (const axis of BREAKPOINT_AXES) {
     const defs = set[axis] ?? [];
@@ -170,11 +168,11 @@ export function validateBreakpoints(set: BreakpointSet): BreakpointIssue[] {
       const id = def.id;
       if (id.length === 0) {
         at("id", "id-required", "Give this breakpoint an id.");
-      } else if (id === BASE_BREAKPOINT_ID) {
+      } else if (id === BASE_BREAKPOINT) {
         at(
           "id",
           "id-reserved",
-          `"${BASE_BREAKPOINT_ID}" is the built-in unconditional breakpoint. Choose another id.`
+          `"${BASE_BREAKPOINT}" is the built-in unconditional breakpoint. Choose another id.`
         );
       } else if (claimedIds.has(id)) {
         at(
