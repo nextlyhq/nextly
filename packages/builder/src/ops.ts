@@ -1143,6 +1143,7 @@ export function applyOp(
           `update: no node with id "${op.id}" in the document.`
         );
       }
+      assertIdIsUnique(nodes, op.id, "update");
       assertPatchNames(op);
       const touched = [...Object.keys(op.patch), ...(op.unset ?? [])];
       const before = priorValues(node, touched);
