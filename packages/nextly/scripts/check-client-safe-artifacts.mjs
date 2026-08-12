@@ -91,7 +91,7 @@ function isNodeBuiltin(spec) {
 
 /** Every relative specifier in a built module, ignoring bare and `node:` ones. */
 const SPECIFIER =
-  /from\s*["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|import\s*["']([^"']+)["']|\b_{0,2}require(?:\.resolve)?\(\s*["']([^"']+)["']\s*\)/g;
+  /^\s*(?:}|\w[\w,\s{}*]*)?\s*from\s*["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|^\s*import\s*["']([^"']+)["']|\b_{0,2}require(?:\.resolve)?\(\s*["']([^"']+)["']\s*\)|process\.getBuiltinModule\(\s*["']([^"']+)["']\s*\)/gm;
 
 function walk(entryFile) {
   const seen = new Set();
@@ -114,7 +114,8 @@ function walk(entryFile) {
     SPECIFIER.lastIndex = 0;
     let match;
     while ((match = SPECIFIER.exec(src)) !== null) {
-      const spec = match[1] ?? match[2] ?? match[3] ?? match[4];
+      const spec =
+        match[1] ?? match[2] ?? match[3] ?? match[4] ?? match[5];
       if (!spec) continue;
       if (isNodeBuiltin(spec)) {
         builtins.push({ file: relative(pkgRoot, file), spec });
@@ -124,7 +125,12 @@ function walk(entryFile) {
       // whether a given package is browser-safe is that package's contract rather than this one's.
       // A relative path reached through require() is not followed either: esbuild emits those for
       // bundled CommonJS interop, where the target is already in this same output.
-      if (!spec.startsWith(".") || match[4] !== undefined) continue;
+      if (
+        !spec.startsWith(".") ||
+        match[4] !== undefined ||
+        match[5] !== undefined
+      )
+        continue;
       stack.push(normalize(join(dirname(file), spec)));
     }
   }
@@ -155,6 +161,7 @@ function selfCheck() {
     "literal dynamic import": 'const f = await import("node:fs");\n',
     "esbuild CommonJS interop": 'const f = __require("node:fs");\n',
     "resolve on the interop shim": 'const p = __require.resolve("fs");\n',
+    "process.getBuiltinModule": 'const f = process.getBuiltinModule("node:fs");\n',
 
     "plain require call": 'const p = require("path");\n',
   };
@@ -191,6 +198,27 @@ function selfCheck() {
     `✓ built-in classification: ${mustClassify.length} names classify, ` +
       `3 ordinary packages do not`
   );
+
+  // A NEGATIVE fixture, because this scanner has failed in both directions. Ordinary text
+  // mentioning a module name is not an import, and a scan that reads it as one fails CI over a
+  // string literal — a false positive costs a lane its build for a reason that is not a defect.
+  const proseDir = mkdtempSync(join(tmpdir(), "nextly-artifact-gate-prose-"));
+  try {
+    const chunk = join(proseDir, "chunk-prose.mjs");
+    const entry = join(proseDir, "entry-prose.mjs");
+    writeFileSync(chunk, `const message = 'loaded from "fs"';\nexport { message };\n`);
+    writeFileSync(entry, `import "./chunk-prose.mjs";\n`);
+    const { builtins } = walk(entry);
+    if (builtins.length > 0) {
+      console.error(
+        "✗ the scanner read ordinary text as a module import: " +
+          builtins.map(b => b.spec).join(", ")
+      );
+      process.exit(1);
+    }
+  } finally {
+    rmSync(proseDir, { recursive: true, force: true });
+  }
 
   const problems = [];
   for (const [label, body] of Object.entries(forms)) {
