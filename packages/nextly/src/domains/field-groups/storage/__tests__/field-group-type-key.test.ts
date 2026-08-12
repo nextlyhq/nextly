@@ -15,10 +15,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // A spelling that is not the current one, standing in for the post-flip name. Mocked rather than
 // waited for: the property under test is "two different keys both read", and with one key there is
 // nothing to test.
-vi.mock("../../migration/manifest", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../migration/manifest")
-  >("../../migration/manifest");
+vi.mock("../../migration/target", async () => {
+  const actual = await vi.importActual<typeof import("../../migration/target")>(
+    "../../migration/target"
+  );
   return {
     ...actual,
     MIGRATION_TARGET: { ...actual.MIGRATION_TARGET, wireTypeKey: "_afterFlip" },

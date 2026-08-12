@@ -35,6 +35,10 @@
       "types": "./dist/errors/index.d.ts",
       "import": "./dist/errors/index.mjs"
     },
+    "./field-group-type": {
+      "types": "./dist/field-group-type.d.ts",
+      "import": "./dist/field-group-type.mjs"
+    },
     "./field-catalog": {
       "types": "./dist/field-catalog.d.ts",
       "import": "./dist/collections/fields/catalog.mjs"

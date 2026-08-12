@@ -41,7 +41,6 @@
  *   but it is broad, and a stored-row FIXTURE written with the raw key is one of the ways a
  *   completed rename gets quietly reverted later. There is currently no automatic way to tell a
  *   fixture from an assertion about the format, so this stays a review-time concern.
- * - **The pinned `packages/admin` sites** below, which are reported on every run and do not fail.
  * - **Comment and doc-block lines**, filtered on purpose: prose describing the format does not read
  *   it, and requiring the docs to avoid naming the thing they document makes them worse.
  *
@@ -63,11 +62,68 @@
  */
 
 const { execFileSync } = require("node:child_process");
+const { existsSync, rmSync, writeFileSync } = require("node:fs");
 const path = require("node:path");
 
 const ROOT = path.resolve(__dirname, "..");
 
 let failures = 0;
+
+/**
+ * Plant a known hit for EVERY pattern and run each through the real scan.
+ *
+ * 🔴 An earlier version planted one literal and checked one pattern. That certifies one scan: if
+ * any other pattern is mistyped or stops matching, its own check reports no hits, the fixture stays
+ * green, and part of the gate is silently switched off while the run still prints a tick for it. A
+ * control that samples cannot speak for the cases it did not sample.
+ *
+ * Each case is evaluated with the exact expression its production check uses, read from the same
+ * array, so a pattern edited in one place cannot be verified against a different one.
+ */
+function assertScanSeesEveryPattern() {
+  const relativePath = "packages/nextly/src/__storage-gate-selfcheck-fixture.ts";
+  const fixture = path.join(ROOT, relativePath);
+  const blind = [];
+
+  // 🔴 Refuse rather than overwrite. This writes to a fixed path and deletes it afterwards, so a
+  // real file sitting there — tracked, or someone's uncommitted work — would be replaced and then
+  // removed by merely RUNNING the gate. A check that destroys source to verify itself is a worse
+  // defect than the one it looks for, and the name being improbable is not a guarantee.
+  if (existsSync(fixture)) {
+    console.error(
+      `✗ ${relativePath} already exists.\n` +
+        "  The self-check writes and deletes that path, so it refuses to touch a file it did not\n" +
+        "  create. Move or remove it and run again."
+    );
+    process.exit(1);
+  }
+
+  try {
+    for (const check of CHECKS) {
+      // Not a comment, not a test file, not an allowlisted path: none of the deliberate exemptions
+      // apply, so the only reason this could go unseen is a scan that stopped working.
+      writeFileSync(fixture, `${check.plant}\n`);
+      const hits = collectHits(check.pattern);
+      if (!hits.some(line => line.includes(relativePath))) blind.push(check.label);
+    }
+  } finally {
+    if (existsSync(fixture)) rmSync(fixture);
+  }
+
+  if (blind.length > 0) {
+    console.error(
+      "✗ the scan did not see a planted hit for these checks, so each would pass below\n" +
+        "  without examining anything:"
+    );
+    for (const label of blind) console.error(`    ${label}`);
+    process.exit(1);
+  }
+
+  console.log(
+    `scan self-check passed: ${CHECKS.length} patterns each saw a planted hit\n`
+  );
+}
+
 
 /**
  * Paths that legitimately name both spellings.
@@ -97,54 +153,13 @@ const ALLOWED = [
   /\.test-d\.ts:/,
 ];
 
+
 /**
- * Known-outstanding sites: reported every run, not failing, and PINNED individually.
+ * The scan itself: everything deciding WHICH lines count as hits.
  *
- * `packages/admin` cannot reach the catalog — `STORAGE_FORMAT` is not exported from any surface
- * admin imports — so fixing these needs a public accessor export, which is an API decision rather
- * than a mechanical edit. They are listed here instead of allowlisted so every run states that
- * they exist and how many remain: an allowlist would make them disappear, and a gate whose output
- * shrinks silently is how the original 43 accumulated.
- *
- * 🔴 Pinned as exact source text rather than as a path pattern, and that distinction is the whole
- * point. A pattern like `^packages/admin/` exempts every file the directory will ever contain, so
- * a NEW hardcoded reader lands reported-but-passing and CI stays green — which is the regression
- * this gate exists to catch, reintroduced by the mechanism that was supposed to track its own
- * debt. Matching the text means a known site is tolerated and anything else is not.
- *
- * Counted, not just matched: duplicating a pinned line is a new site, and a set would accept it.
- *
- * Line numbers are deliberately absent — they move under edits elsewhere in the file, and a pin
- * that breaks on unrelated churn gets re-pinned reflexively, which is how a control stops being
- * read. Text is stable while the site is unfixed, which is exactly as long as it needs to be.
- *
- * This list must reach empty, and the gate says so on every run. It is not a place to move an
- * inconvenient hit to: the correct response to a new hit is the accessor, never a new line here.
+ * Split from the reporting so the self-check can run the real one rather than a lookalike.
  */
-const PENDING_OCCURRENCES = {
-  "packages/admin/src/components/features/entries/fields/structured/ComponentInput.tsx":
-    [
-      "defaultValues._componentType = componentType;",
-      "const currentType = currentData?._componentType as string | undefined;",
-      "const itemComponentType = itemData._componentType as",
-    ],
-  "packages/admin/src/components/features/versions/value-display/FieldValueDisplay.tsx":
-    [
-      "? (instance as { _componentType?: string })._componentType",
-      "? ((instance as { _componentType?: string })._componentType ?? null)",
-    ],
-};
-const PENDING_TRACKED_IN =
-  "tasks/left-tasks/2026-08-12-0800-storage-key-read-by-literal-blocks-b2.md";
-
-/** Split a grep line into the path and the source text, dropping the line number. */
-function splitGrepLine(line) {
-  const m = /^([^:]+):(\d+):(.*)$/.exec(line);
-  if (!m) return null;
-  return { path: m[1], lineNo: m[2], text: m[3].trim() };
-}
-
-function grep(label, pattern, opts = {}) {
+function collectHits(pattern, opts = {}) {
   const {
     // 🔴 Every source extension the repository ships, not only TypeScript. A reader or writer of
     // the storage key added to an existing `.js` or `.mjs` file — a CLI bin, a build script, a
@@ -199,30 +214,17 @@ function grep(label, pattern, opts = {}) {
     // Comments and doc blocks describe the format; they do not read it.
     .filter(l => !/:\s*(\/\/|\*|\/\*)/.test(l.replace(/^[^:]*:\d+:/, ":")));
 
-  // Classify each hit against the pinned occurrences. A hit is tolerated only when its file AND
-  // its source text are pinned, and only as many times as they were pinned; everything else fails,
-  // including a second copy of a pinned line.
-  const remainingBudget = new Map();
-  for (const [path, texts] of Object.entries(PENDING_OCCURRENCES)) {
-    for (const text of texts) {
-      const key = `${path}::${text}`;
-      remainingBudget.set(key, (remainingBudget.get(key) ?? 0) + 1);
-    }
-  }
+  // Every hit fails. The admin sites that were once pinned here are converted, so there is no
+  // tolerated set left — and a list that matches nothing is worse than no list, because it would
+  // silently re-admit exactly those lines if they came back.
+  const failing = lines;
 
-  const pending = [];
-  const failing = [];
-  for (const l of lines) {
-    const parsed = splitGrepLine(l);
-    const key = parsed ? `${parsed.path}::${parsed.text}` : null;
-    const budget = key ? (remainingBudget.get(key) ?? 0) : 0;
-    if (budget > 0) {
-      remainingBudget.set(key, budget - 1);
-      pending.push(l);
-    } else {
-      failing.push(l);
-    }
-  }
+  return failing;
+}
+
+/** Run a scan and report its verdict. */
+function grep(label, pattern, opts = {}) {
+  const failing = collectHits(pattern, opts);
 
   if (failing.length > 0) {
     failures++;
@@ -234,68 +236,65 @@ function grep(label, pattern, opts = {}) {
     console.log(`✓ ${label}`);
   }
 
-  if (pending.length > 0) {
-    console.log(
-      `  ⧗ ${pending.length} pinned known-outstanding site(s) not yet failing — ${PENDING_TRACKED_IN}`
-    );
-    for (const l of pending) console.log(`      ${l}`);
-    console.log(
-      `  ⧗ this list must reach empty; a NEW hit is a failure, never a new pin`
-    );
-  }
 }
+
 
 // 🔴 BOTH generations are banned, not only the legacy one.
 //
 // The target spellings are what a migrated database actually uses, so a literal reading
-// `_fieldGroupType` is wrong on precisely the installs the migration has already reached — and it
-// is the spelling someone writing new code AFTER the flip would naturally reach for. Guarding only
-// the legacy names would enforce the single-catalog rule on the generation that is on its way out
-// while leaving the incoming one unguarded, which is the wrong half.
+// `_fieldGroupType` is wrong on precisely the installs the migration has already reached. Guarding
+// only the legacy names enforces the rule on the generation on its way out and leaves the incoming
+// one unguarded, which is the wrong half.
 //
-// 1. The content key, in both generations. No catalog can describe a key inside a row, so a
-// literal here is the one spelling a database cannot be asked about — read it wrong and the
-// instance loses its type.
-grep(
-  "content type key goes through the catalog (legacy spelling)",
-  "_componentType"
-);
-grep(
-  "content type key goes through the catalog (target spelling)",
-  "_fieldGroupType"
-);
+// Declared as data rather than as seven calls so the self-check can plant a known hit for EVERY
+// pattern from this same array. Checking one and trusting the rest is how a mistyped pattern
+// retires its own scan while the run still prints a tick for it.
+const CHECKS = [
+  {
+    label: "content type key goes through the catalog (legacy spelling)",
+    pattern: "_componentType",
+    plant: "export const planted = row._componentType;",
+  },
+  {
+    label: "content type key goes through the catalog (target spelling)",
+    pattern: "_fieldGroupType",
+    plant: "export const planted = row._fieldGroupType;",
+  },
+  {
+    label: "type column goes through the catalog (legacy spelling)",
+    pattern: "\\b_component_type\\b",
+    plant: "export const planted = row._component_type;",
+  },
+  {
+    label: "type column goes through the catalog (target spelling)",
+    pattern: "\\b_field_group_type\\b",
+    plant: "export const planted = row._field_group_type;",
+  },
+  {
+    label: "registry table goes through the catalog (legacy spelling)",
+    pattern: "\\bdynamic_components\\b",
+    plant: 'export const planted = "dynamic_components";',
+  },
+  {
+    label: "registry table goes through the catalog (target spelling)",
+    pattern: "\\bdynamic_field_groups\\b",
+    plant: 'export const planted = "dynamic_field_groups";',
+  },
+  {
+    label: "content type key is reached through the accessor",
+    pattern: "\\bwireTypeKey\\b",
+    plant: "export const planted = CATALOG.wireTypeKey;",
+  },
+];
 
-// 2. The discriminator column. Catalog-resolvable, so a literal degrades rather than breaks —
-// but it degrades on exactly the databases that have migrated.
-//
-// 🔴 Matched WITHOUT requiring quotes. A quoted-only pattern reads as though it covers the name,
-// and misses `row._component_type` and `{ _field_group_type: value }` — ordinary TypeScript
-// property syntax, and the form a reader is most likely to write. The check that motivated the
-// rule was the one the pattern could not see. `\b` is sound here because the character before the
-// leading underscore is always a non-word one (`.`, a quote, a brace, whitespace).
-grep("type column goes through the catalog (legacy spelling)", "\\b_component_type\\b");
-grep("type column goes through the catalog (target spelling)", "\\b_field_group_type\\b");
+assertScanSeesEveryPattern();
 
-// 3. The registry table. Same shape as the column.
-grep("registry table goes through the catalog (legacy spelling)", "\\bdynamic_components\\b");
-grep("registry table goes through the catalog (target spelling)", "\\bdynamic_field_groups\\b");
+for (const check of CHECKS) grep(check.label, check.pattern);
 
-// 4. 🔴 Reading the CATALOG for the content key, outside the accessor.
-//
-// The checks above ban writing the spelling out. They do not ban asking the catalog for it, and
-// that is not the same rule: `instance[STORAGE_FORMAT.wireTypeKey]` contains no literal, resolves
-// correctly, passes every check above — and still consults exactly ONE spelling, so after the flip
-// it reads a legacy-spelled document as untyped precisely as a hardcoded reader would.
-//
-// The property that actually matters is therefore not "no literals" but "the wire key is reached
-// only through the accessor", which is what this enforces. `field-group-type-key.ts` is where the
-// two catalogs are legitimately combined into a read order; the migration engine names both
-// because renaming one to the other is its job.
-//
-// Note this bans the catalog READ, not the catalog. Sibling `STORAGE_FORMAT` members — column
-// names, table prefixes — stay resolvable everywhere, because those a database can be asked about.
-grep("content type key is reached through the accessor", "\\bwireTypeKey\\b");
-
+// 🔴 The verdict. Without this the script prints every ✗ and exits 0, which is worse than having
+// no gate: CI reports a pass, the output scrolls by in a green job, and the failures read as
+// decoration. It was lost when the checks became data — the edit replaced from the array to the
+// end of the file and took this with it.
 if (failures > 0) {
   console.error(
     `\n${failures} storage-spelling gate failure(s).\n` +
