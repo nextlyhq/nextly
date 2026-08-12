@@ -49,6 +49,13 @@ const ALLOWED_DECORATIVE = new Set<string>([
   "ring-border/10",
   "ring-border/50", // neutral activity-badge outline (~1.7:1 once the token's own alpha compounds); same decorative role as the colored ring siblings
   "ring-foreground/40",
+  // Colour-picker handle, over a surface whose colour the USER chose. No
+  // semantic token can guarantee contrast against an arbitrary background, and
+  // this is the outer half of the standard two-tone handle: a light border
+  // reads on dark colours, this dark ring reads on light ones. The handle's
+  // POSITION carries the meaning; the ring is edge definition, and the value it
+  // selects is also shown as text in the hex field beside it.
+  "ring-black/30",
   "ring-muted/5",
   "ring-success-500/20",
   "ring-success-500/40",
