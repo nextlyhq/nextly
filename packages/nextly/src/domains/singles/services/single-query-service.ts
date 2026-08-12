@@ -53,7 +53,10 @@ import {
 import { GENERIC_DEFAULT_OWNER_FIELD } from "../../../services/access/types";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { RelatedRowReadContext } from "../../../services/collections/related-row-read-context";
-import { applyMediaTrustBound } from "../../../services/collections/trust-bound";
+import {
+  applyMediaTrustBound,
+  expansionAccess,
+} from "../../../services/collections/trust-bound";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
@@ -800,14 +803,11 @@ export class SingleQueryService extends BaseService {
 
     doc = this.deserializeJsonFields(doc, singleMeta.fields);
     params.captureReferences?.(doc);
-    doc = await this.expandUploadFields(doc, singleMeta.fields, {
-      user: options.user,
-      overrideAccess: options.overrideAccess,
-      // Narrows that bypass per target, media included. Dropping it here would
-      // restore the full bypass for the one target this read expands directly.
-      trusted: options.trusted,
-      authenticatedScope: options.authenticatedScope,
-    });
+    doc = await this.expandUploadFields(
+      doc,
+      singleMeta.fields,
+      expansionAccess(options)
+    );
     // The language this read resolved to, shared by both expansions below so a
     // related row and a related row inside a component are judged alike.
     const readLocale = this.resolveLocaleChain(
@@ -2478,13 +2478,14 @@ export class SingleQueryService extends BaseService {
    * The caller travels with the fetch because media is a system table with no
    * stored rules: a trusted read that bounded its bypass has refused this
    * target like any other, and only the caller can say what it may still see.
-   * The default is an unbounded read, which is what every caller that has no
-   * bypass to narrow is.
+   * Required rather than defaulted — a default here is indistinguishable from
+   * a caller that forgot, and the two want opposite outcomes, so the omission
+   * is worth a compile error. Build it with `expansionAccess`.
    */
   async expandUploadFields(
     doc: SingleDocument,
     fields: FieldConfig[],
-    access: RelatedRowReadContext = { trusted: undefined }
+    access: RelatedRowReadContext
   ): Promise<SingleDocument> {
     const allMediaIds = collectAllMediaIds(doc, fields);
     if (allMediaIds.length === 0) {

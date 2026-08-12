@@ -11,6 +11,7 @@
  * @module services/collections/trust-bound
  */
 
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { canReadSystemResource } from "../../auth/resource-readable";
 
 import type { RelatedRowReadContext } from "./related-row-read-context";
@@ -103,4 +104,38 @@ export async function applyMediaTrustBound(
     access.authenticatedScope
   );
   return readable ? records : records.map(withoutInternalMediaColumns);
+}
+
+/**
+ * What a read or write knows about its caller, as the expansions need it.
+ *
+ * Narrower than the full options object either path carries, and deliberately
+ * so: these four fields are exactly what decides whether a media row is
+ * narrowed, and naming them once means a caller cannot forward three of them
+ * and quietly change who the expansion runs as.
+ */
+export interface CallerOptions {
+  user?: Record<string, unknown>;
+  overrideAccess?: boolean;
+  trusted?: (collection: string) => boolean;
+  authenticatedScope?: AuthenticatedScope;
+}
+
+/**
+ * The access context an expansion should run under, derived from its caller's
+ * options.
+ *
+ * Built here rather than assembled at each call site. Two paths reach the
+ * upload expansion and each assembled its own object literal, which is four
+ * chances per site to drop a field or bind it to the wrong thing — and the
+ * failure is silent, because every field is optional and an incomplete context
+ * is a VALID one describing a different caller.
+ */
+export function expansionAccess(options: CallerOptions): RelatedRowReadContext {
+  return {
+    user: options.user,
+    overrideAccess: options.overrideAccess,
+    trusted: options.trusted,
+    authenticatedScope: options.authenticatedScope,
+  };
 }
