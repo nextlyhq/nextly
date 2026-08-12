@@ -170,7 +170,7 @@ export function specifiersIn(source, fileName) {
     readsMember(node, member) &&
     ts.isIdentifier(node.expression) &&
     node.expression.text === object &&
-    !declaredNames.has(object);
+    !isShadowed(node, object);
 
   /**
    * Whether an expression reads `import.meta.resolve`.
@@ -196,23 +196,119 @@ export function specifiersIn(source, fileName) {
     );
   };
 
-  // Names the artifact binds itself. A module that declares its own `module` or `require` is not
-  // reaching the ambient loader, and reporting its argument would name something that is not a
-  // module specifier at all.
-  const declaredNames = new Set();
-  const collectDeclaredNames = node => {
-    if (
-      (ts.isVariableDeclaration(node) ||
-        ts.isFunctionDeclaration(node) ||
-        ts.isParameter(node)) &&
-      node.name !== undefined &&
-      ts.isIdentifier(node.name)
-    ) {
-      declaredNames.add(node.name.text);
+  /**
+   * Every identifier a binding name introduces, including through destructuring.
+   *
+   * `const { require } = someObject` and `const [require] = pair` both bind the name, and reading
+   * only `ts.isIdentifier(node.name)` sees neither.
+   *
+   * @param {ts.BindingName | undefined} name
+   * @param {(bound: string) => void} add
+   */
+  const eachBoundName = (name, add) => {
+    if (name === undefined) return;
+    if (ts.isIdentifier(name)) {
+      add(name.text);
+      return;
     }
-    ts.forEachChild(node, collectDeclaredNames);
+    if (!ts.isObjectBindingPattern(name) && !ts.isArrayBindingPattern(name)) {
+      return;
+    }
+    for (const element of name.elements) {
+      // An array pattern hole — `const [, x] = pair` — has no binding at all.
+      if (ts.isOmittedExpression(element)) continue;
+      eachBoundName(element.name, add);
+    }
   };
-  collectDeclaredNames(tree);
+
+  /**
+   * Whether ONE node introduces a binding for `name` in the scope it opens.
+   *
+   * @param {ts.Node} scope
+   * @param {string} name
+   */
+  const bindsName = (scope, name) => {
+    let found = false;
+    const add = bound => {
+      if (bound === name) found = true;
+    };
+
+    // A function's parameters, and its own name where it has one.
+    if (ts.isFunctionLike(scope)) {
+      for (const parameter of scope.parameters) eachBoundName(parameter.name, add);
+      if (
+        (ts.isFunctionDeclaration(scope) || ts.isFunctionExpression(scope)) &&
+        scope.name !== undefined
+      ) {
+        add(scope.name.text);
+      }
+    }
+
+    if (ts.isCatchClause(scope) && scope.variableDeclaration !== undefined) {
+      eachBoundName(scope.variableDeclaration.name, add);
+    }
+
+    // Declarations sitting directly in a statement list, plus the initializer of a `for` form,
+    // which opens its own scope for the names it declares.
+    const statements = ts.isSourceFile(scope)
+      ? scope.statements
+      : ts.isBlock(scope) || ts.isModuleBlock(scope)
+        ? scope.statements
+        : undefined;
+    for (const statement of statements ?? []) {
+      if (ts.isVariableStatement(statement)) {
+        for (const declaration of statement.declarationList.declarations) {
+          eachBoundName(declaration.name, add);
+        }
+      } else if (
+        (ts.isFunctionDeclaration(statement) ||
+          ts.isClassDeclaration(statement)) &&
+        statement.name !== undefined
+      ) {
+        add(statement.name.text);
+      } else if (ts.isImportDeclaration(statement)) {
+        const clause = statement.importClause;
+        if (clause?.name !== undefined) add(clause.name.text);
+        const bindings = clause?.namedBindings;
+        if (bindings !== undefined) {
+          if (ts.isNamespaceImport(bindings)) add(bindings.name.text);
+          else for (const element of bindings.elements) add(element.name.text);
+        }
+      }
+    }
+
+    const initializer =
+      ts.isForStatement(scope) ||
+      ts.isForInStatement(scope) ||
+      ts.isForOfStatement(scope)
+        ? scope.initializer
+        : undefined;
+    if (initializer !== undefined && ts.isVariableDeclarationList(initializer)) {
+      for (const declaration of initializer.declarations) {
+        eachBoundName(declaration.name, add);
+      }
+    }
+
+    return found;
+  };
+
+  /**
+   * Whether `name` is bound by any scope ENCLOSING this node, so the read is not the ambient one.
+   *
+   * Asked per call site rather than once per file. A single set of every name declared anywhere
+   * suppressed a top-level `module.require("react")` because some unrelated nested function had a
+   * parameter called `module` — a binding that cannot reach the top level, silencing the one read
+   * this rule exists to catch.
+   *
+   * @param {ts.Node} node
+   * @param {string} name
+   */
+  const isShadowed = (node, name) => {
+    for (let scope = node.parent; scope !== undefined; scope = scope.parent) {
+      if (bindsName(scope, name)) return true;
+    }
+    return false;
+  };
 
   // Names bound to a loader before the walk, because the call that uses one can appear above the
   // declaration in the emitted file. `const load = createRequire(import.meta.url)` makes `load`
@@ -270,7 +366,7 @@ export function specifiersIn(source, fileName) {
       const isRequire =
         ts.isIdentifier(callee) &&
         callee.text === "require" &&
-        !declaredNames.has("require");
+        !isShadowed(callee, "require");
       // `module.require("react")` is the CommonJS loader reached through the module object, which
       // survives a format guard into the CJS artifact and is opaque to the bundler, so it appears
       // in neither the specifier list nor the metafile. `module` must be the ambient one.
@@ -493,6 +589,10 @@ export function bundledPackages(metafile, outputNames) {
   const names = Array.isArray(outputNames) ? outputNames : [outputNames];
   const packages = new Set();
   const missing = [];
+  // Every file this build emitted, so an import record naming one can be told from one naming a
+  // dependency. Read from the metafile rather than from the names being asked about: a chunk is an
+  // output of the build without being an artifact anyone asked to check.
+  const outputNamesInBuild = new Set(Object.keys(metafile.outputs ?? {}));
   for (const name of names) {
     const output = metafile.outputs?.[name];
     if (output === undefined) {
@@ -509,6 +609,14 @@ export function bundledPackages(metafile, outputNames) {
     // not being read.
     for (const entry of output.imports ?? []) {
       if (typeof entry?.path !== "string") continue;
+      // A record naming another OUTPUT of this same build is an internal chunk, not a dependency.
+      // Splitting is on by default, so two entries sharing a module produce
+      // `{ path: "dist/chunk-XXXXXX.mjs", kind: "import-statement" }` with no `external` flag, and
+      // classifying that by path yields the directory name — a package called `dist`, which is on
+      // no allow-list and would reject a build that is entirely correct. What those chunks contain
+      // is already covered: `reachedFrom` follows them and their own inputs are read here as
+      // outputs in their own right.
+      if (outputNamesInBuild.has(entry.path)) continue;
       const pkg = packageOfInput(entry.path) ?? packageOf(entry.path);
       if (pkg !== null) packages.add(pkg);
     }

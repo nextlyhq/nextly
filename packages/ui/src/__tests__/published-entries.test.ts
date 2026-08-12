@@ -345,6 +345,42 @@ function exportedNames(source: string): string[] {
   const hasModifier = (node: ts.Node, kind: ts.SyntaxKind): boolean =>
     modifiersOf(node).some(modifier => modifier.kind === kind);
 
+  // Names this file declares in TYPE space, and names it declares in VALUE space.
+  //
+  // `interface Foo {}` followed by `export { Foo }` marks nothing type-only — not the declaration,
+  // not the element — yet publishes no runtime binding, so a module with `export const Foo = 1`
+  // compares equal to a declaration that never offered a value. Two sets rather than one because
+  // declaration merging is real: `interface Foo {}` beside `const Foo = 1` publishes both, and the
+  // value is what a consumer importing the name receives.
+  const typeSpace = new Set<string>();
+  const valueSpace = new Set<string>();
+  for (const statement of tree.statements) {
+    if (
+      ts.isInterfaceDeclaration(statement) ||
+      ts.isTypeAliasDeclaration(statement)
+    ) {
+      typeSpace.add(statement.name.text);
+    } else if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        for (const name of boundNames(declaration.name)) valueSpace.add(name);
+      }
+    } else if (
+      (ts.isFunctionDeclaration(statement) ||
+        ts.isClassDeclaration(statement) ||
+        ts.isEnumDeclaration(statement) ||
+        ts.isModuleDeclaration(statement) ||
+        ts.isImportEqualsDeclaration(statement)) &&
+      statement.name !== undefined &&
+      ts.isIdentifier(statement.name)
+    ) {
+      valueSpace.add(statement.name.text);
+    }
+  }
+
+  /** Whether a name exported from a LOCAL binding exists only in type space. */
+  const isTypeOnlyLocal = (local: string): boolean =>
+    typeSpace.has(local) && !valueSpace.has(local);
+
   for (const statement of tree.statements) {
     if (ts.isExportAssignment(statement)) {
       // `export default value`. `export =` is the CommonJS form and publishes no named binding.
@@ -384,6 +420,16 @@ function exportedNames(source: string): string[] {
         // and `export { x as default }` is the other spelling of a default export.
         for (const element of clause.elements) {
           if (element.isTypeOnly) continue;
+          // Only a list WITHOUT a `from` names local bindings. With one, the name belongs to the
+          // other module and nothing here can decide which space it occupies — recorded as it
+          // stands rather than guessed at.
+          const local = (element.propertyName ?? element.name).text;
+          if (
+            statement.moduleSpecifier === undefined &&
+            isTypeOnlyLocal(local)
+          ) {
+            continue;
+          }
           found.push(element.name.text);
         }
       }
@@ -594,6 +640,36 @@ describe("reading the names a module publishes", () => {
 
   it("names a binding once when it is both declared and listed", () => {
     expect(exportedNames(`export const a = 1;\nexport { a };`)).toEqual(["a"]);
+  });
+
+  it("leaves out a listed name that exists only in type space", () => {
+    // Neither the declaration nor the element is marked type-only here, so nothing syntactic says
+    // this publishes no value — and a runtime module with `export const Foo = 1` would compare
+    // equal to a declaration that never offered one.
+    expect(exportedNames(`interface Foo {}\nexport { Foo };`)).toEqual([]);
+    expect(exportedNames(`type Bar = string;\nexport { Bar };`)).toEqual([]);
+    // Renamed on the way out: the LOCAL name decides which space it occupies, not the public one.
+    expect(
+      exportedNames(`interface Foo {}\nexport { Foo as Public };`)
+    ).toEqual([]);
+  });
+
+  it("keeps a name that is a type AND a value", () => {
+    // Declaration merging is real, and the value is what a consumer importing the name receives.
+    // Dropping it because a type shares the name would report a surface the module does not have.
+    expect(
+      exportedNames(`interface Foo {}\nconst Foo = 1;\nexport { Foo };`)
+    ).toEqual(["Foo"]);
+    // The controls: ordinary value declarations are unaffected by the type-space reading.
+    expect(exportedNames(`function build() {}\nexport { build };`)).toEqual([
+      "build",
+    ]);
+    expect(exportedNames(`class Preset {}\nexport { Preset };`)).toEqual([
+      "Preset",
+    ]);
+    expect(exportedNames(`enum Mode { On }\nexport { Mode };`)).toEqual([
+      "Mode",
+    ]);
   });
 });
 

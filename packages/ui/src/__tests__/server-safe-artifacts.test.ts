@@ -127,6 +127,51 @@ describe("reading an artifact's specifiers", () => {
     ).toEqual([]);
   });
 
+  it("reads a top-level loader that an unrelated nested binding cannot shadow", () => {
+    // Shadowing was answered from one set of every name declared anywhere in the file, so a
+    // parameter in some unrelated helper suppressed a call it could never reach. The binding below
+    // is invisible at the top level, and `module.require` is opaque to both the metafile and the
+    // specifier list, so the dependency passed the gate entirely.
+    expect(
+      read(`
+        function unrelated(module) { return module.id; }
+        const react = module.require("react");
+      `)
+    ).toEqual(["react"]);
+    expect(
+      read(`
+        function unrelated(require) { return require; }
+        const react = require("react");
+      `)
+    ).toEqual(["react"]);
+    // The control, in the direction that costs a lane a red build: a binding that DOES enclose the
+    // call still suppresses it, which is the behaviour the file-wide set got right.
+    expect(
+      read(`
+        function outer(require) {
+          return require("react");
+        }
+      `)
+    ).toEqual([]);
+  });
+
+  it("sees a loader shadowed through a destructured binding", () => {
+    // `const { require } = ...` binds the name without an identifier anywhere in `node.name`, so a
+    // check reading only `ts.isIdentifier` treats the local as the ambient loader.
+    expect(
+      read(`
+        const { require } = loaders;
+        export const label = require("react");
+      `)
+    ).toEqual([]);
+    expect(
+      read(`
+        const [require] = loaders;
+        export const label = require("react");
+      `)
+    ).toEqual([]);
+  });
+
   it("does not treat a locally declared require as the loader", () => {
     // A module declaring its own `require` is not reaching the CommonJS loader, so its argument is
     // not a module specifier. Reported, it rejects an artifact with no dependency at all -- the
@@ -517,6 +562,34 @@ describe("reading what the build bundled", () => {
     expect(
       bundledPackages(metafile, ["dist/utils.mjs", "dist/chunk-abc.mjs"])
     ).toBeNull();
+  });
+
+  it("does not read a shared chunk as a package named after the output directory", () => {
+    // The record shape here was taken from a real split build, not written from memory: esbuild
+    // emits `{ path: "dist/chunk-XXXXXX.js", kind: "import-statement" }` with NO `external` flag
+    // once two entries share a module, and splitting is on by default. Classifying that by path
+    // yields `dist`, which is on no allow-list, so a correct build would be rejected the day any
+    // two server-safe entries first share code.
+    const metafile = {
+      outputs: {
+        "dist/utils.mjs": {
+          inputs: { "src/lib/utils.ts": {} },
+          imports: [
+            { path: "dist/chunk-C7SORCUA.mjs", kind: "import-statement" },
+          ],
+        },
+        "dist/chunk-C7SORCUA.mjs": {
+          inputs: { "src/lib/shared.ts": {} },
+          imports: [{ path: "clsx", kind: "import-statement", external: true }],
+        },
+      },
+    };
+    expect(bundledPackages(metafile, ["dist/utils.mjs"])).toEqual([]);
+    // The control: the chunk is not being ignored, only classified correctly. Asked about the
+    // chunk itself, its real dependency is still reported.
+    expect(bundledPackages(metafile, ["dist/chunk-C7SORCUA.mjs"])).toEqual([
+      "clsx",
+    ]);
   });
 
   it("reads what the bundler RESOLVED but did not inline", () => {
