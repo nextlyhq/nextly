@@ -34,6 +34,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, normalize, relative } from "node:path";
+import { builtinModules } from "node:module";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -50,6 +51,20 @@ const dist = join(pkgRoot, "dist");
 const CLIENT_SAFE_EXPORTS = ["./config", "./next", "./field-group-type"];
 
 const pkg = JSON.parse(readFileSync(join(pkgRoot, "package.json"), "utf8"));
+
+/**
+ * Whether a specifier names a Node built-in, in EITHER form it can appear in.
+ *
+ * 🔴 Checking only the `node:` prefix is what a source-level intuition suggests and it does not
+ * survive bundling: tsup rewrites `node:crypto` to a bare `crypto`, so a check for the prefix finds
+ * nothing in `dist` and reports every entry clean — including ones that genuinely pull half the
+ * standard library. The prefixed form is still matched because an external or unbundled module can
+ * preserve it.
+ */
+function isNodeBuiltin(spec) {
+  if (spec.startsWith("node:")) return true;
+  return builtinModules.includes(spec);
+}
 
 /** Every relative specifier in a built module, ignoring bare and `node:` ones. */
 const SPECIFIER = /from\s*["']([^"']+)["']|import\s*["']([^"']+)["']/g;
@@ -76,7 +91,7 @@ function walk(entryFile) {
     while ((match = SPECIFIER.exec(src)) !== null) {
       const spec = match[1] ?? match[2];
       if (!spec) continue;
-      if (spec.startsWith("node:")) {
+      if (isNodeBuiltin(spec)) {
         builtins.push({ file: relative(pkgRoot, file), spec });
         continue;
       }
