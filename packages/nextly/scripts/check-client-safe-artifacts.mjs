@@ -32,9 +32,16 @@
  * a `node:` specifier, in the entry or in a chunk.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, normalize, relative } from "node:path";
 import { builtinModules } from "node:module";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -48,7 +55,15 @@ const dist = join(pkgRoot, "dist");
  * `package.json`: an entry named here that the map does not export is a typo, and this refuses to
  * run rather than reporting a pass for a file it never opened.
  */
-const CLIENT_SAFE_EXPORTS = ["./config", "./next", "./field-group-type"];
+const CLIENT_SAFE_EXPORTS = [
+  "./config",
+  "./next",
+  "./field-group-type",
+  // Imported by the admin field pickers from "use client" components. It was already an
+  // established client surface before this check existed, which is exactly why it belongs here:
+  // an entry nobody is currently worried about is the one that regresses unnoticed.
+  "./field-catalog",
+];
 
 const pkg = JSON.parse(readFileSync(join(pkgRoot, "package.json"), "utf8"));
 
@@ -67,21 +82,23 @@ function isNodeBuiltin(spec) {
 }
 
 /** Every relative specifier in a built module, ignoring bare and `node:` ones. */
-const SPECIFIER = /from\s*["']([^"']+)["']|import\s*["']([^"']+)["']/g;
+const SPECIFIER =
+  /from\s*["']([^"']+)["']|import\s*["']([^"']+)["']|\b_{0,2}require\(\s*["']([^"']+)["']\s*\)/g;
 
 function walk(entryFile) {
   const seen = new Set();
   const builtins = [];
+  const missing = [];
   const stack = [entryFile];
 
   while (stack.length > 0) {
     const file = stack.pop();
     if (seen.has(file)) continue;
     if (!existsSync(file)) {
-      throw new Error(
-        `check-client-safe-artifacts: ${relative(pkgRoot, file)} does not exist. ` +
-          `Build before running this.`
-      );
+      // Reported rather than thrown: a missing artifact is a verdict this check can state, and
+      // routing it through the same failure path keeps every outcome one exit code.
+      missing.push(relative(pkgRoot, file));
+      continue;
     }
     seen.add(file);
 
@@ -89,7 +106,7 @@ function walk(entryFile) {
     SPECIFIER.lastIndex = 0;
     let match;
     while ((match = SPECIFIER.exec(src)) !== null) {
-      const spec = match[1] ?? match[2];
+      const spec = match[1] ?? match[2] ?? match[3];
       if (!spec) continue;
       if (isNodeBuiltin(spec)) {
         builtins.push({ file: relative(pkgRoot, file), spec });
@@ -97,15 +114,68 @@ function walk(entryFile) {
       }
       // Bare specifiers are external dependencies; a browser bundler resolves those itself, and
       // whether a given package is browser-safe is that package's contract rather than this one's.
-      if (!spec.startsWith(".")) continue;
+      // A relative path reached through require() is not followed either: esbuild emits those for
+      // bundled CommonJS interop, where the target is already in this same output.
+      if (!spec.startsWith(".") || match[3] !== undefined) continue;
       stack.push(normalize(join(dirname(file), spec)));
     }
   }
 
-  return { modules: seen, builtins };
+  return { modules: seen, builtins, missing };
+}
+
+/**
+ * The scanner is exercised on a fixture it MUST reject, before it is trusted on real output.
+ *
+ * 🔴 This exists because the first version of this check was vacuous and passed everything. It
+ * tested `spec.startsWith("node:")`, and tsup rewrites `node:crypto` to a bare `crypto` — there are
+ * no `node:` specifiers anywhere in `dist`, so the check was hunting a string the bundler never
+ * emits. It reported every entry clean and the failure was invisible, because a scan that matches
+ * nothing and a codebase that is clean produce identical output.
+ *
+ * A vacuity control over the INPUT would not have caught it: there was plenty of input and it was
+ * all read. What was missing was an input with a known answer that is not "nothing". Each form
+ * below is one the bundler can actually emit, and the fixture is checked on every run, so a
+ * scanner that stops recognising a form fails loudly instead of quietly certifying everything.
+ */
+function selfCheck() {
+  const dir = mkdtempSync(join(tmpdir(), "nextly-artifact-gate-"));
+  const forms = {
+    "prefixed bare import": 'import "node:fs";\n',
+    "prefixed from-specifier": 'export { x } from "node:path";\n',
+    "stripped bare specifier": 'import { createHash } from "crypto";\n',
+    "esbuild CommonJS interop": 'const f = __require("node:fs");\n',
+    "plain require call": 'const p = require("path");\n',
+  };
+
+  const problems = [];
+  for (const [label, body] of Object.entries(forms)) {
+    // Written as entry -> chunk so the fixture also proves the walk follows chunks: an entry-only
+    // scan reports clean while the chunk carries the reference, which is the real output shape.
+    const chunk = join(dir, `chunk-${problems.length}.mjs`);
+    const entry = join(dir, `entry-${problems.length}.mjs`);
+    writeFileSync(chunk, body);
+    writeFileSync(entry, `import "./${chunk.split("/").pop()}";\n`);
+    const { builtins } = walk(entry);
+    if (builtins.length === 0) problems.push(label);
+  }
+  rmSync(dir, { recursive: true, force: true });
+
+  if (problems.length > 0) {
+    console.error(
+      "✗ the scanner failed its own fixture — it cannot see these forms, so a pass below " +
+        "would mean nothing:"
+    );
+    for (const label of problems) console.error(`    ${label}`);
+    process.exit(1);
+  }
+  console.log(`✓ scanner fixture: ${Object.keys(forms).length} reference forms detected`);
 }
 
 let failures = 0;
+
+selfCheck();
+
 
 // Vacuity control. An empty or mistyped list makes every check below vacuous, and a scan with
 // nothing to scan exits 0 — indistinguishable from a clean run. Fail loudly instead.
@@ -125,7 +195,15 @@ for (const exportKey of CLIENT_SAFE_EXPORTS) {
   }
 
   const entryFile = join(pkgRoot, entry);
-  const { modules, builtins } = walk(entryFile);
+  const { modules, builtins, missing } = walk(entryFile);
+
+  if (missing.length > 0) {
+    failures++;
+    console.error(`✗ ${exportKey} names built files that do not exist:`);
+    for (const f of missing) console.error(`    ${f}`);
+    console.error("    Build before running this check.");
+    continue;
+  }
 
   // Second vacuity control, and the one that matters in practice: an entry that resolved to a file
   // with no imports at all would report clean without ever reaching the code it re-exports. Every
