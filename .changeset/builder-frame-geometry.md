@@ -24,4 +24,4 @@
 "@nextlyhq/builder": patch
 ---
 
-Add the builder's host-canvas coordinate mapping: one module converts between the canvas frame and the host page, with a guard that no other module reads a rectangle across the frame.
+Add the builder's host-canvas coordinate mapping: one module converts between the canvas frame and the host page, including the scaled border inset that places the frame's content origin. A sibling test scans for cross-frame rectangle reads elsewhere in the package, recognising a bounded set of spellings; it narrows the paths taken by accident rather than enforcing single ownership.
