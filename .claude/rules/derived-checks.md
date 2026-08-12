@@ -346,8 +346,8 @@ that. It is usually available and it usually costs the same.
 believed**, because it looks like provenance rather than like a string somebody
 chose. It is configured, not authenticated: two contributors can set the same
 name and one can change theirs, so it identifies nobody in particular. In this
-repo many agents also commit under one identity — 343 of the last 400 commits
-carry a single name — so it does not separate sessions either. That distinction
+repo many agents also commit under one identity, so it does not separate
+sessions either. That distinction
 was never recorded anywhere, and no query recovers it.
 
 Which splits into two questions, and only one of them has an answer:
