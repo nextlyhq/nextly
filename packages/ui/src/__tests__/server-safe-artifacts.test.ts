@@ -281,6 +281,53 @@ describe("reading an artifact's specifiers", () => {
     ).toEqual([]);
   });
 
+  it("sees a resolver held on an object property, one level deep", () => {
+    // `const holder = { load: import.meta.resolve }` puts the resolver where the name-based store
+    // cannot see it: the binding `holder` is an object, not a loader.
+    expect(
+      read(
+        `const holder = { load: import.meta.resolve };\nexport const r = holder.load("react");`
+      )
+    ).toEqual(["react"]);
+    // Both member spellings at the call, and both key spellings in the literal.
+    expect(
+      read(
+        `const holder = { load: import.meta.resolve };\nexport const r = holder["load"]("react");`
+      )
+    ).toEqual(["react"]);
+    expect(
+      read(
+        `const holder = { "load": import.meta.resolve };\nexport const r = holder.load("react");`
+      )
+    ).toEqual(["react"]);
+    expect(
+      read(`
+        import { createRequire } from "node:module";
+        const h = { load: createRequire(import.meta.url) };
+        export const r = h.load("react");
+      `)
+    ).toEqual(["node:module", "react"]);
+    // The controls: an ordinary function on a property is not a resolver, a member call on a
+    // different holder is not one, and a holder shadowed at the call site is not the one that
+    // holds it.
+    expect(
+      read(
+        `const holder = { load: (v) => v };\nexport const r = holder.load("react");`
+      )
+    ).toEqual([]);
+    expect(
+      read(
+        `const holder = { load: import.meta.resolve };\nexport const r = other.load("react");`
+      )
+    ).toEqual([]);
+    expect(
+      read(`
+        const holder = { load: import.meta.resolve };
+        export function f(holder) { return holder.load("react"); }
+      `)
+    ).toEqual([]);
+  });
+
   it("stops treating a name as a loader once it is given something else", () => {
     // `let load = import.meta.resolve; load = v => v; load(x)` invokes the replacement, so
     // reporting it rejects an artifact that loads nothing — the direction that costs a correct

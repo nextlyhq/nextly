@@ -468,6 +468,28 @@ export function specifiersIn(source, fileName) {
   const aliases = [];
   /** Names given a non-loader value somewhere, which disqualifies the binding. */
   const overwritten = [];
+
+  /**
+   * Resolvers held on an object PROPERTY, keyed `holder\u0000property` to the holder's scopes.
+   *
+   * `const holder = { load: import.meta.resolve }` puts the resolver somewhere the name-based
+   * store cannot see, because the binding `holder` is an object rather than a loader.
+   *
+   * DELIBERATELY ONE LEVEL. It covers a resolver placed directly on a literal and called directly
+   * off the name that holds it. It does not follow the holder through another binding, an array,
+   * a nested object or a computed holder, and it cannot: doing so is tracking values through the
+   * heap, which is a dataflow analysis rather than a reading of syntax. The bound is stated here
+   * rather than left for the next reader to discover from a miss.
+   */
+  const memberLoaders = new Map();
+  const memberKey = (holder, property) => `${holder}\u0000${property}`;
+  const addMemberLoader = (holder, property, declaredIn) => {
+    if (declaredIn === undefined) return;
+    const key = memberKey(holder, property);
+    const scopes = memberLoaders.get(key);
+    if (scopes === undefined) memberLoaders.set(key, new Set([declaredIn]));
+    else scopes.add(declaredIn);
+  };
   const collectLoaders = node => {
     /** Whether a key node names `resolve`, in every spelling a key can take. */
     const namesResolveKey = key => {
@@ -561,6 +583,27 @@ export function specifiersIn(source, fileName) {
         // `const again = load` hands the loader on under another name. Recorded now and resolved
         // below, because the assignment can appear in any order in emitted output.
         aliases.push([nameNode.text, value, declaredIn]);
+      } else if (ts.isObjectLiteralExpression(value)) {
+        // A resolver placed on a property of an object literal, e.g.
+        // `const holder = { load: import.meta.resolve }`. The holder itself is not a loader, so it
+        // is not recorded as one; only the property is.
+        for (const property of value.properties) {
+          if (!ts.isPropertyAssignment(property)) continue;
+          const held = property.initializer;
+          const isLoaderValue =
+            namesMetaResolve(held) ||
+            (ts.isCallExpression(held) && namesFactory(held.expression));
+          if (!isLoaderValue) continue;
+          const key = property.name;
+          const named = ts.isComputedPropertyName(key) ? key.expression : key;
+          if (
+            ts.isIdentifier(named) ||
+            ts.isStringLiteral(named) ||
+            ts.isNoSubstitutionTemplateLiteral(named)
+          ) {
+            addMemberLoader(nameNode.text, named.text, declaredIn);
+          }
+        }
       } else {
         // The name was given something that is NOT a loader. `let load = import.meta.resolve;
         // load = v => v` leaves the call harmless, and reporting it rejects a valid artifact.
@@ -646,7 +689,26 @@ export function specifiersIn(source, fileName) {
         (ts.isCallExpression(callee) && namesFactory(callee.expression)) ||
         // `const load = createRequire(...); load("react")`, invoked through the name it was
         // stored under — and only where that declaration is what the name resolves to.
-        (ts.isIdentifier(callee) && isLoaderAt(callee, callee.text));
+        (ts.isIdentifier(callee) && isLoaderAt(callee, callee.text)) ||
+        // `holder.load("react")`, where `load` was placed on `holder` as a resolver. Both member
+        // spellings, through the same predicate every other member rule uses.
+        ((ts.isPropertyAccessExpression(callee) ||
+          ts.isElementAccessExpression(callee)) &&
+          ts.isIdentifier(callee.expression) &&
+          (() => {
+            const holder = callee.expression;
+            const member = ts.isPropertyAccessExpression(callee)
+              ? callee.name.text
+              : ts.isStringLiteral(callee.argumentExpression) ||
+                  ts.isNoSubstitutionTemplateLiteral(callee.argumentExpression)
+                ? callee.argumentExpression.text
+                : undefined;
+            if (member === undefined) return false;
+            const scopes = memberLoaders.get(memberKey(holder.text, member));
+            if (scopes === undefined) return false;
+            const scope = nearestBindingScope(holder, holder.text);
+            return scope !== undefined && scopes.has(scope);
+          })());
       // `import.meta.resolve("@nextlyhq/admin-css")` names a package without importing it. It
       // needs no `node:module` import, so the guard that keeps the loader out of this package
       // does not reach it, and a bundler records no dependency for what it names — a consumer
