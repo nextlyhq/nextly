@@ -487,11 +487,11 @@ export default function UserTable() {
           </>
         }
       >
-        {/* The failure renders as a table state rather than as an Alert. An
-            Alert draws its own border and radius, so inside the card the two
-            outlines double and its corners are clipped by `overflow-hidden`;
-            `TableError` is drawn by the borderless view and inherits the card
-            it sits in, which is also how every other list reports a failure. */}
+        {/* The failure is a table state rather than a separate Alert, so the
+            list reports one the way every other list does. With no rows to
+            show, `DataTableView` returns the message alone and draws no card
+            around it, which is why nothing here needs to suppress the empty
+            state or lay the error out. */}
         <DataTableView<UserApiResponse>
           columns={columns}
           rows={filteredData}

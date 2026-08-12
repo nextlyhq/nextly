@@ -1,15 +1,14 @@
 /**
- * Where the footer lands, in both of the views this component switches between.
+ * The footer is mounted once, and the surface around it is what changes.
  *
- * The footer is pagination, and pagination supplies its own `border-t`. That
- * reads as a divider only when there is a card for it to divide. In the table
- * view there is one, so it belongs inside it; in the card view each row is its
- * own card and there is no enclosing edge, so it needs the surrounding gap
- * instead of butting against the last rounded corner.
+ * An earlier version rendered it in each view and let CSS hide one. That is how
+ * this component renders ROWS, and it is safe for them because they are static
+ * cells — but the footer is pagination: a component with state, effects and
+ * form controls carrying ids. Two mounts meant effects running twice, two live
+ * `id="page-size"` selects on the page, and a resize handing the user the other
+ * instance mid-interaction.
  *
- * Both views are always in the DOM and CSS shows one, which is how this
- * component already renders rows. So both placements are asserted here rather
- * than one, and each is checked against the block it belongs to.
+ * So the single mount is the property under test, not an implementation detail.
  */
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
@@ -23,68 +22,65 @@ interface Row extends Record<string, unknown> {
 
 const ROWS: Row[] = [{ id: "1", name: "first" }];
 
-function renderWithFooter() {
+function renderWithFooter(bordered?: boolean) {
   render(
     <DataTableView<Row>
       columns={[{ name: "name", header: "Name" }]}
       rows={ROWS}
-      footer={<nav data-testid="footer">pagination</nav>}
+      bordered={bordered}
+      footer={
+        <nav data-testid="footer">
+          <select id="page-size" aria-label="Page size">
+            <option>10</option>
+          </select>
+        </nav>
+      }
     />
   );
   return screen.getAllByTestId("footer");
 }
 
-/** The nearest ancestor that switches on the table's container query. */
-function viewBlockOf(node: HTMLElement): HTMLElement | null {
-  let current = node.parentElement;
-  while (current) {
-    const classes = current.className;
-    if (
-      typeof classes === "string" &&
-      (classes.includes("@md/table:block") ||
-        classes.includes("@md/table:hidden"))
-    ) {
-      return current;
-    }
-    current = current.parentElement;
-  }
-  return null;
-}
-
 describe("DataTableView footer", () => {
-  it("renders once per view, so exactly one is ever displayed", () => {
-    expect(renderWithFooter()).toHaveLength(2);
+  it("mounts exactly once", () => {
+    expect(renderWithFooter()).toHaveLength(1);
   });
 
-  it("sits inside the bordered card in the table view", () => {
-    const desktop = renderWithFooter()
-      .map(viewBlockOf)
-      .find(block => block?.className.includes("@md/table:block"));
+  it("leaves one element per id, so controls stay addressable", () => {
+    renderWithFooter();
 
-    expect(desktop).toBeTruthy();
-    // Inside the block that carries the card, so the card encloses it and the
-    // footer's own top border becomes the card's internal divider.
-    expect(desktop?.className).toContain("border-border");
+    // A duplicated mount is not only a React concern: two elements sharing an
+    // id is invalid, and a label or a test that resolves one of them silently
+    // picks whichever came first.
+    expect(document.querySelectorAll("#page-size")).toHaveLength(1);
   });
 
-  it("takes the card view's own gap, and not a second one", () => {
-    const mobile = renderWithFooter()
-      .map(node => ({ node, block: viewBlockOf(node) }))
-      .find(({ block }) => block?.className.includes("@md/table:hidden"));
+  it("sits inside the surface that carries the card", () => {
+    const [footer] = renderWithFooter();
+    const surface = footer?.parentElement;
 
-    expect(mobile).toBeTruthy();
+    // Same element that becomes the card at the breakpoint, so the footer is
+    // enclosed by it and its own top border reads as the divider.
+    expect(surface?.className).toContain("@md/table:border");
+    expect(surface?.className).toContain("@md/table:rounded-md");
+  });
 
-    // The separation comes from the column's `gap-4`, which means the footer
-    // has to be a DIRECT child of it. Wrapping it to add a margin also adds the
-    // gap, and the two stack into double the intended space.
-    expect(mobile?.node.parentElement).toBe(mobile?.block);
-    expect(mobile?.block?.className).toContain("gap-4");
+  it("takes the column gap where there is no card to be a footer of", () => {
+    const [footer] = renderWithFooter();
+    const surface = footer?.parentElement;
 
-    // Asserting a margin exists would encode whichever spacing shipped rather
-    // than the one intended, so what is pinned is the absence of a second
-    // source of it.
-    const between = mobile?.node.className ?? "";
-    expect(between).not.toMatch(/\bmt-\d/);
+    // Below the breakpoint the surface is a plain column and the rows are
+    // separate cards, so the gap separates the footer from the last of them.
+    // Above it the gap collapses and the card's edge does the work.
+    expect(surface?.className).toContain("gap-4");
+    expect(surface?.className).toContain("@md/table:gap-0");
+  });
+
+  it("draws no card when the caller supplies one", () => {
+    const [footer] = renderWithFooter(false);
+
+    // `EntryTable` and the media library wrap the view themselves; the surface
+    // must stay borderless there or the outlines double.
+    expect(footer?.parentElement?.className).not.toContain("@md/table:border");
   });
 
   it("renders nothing extra when no footer is given", () => {
