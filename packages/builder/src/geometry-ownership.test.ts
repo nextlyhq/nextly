@@ -8,12 +8,10 @@
  * here would see it. A duplicate mapping added alongside this file passes every
  * assertion below.
  *
- * That half is a review-time convention rather than a checked one, for the same
- * reason the builder's "draws with `blocks-react`" rule is: arithmetic on two
- * numbers is indistinguishable from any other arithmetic, so no scan can tell a
- * second implementation from ordinary code. What IS checkable is the DOM read
- * that a mapping needs its inputs from, and narrowing the guard to that leaves
- * the door it can actually hold.
+ * Nothing checks that half. Arithmetic on two numbers is indistinguishable
+ * from any other arithmetic, so no scan can tell a second implementation from
+ * ordinary code. What IS checkable is the DOM read a mapping needs its inputs
+ * from, and this is narrowed to that.
  *
  * The editor's chrome is drawn in the host document over a canvas that lives in
  * an iframe, so anything positioning an overlay has to convert between the two
@@ -21,17 +19,16 @@
  * about their own question and disagree about the shared one — the indicator
  * lands a few pixels off the gap it names, and neither module's tests fail.
  *
- * So this scans for that read outside `geometry.ts` — and it is a REVIEW AID,
- * not a boundary. It recognises a bounded set of spellings: a property access,
- * a string element access, and a destructured binding in either form. A name
- * assembled at runtime, a `Reflect.get`, a property descriptor and an `eval`
- * all walk past it, and the last test in this file asserts one of them does.
+ * So this scans for that read outside `geometry.ts`. Its detection is bounded:
+ * it recognises a property access, a string element access, and a destructured
+ * binding in either form. A name assembled at runtime, a `Reflect.get`, a
+ * property descriptor and an `eval` all walk past it, and the last test in this
+ * file asserts one of them does.
  *
- * That is worth saying at the top rather than only at the bottom, because a
- * scan is easy to read as a guarantee. It narrows the paths someone takes by
- * accident, which is the failure it is aimed at: the second implementation
+ * Stated at the top because a scan reads as a guarantee otherwise. It catches
+ * the spelling someone reaches for without thinking — a second implementation
  * looks reasonable in isolation and arrives when someone needs a rectangle and
- * has a DOM node to hand. It cannot stop one written deliberately.
+ * has a DOM node to hand. It does not constrain one written deliberately.
  *
  * Read from the AST rather than by matching text, so a call written as
  * `el["getBoundingClientRect"]()` is seen as the same thing — the spelling that
@@ -208,16 +205,15 @@ describe("rectangles are read across the frame in one place", () => {
   });
 
   it("does not claim to see a read routed through a computed name", () => {
-    // The limit of the scan, asserted rather than left to be discovered.
+    // The limit of the scan, asserted so it stays true.
     //
-    // A scan over syntax has an unbounded surface: a name assembled at runtime,
-    // a `Reflect.get`, a property descriptor, an `eval`. Recognising one more
-    // spelling moves the edge without closing it, so this is a REVIEW AID over
-    // a bounded set of spellings, NOT a boundary the code cannot cross.
+    // Detection is by syntax, and syntax has an unbounded surface: a name
+    // assembled at runtime, a `Reflect.get`, a property descriptor, an `eval`.
+    // Recognising one more spelling moves the edge without closing it, so the
+    // set above is bounded on purpose rather than aspiring to completeness.
     //
-    // The enforceable half is elsewhere: `geometry.ts` owns the arithmetic and
-    // every caller asks it. Writing the limit as a passing assertion keeps it
-    // true, where a sentence in a header stops being read.
+    // Asserting the miss keeps the boundary honest: a sentence in a header can
+    // drift from the code, and this cannot.
     const computed = crossFrameReads(
       'const name = "getBounding" + "ClientRect"; const r = el[name]();',
       "probe.ts"

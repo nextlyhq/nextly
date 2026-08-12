@@ -73,16 +73,16 @@ describe("locating the frame's content viewport", () => {
   });
 
   it("agrees with adding the inset raw only at 100%", () => {
-    // Why the fault survived review: at scale 1 the two implementations are the
-    // same function, and 100% is the state a canvas is developed in.
+    // At scale 1 the scaled and raw inset arithmetic are the same function, so
+    // this case cannot distinguish them. It pins the identity, not the fix.
     expect(
       frameContentOrigin({ x: 100, y: 50 }, { left: 4, top: 8 }, 1)
     ).toEqual({ x: 104, y: 58 });
   });
 
   it("leaves the origin alone when the frame has no border", () => {
-    // The fixture case. It passes whether or not the inset is scaled, which is
-    // precisely why it could not have caught this.
+    // A borderless frame has a zero inset, so the scale term multiplies
+    // nothing. This case also cannot distinguish the two implementations.
     expect(
       frameContentOrigin({ x: 100, y: 50 }, { left: 0, top: 0 }, 0.5)
     ).toEqual({ x: 100, y: 50 });

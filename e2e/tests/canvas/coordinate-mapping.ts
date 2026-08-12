@@ -74,8 +74,8 @@ export function mapFrameRectToHost(
  * Where the frame's content viewport starts, from a measured border box.
  *
  * Re-exported rather than wrapped: this is the arithmetic every caller needs
- * after reading `boundingBox()` and `clientLeft`, and the two places that
- * previously did it by hand both added the inset without scaling it. The
- * measurement stays in the driver; the sums stay in the editor's module.
+ * after reading `boundingBox()` and `clientLeft`, and writing it at each call
+ * site is how one of them ends up adding the inset unscaled. The measurement
+ * stays in the driver; the sums stay in the editor's module.
  */
 export { frameContentOrigin, type FrameInset };

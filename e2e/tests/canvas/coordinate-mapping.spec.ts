@@ -44,8 +44,8 @@ async function groundTruth(page: import("@playwright/test").Page) {
 /**
  * How the frame's content origin is derived from its measured border box.
  *
- * `"raw"` reproduces the arithmetic this file used to carry: add `clientLeft`
- * to a post-transform corner without scaling it. It exists so the bordered test
+ * `"raw"` adds `clientLeft` to a post-transform corner without scaling it —
+ * the arithmetic a naive implementation writes. It exists so the bordered test
  * below can show its own tolerance is load-bearing, the same way the scale test
  * shows the scale term is.
  */

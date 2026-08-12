@@ -26,9 +26,8 @@
  * open-code the arithmetic without touching the DOM, and two numbers multiplied
  * and added look like any other code.
  *
- * So treat both as review-time conventions, the same way the builder's "draws
- * with `blocks-react`" rule is. What is real is that the e2e helper adapts these
- * functions rather than restating them, and that every caller needing a content
+ * What holds instead is narrower and true: the e2e helper adapts these
+ * functions rather than restating them, and every caller needing a content
  * origin asks {@link frameContentOrigin} for one.
  *
  * The functions are pure and take plain numbers rather than DOM nodes, so the
@@ -189,8 +188,8 @@ export function pointToCanvas(point: Point, frame: FrameGeometry): Point {
  * A rectangle inside the canvas frame, in host coordinates.
  *
  * Its size scales with the frame. An overlay sized from the unscaled rectangle
- * would be correct only at 100%, and would look correct there — which is how a
- * zoom bug survives review.
+ * would be correct only at 100%, and would look correct there, which is the
+ * one configuration a canvas is usually looked at in.
  */
 export function rectToHost(rect: Rect, frame: FrameGeometry): Rect {
   const origin = pointToHost({ x: rect.x, y: rect.y }, frame);

@@ -36,9 +36,9 @@
 /**
  * The extensions TypeScript and tsup follow.
  *
- * `.mts` and `.cts` are here because both tools resolve them. They were missing
- * from every copy of this list, so a module written with either extension was
- * invisible to every check in this package.
+ * `.mts` and `.cts` are here because both tools resolve them. A module written
+ * with either extension is a module the bundler follows, so a list omitting
+ * them leaves that file invisible to every check in this package.
  */
 const MODULE_EXTENSIONS = [
   "ts",

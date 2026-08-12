@@ -88,12 +88,24 @@ export function createPocDriver(page: Page): CanvasDriver {
     return frame;
   }
 
-  /** The frame's current transform scale; 1 when untransformed. */
+  /**
+   * The frame's current transform scale; 1 when untransformed.
+   *
+   * Reported as measured, including zero. A collapsed frame maps the whole
+   * canvas onto a point, and the mapping refuses it — but only if the number
+   * reaches the mapping, so this must not substitute a usable-looking value for
+   * an unusable one.
+   *
+   * `|| 1` is what did that: it reads as "default when absent" and also fires
+   * on a measured 0. It is not needed for the untransformed case either, since
+   * `getComputedStyle` reports `"none"` there and `DOMMatrixReadOnly` parses
+   * that to the identity, whose `a` is already 1.
+   */
   async function frameScale(): Promise<number> {
     return page.evaluate(() => {
       const frame = document.querySelector("iframe");
       if (!(frame instanceof HTMLElement)) return 1;
-      return new DOMMatrixReadOnly(getComputedStyle(frame).transform).a || 1;
+      return new DOMMatrixReadOnly(getComputedStyle(frame).transform).a;
     });
   }
 

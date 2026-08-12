@@ -36,8 +36,8 @@ import { BUNDLED_MODULE, TEST_MODULE } from "./source-modules";
  * `blocks-react` rather than reimplementing rendering on top of React and
  * `@nextlyhq/blocks-engine` is a property of what the code does, not of what it
  * imports, and both spellings import exactly the same packages. The allowlist
- * makes the shortcut inconvenient; it cannot make it impossible. Treat that rule
- * as a design constraint reviewed by people, not as one enforced here.
+ * makes the shortcut inconvenient; it cannot make it impossible. That rule is a
+ * design constraint, and nothing in this file enforces it.
  */
 
 // `import.meta.dirname` only exists from Node 20.11 and the package floor is
