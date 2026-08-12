@@ -6,31 +6,52 @@ name: Code hygiene
 # ESLint reads one file at a time, so nothing in CI could see an export with no
 # consumers, a `vi.mock` pointing at a module that no longer exists, or a
 # package listed in a manifest that no code imports. Fallow reads the whole
-# module graph, which is what makes those visible — and what makes it too slow
-# and too noisy to run as a whole-repo gate.
+# module graph, which is what makes those visible.
 #
-# Scoped to the diff for that reason. `fallow audit` analyses a snapshot of the
-# base commit as well as the head, and attributes every finding to one side or
-# the other. `--gate new-only` (its default) fails on what the pull request
-# introduced and reports the rest without failing, so the debt already in the
-# tree — 47 import cycles through the admin page registry, ~8.6% duplication —
-# never blocks an author who did not cause it. Nothing here is
-# `continue-on-error`: a red run means this pull request added something.
+# It analyses the WHOLE repository, not the diff, because the file a change
+# breaks is often one it never opened: deleting the last call to an exported
+# helper orphans that export somewhere else entirely, and a diff-scoped reader
+# cannot see it. `templates/` is the one tree left out — those four are
+# fragments with no package.json of their own, composed into a project by
+# create-nextly-app at scaffold time, so read in place every specifier in them
+# is unresolvable.
 #
-# Separate from ci.yml because of that base snapshot: it needs full history,
-# and ci.yml checks out with `fetch-depth: 2`. Widening that would slow every
-# job in CI to serve one step here.
+# What keeps a whole-repo verdict usable is the BASELINE. The tree carries debt
+# this job is not here to relitigate — 47 import cycles through the admin page
+# registry, ~846 clone groups, ~1200 functions over the complexity thresholds —
+# and a bare whole-repo run reports every one of them on every pull request. So
+# the base commit is analysed too and the head compared against it: only what
+# the change ADDS can fail, and only what it adds is annotated. Nothing here is
+# `continue-on-error`; a red run means this pull request introduced something.
 #
-# pull_request only. A push to main has no diff to attribute against, and a
-# whole-repo verdict would report the inherited debt above on every commit.
+# Three analyses rather than one, each against its own baseline, because that is
+# how the baselines work: a single `fallow --baseline` covers dead code alone,
+# and the combined run keeps failing on inherited duplication and complexity.
+# Measured on an unchanged tree, the three-baseline form emits no annotations
+# and exits 0, which is the property this job needs to be worth having.
+#
+# The baselines are computed per run rather than committed. A checked-in
+# baseline is a second copy of a fact the repository already holds, and it goes
+# stale silently — every pull request after a merge would measure against
+# whatever main looked like when someone last remembered to refresh it.
+# Deriving them from the pull request's own base costs one extra install and
+# three short scans, and cannot be wrong.
+#
+# Separate from ci.yml because of that: it needs full history and a second
+# working tree, and ci.yml checks out with `fetch-depth: 2`.
+#
+# pull_request only. A push to main has no base to compare against.
 
 on:
   pull_request:
     branches: [main]
 
-# Reports through its exit code. Nothing here comments, labels, or writes.
 permissions:
   contents: read
+  # The sticky summary comment. The other two outputs — inline annotations and
+  # the job summary — are workflow commands and need no token, which is what
+  # lets them render on pull requests from forks.
+  pull-requests: write
 
 concurrency:
   group: code-hygiene-${{ github.ref }}
@@ -38,16 +59,16 @@ concurrency:
 
 jobs:
   audit:
-    name: Audit changed files
+    name: Audit the repository
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # Full history: attributing a finding to the pull request means
-          # analysing the base commit's tree, not just the diff against it.
+          # Full history so the base commit can be checked out as a second
+          # working tree below; a shallow clone has no object for it.
           fetch-depth: 0
           persist-credentials: false
 
@@ -66,22 +87,79 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # No build step. The two specifier families that exist only after one —
-      # the `nextly/field-catalog` exports subpath and the `../dist/**` bin
-      # shims — are listed under `ignoreUnresolvedImports` in .fallowrc.jsonc,
-      # so the verdict is the same on a built and an unbuilt tree and this job
-      # costs seconds rather than the seven minutes a build would add.
-      #
-      # `pnpm fallow:audit` covers apps/playground, which `pnpm fallow`
-      # excludes: the harness carries a few permanent findings that would
-      # crowd a full report, but new-only files those as inherited, and the
-      # dev loop and the Playwright suite both boot that app — a broken import
-      # in it should fail a PR like any other.
-      #
-      # The base is pinned to the PR's base commit rather than inferred from
-      # merge-base, so the verdict does not move when main moves under a
-      # long-lived branch.
-      - name: Audit
-        run: pnpm fallow:audit
+      # The base tree lives outside the workspace so its own files are not
+      # analysed by the run below. It needs an install for the same resolution
+      # reason; the pnpm store is already warm, so this is mostly linking.
+      - name: Baseline the base commit
         env:
-          FALLOW_AUDIT_BASE: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git worktree add /tmp/fallow-base "$BASE_SHA"
+          cd /tmp/fallow-base
+          pnpm install --frozen-lockfile
+          for analysis in dead-code dupes health; do
+            pnpm exec fallow "$analysis" --save-baseline "/tmp/base-$analysis.json"
+          done
+
+      # Each analysis writes JSON and records its own verdict. `--format json`
+      # always exits 0 — it is machine output, and the caller decides — so the
+      # verdict comes from a second, human-format run rather than from that
+      # exit code, which would gate on nothing at all.
+      #
+      # Rendering happens after all three regardless of verdict: a red check
+      # with no annotations tells the author only that something is wrong.
+      - name: Analyse the pull request
+        id: analyse
+        run: |
+          failed=""
+          for analysis in dead-code dupes health; do
+            pnpm exec fallow "$analysis" \
+              --baseline "/tmp/base-$analysis.json" \
+              --format json > "/tmp/head-$analysis.json"
+            if ! pnpm exec fallow "$analysis" \
+              --baseline "/tmp/base-$analysis.json" > /dev/null 2>&1; then
+              failed="$failed $analysis"
+            fi
+          done
+          echo "failed=$failed" >> "$GITHUB_OUTPUT"
+
+      # Inline on the offending lines. Only findings absent from the baseline
+      # reach this point, so an unchanged tree annotates nothing.
+      - name: Annotate findings
+        run: |
+          for analysis in dead-code dupes health; do
+            pnpm exec fallow report --from "/tmp/head-$analysis.json" \
+              --format github-annotations
+          done
+
+      - name: Write the job summary
+        run: |
+          for analysis in dead-code dupes health; do
+            pnpm exec fallow report --from "/tmp/head-$analysis.json" \
+              --format github-summary >> /tmp/fallow-summary.md
+          done
+          cat /tmp/fallow-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      # One comment per pull request, edited in place on each push rather than
+      # appended, so the thread does not fill with superseded verdicts.
+      #
+      # Skipped for forks: their token is read-only by design, and a step that
+      # cannot post should not fail a check the fork author cannot influence.
+      # Annotations and the job summary still render for them.
+      - name: Comment on the pull request
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pnpm exec fallow ci post-pr-comment \
+            --provider github \
+            --pr "${{ github.event.pull_request.number }}" \
+            --body /tmp/fallow-summary.md \
+            --marker-id code-hygiene \
+            ${{ steps.analyse.outputs.failed == '' && '--clean' || '' }}
+
+      - name: Gate
+        if: steps.analyse.outputs.failed != ''
+        run: |
+          echo "::error::fallow reported findings introduced by this pull request:${{ steps.analyse.outputs.failed }}. See the annotations above and the job summary."
+          exit 1
