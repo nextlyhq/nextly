@@ -70,44 +70,45 @@ const ROOT = path.resolve(__dirname, "..");
 let failures = 0;
 
 /**
- * Run a known-forbidden fixture through the REAL scan before trusting any verdict below.
+ * Plant a known hit for EVERY pattern and run each through the real scan.
  *
- * 🔴 An earlier version of this control ran its OWN `grep`, with its own include list and its own
- * exclusions. That answers "can something find the catalog", which is a different question from
- * "does the scan these checks depend on still work" — and it keeps answering yes after the real
- * include list, exclusion set, allowlist or patterns have stopped matching. A control has to
- * exercise the path it certifies, or it certifies a different path.
+ * 🔴 An earlier version planted one literal and checked one pattern. That certifies one scan: if
+ * any other pattern is mistyped or stops matching, its own check reports no hits, the fixture stays
+ * green, and part of the gate is silently switched off while the run still prints a tick for it. A
+ * control that samples cannot speak for the cases it did not sample.
  *
- * So this writes a file that MUST be rejected into a scanned directory and runs the same scan
- * every check below runs. If a plain forbidden literal sitting in ordinary product code does not
- * come back as a hit, nothing below means anything.
- *
- * Removed in a `finally`, and named so that a crash between writing and deleting leaves a file
- * whose only possible purpose is obvious.
+ * Each case is evaluated with the exact expression its production check uses, read from the same
+ * array, so a pattern edited in one place cannot be verified against a different one.
  */
-function assertScanSeesAForbiddenLiteral() {
+function assertScanSeesEveryPattern() {
   const relativePath = "packages/nextly/src/__storage-gate-selfcheck-fixture.ts";
   const fixture = path.join(ROOT, relativePath);
+  const blind = [];
 
   try {
-    // Not a comment, not a test file, not in an allowlisted path: none of the deliberate
-    // exemptions apply, so the only reason this could go unseen is a scan that stopped working.
-    writeFileSync(fixture, "export const planted = row._componentType;\n");
-
-    const hits = collectHits("_componentType");
-    if (!hits.some(line => line.includes(relativePath))) {
-      console.error(
-        "✗ the scan did not see a forbidden literal placed in product code.\n" +
-          "  Its include list, exclusions, allowlist or patterns have stopped matching, so every\n" +
-          "  check below would pass without examining anything."
-      );
-      process.exit(1);
+    for (const check of CHECKS) {
+      // Not a comment, not a test file, not an allowlisted path: none of the deliberate exemptions
+      // apply, so the only reason this could go unseen is a scan that stopped working.
+      writeFileSync(fixture, `${check.plant}\n`);
+      const hits = collectHits(check.pattern);
+      if (!hits.some(line => line.includes(relativePath))) blind.push(check.label);
     }
-
-    console.log("scan self-check passed: a planted literal was seen\n");
   } finally {
     if (existsSync(fixture)) rmSync(fixture);
   }
+
+  if (blind.length > 0) {
+    console.error(
+      "✗ the scan did not see a planted hit for these checks, so each would pass below\n" +
+        "  without examining anything:"
+    );
+    for (const label of blind) console.error(`    ${label}`);
+    process.exit(1);
+  }
+
+  console.log(
+    `scan self-check passed: ${CHECKS.length} patterns each saw a planted hit\n`
+  );
 }
 
 
@@ -224,65 +225,55 @@ function grep(label, pattern, opts = {}) {
 
 }
 
-assertScanSeesAForbiddenLiteral();
 
 // 🔴 BOTH generations are banned, not only the legacy one.
 //
 // The target spellings are what a migrated database actually uses, so a literal reading
-// `_fieldGroupType` is wrong on precisely the installs the migration has already reached — and it
-// is the spelling someone writing new code AFTER the flip would naturally reach for. Guarding only
-// the legacy names would enforce the single-catalog rule on the generation that is on its way out
-// while leaving the incoming one unguarded, which is the wrong half.
+// `_fieldGroupType` is wrong on precisely the installs the migration has already reached. Guarding
+// only the legacy names enforces the rule on the generation on its way out and leaves the incoming
+// one unguarded, which is the wrong half.
 //
-// 1. The content key, in both generations. No catalog can describe a key inside a row, so a
-// literal here is the one spelling a database cannot be asked about — read it wrong and the
-// instance loses its type.
-grep(
-  "content type key goes through the catalog (legacy spelling)",
-  "_componentType"
-);
-grep(
-  "content type key goes through the catalog (target spelling)",
-  "_fieldGroupType"
-);
+// Declared as data rather than as seven calls so the self-check can plant a known hit for EVERY
+// pattern from this same array. Checking one and trusting the rest is how a mistyped pattern
+// retires its own scan while the run still prints a tick for it.
+const CHECKS = [
+  {
+    label: "content type key goes through the catalog (legacy spelling)",
+    pattern: "_componentType",
+    plant: "export const planted = row._componentType;",
+  },
+  {
+    label: "content type key goes through the catalog (target spelling)",
+    pattern: "_fieldGroupType",
+    plant: "export const planted = row._fieldGroupType;",
+  },
+  {
+    label: "type column goes through the catalog (legacy spelling)",
+    pattern: "\\b_component_type\\b",
+    plant: "export const planted = row._component_type;",
+  },
+  {
+    label: "type column goes through the catalog (target spelling)",
+    pattern: "\\b_field_group_type\\b",
+    plant: "export const planted = row._field_group_type;",
+  },
+  {
+    label: "registry table goes through the catalog (legacy spelling)",
+    pattern: "\\bdynamic_components\\b",
+    plant: 'export const planted = "dynamic_components";',
+  },
+  {
+    label: "registry table goes through the catalog (target spelling)",
+    pattern: "\\bdynamic_field_groups\\b",
+    plant: 'export const planted = "dynamic_field_groups";',
+  },
+  {
+    label: "content type key is reached through the accessor",
+    pattern: "\\bwireTypeKey\\b",
+    plant: "export const planted = CATALOG.wireTypeKey;",
+  },
+];
 
-// 2. The discriminator column. Catalog-resolvable, so a literal degrades rather than breaks —
-// but it degrades on exactly the databases that have migrated.
-//
-// 🔴 Matched WITHOUT requiring quotes. A quoted-only pattern reads as though it covers the name,
-// and misses `row._component_type` and `{ _field_group_type: value }` — ordinary TypeScript
-// property syntax, and the form a reader is most likely to write. The check that motivated the
-// rule was the one the pattern could not see. `\b` is sound here because the character before the
-// leading underscore is always a non-word one (`.`, a quote, a brace, whitespace).
-grep("type column goes through the catalog (legacy spelling)", "\\b_component_type\\b");
-grep("type column goes through the catalog (target spelling)", "\\b_field_group_type\\b");
+assertScanSeesEveryPattern();
 
-// 3. The registry table. Same shape as the column.
-grep("registry table goes through the catalog (legacy spelling)", "\\bdynamic_components\\b");
-grep("registry table goes through the catalog (target spelling)", "\\bdynamic_field_groups\\b");
-
-// 4. 🔴 Reading the CATALOG for the content key, outside the accessor.
-//
-// The checks above ban writing the spelling out. They do not ban asking the catalog for it, and
-// that is not the same rule: `instance[STORAGE_FORMAT.wireTypeKey]` contains no literal, resolves
-// correctly, passes every check above — and still consults exactly ONE spelling, so after the flip
-// it reads a legacy-spelled document as untyped precisely as a hardcoded reader would.
-//
-// The property that actually matters is therefore not "no literals" but "the wire key is reached
-// only through the accessor", which is what this enforces. `field-group-type-key.ts` is where the
-// two catalogs are legitimately combined into a read order; the migration engine names both
-// because renaming one to the other is its job.
-//
-// Note this bans the catalog READ, not the catalog. Sibling `STORAGE_FORMAT` members — column
-// names, table prefixes — stay resolvable everywhere, because those a database can be asked about.
-grep("content type key is reached through the accessor", "\\bwireTypeKey\\b");
-
-if (failures > 0) {
-  console.error(
-    `\n${failures} storage-spelling gate failure(s).\n` +
-      `Read the spelling from schemas/storage-format.ts instead of writing it out. ` +
-      `The catalog is what makes the storage migration a rename rather than a search.`
-  );
-  process.exit(1);
-}
-console.log("\nStorage-spelling gate passed.");
+for (const check of CHECKS) grep(check.label, check.pattern);

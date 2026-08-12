@@ -44,26 +44,21 @@ import { builtinModules } from "node:module";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { CLIENT_ENTRIES } from "./client-entries.mjs";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const pkgRoot = join(here, "..");
 const dist = join(pkgRoot, "dist");
 
 /**
- * Entry points a browser bundle may reach, by their export-map path.
+ * Derived from the single declaration the build also reads.
  *
- * Kept as export-map keys rather than dist filenames so the list is checkable against
- * `package.json`: an entry named here that the map does not export is a typo, and this refuses to
- * run rather than reporting a pass for a file it never opened.
+ * 🔴 Not a second list. Keeping one here and one in `tsup.config.js` meant a client entry added to
+ * the build was scanned by nobody — and they had already drifted, with `./field-catalog` covered
+ * here and unnamed there. Deriving both views from one declaration makes that impossible rather
+ * than unlikely.
  */
-const CLIENT_SAFE_EXPORTS = [
-  "./config",
-  "./next",
-  "./field-group-type",
-  // Imported by the admin field pickers from "use client" components. It was already an
-  // established client surface before this check existed, which is exactly why it belongs here:
-  // an entry nobody is currently worried about is the one that regresses unnoticed.
-  "./field-catalog",
-];
+const CLIENT_SAFE_EXPORTS = CLIENT_ENTRIES.map(entry => entry.exportKey);
 
 const pkg = JSON.parse(readFileSync(join(pkgRoot, "package.json"), "utf8"));
 
@@ -76,9 +71,20 @@ const pkg = JSON.parse(readFileSync(join(pkgRoot, "package.json"), "utf8"));
  * standard library. The prefixed form is still matched because an external or unbundled module can
  * preserve it.
  */
+const BUILTIN_NAMES = new Set(
+  builtinModules.flatMap(name => [
+    name,
+    // 🔴 Both spellings, because the two lists disagree in BOTH directions. `builtinModules`
+    // lists most modules bare (`fs`) and some newer ones only prefixed (`node:sqlite`), while the
+    // bundler strips the prefix from whatever it finds. So a prefix-only built-in arrives in the
+    // artifact as a bare name that appears in no list, and gets classified as an ordinary npm
+    // package — certified for the browser precisely because it is too new to be listed bare.
+    name.startsWith("node:") ? name.slice("node:".length) : `node:${name}`,
+  ])
+);
+
 function isNodeBuiltin(spec) {
-  if (spec.startsWith("node:")) return true;
-  return builtinModules.includes(spec);
+  return BUILTIN_NAMES.has(spec);
 }
 
 /** Every relative specifier in a built module, ignoring bare and `node:` ones. */
@@ -147,8 +153,35 @@ function selfCheck() {
     "literal dynamic import": 'const f = await import("node:fs");\n',
     "esbuild CommonJS interop": 'const f = __require("node:fs");\n',
     "resolve on the interop shim": 'const p = __require.resolve("fs");\n',
+
     "plain require call": 'const p = require("path");\n',
   };
+
+  // Classification, asserted against the real list rather than a fixture. A prefix-only built-in
+  // reaches the artifact with its prefix stripped, so both spellings of every listed name have to
+  // classify as a built-in — otherwise the newest modules, which are the ones listed only as
+  // `node:x`, are the ones certified for the browser.
+  //
+  // ⚠️ The prefix-only half is vacuous on a Node whose list has no such entries (Node 22 has
+  // none; they appear from 24). Reported rather than hidden, so a green here is not read as
+  // covering a case this runtime cannot present.
+  const prefixOnly = builtinModules.filter(name => name.startsWith("node:"));
+  const misclassified = [
+    ...builtinModules.filter(name => !isNodeBuiltin(name)),
+    ...prefixOnly
+      .map(name => name.slice("node:".length))
+      .filter(bare => !isNodeBuiltin(bare)),
+  ];
+  if (misclassified.length > 0) {
+    console.error(
+      `✗ these built-ins are not classified as such: ${misclassified.join(", ")}`
+    );
+    process.exit(1);
+  }
+  console.log(
+    `✓ built-in classification: ${builtinModules.length} names, ` +
+      `${prefixOnly.length} prefix-only${prefixOnly.length === 0 ? " (this runtime lists none — that half is untested here)" : ""}`
+  );
 
   const problems = [];
   for (const [label, body] of Object.entries(forms)) {

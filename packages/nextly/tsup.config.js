@@ -14,6 +14,8 @@ const require = createRequire(import.meta.url);
 const { version: coreVersion } = require("./package.json");
 
 // Server-only entry points that need Node.js shims (__dirname, import.meta.url, etc.)
+import { CLIENT_ENTRIES } from "./scripts/client-entries.mjs";
+
 const serverEntries = [
   "src/index.ts",
   // Testing subpath: createTestNextly harness (D46). Server-only.
@@ -55,9 +57,6 @@ const serverEntries = [
   "src/storage/index.ts",
   // Unified error system entry points
   "src/errors/index.ts",
-  // Field-type catalog subpath: pure serializable data, browser-safe —
-  // consumed by the admin's field pickers and by plugins.
-  "src/collections/fields/catalog.ts",
   "src/observability/index.ts",
   "src/database/index.ts",
   // Bootstrap seeders subpath. Internal docs at database/index.ts:23
@@ -82,14 +81,9 @@ const serverEntries = [
 
 // Client-safe entry points that should NOT have Node.js shims
 // These are imported in browser contexts (admin UI, client components)
-const clientEntries = [
-  "src/config.ts",
-  "src/next.ts",
-  // Read and written by the admin editor from a client component, so it must stay free of
-  // Node built-ins. That property is enforced against the BUILT output by
-  // scripts/check-client-safe-artifacts.mjs, not by membership of this list.
-  "src/field-group-type.ts",
-];
+// Derived from the single declaration these and the artifact check share. Two hand-kept lists had
+// already drifted: the check covered `./field-catalog` and this one did not name it.
+const clientEntries = CLIENT_ENTRIES.map(entry => entry.source);
 
 // Shared config options
 const sharedConfig = {
