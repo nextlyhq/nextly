@@ -33,6 +33,7 @@ import {
   FLAT_LIST_FIXTURE,
   LARGE_FIXTURE,
   NESTED_FIXTURE,
+  TALL_FIXTURE,
   seedPage,
 } from "./fixtures";
 import { mapFramePointToHost } from "./coordinate-mapping";
@@ -427,7 +428,24 @@ test.describe("a canvas any Nextly editor could ship", () => {
     request,
   }) => {
     note(PLAN_POINT.autoscrollBounded, "B-8");
-    await driver.mountTree(await seedPage(request, NESTED_FIXTURE));
+    // A document TALLER than the canvas, or there is no scroll range and the
+    // target cannot pass however correctly autoscroll is implemented.
+    const fixture = await seedPage(request, TALL_FIXTURE);
+    await driver.mountTree(fixture);
+
+    // Precondition, asserted rather than assumed: if the fixture rendered
+    // shorter than the viewport this case would measure a canvas that cannot
+    // scroll and report it as a missing behaviour.
+    const boxes = await driver.readBlockBoxes();
+    const authored = boxes.reduce(
+      (lowest, box) => Math.max(lowest, box.top + box.height),
+      0
+    );
+    expect(
+      authored,
+      "the fixture must overflow the canvas, or autoscroll is unobservable"
+    ).toBeGreaterThan(1400);
+
     await dragFromPanel(driver);
 
     // The canvas cannot answer this at all, and that refusal IS the
@@ -478,24 +496,43 @@ test.describe("a canvas any Nextly editor could ship", () => {
       fixture.blockIds.length,
       "the budget must be measured against the supported tree size"
     ).toBeGreaterThanOrEqual(500);
+    // SEEDED is not RENDERED. Timing against a canvas that mounted 6 of the 500
+    // measures a small tree while claiming to measure a large one, and the
+    // budget then passes on exactly the implementation it exists to reject.
+    const rendered = await driver.readBlockBoxes();
+    expect(
+      rendered.length,
+      "the tree must be on screen before timing moves against it"
+    ).toBeGreaterThanOrEqual(500);
+
     await dragFromPanel(driver);
 
-    const started = Date.now();
-    const moves = 20;
-    for (let move = 0; move < moves; move += 1) await driver.moveBy(0, 12);
-    const perMove = (Date.now() - started) / moves;
+    // Every move timed individually. A mean hides the shape that matters: one
+    // 2-second stall among twenty fast moves averages to a comfortable number
+    // while the editor visibly locks up, and a canvas that re-measures the tree
+    // does exactly that on the move where a rect cache misses.
+    const durations: number[] = [];
+    for (let move = 0; move < 20; move += 1) {
+      const started = Date.now();
+      await driver.moveBy(0, 12);
+      durations.push(Date.now() - started);
+    }
     await driver.cancel();
 
+    const slowest = Math.max(...durations);
+    const mean = durations.reduce((sum, ms) => sum + ms, 0) / durations.length;
     test.info().annotations.push({
       type: "per-move-ms",
-      description: String(Math.round(perMove)),
+      description: `slowest=${String(slowest)} mean=${String(Math.round(mean))}`,
     });
     // A budget, not a frame rate. Wall clock on a machine running several
     // matrices measures load as much as code, so this sits where only a
-    // re-measure-the-whole-tree-every-move regression can cross it.
-    expect(perMove, "a move must not re-measure the whole tree").toBeLessThan(
-      120
-    );
+    // re-measure-the-whole-tree-every-move regression can cross it — but it is
+    // the SLOWEST move that has to sit under it, not the average.
+    expect(
+      slowest,
+      "no single move may re-measure the whole tree"
+    ).toBeLessThan(120);
   });
 
   test("records exactly one undo entry for one drop", async ({ request }) => {

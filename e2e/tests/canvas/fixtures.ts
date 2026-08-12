@@ -119,6 +119,38 @@ export const NESTED_FIXTURE: SeedOptions = {
   ],
 };
 
+/**
+ * A document taller than the canvas viewport, so the canvas can actually
+ * scroll.
+ *
+ * Autoscroll is unobservable without this. The suite runs at 1400px tall and
+ * `NESTED_FIXTURE` renders roughly 400px of authored height, so the canvas has
+ * no scroll range at all — `canvasScrollTop()` cannot change, and the target
+ * could not pass even once autoscroll is implemented correctly.
+ *
+ * Its own fixture rather than borrowing `LARGE_FIXTURE`: that one is sized for
+ * a PERF budget, and a later tuning of the block count for timing reasons would
+ * silently take the scroll range away from this. Two questions, two fixtures.
+ */
+const TALL_BLOCK_HEIGHT = 200;
+const TALL_COUNT = 30;
+export const TALL_FIXTURE: SeedOptions = {
+  title: "spike tall",
+  slug: "spike-tall",
+  content: document(
+    Array.from({ length: TALL_COUNT }, (_unused, index) =>
+      spacer(`nx-tall-${String(index)}`, `${String(TALL_BLOCK_HEIGHT)}px`)
+    )
+  ),
+  blockIds: [
+    "nx-spike-root",
+    ...Array.from(
+      { length: TALL_COUNT },
+      (_unused, index) => `nx-tall-${String(index)}`
+    ),
+  ],
+};
+
 /** 500 siblings: the tree size the perf budget is stated against. */
 const LARGE_COUNT = 500;
 export const LARGE_FIXTURE: SeedOptions = {
