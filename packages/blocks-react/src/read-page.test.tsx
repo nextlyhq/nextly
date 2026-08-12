@@ -711,6 +711,82 @@ describe("a migration that changes whether a node draws", () => {
     expect(read.styles.css).not.toContain("nx-c-only-a");
   });
 
+  it("keeps the sheet when the flip is inside a CONDITION-GATED subtree", () => {
+    // Over-invalidation is the failure this guards. A gated node's rules travel
+    // in the per-node map rather than the main sheet, and gating withholds the
+    // whole subtree — so a descendant turning drawless leaves the delivered CSS
+    // exactly as correct as it was. Withholding the artifact for it would cost
+    // every OTHER block on the page its styling, which is a far larger
+    // regression than the stale rules this feature drops.
+    const gatedPage: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "wrapper",
+          type: "test/box",
+          version: 1,
+          props: { label: "w" },
+          // No visitor context reaches the gating pass, so any condition at all
+          // withholds this node and everything beneath it.
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+          },
+          slots: {
+            children: [
+              {
+                id: "a",
+                type: "plugin/drawless",
+                version: 1,
+                props: { draw: true },
+                classes: ["only-a"],
+                styles: { base: { base: { color: "rebeccapurple" } } },
+              },
+            ],
+          },
+        },
+        // A VISIBLE node of the same type as the gated wrapper. Without it the
+        // wrapper is the last `test/box` on the page, and removing the last node
+        // of a type leaves that type's shared rule in the main sheet with
+        // nothing to justify it — a refusal that is correct and has nothing to
+        // do with migration, which would make this case pass for the wrong
+        // reason and prove nothing about the flip.
+        {
+          id: "sibling",
+          type: "test/box",
+          version: 1,
+          props: { label: "s" },
+        },
+        // A VISIBLE drawless-capable node, stored ALREADY at v2 so the migration
+        // does not touch it and it keeps drawing. Same purpose as the box above,
+        // for the other type the gated subtree would otherwise be the last of.
+        {
+          id: "vis",
+          type: "plugin/drawless",
+          version: 2,
+          props: { draw: true },
+        },
+        {
+          id: "b",
+          type: "test/text",
+          version: 1,
+          props: { value: "y" },
+          styles: { base: { base: { color: "teal" } } },
+        },
+      ],
+    } as unknown as BlockDocument;
+
+    const stored = resolvePageStyles(gatedPage, undefined, context, withPlugin);
+    const read = preparePageForRead(gatedPage, {
+      resolver: flipping,
+      styles: stored,
+    });
+
+    // The visible sibling keeps its rule, which is the property that breaks if
+    // the flip inside the withheld subtree is treated as a repair.
+    expect(read.styles.css).toContain("color: teal");
+  });
+
   it("CONTROL: keeps the sheet when a migration leaves drawing alone", () => {
     // Without this the case above passes on an implementation that withholds
     // the sheet for ANY migrated node, which would blank the styling of every
