@@ -15,6 +15,7 @@ const REACT_FILES = [
   "packages/ui/**/*.{ts,tsx,js,jsx}",
   "packages/blocks-react/**/*.{ts,tsx,js,jsx}",
   "packages/builder/**/*.{ts,tsx,js,jsx}",
+  "packages/plugin-page-builder/**/*.{ts,tsx,js,jsx}",
   "apps/playground/**/*.{ts,tsx,js,jsx}",
 ];
 
