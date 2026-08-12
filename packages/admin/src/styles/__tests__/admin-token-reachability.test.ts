@@ -131,12 +131,13 @@ function namespaceOf(property: string): string {
  */
 
 /**
- * The one property in a theme-owned namespace that the theme legitimately does
- * not declare. `--font-inter` is injected by `next/font` at runtime and read
- * from inside `theme.css` itself (`--font-sans: var(--font-inter), Inter, ...`),
- * so the theme is its consumer, not its author.
+ * The properties in a theme-owned namespace that the theme legitimately does
+ * not declare. `next/font` self-hosts a face at build time and exposes it only
+ * as a variable, so the host app authors these and `theme.css` merely reads
+ * them (`--font-sans: var(--font-geist), Geist, ...`). The theme is their
+ * consumer, not their author.
  */
-const INJECTED_AT_RUNTIME = new Set(["--font-inter"]);
+const INJECTED_AT_RUNTIME = new Set(["--font-geist", "--font-geist-mono"]);
 
 const themeCss = readFileSync(resolve(repo, THEME), "utf8");
 const declaredByTheme = declaredIn(themeCss);
@@ -181,15 +182,24 @@ describe("admin tokens are reachable by a palette change", () => {
     expect([...namespaces].some(space => space !== "--nx")).toBe(true);
   });
 
-  it("still needs its one runtime-injected exception", () => {
-    // An exception nobody rechecks outlives its reason. If `--font-inter` is no
-    // longer consumed, or the theme starts declaring it, the entry should go
-    // rather than sit here explaining a situation that has changed.
-    const consumed = sources.some(path =>
-      readFileSync(resolve(repo, path), "utf8").includes("var(--font-inter)")
-    );
-    expect(consumed).toBe(true);
-    expect(declaredByTheme.has("--font-inter")).toBe(false);
+  it("still needs each runtime-injected exception", () => {
+    // An exception nobody rechecks outlives its reason. Each entry has to still
+    // be consumed somewhere and still be absent from the theme; one that is no
+    // longer either should go rather than sit here explaining a situation that
+    // has changed.
+    //
+    // Derived from the set rather than naming a font, so swapping the typeface
+    // is one edit here instead of two that can disagree.
+    for (const name of INJECTED_AT_RUNTIME) {
+      const consumed = sources.some(path =>
+        readFileSync(resolve(repo, path), "utf8").includes(`var(${name})`)
+      );
+      expect(consumed, `${name} is exempted but no longer consumed`).toBe(true);
+      expect(
+        declaredByTheme.has(name),
+        `${name} is exempted but the theme now declares it`
+      ).toBe(false);
+    }
   });
 
   it("reads declarations the way a stylesheet is written, not as lines", () => {
