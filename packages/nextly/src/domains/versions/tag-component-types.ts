@@ -20,8 +20,8 @@ import type { FieldConfig } from "../../collections/fields/types";
 import { storageTypeToken } from "../../shared/lib/plugin-storage";
 import {
   clearFieldGroupType,
-  currentFieldGroupTypeKey,
   readFieldGroupType,
+  writeFieldGroupType,
 } from "../field-groups/storage/field-group-type-key";
 
 import type { ComponentSchemas } from "./restore-snapshot";
@@ -160,13 +160,34 @@ function tagValue(
   // stopping at the repeated slug would tag the first two levels and leave
   // every level below them bare.
   const ownFields = resolve?.(slug);
-  if (!ownFields) return { ...source, [currentFieldGroupTypeKey]: slug };
+  if (!ownFields) return taggedCopy(source, slug);
 
   seen.add(source);
   const inner = tagFieldsIn(source, ownFields, resolve, seen);
   seen.delete(source);
 
-  return { ...inner, [currentFieldGroupTypeKey]: slug };
+  return taggedCopy(inner, slug);
+}
+
+/**
+ * A copy of one value carrying exactly one spelling of its type.
+ *
+ * Spreading and then assigning the current spelling is not the same thing: a value that already
+ * carries an older spelling keeps it, and the copy ends up announcing its type twice. That happens
+ * whenever the value came from data an earlier release wrote — a snapshot captured before the
+ * storage rename, restored and captured again — so the shape reaching a new snapshot depends on
+ * how old the entry is.
+ *
+ * Writing through the accessor removes every spelling before adding the current one, so the
+ * guarantee holds without reasoning about where the value came from.
+ */
+function taggedCopy(
+  value: Record<string, unknown>,
+  slug: string
+): Record<string, unknown> {
+  const tagged = { ...value };
+  writeFieldGroupType(tagged, slug);
+  return tagged;
 }
 
 /**
