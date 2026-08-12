@@ -517,9 +517,15 @@ function FormBuilderViewInner({
                       className="shrink-0 whitespace-nowrap"
                     >
                       {tab.label}
+                      {/* `rounded-sm`, the adornment step, matching the shared
+                          Badge and the identically sized notification count.
+                          Square is the TAB's corner and it exists so the
+                          underline runs flush to the trigger's edges; a chip
+                          inside the label inherits none of that reasoning, and
+                          carrying it made the count read as a second tab. */}
                       {tab.count !== null && (
                         <span
-                          className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-semibold rounded-full ml-2 transition-colors ${
+                          className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-semibold rounded-sm ml-2 transition-colors ${
                             activeTab === tab.value
                               ? "bg-primary/5 text-primary"
                               : "bg-primary/5 text-muted-foreground"
