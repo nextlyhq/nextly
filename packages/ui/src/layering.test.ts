@@ -65,6 +65,38 @@ const DEPENDENCY_FIELDS = [
 const FORBIDDEN = "@nextlyhq/blocks-engine";
 
 /**
+ * Every module extension the bundler follows.
+ *
+ * Pinned as a literal, and wider than the `.ts`/`.tsx` a source tree usually
+ * holds: tsup follows a local `.mts` or `.cts` bridge as readily as a `.ts`
+ * one, so a scan that reads only the common two leaves a route into the bundle
+ * unwatched. The `.js` family is here for the same reason — nothing stops a
+ * shipped entry importing one.
+ */
+const MODULE_EXTENSIONS = [
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+] as const;
+
+/**
+ * Whether a filename is a shipped module this scan must read.
+ *
+ * Separated from the directory walk so each extension can be exercised
+ * directly. Driving it through the filesystem instead means a route is only
+ * covered if a file with that extension happens to exist today.
+ */
+function isShippedModule(entry: string): boolean {
+  if (/\.(test|fixture)\./.test(entry)) return false;
+  return MODULE_EXTENSIONS.some(extension => entry.endsWith(extension));
+}
+
+/**
  * The one matcher. Its positive control below reads THIS value rather than a
  * copy: a control with its own regex proves the copy works, and stays green
  * while the matcher it stands for drifts.
@@ -88,12 +120,24 @@ const IMPORTS_FORBIDDEN = new RegExp(
   `from\\s+["']${FORBIDDEN.replace("/", "\\/")}`
 );
 
-/** Every `field.package` a manifest declares, across all four fields. */
-function declarationsIn(manifest: Record<string, unknown>): string[] {
+/**
+ * Every `field.package` a manifest declares that RESOLVES to the forbidden
+ * package — by name, or through an npm alias.
+ *
+ * Keys alone are not the boundary. `"engine": "npm:@nextlyhq/blocks-engine@1"`
+ * declares the engine under a name of the author's choosing, so the key says
+ * `engine` and the source says `import ... from "engine"`: the manifest check
+ * and the import check both see a package they have never heard of, and both
+ * pass. The VALUE is where the real specifier lives.
+ */
+function forbiddenDeclarationsIn(manifest: Record<string, unknown>): string[] {
   return DEPENDENCY_FIELDS.flatMap(field =>
-    Object.keys((manifest[field] as Record<string, string>) ?? {}).map(
-      name => `${field}.${name}`
-    )
+    Object.entries((manifest[field] as Record<string, string>) ?? {})
+      .filter(
+        ([name, range]) =>
+          name === FORBIDDEN || range.startsWith(`npm:${FORBIDDEN}`)
+      )
+      .map(([name]) => `${field}.${name}`)
   );
 }
 
@@ -112,9 +156,7 @@ function sourceFiles(dir: string): string[] {
     if (statSync(path).isDirectory()) {
       return entry === "__tests__" ? [] : sourceFiles(path);
     }
-    if (!/\.tsx?$/.test(entry)) return [];
-    if (/\.(test|fixture)\.tsx?$/.test(entry)) return [];
-    return [path];
+    return isShippedModule(entry) ? [path] : [];
   });
 }
 
@@ -135,7 +177,7 @@ describe("this package takes no direct dependency on the block engine", () => {
     ) as Record<string, unknown>;
 
     expect(
-      declarationsIn(manifest).filter(entry => entry.endsWith(`.${FORBIDDEN}`)),
+      forbiddenDeclarationsIn(manifest),
       "packages/ui is the block-agnostic layer. A component needing the block " +
         "model belongs in packages/builder, which already depends on the engine."
     ).toEqual([]);
@@ -163,10 +205,51 @@ describe("this package takes no direct dependency on the block engine", () => {
       // runtime dependencies entirely. A sentinel in ONE field at a time is the
       // only shape that fails when that field's route is missing.
       expect(
-        declarationsIn({ [field]: { [FORBIDDEN]: "workspace:*" } })
+        forbiddenDeclarationsIn({ [field]: { [FORBIDDEN]: "workspace:*" } })
       ).toEqual([`${field}.${FORBIDDEN}`]);
+      // The ALIAS route through the same field. `"engine": "npm:<pkg>@1"`
+      // declares the engine under a name of the author's choosing, so a check
+      // reading keys alone never sees the package it forbids.
+      expect(
+        forbiddenDeclarationsIn({
+          [field]: { engine: `npm:${FORBIDDEN}@1.0.0` },
+        })
+      ).toEqual([`${field}.engine`]);
     }
   );
+
+  it("names every module extension the bundler follows", () => {
+    // Pinned literally, for the reason the field list is: removing an
+    // extension deletes that extension's own case below, the suite shrinks by
+    // one, and every remaining case passes. A vanishing test reads exactly
+    // like a passing one.
+    expect([...MODULE_EXTENSIONS].sort()).toEqual([
+      ".cjs",
+      ".cts",
+      ".js",
+      ".jsx",
+      ".mjs",
+      ".mts",
+      ".ts",
+      ".tsx",
+    ]);
+  });
+
+  it.each(MODULE_EXTENSIONS)("scans a %s module", extension => {
+    // Per extension, asserted on the decision rather than through the
+    // filesystem: driving this off real files covers only the extensions that
+    // happen to exist today, and a `.mts` bridge importing the engine is
+    // exactly the file nobody has written yet.
+    expect(isShippedModule(`bridge${extension}`)).toBe(true);
+    expect(isShippedModule(`bridge.test${extension}`)).toBe(false);
+  });
+
+  it("skips a file the bundler does not follow", () => {
+    // The positive control for the two above: an `isShippedModule` returning
+    // true for everything satisfies every extension case.
+    expect(isShippedModule("theme.css")).toBe(false);
+    expect(isShippedModule("README.md")).toBe(false);
+  });
 
   it("is exercised — the import scan can find the specifier it hunts", () => {
     // An empty offender list is only evidence once the search is shown to
