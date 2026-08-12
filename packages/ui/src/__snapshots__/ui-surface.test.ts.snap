@@ -307,12 +307,18 @@ exports[`ui public export surface > ./color surface is unchanged 1`] = `
   "Oklch (type)",
   "Rgb (type)",
   "Rgba (type)",
+  "SurfacePoint (type)",
   "hsvToRgb (value)",
+  "hueAt (value)",
+  "huePosition (value)",
   "normalizeHue (value)",
   "oklchToRgb (value)",
   "parseHex (value)",
+  "pointOnSurface (value)",
   "rgbToHsv (value)",
   "rgbToOklch (value)",
+  "saturationValueAt (value)",
+  "surfacePointFor (value)",
   "toHex (value)",
 ]
 `;
