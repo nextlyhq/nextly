@@ -77,6 +77,28 @@ const NODE_CLASS = nodeClassName(NODE_ID);
 const ALLOWED: ReadonlyMap<string, ReadonlySet<string>> = new Map();
 
 /**
+ * Every block this file expects to inspect.
+ *
+ * Listed rather than counted so that removing one fails here instead of quietly
+ * shrinking what the suite covers, and adding one is a deliberate edit rather
+ * than an unnoticed gap.
+ */
+const EXPECTED_BLOCKS = [
+  "core/box",
+  "core/button",
+  "core/collection-loop",
+  "core/divider",
+  "core/embed",
+  "core/heading",
+  "core/image",
+  "core/list",
+  "core/quote",
+  "core/section",
+  "core/spacer",
+  "core/text",
+].sort();
+
+/**
  * The host services a render receives, in both of the states a block branches on.
  *
  * A permanently inert host inspects only the empty path. `core/image` takes a
@@ -120,6 +142,13 @@ function contexts(): PageContext[] {
   // A routed render sets a locale, and a block can branch on it when building
   // its query, so the unlocalized state alone leaves that path uninspected.
   const localized = { ...answering, locale: "fr" };
+  // A resolver can reject, and image and button both catch that and render a
+  // different tree. Resolving to null is not the same path.
+  const rejecting = {
+    ...answering,
+    resolveMedia: () => Promise.reject(new Error("media lookup failed")),
+    resolveEntryPath: () => Promise.reject(new Error("path lookup failed")),
+  };
   const budgetSpent = { ...answering, queries: { take: () => false } };
   const budgetAvailable = { ...answering, queries: { take: () => true } };
   return [
@@ -127,6 +156,7 @@ function contexts(): PageContext[] {
     answering,
     noProvider,
     failing,
+    rejecting,
     localized,
     budgetSpent,
     budgetAvailable,
@@ -281,7 +311,34 @@ function propVariants(block: AnyBlockDefinition): unknown[] {
       variants.push({ ...base, [name]: value });
     }
   }
-  return [...variants, ...layeredVariants(base, alternatives)];
+  return [
+    ...variants,
+    ...layeredVariants(base, alternatives),
+    ...malformedVariants(base, schema),
+  ];
+}
+
+/**
+ * Prop sets carrying values a stored document can really hold.
+ *
+ * `sanitizeDocument` deliberately keeps content it cannot validate, so a node
+ * hand-edited or written by an older version reaches `render` with the wrong
+ * TYPE — and renderers have their own fallbacks for that, which are branches
+ * like any other. `renderContainer` turning `{ as: "img" }` into a `div` is one.
+ * Every other variant here is type-correct, so none of those paths is reached.
+ */
+function malformedVariants(
+  base: Record<string, unknown>,
+  schema: Record<string, unknown>
+): unknown[] {
+  const wrongTypes: unknown[] = [42, {}, [], null];
+  const variants: unknown[] = [];
+  for (const name of Object.keys(schema)) {
+    for (const value of wrongTypes) {
+      variants.push({ ...base, [name]: value });
+    }
+  }
+  return variants;
 }
 
 /**
@@ -557,11 +614,12 @@ describe("a core block's root element", () => {
       })
     );
 
-    // The registry has to be POPULATED before anything derived from it means
-    // anything: every assertion below is computed by mapping over `coreBlocks`,
-    // so an export that stopped enumerating would satisfy all of them over an
-    // empty set and read exactly like a clean library.
-    expect(results.length).toBeGreaterThanOrEqual(10);
+    // The exact set, not a floor. A minimum of ten is still met after one or
+    // two blocks are dropped from the export, and the reachability check below
+    // only ever examines what remains — so coverage would fall silently while
+    // both assertions stayed green. Naming them makes a deletion a failure and
+    // an addition a deliberate edit here.
+    expect(results.map(result => result.name).sort()).toEqual(EXPECTED_BLOCKS);
 
     // The vacuity control, BY NAME. A count is satisfied by any nine of twelve,
     // so it cannot tell a library that grew a clean block from one whose
