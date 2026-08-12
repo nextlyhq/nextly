@@ -62,11 +62,76 @@
  */
 
 const { execFileSync } = require("node:child_process");
+const { existsSync } = require("node:fs");
 const path = require("node:path");
 
 const ROOT = path.resolve(__dirname, "..");
 
 let failures = 0;
+
+/**
+ * Prove the search apparatus can find something, and say how much it looked at.
+ *
+ * 🔴 Without this the gate is indistinguishable from a working one when it scans nothing. Point it
+ * at directories that do not exist and it prints seven ticks and "gate passed" and exits 0 — the
+ * same bytes a real pass produces. A renamed directory, a changed include list or a bad exclude
+ * would each retire the whole check silently, and the only signal would be its continued success.
+ *
+ * Two parts, because they answer different questions. The path check catches a scope that moved.
+ * The positive control catches a scan that is running but finding nothing — a broken pattern, a
+ * grep that is not behaving as assumed — by hunting a string that must exist in the tree being
+ * scanned and failing when it does not.
+ *
+ * The count is printed rather than merely tested, so a scope that collapses PARTWAY shows up as a
+ * number that got smaller. A verdict that carries its own domain is the only kind a reader can
+ * check at a glance.
+ */
+function assertScanCoversSomething(paths) {
+  const missing = paths.filter(p => !existsSync(path.join(ROOT, p)));
+  if (missing.length > 0) {
+    console.error(
+      `✗ scan paths do not exist: ${missing.join(", ")}\n` +
+        `  Every check below would pass by finding nothing.`
+    );
+    process.exit(1);
+  }
+
+  // The catalog is the thing this gate exists to protect, so it is guaranteed to be inside the
+  // scanned tree. If the scan cannot see it, the scan is not working.
+  let files = [];
+  try {
+    files = execFileSync(
+      "grep",
+      [
+        "-rlE",
+        "STORAGE_FORMAT",
+        ...paths,
+        "--include=*.ts",
+        "--exclude-dir=node_modules",
+        "--exclude-dir=dist",
+      ],
+      { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
+    )
+      .split("\n")
+      .filter(Boolean);
+  } catch (e) {
+    if (e.status !== 1) throw e;
+  }
+
+  if (files.length === 0) {
+    console.error(
+      "✗ the scan found no reference to STORAGE_FORMAT anywhere in the scanned paths.\n" +
+        "  The catalog is inside that tree, so this means the search itself is not working " +
+        "and every check below would pass vacuously."
+    );
+    process.exit(1);
+  }
+
+  console.log(
+    `scanning ${paths.join(", ")} — ${files.length} files reference the catalog\n`
+  );
+}
+
 
 /**
  * Paths that legitimately name both spellings.
@@ -168,6 +233,8 @@ function grep(label, pattern, opts = {}) {
   }
 
 }
+
+assertScanCoversSomething(["packages", "apps", "templates"]);
 
 // 🔴 BOTH generations are banned, not only the legacy one.
 //
