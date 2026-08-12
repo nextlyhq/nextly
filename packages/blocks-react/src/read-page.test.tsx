@@ -686,8 +686,34 @@ describe("a migration that changes whether a node draws", () => {
         classes: ["only-a"],
         styles: { base: { base: { color: "rebeccapurple" } } },
       },
+      // A condition-gated sibling, so the compiled artifact actually CARRIES a
+      // per-node gated map. Without one the read path cannot consult the record
+      // of what the sheet withheld and falls back to re-deriving it from the
+      // stored props — so a page with nothing gated exercises the legacy path
+      // and leaves the primary one uncovered.
+      {
+        id: "conditioned",
+        type: "test/text",
+        version: 1,
+        props: { value: "maybe" },
+        styles: { base: { base: { color: "goldenrod" } } },
+        visibility: {
+          conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+        },
+      },
+      // Keeps `test/text` represented among the survivors. Without it the gated
+      // sibling is the last node of its type, and removing the last node of a
+      // type leaves its shared rule unjustified — a refusal that is correct and
+      // has nothing to do with migration, which would make both cases here pass
+      // for the wrong reason.
+      {
+        id: "visible-text",
+        type: "test/text",
+        version: 1,
+        props: { value: "always" },
+      },
     ],
-  };
+  } as unknown as BlockDocument;
 
   /** Compiled by the WRITE path, against the version the node was stored at. */
   function sheetForDrawingPage(): ReturnType<typeof resolvePageStyles> {
