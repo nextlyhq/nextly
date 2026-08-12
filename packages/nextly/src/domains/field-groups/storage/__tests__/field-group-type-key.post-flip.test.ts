@@ -70,6 +70,27 @@ describe("after the catalog has been flipped to the new spelling", () => {
     expect(Object.keys(instance)).toEqual(["_fieldGroupType"]);
   });
 
+  it("REPLACES a legacy spelling rather than writing alongside it", () => {
+    // 🔴 The case starting from `{}` cannot reach this. An instance read back from storage before
+    // the rewrite pass reached it arrives carrying the old key, and that is the population the
+    // whole dual-read exists for — so an empty fixture tests the one shape the mechanism never
+    // meets in production.
+    //
+    // Assigning without clearing leaves BOTH keys. Reads still resolve, so nothing surfaces; what
+    // breaks is the invariant that makes the migration finish — the legacy set stops shrinking as
+    // documents are saved, and every save mints a document a later reader has to disambiguate.
+    const instance: Record<string, unknown> = {
+      _componentType: "hero",
+      label: "kept",
+    };
+
+    writeFieldGroupType(instance, "cta");
+
+    expect(instance._componentType).toBeUndefined();
+    expect(instance._fieldGroupType).toBe("cta");
+    expect(instance.label).toBe("kept");
+  });
+
   it("prefers the current spelling when a document carries both", () => {
     expect(
       readFieldGroupType({ _fieldGroupType: "new", _componentType: "old" })
