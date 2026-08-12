@@ -83,7 +83,7 @@ function isNodeBuiltin(spec) {
 
 /** Every relative specifier in a built module, ignoring bare and `node:` ones. */
 const SPECIFIER =
-  /from\s*["']([^"']+)["']|import\s*["']([^"']+)["']|\b_{0,2}require\(\s*["']([^"']+)["']\s*\)/g;
+  /from\s*["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|import\s*["']([^"']+)["']|\b_{0,2}require\(\s*["']([^"']+)["']\s*\)/g;
 
 function walk(entryFile) {
   const seen = new Set();
@@ -106,7 +106,7 @@ function walk(entryFile) {
     SPECIFIER.lastIndex = 0;
     let match;
     while ((match = SPECIFIER.exec(src)) !== null) {
-      const spec = match[1] ?? match[2] ?? match[3];
+      const spec = match[1] ?? match[2] ?? match[3] ?? match[4];
       if (!spec) continue;
       if (isNodeBuiltin(spec)) {
         builtins.push({ file: relative(pkgRoot, file), spec });
@@ -116,7 +116,7 @@ function walk(entryFile) {
       // whether a given package is browser-safe is that package's contract rather than this one's.
       // A relative path reached through require() is not followed either: esbuild emits those for
       // bundled CommonJS interop, where the target is already in this same output.
-      if (!spec.startsWith(".") || match[3] !== undefined) continue;
+      if (!spec.startsWith(".") || match[4] !== undefined) continue;
       stack.push(normalize(join(dirname(file), spec)));
     }
   }
@@ -144,6 +144,7 @@ function selfCheck() {
     "prefixed bare import": 'import "node:fs";\n',
     "prefixed from-specifier": 'export { x } from "node:path";\n',
     "stripped bare specifier": 'import { createHash } from "crypto";\n',
+    "literal dynamic import": 'const f = await import("node:fs");\n',
     "esbuild CommonJS interop": 'const f = __require("node:fs");\n',
     "plain require call": 'const p = require("path");\n',
   };
@@ -229,10 +230,14 @@ for (const exportKey of CLIENT_SAFE_EXPORTS) {
 }
 
 if (failures > 0) {
+  // Deliberately does not name a cause: this path is reached by a missing artifact and by a
+  // Node built-in alike, and a summary that asserts the wrong one sends the reader to the wrong
+  // question. The per-entry lines above say which.
   console.error(
-    `\n${failures} client-safe entry point(s) reach Node built-ins.\n` +
-      `A "use client" component importing one of these gets a module the browser build cannot ` +
-      `resolve. Move the Node-dependent code behind a server-only entry point.`
+    `\n${failures} client-safe entry point(s) failed the check. See the lines above.\n` +
+      `Where a Node built-in is reported, a "use client" component importing that entry gets a ` +
+      `module the browser build cannot resolve; move the Node-dependent code behind a ` +
+      `server-only entry point.`
   );
   process.exit(1);
 }
