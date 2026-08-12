@@ -148,6 +148,36 @@ function withoutImportance(classes: string): string {
 }
 
 /**
+ * The same class list with every variant prefix removed.
+ *
+ * tailwind-merge keys a utility by its variants as well as its property, so
+ * `data-[state=active]:border-b-0` and an unconditional `border-b-2` are
+ * different keys and both survive a merge. In the browser they are not
+ * independent: while the tab is active the state-qualified rule wins and the
+ * underline is gone. Comparing the bare utility is what makes that visible.
+ *
+ * Bracket depth is tracked because a variant can contain a colon of its own —
+ * `data-[state=active]` — and splitting on the first one would truncate it.
+ */
+function withoutVariants(classes: string): string {
+  return classes
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(cls => {
+      let depth = 0;
+      let lastSeparator = -1;
+      for (let i = 0; i < cls.length; i += 1) {
+        const character = cls[i];
+        if (character === "[") depth += 1;
+        else if (character === "]") depth -= 1;
+        else if (character === ":" && depth === 0) lastSeparator = i;
+      }
+      return lastSeparator >= 0 ? cls.slice(lastSeparator + 1) : cls;
+    })
+    .join(" ");
+}
+
+/**
  * Which of a component's owned classes a caller's `className` displaces.
  *
  * Asked of tailwind-merge rather than answered here, because tailwind-merge is
@@ -163,11 +193,13 @@ function displacedBy(exported: string, classes: string): string[] {
     new Set(twMerge(base, candidate).split(/\s+/));
   const direct = survives(classes);
   const unimportant = survives(withoutImportance(classes));
+  const bare = survives(withoutVariants(withoutImportance(classes)));
   const passed = new Set(classes.split(/\s+/).filter(Boolean));
   return owned.filter(
     c =>
       !direct.has(c) ||
       !unimportant.has(c) ||
+      !bare.has(c) ||
       // A byte-identical restatement displaces nothing, so the merge cannot see
       // it — and it is still a second copy of one appearance, which is what
       // drifts when the primitive changes and the call site does not.
@@ -175,14 +207,34 @@ function displacedBy(exported: string, classes: string): string[] {
   );
 }
 
-/** Inline declarations the primitive owns; an inline style beats every class. */
-const OWNED_STYLE_PROPERTIES = [
-  "borderBottom",
-  "borderBottomColor",
-  "borderBottomStyle",
-  "borderBottomWidth",
-  "borderRadius",
-];
+/**
+ * Whether an inline style property reaches the indicator.
+ *
+ * Decided by what the property EXPANDS to rather than by a list of names, for
+ * the same reason the class question goes to tailwind-merge: a list covers the
+ * longhands someone thought of, and `border: "none"` or `borderWidth: 0` erases
+ * the underline without appearing in it. The indicator is a bottom edge, a
+ * corner and a bottom offset, so a property is owned when its expansion touches
+ * one of those.
+ *
+ * The side alternation is what carries the reasoning: an omitted side means all
+ * four, which includes the bottom; `y` and the logical `block` forms include it
+ * too; `top`, `left`, `right` and `x` do not, and stay a caller's to set.
+ * Corners are all owned, because the primitive squares all four.
+ */
+const OWNED_EDGE =
+  /^border(-(bottom|block-end|block|y))?(-(width|style|color))?$/;
+const OWNED_CORNER = /^border(-[a-z]+)*-radius$/;
+const OWNED_OFFSET = /^margin(-(bottom|block-end|block|y))?$/;
+
+function ownsStyleProperty(property: string): boolean {
+  const kebab = property.replace(/([A-Z])/g, "-$1").toLowerCase();
+  return (
+    OWNED_EDGE.test(kebab) ||
+    OWNED_CORNER.test(kebab) ||
+    OWNED_OFFSET.test(kebab)
+  );
+}
 
 /** Every `.tsx` under a scan root, excluding build output and the primitive. */
 function sourceFiles(dir: string, found: string[] = []): string[] {
@@ -395,7 +447,7 @@ function ownedStyleProperty(
         : ts.isStringLiteral(node.name)
           ? node.name.text
           : undefined;
-      if (name && OWNED_STYLE_PROPERTIES.includes(name)) found ??= name;
+      if (name && ownsStyleProperty(name)) found ??= name;
     }
     ts.forEachChild(node, visit);
   };
@@ -540,11 +592,38 @@ describe("the tab indicator contract", () => {
       "a forbidden class in one branch of a conditional",
       '<TabsTrigger className={on ? "border-b-2 border-primary" : "x"} />',
     ],
-    // Inline styles, including the quoted-key spelling.
+    // State-qualified overrides. tailwind-merge keys by variant as well as by
+    // property, so these survive beside the primitive's unconditional
+    // declaration and then win in CSS for the state they name.
+    [
+      "a state-qualified zero border",
+      '<TabsTrigger className="data-[state=active]:border-b-0" />',
+    ],
+    [
+      "an important state-qualified zero border",
+      '<TabsTrigger className="data-[state=active]:!border-b-0" />',
+    ],
+    [
+      "a state-qualified corner",
+      '<TabsList className="data-[state=inactive]:rounded-md" />',
+    ],
+    // Inline styles, including the shorthands that expand onto the bottom edge
+    // and the quoted-key spelling.
     [
       "an inline underline colour",
       "<TabsTrigger style={{ borderBottomColor: c }} />",
     ],
+    [
+      "an inline border shorthand",
+      '<TabsTrigger style={{ border: "none" }} />',
+    ],
+    ["an inline border width", "<TabsTrigger style={{ borderWidth: 0 }} />"],
+    ["an inline axis border", '<TabsTrigger style={{ borderY: "0" }} />'],
+    [
+      "an inline logical bottom border",
+      '<TabsTrigger style={{ borderBlockEnd: "none" }} />',
+    ],
+    ["an inline corner", "<TabsList style={{ borderRadius: 8 }} />"],
     [
       "a quoted inline underline colour",
       '<TabsTrigger style={{ "borderBottomColor": c }} />',
@@ -610,6 +689,14 @@ describe("the tab indicator contract", () => {
     [
       "an unrelated inline style on a tab",
       "<TabsList style={{ width: 320 }} />",
+    ],
+    [
+      "an inline edge the indicator does not use",
+      '<TabsList style={{ borderTop: "1px solid red", marginTop: 4 }} />',
+    ],
+    [
+      "a state-qualified utility that touches nothing owned",
+      '<TabsTrigger className="data-[state=active]:shadow-sm" />',
     ],
     [
       "an unrelated element carrying a corner",
