@@ -394,13 +394,16 @@ export function migrationChangedWhatDraws(
     // its absence means they are.
     //
     // Read rather than re-derived for two reasons. Reapplying the gating rule
-    // here is a second implementation of a decision the compiler owns, and
-    // three separate defects on this path have been exactly that. And the
-    // predicate cannot answer the question at all for a node whose migration
-    // RENAMED the prop `rendersNothing` reads: today's predicate over
-    // yesterday's props reports drawless for a node that drew, so the flip
-    // disappears. The artifact carries the answer the schema of the day
-    // produced, which is the only version-independent source there is.
+    // here would be a second implementation of a decision the compiler owns,
+    // and the two only agree while both are maintained together: the compiler
+    // may widen what it gates, or change how gating descends a subtree, and a
+    // copy that does not follow classifies the same node differently while
+    // still looking correct. And the predicate cannot answer the question at
+    // all for a node whose migration RENAMED the prop `rendersNothing` reads:
+    // today's predicate over yesterday's props reports drawless for a node that
+    // drew, so the flip disappears. The artifact carries the answer the schema
+    // of the day produced, which is the only version-independent source there
+    // is.
     if (gatedRules !== undefined) {
       // Asked through `isRecordedGatedEntry`, the same predicate delivery and
       // pruning coverage use, rather than by testing for the key. A stored map

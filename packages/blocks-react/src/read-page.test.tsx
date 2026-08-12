@@ -821,10 +821,12 @@ describe("a migration that changes whether a node draws", () => {
     // would conclude the compiler withheld it and keep serving those rules, and
     // any `url(...)` inside them, after a migration made them stale.
     const stored = sheetForDrawingPage();
+    // Through `unknown` because the cast is the POINT: this is a stored row
+    // that the type forbids and the runtime can still be handed.
     const corrupted = {
       ...stored,
       gated: { ...(stored.gated ?? {}), a: null },
-    } as typeof stored;
+    } as unknown as typeof stored;
 
     const read = preparePageForRead(drawingPage, {
       resolver: flipping,
