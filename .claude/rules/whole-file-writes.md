@@ -162,48 +162,37 @@ drop whatever the root supplies.
 
 ## Restoring, and proving the restore
 
-The target is the **pre-write** content of that path. Which revision holds it is
-a question about this working tree, so answer it before running anything — no
-command is right by default:
+Recovery is where this rule stops being a procedure, deliberately. The full
+matter of which git revision holds a given pre-write state is a large surface —
+seven successive corrections to this section all found real defects in it — and
+a manual that is right about six cases and silent about the seventh reads as
+complete. Three things are worth stating; the rest is the situation in front of
+you.
 
-- **`git checkout -- <path>` restores from the INDEX, not from a commit.** If
-  the clobbered content was staged it repairs nothing, and if deliberate earlier
-  edits were staged it reinstates those.
-- **`git checkout HEAD -- <path>` is right when the last commit IS the pre-write
-  state**, which is common and not a given. Where the path carried deliberate
-  staged or unstaged edits when it was clobbered, `HEAD` never held them, and
-  this overwrites the index and the working-tree copy alike from that commit —
-  destroying the edits being recovered. Inspect the INDEX before choosing, and
-  note which command actually shows it: `git status` reports only `MM`, and
-  `git diff HEAD -- <path>` renders the post-clobber working tree, so neither
-  displays the staged content at risk. `git diff --cached HEAD -- <path>` — or
-  `git show :<path>` for the copy verbatim — is what puts it on screen. With
-  uncommitted work in flight, that index copy or a stash may be the only
-  surviving pre-write state, and it is the one a `checkout` from a commit
-  destroys without ever having shown it to you.
-- **`git checkout origin/main -- <path>` restores from `origin/main`, which is a
-  different question**, and two independent things break it: the branch may have
-  committed its own edits to that path, and `main` may have changed the path
-  since the branch point. In the second case the checkout imports newer upstream
-  content while looking like a clean repair, and no check on the branch's own
-  history detects it. Reach for it only when you specifically want `main`'s
-  version — not as the way to undo a clobber.
-- Whichever source you take, the restore does not carry the deliberate edit —
-  re-apply that on top as the delta it actually was. An append is right for the
-  additive case only; for a removal or a replacement it duplicates a setting, or
-  reinstates content that was meant to go.
+**1. Identify which revision actually holds the pre-write content, before
+running anything.** No command is right by default. Ask in this order, first YES
+settles it:
 
-Then prove it, and prove it **before submitting**:
+- Deliberate edits that were never committed or stashed, staged or not? Then
+  **git does not hold it, and this is where the procedure stops.** Say so and
+  look outside git — editor local history, a backup, an open buffer. Running the
+  steps anyway converts a known loss into an unnoticed one.
+- Otherwise it is a commit or the index, and the reading commands follow from
+  the baseline section above.
 
-- Compare the repaired path against the baseline — the same one the tells used
-  and the one you restored from — and expect to see only the edit you meant. The
-  command follows from that choice, as above; reaching for `HEAD` when the index
-  is the baseline mixes the deliberate staged edits into the delta, so the proof
-  reports a difference the recovery did not cause.
-- The reason this step is not optional: the clobber and the restore both live
-  inside one PR, so the branch diffstat nets out and reads as though nothing
-  happened. The summary is exactly the artifact that hides this.
-- The merge-commit content check in `verifying-merged-work.md` is a SEPARATE,
-  post-merge confirmation. It cannot run while the PR is open, so it is not a
-  substitute for the check above — by the time it is available, a broken config
-  has already merged.
+**2. The restore does not carry your edit.** Re-apply it on top as the delta it
+actually was — an append only where the edit was additive; for a removal or a
+replacement, appending duplicates a setting or reinstates content meant to go.
+
+**3. Prove it BEFORE submitting, against the same baseline.** Expect only the
+edit you meant. This step is not optional, because the clobber and the restore
+both live inside one PR: the branch diffstat nets out and reads as though
+nothing happened, and that summary is exactly what hides the loss. The
+merge-commit check in `verifying-merged-work.md` is a separate, post-merge
+confirmation — by the time it can run, a broken config has already merged.
+
+Two commands are worth knowing because their names mislead: `git checkout --
+<path>` restores from the INDEX rather than a commit, and
+`git checkout origin/main -- <path>` answers "what does main have", which is a
+different question from "what was here before my write" and quietly imports
+upstream changes when `main` has moved.
