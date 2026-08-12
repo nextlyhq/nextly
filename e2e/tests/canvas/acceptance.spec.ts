@@ -73,17 +73,26 @@ function note(point: number, becomes: string, shortfall?: string): void {
 
 /** Begin a drag from the insert panel and carry the pointer over the canvas. */
 async function dragFromPanel(driver: CanvasDriver): Promise<void> {
-  const source = await driver.dragSourceCentre();
   const target = await driver.canvasCentre();
-  await driver.startDragAt(source);
+  await driver.startDragAt(await driver.dragSourceCentre());
+
+  // The delta is measured from where the pointer ACTUALLY is after activation,
+  // not from the source point. `startDragAt` is contractually allowed to move
+  // past the drag threshold, and the PoC driver shifts 12px doing so — so a
+  // delta computed from the source overshoots by exactly that, and a
+  // replacement driver with a different activation motion overshoots by a
+  // different amount. Asking the driver where the pointer is keeps the gesture
+  // landing in the same place whichever driver is behind it.
+  const from = driver.pointer();
+
   // In steps, not one jump. A single move is a teleport, and a canvas that
   // commits on dwell rather than on distance answers a teleport differently
   // from the gesture a person makes.
   const steps = 8;
   for (let step = 0; step < steps; step += 1) {
     await driver.moveBy(
-      (target.x - source.x) / steps,
-      (target.y - source.y) / steps
+      (target.x - from.x) / steps,
+      (target.y - from.y) / steps
     );
   }
 }
