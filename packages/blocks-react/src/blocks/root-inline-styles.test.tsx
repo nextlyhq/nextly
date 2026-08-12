@@ -36,6 +36,7 @@ import type {
   BlockRenderArgs,
 } from "@nextlyhq/blocks-engine";
 import type { ReactNode } from "react";
+import { createElement } from "react";
 import { renderToReadableStream } from "react-dom/server";
 
 import type { PageContext } from "../context";
@@ -455,39 +456,96 @@ async function inspectBlock(block: AnyBlockDefinition): Promise<Inspection> {
   return { reached, offenders };
 }
 
-/** A block that does the thing this file forbids, for checking the detector. */
-const STYLED_PROBE = {
-  name: "test/styled-probe",
-  version: 1,
-  example: { props: {} },
-  // Returns a COMPONENT that adds the style internally, not a host element.
-  // A probe whose style sits on the element it returns is visible without
-  // rendering, so it cannot tell a detector that resolves components from one
-  // that only reads the returned element's own props. Placing the style behind
-  // a component is what makes the two answer differently.
-  render: ({ className }: { className: string }) => {
-    const Root = (inner: { className: string }) => (
-      <div className={inner.className} style={{ color: "red" }}>
-        probe
-      </div>
-    );
-    return <Root className={className} />;
+/**
+ * Blocks that do the thing this file forbids, each reachable by a different
+ * part of the detector.
+ *
+ * One probe is not enough, and the reason is the same one that motivates the
+ * rule itself: a probe carrying the class and the style on the SAME element is
+ * found by the carrier lookup alone, so a detector that stopped resolving
+ * components, or stopped inspecting the wrapper above the carrier, or stopped
+ * matching an oddly-cased attribute, would keep finding it and report clean for
+ * every block that evaded the part which broke. Each probe here fails for a
+ * reason none of the others can.
+ */
+const PROBES: {
+  label: string;
+  block: AnyBlockDefinition;
+  property: string;
+}[] = [
+  {
+    label: "a style behind a component",
+    property: "color",
+    // Visible only once components are resolved: reading the returned element's
+    // own props finds a class and no style.
+    block: {
+      name: "test/probe-component",
+      version: 1,
+      example: { props: {} },
+      render: ({ className }: { className: string }) => {
+        const Root = (inner: { className: string }) => (
+          <div className={inner.className} style={{ color: "red" }}>
+            probe
+          </div>
+        );
+        return <Root className={className} />;
+      },
+    } as unknown as AnyBlockDefinition,
   },
-} as unknown as AnyBlockDefinition;
+  {
+    label: "a styled wrapper around a clean carrier",
+    property: "color",
+    // The class sits on a NESTED element while the style sits on the wrapper
+    // above it, which is the element a page lays out. A carrier-only lookup
+    // finds the class, finds no style, and reports the block clean.
+    block: {
+      name: "test/probe-wrapper",
+      version: 1,
+      example: { props: {} },
+      render: ({ className }: { className: string }) => (
+        <div style={{ color: "red" }}>
+          <span className={className}>probe</span>
+        </div>
+      ),
+    } as unknown as AnyBlockDefinition,
+  },
+  {
+    label: "an odd-cased style attribute",
+    property: "padding",
+    // React preserves an unknown prop's spelling and HTML attribute names are
+    // case-insensitive, so this ships as a live inline style that a
+    // lowercase-only match cannot see.
+    block: {
+      name: "test/probe-uppercase",
+      version: 1,
+      example: { props: {} },
+      render: ({ className }: { className: string }) =>
+        createElement("div", {
+          className,
+          ...({ STYLE: "padding:24px" } as Record<string, string>),
+        }),
+    } as unknown as AnyBlockDefinition,
+  },
+];
 
 describe("the detector itself", () => {
-  it("reports a known inline style, so an empty result means clean", async () => {
-    // Every other assertion in this file is satisfied by finding nothing, and
-    // `reached` is populated by the class match alone — so a parser or
-    // aggregation that regressed to returning nothing would leave them all
-    // green. This drives a block that IS in breach through the same path.
-    const { reached, offenders } = await inspectBlock(STYLED_PROBE);
+  it.each(PROBES.map(probe => [probe.label, probe] as const))(
+    "reports %s, so an empty result means clean",
+    async (_label, probe) => {
+      // Every other assertion in this file is satisfied by finding nothing, and
+      // reachability is decided by the class lookup alone — so a parser or an
+      // aggregation that regressed to returning nothing would leave them all
+      // green. Each probe drives a block that IS in breach through this path.
+      const { reached, offenders } = await inspectBlock(probe.block);
 
-    expect(reached).toBe(true);
-    // Deduped, as the library assertion is: a block is rendered once per host
-    // state and per prop variant, so one breach is reported once per case.
-    expect([...new Set(offenders)]).toEqual(["test/styled-probe: color"]);
-  });
+      expect(reached).toBe(true);
+      // Deduped, as the library assertion is: a block is rendered once per host
+      // state and per prop variant, so one breach is reported once per case.
+      expect([...new Set(offenders)]).toEqual([
+        `${probe.block.name}: ${probe.property}`,
+      ]);
+    }
+  );
 });
 
 describe("a core block's root element", () => {
