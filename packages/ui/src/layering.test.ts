@@ -49,7 +49,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import ts from "typescript";
+import { importedSpecifiers } from "@nextlyhq/module-specifiers";
 import { describe, expect, it } from "vitest";
 
 const SRC = join(__dirname);
@@ -95,59 +95,6 @@ const MODULE_EXTENSIONS = [
 function isShippedModule(entry: string): boolean {
   if (/\.(test|fixture)\./.test(entry)) return false;
   return MODULE_EXTENSIONS.some(extension => entry.endsWith(extension));
-}
-
-/**
- * Every module specifier a source text loads, read from the AST.
- *
- * A raw-text search cannot do this. It reports the specifier appearing in a
- * COMMENT or a string as an import — a false positive, and the worse direction
- * for a guard, because one that cries wolf about code the compiler never loads
- * stops being read. It also misses a bare side-effect `import "pkg"`, a dynamic
- * `import("pkg")` and a `require("pkg")`, none of which carry `from`.
- *
- * DELIBERATE DUPLICATION, and it is the thing this file otherwise argues
- * against. `packages/builder/src/layering.test.ts` already has a fuller reader
- * covering `import x = require(...)`, `typeof import(...)` in type position and
- * JSDoc `@import`. One shared reader that all the layering tests call is what
- * removes this copy. It exists meanwhile because a guard with FALSE POSITIVES
- * is worse than a temporary second implementation: one that reports code the
- * compiler never loads stops being read, and takes the true findings with it.
- */
-function importedSpecifiers(text: string, fileName: string): string[] {
-  // The real filename, because TypeScript picks its parser from the extension.
-  // Reading a `.tsx` file as `.ts` parses `<div>` as a type assertion, and the
-  // malformed tree that follows hides every load inside JSX — which in this
-  // package is most of them. Required rather than defaulted: a caller that
-  // forgets restores exactly that blindness, and silently.
-  const source = ts.createSourceFile(
-    fileName,
-    text,
-    ts.ScriptTarget.ESNext,
-    true
-  );
-  const found: string[] = [];
-  const visit = (node: ts.Node): void => {
-    if (
-      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
-      node.moduleSpecifier &&
-      ts.isStringLiteralLike(node.moduleSpecifier)
-    ) {
-      found.push(node.moduleSpecifier.text);
-    } else if (ts.isCallExpression(node)) {
-      const callee = node.expression;
-      const loads =
-        callee.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(callee) && callee.text === "require");
-      const target = node.arguments[0];
-      if (loads && target && ts.isStringLiteralLike(target)) {
-        found.push(target.text);
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
-  return found;
 }
 
 /**
@@ -313,37 +260,27 @@ describe("this package takes no direct dependency on the block engine", () => {
 
   it("is exercised — the import scan can find the specifier it hunts", () => {
     // An empty offender list is only evidence once the search is shown to
-    // work. A renamed package or a typo in the pattern returns exactly the
-    // same clean result as compliance does.
-    // Every form the reader claims, and the two it must NOT claim. The
-    // comment and string cases are the false positives a text search produces,
-    // and they are asserted here because that is where the reader's value is.
-    const read = (text: string): string[] =>
-      importedSpecifiers(text, "module.ts");
-
-    expect(read(`import { x } from "${FORBIDDEN}";`)).toContain(FORBIDDEN);
-    expect(read(`import "${FORBIDDEN}";`)).toContain(FORBIDDEN);
-    expect(read(`export { x } from "${FORBIDDEN}";`)).toContain(FORBIDDEN);
-    expect(read(`await import("${FORBIDDEN}");`)).toContain(FORBIDDEN);
-    expect(read(`require("${FORBIDDEN}");`)).toContain(FORBIDDEN);
-
-    expect(read(`// never import from "${FORBIDDEN}" here`)).toEqual([]);
-    expect(read(`const s = 'from "${FORBIDDEN}"';`)).toEqual([]);
-    expect(read('import { x } from "@nextlyhq/ui";')).toEqual(["@nextlyhq/ui"]);
-  });
-
-  it("reads a JSX module with the parser that extension needs", () => {
-    // The load is placed INSIDE a JSX expression on purpose. A `.tsx` file read
-    // as `.ts` parses `<div>` as a type assertion and recovers into a tree this
-    // visitor walks without finding anything, so the guard returns clean over a
-    // file it never really read. Most of this package is `.tsx`, which is what
-    // makes the blind spot worth a case of its own.
+    // work. A renamed package or a typo in the pattern returns exactly the same
+    // clean result as compliance does.
+    //
+    // This asserts the WIRING, in the two shapes this package's own files take:
+    // a `.ts` module and the `.tsx` most of it is written in. One case per
+    // import form the reader claims — and the comment and string cases it must
+    // NOT claim — lives beside the reader in
+    // `packages/module-specifiers/src/index.test.ts`, so a reader that stops
+    // recognising a form fails there rather than silently in every consumer.
+    expect(
+      importedSpecifiers(`import { x } from "${FORBIDDEN}";`, "module.ts")
+    ).toContain(FORBIDDEN);
     expect(
       importedSpecifiers(
         `export const C = () => <div>{require("${FORBIDDEN}")}</div>;`,
         "component.tsx"
       )
     ).toContain(FORBIDDEN);
+    expect(
+      importedSpecifiers('import { x } from "@nextlyhq/ui";', "module.ts")
+    ).toEqual(["@nextlyhq/ui"]);
   });
 
   it("counts a subpath of the forbidden package, and only that package", () => {
