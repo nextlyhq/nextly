@@ -859,6 +859,9 @@ importers:
       '@nextlyhq/eslint-config':
         specifier: workspace:*
         version: link:../eslint-config
+      '@nextlyhq/module-specifiers':
+        specifier: workspace:*
+        version: link:../module-specifiers
       '@nextlyhq/plugin-sdk':
         specifier: workspace:*
         version: link:../plugin-sdk
@@ -1001,6 +1004,27 @@ importers:
       typescript-eslint:
         specifier: ^8.59.0
         version: 8.59.0(eslint@9.39.1(jiti@2.7.0))(typescript@5.9.3)
+
+  packages/module-specifiers:
+    devDependencies:
+      '@nextlyhq/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@nextlyhq/tsconfig':
+        specifier: workspace:*
+        version: link:../tsconfig
+      '@types/node':
+        specifier: ^20.19.17
+        version: 20.19.17
+      eslint:
+        specifier: ^9.39.1
+        version: 9.39.1(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.0
+        version: 4.1.10(@types/node@20.19.17)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.9.0)(jsdom@27.1.0)(vite@7.3.6(@types/node@20.19.17)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
 
   packages/nextly:
     dependencies:
@@ -1357,6 +1381,9 @@ importers:
       '@nextlyhq/tsconfig':
         specifier: workspace:*
         version: link:../tsconfig
+      '@types/node':
+        specifier: ^20.19.17
+        version: 20.19.17
       '@types/react':
         specifier: 19.2.0
         version: 19.2.0
@@ -1377,7 +1404,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.0
-        version: 4.1.10(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.9.0)(jsdom@27.1.0)(vite@7.3.6(@types/node@24.10.0)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
+        version: 4.1.10(@types/node@20.19.17)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.9.0)(jsdom@27.1.0)(vite@7.3.6(@types/node@20.19.17)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
 
   packages/plugin-seo:
     devDependencies:
@@ -1664,6 +1691,9 @@ importers:
       '@nextlyhq/eslint-config':
         specifier: workspace:*
         version: link:../eslint-config
+      '@nextlyhq/module-specifiers':
+        specifier: workspace:*
+        version: link:../module-specifiers
       '@nextlyhq/tsconfig':
         specifier: workspace:*
         version: link:../tsconfig
@@ -13395,7 +13425,7 @@ snapshots:
       '@humanfs/node': 0.16.6
       '@humanwhocodes/module-importer': 1.0.1
       '@humanwhocodes/retry': 0.4.3
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
       ajv: 6.15.0
       chalk: 4.1.2
       cross-spawn: 7.0.6
