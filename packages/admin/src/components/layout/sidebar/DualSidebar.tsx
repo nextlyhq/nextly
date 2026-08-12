@@ -100,14 +100,15 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     >();
     for (const sp of visibleStandalonePlugins) {
       const slug = pluginSlug(sp.name);
-      // Resolved through the shared chain so asset precedence is decided in one
-      // place. This surface renders the lucide branch only: a menu item stores
-      // an ElementType and is rendered as `<Icon className=... />`, so a shipped
-      // image has nowhere to go without changing that data model. A plugin that
-      // ships only an asset therefore shows the fallback here while showing its
-      // logo in the plugins table and on its detail page.
-      const resolved = resolvePluginIcon(sp, { fallback: "Database" });
-      const iconName = resolved.kind === "lucide" ? resolved.name : "Database";
+      // A menu item stores an ElementType rendered as `<Icon className=… />`,
+      // so this surface cannot show an image. It says so rather than resolving
+      // an asset and discarding it, which would also discard the lucide name a
+      // plugin declared alongside the asset for precisely this surface.
+      const resolved = resolvePluginIcon(sp, {
+        fallback: "Database",
+        allowAsset: false,
+      });
+      const iconName = resolved.name;
       const IconComponent = iconMap[iconName] || Database;
       // The former top-level Users icon is gone; User Management now lives
       // under Settings, so a plugin still declaring `after: "users"` is anchored
@@ -295,10 +296,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
   const activeCategory = useMemo(() => {
     // 0. Check standalone plugin collection routes first
     for (const sp of visibleStandalonePlugins) {
-      const slug = sp.name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "");
+      const slug = pluginSlug(sp.name);
       const standaloneId = `standalone-${slug}` as MainMenuCategory;
       const collectionSlugs = sp.collections ?? [];
       if (
@@ -475,13 +473,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
   const pluginCollectionsForSection = useMemo(() => {
     if (!selectedMain.startsWith("standalone-")) return [];
     const slug = selectedMain.replace("standalone-", "");
-    const sp = visibleStandalonePlugins.find(
-      p =>
-        p.name
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-+|-+$/g, "") === slug
-    );
+    const sp = visibleStandalonePlugins.find(p => pluginSlug(p.name) === slug);
     if (!sp) return [];
     const collectionSlugs = new Set(sp.collections ?? []);
     return authorizedPlugins
@@ -500,13 +492,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
   const standaloneLabel = useMemo(() => {
     if (!selectedMain.startsWith("standalone-")) return "";
     const slug = selectedMain.replace("standalone-", "");
-    const sp = visibleStandalonePlugins.find(
-      p =>
-        p.name
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-+|-+$/g, "") === slug
-    );
+    const sp = visibleStandalonePlugins.find(p => pluginSlug(p.name) === slug);
     return sp?.appearance?.label || sp?.name || slug;
   }, [selectedMain, visibleStandalonePlugins]);
 

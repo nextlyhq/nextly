@@ -1,4 +1,5 @@
 import type React from "react";
+import { useState } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { resolvePluginIcon } from "@admin/lib/plugins/resolve-plugin-icon";
@@ -38,7 +39,17 @@ export function PluginIcon({
   className,
   alt = "",
 }: PluginIconProps): React.ReactElement {
-  const source = resolvePluginIcon(plugin, { fallback });
+  // A declared asset can still fail to arrive: a mistyped path, a deleted
+  // file, or a Content-Security-Policy that blocks the origin. Without this the
+  // surface keeps a broken-image glyph forever, which is worse than the plain
+  // icon it replaced. On failure the component re-resolves with assets
+  // disallowed, so it lands on whatever lucide name the plugin declared beside
+  // the asset before reaching the caller's fallback.
+  const [assetFailed, setAssetFailed] = useState(false);
+  const source = resolvePluginIcon(plugin, {
+    fallback,
+    allowAsset: !assetFailed,
+  });
 
   if (source.kind === "asset") {
     // Decorative by default: the plugin's name is always rendered beside this,
@@ -50,6 +61,7 @@ export function PluginIcon({
       <img
         src={source.src}
         alt={alt}
+        onError={() => setAssetFailed(true)}
         className={cn("object-contain", className)}
       />
     );

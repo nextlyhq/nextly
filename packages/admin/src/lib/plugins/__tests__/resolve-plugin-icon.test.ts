@@ -52,3 +52,37 @@ describe("resolvePluginIcon", () => {
     });
   });
 });
+
+describe("resolvePluginIcon on a surface that cannot render images", () => {
+  it("keeps the declared lucide name instead of the asset", () => {
+    // The case the option exists for: a plugin declaring both is saying "logo
+    // where you can, this glyph where you cannot". Resolving the asset and
+    // substituting a default afterwards would discard that glyph.
+    expect(
+      resolvePluginIcon(
+        { appearance: { icon: "Puzzle", iconAsset: "/x/logo.svg" } },
+        { fallback: "Database", allowAsset: false }
+      )
+    ).toEqual({ kind: "lucide", name: "Puzzle" });
+  });
+
+  it("falls back only when the plugin declared no lucide name", () => {
+    expect(
+      resolvePluginIcon(
+        { appearance: { iconAsset: "/x/logo.svg" } },
+        { fallback: "Database", allowAsset: false }
+      )
+    ).toEqual({ kind: "lucide", name: "Database" });
+  });
+
+  // Control: with assets allowed the same input still resolves to the asset,
+  // so the option is what changes the answer rather than the input.
+  it("still resolves the asset when the surface allows one", () => {
+    expect(
+      resolvePluginIcon(
+        { appearance: { icon: "Puzzle", iconAsset: "/x/logo.svg" } },
+        { fallback: "Database" }
+      )
+    ).toEqual({ kind: "asset", src: "/x/logo.svg" });
+  });
+});

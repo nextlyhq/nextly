@@ -164,15 +164,14 @@ export function DynamicPluginSectionItems({
                   // declares none. Below that the shared chain decides, so
                   // asset-over-lucide precedence lives in one place.
                   //
-                  // Lucide branch only, for the same reason as the sidebar
-                  // rail: this renders an ElementType looked up by name, so a
-                  // shipped image has nowhere to go here.
+                  // Cannot render an image, for the same reason as the
+                  // sidebar rail, so it declares that and keeps whatever lucide
+                  // name the plugin supplied beside its asset.
                   const resolved = resolvePluginIcon(group.meta, {
                     fallback: "Database",
+                    allowAsset: false,
                   });
-                  const iconName =
-                    collection.admin?.icon ||
-                    (resolved.kind === "lucide" ? resolved.name : "Database");
+                  const iconName = collection.admin?.icon || resolved.name;
                   const IconComponent =
                     (Icons as Record<string, React.ElementType>)[iconName] ||
                     Database;
