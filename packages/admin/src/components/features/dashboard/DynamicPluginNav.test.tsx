@@ -2,10 +2,9 @@
  * The plugins panel must offer a route to the overview on every install,
  * including one with nothing installed.
  *
- * This is the case the component previously returned `null` for. It matters
- * most on mobile, where the primary plugins icon only opens this panel rather
- * than navigating, so an empty panel left `/admin/plugins` unreachable from
- * anywhere in the UI.
+ * The empty-install case matters most on mobile, where the primary plugins
+ * icon only opens this panel rather than navigating, so a panel with no link
+ * leaves `/admin/plugins` unreachable from anywhere in the UI.
  */
 import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -139,9 +138,9 @@ describe("DynamicPluginNav", () => {
 
     renderNav();
 
-    // Exactly one: the panel previously grew a second, parallel copy of this
-    // link so that the empty case had one, which produced two adjacent links
-    // to the same page on every non-empty install.
+    // Exactly one. This component owns the overview link; a second copy
+    // rendered by the panel around it would put two adjacent links to the same
+    // page in front of every non-empty install.
     expect(
       screen.getAllByRole("link", { name: /installed plugins/i })
     ).toHaveLength(1);

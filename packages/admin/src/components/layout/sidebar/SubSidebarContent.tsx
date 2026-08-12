@@ -119,6 +119,9 @@ export function SubSidebarContent({
           onChange={onPluginSearchChange}
         />
         <div className="space-y-1">
+          {/* Names what the panel contains: the installed-plugins overview and
+              navigation into each plugin's collections. Nothing here installs
+              a plugin, which happens through the Nextly config. */}
           <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
             Plugins
           </p>

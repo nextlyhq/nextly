@@ -82,12 +82,12 @@ export function DynamicPluginNav({
   const { capabilities } = useCurrentUserPermissions();
   const branding = useBranding();
 
-  // `error` is deliberately not read. A collections failure leaves `data`
-  // undefined, so the collection-derived entries below are empty on their own,
-  // and the overview link must survive that failure because it reads
-  // admin-meta rather than collections. Branching on the error here is what
-  // used to remove the only sidebar route to /admin/plugins during an
-  // unrelated API outage.
+  // `error` is deliberately not read. The two things this panel renders have
+  // different data sources: collection entries come from this query, and the
+  // overview link comes from admin-meta. A failure here empties `data`, which
+  // suppresses the collection entries on its own, and must not reach the
+  // overview link, which is still backed and still the only sidebar route to
+  // /admin/plugins on mobile.
   const { data, isLoading } = useCollections(
     {
       pagination: { page: 0, pageSize: 100 },
