@@ -1,14 +1,12 @@
----
-# Unconditional, because the subject is an ACT rather than a kind of file. Two
-# things follow. Any path can be clobbered, so no glob over filenames selects
-# the population; and the failure is a shell redirect, which reads nothing, so a
-# rule keyed to reading a matching path would be absent at exactly the moment it
-# applies. `derived-checks.md` matches by extension across the repo for the same
-# reason its own header gives: enumerating directories is how it kept missing the
-# code it is about.
-paths:
-  - "**/*"
----
+<!--
+Deliberately has NO `paths` frontmatter. Claude Code loads a rule without that
+field at launch, unconditionally; a rule WITH it — including `paths: ["**/*"]` —
+is conditional and triggers when a matching file is read. The failure this rule
+is about is a shell redirect, which reads nothing, so the conditional form is
+absent at exactly the moment it applies. A path-scoped rule is also not
+re-injected after /compact until it next matches, which the unconditional form
+avoids.
+-->
 
 ## A whole-file write is a delete plus a create
 
@@ -36,13 +34,22 @@ that passed a moment earlier. An exclusive create refuses at write time instead,
 which is a boundary rather than a look:
 
 ```sh
-set -o noclobber        # `>` now fails on an existing file; `>|` opts out
+set -o noclobber; printf '%s' "$content" > path    # ONE command, both parts
 ```
 
-Node's equivalent is the `wx` flag, which throws `EEXIST` rather than
-truncating: `writeFileSync(path, data, { flag: "wx" })`. Use one of these when
-the intent is genuinely "create", and keep the NOT FOUND probe for deciding
-whether that is the intent at all.
+**The option and the redirect must run in the same shell**, which for an agent
+means the same tool call. Each invocation starts a fresh shell with the option
+back at its default, so setting it in one call and redirecting in the next
+protects nothing — measured: separate invocations truncate the file, the
+compound command above fails with `cannot overwrite existing file`. `>|` opts
+out where overwriting is the intent.
+
+Node's equivalent has no such scoping problem, because the flag is an argument
+to the write itself: `writeFileSync(path, data, { flag: "wx" })` throws `EEXIST`
+rather than truncating. Prefer it when the choice is available.
+
+Use one of these when the intent is genuinely "create", and keep the NOT FOUND
+probe for deciding whether that is the intent at all.
 
 Under an editing tool that requires a prior read, use it; reaching for the shell
 to write a file the tool would have made you read is how the requirement gets
@@ -113,6 +120,15 @@ settles it is naming the revision and CHECKING it holds what you expect:
   `git diff <rev> -- <path>`; against the index, the bare `git diff -- <path>`,
   which is working tree versus index. Note that `git status` shows only `MM` and
   reveals neither.
+- **Those forms only compare TRACKED content.** If the recovered path is
+  untracked — the `stash@{n}^3` case above is the common one — `git diff <rev>`
+  reports the baseline as deleted and says nothing about what the file now
+  holds, whatever that is. Measured: with the original in the stash and
+  replacement text on disk, it prints `-ORIGINAL` and no `+` line at all, so a
+  clobber reads as a plain deletion. Materialise the candidate
+  (`git show <rev>:<path> > /tmp/base`) and compare with
+  `git diff --no-index /tmp/base <path>`, which reads both sides from the
+  filesystem and shows `-ORIGINAL +CLOBBERED`.
 
 **If no revision holds it — and you have established that rather than inferred
 it from an empty result — stop.** Say so and look outside git — editor local
