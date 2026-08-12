@@ -136,6 +136,32 @@ describe("DynamicPluginNav", () => {
     ).toBeNull();
   });
 
+  it("keeps the link while the collections query is still loading", () => {
+    // The skeleton stands in for the collection entries. The overview reads
+    // admin-meta, which has resolved, so replacing the whole panel would make
+    // /admin/plugins unreachable for the duration of a slow request.
+    mockBranding = { plugins: [] } as unknown as AdminBranding;
+    mockIsLoading = true;
+
+    renderNav();
+
+    expect(
+      screen.getByRole("link", { name: /installed plugins/i })
+    ).toHaveAttribute("href", "/admin/plugins");
+  });
+
+  it("withholds it while loading from a user who cannot open it", () => {
+    mockBranding = { plugins: [] } as unknown as AdminBranding;
+    mockIsLoading = true;
+    mockCanManageSettings = false;
+
+    renderNav();
+
+    expect(
+      screen.queryByRole("link", { name: /installed plugins/i })
+    ).toBeNull();
+  });
+
   it("keeps the link when the collections query errors", () => {
     mockBranding = { plugins: [] } as unknown as AdminBranding;
     mockIsError = true;

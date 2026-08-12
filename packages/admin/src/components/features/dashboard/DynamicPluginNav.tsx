@@ -44,6 +44,33 @@ interface DynamicPluginNavProps {
 }
 
 /**
+ * The Installed Plugins entry.
+ *
+ * One implementation, used while collections load and after they settle. The
+ * link reads admin-meta only, so it is available in both states, and rendering
+ * it twice from two places is how the two would drift.
+ */
+function PluginOverviewLink({
+  isActive,
+}: {
+  isActive: (href?: string) => boolean;
+}) {
+  const active = isActive("/admin/plugins");
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild isActive={active}>
+        <Link href={ROUTES.PLUGINS}>
+          <Package
+            className={cn("shrink-0", !active && "text-muted-foreground")}
+          />
+          <span>Installed Plugins</span>
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}
+
+/**
  * Loading skeleton for plugin items
  */
 function PluginSkeleton() {
@@ -198,16 +225,26 @@ export function DynamicPluginNav({
     );
   }, [allPluginCollections, visibleCollectionIds, isPluginPlaced, search]);
 
-  if (isLoading) {
-    if (isCollapsed) return null;
-    return <PluginSkeleton />;
-  }
-
   // The overview link is shown only to users who can open the page it points
   // at: /admin/plugins is manage-settings guarded, and a collection reader
   // opens this panel to reach their plugin's collections. Linking them to a
   // route that redirects would replace working navigation with a bounce.
   const canOpenOverview = capabilities.canManageSettings;
+
+  if (isLoading) {
+    if (isCollapsed) return null;
+    // The skeleton stands in for the collection entries only. The overview
+    // link reads admin-meta, which has already resolved, so replacing the whole
+    // panel would make /admin/plugins unreachable for as long as a slow or
+    // hung collections request lasts — and on mobile the rail item is a button
+    // that opens this panel rather than navigating, so there is no other way in.
+    return (
+      <>
+        {canOpenOverview && <PluginOverviewLink isActive={isActive} />}
+        <PluginSkeleton />
+      </>
+    );
+  }
 
   // A collections failure does NOT suppress the overview link. That
   // destination reads admin-meta, not collections, so it is still reachable;
@@ -251,12 +288,6 @@ export function DynamicPluginNav({
     );
   }
 
-  // Expanded mode — the overview link goes to the plugins list; each plugin
-  // has its own detail page now, so linking a plugin's slug here would land
-  // on one plugin instead of the overview.
-  const overviewHref = ROUTES.PLUGINS;
-  const isOverviewActive = isActive("/admin/plugins");
-
   // Plugins with unplaced collections (shown as expandable with collection sub-items)
   const pluginsWithCollections = plugins.filter(
     p => !p.isPlaced && p.collections.length > 0
@@ -265,21 +296,7 @@ export function DynamicPluginNav({
   return (
     <>
       {/* Installed Plugins overview link, for users who can open that page */}
-      {canOpenOverview && (
-        <SidebarMenuItem>
-          <SidebarMenuButton asChild isActive={isOverviewActive}>
-            <Link href={overviewHref}>
-              <Package
-                className={cn(
-                  "shrink-0",
-                  !isOverviewActive && "text-muted-foreground"
-                )}
-              />
-              <span>Installed Plugins</span>
-            </Link>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-      )}
+      {canOpenOverview && <PluginOverviewLink isActive={isActive} />}
 
       {/* Plugin collections (only for plugins not placed elsewhere) */}
       {pluginsWithCollections.map(plugin => {
