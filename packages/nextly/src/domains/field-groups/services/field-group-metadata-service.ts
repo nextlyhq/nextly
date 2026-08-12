@@ -40,6 +40,7 @@ import type {
 } from "../../../schemas/dynamic-field-groups/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types";
+import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 
 import type { FieldGroupRegistryService } from "./field-group-registry-service";
 
@@ -105,6 +106,23 @@ export class FieldGroupMetadataService {
    * The caller has already validated the input's shape.
    */
   async createFieldGroup(
+    input: CreateFieldGroupInput
+  ): Promise<CreateFieldGroupResult> {
+    // 🔴 The exclusion wraps the ownership check too, not only the DDL. That check reads which
+    // table names are taken, and a storage migration renaming tables is exactly what makes such a
+    // read stale — a name that looked free can be claimed by the rename a moment later.
+    return withSchemaChangeExcluded(
+      {
+        adapter: this.adapter,
+        logger: this.logger,
+        label: `create field group "${input.slug}"`,
+        issuesDdl: true,
+      },
+      () => this.createFieldGroupExcluded(input)
+    );
+  }
+
+  private async createFieldGroupExcluded(
     input: CreateFieldGroupInput
   ): Promise<CreateFieldGroupResult> {
     // 0. REFUSE a table another field group owns, before anything is executed.

@@ -53,6 +53,7 @@ import type {
 } from "../../../schemas/dynamic-singles/types";
 import type { Logger } from "../../../shared/types";
 import { applyMigrationStatements } from "../../schema/services/apply-migration-statements";
+import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 
 import type { SingleRegistryService } from "./single-registry-service";
 
@@ -231,6 +232,23 @@ export class SingleMetadataService {
    * table name. Rejecting after this point would leave a `pending` row behind.
    */
   async createSingle(input: CreateSingleInput): Promise<CreateSingleResult> {
+    // 🔴 The exclusion wraps ALL THREE phases, not just the apply. A storage migration renaming
+    // tables between the plan and the row write would leave this create describing storage that
+    // moved underneath it, and the row is as much a part of the schema as the table is.
+    return withSchemaChangeExcluded(
+      {
+        adapter: this.adapter,
+        logger: this.logger,
+        label: `create single "${input.slug}"`,
+        issuesDdl: true,
+      },
+      () => this.createSingleExcluded(input)
+    );
+  }
+
+  private async createSingleExcluded(
+    input: CreateSingleInput
+  ): Promise<CreateSingleResult> {
     // 1. PLAN, before anything is persisted or executed. The generator is a validator as well as a
     // renderer, so a request it refuses leaves nothing behind at all — no row, no table — and the
     // corrected retry is a fresh create rather than a collision with its own wreckage.
@@ -268,6 +286,21 @@ export class SingleMetadataService {
    * tables survive: the row is what makes the tables findable.
    */
   async deleteSingle(
+    slug: string,
+    tableName: string | undefined
+  ): Promise<void> {
+    return withSchemaChangeExcluded(
+      {
+        adapter: this.adapter,
+        logger: this.logger,
+        label: `delete single "${slug}"`,
+        issuesDdl: true,
+      },
+      () => this.deleteSingleExcluded(slug, tableName)
+    );
+  }
+
+  private async deleteSingleExcluded(
     slug: string,
     tableName: string | undefined
   ): Promise<void> {
@@ -329,6 +362,20 @@ export class SingleMetadataService {
    * recorded rather than a request that never began.
    */
   async updateSingleSchema(
+    input: UpdateSingleSchemaInput
+  ): Promise<UpdateSingleSchemaResult> {
+    return withSchemaChangeExcluded(
+      {
+        adapter: this.adapter,
+        logger: this.logger,
+        label: `update single schema "${input.slug}"`,
+        issuesDdl: true,
+      },
+      () => this.updateSingleSchemaExcluded(input)
+    );
+  }
+
+  private async updateSingleSchemaExcluded(
     input: UpdateSingleSchemaInput
   ): Promise<UpdateSingleSchemaResult> {
     // 1. PLAN. May reject; nothing is persisted and no statement has run.
