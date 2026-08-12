@@ -200,6 +200,39 @@ describe("reading an artifact's specifiers", () => {
     ).toEqual(["react"]);
   });
 
+  it("keeps every loader binding, not the last one declared under a name", () => {
+    // Two scopes can each declare a resolver under the same name. Recording one scope per name let
+    // the second declaration overwrite the first, so the earlier function's call stopped resolving
+    // and whatever it named went unreported — while the later one kept working, which is what makes
+    // this invisible: the check still reports something.
+    expect(
+      read(`
+        export function a() {
+          const resolve = import.meta.resolve;
+          return resolve("react");
+        }
+        export function b() {
+          const resolve = import.meta.resolve;
+          return resolve("clsx");
+        }
+      `)
+    ).toEqual(["react", "clsx"]);
+    // The same shape through the CommonJS factory rather than the resolver.
+    expect(
+      read(`
+        import { createRequire } from "node:module";
+        export function a() {
+          const load = createRequire(import.meta.url);
+          return load("react");
+        }
+        export function b() {
+          const load = createRequire(import.meta.url);
+          return load("clsx");
+        }
+      `)
+    ).toEqual(["node:module", "react", "clsx"]);
+  });
+
   it("does not treat a nested binding as the imported require factory", () => {
     // The import that makes a name the factory sits at module scope, so a parameter of the same
     // word is a different value and calling it makes no loader.

@@ -345,7 +345,28 @@ export function specifiersIn(source, fileName) {
   // beside `function f(resolve) { return resolve(x) }` binds the same word to two different values,
   // and reading membership alone treats the parameter as the resolver — rejecting an artifact
   // whose call loads nothing.
+  // Name to the SET of scopes that bind it as a loader, not to one scope. Two functions can each
+  // declare `const resolve = import.meta.resolve`, and storing one scope per name lets the later
+  // declaration overwrite the earlier — so the first function's call stops resolving and whatever
+  // it named goes unreported, while the second keeps working and the check looks alive.
   const loaders = new Map();
+
+  /** Record that `name` is a loader within the scope `declaredIn` opened. */
+  const addLoader = (name, declaredIn) => {
+    if (declaredIn === undefined) return;
+    const scopes = loaders.get(name);
+    if (scopes === undefined) loaders.set(name, new Set([declaredIn]));
+    else scopes.add(declaredIn);
+  };
+
+  /** Whether `name` at this node resolves to one of the bindings that made it a loader. */
+  const isLoaderAt = (node, name) => {
+    const scopes = loaders.get(name);
+    if (scopes === undefined) return false;
+    const scope = nearestBindingScope(node, name);
+    return scope !== undefined && scopes.has(scope);
+  };
+
   const aliases = [];
   const collectLoaders = node => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
@@ -356,11 +377,11 @@ export function specifiersIn(source, fileName) {
         ts.isCallExpression(init) &&
         namesFactory(init.expression)
       ) {
-        loaders.set(node.name.text, declaredIn);
+        addLoader(node.name.text, declaredIn);
       } else if (init !== undefined && namesMetaResolve(init)) {
         // `const resolve = import.meta.resolve` hands the resolver on as a value, and calling it
         // through that name names a package exactly as calling it in place does.
-        loaders.set(node.name.text, declaredIn);
+        addLoader(node.name.text, declaredIn);
       } else if (init !== undefined && ts.isIdentifier(init)) {
         // `const again = load` hands the loader on under another name. Recorded now and resolved
         // below, because the assignment can appear in any order in emitted output.
@@ -376,11 +397,14 @@ export function specifiersIn(source, fileName) {
   for (let changed = true; changed; ) {
     changed = false;
     for (const [alias, source, declaredIn] of aliases) {
+      // Guarded on the alias not already being a loader IN THAT SCOPE, so the loop terminates
+      // while still allowing one name to be a loader in several scopes.
       if (
-        resolvesTo(source, source.text, loaders.get(source.text)) &&
-        !loaders.has(alias)
+        isLoaderAt(source, source.text) &&
+        declaredIn !== undefined &&
+        !(loaders.get(alias)?.has(declaredIn) ?? false)
       ) {
-        loaders.set(alias, declaredIn);
+        addLoader(alias, declaredIn);
         changed = true;
       }
     }
@@ -421,8 +445,7 @@ export function specifiersIn(source, fileName) {
         (ts.isCallExpression(callee) && namesFactory(callee.expression)) ||
         // `const load = createRequire(...); load("react")`, invoked through the name it was
         // stored under — and only where that declaration is what the name resolves to.
-        (ts.isIdentifier(callee) &&
-          resolvesTo(callee, callee.text, loaders.get(callee.text)));
+        (ts.isIdentifier(callee) && isLoaderAt(callee, callee.text));
       // `import.meta.resolve("@nextlyhq/admin-css")` names a package without importing it. It
       // needs no `node:module` import, so the guard that keeps the loader out of this package
       // does not reach it, and a bundler records no dependency for what it names — a consumer

@@ -374,6 +374,26 @@ function exportedNames(source: string): string[] {
       ts.isIdentifier(statement.name)
     ) {
       valueSpace.add(statement.name.text);
+    } else if (ts.isImportDeclaration(statement)) {
+      // An IMPORT binds a name too, and which space it lands in is written on the syntax:
+      // `import type { Foo }` marks the whole clause, `import { type Foo }` marks the element.
+      // Reading only the local declarations left an imported type looking like a value, so a
+      // declaration re-exporting one compared equal to a module publishing a real binding.
+      const clause = statement.importClause;
+      if (clause === undefined) continue;
+      const space = clause.isTypeOnly ? typeSpace : valueSpace;
+      if (clause.name !== undefined) space.add(clause.name.text);
+      const bindings = clause.namedBindings;
+      if (bindings === undefined) continue;
+      if (ts.isNamespaceImport(bindings)) {
+        space.add(bindings.name.text);
+        continue;
+      }
+      for (const element of bindings.elements) {
+        (clause.isTypeOnly || element.isTypeOnly ? typeSpace : valueSpace).add(
+          element.name.text
+        );
+      }
     }
   }
 
@@ -652,6 +672,28 @@ describe("reading the names a module publishes", () => {
     expect(
       exportedNames(`interface Foo {}\nexport { Foo as Public };`)
     ).toEqual([]);
+  });
+
+  it("leaves out a listed name imported only as a type", () => {
+    // The syntax says which space it lands in, and neither spelling marks the EXPORT — so a
+    // declaration re-exporting an imported type read as publishing a value, and compared equal to
+    // a module that publishes a real binding of that name.
+    expect(
+      exportedNames(`import type { Foo } from "./x.mjs";\nexport { Foo };`)
+    ).toEqual([]);
+    expect(
+      exportedNames(`import { type Foo } from "./x.mjs";\nexport { Foo };`)
+    ).toEqual([]);
+    expect(
+      exportedNames(`import type Foo from "./x.mjs";\nexport { Foo };`)
+    ).toEqual([]);
+    // The control, and the one that must not regress: an ordinary import re-exported IS a value.
+    expect(
+      exportedNames(`import { Foo } from "./x.mjs";\nexport { Foo };`)
+    ).toEqual(["Foo"]);
+    expect(
+      exportedNames(`import Foo from "./x.mjs";\nexport { Foo };`)
+    ).toEqual(["Foo"]);
   });
 
   it("keeps a name that is a type AND a value", () => {
