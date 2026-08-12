@@ -97,6 +97,27 @@ describe("tagging a snapshot after the catalog has been renamed", () => {
     expect(tagged.zone[0]._componentType).toBe("hero");
   });
 
+  it("tags a single component with ONE spelling when it already carried the old one", () => {
+    // The production path for the accessor's canonicalisation. A single-component value that was
+    // captured before the rename, restored, and captured again arrives already carrying the old
+    // key; spreading it and adding the current one leaves the snapshot announcing its type twice.
+    //
+    // A double-tagged value still reads — `readFieldGroupType` prefers the current spelling — so
+    // nothing surfaces at capture. It matters because the set of legacy-spelled documents stops
+    // shrinking as snapshots are taken, which is the invariant that lets the rename finish.
+    const entry = { hero: { _componentType: "hero", title: "Old" } };
+
+    const tagged = tagComponentTypes(
+      entry,
+      [{ name: "hero", type: "component", component: "hero" }] as FieldConfig[],
+      () => undefined
+    ) as { hero: Record<string, unknown> };
+
+    expect(tagged.hero._fieldGroupType).toBe("hero");
+    expect(tagged.hero._componentType).toBeUndefined();
+    expect(tagged.hero.title).toBe("Old");
+  });
+
   it("still leaves a row alone when its type names a component the field forbids", () => {
     // The dual read widens which spellings are understood, not which components are allowed.
     const entry = {
