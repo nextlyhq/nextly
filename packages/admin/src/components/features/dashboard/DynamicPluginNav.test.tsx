@@ -20,9 +20,19 @@ let mockIsError = false;
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
 }));
+let mockCanManageSettings = true;
+let mockCollectionCaps: Record<string, { canRead: boolean }> = {};
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({
-    capabilities: { canViewCollections: true, canManageSettings: true },
+    capabilities: {
+      canViewCollections: true,
+      canManageSettings: mockCanManageSettings,
+      isSuperAdmin: false,
+      // Real `filterCollectionItems` runs here rather than a stub: a
+      // pass-through mock would certify that a collection reaches the panel
+      // without the permission that actually admits it.
+      collections: mockCollectionCaps,
+    },
   }),
 }));
 vi.mock("@admin/hooks/queries", () => ({
@@ -54,6 +64,8 @@ afterEach(() => {
   mockCollections = { items: [] };
   mockIsLoading = false;
   mockIsError = false;
+  mockCanManageSettings = true;
+  mockCollectionCaps = {};
   vi.restoreAllMocks();
 });
 
@@ -68,19 +80,61 @@ describe("DynamicPluginNav", () => {
   });
 
   /**
-   * The separating case. Without it, a component that rendered the link
-   * unconditionally under every circumstance would satisfy the assertion
-   * above, including when the panel should be suppressed entirely.
+   * The separating case, corrected. An earlier version asserted that a
+   * collections error suppressed the link, which encoded a bug as the control:
+   * `/admin/plugins` reads `admin-meta`, not collections, so it stays reachable
+   * during that failure and only the collection-derived entries are lost.
+   *
+   * What actually separates "renders the link always" from "renders it for the
+   * right users" is the capability, so that is the control.
    */
-  it("renders nothing when the collections query errored", () => {
+  it("withholds the link from a collection reader who cannot open the page", () => {
+    // The panel must still RENDER for this user — they opened it to reach
+    // their plugin's collections — so a plugin collection is present. Without
+    // it the component returns early and the assertion below passes on the
+    // early return rather than on the link being gated, which is what an
+    // earlier version of this test did.
+    mockCanManageSettings = false;
+    mockBranding = {
+      plugins: [{ name: "@acme/p", collections: ["widgets"] }],
+    } as unknown as AdminBranding;
+    mockCollectionCaps = { widgets: { canRead: true } };
+    mockCollections = {
+      items: [
+        {
+          id: "c1",
+          name: "widgets",
+          label: "Widgets",
+          labels: { plural: "Widgets" },
+          admin: { isPlugin: true },
+        },
+      ],
+    };
+
+    const { container } = renderNav();
+
+    // Positive control on the component, not on any particular row: the panel
+    // rendered something, so the missing link is a fact about the gate rather
+    // than about a component that returned null. An earlier version asserted
+    // only the absence, and passed on the early return instead of the gate.
+    expect(container).not.toBeEmptyDOMElement();
+    expect(
+      screen.queryByRole("link", { name: /installed plugins/i })
+    ).toBeNull();
+  });
+
+  it("keeps the link when the collections query errors", () => {
     mockBranding = { plugins: [] } as unknown as AdminBranding;
     mockIsError = true;
 
     renderNav();
 
+    // The overview reads admin-meta, so a collections failure must not remove
+    // the only sidebar route to it — on mobile the primary icon is a button
+    // that opens this panel rather than navigating.
     expect(
-      screen.queryByRole("link", { name: /installed plugins/i })
-    ).toBeNull();
+      screen.getByRole("link", { name: /installed plugins/i })
+    ).toHaveAttribute("href", "/admin/plugins");
   });
 
   it("still offers exactly one overview link when plugins are installed", () => {

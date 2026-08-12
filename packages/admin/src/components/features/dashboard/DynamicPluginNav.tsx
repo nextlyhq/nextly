@@ -82,7 +82,13 @@ export function DynamicPluginNav({
   const { capabilities } = useCurrentUserPermissions();
   const branding = useBranding();
 
-  const { data, isLoading, error } = useCollections(
+  // `error` is deliberately not read. A collections failure leaves `data`
+  // undefined, so the collection-derived entries below are empty on their own,
+  // and the overview link must survive that failure because it reads
+  // admin-meta rather than collections. Branching on the error here is what
+  // used to remove the only sidebar route to /admin/plugins during an
+  // unrelated API outage.
+  const { data, isLoading } = useCollections(
     {
       pagination: { page: 0, pageSize: 100 },
       sorting: [{ field: "name", direction: "asc" }],
@@ -197,13 +203,21 @@ export function DynamicPluginNav({
     return <PluginSkeleton />;
   }
 
-  // Only an error suppresses this panel. An empty install used to return null
-  // here, which left the panel with a search box and no link at all — and on
-  // mobile the primary icon only opens this panel rather than navigating, so
-  // there was no route to the overview from anywhere. The overview link below
-  // is the one implementation of that destination, so it has to render even
-  // when there is nothing to list underneath it.
-  if (error) {
+  // The overview link is shown only to users who can open the page it points
+  // at: /admin/plugins is manage-settings guarded, and a collection reader
+  // opens this panel to reach their plugin's collections. Linking them to a
+  // route that redirects would replace working navigation with a bounce.
+  const canOpenOverview = capabilities.canManageSettings;
+
+  // A collections failure does NOT suppress the overview link. That
+  // destination reads admin-meta, not collections, so it is still reachable;
+  // only the collection-derived entries below are lost. On mobile the primary
+  // plugins icon is a button that opens this panel rather than navigating, so
+  // suppressing the link here would leave a settings manager with no route to
+  // the page during an unrelated API failure.
+  //
+  // Nothing to offer at all is the one case that renders nothing.
+  if (!canOpenOverview && plugins.length === 0) {
     return null;
   }
 
@@ -248,20 +262,22 @@ export function DynamicPluginNav({
 
   return (
     <>
-      {/* Installed Plugins overview link */}
-      <SidebarMenuItem>
-        <SidebarMenuButton asChild isActive={isOverviewActive}>
-          <Link href={overviewHref}>
-            <Package
-              className={cn(
-                "shrink-0",
-                !isOverviewActive && "text-muted-foreground"
-              )}
-            />
-            <span>Installed Plugins</span>
-          </Link>
-        </SidebarMenuButton>
-      </SidebarMenuItem>
+      {/* Installed Plugins overview link, for users who can open that page */}
+      {canOpenOverview && (
+        <SidebarMenuItem>
+          <SidebarMenuButton asChild isActive={isOverviewActive}>
+            <Link href={overviewHref}>
+              <Package
+                className={cn(
+                  "shrink-0",
+                  !isOverviewActive && "text-muted-foreground"
+                )}
+              />
+              <span>Installed Plugins</span>
+            </Link>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+      )}
 
       {/* Plugin collections (only for plugins not placed elsewhere) */}
       {pluginsWithCollections.map(plugin => {
