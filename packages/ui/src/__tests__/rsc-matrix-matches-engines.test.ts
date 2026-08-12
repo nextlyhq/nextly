@@ -119,9 +119,13 @@ describe("the workflow's use of that derivation", () => {
     //
     // The expression is `cond && A || B`, so the operand AFTER the `&&` is what a pull request
     // selects and the one after the `||` is what everything else does.
-    const chosen = /pull_request'\s*&&\s*([^|]+?)\s*\|\|\s*(\S+?)\s*\)/.exec(
-      line as string
-    );
+    // The whole condition, not just its tail. Matching only `pull_request' &&` accepts
+    // `github.event_name != 'pull_request'`, which reverses the two matrices while satisfying
+    // every assertion here — the plausible broken form this test exists to exclude.
+    const chosen =
+      /github\.event_name\s*==\s*'pull_request'\s*&&\s*([^|]+?)\s*\|\|\s*(\S+?)\s*\)/.exec(
+        line as string
+      );
     expect(
       chosen,
       "the matrix expression is not the expected `event == pull_request && A || B` form"
