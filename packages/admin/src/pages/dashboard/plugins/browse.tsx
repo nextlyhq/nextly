@@ -105,13 +105,25 @@ function BrowseContent(): React.ReactElement {
   // a question they stopped asking.
   const showFeatured = !normalized && shouldShowFeatured(entries, featuredIds);
 
+  // The grid holds what the strip does not. Showing every entry below a strip
+  // that repeats two of them puts the same card on screen twice, which reads
+  // as a rendering fault rather than as a recommendation.
+  const featuredIdSet = useMemo(
+    () => new Set(showFeatured ? featuredIds : []),
+    [showFeatured, featuredIds]
+  );
+  const rest = useMemo(
+    () => visible.filter(e => !featuredIdSet.has(e.id)),
+    [visible, featuredIdSet]
+  );
+
   return (
     <>
       <div className="mb-6 max-w-sm">
         <SearchBar
           value={query}
           onChange={setQuery}
-          placeholder="Search plugins"
+          placeholder="Search the directory"
         />
       </div>
 
@@ -132,13 +144,18 @@ function BrowseContent(): React.ReactElement {
           id="all-plugins"
           className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground"
         >
-          {showFeatured ? "All plugins" : "Plugins"}
+          {showFeatured ? "More plugins" : "Plugins"}
         </h2>
-        {visible.length > 0 ? (
-          <PluginGrid plugins={visible} installedByName={installedByName} />
+        {rest.length > 0 ? (
+          <PluginGrid plugins={rest} installedByName={installedByName} />
         ) : (
+          // Two different nothings. A search that matched nothing names the
+          // term, because the reader chose it and can edit it; an empty
+          // catalogue must not, since quoting an empty string reads as a bug.
           <p className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-            No plugins match “{query.trim()}”.
+            {normalized
+              ? `No plugins match “${query.trim()}”.`
+              : "No plugins to show yet."}
           </p>
         )}
       </section>
