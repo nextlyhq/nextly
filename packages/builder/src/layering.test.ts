@@ -2,6 +2,10 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  importedSpecifiers,
+  UNRESOLVABLE_SPECIFIER,
+} from "@nextlyhq/module-specifiers";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
@@ -67,11 +71,17 @@ const ALLOWED_RUNTIME_IMPORTS = [
   "react",
   "react-dom",
   "react/jsx-runtime",
+  // Icons only. `@nextlyhq/ui` declares it a peer for the same reason: one copy
+  // resolved by the host app rather than one bundled per package.
+  "lucide-react",
   "@nextlyhq/blocks-engine",
   // The ROOT entry only. `@nextlyhq/blocks-react/next` imports `nextly/runtime`,
   // and `/blocks` is the built-in catalogue, which nothing here needs yet.
   "@nextlyhq/blocks-react",
   "@nextlyhq/ui",
+  // The `cn` helper only. A separate subpath because the root barrel carries a
+  // `"use client"` banner and this one is plain string joining.
+  "@nextlyhq/ui/utils",
   // The `/admin` subpath ONLY, and not the SDK root. The root re-exports runtime
   // values from `nextly` (`export { definePlugin } from "nextly"`), which that
   // package's build leaves external, so importing it loads the CMS runtime this
@@ -84,23 +94,14 @@ const ALLOWED_RUNTIME_IMPORTS = [
 
 /** Node built-ins and test-only tooling, which never reach a consumer's bundle. */
 const ALLOWED_IN_TESTS = [
+  "@nextlyhq/module-specifiers",
+  "@testing-library/react",
   "node:fs",
   "node:path",
   "node:url",
   "typescript",
   "vitest",
 ];
-
-/**
- * Stands in for a module call whose target is not a literal, such as
- * `import(base + name)` or `require(name)`.
- *
- * Such a target cannot be resolved by reading the file, so the honest report is
- * "unknown", and unknown has to be a violation: the alternative is a guard that
- * approves whatever it could not read. It is deliberately not a legal package
- * specifier, so it can never be satisfied by an allowlist entry.
- */
-const UNRESOLVABLE_SPECIFIER = "<unresolvable-specifier>";
 
 /**
  * Extensions the bundler will follow, and therefore the ones this guard must read.
@@ -119,115 +120,9 @@ function sourceFiles(dir: string): string[] {
   );
 }
 
-/**
- * Every module specifier a source text imports, read from the AST rather than by
- * regex.
- *
- * Several shapes reach a module, not one, and a visitor that reads only
- * declarations walks straight past most of them — approving a file that pulls
- * the forbidden package in anyway:
- *
- * - `import ... from` and `export ... from`, which carry a module specifier.
- * - `import("pkg")` and `require("pkg")`, which are call expressions. A bare
- *   `require` identifier only: `loader.require("x")` is a method on some object,
- *   not a module resolve.
- * - `import x = require("pkg")`, the documented CommonJS-interop spelling, which
- *   is neither of the above.
- * - `typeof import("pkg")` in type position, which the parser gives as an
- *   `ImportTypeNode` rather than a call. It erases at build, so a purely runtime
- *   guard would skip it — this one does not, for the reason below.
- *
- * Template literals with no substitutions are as statically known as quoted
- * strings, so they count as literals here.
- *
- * Type-only imports are collected too, which is stricter than a purely runtime
- * guard would be. The admin prohibition is not only about what reaches a bundle:
- * importing admin's types is the same dependency on internals nobody promised to
- * keep, and it is one rename away from becoming a value import.
- *
- * Separated from the file reading so the shapes above can be asserted against
- * source text directly: the contract tests below scan real files, and a file
- * that happens to contain none of a shape cannot demonstrate the shape is seen.
- */
-function importsOfSource(text: string, fileName = "module.ts"): string[] {
-  const source = ts.createSourceFile(
-    fileName,
-    text,
-    ts.ScriptTarget.ESNext,
-    true
-  );
-  const found: string[] = [];
-  const seen = new Set<ts.Node>();
-  const visit = (node: ts.Node): void => {
-    if (seen.has(node)) return;
-    seen.add(node);
-    if (
-      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
-      node.moduleSpecifier &&
-      ts.isStringLiteralLike(node.moduleSpecifier)
-    ) {
-      found.push(node.moduleSpecifier.text);
-    } else if (ts.isJSDocImportTag(node)) {
-      // `/** @import { X } from "pkg" */`. A tag with its own module specifier, not the
-      // `ImportTypeNode` a `@typedef` produces, so entering the JSDoc tree is not enough.
-      const target = node.moduleSpecifier;
-      found.push(
-        target && ts.isStringLiteralLike(target)
-          ? target.text
-          : UNRESOLVABLE_SPECIFIER
-      );
-    } else if (ts.isImportTypeNode(node)) {
-      // `type A = typeof import("pkg")`. A type query, so it never reaches a bundle — but it is
-      // still a dependency on that package's internals, which is what the admin rule forbids.
-      const target = node.argument;
-      found.push(
-        ts.isLiteralTypeNode(target) && ts.isStringLiteralLike(target.literal)
-          ? target.literal.text
-          : UNRESOLVABLE_SPECIFIER
-      );
-    } else if (
-      ts.isImportEqualsDeclaration(node) &&
-      ts.isExternalModuleReference(node.moduleReference)
-    ) {
-      const target = node.moduleReference.expression;
-      found.push(
-        ts.isStringLiteralLike(target) ? target.text : UNRESOLVABLE_SPECIFIER
-      );
-    } else if (ts.isCallExpression(node)) {
-      const callee = node.expression;
-      const resolvesAModule =
-        callee.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(callee) && callee.text === "require");
-      if (resolvesAModule) {
-        const target = node.arguments[0];
-        found.push(
-          target && ts.isStringLiteralLike(target)
-            ? target.text
-            : UNRESOLVABLE_SPECIFIER
-        );
-      }
-    }
-    ts.forEachChild(node, visit);
-    // JSDoc hangs off a node rather than sitting under it, so `forEachChild` never enters it.
-    // In a JavaScript file that is where the types live: `@typedef {import("pkg").T}` puts an
-    // ImportTypeNode inside the comment, invisible to every branch above.
-    for (const doc of ts.getJSDocCommentsAndTags(node)) visit(doc);
-  };
-  visit(source);
-
-  // `/// <reference types="pkg" />` is not part of the node tree, so `forEachChild` never
-  // reaches it. The parser puts it here instead, and it is a dependency on that package's
-  // types exactly as an `import type` is.
-  for (const directive of source.typeReferenceDirectives) {
-    found.push(directive.fileName);
-  }
-
-  return found;
-}
-
 /** Every module specifier a file imports. */
 function importsOf(file: string): string[] {
-  return importsOfSource(readFileSync(file, "utf8"), file);
+  return importedSpecifiers(readFileSync(file, "utf8"), file);
 }
 
 /**
@@ -250,112 +145,36 @@ function isBare(specifier: string): boolean {
 }
 
 describe("reading a module's imports", () => {
-  it("sees static imports and re-exports", () => {
-    expect(importsOfSource(`import { a } from "react";`)).toEqual(["react"]);
-    expect(importsOfSource(`export { b } from "@nextlyhq/ui";`)).toEqual([
-      "@nextlyhq/ui",
-    ]);
-    expect(importsOfSource(`export * from "@nextlyhq/blocks-react";`)).toEqual([
-      "@nextlyhq/blocks-react",
-    ]);
-  });
+  // One case per import form the reader claims — static, side-effect, dynamic,
+  // require, import-equals, typeof-import, JSDoc, triple-slash, template
+  // literal — and the comment and string cases it must not claim, now live
+  // beside the reader in `packages/module-specifiers/src/index.test.ts`. They
+  // moved with it: a reader that quietly stops recognising a form returns a
+  // clean result to every consumer at once, so the corpus that catches it
+  // belongs where the reader is, not copied into each guard that calls it.
+  //
+  // What remains here is this package's own wiring, which the shared corpus
+  // cannot establish.
 
-  it("sees type-only imports, which a rename could turn into a value import", () => {
+  it("is exercised — the reader this guard calls finds a specifier", () => {
+    // An empty offender list is only evidence once the search is shown to work.
+    // A misrouted import or a renamed export returns exactly the same clean
+    // result as compliance does.
     expect(
-      importsOfSource(`import type { P } from "@nextlyhq/admin";`)
+      importedSpecifiers(`import type { P } from "@nextlyhq/admin";`, "m.ts")
     ).toEqual(["@nextlyhq/admin"]);
-  });
-
-  it("sees dynamic imports, which carry a dependency no declaration records", () => {
     expect(
-      importsOfSource(`const m = await import("@nextlyhq/admin/lexical");`)
-    ).toEqual(["@nextlyhq/admin/lexical"]);
-    expect(
-      importsOfSource("const m = await import(`@nextlyhq/admin`);")
-    ).toEqual(["@nextlyhq/admin"]);
-  });
-
-  it("sees a bare require, which reaches a module exactly as an import does", () => {
-    expect(importsOfSource(`const a = require("@nextlyhq/admin");`)).toEqual([
-      "@nextlyhq/admin",
-    ]);
-  });
-
-  it("sees a triple-slash type reference, which is not in the node tree at all", () => {
-    // The parser stores these on `typeReferenceDirectives`, so a visitor built on
-    // `forEachChild` cannot reach one however carefully it is written.
-    expect(
-      importsOfSource(`/// <reference types="@nextlyhq/admin" />\nexport {};`)
-    ).toEqual(["@nextlyhq/admin"]);
-  });
-
-  it("sees a JSDoc @import tag, which carries its own module specifier", () => {
-    // Distinct from the `@typedef` form: `@import` parses to a JSDocImportTag, so walking into
-    // JSDoc reaches it but no ImportTypeNode branch records it. Asserted against a subpath the
-    // guard genuinely must catch, since admin is unresolvable here anyway.
-    expect(
-      importsOfSource(
-        `/** @import { N } from "@nextlyhq/blocks-react/next" */\nexport const x = 1;`,
-        "probe.js"
+      importedSpecifiers(
+        `export const C = () => <div>{require("@nextlyhq/admin")}</div>;`,
+        "m.tsx"
       )
-    ).toContain("@nextlyhq/blocks-react/next");
-  });
-
-  it("sees an import type inside a JSDoc typedef, which JavaScript files use", () => {
-    // JSDoc is attached to a node, not nested under it, so `forEachChild` walks past the whole
-    // comment. This only became reachable once the enumerator started scanning `.js` files.
-    expect(
-      importsOfSource(
-        `/** @typedef {import("@nextlyhq/admin").Node} Node */\nexport const x = 1;`,
-        "probe.js"
-      )
-    ).toContain("@nextlyhq/admin");
-  });
-
-  it("sees a typeof-import type query, which no call expression covers", () => {
-    // The parser gives this as an ImportTypeNode, so a visitor watching for calls and declarations
-    // walks past it. It erases at build, which is exactly why it is an easy way to take a
-    // dependency on admin internals without appearing to import anything.
-    expect(
-      importsOfSource(`type A = typeof import("@nextlyhq/admin");`)
     ).toEqual(["@nextlyhq/admin"]);
-    expect(
-      importsOfSource(`let x: import("@nextlyhq/admin/lexical").Node;`)
-    ).toEqual(["@nextlyhq/admin/lexical"]);
-  });
-
-  it("sees the CommonJS-interop import-equals spelling", () => {
-    expect(
-      importsOfSource(`import admin = require("@nextlyhq/admin");`)
-    ).toEqual(["@nextlyhq/admin"]);
-  });
-
-  it("does not count a method that merely happens to be named require", () => {
-    // `loader.require("x")` resolves nothing; treating it as an import would make the guard
-    // fail CLOSED on innocent code, which gets guards deleted rather than obeyed.
-    expect(importsOfSource(`loader.require("@nextlyhq/admin");`)).toEqual([]);
-  });
-
-  it("reports a require it cannot resolve rather than dropping it", () => {
-    expect(importsOfSource(`const a = require(name);`)).toEqual([
-      UNRESOLVABLE_SPECIFIER,
-    ]);
-  });
-
-  it("reports a dynamic import it cannot resolve rather than dropping it", () => {
-    // The failure this replaces is silent: an unreadable target that produced no
-    // entry left the allowlist with nothing to reject.
-    expect(importsOfSource(`const m = await import(name);`)).toEqual([
-      UNRESOLVABLE_SPECIFIER,
-    ]);
-    expect(
-      importsOfSource("const m = await import(`@nextlyhq/${pkg}`);")
-    ).toEqual([UNRESOLVABLE_SPECIFIER]);
   });
 
   it("rejects an unresolved dynamic import through the same allowlist as a named one", () => {
     // The sentinel is only useful if it survives the two filters between the
-    // reader and the verdict: it must look bare, and must match no entry.
+    // reader and the verdict: it must look bare, and must match no entry. That
+    // is a property of THIS package's allowlists, so it stays here.
     expect(isBare(UNRESOLVABLE_SPECIFIER)).toBe(true);
     expect(ALLOWED_RUNTIME_IMPORTS).not.toContain(UNRESOLVABLE_SPECIFIER);
     expect(ALLOWED_IN_TESTS).not.toContain(UNRESOLVABLE_SPECIFIER);
@@ -363,7 +182,7 @@ describe("reading a module's imports", () => {
 
   it("ignores relative imports of the package's own code", () => {
     expect(
-      importsOfSource(`import { x } from "./canvas";`).filter(isBare)
+      importedSpecifiers(`import { x } from "./canvas";`, "m.ts").filter(isBare)
     ).toEqual([]);
   });
 });

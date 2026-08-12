@@ -1,0 +1,5 @@
+{
+  "extends": "@nextlyhq/tsconfig/base-bundler.json",
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules"]
+}

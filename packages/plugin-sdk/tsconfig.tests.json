@@ -1,0 +1,30 @@
+// Type-checks the test files that `tsconfig.json` excludes.
+//
+// The package's own tsconfig excludes `**/*.test.ts`, so no test file here was
+// ever type-checked — and vitest does not type-check either, because esbuild
+// strips annotations rather than checking them. Two independent ways for a test
+// to be wrong and look green, with neither gate covering the other. This
+// package is the ONLY stable import surface plugin authors have, so a test
+// asserting the shape of that surface is exactly the kind that must compile.
+//
+// `types` is re-widened here because the shipping config sets it to `[]`. Test
+// files legitimately reach `node:fs`, `node:path`, `node:url` and `node:util`
+// to read the built package off disk; `src` must not, and the shipping config's
+// empty list is what enforces that. Both halves are needed — the empty list
+// alone breaks these files, and node types alone would put `process` and the
+// filesystem in ambient reach of every module this package publishes, which is
+// the one surface plugin authors are told is stable.
+//
+// There is no opt-out list, deliberately. Every one of this package's test
+// files compiles, so nothing needs carrying, and an empty list is a stronger
+// statement than a short one: adding the first entry is a visible regression
+// rather than one more line in a column that already has several.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*"],
+  "exclude": ["dist", "node_modules"]
+}

@@ -169,10 +169,17 @@
       // missing here leaves the hash unmoved, so CI replays a cached green
       // without ever checking the changed module. Kept in step with
       // `MODULE_EXTENSIONS` in `packages/builder/src/source-modules.ts`.
+      //
+      // `tsconfig.tests.json` is listed for the same reason as the extensions
+      // above. Several packages run a SECOND `tsc` over that config to cover the
+      // test files their shipping config excludes, and a config outside this
+      // list does not move the hash — so narrowing what that pass checks would
+      // replay a cached green rather than re-running it.
       "inputs": [
         "src/**/*.{ts,tsx,mts,cts}",
         "*.{ts,tsx,mts,cts}",
-        "tsconfig.json"
+        "tsconfig.json",
+        "tsconfig.tests.json"
       ],
       "outputs": ["**/*.tsbuildinfo"] // TypeScript incremental cache
     },

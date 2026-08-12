@@ -22,22 +22,21 @@
  * implementations agree the day they are written and drift silently after —
  * and records defects from five unrelated packages behind it.
  *
- * WHAT THIS FILE DOES NOT ESTABLISH, stated first because a green suite here
- * would otherwise read as the whole claim: this package is NOT block-agnostic
- * today. `lib/breakpoints.ts` reimplements the compiler's breakpoint drop
- * rules and `breakpoint-dialog.tsx` consumes them. Both are green under every
- * assertion below, because a second implementation of a rule is not an import
- * — it is ordinary code, and no import scan can see it.
+ * WHAT THIS FILE ESTABLISHES, and what it does not. The checks decide one
+ * narrow thing: this package takes no DIRECT dependency on the engine, by
+ * manifest or by import. That is a PRECONDITION for the layer being
+ * block-agnostic, not evidence that it is — a second implementation of an
+ * engine rule is ordinary code, not an import, and no scan below can see one.
  *
- * So the invariant asserted is the narrow one the checks actually decide: this
- * package takes no DIRECT dependency on the engine, by manifest or by import.
- * That is worth holding on its own — it is what keeps a block-aware component
- * from being casually added here — but it is a precondition for the layer being
- * block-agnostic, not evidence that it is.
+ * The known counter-example is GONE as of 2026-08-12. `lib/breakpoints.ts` and
+ * `breakpoint-dialog.tsx` restated the compiler's breakpoint drop rules and
+ * were green under every assertion here for exactly that reason. They now live
+ * in `packages/builder`, which depends on the engine and imports its cap and
+ * types rather than mirroring them. The `./breakpoints` subpath was removed
+ * from this package's export map in the same change.
  *
- * The remaining half is a MOVE: `lib/breakpoints.ts` and `breakpoint-dialog.tsx`
- * belong in `packages/builder`, which already depends on the engine and can
- * derive those rules instead of restating them.
+ * So no restatement is KNOWN to remain — which is a weaker claim than none
+ * existing, and deliberately worded that way.
  *
  * Placement is worth enforcing precisely because availability is not enough.
  * `baseStyles` on the block definition is the supported way to declare a
@@ -49,7 +48,10 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import ts from "typescript";
+import {
+  importedSpecifiers,
+  UNRESOLVABLE_SPECIFIER,
+} from "@nextlyhq/module-specifiers";
 import { describe, expect, it } from "vitest";
 
 const SRC = join(__dirname);
@@ -98,59 +100,6 @@ function isShippedModule(entry: string): boolean {
 }
 
 /**
- * Every module specifier a source text loads, read from the AST.
- *
- * A raw-text search cannot do this. It reports the specifier appearing in a
- * COMMENT or a string as an import — a false positive, and the worse direction
- * for a guard, because one that cries wolf about code the compiler never loads
- * stops being read. It also misses a bare side-effect `import "pkg"`, a dynamic
- * `import("pkg")` and a `require("pkg")`, none of which carry `from`.
- *
- * DELIBERATE DUPLICATION, and it is the thing this file otherwise argues
- * against. `packages/builder/src/layering.test.ts` already has a fuller reader
- * covering `import x = require(...)`, `typeof import(...)` in type position and
- * JSDoc `@import`. One shared reader that all the layering tests call is what
- * removes this copy. It exists meanwhile because a guard with FALSE POSITIVES
- * is worse than a temporary second implementation: one that reports code the
- * compiler never loads stops being read, and takes the true findings with it.
- */
-function importedSpecifiers(text: string, fileName: string): string[] {
-  // The real filename, because TypeScript picks its parser from the extension.
-  // Reading a `.tsx` file as `.ts` parses `<div>` as a type assertion, and the
-  // malformed tree that follows hides every load inside JSX — which in this
-  // package is most of them. Required rather than defaulted: a caller that
-  // forgets restores exactly that blindness, and silently.
-  const source = ts.createSourceFile(
-    fileName,
-    text,
-    ts.ScriptTarget.ESNext,
-    true
-  );
-  const found: string[] = [];
-  const visit = (node: ts.Node): void => {
-    if (
-      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
-      node.moduleSpecifier &&
-      ts.isStringLiteralLike(node.moduleSpecifier)
-    ) {
-      found.push(node.moduleSpecifier.text);
-    } else if (ts.isCallExpression(node)) {
-      const callee = node.expression;
-      const loads =
-        callee.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(callee) && callee.text === "require");
-      const target = node.arguments[0];
-      if (loads && target && ts.isStringLiteralLike(target)) {
-        found.push(target.text);
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
-  return found;
-}
-
-/**
  * Whether a module specifier loads the forbidden package.
  *
  * A SUBPATH counts. `@nextlyhq/blocks-engine/schema` reaches the same package
@@ -162,6 +111,26 @@ function importedSpecifiers(text: string, fileName: string): string[] {
  */
 function resolvesToForbidden(specifier: string): boolean {
   return specifier === FORBIDDEN || specifier.startsWith(`${FORBIDDEN}/`);
+}
+
+/**
+ * Whether a specifier stops this file being cleared.
+ *
+ * Two different reasons, and the second is easy to lose. A specifier that
+ * RESOLVES to the engine is the obvious one. A specifier the reader could not
+ * read — `import(name)`, `require(base + id)` — is the other: it is reported as
+ * {@link UNRESOLVABLE_SPECIFIER}, and passing that through a "does this name the
+ * engine" test answers `false`, which certifies a load nobody has read.
+ *
+ * This guard is allow-by-default: it names ONE forbidden package rather than
+ * listing what is permitted, so an unreadable specifier falls straight through
+ * unless it is rejected on purpose. `packages/builder` is deny-by-default and
+ * gets this for free, because a marker that matches no allowlist entry is
+ * already a violation there. The marker was designed for that shape; this
+ * consumer has to opt in.
+ */
+function blocksClearance(specifier: string): boolean {
+  return resolvesToForbidden(specifier) || specifier === UNRESOLVABLE_SPECIFIER;
 }
 
 /**
@@ -313,37 +282,27 @@ describe("this package takes no direct dependency on the block engine", () => {
 
   it("is exercised — the import scan can find the specifier it hunts", () => {
     // An empty offender list is only evidence once the search is shown to
-    // work. A renamed package or a typo in the pattern returns exactly the
-    // same clean result as compliance does.
-    // Every form the reader claims, and the two it must NOT claim. The
-    // comment and string cases are the false positives a text search produces,
-    // and they are asserted here because that is where the reader's value is.
-    const read = (text: string): string[] =>
-      importedSpecifiers(text, "module.ts");
-
-    expect(read(`import { x } from "${FORBIDDEN}";`)).toContain(FORBIDDEN);
-    expect(read(`import "${FORBIDDEN}";`)).toContain(FORBIDDEN);
-    expect(read(`export { x } from "${FORBIDDEN}";`)).toContain(FORBIDDEN);
-    expect(read(`await import("${FORBIDDEN}");`)).toContain(FORBIDDEN);
-    expect(read(`require("${FORBIDDEN}");`)).toContain(FORBIDDEN);
-
-    expect(read(`// never import from "${FORBIDDEN}" here`)).toEqual([]);
-    expect(read(`const s = 'from "${FORBIDDEN}"';`)).toEqual([]);
-    expect(read('import { x } from "@nextlyhq/ui";')).toEqual(["@nextlyhq/ui"]);
-  });
-
-  it("reads a JSX module with the parser that extension needs", () => {
-    // The load is placed INSIDE a JSX expression on purpose. A `.tsx` file read
-    // as `.ts` parses `<div>` as a type assertion and recovers into a tree this
-    // visitor walks without finding anything, so the guard returns clean over a
-    // file it never really read. Most of this package is `.tsx`, which is what
-    // makes the blind spot worth a case of its own.
+    // work. A renamed package or a typo in the pattern returns exactly the same
+    // clean result as compliance does.
+    //
+    // This asserts the WIRING, in the two shapes this package's own files take:
+    // a `.ts` module and the `.tsx` most of it is written in. One case per
+    // import form the reader claims — and the comment and string cases it must
+    // NOT claim — lives beside the reader in
+    // `packages/module-specifiers/src/index.test.ts`, so a reader that stops
+    // recognising a form fails there rather than silently in every consumer.
+    expect(
+      importedSpecifiers(`import { x } from "${FORBIDDEN}";`, "module.ts")
+    ).toContain(FORBIDDEN);
     expect(
       importedSpecifiers(
         `export const C = () => <div>{require("${FORBIDDEN}")}</div>;`,
         "component.tsx"
       )
     ).toContain(FORBIDDEN);
+    expect(
+      importedSpecifiers('import { x } from "@nextlyhq/ui";', "module.ts")
+    ).toEqual(["@nextlyhq/ui"]);
   });
 
   it("counts a subpath of the forbidden package, and only that package", () => {
@@ -378,15 +337,43 @@ describe("this package takes no direct dependency on the block engine", () => {
     ).toBe(true);
   });
 
+  it("refuses to clear a file whose load it could not read", () => {
+    // A computed target cannot be resolved by reading the file, so the reader
+    // reports a marker rather than a name. Asked only "does this name the
+    // engine", the marker answers no — and the file is certified on the
+    // strength of a load nobody read.
+    //
+    // Driven through the reader rather than by handing the marker straight to
+    // the predicate: the two have to agree about what an unreadable load
+    // produces, and a test that supplies the marker itself would pass even if
+    // the reader stopped emitting it.
+    const computed = importedSpecifiers(
+      `const m = await import(name);`,
+      "module.ts"
+    );
+    expect(computed).toEqual([UNRESOLVABLE_SPECIFIER]);
+    expect(computed.some(blocksClearance)).toBe(true);
+
+    // And the reason it needs saying here at all: the narrower predicate this
+    // one wraps says no, because the marker is not the engine's name.
+    expect(computed.some(resolvesToForbidden)).toBe(false);
+
+    // An ordinary import is still cleared, so the guard has not become one that
+    // rejects everything.
+    expect(
+      importedSpecifiers('import { x } from "react";', "module.ts").some(
+        blocksClearance
+      )
+    ).toBe(false);
+  });
+
   it("imports it in no shipped source file", () => {
     // The manifest alone is not a boundary: under pnpm a package hoisted for
     // another workspace member stays importable from one whose own manifest
     // never declares it. The import is the thing that would actually resolve,
     // so the import is what is checked.
     const offenders = sourceFiles(SRC).filter(file =>
-      importedSpecifiers(readFileSync(file, "utf8"), file).some(
-        resolvesToForbidden
-      )
+      importedSpecifiers(readFileSync(file, "utf8"), file).some(blocksClearance)
     );
 
     expect(
