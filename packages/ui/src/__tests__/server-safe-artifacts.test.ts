@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   childOutcome,
+  remaining,
   disallowedSpecifiers,
   domGlobalsPresent,
   floorGlobalsPresent,
@@ -635,6 +636,29 @@ describe("restricting to the oldest supported Node", () => {
     expect(floor.stubborn).toEqual([]);
     floor.restore();
     expect(scope).toEqual({ untouched: 1 });
+  });
+});
+
+describe("what an artifact left running", () => {
+  it("names what appeared, not what was already there", () => {
+    // The stdio pipes are present on every run and are not the artifact's doing.
+    expect(
+      remaining(["PipeWrap", "PipeWrap"], ["PipeWrap", "PipeWrap"])
+    ).toEqual([]);
+    expect(
+      remaining(["PipeWrap", "PipeWrap"], ["PipeWrap", "PipeWrap", "Timeout"])
+    ).toEqual(["Timeout"]);
+  });
+
+  it("counts duplicates, so a second one of the same kind is reported", () => {
+    // A set difference answers "nothing new" here, and an artifact adding a timer beside an
+    // existing one is adding a timer.
+    expect(remaining(["Timeout"], ["Timeout", "Timeout"])).toEqual(["Timeout"]);
+  });
+
+  it("says nothing about a resource that went away", () => {
+    // Fewer resources than before is not this check's concern; only additions are the artifact's.
+    expect(remaining(["Timeout", "PipeWrap"], ["PipeWrap"])).toEqual([]);
   });
 });
 

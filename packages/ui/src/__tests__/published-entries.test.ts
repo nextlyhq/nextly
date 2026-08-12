@@ -297,9 +297,26 @@ describe("the barrel declaration and the export map", () => {
  * returns equal lists and reports parity, so a form neither matcher recognises is invisible in
  * exactly the comparison meant to catch it.
  */
+/**
+ * Every name a declaration's binding form introduces.
+ *
+ * `const { a, b: c } = v` binds `a` and `c`; `const [x, , y] = v` binds `x` and `y`; a rest element
+ * binds its own name. Written as a walk rather than a case per shape, because the forms nest.
+ */
+function boundNames(name: ts.BindingName): string[] {
+  if (ts.isIdentifier(name)) return [name.text];
+  const found: string[] = [];
+  for (const element of name.elements) {
+    // An array pattern can hold a hole, which binds nothing.
+    if (ts.isOmittedExpression(element)) continue;
+    found.push(...boundNames(element.name));
+  }
+  return found;
+}
+
 function exportedNames(
   source: string,
-  from?: { dir: string; seen: Set<string> }
+  from?: { dir: string; seen: Set<string>; declaration?: boolean }
 ): string[] {
   // PARSED, not matched. Export syntax has a long tail -- a default export, a re-export list, a
   // namespace re-export, a declaration inside a block comment whose inner line begins at column
@@ -351,9 +368,20 @@ function exportedNames(
           specifier !== undefined && ts.isStringLiteral(specifier)
             ? specifier.text
             : "?";
+        // A declaration file uses the NodeNext spelling and points at the RUNTIME name:
+        // `export * from "./helper.mjs"` inside a `.d.mts` means `helper.d.mts`. Opening the
+        // literal path reads the runtime helper from both sides, so the two readers collect the
+        // same names and a binding the declaration omits is invisible.
         const target =
           from !== undefined && where.startsWith(".")
-            ? resolve(from.dir, where)
+            ? from.declaration
+              ? resolve(
+                  from.dir,
+                  where.replace(/\.m?js$/, match =>
+                    match === ".mjs" ? ".d.mts" : ".d.ts"
+                  )
+                )
+              : resolve(from.dir, where)
             : undefined;
         if (target === undefined) {
           found.push(`<star export from ${where}>`);
@@ -372,7 +400,11 @@ function exportedNames(
             continue;
           }
           found.push(
-            ...exportedNames(text, { dir: dirname(target), seen: from!.seen })
+            ...exportedNames(text, {
+              dir: dirname(target),
+              seen: from!.seen,
+              declaration: from!.declaration,
+            })
           );
         }
       } else if (ts.isNamespaceExport(clause)) {
@@ -394,8 +426,10 @@ function exportedNames(
     if (ts.isVariableStatement(statement)) {
       // Every declarator, so `export const a = 1, b = 2` publishes both.
       for (const declaration of statement.declarationList.declarations) {
-        if (ts.isIdentifier(declaration.name))
-          found.push(declaration.name.text);
+        // A destructuring export publishes every name it BINDS: `export const { a, b: c } = value`
+        // publishes `a` and `c`. Reading only the identifier form recorded nothing for those, so a
+        // declaration omitting them compared equal to a module that publishes them.
+        found.push(...boundNames(declaration.name));
       }
       continue;
     }
@@ -573,6 +607,48 @@ describe("reading the names a module publishes", () => {
     ]);
   });
 
+  it("names every binding a destructuring export introduces", () => {
+    // `export const { extra } = value` binds a name the module publishes, and reading only the
+    // identifier form recorded nothing -- invisible on both sides at once.
+    expect(exportedNames(`export const { extra } = value;`)).toEqual(["extra"]);
+    expect(exportedNames(`export const { a, b: c } = value;`)).toEqual([
+      "a",
+      "c",
+    ]);
+    expect(exportedNames(`export const [x, , y] = value;`)).toEqual(["x", "y"]);
+    expect(exportedNames(`export const { a, ...rest } = value;`)).toEqual([
+      "a",
+      "rest",
+    ]);
+  });
+
+  it("resolves a declaration file's star export to a declaration file", () => {
+    // A `.d.mts` re-exports by the RUNTIME name: `export * from "./helper.mjs"` means
+    // `helper.d.mts`. Opening the literal path reads the runtime helper from both sides, so both
+    // readers collect the same names and a binding the declaration omits is invisible.
+    const dir = mkdtempSync(path.join(tmpdir(), "nx-dts-"));
+    writeFileSync(
+      path.join(dir, "helper.mjs"),
+      `export const runtimeOnly = 1;`
+    );
+    writeFileSync(
+      path.join(dir, "helper.d.mts"),
+      `export declare const declaredOnly: number;`
+    );
+    expect(
+      exportedNames(`export * from "./helper.mjs";`, {
+        dir,
+        seen: new Set(),
+        declaration: true,
+      })
+    ).toEqual(["declaredOnly"]);
+    // The control: the same source read as RUNTIME resolves to the runtime helper.
+    expect(
+      exportedNames(`export * from "./helper.mjs";`, { dir, seen: new Set() })
+    ).toEqual(["runtimeOnly"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("names every declarator in one exported statement", () => {
     expect(exportedNames(`export const a = 1, b = 2;`)).toEqual(["a", "b"]);
   });
@@ -601,6 +677,8 @@ describe("the hand-written declaration beside the module", () => {
     exportedNames(readFileSync(path.join(scripts, file), "utf8"), {
       dir: scripts,
       seen: new Set([path.join(scripts, file)]),
+      // Declaration files re-export by the runtime name, so their star targets need mapping back.
+      declaration: file.endsWith(".d.mts") || file.endsWith(".d.ts"),
     });
 
   it("declares exactly the bindings the module exports", () => {

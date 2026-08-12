@@ -106,3 +106,14 @@ export function childOutcome(
     stderr?: string;
   }
 ): string | null;
+
+/**
+ * The resources present after an import that were not present before it, as a multiset.
+ *
+ * Counted rather than compared as sets: an artifact adding a second `Timeout` beside one the
+ * process already had is adding one, and a set difference reports nothing.
+ */
+export function remaining(
+  before: readonly string[],
+  after: readonly string[]
+): string[];

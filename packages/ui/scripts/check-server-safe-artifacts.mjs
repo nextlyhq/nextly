@@ -767,6 +767,27 @@ export function childOutcome(file, run) {
 }
 
 /**
+ * The resources present after an import that were not present before it, as a multiset.
+ *
+ * Counted rather than compared as sets: an artifact that adds a second `Timeout` beside one this
+ * process already had is adding one, and a set difference reports nothing.
+ *
+ * @param {readonly string[]} before
+ * @param {readonly string[]} after
+ * @returns {string[]}
+ */
+export function remaining(before, after) {
+  const spare = [...before];
+  const added = [];
+  for (const resource of after) {
+    const at = spare.indexOf(resource);
+    if (at === -1) added.push(resource);
+    else spare.splice(at, 1);
+  }
+  return added;
+}
+
+/**
  * Evaluate ONE artifact in this process, which the parent has just started for it alone.
  *
  * Sharing a process across artifacts made every artifact's verdict depend on the ones before it.
@@ -778,30 +799,47 @@ export function childOutcome(file, run) {
  *
  * @param {string} file
  */
+/**
+ * Report why an artifact failed and end the child on the spot.
+ *
+ * Immediately, and with `process.exit` rather than `exitCode`, because the artifact may have
+ * SCHEDULED an exit of its own: `setTimeout(() => process.exit(0))` fires after this function
+ * returns and overwrites the status the parent reads, so a verdict set and then returned from is a
+ * verdict the artifact can overrule. Completion is marked first so the end-of-run assertion does
+ * not also fire for a run that reached a conclusion.
+ *
+ * @param {string} why
+ * @returns {never}
+ */
+function failEvaluation(why) {
+  console.error(why);
+  completed = true;
+  process.exit(1);
+}
+
 async function evaluateOne(file) {
   const contaminated = domGlobalsPresent();
   if (contaminated.length > 0) {
-    console.error(
+    failEvaluation(
       `this environment defines ${contaminated.join(", ")}, so importing an artifact proves ` +
         `nothing about a server`
     );
-    process.exitCode = 1;
-    return;
   }
 
   // Down to the oldest supported Node BEFORE the import, so the evaluation answers for the whole
   // `engines` range rather than for the build machine. Not restored: the process exits next.
   const floor = restrictToSupportedFloor();
   if (floor.stubborn.length > 0) {
-    console.error(
+    failEvaluation(
       `${floor.stubborn.join(", ")} could not be removed from this environment, so the artifact ` +
         `could evaluate against a capability the oldest supported Node does not have`
     );
-    process.exitCode = 1;
-    return;
   }
 
   const full = join(DIST, file);
+  // What this process is holding open BEFORE the artifact runs, so only what the ARTIFACT adds is
+  // reported. The stdio pipes are here on every run and are not the artifact's doing.
+  const before = process.getActiveResourcesInfo();
   importing = file;
   try {
     // The CJS artifacts go through `require` because `import()` of a `.cjs` file gives back its
@@ -809,26 +847,36 @@ async function evaluateOne(file) {
     if (file.endsWith(".cjs")) createRequire(import.meta.url)(full);
     else await import(pathToFileURL(full).href);
   } catch (error) {
-    console.error(
+    failEvaluation(
       `threw while being imported under Node: ` +
         `${error instanceof Error ? error.message : String(error)}. A server-safe entry point ` +
         `must evaluate on a bare server, on its own`
     );
-    process.exitCode = 1;
-    return;
   }
   importing = null;
+
+  // What the artifact left RUNNING. Reaching the end of the import is not the same as being
+  // finished: a module-scope `setInterval` keeps its consumer's process alive forever, and a
+  // `setTimeout(() => process.exit(0))` lets this child exit 0 before the timer fires, so the
+  // parent reads a clean status for an artifact that would end a server. Neither is visible in the
+  // import's return value; both are visible here.
+  const left = remaining(before, process.getActiveResourcesInfo());
+  if (left.length > 0) {
+    failEvaluation(
+      `left ${left.join(", ")} running after it was imported. A server-safe entry point must ` +
+        `finish initializing and leave nothing holding, or ending, its consumer's process`
+    );
+  }
 
   // Still asked, because this artifact putting a browser global into its OWN consumer's
   // environment is a defect whatever the next artifact does. What the fresh process removes is
   // one artifact's leak deciding another's verdict, not the leak itself.
   const installed = [...domGlobalsPresent(), ...floorGlobalsPresent()];
   if (installed.length > 0) {
-    console.error(
+    failEvaluation(
       `installed ${installed.join(", ")} while being imported. A server-safe entry point must ` +
         `not put a browser global into its consumer's environment`
     );
-    process.exitCode = 1;
   }
 }
 
