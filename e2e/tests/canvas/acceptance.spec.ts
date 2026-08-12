@@ -30,6 +30,7 @@
 import { expect, test } from "@playwright/test";
 
 import { FLAT_LIST_FIXTURE, NESTED_FIXTURE, seedPage } from "./fixtures";
+import { dragUntilTarget } from "./driver";
 import type { CanvasChromeReader, CanvasDriver } from "./driver";
 import { createPocChromeReader, createPocDriver } from "./poc-driver";
 
@@ -82,6 +83,25 @@ async function dragFromPanel(driver: CanvasDriver): Promise<void> {
   }
 }
 
+/**
+ * Carry a drag onto an actual drop zone, and refuse to continue without one.
+ *
+ * The canvas centre is over dead space as often as not, so a test that reads a
+ * target straight after {@link dragFromPanel} measures "no zone" and reports it
+ * as whatever it was looking for — a collision resolved wrongly, an indicator
+ * that flickers. The assertion is what keeps a property test from quietly
+ * becoming a test of where the pointer happened to stop.
+ */
+async function dragOntoZone(driver: CanvasDriver): Promise<number> {
+  await dragFromPanel(driver);
+  const active = await dragUntilTarget(driver);
+  expect(
+    active,
+    "the drag must reach a drop zone before any target is read"
+  ).toBeGreaterThanOrEqual(0);
+  return active;
+}
+
 test.describe("a canvas any Nextly editor could ship", () => {
   let driver: CanvasDriver;
   let chrome: CanvasChromeReader;
@@ -96,12 +116,14 @@ test.describe("a canvas any Nextly editor could ship", () => {
   }) => {
     note(PLAN_POINT.collisionByDepth, "B-6");
     await driver.mountTree(await seedPage(request, NESTED_FIXTURE));
-    await dragFromPanel(driver);
+    // Onto a zone first. Reading a target at the canvas centre answers -1 from
+    // dead space, and -1 against a real index reads as a collision resolved
+    // wrongly rather than as a pointer that was never over anything.
+    const active = await dragOntoZone(driver);
 
     // The geometrically nearest zone and the active zone must agree. Both the
     // stale-rect and the unscaled-transform failures select a zone that is not
     // the nearest, so agreement catches them with no tolerance to tune.
-    const active = await driver.readActiveTarget();
     const nearest = await driver.nearestZoneToPointer();
     await driver.cancel();
     expect(active, "the active zone must be the one under the pointer").toBe(
@@ -125,34 +147,65 @@ test.describe("a canvas any Nextly editor could ship", () => {
     expect(dragging, "a 2px movement must not begin a drag").toBe(false);
   });
 
-  // UNRESOLVED. This fails here (5 target changes) while `scenarios.spec.ts`
-  // asserts the same property against the same canvas and passes, so one of
-  // the two drives the gesture differently and it is not yet known which is
-  // right. Left failing rather than marked expected: declaring a shortfall
-  // this canvas may not have would put a false target in front of B-7.
-  test("holds its target through a jitter at a zone boundary", async ({
+  test("reaches a drop zone on the fixture the hysteresis probe uses", async ({
     request,
   }) => {
-    note(PLAN_POINT.targetSwitchHysteresis, "B-7");
+    // Positive control for the expected failure below, and it is load-bearing.
+    // `test.fail()` reports the same green whether the canvas lacks hysteresis
+    // or the harness never got onto a zone to measure it — opposite meanings in
+    // the same colour, and the second is exactly the state this suite was in
+    // before `dragOntoZone` existed. Asserting the precondition separately, on
+    // the SAME fixture, leaves the property as the only thing the expected
+    // failure can be reporting.
     await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
-    await dragFromPanel(driver);
-
-    const reader = await driver.recordActiveTargetTransitions();
-    // A 2px oscillation across a boundary. With no switch margin the target
-    // flips on every crossing and the indicator stutters under a hand that is
-    // not perfectly still.
-    for (let cycle = 0; cycle < 6; cycle += 1) {
-      await driver.moveBy(0, 2);
-      await driver.moveBy(0, -2);
-    }
-    const transitions = await reader();
+    const active = await dragOntoZone(driver);
     await driver.cancel();
 
     expect(
-      transitions.length,
-      "a 2px jitter must not move the drop target"
-    ).toBe(0);
+      active,
+      "the hysteresis probe must be able to reach a zone at all"
+    ).toBeGreaterThanOrEqual(0);
   });
+
+  test.fail(
+    "holds its target through a jitter at a zone boundary",
+    async ({ request }) => {
+      note(
+        PLAN_POINT.targetSwitchHysteresis,
+        "B-7",
+        "no switch margin: a 2px jitter moves the target to a neighbouring zone"
+      );
+      await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
+      // Jittering from dead space counts the indicator appearing and vanishing
+      // as target changes, which looks exactly like the missing hysteresis this
+      // is meant to detect. The property is only observable from a live zone,
+      // and without this the run reported nine changes that were mostly the
+      // indicator blinking rather than moving.
+      await dragOntoZone(driver);
+
+      const reader = await driver.recordActiveTargetTransitions();
+      // A 2px oscillation across a boundary. With no switch margin the target
+      // flips on every crossing and the indicator stutters under a hand that is
+      // not perfectly still.
+      for (let cycle = 0; cycle < 6; cycle += 1) {
+        await driver.moveBy(0, 2);
+        await driver.moveBy(0, -2);
+      }
+      const transitions = await reader();
+      await driver.cancel();
+
+      // The transitions themselves, not just how many. A count cannot separate
+      // an indicator flipping between two real zones from one vanishing and
+      // returning, and only the first is the property named in the title. What
+      // this canvas produces is a single move to a REAL neighbouring zone, so
+      // the expected failure records a genuine absence of hysteresis and not a
+      // pointer that wandered off every zone.
+      expect(
+        transitions.map(entry => entry.index),
+        "a 2px jitter must not move the drop target"
+      ).toEqual([]);
+    }
+  );
 
   test.fail(
     "shifts no existing block when its drop zones appear",

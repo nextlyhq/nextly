@@ -247,3 +247,36 @@ export interface CanvasChromeReader {
   /** How many entries the editor's undo history holds. */
   undoDepth(): Promise<number>;
 }
+
+/**
+ * Carries a drag forward until a drop zone is actually active, or gives up.
+ *
+ * Arriving over the canvas is NOT the same as being over a zone, and the
+ * difference is the whole reason this exists. A canvas separates its zones with
+ * block-sized dead space, so a pointer walked to the geometric centre routinely
+ * lands where nothing is active — `readActiveTarget` answers `-1`, and a test
+ * that reads a target there is measuring dead space while its title claims
+ * otherwise.
+ *
+ * Two failures come out of that, and neither looks like a missing precondition.
+ * A test comparing the active zone against the nearest one fails with `-1`
+ * against a real index, which reads as a collision-resolution defect. A test
+ * jittering the pointer counts the indicator vanishing and returning as target
+ * changes, which reads as missing hysteresis. Both are the harness standing in
+ * the wrong place.
+ *
+ * Returns the active zone's index, or `-1` when the whole descent found none —
+ * a value the CALLER must assert on, because continuing from `-1` is exactly
+ * the measurement this prevents.
+ */
+export async function dragUntilTarget(
+  driver: CanvasDriver,
+  maxSteps = 90
+): Promise<number> {
+  for (let step = 0; step < maxSteps; step += 1) {
+    await driver.moveBy(0, 8);
+    const active = await driver.readActiveTarget();
+    if (active >= 0) return active;
+  }
+  return -1;
+}
