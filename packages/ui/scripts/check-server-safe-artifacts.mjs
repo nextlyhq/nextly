@@ -193,9 +193,11 @@ export function specifiersIn(source, fileName) {
     if (ts.isIdentifier(node)) {
       return factories.has(node.text) && resolvesTo(node, node.text, tree);
     }
+    // Through `readsMember` so `mod.createRequire` and `mod["createRequire"]` are one rule. Written
+    // as a property access only, the computed spelling walked past it — and the predicate that
+    // covers both already existed a few lines above, which is what makes this the avoidable kind.
     return (
-      ts.isPropertyAccessExpression(node) &&
-      node.name.text === "createRequire" &&
+      readsMember(node, "createRequire") &&
       ts.isIdentifier(node.expression) &&
       namespaces.has(node.expression.text) &&
       resolvesTo(node.expression, node.expression.text, tree)
@@ -478,12 +480,22 @@ export function specifiersIn(source, fileName) {
     ) {
       for (const element of node.name.elements) {
         // Only the `resolve` property is a loader; `const { url } = import.meta` is not.
-        const source = element.propertyName ?? element.name;
-        if (
-          ts.isIdentifier(source) &&
-          source.text === "resolve" &&
-          ts.isIdentifier(element.name)
-        ) {
+        //
+        // The key is read in BOTH spellings: `{ resolve: load }` names it with an identifier and
+        // `{ ["resolve"]: load }` with a string literal, and a rule written for one is a rule the
+        // other walks around — the same drift `readsMember` exists to prevent for member access.
+        // A COMPUTED key wraps its literal in a `ComputedPropertyName`, so the literal is one level
+        // down and a check reading the property name directly sees a node of the wrong kind.
+        const named = element.propertyName ?? element.name;
+        const source = ts.isComputedPropertyName(named)
+          ? named.expression
+          : named;
+        const keyed =
+          (ts.isIdentifier(source) && source.text === "resolve") ||
+          ((ts.isStringLiteral(source) ||
+            ts.isNoSubstitutionTemplateLiteral(source)) &&
+            source.text === "resolve");
+        if (keyed && ts.isIdentifier(element.name)) {
           addLoader(
             element.name.text,
             nearestBindingScope(element.name, element.name.text)

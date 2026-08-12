@@ -245,6 +245,49 @@ describe("reading an artifact's specifiers", () => {
     ).toEqual(["react"]);
   });
 
+  it("reads a destructuring key in every spelling", () => {
+    // `{ resolve: load }` names the key with an identifier and `{ ["resolve"]: load }` with a
+    // literal wrapped in a ComputedPropertyName — one node kind deeper, so a check reading the
+    // property name directly sees the wrong kind and the loader is never registered.
+    expect(
+      read(
+        `const { ["resolve"]: load } = import.meta;\nexport const r = load("react");`
+      )
+    ).toEqual(["react"]);
+    expect(
+      read(
+        'const { [`resolve`]: load } = import.meta;\nexport const r = load("react");'
+      )
+    ).toEqual(["react"]);
+    // The control that keeps it a KEY rule rather than a blanket one: another computed property of
+    // `import.meta` is still not a resolver.
+    expect(
+      read(`const { ["url"]: u } = import.meta;\nexport const r = u("react");`)
+    ).toEqual([]);
+  });
+
+  it("reads a namespaced createRequire in both member spellings", () => {
+    // `mod.createRequire` and `mod["createRequire"]` are the same access. Written as a property
+    // access only, the computed form walked past — and `readsMember`, which covers both, already
+    // existed a few lines above, so the two spellings had drifted inside one file.
+    expect(
+      read(`
+        import * as mod from "node:module";
+        const load = mod["createRequire"](import.meta.url);
+        export const r = load("react");
+      `)
+    ).toEqual(["node:module", "react"]);
+    // The control: only the namespace that node:module was imported under counts, in either
+    // spelling.
+    expect(
+      read(`
+        import * as other from "other-package";
+        const load = other["createRequire"](import.meta.url);
+        export const r = load("react");
+      `)
+    ).toEqual(["other-package"]);
+  });
+
   it("sees a resolver taken off import.meta by destructuring", () => {
     // `const { resolve } = import.meta` binds the resolver without the text `import.meta.resolve`
     // appearing anywhere, so the initializer check never saw it — and this reading is the only
