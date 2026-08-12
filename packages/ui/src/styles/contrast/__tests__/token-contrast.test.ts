@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { ACCEPTED_REGRESSIONS, acceptedFor } from "../accepted";
 import { compositeOver, contrastRatio, toHex, type Rgb } from "../color";
 import { PAIRINGS, THRESHOLDS, type Pairing } from "../pairings";
 import {
@@ -74,6 +75,45 @@ const MODES: ReadonlyArray<{ name: "light" | "dark"; tokens: TokenMap }> = [
   { name: "dark", tokens: dark },
 ];
 
+describe("the accepted-regression set", () => {
+  it("names only pairings that exist", () => {
+    // An entry whose label no longer matches a pairing suppresses nothing and
+    // is never evaluated, so it cannot be caught by the ratio or still-failing
+    // checks -- those only run for pairings that ARE asserted. A renamed
+    // pairing would therefore leave a permanent unexamined entry here while
+    // quietly re-entering the strict path, or worse, a future pairing that
+    // happens to take the old label would be silently pre-accepted.
+    const labels = new Set(PAIRINGS.map(p => p.label));
+    const orphans = ACCEPTED_REGRESSIONS.filter(
+      entry => !labels.has(entry.label)
+    ).map(entry => `${entry.label} (${entry.mode})`);
+
+    expect(
+      orphans,
+      `These accepted-regression entries name no pairing in pairings.ts. ` +
+        `Either the pairing was renamed, in which case update the entry, or it ` +
+        `was removed, in which case delete the entry.`
+    ).toEqual([]);
+  });
+
+  it("is keyed by something that identifies one pairing", () => {
+    // The whole mechanism looks a pairing up by label, so two pairings sharing
+    // a label would let one entry silently accept the other as well.
+    const seen = new Map<string, number>();
+    for (const p of PAIRINGS) {
+      const key = `${p.label}|${p.mode ?? "both"}`;
+      seen.set(key, (seen.get(key) ?? 0) + 1);
+    }
+    const duplicated = [...seen].filter(([, n]) => n > 1).map(([key]) => key);
+
+    expect(
+      duplicated,
+      `These labels describe more than one pairing, so accepting one would ` +
+        `accept its twin. Give each a distinct label.`
+    ).toEqual([]);
+  });
+});
+
 for (const mode of MODES) {
   const ctx: ResolveContext = { tokens: mode.tokens, scale };
   const applicable = PAIRINGS.filter(
@@ -87,13 +127,41 @@ for (const mode of MODES) {
       const surface = surfaceOf(pairing, ctx);
       const foreground = foregroundOf(pairing, ctx, surface);
       const ratio = contrastRatio(foreground, surface);
-
-      expect(
-        ratio,
+      const where =
         `${mode.name}: ${pairing.label} — ${pairing.fg} ${toHex(foreground)} on ` +
-          `${pairing.bg} ${toHex(surface)} = ${ratio.toFixed(2)}:1, ` +
-          `needs ${required}:1 (${pairing.kind})`
-      ).toBeGreaterThanOrEqual(required);
+        `${pairing.bg} ${toHex(surface)} = ${ratio.toFixed(2)}:1, ` +
+        `needs ${required}:1 (${pairing.kind})`;
+
+      const accepted = acceptedFor(pairing.label, mode.name);
+      if (accepted) {
+        // Still-failing is asserted BEFORE the ratio pin, and the order is
+        // load-bearing rather than stylistic. Any repair moves the ratio too,
+        // so pinning first would report every repair as "drifted" and the
+        // stale-entry branch would be unreachable in practice -- an assertion
+        // that cannot fire, which is worse than an absent one because it reads
+        // as cover.
+        expect(
+          ratio,
+          `${where}\nThis pairing now MEETS its threshold, so its accepted.ts ` +
+            `entry is stale. Delete the entry: leaving it makes the accepted ` +
+            `set read as larger than it is.`
+        ).toBeLessThan(required);
+
+        // Then pin how far below it sits. Recording only "this one fails"
+        // would let the token slide further behind an entry that already
+        // admits failure, which is how an accepted regression quietly becomes
+        // a worse one.
+        expect(
+          ratio,
+          `${where}\nThis pairing is recorded in accepted.ts at ` +
+            `${accepted.ratio}:1 and now measures ${ratio.toFixed(2)}:1. If the ` +
+            `change was intended, update the recorded ratio; if not, the token ` +
+            `moved under an entry that was not agreed for this value.`
+        ).toBeCloseTo(accepted.ratio, 1);
+        return;
+      }
+
+      expect(ratio, where).toBeGreaterThanOrEqual(required);
     });
 
     it("clears every threshold by a margin, not on the line", () => {
@@ -119,6 +187,10 @@ for (const mode of MODES) {
             required: THRESHOLDS[pairing.kind],
           };
         })
+        // A pairing that is knowingly below its threshold is not "thin", it is
+        // accepted, and it is pinned by the case above. Leaving it in here
+        // would report every accepted entry as a fragile pass forever.
+        .filter(row => !acceptedFor(row.label, mode.name))
         .filter(row => row.margin < MARGIN)
         .sort((a, b) => a.margin - b.margin);
 

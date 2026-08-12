@@ -828,10 +828,14 @@
   --nx-overlay-soft: oklch(0 0 0 / 0.4);
   --nx-border-subtle: color-mix(in srgb, oklch(0.92 0 0), transparent 60%);
   --nx-border: oklch(0.92 0 0);
-  /* Alpha raised so the composited strong border clears WCAG 3:1 / ~4:1 (was 2.11:1). */
-  --nx-border-strong: oklch(0.58 0 0);
-  /* Darkened so the field border clears WCAG 3:1 on the page (was 2.32:1). */
-  --nx-input: oklch(0.6154 0 0);
+  /* These two sit BELOW the WCAG 1.4.11 3:1 minimum for a control boundary,
+   * deliberately, to keep the light border weight the palette is designed
+   * around. `contrast/accepted.ts` records each affected pairing with its
+   * measured ratio and is what keeps that visible rather than silent; the
+   * contrast suite reads that list, so neither token can drift further without
+   * failing. */
+  --nx-border-strong: color-mix(in srgb, oklch(0.92 0 0), black 25%);
+  --nx-input: oklch(0.94 0 0);
   --nx-ring: var(--nx-primary);
 
   /* The base colour of the elevation ramp (--shadow-sm..xl, -inner-subtle,
@@ -882,8 +886,9 @@
   --nx-sidebar-accent: oklch(0.94 0 0);
   /* slate-100 */
   --nx-sidebar-accent-foreground: oklch(0 0 0);
-  /* Darkened so the sidebar border clears WCAG 3:1 on its surface (was 1.23:1). */
-  --nx-sidebar-border: oklch(0.63 0 0);
+  /* Below the 3:1 boundary minimum, deliberately, to match the border weight of
+   * the rest of the palette. Recorded in `contrast/accepted.ts`. */
+  --nx-sidebar-border: oklch(0.94 0 0);
   --nx-sidebar-ring: var(--nx-primary);
 
   /* Data table specific colors */
