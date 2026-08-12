@@ -385,6 +385,15 @@ export {
   type BlockManifestEntry,
 } from "./plugins/codegen/block-manifest";
 
+// The block document format's published contract, exported for the same reason
+// as the manifest above: the things that most need to check a document against
+// the format — a generator, an editor build, an agent writing a page — are the
+// ones with no way to reach an internal module.
+export {
+  blockDocumentJsonSchema,
+  blockDocumentSchema,
+} from "./plugins/codegen/block-document";
+
 // Plugin System - Types and helpers for creating plugins
 export {
   AdminPlacement,
