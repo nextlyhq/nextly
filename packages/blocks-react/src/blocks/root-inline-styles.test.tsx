@@ -375,7 +375,7 @@ const HOISTED_BY_REACT: ReadonlySet<string> = new Set([
 function rootTags(html: string): string[] {
   const tags = html.match(/<[a-zA-Z][a-zA-Z0-9-]*[\s>][^>]*>?/g) ?? [];
   const carriers = tags.filter(tag => {
-    const attr = /\sclass="([^"]*)"/.exec(tag);
+    const attr = /\sclass="([^"]*)"/i.exec(tag);
     return attr !== null && attr[1].split(/\s+/).includes(NODE_CLASS);
   });
   // React hoists resource hints to the front of the stream, so the first tag in
@@ -394,14 +394,23 @@ function rootTags(html: string): string[] {
 function carriesClass(html: string): boolean {
   const tags = html.match(/<[a-zA-Z][a-zA-Z0-9-]*[\s>][^>]*>?/g) ?? [];
   return tags.some(tag => {
-    const attr = /\sclass="([^"]*)"/.exec(tag);
+    const attr = /\sclass="([^"]*)"/i.exec(tag);
     return attr !== null && attr[1].split(/\s+/).includes(NODE_CLASS);
   });
 }
 
+/**
+ * Attribute names are matched case-INSENSITIVELY.
+ *
+ * HTML attribute names are case-insensitive and React emits an oddly-cased one
+ * verbatim: a block spreading `{ STYLE: "padding:24px" }` serializes as
+ * `STYLE="padding:24px"`, which a browser applies exactly like `style`. Matching
+ * only the lowercase spelling reports that block clean. The captured VALUE is
+ * unaffected, so class names stay case-sensitive as CSS requires.
+ */
 /** The CSS property names an opening tag declares inline. */
 function inlinePropertiesOf(tag: string): string[] {
-  const attr = /\sstyle="([^"]*)"/.exec(tag);
+  const attr = /\sstyle="([^"]*)"/i.exec(tag);
   if (attr === null) return [];
   return attr[1]
     .split(";")
@@ -486,6 +495,12 @@ describe("a core block's root element", () => {
         return { name: definition.name, ...(await inspectBlock(definition)) };
       })
     );
+
+    // The registry has to be POPULATED before anything derived from it means
+    // anything: every assertion below is computed by mapping over `coreBlocks`,
+    // so an export that stopped enumerating would satisfy all of them over an
+    // empty set and read exactly like a clean library.
+    expect(results.length).toBeGreaterThanOrEqual(10);
 
     // The vacuity control, BY NAME. A count is satisfied by any nine of twelve,
     // so it cannot tell a library that grew a clean block from one whose
