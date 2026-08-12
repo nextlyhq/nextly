@@ -312,7 +312,18 @@ function exportedNames(source: string): string[] {
   // the keywords above. Unmatched, a module that gained one and a declaration that did not both
   // reported nothing, so the arrays stayed equal and the mismatch read as agreement.
   const byDefault = /^export default\b/m.test(source) ? ["default"] : [];
-  const listed = [...source.matchAll(/^export \{([^}]*)\}(?!\s*from)/gm)]
+  // A re-export publishes a binding exactly as a local one does, so the list is read whether or not
+  // a `from` clause follows it. Excluding those made `export { extra } from "./other.mjs"` invisible
+  // on both sides at once, which is the one way a parity comparison reports agreement over a real
+  // difference.
+  //
+  // `export * from` is the case that cannot be answered by reading one file: the names live in the
+  // other module. It is recorded as a marker naming its source rather than skipped, so two files
+  // agree only when they star-export the same module and a one-sided one fails loudly.
+  const starred = [
+    ...source.matchAll(/^export \* from\s*["']([^"']+)["']/gm),
+  ].map(match => `<star export from ${match[1]!}>`);
+  const listed = [...source.matchAll(/^export \{([^}]*)\}/gm)]
     .flatMap(match => match[1]!.split(","))
     .map(part => {
       // `export { extra as renamed }` publishes the name on the RIGHT. This is also how
@@ -321,7 +332,9 @@ function exportedNames(source: string): string[] {
       return (segments[segments.length - 1] ?? "").trim();
     })
     .filter(name => name.length > 0 && name !== "type");
-  return [...new Set([...declared, ...byDefault, ...listed])].sort();
+  return [
+    ...new Set([...declared, ...byDefault, ...starred, ...listed]),
+  ].sort();
 }
 
 describe("reading the names a module publishes", () => {
@@ -353,6 +366,28 @@ describe("reading the names a module publishes", () => {
     expect(
       exportedNames(`export const defaults = 1;\n// export default preset;`)
     ).toEqual(["defaults"]);
+  });
+
+  it("records a re-exported binding, which publishes a name like any other", () => {
+    // `export { extra } from "./other.mjs"` adds a public binding. Skipped, it was invisible on
+    // BOTH sides at once — the one way a parity comparison reports agreement over a real gap.
+    expect(exportedNames(`export { extra } from "./other.mjs";`)).toEqual([
+      "extra",
+    ]);
+    expect(
+      exportedNames(`export { extra as renamed } from "./other.mjs";`)
+    ).toEqual(["renamed"]);
+  });
+
+  it("records a star re-export by its source, since its names are in another file", () => {
+    // Unanswerable from this file alone, so it is carried as a marker rather than dropped: two
+    // files agree only when they star-export the SAME module, and a one-sided one fails.
+    expect(exportedNames(`export * from "./other.mjs";`)).toEqual([
+      "<star export from ./other.mjs>",
+    ]);
+    expect(exportedNames(`export * from "./a.mjs";`)).not.toEqual(
+      exportedNames(`export * from "./b.mjs";`)
+    );
   });
 
   it("names a binding once when it is both declared and listed", () => {

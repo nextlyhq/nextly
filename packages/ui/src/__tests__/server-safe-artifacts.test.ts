@@ -601,6 +601,17 @@ describe("reading one artifact's own process", () => {
     expect(said).not.toContain("null");
   });
 
+  it("calls a child killed at the deadline a defect, not an unrunnable check", () => {
+    // An artifact that leaves a handle open finishes importing and never lets its process exit.
+    // Read as a spawn failure it would be reported as "could not be evaluated", which hides it.
+    const timedOut = Object.assign(new Error("ETIMEDOUT"), {
+      code: "ETIMEDOUT",
+    });
+    const said = ran({ error: timedOut, status: null });
+    expect(said).toContain("still running");
+    expect(said).not.toContain("could not be evaluated");
+  });
+
   it("separates a child that never started from one that failed", () => {
     // "The artifact is bad" and "the check could not run" call for different action, and a spawn
     // that never happened is the second.

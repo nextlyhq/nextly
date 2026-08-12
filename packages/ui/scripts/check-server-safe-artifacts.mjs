@@ -84,6 +84,17 @@ import {
 
 const DIST = join(pathDirname(fileURLToPath(import.meta.url)), "..", "dist");
 
+/**
+ * How long one artifact gets to import before the child is killed.
+ *
+ * Bounded because an artifact that leaves an active handle — a module-scope `setInterval`, an open
+ * socket — finishes importing and never lets its process exit, and an unbounded wait would hang
+ * `build:js` until CI's job timeout with nothing said about which artifact did it. Generous
+ * relative to the work: these are small modules whose imports take milliseconds, so the deadline
+ * is only ever reached by an artifact that is not going to finish.
+ */
+const EVALUATION_TIMEOUT_MS = 30_000;
+
 /** This file, re-invoked as the child that evaluates one artifact. */
 const SELF = fileURLToPath(import.meta.url);
 
@@ -672,6 +683,16 @@ export function domGlobalsPresent(scope = globalThis) {
  * @returns {string | null}
  */
 export function childOutcome(file, run) {
+  // A child that had to be killed at the deadline is a VERDICT, not a failure to evaluate: the
+  // import either never finished or left a handle keeping the process alive, and an entry point
+  // that does either hangs whatever imports it. Reported before the general spawn-failure branch,
+  // which would otherwise describe it as "could not be evaluated" and hide a real defect.
+  if (run.error !== undefined && run.error !== null && run.error.code === "ETIMEDOUT") {
+    return (
+      `${file} was still running ${EVALUATION_TIMEOUT_MS}ms after it was imported. A server-safe ` +
+      `entry point must finish initializing and leave nothing holding the process open.`
+    );
+  }
   if (run.error !== undefined && run.error !== null) {
     return (
       `${file} could not be evaluated: ${run.error.message}. The check cannot report on an ` +
@@ -856,6 +877,7 @@ async function main() {
       file,
       spawnSync(process.execPath, [SELF, "--evaluate", file], {
         encoding: "utf8",
+        timeout: EVALUATION_TIMEOUT_MS,
       })
     );
     if (problem !== null) problems.push(problem);
