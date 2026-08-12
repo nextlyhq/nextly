@@ -57,8 +57,35 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 ## Build and test (read this before running anything)
 
 - `pnpm build` builds all packages (turbo, dependency order).
-- `pnpm check-types` and `pnpm lint` do NOT need a build first. `pnpm test`
-  does (turbo handles it when run from the root).
+- `pnpm lint` does NOT need a build first. `pnpm test` does (turbo handles it
+  when run from the root).
+- `pnpm check-types` needs one for any package that imports a workspace sibling
+  through its package exports, and that is not a corner case: on a clean
+  checkout the root `pnpm check-types` EXITS 1, because `@nextlyhq/admin` cannot
+  resolve `@nextlyhq/ui`, `nextly/config` or `nextly/field-catalog` until their
+  `dist` exists. Nineteen of twenty-one packages pass, so the failure looks
+  local to one package rather than like a missing prerequisite.
+
+  The specifier tells you which case you are in. `TS2307` naming a workspace
+  package (`nextly/...`, `@nextlyhq/...`) is a missing build, not a defect in
+  the code being checked — the same costume described in
+  `.claude/rules/verifying-merged-work.md`. Build just what that package needs:
+
+  ```
+  pnpm --filter <pkg>^... build     # ^... is its dependencies, not the package
+  ```
+
+  A package importing no workspace sibling is genuinely build-free, which is why
+  the guarantee held for so long and why it fails without warning the first time
+  a package takes such a dependency.
+
+  `packages/admin` shows the half-measure that does not close this: it maps
+  `nextly` to `../nextly/src` with tsconfig `paths`, so the bare specifier
+  resolves from source, while its SUBPATHS and `@nextlyhq/ui` still do not.
+  Mapping a sibling's source is also not a general fix — it pulls that sibling's
+  whole program in, and under pnpm isolation its own devDependencies are not
+  visible from the consumer, so the errors change rather than stop.
+
 - CRITICAL: integration tests require built packages. Run them from the ROOT
   (`pnpm test:integration...`) so turbo builds first. Running
   `pnpm --filter nextly test:integration` on an unbuilt tree fails 60+ files
