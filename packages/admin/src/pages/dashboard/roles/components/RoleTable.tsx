@@ -27,6 +27,7 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import { ListShell } from "@admin/components/ui/table/list-shell";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
   useRoles,
@@ -331,94 +332,101 @@ export default function RoleTable() {
   );
 
   return (
-    <div className="space-y-4">
-      {selectedCount > 0 && (
-        <>
-          <BulkActionBar
-            selectedCount={selectedCount}
-            collection={undefined}
-            onDelete={handleBulkDelete}
-            onClear={clearSelection}
-            itemLabel="role"
-          />
-          {systemRoleCount > 0 && (
-            <Alert>
-              {systemRoleCount} system role(s) selected. System roles cannot be
-              deleted and will be excluded from bulk operations.
-            </Alert>
-          )}
-        </>
-      )}
+    <>
+      <ListShell
+        toolbar={
+          <>
+            {selectedCount > 0 && (
+              <>
+                <BulkActionBar
+                  selectedCount={selectedCount}
+                  collection={undefined}
+                  onDelete={handleBulkDelete}
+                  onClear={clearSelection}
+                  itemLabel="role"
+                />
+                {systemRoleCount > 0 && (
+                  <Alert>
+                    {systemRoleCount} system role(s) selected. System roles
+                    cannot be deleted and will be excluded from bulk operations.
+                  </Alert>
+                )}
+              </>
+            )}
 
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <SearchBar
-          value={search}
-          onChange={setSearch}
-          placeholder="Search roles by name"
-          isLoading={isLoading}
-          className="max-w-sm flex-1 border-border bg-background text-foreground"
-        />
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <SearchBar
+                value={search}
+                onChange={setSearch}
+                placeholder="Search roles by name"
+                isLoading={isLoading}
+                className="max-w-sm flex-1 border-border bg-background text-foreground"
+              />
 
-        <div className="flex items-center gap-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="md"
-                className="border-border bg-background text-foreground hover:bg-accent/10"
-              >
-                <Columns className="h-4 w-4" />
-                Columns
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              {toggleableColumns.map(col => (
-                <DropdownMenuCheckboxItem
-                  key={col.name}
-                  checked={!hiddenColumns.has(col.name)}
-                  onCheckedChange={() => toggleColumn(col.name)}
-                >
-                  {typeof col.header === "string" ? col.header : col.name}
-                </DropdownMenuCheckboxItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </div>
-
-      <DataTableView<Role>
-        columns={columns}
-        rows={roles}
-        loading={isLoading}
-        rowHref={role =>
-          buildRoute(ROUTES.SECURITY_ROLES_EDIT, { id: role.id })
+              <div className="flex items-center gap-2">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="md"
+                      className="border-border bg-background text-foreground hover:bg-accent/10"
+                    >
+                      <Columns className="h-4 w-4" />
+                      Columns
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-48">
+                    <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    {toggleableColumns.map(col => (
+                      <DropdownMenuCheckboxItem
+                        key={col.name}
+                        checked={!hiddenColumns.has(col.name)}
+                        onCheckedChange={() => toggleColumn(col.name)}
+                      >
+                        {typeof col.header === "string" ? col.header : col.name}
+                      </DropdownMenuCheckboxItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </div>
+          </>
         }
-        primaryColumn="roleName"
-        selection={selection}
-        rowActions={rowActions}
-        registryKey="roles"
-        ariaLabel="Roles table"
-        emptyMessage={
-          search
-            ? "No roles found. Try adjusting your search."
-            : "No roles available. Create your first role to get started."
-        }
-      />
-
-      {data && data.meta.totalPages > 0 && (
-        <Pagination
-          currentPage={page}
-          totalPages={data.meta.totalPages}
-          pageSize={pageSize}
-          pageSizeOptions={[10, 25, 50]}
-          onPageChange={setPage}
-          onPageSizeChange={handlePageSizeChange}
-          isLoading={isLoading}
-          totalItems={data.meta.total}
+      >
+        <DataTableView<Role>
+          columns={columns}
+          rows={roles}
+          loading={isLoading}
+          rowHref={role =>
+            buildRoute(ROUTES.SECURITY_ROLES_EDIT, { id: role.id })
+          }
+          primaryColumn="roleName"
+          selection={selection}
+          rowActions={rowActions}
+          registryKey="roles"
+          ariaLabel="Roles table"
+          footer={
+            data && data.meta.totalPages > 0 ? (
+              <Pagination
+                currentPage={page}
+                totalPages={data.meta.totalPages}
+                pageSize={pageSize}
+                pageSizeOptions={[10, 25, 50]}
+                onPageChange={setPage}
+                onPageSizeChange={handlePageSizeChange}
+                isLoading={isLoading}
+                totalItems={data.meta.total}
+              />
+            ) : undefined
+          }
+          emptyMessage={
+            search
+              ? "No roles found. Try adjusting your search."
+              : "No roles available. Create your first role to get started."
+          }
         />
-      )}
+      </ListShell>
 
       <RoleDeleteDialog
         open={deleteDialogOpen}
@@ -443,6 +451,6 @@ export default function RoleTable() {
         onConfirm={handleConfirmBulkDelete}
         isLoading={isBulkDeleting}
       />
-    </div>
+    </>
   );
 }

@@ -40,7 +40,7 @@
  * with either extension is a module the bundler follows, so a list omitting
  * them leaves that file invisible to every check in this package.
  */
-const MODULE_EXTENSIONS = [
+export const MODULE_EXTENSIONS = [
   "ts",
   "tsx",
   "mts",

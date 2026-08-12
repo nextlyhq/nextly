@@ -18,6 +18,7 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import { ListShell } from "@admin/components/ui/table/list-shell";
 import type { WebhookEndpointSummary } from "@admin/types/webhooks";
 
 import { EndpointStatusBadge, describeEvents } from "./status";
@@ -208,17 +209,19 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
   );
 
   return (
-    <div className="space-y-4">
-      <div className="max-w-md">
-        <SearchBar
-          value={search}
-          onChange={setSearch}
-          placeholder="Search endpoints by name or URL..."
-          isLoading={isLoading}
-          className="w-full bg-background text-foreground border-input"
-        />
-      </div>
-
+    <ListShell
+      toolbar={
+        <div className="max-w-md">
+          <SearchBar
+            value={search}
+            onChange={setSearch}
+            placeholder="Search endpoints by name or URL..."
+            isLoading={isLoading}
+            className="w-full bg-background text-foreground border-input"
+          />
+        </div>
+      }
+    >
       <DataTableView<WebhookEndpointSummary>
         columns={columns}
         rows={paginated}
@@ -229,19 +232,20 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
         rowActions={rowActions}
         registryKey="webhooks"
         ariaLabel="Webhook endpoints table"
+        footer={
+          <Pagination
+            currentPage={page}
+            totalPages={Math.max(1, totalPages)}
+            pageSize={pageSize}
+            pageSizeOptions={[10, 25, 50]}
+            onPageChange={setPage}
+            onPageSizeChange={handlePageSizeChange}
+            totalItems={totalItems}
+            isLoading={isLoading}
+          />
+        }
         emptyMessage="No webhook endpoints yet. Create one to start receiving events."
       />
-
-      <Pagination
-        currentPage={page}
-        totalPages={Math.max(1, totalPages)}
-        pageSize={pageSize}
-        pageSizeOptions={[10, 25, 50]}
-        onPageChange={setPage}
-        onPageSizeChange={handlePageSizeChange}
-        totalItems={totalItems}
-        isLoading={isLoading}
-      />
-    </div>
+    </ListShell>
   );
 };

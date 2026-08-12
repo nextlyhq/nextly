@@ -56,9 +56,11 @@ export interface Rect {
  * `origin` is where the frame's CONTENT viewport lands in host coordinates, and
  * the word content is load-bearing. `getBoundingClientRect` on an iframe reports
  * its BORDER box, while every rectangle read inside the frame is relative to the
- * content viewport — so on a frame with any border the two differ by
- * `clientLeft`/`clientTop`, and an overlay built from the border box sits a
- * couple of scaled pixels out at every point. A canvas that never sets
+ * content viewport — so on a frame with any border or padding the two differ,
+ * and an overlay built from the border box sits a couple of scaled pixels out
+ * at every point. Measure that difference with {@link frameInsetOf}; the inset
+ * is border PLUS padding, and `clientLeft`/`clientTop` alone are short by the
+ * padding. A canvas that never sets
  * `border: none` gets the browser default and the fault is present from the
  * first render, which is exactly the sort of near-miss that reads as "the
  * indicator feels slightly off" rather than as a bug.
@@ -117,10 +119,16 @@ function assertUsable(frame: FrameGeometry): void {
 /**
  * How far the frame's content viewport sits inside its border box.
  *
- * `clientLeft` and `clientTop` exactly as the DOM reports them, which is the
- * whole reason this type exists rather than the caller passing two numbers: they
- * are CSS pixels in the FRAME's own untransformed space. Every other coordinate
- * in this module is host space. Mixing the two is the mistake below.
+ * The COMPLETE offset, border plus padding. A border alone is the tempting
+ * reading, because `clientLeft`/`clientTop` report exactly that and are the
+ * obvious things to reach for — but an iframe's nested viewport begins at the
+ * content box, so padding displaces it too. Measured in Chromium: an 8px border
+ * with 12px padding puts the content 20px in, while `clientLeft` reports 8.
+ *
+ * In CSS pixels of the FRAME's own untransformed space, which is the whole
+ * reason this type exists rather than the caller passing two numbers. Every
+ * other coordinate in this module is host space, and mixing the two is the
+ * mistake {@link frameContentOrigin} exists to prevent.
  */
 export interface FrameInset {
   readonly left: number;
@@ -131,7 +139,7 @@ export interface FrameInset {
  * Where the frame's content viewport starts, in host coordinates.
  *
  * `borderBox` is the corner `getBoundingClientRect` reports for the frame
- * element, and `inset` is its border width. The border is laid out in the
+ * element, and `inset` is its border-to-content offset. That offset is laid out in the
  * frame's own pixels, so a host that has scaled the frame scales the border with
  * everything else: at 50% a 2px border occupies 1 host pixel. Adding the inset
  * unscaled therefore misplaces the origin by `(1 - scale) * inset`, which is

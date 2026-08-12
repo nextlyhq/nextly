@@ -9,6 +9,7 @@ import { gotoAdmin } from "../support/admin";
 
 import {
   frameContentOrigin,
+  frameInsetOf,
   mapFramePointToHost,
   mapFrameRectToHost,
   type FrameInset,
@@ -184,14 +185,22 @@ export function createPocDriver(page: Page): CanvasDriver {
       // border has that gap from the first render, and it reads as "the
       // indicator feels slightly off" rather than as a fault.
       //
-      // Measured here, converted there. `clientLeft` is in the frame's own
-      // untransformed pixels while the box is post-transform, so the two cannot
-      // be added without the scale, and doing that sum at the call site is what
-      // put the same error in two files.
-      const inset = await frame.evaluate<FrameInset, HTMLIFrameElement>(el => ({
-        left: el.clientLeft,
-        top: el.clientTop,
-      }));
+      // Border AND padding. The nested viewport begins at the CONTENT box, so
+      // padding displaces it exactly as a border does — and `clientLeft` reports
+      // only the border, which is the reading that looks complete and is not.
+      //
+      // Measured here, converted there. These are the frame's own untransformed
+      // pixels while the box is post-transform, so the two cannot be added
+      // without the scale, and doing that sum at the call site is what put the
+      // same error in several files.
+      // The shared reader, PASSED INTO the page rather than called here.
+      // `evaluate` serializes the function and runs it in the browser, so this
+      // works only because `frameInsetOf` closes over nothing — it reads the
+      // element and globals and no module scope. That is what lets one
+      // definition serve both the editor and this harness.
+      const inset = await frame.evaluate<FrameInset, HTMLIFrameElement>(
+        frameInsetOf
+      );
       return frameContentOrigin(box, inset, await frameScale());
     },
 

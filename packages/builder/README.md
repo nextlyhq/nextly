@@ -90,12 +90,18 @@ Scroll inside the frame is deliberately not a field: a rectangle read from
 inside is already relative to the frame's viewport, so subtracting its scroll
 would count it twice.
 
-`frameContentOrigin(borderBox, inset, scale)` — build that origin from what the
-DOM reports. `getBoundingClientRect` gives the BORDER box while the inset
-(`clientLeft`/`clientTop`) is in the frame's own untransformed pixels, so the
-inset has to be scaled before it is added. Getting that wrong misplaces every
-overlay by `(1 - scale) * inset`, which is zero at 100% and therefore invisible
-in the state a canvas is developed in.
+`frameInsetOf(iframe)` — measure the inset. Border AND padding, because an
+iframe's nested viewport begins at the CONTENT box: `clientLeft`/`clientTop`
+report only the border, and a padded frame displaces the viewport further.
+Provided as a function rather than as a recipe because the recipe was
+documented and three call sites still got it wrong.
+
+`frameContentOrigin(borderBox, inset, scale)` — build the origin from that
+inset and the frame's measured box. `getBoundingClientRect` gives the BORDER
+box while the inset is in the frame's own untransformed pixels, so the inset
+has to be scaled before it is added. Getting that wrong misplaces every overlay
+by `(1 - scale) * inset`, which is zero at 100% and therefore invisible in the
+state a canvas is developed in.
 
 `pointToHost` / `pointToCanvas` — a point across the frame, in either
 direction. Exact inverses rather than two mappings written to match, because
