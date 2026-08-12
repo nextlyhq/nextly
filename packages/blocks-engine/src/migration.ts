@@ -214,6 +214,49 @@ function pointer(parent: string, token: string | number): string {
   return `${parent}/${escapePointer(String(token))}`;
 }
 
+function unescapePointer(token: string): string {
+  // `~1` before `~0`, which is the order RFC 6901 requires: reversing it turns a
+  // literal `~1` in a name into `/`.
+  return token.replace(/~1/g, "/").replace(/~0/g, "~");
+}
+
+/**
+ * The node a reported pointer addresses, in whichever document is passed.
+ *
+ * Exported so the side that READS a pointer and the side that writes one share
+ * an implementation. A consumer rebuilding paths to match against reported ones
+ * is a second encoder: it agrees on every ordinary name and diverges on the
+ * ones the escaping exists for, so a slot called `hero/main` silently addresses
+ * nothing and whatever the pointer was reported for goes unexamined.
+ *
+ * Pointers reported by `migrateDocument` address the PRE- and post-migration
+ * documents alike — migration rewrites nodes in place and adds or removes none —
+ * which is what lets a caller recover the state a node was stored in.
+ */
+export function nodeAtPointer(
+  doc: BlockDocument,
+  path: string
+): BlockNode | undefined {
+  if (path === "") return undefined;
+  let current: unknown = doc;
+  for (const raw of path.split("/").slice(1)) {
+    const token = unescapePointer(raw);
+    if (Array.isArray(current)) {
+      const index = Number(token);
+      // A non-canonical index (`01`, `1.0`, `-1`, a name) addresses nothing in
+      // an array rather than coercing to a neighbouring element.
+      if (!Number.isInteger(index) || String(index) !== token) return undefined;
+      current = current[index];
+      continue;
+    }
+    if (typeof current !== "object" || current === null) return undefined;
+    current = (current as Record<string, unknown>)[token];
+  }
+  return typeof current === "object" && current !== null
+    ? (current as BlockNode)
+    : undefined;
+}
+
 /**
  * Upgrade every node in a document to its block's current schema version.
  *

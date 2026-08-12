@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import type { BlockDocument } from "./document";
 import type { MigrationSource } from "./migration";
-import { findMigrationGaps, migrateDocument, migrateProps } from "./migration";
+import {
+  findMigrationGaps,
+  migrateDocument,
+  migrateProps,
+  nodeAtPointer,
+} from "./migration";
 
 /** A migration source from a plain record of type → info. */
 function source(
@@ -486,5 +491,72 @@ describe("migrateDocument's report of what it rewrote", () => {
 
     expect(rewritten).toEqual([]);
     expect(propsReplaced(doc, out)).toEqual([]);
+  });
+});
+
+describe("resolving a reported pointer", () => {
+  const src = source({
+    "core/heading": {
+      version: 2,
+      migrate: { 1: (p: Record<string, unknown>) => ({ ...p, level: 2 }) },
+    },
+    "core/box": { version: 1 },
+  });
+
+  it("addresses a node in a slot whose NAME needs escaping", () => {
+    // The separating case. A slot called `hero/main` produces a pointer with the
+    // slash escaped, so a consumer that rebuilds paths by joining raw names
+    // looks up a pointer the producer never wrote — and misses the node
+    // silently, which is indistinguishable from the node not having changed.
+    const doc: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "outer",
+          type: "core/box",
+          version: 1,
+          props: {},
+          slots: {
+            "hero/main": [
+              { id: "deep", type: "core/heading", version: 1, props: {} },
+            ],
+          },
+        },
+      ],
+    } as unknown as BlockDocument;
+
+    const { doc: out, rewritten } = migrateDocument(doc, src);
+
+    expect(rewritten).toHaveLength(1);
+    expect(rewritten[0]?.path).toBe("/nodes/0/slots/hero~1main/0");
+    // Resolves in BOTH documents, which is what lets a caller recover the props
+    // a node was stored with after migration has replaced them.
+    expect(nodeAtPointer(out, rewritten[0]!.path)).toMatchObject({
+      id: "deep",
+      version: 2,
+    });
+    expect(nodeAtPointer(doc, rewritten[0]!.path)).toMatchObject({
+      id: "deep",
+      version: 1,
+    });
+    // The naive join, for contrast: it addresses nothing.
+    expect(nodeAtPointer(out, "/nodes/0/slots/hero/main/0")).toBeUndefined();
+  });
+
+  it("answers undefined rather than a neighbour for a bad index", () => {
+    const doc: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "a", type: "core/box", version: 1, props: {} }],
+    };
+    expect(nodeAtPointer(doc, "/nodes/0")).toMatchObject({ id: "a" });
+    // `01` and `1.0` both coerce to a valid index numerically; RFC 6901 says a
+    // non-canonical index addresses nothing, and silently returning element 0
+    // would hand a caller the wrong node's props.
+    expect(nodeAtPointer(doc, "/nodes/01")).toBeUndefined();
+    expect(nodeAtPointer(doc, "/nodes/1.0")).toBeUndefined();
+    expect(nodeAtPointer(doc, "/nodes/-1")).toBeUndefined();
+    expect(nodeAtPointer(doc, "")).toBeUndefined();
   });
 });

@@ -18,9 +18,9 @@
  *
  * @module read-page
  */
+import { nodeAtPointer } from "@nextlyhq/blocks-engine";
 import type {
   BlockDocument,
-  BlockNode,
   RemotePatternInput,
   StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
@@ -106,60 +106,17 @@ function migrationChangedWhatDraws(
 ): boolean {
   if (stages.rewritten.length === 0) return false;
   const drawsNothing = drawlessTestFor(resolver);
-  const rewrittenPaths = new Set(stages.rewritten.map(entry => entry.path));
-  let flipped = false;
-
-  // Walked in parallel so each reported node is compared against the props it
-  // was stored with. The paths come from the engine and address both trees,
-  // which is what makes the BEFORE state recoverable at all: after migration
-  // the pre-migration props exist nowhere else.
-  const visit = (before: unknown, after: unknown, path: string): void => {
-    if (flipped) return;
-    if (
-      typeof before !== "object" ||
-      before === null ||
-      typeof after !== "object" ||
-      after === null
-    ) {
-      return;
-    }
-    const priorNode = before as BlockNode;
-    const currentNode = after as BlockNode;
-    if (
-      rewrittenPaths.has(path) &&
-      !drawsNothing(priorNode) &&
-      drawsNothing(currentNode)
-    ) {
-      flipped = true;
-      return;
-    }
-    const priorSlots = priorNode.slots;
-    const currentSlots = currentNode.slots;
-    if (
-      typeof priorSlots !== "object" ||
-      priorSlots === null ||
-      typeof currentSlots !== "object" ||
-      currentSlots === null
-    ) {
-      return;
-    }
-    for (const [slot, children] of Object.entries(currentSlots)) {
-      const priorChildren = (priorSlots as Record<string, unknown>)[slot];
-      if (!Array.isArray(children) || !Array.isArray(priorChildren)) continue;
-      children.forEach((child, index) => {
-        visit(priorChildren[index], child, `${path}/slots/${slot}/${index}`);
-      });
-    }
-  };
-
-  const priorNodes = stages.sanitized.nodes;
-  const currentNodes = stages.migrated.nodes;
-  if (Array.isArray(priorNodes) && Array.isArray(currentNodes)) {
-    currentNodes.forEach((node, index) => {
-      visit(priorNodes[index], node, `/nodes/${index}`);
-    });
-  }
-  return flipped;
+  // The engine's reported pointers are RESOLVED rather than matched against
+  // paths rebuilt here. Rebuilding them would be a second encoder of the same
+  // format: it agrees on every ordinary slot name and diverges on the ones the
+  // escaping exists for, so the mismatch appears only for the documents this
+  // check most needs to read.
+  return stages.rewritten.some(entry => {
+    const before = nodeAtPointer(stages.sanitized, entry.path);
+    const after = nodeAtPointer(stages.migrated, entry.path);
+    if (before === undefined || after === undefined) return false;
+    return !drawsNothing(before) && drawsNothing(after);
+  });
 }
 
 /**
