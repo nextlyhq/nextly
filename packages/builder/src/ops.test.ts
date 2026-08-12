@@ -1390,3 +1390,17 @@ describe("an id the document holds twice", () => {
     ).not.toThrow();
   });
 });
+
+describe("a duplicate id reached through update", () => {
+  it("refuses an update whose inverse cannot restore both nodes", () => {
+    // `updateNode` patches every match while `priorValues` records the first,
+    // so the undo writes one node's values onto both and the other's are lost.
+    const forest: BlockNode[] = [
+      { ...node("dupe"), name: "first" },
+      { ...node("dupe"), name: "second" },
+    ];
+    expect(() =>
+      applyOp(doc(forest), { kind: "update", id: "dupe", patch: { name: "x" } })
+    ).toThrow(/addresses 2 nodes/);
+  });
+});
