@@ -372,7 +372,12 @@ const HOISTED_BY_REACT: ReadonlySet<string> = new Set([
  * would find nothing while the forbidden declaration ships on the element above
  * it.
  */
-function rootTags(html: string): string[] {
+function inspectableTags(html: string): {
+  /** Tags whose inline styles belong to this block's root. */
+  roots: string[];
+  /** Whether the block put its class on anything at all. */
+  carriesClass: boolean;
+} {
   const tags = html.match(/<[a-zA-Z][a-zA-Z0-9-]*[\s>][^>]*>?/g) ?? [];
   const carriers = tags.filter(tag => {
     const attr = /\sclass="([^"]*)"/i.exec(tag);
@@ -385,18 +390,15 @@ function rootTags(html: string): string[] {
     const name = /^<([a-zA-Z][a-zA-Z0-9-]*)/.exec(tag)?.[1]?.toLowerCase();
     return name !== undefined && !HOISTED_BY_REACT.has(name);
   });
-  return outermost !== undefined && !carriers.includes(outermost)
-    ? [outermost, ...carriers]
-    : carriers;
-}
-
-/** Whether the block put its class on anything at all. */
-function carriesClass(html: string): boolean {
-  const tags = html.match(/<[a-zA-Z][a-zA-Z0-9-]*[\s>][^>]*>?/g) ?? [];
-  return tags.some(tag => {
-    const attr = /\sclass="([^"]*)"/i.exec(tag);
-    return attr !== null && attr[1].split(/\s+/).includes(NODE_CLASS);
-  });
+  const roots =
+    outermost !== undefined && !carriers.includes(outermost)
+      ? [outermost, ...carriers]
+      : carriers;
+  // Both answers come from THIS parse. Asked separately they drift: teaching one
+  // about a new serialized shape would leave coverage and the offender scan
+  // reading different views of the same output, so a block could be reported
+  // reached while its styles went uninspected.
+  return { roots, carriesClass: carriers.length > 0 };
 }
 
 /**
@@ -439,8 +441,9 @@ async function inspectBlock(block: AnyBlockDefinition): Promise<Inspection> {
     for (const ctx of contexts()) {
       for (const hostPolicy of hostPolicies()) {
         const html = await renderHtml(block, props, ctx, hostPolicy);
-        if (carriesClass(html)) reached = true;
-        for (const tag of rootTags(html)) {
+        const { roots, carriesClass } = inspectableTags(html);
+        if (carriesClass) reached = true;
+        for (const tag of roots) {
           for (const property of inlinePropertiesOf(tag)) {
             if (permitted.has(property)) continue;
             offenders.push(`${block.name}: ${property}`);
