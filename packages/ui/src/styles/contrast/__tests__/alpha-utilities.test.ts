@@ -55,7 +55,7 @@ const ALLOWED_DECORATIVE = new Set<string>([
   // reads on dark colours, this dark ring reads on light ones. The handle's
   // POSITION carries the meaning; the ring is edge definition, and the value it
   // selects is also shown as text in the hex field beside it.
-  "ring-black/30",
+  "ring-black/60",
   "ring-muted/5",
   "ring-success-500/20",
   "ring-success-500/40",

@@ -3,10 +3,11 @@
 import { Pipette } from "lucide-react";
 import * as React from "react";
 
+import type { Rgba } from "../lib/color";
 import {
   hsvToRgb,
   hueAt,
-  huePosition,
+  hueSliderValue,
   parseHex,
   pointOnSurface,
   rgbToHsv,
@@ -84,6 +85,42 @@ function toHexString(hsva: Hsva, withAlpha: boolean): string {
   return toHex(hsvToRgb(hsva), withAlpha ? hsva.a : 1);
 }
 
+/** The last step of the hue strip. Kept beside the input it sizes. */
+const HUE_MAX = 359;
+
+/**
+ * A parsed colour as picker state, keeping the hue the surface already sits on
+ * when the new colour has none of its own.
+ *
+ * Grey and black carry no hue, so `rgbToHsv` reports its documented fallback of
+ * 0. Storing that discards where the user was: typing black while editing a
+ * blue and then raising saturation returns RED. While saturation is 0 the
+ * retained hue is invisible, so keeping it costs nothing and is the only thing
+ * that makes the surface recoverable.
+ */
+function hsvaFrom(color: Rgba, alpha: number, currentHue: number): Hsva {
+  const hsv = rgbToHsv(color);
+  return { ...hsv, h: hsv.s === 0 ? currentHue : hsv.h, a: alpha };
+}
+
+/**
+ * A range input drawn by this component rather than by the browser.
+ *
+ * `appearance-none` removes the platform track, so every slider carrying it
+ * owes a background of its own — one that does not is not a subtle styling
+ * miss, it is an invisible control.
+ */
+const SLIDER = "h-3 w-full cursor-pointer appearance-none rounded-full";
+
+/**
+ * The grey chequerboard that makes transparency legible.
+ *
+ * Fixed greys, deliberately, where the rest of this package uses theme tokens:
+ * this is the standard rendering of "nothing here", and a chequerboard that
+ * changed colour with the theme would read as part of the colour being edited.
+ */
+const CHECKERBOARD = "repeating-conic-gradient(#c8c8c8 0% 25%, #ffffff 0% 50%)";
+
 /** Whether this browser can sample a colour from the screen. */
 function eyeDropperSupported(): boolean {
   // Chromium only. Feature-detected rather than assumed: constructing it where
@@ -145,7 +182,11 @@ export function ColorPicker<TValue = string>({
       incoming &&
       toHex(incoming, showAlpha ? incoming.alpha : 1) !== rendered
     ) {
-      setHsva(toHsva(color));
+      // Same hue retention as the other entry points: a host that pushes a grey
+      // in must not silently move the surface's hue to red. Read from the
+      // updater rather than from `hsva`, so the effect does not re-run on a
+      // hue change it is not interested in.
+      setHsva(prev => hsvaFrom(incoming, incoming.alpha, prev.h));
     }
   }, [color, rendered, showAlpha]);
 
@@ -164,6 +205,41 @@ export function ColorPicker<TValue = string>({
     commit({ ...hsva, s, v });
   };
 
+  // Routed through the surface mapping instead of clamping here, so the keys
+  // and the pointer cannot disagree about where the edges are.
+  const nudge = (ds: number, dv: number): void => {
+    const { s, v } = saturationValueAt(
+      surfacePointFor(hsva.s + ds, hsva.v + dv)
+    );
+    commit({ ...hsva, s, v });
+  };
+
+  const handleSurfaceKey = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    // Shift takes the coarse step, matching what the arrow keys do on the
+    // sliders beside it.
+    const step = event.shiftKey ? 0.1 : 0.01;
+    const moves: Record<string, [number, number]> = {
+      ArrowLeft: [-step, 0],
+      ArrowRight: [step, 0],
+      ArrowUp: [0, step],
+      ArrowDown: [0, -step],
+    };
+    const move = moves[event.key];
+    if (!move) return;
+    // Arrow keys would otherwise scroll the page under the control.
+    event.preventDefault();
+    nudge(move[0], move[1]);
+  };
+
+  // Resolved after mount, never during render. Reading `window` while rendering
+  // makes the server omit this button and the first client render add it, which
+  // React 19 treats as a hydration failure and repairs by discarding the whole
+  // picker subtree.
+  const [canPickFromScreen, setCanPickFromScreen] = React.useState(false);
+  React.useEffect(() => {
+    setCanPickFromScreen(eyeDropperSupported());
+  }, []);
+
   const handle = surfacePointFor(hsva.s, hsva.v);
   const hueOnly = toHex(hsvToRgb({ h: hsva.h, s: 1, v: 1 }));
 
@@ -175,7 +251,8 @@ export function ColorPicker<TValue = string>({
     try {
       const { sRGBHex } = await new ctor().open();
       const parsed = parseHex(sRGBHex);
-      if (parsed) commit({ ...rgbToHsv(parsed), a: hsva.a });
+      // The screen's alpha is not meaningful, so the picker keeps its own.
+      if (parsed) commit(hsvaFrom(parsed, hsva.a, hsva.h));
     } catch {
       // The user dismissed the picker. Not an error, and nothing to report.
     }
@@ -186,13 +263,22 @@ export function ColorPicker<TValue = string>({
       <div
         ref={surfaceRef}
         role="application"
-        aria-label="Saturation and brightness"
-        className="relative h-40 w-full cursor-crosshair rounded-md"
+        tabIndex={0}
+        // The values are in the name because `role="application"` carries no
+        // value semantics of its own, and without them a screen reader
+        // announces a region that can be driven but never says where it is.
+        aria-label={`Saturation and brightness: ${Math.round(hsva.s * 100)}% saturation, ${Math.round(hsva.v * 100)}% brightness. Arrow keys adjust.`}
+        className="ring-offset-background focus-visible:ring-ring relative h-40 w-full cursor-crosshair touch-none rounded-md focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
         style={{
           backgroundColor: hueOnly,
+          // Value on TOP of saturation. CSS paints the first layer nearest the
+          // viewer, so the reverse order lets the opaque white end of the
+          // saturation ramp cover the black end of the value ramp: the
+          // bottom-left corner displays white while selecting black.
           backgroundImage:
-            "linear-gradient(to right, #fff, transparent), linear-gradient(to top, #000, transparent)",
+            "linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent)",
         }}
+        onKeyDown={handleSurfaceKey}
         onPointerDown={event => {
           event.currentTarget.setPointerCapture(event.pointerId);
           trackPointer(event);
@@ -203,7 +289,12 @@ export function ColorPicker<TValue = string>({
       >
         <span
           aria-hidden="true"
-          className="border-background pointer-events-none absolute size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 shadow-sm ring-1 ring-black/30"
+          // A fixed white ring inside a black one, not theme tokens: this
+          // handle sits on an arbitrary colour the user is choosing, not on a
+          // themed surface, so it has to stay visible against both ends of the
+          // square. `border-background` resolved to black in dark mode and
+          // vanished against the square's own black lower edge.
+          className="pointer-events-none absolute size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-sm ring-1 ring-black/60"
           style={{ left: `${handle.x * 100}%`, top: `${handle.y * 100}%` }}
         />
       </div>
@@ -215,13 +306,13 @@ export function ColorPicker<TValue = string>({
         id={`${fieldId}-hue`}
         type="range"
         min={0}
-        max={359}
+        max={HUE_MAX}
         step={1}
-        value={Math.round(huePosition(hsva.h) * 360) % 360}
+        value={hueSliderValue(hsva.h, HUE_MAX)}
         onChange={event =>
-          commit({ ...hsva, h: hueAt(+event.target.value / 360) })
+          commit({ ...hsva, h: hueAt(+event.target.value / (HUE_MAX + 1)) })
         }
-        className="h-3 w-full cursor-pointer appearance-none rounded-full"
+        className={SLIDER}
         style={{
           backgroundImage:
             "linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)",
@@ -243,7 +334,15 @@ export function ColorPicker<TValue = string>({
             onChange={event =>
               commit({ ...hsva, a: +event.target.value / 100 })
             }
-            className="h-3 w-full cursor-pointer appearance-none rounded-full"
+            className={SLIDER}
+            style={{
+              // The ramp runs to the colour being edited, over a chequerboard,
+              // so the track shows what the slider actually controls. Without
+              // any background this rendered as a blank 12px strip whose only
+              // label was screen-reader-only.
+              backgroundImage: `linear-gradient(to right, transparent, ${toHexString({ ...hsva, a: 1 }, false)}), ${CHECKERBOARD}`,
+              backgroundSize: "100% 100%, 8px 8px",
+            }}
           />
         </>
       )}
@@ -264,13 +363,13 @@ export function ColorPicker<TValue = string>({
             // the ordinary state of one, and reporting `#ab` as a colour would
             // repaint the surface black under the person typing it.
             if (parsed) {
-              setHsva({ ...rgbToHsv(parsed), a: parsed.alpha });
+              setHsva(hsvaFrom(parsed, parsed.alpha, hsva.h));
               onColorChange(toHex(parsed, showAlpha ? parsed.alpha : 1));
             }
           }}
           onBlur={() => setDraftHex(null)}
         />
-        {eyeDropperSupported() && (
+        {canPickFromScreen && (
           <Button
             type="button"
             variant="outline"
@@ -316,7 +415,7 @@ export function ColorPicker<TValue = string>({
                 style={{ backgroundColor: recent }}
                 onClick={() => {
                   const parsed = parseHex(recent);
-                  if (parsed) commit({ ...rgbToHsv(parsed), a: parsed.alpha });
+                  if (parsed) commit(hsvaFrom(parsed, parsed.alpha, hsva.h));
                 }}
               />
             ))}
