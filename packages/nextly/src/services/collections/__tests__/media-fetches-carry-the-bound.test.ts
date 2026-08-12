@@ -64,3 +64,66 @@ describe("every media fetch carries the trust bound", () => {
     ).toBe(called);
   });
 });
+
+/** Modules that call the Single upload expansion. */
+const UPLOAD_EXPANSION_CALLERS = [
+  join(SRC, "domains/singles/services/single-query-service.ts"),
+  join(SRC, "domains/singles/services/single-mutation-service.ts"),
+];
+
+/**
+ * The source of each `expandUploadFields(...)` CALL, arguments included.
+ *
+ * Read by balancing parentheses rather than by a regex, so a call spanning
+ * several lines or holding a nested call is captured whole. The definition is
+ * excluded by its `async` keyword: it takes the access context as a parameter
+ * and would otherwise look exactly like a call that passes one.
+ */
+function uploadExpansionCalls(file: string): string[] {
+  const text = readFileSync(file, "utf8");
+  const calls: string[] = [];
+
+  for (const match of text.matchAll(/(async\s+)?expandUploadFields\(/g)) {
+    if (match[1] !== undefined) continue;
+    let depth = 0;
+    const open = match.index + match[0].length - 1;
+    for (let i = open; i < text.length; i++) {
+      if (text[i] === "(") depth++;
+      else if (text[i] === ")") {
+        depth--;
+        if (depth === 0) {
+          calls.push(text.slice(open, i + 1));
+          break;
+        }
+      }
+    }
+  }
+
+  return calls;
+}
+
+describe("every upload expansion carries the caller", () => {
+  it("is exercised — the Single services do expand uploads", () => {
+    const total = UPLOAD_EXPANSION_CALLERS.reduce(
+      (sum, file) => sum + uploadExpansionCalls(file).length,
+      0
+    );
+    expect(total).toBeGreaterThanOrEqual(2);
+  });
+
+  it.each(UPLOAD_EXPANSION_CALLERS)("passes the bound in %s", file => {
+    // The access context is OPTIONAL on the expansion, so omitting it is not a
+    // type error — it silently selects the unbounded default. The read and the
+    // write path each reach it separately, and the relationship expansion
+    // beside it returns early when a Single holds no relationship field, so a
+    // bound threaded only there reaches nothing for an uploads-only Single.
+    for (const call of uploadExpansionCalls(file)) {
+      expect(
+        call.includes("trusted:"),
+        `An expandUploadFields call in ${file} omits the caller, so it expands ` +
+          "media as an unbounded trusted read:\n" +
+          call
+      ).toBe(true);
+    }
+  });
+});

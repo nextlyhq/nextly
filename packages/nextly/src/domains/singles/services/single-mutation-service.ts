@@ -2289,10 +2289,23 @@ export class SingleMutationService extends BaseService {
         user: options.user,
       });
 
-      // 10.5. Expand upload fields with full media data
+      // 10.5. Expand upload fields with full media data.
+      //
+      // Carries the same caller as the relationship expansion below. Media is a
+      // system table with no stored rules, so a write that narrowed its bypass
+      // has refused that target like any other, and this expansion is the only
+      // one that reads it. The two are not alternatives: a Single holding
+      // uploads and no relationship field returns before the expansion below
+      // does anything, so a bound applied only there reaches nothing.
       updatedDoc = await this.queryService.expandUploadFields(
         updatedDoc,
-        fieldConfigs
+        fieldConfigs,
+        {
+          user: options.user,
+          overrideAccess: options.overrideAccess,
+          trusted: options.trusted,
+          authenticatedScope: options.authenticatedScope,
+        }
       );
 
       // 10.6. Expand relationship fields with full related entry data.
