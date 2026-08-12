@@ -245,6 +245,61 @@ describe("reading an artifact's specifiers", () => {
     ).toEqual(["react"]);
   });
 
+  it("sees a loader declared in a braceless switch case", () => {
+    // A switch's CaseBlock is ONE lexical scope shared by every clause, so a `const` in a case
+    // without braces belongs to it. Recognising only blocks and source files left the declaration
+    // with no scope at all, which unregistered the loader — and `import.meta.resolve` reaches a
+    // package without leaving a metafile record, so nothing else would have caught it.
+    expect(
+      read(`
+        function f(kind) {
+          switch (kind) {
+            case 0:
+              const resolve = import.meta.resolve;
+              return resolve("react");
+          }
+        }
+      `)
+    ).toEqual(["react"]);
+    // The braced form, which already worked, kept as the control that the two spellings agree.
+    expect(
+      read(`
+        function f(kind) {
+          switch (kind) {
+            case 0: {
+              const resolve = import.meta.resolve;
+              return resolve("react");
+            }
+          }
+        }
+      `)
+    ).toEqual(["react"]);
+    // The shadowing mirror, and the bound on it: a case-scoped binding suppresses the loader
+    // INSIDE the switch and does not escape it.
+    expect(
+      read(`
+        function f(kind) {
+          switch (kind) {
+            case 0:
+              const require = (name) => name;
+              return require("react");
+          }
+        }
+      `)
+    ).toEqual([]);
+    expect(
+      read(`
+        function f(kind) {
+          switch (kind) {
+            case 0:
+              const require = (name) => name;
+          }
+          return require("react");
+        }
+      `)
+    ).toEqual(["react"]);
+  });
+
   it("gives a for-loop var loader the function scope too", () => {
     // The `for` initializer is a scope for `let`/`const` and NOT for `var`, which binds to the
     // enclosing function like any other. Treating every initializer as a scope put the loader out

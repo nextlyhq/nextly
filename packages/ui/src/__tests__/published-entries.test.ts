@@ -375,7 +375,12 @@ function exportedNames(source: string): string[] {
       statement.name !== undefined &&
       ts.isIdentifier(statement.name)
     ) {
-      valueSpace.add(statement.name.text);
+      // Same exception as the export branch below: `import type Foo = require(...)` binds a type.
+      if (ts.isImportEqualsDeclaration(statement) && statement.isTypeOnly) {
+        typeSpace.add(statement.name.text);
+      } else {
+        valueSpace.add(statement.name.text);
+      }
     } else if (ts.isImportDeclaration(statement)) {
       // An IMPORT binds a name too. A type-only spelling settles it — `import type { Foo }` marks
       // the clause, `import { type Foo }` marks the element, and neither can be a value.
@@ -510,6 +515,11 @@ function exportedNames(source: string): string[] {
     // export modifier while being neither a declaration nor an export declaration.
     if (ts.isImportEqualsDeclaration(statement)) {
       // The export modifier is already required above, so reaching here means it is exported.
+      //
+      // `export import type Foo = require("./foo.cjs")` is accepted syntax and publishes a TYPE:
+      // a consumer using it as a value gets TS1361. Recording it let a module exporting a real
+      // `Foo` compare equal to a declaration that offers none.
+      if (statement.isTypeOnly) continue;
       found.push(statement.name.text);
       continue;
     }
@@ -645,6 +655,18 @@ describe("reading the names a module publishes", () => {
     ]);
     expect(exportedNames(`export default class Preset {}`)).toEqual([
       "default",
+    ]);
+  });
+
+  it("leaves out a type-only import-equals declaration", () => {
+    // Accepted syntax, and it publishes a TYPE — a consumer using it as a value gets TS1361. So a
+    // module exporting a real `Foo` compared equal to a declaration that offers none.
+    expect(
+      exportedNames(`export import type Foo = require("./foo.cjs");`)
+    ).toEqual([]);
+    // The control, one keyword apart: without `type` it publishes a value a consumer can import.
+    expect(exportedNames(`export import Foo = require("./foo.cjs");`)).toEqual([
+      "Foo",
     ]);
   });
 

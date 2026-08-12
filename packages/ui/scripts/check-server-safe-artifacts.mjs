@@ -302,11 +302,16 @@ export function specifiersIn(source, fileName) {
 
     // Declarations sitting directly in a statement list, plus the initializer of a `for` form,
     // which opens its own scope for the names it declares.
+    // A switch's CaseBlock is one lexical scope shared by every clause, so a `const` in a braceless
+    // `case` belongs to it rather than to the clause. Omitting it left `nearestBindingScope`
+    // returning undefined for that declaration, which unregisters the loader entirely.
     const statements = ts.isSourceFile(scope)
       ? scope.statements
       : ts.isBlock(scope) || ts.isModuleBlock(scope)
         ? scope.statements
-        : undefined;
+        : ts.isCaseBlock(scope)
+          ? scope.clauses.flatMap(clause => clause.statements)
+          : undefined;
     for (const statement of statements ?? []) {
       if (ts.isVariableStatement(statement)) {
         // A `var` here was already counted by the hoisting walk above, against the function or
