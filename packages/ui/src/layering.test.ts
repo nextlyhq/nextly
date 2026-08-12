@@ -46,7 +46,7 @@
  * boundary has to be one something FAILS at.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import {
   importedSpecifiers,
@@ -405,6 +405,7 @@ describe("this package takes no direct dependency on the block engine", () => {
 const RUNTIME_RESOLVERS = [
   "require",
   "module",
+  "process.getBuiltinModule",
   "createRequire",
   "import.meta.resolve",
 ];
@@ -445,6 +446,9 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
     if (ts.isPropertyAccessExpression(parent)) return parent.name === node;
     if (ts.isQualifiedName(parent)) return parent.right === node;
     if (ts.isBindingElement(parent)) return parent.propertyName === node;
+    // `<Widget module={value} require />` spells both words as PROP names. They reach no ambient
+    // binding, and reporting them would reject a component that resolves nothing.
+    if (ts.isJsxAttribute(parent)) return parent.name === node;
     if (ts.isImportSpecifier(parent) || ts.isExportSpecifier(parent)) {
       return parent.propertyName === node;
     }
@@ -494,6 +498,32 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
       !isMemberName(node)
     ) {
       found.push(node.text);
+    }
+    // `process` cannot be refused outright — `process.env.NODE_ENV` is how this package decides
+    // whether to warn — so it is WHITELISTED down to the uses that exist, exactly as `import.meta`
+    // is. `process.getBuiltinModule("module")` hands back the loader without importing anything,
+    // and enumerating that member would leave `process["getBuiltin" + "Module"]` and any future
+    // host addition behind it. Reading `.env`, testing with `typeof`, and DECLARING the binding are
+    // the three forms this package uses; everything else, including taking a reference to pass on,
+    // is refused.
+    if (
+      ts.isIdentifier(node) &&
+      node.text === "process" &&
+      !isMemberName(node)
+    ) {
+      const parent = node.parent;
+      const declares =
+        parent !== undefined &&
+        ts.isVariableDeclaration(parent) &&
+        parent.name === node;
+      const tested = parent !== undefined && ts.isTypeOfExpression(parent);
+      const readsEnv =
+        parent !== undefined &&
+        (ts.isPropertyAccessExpression(parent) ||
+          ts.isElementAccessExpression(parent)) &&
+        parent.expression === node &&
+        readsMember(parent, "env");
+      if (!declares && !tested && !readsEnv) found.push("process");
     }
     ts.forEachChild(node, visit);
   };
@@ -582,6 +612,17 @@ describe("this package resolves no module at runtime", () => {
         "a.ts"
       )
     ).toEqual(["import.meta.resolve"]);
+    // `process` is whitelisted rather than banned, so both directions need pinning: the loader
+    // route is refused, and the three forms this package actually uses are not.
+    expect(
+      runtimeResolversIn(
+        `export const r = process.getBuiltinModule("module").createRequire("/x")("react");`,
+        "a.ts"
+      )
+    ).toEqual(["process"]);
+    expect(
+      runtimeResolversIn(`const p = process;\nexport const r = p;`, "a.ts")
+    ).toEqual(["process"]);
     // The controls: ordinary code names none of them.
     expect(
       runtimeResolversIn(
@@ -598,6 +639,21 @@ describe("this package resolves no module at runtime", () => {
         "a.ts"
       )
     ).toEqual([]);
+    // A prop is a name, not a binding — this component reaches no loader.
+    expect(
+      runtimeResolversIn(
+        `export const W = () => <Widget module={1} require />;`,
+        "a.tsx"
+      )
+    ).toEqual([]);
+    // The three `process` forms this package uses, exactly as `dev-warn.ts` writes them.
+    expect(
+      runtimeResolversIn(
+        `declare const process: { env?: { NODE_ENV?: string } } | undefined;\n` +
+          `export const dev = typeof process !== "undefined" && process?.env?.NODE_ENV === "test";`,
+        "a.ts"
+      )
+    ).toEqual([]);
   });
 
   // The ban above reads the files `sourceFiles(SRC)` returns, so it is only a boundary while that
@@ -610,7 +666,11 @@ describe("this package resolves no module at runtime", () => {
   it("reaches no file outside the tree the ban reads", () => {
     const escapes = sourceFiles(SRC).flatMap(file =>
       importedSpecifiers(readFileSync(file, "utf8"), file)
-        .filter(specifier => specifier.startsWith("."))
+        // Split by what the specifier RESOLVES against rather than by how it starts. A bare package
+        // name goes through the dependency graph, which the artifact gate reads; everything else
+        // names a file, and an absolute path names one just as a relative path does — a rule
+        // written for `./` alone is walked around by `/abs/path/escape.mjs`.
+        .filter(specifier => specifier.startsWith(".") || isAbsolute(specifier))
         // Compared after RESOLUTION, so a specifier that climbs out and back in is judged by where
         // it lands rather than by how it is spelled.
         .filter(specifier =>

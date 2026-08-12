@@ -367,6 +367,17 @@ function exportedNames(source: string): string[] {
           modifier => modifier.kind === ts.SyntaxKind.ConstKeyword
         );
       }
+      // An import inside a namespace binds a name for the body to use; it publishes nothing.
+      if (ts.isImportDeclaration(member)) return false;
+      if (ts.isExportDeclaration(member)) {
+        // A LOCAL export list names members declared in this same block, and `some` visits each of
+        // those declarations on its own — so counting the list too makes a namespace of pure types
+        // look like a value, which is what `export declare namespace F { interface X {}; export
+        // { X }; }` did. With a module specifier the names come from somewhere this reader cannot
+        // see, so that case stays conservative rather than guessing.
+        if (member.isTypeOnly) return false;
+        return member.moduleSpecifier !== undefined;
+      }
       return true;
     });
   };
@@ -870,6 +881,31 @@ describe("reading the names a module publishes", () => {
     expect(
       exportedNames(
         `declare namespace Foo { const x: number; }\nexport { Foo };`
+      )
+    ).toEqual(["Foo"]);
+  });
+
+  it("leaves out a namespace whose only statement is a local export list", () => {
+    // Re-exporting the members from inside the namespace is a third spelling of the same
+    // type-only declaration. The export list published nothing itself, yet counted as a value
+    // member, so a declaration offering only types compared equal to a module exporting a real
+    // `Foo` — while a consumer using it as a value gets TS2708.
+    expect(
+      exportedNames(
+        `export declare namespace Foo { interface X {}\nexport { X }; }`
+      )
+    ).toEqual([]);
+    // The control: the list is not what decides it. A namespace holding a value still publishes
+    // one when the same list is present.
+    expect(
+      exportedNames(
+        `export declare namespace Foo { const x: number;\nexport { x }; }`
+      )
+    ).toEqual(["Foo"]);
+    // A list with a MODULE SPECIFIER names something this reader cannot see, so it stays a value.
+    expect(
+      exportedNames(
+        `export declare namespace Foo { export { X } from "./other"; }`
       )
     ).toEqual(["Foo"]);
   });
