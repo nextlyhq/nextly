@@ -33,6 +33,14 @@ Under an editing tool that requires a prior read, use it; reaching for the shell
 to write a file the tool would have made you read is how the requirement gets
 bypassed, and it is the bypass rather than the command that does the damage.
 
+**A symlink defeats every check below, so refuse to write through one.** A shell
+redirect follows the link and truncates its TARGET; the link entry itself is
+untouched, so `git diff -- <path>` reports nothing and each tell and proof
+clears a write that destroyed a different file. Test the path with `test -L`
+first. If a link genuinely has to be written through, resolve it — `readlink -f`
+— and run every check in this rule against the resolved target instead, because
+that is the file that changed.
+
 `turbo.json` in `packages/ui` was replaced this way. It lost
 `dependsOn: ["$TURBO_EXTENDS$", "build"]` on both `test` and `test:coverage`,
 plus three call-site input trees, and the result parsed, ran, and passed
@@ -52,6 +60,14 @@ content is being judged.
   `git diff -- <path>`, which is working tree against index. Inspect the staged
   copy with `git diff --cached HEAD -- <path>` or `git show :<path>`; note that
   `git status` shows only `MM` and reveals none of it.
+- The path carried deliberate UNSTAGED edits that were never committed or
+  stashed → **git holds no copy of the pre-write state, and this is where the
+  procedure stops.** Neither source above contains those lines, so choosing
+  either produces a repair that looks clean and silently omits them. Say so and
+  go outside git — the editor's local history, a backup, an open buffer — rather
+  than picking the nearest baseline. A recovery that cannot recover is worth
+  naming as one; running the steps anyway converts a known loss into an
+  unnoticed one.
 
 Both failure directions are live, which is why this is not a detail. Comparing
 against `HEAD` when the index is the baseline reports the staged additions as
@@ -80,9 +96,15 @@ They are worth knowing individually, because each looks like good news:
    magnitude in the direction you were hoping for is the moment to ask which
    change produced it, not to write it down as a result.
 
-3. **Content you did not write, and did not mean to remove, is gone.** This is
-   the only one of the three that is conclusive on its own, and it has to be
-   stated as the disappearance rather than as the suspicion that led there.
+3. **Content you did not write, and did not mean to remove, is gone.**
+   Conclusive, and it has to be stated as the disappearance rather than as the
+   suspicion that led there.
+
+   Two of these three settle it and one does not, so the split is worth stating
+   plainly rather than by rank: a deletion against the correctly chosen baseline
+   (1) and vanished content (3) are each conclusive on their own; the metric (2)
+   is only ever a prompt to go and look, because a number can move for reasons
+   that have nothing to do with a write.
 
    What led there in the real case was noticing that the replaced file already
    used `$TURBO_EXTENDS$` — the mechanism the new comment introduced as if it
