@@ -161,6 +161,17 @@ function violations(): Violation[] {
 }
 
 describe("the tab indicator contract", () => {
+  it("still has a contract to enforce", () => {
+    // The structural witness. This scan exists only because the primitive owns
+    // the indicator; if it stops declaring one, the scan is not merely
+    // unscoped, it is meaningless — so its absence must go red rather than
+    // green. Chosen because the check's own purpose guarantees it, not because
+    // it happens to be in the file today.
+    const primitive = readFileSync(PRIMITIVE, "utf8");
+    expect(primitive).toContain("TRIGGER_INDICATOR");
+    expect(primitive).toMatch(/border-b-2!/);
+  });
+
   it("finds files to check, so a clean result means conforming and not unscanned", () => {
     // The instrument control. Every assertion below is "nothing was found",
     // which a broken path, a wrong extension or an over-eager skip would also
