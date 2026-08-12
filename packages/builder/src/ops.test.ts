@@ -717,6 +717,35 @@ describe("an op whose own shape is wrong", () => {
     expect(updated.nodes).toBeDefined();
   });
 
+  it.each<[string, () => Record<string, unknown>]>([
+    ["a bigint", () => ({ count: 1n })],
+    [
+      "a cycle",
+      () => {
+        const cyclic: Record<string, unknown> = {};
+        cyclic.self = cyclic;
+        return cyclic;
+      },
+    ],
+  ])("refuses a patch value with no JSON form: %s", (_label, build) => {
+    // The type cannot stop this — `props` is `Record<string, unknown>`, so both
+    // are statically legal. `JSON.stringify` throws a native TypeError on
+    // either, which would leave this module as an editor crash rather than the
+    // refusal it promises. The value would not survive storage anyway.
+    let thrown: unknown;
+    try {
+      applyOp(forest(), {
+        kind: "update",
+        id: "a",
+        patch: { props: build() },
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(OpError);
+    expect(thrown).not.toBeInstanceOf(TypeError);
+  });
+
   it("refuses a hole in an inserted slot array", () => {
     // `forEach` skips holes, so a sparse child list would be walked as though
     // the missing entries were not there. They serialize as `null`, and a

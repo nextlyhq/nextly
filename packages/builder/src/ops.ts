@@ -186,6 +186,32 @@ function isStringArray(value: unknown): boolean {
   return true;
 }
 
+/**
+ * A value's serialized form, or a refusal if it has none.
+ *
+ * The op layer compares patch values by serializing them, because a persisted
+ * patch is freshly parsed and never shares a reference with the node's own
+ * value. That comparison is where a value with no JSON form surfaces: a
+ * `BigInt` and a cycle both make `JSON.stringify` throw a native `TypeError`,
+ * which would leave this module as an editor crash rather than as the refusal
+ * it promises for a bad op.
+ *
+ * The type cannot prevent it — `props` is `Record<string, unknown>`, so
+ * `{ count: 1n }` is statically legal — and the value would not survive storage
+ * anyway, so refusing it is the same answer the next read would give.
+ */
+function serialize(value: unknown, id: string): string {
+  try {
+    return JSON.stringify(value) ?? "undefined";
+  } catch (cause) {
+    throw new OpError(
+      `update: a value for "${id}" cannot be written down. A patch is stored as ` +
+        `JSON, so a value with no JSON form — a bigint, a cycle — could not be ` +
+        `replayed or undone even if it applied. Cause: ${String(cause)}`
+    );
+  }
+}
+
 function isStringRecord(value: unknown): boolean {
   return (
     isPlainRecord(value) &&
@@ -743,7 +769,7 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
       // node's `{}` and a reference test calls every replayed op a change —
       // which is the invisible history entry this guard exists to refuse.
       const same = (a: unknown, b: unknown): boolean =>
-        a === b || JSON.stringify(a) === JSON.stringify(b);
+        a === b || serialize(a, op.id) === serialize(b, op.id);
       const changesSomething = touched.some(key =>
         (op.unset ?? []).includes(key)
           ? held[key] !== undefined
