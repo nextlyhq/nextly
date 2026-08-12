@@ -222,9 +222,20 @@ So the clean zero was produced by a scan that had been narrowed until it could
 not fail. That it agreed with the honest answer is luck, and the agreement is
 what would have stopped anyone looking.
 
-The sound method was the unglamorous one: keep all 22, accept 43 hits, and read
-them. **A count is not a finding until something has looked at what it counted**,
-and "I filtered it" is not the same as having looked.
+Keeping all 22 and reading the 43 hits is what made the COUNT trustworthy, and
+no more than that. **The scan is still not sound and cannot be made sound**: a
+PR adding only `export * from "./legacy-module"` produces no hit at all, since
+the forbidden name appears nowhere in the diff, and no amount of reading finds a
+line that was never printed.
+
+So the diff scan is a pre-warning heuristic. The sound instrument is the one
+that resolves the real thing — the suite that imports each entry point and asks
+`name in mod` of the live namespace, where export-star bindings ARE present. A
+parsed-binding check would also qualify; a regex over a diff never will.
+
+Within what it can see, though: **a count is not a finding until something has
+looked at what it counted**, and "I filtered it" is not the same as having
+looked.
 
 An identifier list containing an ordinary word is the tell. Match at a
 granularity the language distinguishes — a parsed binding, not a regex — or read
