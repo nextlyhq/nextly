@@ -22,10 +22,22 @@
  * implementations agree the day they are written and drift silently after —
  * and records defects from five unrelated packages behind it.
  *
- * What this file can enforce is the PLACEMENT, not the duplication. A second
- * implementation of a rule is not detectable by any import scan; it looks like
- * ordinary code. Keeping block-aware modules out of this package is what
- * removes the REASON to write one, so that is the boundary drawn here.
+ * WHAT THIS FILE DOES NOT ESTABLISH, stated first because a green suite here
+ * would otherwise read as the whole claim: this package is NOT block-agnostic
+ * today. `lib/breakpoints.ts` reimplements the compiler's breakpoint drop
+ * rules and `breakpoint-dialog.tsx` consumes them. Both are green under every
+ * assertion below, because a second implementation of a rule is not an import
+ * — it is ordinary code, and no import scan can see it.
+ *
+ * So the invariant asserted is the narrow one the checks actually decide: this
+ * package takes no DIRECT dependency on the engine, by manifest or by import.
+ * That is worth holding on its own — it is what keeps a block-aware component
+ * from being casually added here — but it is a precondition for the layer being
+ * block-agnostic, not evidence that it is.
+ *
+ * The remaining half is a MOVE: `lib/breakpoints.ts` and `breakpoint-dialog.tsx`
+ * belong in `packages/builder`, which already depends on the engine and can
+ * derive those rules instead of restating them.
  *
  * Placement is worth enforcing precisely because availability is not enough.
  * `baseStyles` on the block definition is the supported way to declare a
@@ -49,25 +61,35 @@ const DEPENDENCY_FIELDS = [
   "optionalDependencies",
 ] as const;
 
-/** Every source file in this package, tests excluded. */
+/**
+ * Every SHIPPED source file in this package.
+ *
+ * Test material is excluded by three separate spellings, because it uses all
+ * three: a `.test.ts` filename, a `__tests__` directory holding helpers that
+ * carry no test suffix, and a `.fixture.ts` file. Excluding only the filename
+ * suffix reports a helper importing the engine FOR a test as a production
+ * layering violation, which is a false alarm about code that never ships.
+ */
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap(entry => {
     const path = join(dir, entry);
-    if (statSync(path).isDirectory()) return sourceFiles(path);
+    if (statSync(path).isDirectory()) {
+      return entry === "__tests__" ? [] : sourceFiles(path);
+    }
     if (!/\.tsx?$/.test(entry)) return [];
-    if (/\.test\.tsx?$/.test(entry)) return [];
+    if (/\.(test|fixture)\.tsx?$/.test(entry)) return [];
     return [path];
   });
 }
 
-describe("the generic UI layer stays block-agnostic", () => {
+describe("this package takes no direct dependency on the block engine", () => {
   it("is exercised — there are source files to scan", () => {
     // Without this the assertions below pass against an empty list, which is
     // the shape of a guard that reports success because it found nothing.
     expect(sourceFiles(SRC).length).toBeGreaterThan(20);
   });
 
-  it("declares no dependency on the block engine, in ANY field", () => {
+  it("declares it in no manifest field", () => {
     // All four fields, because each makes the engine reachable in its own way:
     // `peerDependencies` and `optionalDependencies` push it onto consumers,
     // and `devDependencies` makes it resolvable while the package is being
@@ -114,7 +136,7 @@ describe("the generic UI layer stays block-agnostic", () => {
     expect(pattern.test('import { x } from "@nextlyhq/ui";')).toBe(false);
   });
 
-  it("imports nothing from the block engine", () => {
+  it("imports it in no shipped source file", () => {
     // The manifest alone is not a boundary: under pnpm a package hoisted for
     // another workspace member stays importable from one whose own manifest
     // never declares it. The import is the thing that would actually resolve,
