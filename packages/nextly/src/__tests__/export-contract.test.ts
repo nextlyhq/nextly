@@ -1,11 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-import * as config from "../config";
-import * as database from "../database";
-import * as fieldCatalog from "../collections/fields/catalog";
-import * as fieldGroupType from "../field-group-type";
-import * as root from "../index";
-import * as schemas from "../schemas";
+import { describe, expect, it } from "vitest";
 
 // The rename is only complete when the old vocabulary is absent from every
 // published entry point. A re-exported legacy name is indistinguishable from a
@@ -37,38 +34,82 @@ const FORBIDDEN = [
   "COMPONENT_MIGRATION_STATUSES",
 ];
 
-const ENTRY_POINTS: Array<[string, Record<string, unknown>]> = [
-  ["nextly", root as Record<string, unknown>],
-  ["nextly/config", config as Record<string, unknown>],
-  ["nextly/schemas", schemas as Record<string, unknown>],
-  ["nextly/database", database as Record<string, unknown>],
-  ["nextly/field-catalog", fieldCatalog as Record<string, unknown>],
-  ["nextly/field-group-type", fieldGroupType as Record<string, unknown>],
-];
+const manifestUrl = new URL("../../package.json", import.meta.url);
+const packageRoot = path.dirname(fileURLToPath(manifestUrl));
 
-// 🔴 Pinned alongside the generated cases. `it.each` derives one case per entry, so REMOVING an
-// entry deletes its own case and the suite shrinks by one while every remaining case passes — a
-// vanished test reads exactly like a passing one. This asserts the matrix itself.
-const PUBLISHED_ENTRY_POINT_COUNT = 6;
+const manifest = JSON.parse(readFileSync(manifestUrl, "utf8")) as {
+  exports: Record<string, { import: string }>;
+};
+
+const declaredSubpaths = Object.keys(manifest.exports);
+
+/**
+ * The source module behind a published subpath.
+ *
+ * 🔴 The mapping is `dist` -> `src` rather than a second hand-kept list, because a hand-kept list is
+ * what this suite exists to stop being possible. `package.json` is what a consumer resolves, so it
+ * is the only description of the surface that cannot fall behind it.
+ */
+function sourceOf(distEntry: string): string {
+  return path.join(
+    packageRoot,
+    distEntry.replace(/^\.\/dist\//, "src/").replace(/\.mjs$/, ".ts")
+  );
+}
+
+const ENTRY_POINTS: Array<[string, string]> = declaredSubpaths.map(subpath => [
+  subpath === "." ? "nextly" : `nextly/${subpath.replace(/^\.\//, "")}`,
+  sourceOf(manifest.exports[subpath]!.import),
+]);
 
 describe("published export surface", () => {
-  it("checks every published entry point", () => {
-    expect(ENTRY_POINTS).toHaveLength(PUBLISHED_ENTRY_POINT_COUNT);
+  // 🔴 Guards the derivation, not the package. Every check below is generated from `ENTRY_POINTS`,
+  // so a mapping that silently produced fewer entries — or none — would delete its own cases and
+  // leave a suite whose every remaining case passes. A vanished test reads exactly like a passing
+  // one, so the matrix is asserted against the manifest it claims to describe.
+  it("covers every subpath package.json publishes", () => {
+    expect(ENTRY_POINTS).toHaveLength(declaredSubpaths.length);
+    expect(declaredSubpaths.length).toBeGreaterThan(0);
+  });
+
+  // The mapping is textual, so a renamed or moved module would resolve to a path that does not
+  // exist. Importing it would throw inside the case that names it, which is legible; a missing file
+  // is checked separately so the failure says which of the two happened.
+  it.each(ENTRY_POINTS)("%s resolves to a source module", (_name, source) => {
+    expect(existsSync(source), `no source module at ${source}`).toBe(true);
   });
 
   it.each(ENTRY_POINTS)(
     "%s exposes no legacy component names",
-    (_name, mod) => {
+    async (_name, source) => {
+      const mod = (await import(pathToFileURL(source).href)) as Record<
+        string,
+        unknown
+      >;
       const leaked = FORBIDDEN.filter(name => name in mod);
       expect(leaked).toEqual([]);
     }
   );
 
-  it("exposes the field-group vocabulary from the config entry point", () => {
+  it("exposes the field-group vocabulary from the config entry point", async () => {
     // The counterpart to the list above: absence alone would also be satisfied
     // by deleting the API, so the replacements are asserted present.
-    const cfg = config as Record<string, unknown>;
+    const cfg = (await import("../config")) as Record<string, unknown>;
     expect(typeof cfg.defineFieldGroup).toBe("function");
     expect(typeof cfg.fieldGroup).toBe("function");
+  });
+
+  it("publishes the field-group type accessor", async () => {
+    // Named explicitly because the derived matrix would still pass if this subpath were dropped
+    // from package.json: the surface would simply be described as smaller. The accessor is the one
+    // entry point whose absence sends callers back to reading the raw storage key by hand.
+    expect(declaredSubpaths).toContain("./field-group-type");
+    const mod = (await import("../field-group-type")) as Record<
+      string,
+      unknown
+    >;
+    expect(typeof mod.readFieldGroupType).toBe("function");
+    expect(typeof mod.isFieldGroupType).toBe("function");
+    expect(typeof mod.writeFieldGroupType).toBe("function");
   });
 });

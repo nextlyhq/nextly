@@ -64,12 +64,14 @@ const HISTORICAL_WIRE_TYPE_KEYS = ["_componentType"] as const;
  * most current one. Callers wanting a single spelling want `currentFieldGroupTypeKey`, which says
  * so; indexing this is the same bug as hardcoding.
  */
+const FIELD_GROUP_TYPE_KEY_NAMES = [
+  STORAGE_FORMAT.wireTypeKey,
+  MIGRATION_TARGET.wireTypeKey,
+  ...HISTORICAL_WIRE_TYPE_KEYS,
+] as const;
+
 export const fieldGroupTypeKeys: readonly string[] = Array.from(
-  new Set([
-    STORAGE_FORMAT.wireTypeKey,
-    MIGRATION_TARGET.wireTypeKey,
-    ...HISTORICAL_WIRE_TYPE_KEYS,
-  ])
+  new Set(FIELD_GROUP_TYPE_KEY_NAMES)
 );
 
 /** The spelling new documents are written under. */
@@ -149,14 +151,15 @@ type UnionToIntersection<U> = (
 /**
  * Every spelling a declared discriminator may use, as TYPES.
  *
- * 🔴 The runtime accessor reads all of them; the type helpers below must too, or they answer for a
- * narrower world than the functions they describe. A payload interface generated on the other side
- * of the rename declares the other key, and a helper keyed on only the current one falls through
- * to `string` — re-admitting exactly the retagging the constraint exists to reject.
+ * 🔴 Derived from the SAME list the runtime read order is built from, and that is the whole point.
+ * Restating the two catalogs here reproduces, in the type system, the convergence bug the comment
+ * on `HISTORICAL_WIRE_TYPE_KEYS` describes: once the current catalog is flipped to the target
+ * spelling the two names coincide, the historical one is absent from the restated union, and a
+ * legacy-generated interface falls through to `string` — re-admitting exactly the retagging these
+ * helpers exist to reject, in the release where nearly every stored document is still legacy.
+ * Deriving makes the two answer for one world rather than two that drift apart on a flip.
  */
-type FieldGroupTypeKeyName =
-  | typeof STORAGE_FORMAT.wireTypeKey
-  | typeof MIGRATION_TARGET.wireTypeKey;
+type FieldGroupTypeKeyName = (typeof FIELD_GROUP_TYPE_KEY_NAMES)[number];
 
 /** The literal a value declares its type as, under whichever spelling it uses. */
 type DeclaredFieldGroupType<T> = T[Extract<keyof T, FieldGroupTypeKeyName>];
@@ -202,8 +205,61 @@ type NarrowedFieldGroup<T, K extends string> = [
   ? T
   : Extract<T, Record<Extract<keyof T, FieldGroupTypeKeyName>, K>>;
 
+/** The spellings this version no longer writes, but still reads. */
+type SupersededFieldGroupTypeKey = Exclude<
+  FieldGroupTypeKeyName,
+  typeof currentFieldGroupTypeKey
+>;
+
+/** The literal a value declares under a spelling this version has moved past. */
+type DeclaredUnderSupersededKey<T> = T[Extract<
+  keyof T,
+  SupersededFieldGroupTypeKey
+>];
+
+/**
+ * Marks a value this function would leave describing itself incorrectly.
+ *
+ * 🔴 The refusal is the honest answer rather than a conservative one. Canonicalising DELETES every
+ * other spelling, so a value whose declared type requires a superseded key emerges without a
+ * property its own type still promises: reading it back type-checks as the literal and is
+ * `undefined` at runtime, and no narrowing downstream can catch that because the compiler agrees
+ * with the stale shape. Neither alternative works — writing the superseded spelling instead grows
+ * the legacy set behind a migration that has reported success, and mutating in place cannot be
+ * reflected back to the caller's binding.
+ *
+ * What this rejects is a value typed by a GENERATOR that ran against a different storage format,
+ * which is a stale artefact rather than a legitimate shape, and the fix is to regenerate. Reading
+ * such a value is untouched: `readFieldGroupType` and `isFieldGroupType` handle every spelling,
+ * which is where compatibility with an unmigrated database actually has to live.
+ *
+ * A property carries the explanation because a bare `never` parameter renders as "type 'string' is
+ * not assignable to type 'never'", which names neither the cause nor the remedy.
+ */
+type SupersededSpellingRefusal = {
+  readonly __nextlyRegenerateTypes: "this value declares its field-group type under a superseded key, which writing would delete; regenerate the types for this version";
+};
+
+/**
+ * Nothing, or the refusal, depending on what the value declares.
+ *
+ * The `never` arm is checked first: `Extract` yields `never` for a value declaring no superseded
+ * key, `T[never]` is `never`, and `never extends string` is TRUE — so testing assignability alone
+ * would refuse every well-formed value.
+ *
+ * Applied as `T & SupersededRefusal<T>` rather than as a conditional in the parameter's own
+ * position, because `T` is not inferable from a conditional type and would silently fall back to
+ * its constraint, taking the retagging check down with it. Intersecting keeps `T` inferable from
+ * the argument, and `T & unknown` is `T`, so the permitted case is unchanged.
+ */
+type SupersededRefusal<T> = [DeclaredUnderSupersededKey<T>] extends [never]
+  ? unknown
+  : [DeclaredUnderSupersededKey<T>] extends [string]
+    ? SupersededSpellingRefusal
+    : unknown;
+
 export function writeFieldGroupType<T extends object>(
-  instance: T,
+  instance: T & SupersededRefusal<T>,
   type: WritableFieldGroupType<T>
 ): void {
   // Every other spelling goes first, so an instance that arrived carrying the old key leaves
