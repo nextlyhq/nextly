@@ -201,6 +201,11 @@ export function createTableWorld(
 
   const session: MigrationSession = {
     dialect: "postgresql",
+    // This double stands in for a session that CLAIMED the lock, which is what
+    // every step it serves requires. `null` is that session's real answer:
+    // under a claim the owner is this session itself, and reporting it would
+    // let a step mistake its own claim for someone else's contention.
+    observedLockOwner: null,
     async inTransaction(work) {
       counts.transactions += 1;
       const snapshot = new Map(

@@ -29,6 +29,7 @@ import { FIELD_GROUP_MIGRATION_KEY, MIGRATION_MARKER_VERSION } from "../state";
 import { identifierCaseRules } from "../../../schema/utils/resolve-catalog-name";
 
 import { readRegistryRows, runFieldGroupMigration } from "../run";
+import { MIGRATION_LOCK_TABLE } from "../session";
 
 const PRESERVING = identifierCaseRules({ dialect: "postgresql" });
 
@@ -64,6 +65,14 @@ interface RunWorld {
    * appear inside a message that has nothing to do with the column missing.
    */
   denyLocalizedColumn?: boolean;
+  /**
+   * Who already holds the lock row.
+   *
+   * Only observable when `tables` also contains the lock table: an observing
+   * session asks the catalog first, so an owner on a table that does not exist
+   * describes a state no database can be in.
+   */
+  lockOwner?: string;
 }
 
 /**
@@ -97,7 +106,7 @@ function createRunWorld(world: RunWorld) {
   const writes = { marker: 0 };
   const lock: { seeded: boolean; owner: string | null } = {
     seeded: true,
-    owner: null,
+    owner: world.lockOwner ?? null,
   };
 
   function interpret(statement: SQL): Record<string, unknown>[] {
@@ -827,14 +836,62 @@ describe("a dry run", () => {
       dryRun: true,
     });
 
-    // It took the lock and read, which is deliberate: a report built while another run mutates
-    // storage describes a world that no longer exists by the time it is read.
-    //
-    // 🔴 Taking the lock is itself a write on a database that has never run this before -- the
-    // table is created and an owner row inserted. This fixture pre-seeds the lock, so it cannot
-    // observe that, and the guarantee in `RunMigrationArgs` is worded to match the code rather
-    // than this test: no CONTENT is touched and no marker recorded, which is what is asserted.
-    expect(trace).toContain("lock");
+    // 🔴 The lock is NOT taken, and that is the assertion rather than an omission. Claiming it
+    // creates the table and writes an owner, so a preview that claimed was issuing DDL -- which a
+    // read-only role is refused outright. `trace` records a claim, so its absence is what makes
+    // "this wrote nothing" observable rather than merely stated.
+    expect(trace).not.toContain("lock");
     expect(writes.marker).toBe(0);
+  });
+
+  // The separating case for the whole change. The fixture above pre-seeds the lock row, so it
+  // cannot tell "did not claim" from "claimed a row that already existed" -- and the operator this
+  // is for meets a database where the table has never been created at all.
+  it("touches nothing on a database that has never run a migration", async () => {
+    const { adapter, trace, writes } = createRunWorld({
+      tables: [LEGACY_REGISTRY, "comp_hero"],
+      registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
+    });
+
+    const outcome = await runFieldGroupMigration({
+      adapter,
+      logger,
+      direction: "up",
+      dryRun: true,
+    });
+
+    if (outcome.ran !== false || outcome.reason !== "dry-run") {
+      throw new Error("expected a dry-run outcome");
+    }
+    // Still a real plan: a run that refused early would also write nothing, and would be
+    // indistinguishable from this without asserting the preview it was asked for.
+    expect(outcome.renames.length).toBeGreaterThan(0);
+    // Nothing holds a lock whose table does not exist, so the honest answer is `null` rather than
+    // a refusal about a missing table.
+    expect(outcome.lockedBy).toBeNull();
+    expect(trace).not.toContain("lock");
+    expect(writes.marker).toBe(0);
+  });
+
+  it("reports the holder instead of refusing when a run is in flight", async () => {
+    const { adapter } = createRunWorld({
+      tables: [LEGACY_REGISTRY, "comp_hero", MIGRATION_LOCK_TABLE],
+      registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
+      lockOwner: "field-group-migration:up#someone-else",
+    });
+
+    const outcome = await runFieldGroupMigration({
+      adapter,
+      logger,
+      direction: "up",
+      dryRun: true,
+    });
+
+    // A claiming session refuses here. Observing reports it, because nothing acts on a preview:
+    // the operator needs to know the answer is moving, not to be denied the answer.
+    if (outcome.ran !== false || outcome.reason !== "dry-run") {
+      throw new Error("expected a dry-run outcome, not a refusal");
+    }
+    expect(outcome.lockedBy).toBe("field-group-migration:up#someone-else");
   });
 });

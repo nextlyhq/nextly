@@ -96,6 +96,19 @@ export type MigrationOutcome =
        * here is exactly what it says: the storage objects that change name.
        */
       renames: readonly { readonly from: string; readonly to: string }[];
+      /**
+       * The claim held on the migration lock when the preview was taken, or `null`.
+       *
+       * A dry run observes the lock rather than taking it, so a run in flight is reported here
+       * instead of raising a refusal. Present because the preview is a snapshot: with another run
+       * writing, the renames above describe a world that is moving, and an operator who cannot see
+       * that would read a partially-applied plan as the plan.
+       *
+       * 🔴 Informational only. It was true at the moment it was read and may not be by the time it
+       * is acted on, so it can no more gate a write than any other stale read. The lock itself is
+       * what makes a run exclusive.
+       */
+      lockedBy: string | null;
     }
   | { ran: true; direction: MigrationDirection; steps: number };
 
@@ -105,29 +118,26 @@ export interface RunMigrationArgs {
   /** `up` unless an operator is explicitly rolling back. */
   direction: MigrationDirection;
   /**
-   * Report what the run would do without changing any content or recording any intent.
+   * Report what the run would do, writing nothing at all.
    *
-   * 🔴 It is NOT read-only, and the difference matters to whoever runs it. Claiming the session
-   * lock creates `nextly_field_group_lock` if absent and writes an owner into it, so a dry run
-   * issues DDL on first use and fails outright for a role with read-only privileges. That is a
-   * narrower promise than "writes nothing", which is what this said before, and the honest one:
-   * no content is touched and no migration marker is recorded, but the lock is real.
+   * Read-only in the strict sense, which is the point rather than a detail. It does not take the
+   * migration lock, and taking it was previously the one thing that wrote: claiming creates
+   * `nextly_field_group_lock` when absent and inserts an owner, so a preview issued DDL on first
+   * use and was refused outright for a role with read-only privileges — the credential an operator
+   * should be previewing production with. No content, no marker, no lock, no DDL.
    *
-   * The lock is deliberate rather than incidental. A plan reported while another run mutates
-   * storage describes a world that no longer exists by the time it is read, and this lock refuses
-   * rather than waits, so contention surfaces as a refusal instead of a stale answer. Making the
-   * preview usable by a read-only operator means building it outside the session, which changes
-   * that guarantee rather than preserving it, and is tracked separately.
+   * What that gives up is exclusion, and the outcome says so rather than hiding it. Another run can
+   * be mutating storage while this reads, so the reported plan is a snapshot; `lockedBy` carries
+   * whoever holds the lock so an operator can see that their preview is describing a moving target.
+   * That trade only works because a dry run performs no work — nothing acts on the answer, so a
+   * stale one costs a re-read rather than a wrong write. The same reasoning would be wrong for a
+   * run that writes, which is why only this path observes.
    *
    * Stops immediately after the plan has been reconciled against the live catalog, which is the
    * last point before anything is recorded. That placement is the whole value: a plan reported
    * before reconciliation describes what the manifest says rather than what this database will
    * actually accept, and the discrepancies between those two are exactly what an operator runs a
    * dry run to find.
-   *
-   * The session lock is still taken. A report built while another run is mutating storage
-   * describes a world that no longer exists by the time it is read, and the lock refuses rather
-   * than waits, so contention surfaces as a refusal rather than as a stale answer.
    */
   dryRun?: boolean;
   /**
@@ -144,8 +154,8 @@ export interface RunMigrationArgs {
    * direction that matters: a staging database restored from production carries the same content
    * as production.
    *
-   * A dry run does not require it, because a dry run writes no content and records no marker.
-   * It is not read-only — see `dryRun` — but nothing it touches is a thing a backup would restore.
+   * A dry run does not require it, because a dry run writes nothing whatsoever — see `dryRun`.
+   * There is no state for a backup to restore.
    */
   backupConfirmed?: boolean;
 }
@@ -212,7 +222,16 @@ export async function runFieldGroupMigration(
   // entry point owns: this lock refuses rather than waits, so a fleet whose
   // instances all invoke it at boot would have every instance but one refuse.
   return withMigrationSession(
-    { adapter, dialect, label: `field-group-migration:${direction}` },
+    {
+      adapter,
+      dialect,
+      label: `field-group-migration:${direction}`,
+      // A dry run observes the lock instead of taking it, so it writes nothing
+      // at all and stays available to a read-only role. It reports contention
+      // through `lockedBy` rather than raising it as a refusal: nothing acts on
+      // a preview, so a stale answer costs a re-read rather than a wrong write.
+      mode: dryRun ? "observe" : "claim",
+    },
     async session => {
       const state = await readMigrationState(meta);
       const rows = await readRegistryRows(adapter, dialect, identifierCase);
@@ -387,7 +406,13 @@ export async function runFieldGroupMigration(
           direction,
           renames: renames.length,
         });
-        return { ran: false, reason: "dry-run", direction, renames };
+        return {
+          ran: false,
+          reason: "dry-run",
+          direction,
+          renames,
+          lockedBy: session.observedLockOwner,
+        };
       }
 
       // Written before the first statement, never after. A crash between a

@@ -26,7 +26,7 @@ import { randomUUID } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
 
@@ -46,21 +46,45 @@ export const MIGRATION_LOCK_TABLE = "nextly_field_group_lock";
 const LOCK_ROW_ID = 1;
 
 /**
- * Read the lock row's owner inside a transaction.
+ * The single statement that reads the lock row's owner.
  *
  * Issued as a Drizzle statement rather than through the typed query builder:
  * that resolves a table through the schema registry and rejects any name the
  * ORM does not declare, and this table is created on demand by the migration
  * rather than declared in the static schema — the same shape the schema
  * pipeline's own `nextly_migrate_lock` has.
+ *
+ * Held as one function because two executors run it, and a second copy would be
+ * free to disagree about which row the owner lives in.
  */
+function ownerQuery(): SQL {
+  return sql`SELECT ${sql.identifier("owner")}
+      FROM ${sql.identifier(MIGRATION_LOCK_TABLE)}
+      WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}`;
+}
+
+/** The owner, read inside the transaction that is about to decide the claim. */
 async function readOwner(
   ctx: TransactionContext
 ): Promise<{ owner: string | null } | undefined> {
-  const rows = await ctx.queryStatement<{ owner: string | null }>(
-    sql`SELECT ${sql.identifier("owner")}
-        FROM ${sql.identifier(MIGRATION_LOCK_TABLE)}
-        WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}`
+  const rows = await ctx.queryStatement<{ owner: string | null }>(ownerQuery());
+  return rows[0];
+}
+
+/**
+ * The same read, on the adapter's own connection.
+ *
+ * Separate executor rather than a separate query — both issue `ownerQuery()`,
+ * so the two cannot drift into disagreeing about which row the owner lives in.
+ * An observing caller wants no transaction at all: opening one to read a single
+ * row asks a read-only role for more than the read needs, which is the entire
+ * failure this path exists to avoid.
+ */
+async function readOwnerOutsideTransaction(
+  adapter: DrizzleAdapter
+): Promise<{ owner: string | null } | undefined> {
+  const rows = await adapter.queryStatement<{ owner: string | null }>(
+    ownerQuery()
   );
   return rows[0];
 }
@@ -85,6 +109,21 @@ export interface MigrationSession {
    * the commit, never claims work a later rollback could undo.
    */
   inTransaction<T>(work: (ctx: TransactionContext) => Promise<T>): Promise<T>;
+  /**
+   * Who holds the lock, for a session that deliberately did not take it.
+   *
+   * `null` under `claim`, where the answer is this session itself and saying so
+   * would invite a caller to report its own claim as contention. Under
+   * `observe` it is the owner read from the row, or `null` when the row or the
+   * table is absent — no run has ever been recorded, so nothing holds it.
+   *
+   * Advisory in the strict sense: it describes an instant that has already
+   * passed by the time a caller reads it. That is sound for the only thing it
+   * is for, which is telling an operator their PREVIEW may be describing a
+   * moving target. It is not sound as a precondition for doing work, and a
+   * caller that treats it as one has reimplemented the lock badly.
+   */
+  readonly observedLockOwner: string | null;
 }
 
 /**
@@ -138,10 +177,30 @@ export async function withMigrationSession<T>(
      * interrupted run stays held, and an operator clears it.
      */
     releaseOnInterrupt?: boolean;
+    /**
+     * Whether this session takes the lock or merely looks at it.
+     *
+     * 🔴 `observe` writes NOTHING — no DDL, no row, no claim — which is the
+     * whole point: claiming creates the table on first use, so a caller that
+     * only reads was still issuing DDL and failing outright for a role with
+     * read-only privileges. That made previewing a migration impossible with
+     * exactly the credential an operator should be previewing production with.
+     *
+     * What it gives up is real and is not a technicality: nothing excludes a
+     * concurrent run, so an `observe` session describes a snapshot that may
+     * already be stale. That is acceptable only because such a session performs
+     * no work — nothing acts on the answer, so a stale one costs an operator a
+     * re-read rather than a wrong write. `observedLockOwner` reports the
+     * contention that the claim would otherwise have raised as a refusal.
+     *
+     * Never use `observe` for a session that writes. The lock is what makes two
+     * writers impossible, and this mode is precisely its absence.
+     */
+    mode?: "claim" | "observe";
   },
   fn: (session: MigrationSession) => Promise<T>
 ): Promise<T> {
-  const { adapter, dialect, label } = args;
+  const { adapter, dialect, label, mode = "claim" } = args;
 
   if (label.length === 0) {
     throw NextlyError.internal({
@@ -159,7 +218,25 @@ export async function withMigrationSession<T>(
   const session: MigrationSession = {
     dialect,
     inTransaction: work => adapter.transaction(work),
+    observedLockOwner: null,
   };
+
+  // Returns before anything that writes: the DDL, the seed row, the claim, the
+  // signal handlers and the release are all below, and an observing session
+  // must reach none of them. Placed above `requireExistingLock` because that
+  // option still claims when the table happens to exist, which is a write.
+  if (mode === "observe") {
+    // The table's absence is a complete answer rather than a missing one: the
+    // lock is created by the first run that ever claims it, so nothing can hold
+    // a lock whose table does not exist. Asked with `tableExists` because
+    // SELECTing a missing table raises a dialect-specific error that would have
+    // to be recognised to be told apart from a permission failure — the guess
+    // this mode exists to avoid.
+    const row = (await adapter.tableExists(MIGRATION_LOCK_TABLE))
+      ? await readOwnerOutsideTransaction(adapter)
+      : undefined;
+    return fn({ ...session, observedLockOwner: row?.owner ?? null });
+  }
 
   if (args.requireExistingLock === true) {
     // No lock table means no run has ever been recorded here, so there is
