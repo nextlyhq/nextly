@@ -54,23 +54,28 @@ They are worth knowing individually, because each looks like good news:
    been doing the thing you are adding, you did not add it; you replaced
    something that already worked.
 
-## Why build configuration is the worst place for it
+## Configuration coverage is UNEVEN, so find out before trusting green
 
-The clobber survived `lint`, `check-types` and the full unit suite, because no
-test asserts on build configuration. Product code has a suite standing behind
-it; a `turbo.json`, a `tsconfig`, a `tsup.config.*`, a `vitest.*.config.*`, a
-`next.config.*`, a workflow file and a `package.json` have only the diff. Green
-after touching one of these is not corroboration — it is the absence of any
-instrument. That list is examples rather than a boundary: the property is "no
-suite reads it", not the filename.
+The clobber survived `lint`, `check-types` and the full unit suite. The reason
+is narrower than "configuration is untested", and the narrow version is the
+useful one, because the broad version is false: nine suites in this repo read
+build configuration and assert on it. `packages/blocks-engine/src/typecheck-config.test.ts`
+parses `tsconfig.json`, `tsconfig.tests.json` and `package.json` and pins exact
+settings; `packages/builder/src/layering.test.ts` parses `vitest.config.ts` and
+asserts its `include`. For a property one of those covers, a green run IS
+corroboration.
 
-The consequence is delayed and looks unrelated. Dropping this package's own
-`build` from `dependsOn` leaves the root task's `^build`, which builds
-DEPENDENCIES and not this package, so turbo becomes free to schedule `build` and
-`test:coverage` together: the surface suite's `beforeAll` runs `tsup` while
-`build:js` is removing `dist` underneath it, and coverage reads half-written
-artifacts. That surfaces later, as flake, in a package whose diff no longer
-mentions any of this.
+`turbo.json` has no such suite, which is why this one went through. So the
+question to answer before reading green as evidence is not "is this a config
+file" but "does anything read the property I just changed" — and the answer
+varies by file, by package, and by which field inside it.
+
+The consequence of getting that wrong is delayed and looks unrelated to the
+diff. A dropped `inputs` entry means the hash no longer moves when that input
+changes, so turbo replays a cached pass over code nothing ran against. A dropped
+`dependsOn` edge means two tasks that were ordered may now be scheduled
+together. Neither fails at the moment of the edit, and by the time either
+surfaces the diff that caused it mentions none of the symptoms.
 
 ## `$TURBO_EXTENDS$` means the package config ADDS
 
@@ -95,11 +100,15 @@ command — name it before running anything:
   the clobbered content was staged it repairs nothing, and if deliberate earlier
   edits were staged it reinstates those. `git checkout HEAD -- <path>` is the
   form that goes to the last commit.
-- **`git checkout origin/main -- <path>` is right only when the branch has made
-  no committed change to that path.** Otherwise it discards this PR's own
-  earlier edits along with the clobber, while looking like a clean repair. Check
-  that condition — `git log <base>..HEAD -- <path>` — rather than reaching for
-  the command because it worked somewhere else.
+- **`git checkout HEAD -- <path>` is the default answer**, because the branch's
+  own last commit is where the pre-write content is.
+- **`git checkout origin/main -- <path>` restores from `origin/main`, which is a
+  different question**, and two independent things break it: the branch may have
+  committed its own edits to that path, and `main` may have changed the path
+  since the branch point. In the second case the checkout imports newer upstream
+  content while looking like a clean repair, and no check on the branch's own
+  history detects it. Reach for it only when you specifically want `main`'s
+  version — not as the way to undo a clobber.
 - Whichever source you take, the deliberate edit is then re-applied on top as an
   APPEND. The restore does not carry it.
 
