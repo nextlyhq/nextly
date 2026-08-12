@@ -311,3 +311,13 @@ export {
   type RemotePattern,
   type RemotePatternInput,
 } from "./url-policy";
+
+// The operation names the format reserves for composition flows. Exported so
+// an operation layer can ask rather than restate: a reservation only holds if
+// the code deciding whether to accept a name reads the same list the format
+// spec publishes.
+export {
+  RESERVED_OPERATION_NAMES,
+  isReservedOperationName,
+  type ReservedOperationName,
+} from "./operations";

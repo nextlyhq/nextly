@@ -173,6 +173,17 @@ const bindingSchema = z.union([
     fallback: z.unknown().optional(),
     format: bindingFormatSchema.optional(),
     source: z.enum(["entry", "item", "site"]).optional(),
+    /**
+     * Declared so a misplaced key is REFUSED rather than dropped.
+     *
+     * An object schema strips what it does not declare, so omitting this would
+     * accept `{ source: "entry", sourceKey: "hero" }`, return a document with
+     * the key silently removed, and hand the caller a value the engine rejects.
+     * The two answers would disagree, and the one that sanitizes is the one
+     * that hides the disagreement. `never().optional()` is this schema's
+     * spelling of the stored type's `sourceKey?: never`.
+     */
+    sourceKey: z.never().optional(),
   }),
   z.object({
     $bind: z.string(),

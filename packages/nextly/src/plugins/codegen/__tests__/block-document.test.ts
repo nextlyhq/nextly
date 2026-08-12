@@ -1,7 +1,11 @@
+import { readFileSync } from "node:fs";
+
 import {
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
+  RESERVED_OPERATION_NAMES,
   STYLE_STATES,
+  isReservedOperationName,
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
@@ -136,6 +140,30 @@ describe("block document schema", () => {
     expect(blockDocumentSchema.safeParse(withoutKey).success).toBe(false);
   });
 
+  it("refuses sourceKey on a source that has no single to name", () => {
+    // Refused rather than stripped. An object schema drops what it does not
+    // declare, so the permissive version would parse this, return a document
+    // with the key quietly gone, and hand the caller a value the engine
+    // rejects — two answers to one question, with the sanitizing one hiding
+    // the disagreement.
+    const doc = {
+      ...emptyPage(),
+      nodes: [
+        {
+          id: "a",
+          type: "core/text",
+          version: 1,
+          props: {},
+          bindings: {
+            text: { $bind: "title", source: "entry", sourceKey: "hero" },
+          },
+        },
+      ],
+    };
+    const result = blockDocumentSchema.safeParse(doc);
+    expect(result.success).toBe(false);
+  });
+
   it("leaves unknown style properties alone", () => {
     // The property catalog is additive-open, so a schema that enumerated
     // today's properties would refuse documents the moment the catalog grew.
@@ -152,6 +180,66 @@ describe("block document schema", () => {
       ],
     };
     expect(blockDocumentSchema.safeParse(doc).success).toBe(true);
+  });
+});
+
+describe("the frozen contract", () => {
+  it("matches the committed schema exactly", () => {
+    // The compile-time assertions pin which FIELDS exist. They cannot see a
+    // field whose type or requiredness changed while its name stayed — which
+    // is the change that silently reinterprets every stored document, because
+    // the type, the schema, the validator and the fixtures can all move
+    // together and stay self-consistent.
+    //
+    // The committed schema is the outside reference that cannot move with
+    // them. It is a file rather than an inline snapshot on purpose: a format
+    // change then appears in the PR diff, where a reviewer decides whether it
+    // needs a `formatVersion` bump and a migration.
+    //
+    // If this fails, the format changed. Regenerate the fixture ONLY after
+    // deciding that the change is compatible, or that it comes with a version
+    // bump. Updating it to make the test pass is the one response that turns
+    // this from a control into a formality.
+    const committed = JSON.parse(
+      readFileSync(
+        new URL("./__fixtures__/block-document.schema.json", import.meta.url),
+        "utf8"
+      )
+    ) as Record<string, unknown>;
+
+    expect(blockDocumentJsonSchema()).toEqual(committed);
+  });
+
+  it("reserves the operation names the format spec publishes", () => {
+    // Read from the engine rather than listed here: a copy in the test would
+    // agree on the day it was written and then certify whichever list stopped
+    // being maintained.
+    expect([...RESERVED_OPERATION_NAMES]).toEqual([
+      "saveAsPattern",
+      "saveAsComponent",
+      "convertToComponent",
+      "detachComponent",
+    ]);
+    expect(isReservedOperationName("saveAsPattern")).toBe(true);
+    expect(isReservedOperationName("insert")).toBe(false);
+  });
+
+  it("documents every reserved name in the format spec", () => {
+    // A reservation nobody can look up is not a reservation. The spec page is
+    // the only place an outside implementer meets these names, so a name added
+    // to the engine and not to the page would be reserved in private.
+    const spec = readFileSync(
+      new URL(
+        "../../../../../../docs/api-reference/block-document-format.mdx",
+        import.meta.url
+      ),
+      "utf8"
+    );
+    for (const name of RESERVED_OPERATION_NAMES) {
+      expect(spec, `"${name}" should appear in the format spec`).toContain(
+        name
+      );
+    }
   });
 });
 

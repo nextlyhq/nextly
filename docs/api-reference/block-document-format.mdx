@@ -8,8 +8,24 @@ format's specification: what a document contains, which parts are fixed, and
 which parts are expected to grow.
 
 It is written for anything that produces or consumes a document without going
-through the editor — a migration script, a content generator, an AI agent
+through an editor — a migration script, a content generator, an AI agent
 writing a page, or a build step reading one.
+
+## What this format covers
+
+This is the document format of `@nextlyhq/blocks-engine`. It is what the
+`blocks` field stores and what `@nextlyhq/blocks-react` renders.
+
+**The `@nextlyhq/plugin-page-builder` editor does not currently write this
+format.** Its canvas stores a different, internal shape — a single `root`
+container under a `version` key — and there is no adapter between the two. That
+editor is a proof of concept being replaced, and the replacement writes this
+format; until then, a document saved by that canvas will not validate here, and
+that is expected rather than a defect in either.
+
+So: use this specification for the `blocks` field, for the engine, for the
+renderer, and for anything you generate yourself. Do not use it to read what the
+legacy page-builder canvas has already saved.
 
 ## Checking a document
 
@@ -180,19 +196,31 @@ The frozen surface is:
 
 ### Reserved operation names
 
-These names are reserved by the format for conversion flows. They exist as
-operations and API actions rather than as editor gestures, so an agent or a
-script can perform them:
+⚠️ **These names are reserved, not yet callable.** None of them is implemented
+today. They are listed here so that nothing else claims one before the
+composition features ship, and so an implementer can see the intended shape.
 
-| name | what it does |
+| name | what it will do |
 | --- | --- |
-| `saveAsPattern` | saves a subtree as a copy-on-insert pattern |
-| `saveAsComponent` | saves a subtree as a linked, reusable component |
-| `convertToComponent` | replaces a subtree in place with a component instance |
-| `detachComponent` | replaces a component instance with a copy of its content |
+| `saveAsPattern` | save a subtree as a copy-on-insert pattern |
+| `saveAsComponent` | save a subtree as a linked, reusable component |
+| `convertToComponent` | replace a subtree in place with a component instance |
+| `detachComponent` | replace a component instance with a copy of its content |
 
-They are reserved now so no other operation can claim the name later; their
-behaviour ships with the composition features.
+The reservation is a value rather than a sentence, because a list that exists
+only in prose cannot be consulted by the code that would have to honour it:
+
+```ts
+import { RESERVED_OPERATION_NAMES, isReservedOperationName } from "@nextlyhq/blocks-engine";
+```
+
+An operation layer should refuse a reserved name it does not implement, rather
+than reporting it as unknown. "Unknown operation" invites a caller to define
+their own `saveAsPattern`, which is the collision the reservation exists to
+prevent, and it would surface only once the real one shipped.
+
+When these are built they will be operations and API actions rather than editor
+gestures, so a script or an agent can perform them without driving a UI.
 
 ## What documents never contain
 
