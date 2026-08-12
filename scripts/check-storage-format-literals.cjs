@@ -45,6 +45,14 @@
  * - **Comment and doc-block lines**, filtered on purpose: prose describing the format does not read
  *   it, and requiring the docs to avoid naming the thing they document makes them worse.
  *
+ *   🔴 That justification covers PROSE; the filter's effect covers ALL comments, and the two are
+ *   the same set only until someone parks code or writes an example. A commented-out assignment is
+ *   an executable site the moment it is uncommented, and a doc-block code EXAMPLE is worse than an
+ *   executable occurrence — it teaches the spelling to everyone who copies it, in the documents
+ *   most likely to be describing the rename. Neither announces itself later, because the gate
+ *   stays green while the gap widens. Distinguishing them mechanically means parsing comment
+ *   bodies, which is more machinery than this is worth; the limit is stated instead.
+ *
  * What a pass DOES mean is narrower and still worth having: no product source line outside the
  * catalog, the accessor and the migration engine names either spelling of the table, the column or
  * the content key, and none reads that key from the catalog instead of through the accessor.

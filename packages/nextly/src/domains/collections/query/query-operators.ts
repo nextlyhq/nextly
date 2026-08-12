@@ -619,6 +619,11 @@ function buildComponentFieldMap(
  * // ]
  * // cleanedWhere: { title: { contains: 'Hello' } }
  * ```
+ *
+ * The discriminator path is matched under every spelling the key has carried, so a filter written
+ * against an older release keeps selecting on the type after the storage rename rather than
+ * quietly degrading into a lookup for a column of that name. The example shows one spelling; it is
+ * not the only accepted one.
  */
 export function extractComponentFieldConditions(
   where: WhereFilter | undefined,
