@@ -136,6 +136,24 @@ jobs:
         env:
           TURBO_CACHE_DIR: .turbo
 
+      # The bare-`Error` guard's own controls. They belong in a named step
+      # rather than folded into a neighbouring one, because what they check is
+      # unrelated to it and an unexplained suite is the first thing removed
+      # during someone else's cleanup.
+      #
+      # Runs here for the same reason the step above exists: `nextly`'s full
+      # test task is excluded from the Test job over a pre-existing failing
+      # baseline, so a suite left to that task executes in no CI job at all.
+      # Without this step the allowlist could be edited to silence package lint
+      # and nothing would check the size, the per-file counts, the
+      # globally-ignored paths, or that the rule is still mounted.
+      #
+      # Needs no build: the suite drives ESLint over this package's own source.
+      - name: Bare-Error guard controls (unit)
+        run: |
+          pnpm --filter nextly exec vitest run \
+            src/errors/__tests__/bare-error-allowlist.test.ts
+
       # Release tooling under `scripts/` sits in no workspace package, so
       # `turbo run test` never reaches it. Its own suite runs here: a defect in
       # the release-notes builder only surfaces during a real publish, after the
