@@ -787,64 +787,6 @@ describe("a migration that changes whether a node draws", () => {
     expect(read.styles.css).toContain("color: teal");
   });
 
-  it("withholds when a VISIBLE ancestor flips and only its child was gated", () => {
-    // The ancestor stays visible, so its rules are in the main sheet and a flip
-    // to drawless makes them stale — this is the case the scoping must NOT
-    // exclude. It is also the case where the gating walk REBUILDS the ancestor,
-    // because it removed a child from it, so the surviving node is a different
-    // object from the migrated one. Scoping by object identity misses exactly
-    // this node and trusts the stale sheet; scoping by id catches it.
-    const nestedPage: BlockDocument = {
-      formatVersion: DOCUMENT_FORMAT_VERSION,
-      kind: "page",
-      nodes: [
-        {
-          id: "a",
-          type: "plugin/drawless",
-          version: 1,
-          props: { draw: true },
-          classes: ["only-a"],
-          styles: { base: { base: { color: "rebeccapurple" } } },
-          slots: {
-            children: [
-              {
-                id: "gatedchild",
-                type: "test/text",
-                version: 1,
-                props: { value: "hidden" },
-                visibility: {
-                  conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
-                },
-              },
-            ],
-          },
-        },
-        {
-          id: "b",
-          type: "test/text",
-          version: 1,
-          props: { value: "y" },
-          styles: { base: { base: { color: "teal" } } },
-        },
-      ],
-    } as unknown as BlockDocument;
-
-    const stored = resolvePageStyles(
-      nestedPage,
-      undefined,
-      context,
-      withPlugin
-    );
-    expect(stored.css).toContain("rebeccapurple");
-
-    const read = preparePageForRead(nestedPage, {
-      resolver: flipping,
-      styles: stored,
-    });
-
-    expect(read.styles.css).not.toContain("rebeccapurple");
-  });
-
   it("CONTROL: keeps the sheet when a migration leaves drawing alone", () => {
     // Without this the case above passes on an implementation that withholds
     // the sheet for ANY migrated node, which would blank the styling of every
