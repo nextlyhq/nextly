@@ -6,19 +6,12 @@ import {
   clearPluginPages,
   pluginPagePath,
 } from "@admin/lib/plugins/plugin-route-registry";
+import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import type { PluginMetadata } from "@admin/types/branding";
 
 /** Order-independent signature of a set of registered plugin routes. */
 function routeSignature(routes: string[]): string {
   return JSON.stringify([...routes].sort());
-}
-
-/** Derive a plugin's admin slug from its name (matches the server's derivation). */
-function toSlug(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
 }
 
 /**
@@ -48,7 +41,7 @@ export function usePluginPageRegistration(
     // pages if a plugin is disabled; both must still reach the change check
     // below so a removed route stops resolving.
     for (const plugin of plugins ?? []) {
-      const slug = toSlug(plugin.name);
+      const slug = pluginSlug(plugin.name);
       if (plugin.pages && plugin.pages.length > 0) {
         registerPluginPages(
           slug,

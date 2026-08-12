@@ -363,6 +363,17 @@ export interface PluginContext {
 export interface PluginAdminAppearance {
   /** Lucide icon name for the plugin's sidebar entry */
   icon?: string;
+  /**
+   * URL of an image the plugin ships, for a plugin that wants its own branding
+   * rather than a built-in glyph. Takes precedence over `icon` where both are
+   * declared, and the admin scales it rather than cropping, so a rectangular
+   * logo keeps its proportions.
+   *
+   * `icon` remains the common case: a lucide name is theme-aware by
+   * construction, while an image has to work on both the light and the dark
+   * surface on its own.
+   */
+  iconAsset?: string;
   /** Custom label override (defaults to plugin name) */
   label?: string;
   /** Badge text shown next to the plugin name (e.g., "Beta", "New") */

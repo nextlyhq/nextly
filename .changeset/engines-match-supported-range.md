@@ -25,4 +25,8 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-The field-group storage migration can now report what it would rename without changing any content or recording that a run happened, and refuses to run for real unless the caller states that a restorable backup exists. A preview still claims the migration lock, so it needs a role that can write to Nextly's own lock table.
+Advertise the Node range this project actually supports. Every package declared
+`>=20.0.0` while the repository requires `^20.19.0 || ^22.12.0 || >=24.0.0`, so
+installs on 20.6-20.18 or on 23.x succeeded without warning and failed later at
+runtime. Release preflight now derives the expected range from the root manifest
+and rejects a package that disagrees, so the two cannot drift apart again.

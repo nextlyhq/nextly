@@ -785,6 +785,38 @@ describe("a dry run", () => {
     );
   });
 
+  // A localized field group moves its `_locales` companion on the same manifest
+  // entry as its own table, so a preview reading `from` and `to` off the entry
+  // names one rename where two happen -- and omits the one an operator is least
+  // likely to predict.
+  it("names a localized field group's companion table too", async () => {
+    const { adapter } = createRunWorld({
+      tables: [LEGACY_REGISTRY, "comp_hero", "comp_hero_locales"],
+      registryRows: [
+        { id: "1", slug: "hero", table_name: "comp_hero", localized: true },
+      ],
+    });
+
+    const outcome = await runFieldGroupMigration({
+      adapter,
+      logger,
+      direction: "up",
+      dryRun: true,
+    });
+
+    if (outcome.ran !== false || outcome.reason !== "dry-run") {
+      throw new Error("expected a dry-run outcome");
+    }
+    expect(outcome.renames).toContainEqual({
+      from: "comp_hero",
+      to: "fg_hero",
+    });
+    expect(outcome.renames).toContainEqual({
+      from: "comp_hero_locales",
+      to: "fg_hero_locales",
+    });
+  });
+
   it("reads the catalog but records nothing", async () => {
     const { adapter, trace, writes } = unmigrated();
 

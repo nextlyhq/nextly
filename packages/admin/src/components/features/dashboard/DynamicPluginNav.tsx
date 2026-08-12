@@ -29,6 +29,7 @@ import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useCollections } from "@admin/hooks/queries";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { filterCollectionItems } from "@admin/lib/permissions/authorization";
+import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { cn } from "@admin/lib/utils";
 import type { ApiCollection } from "@admin/types/entities";
 
@@ -54,17 +55,6 @@ function PluginSkeleton() {
       </SidebarMenuButton>
     </SidebarMenuItem>
   );
-}
-
-/**
- * Derive a URL-friendly slug from a plugin group name.
- * e.g. "Form Builder" -> "form-builder"
- */
-function toSlug(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
 }
 
 interface PluginEntry {
@@ -132,7 +122,7 @@ export function DynamicPluginNav({
       const collectionSlugs = new Set(meta.collections ?? []);
       for (const collection of allPluginCollections) {
         if (collectionSlugs.has(collection.name)) {
-          const groupSlug = toSlug(collection.admin?.group || "");
+          const groupSlug = pluginSlug(collection.admin?.group || "");
           if (groupSlug && !map.has(groupSlug)) {
             map.set(groupSlug, meta);
           }
@@ -170,7 +160,7 @@ export function DynamicPluginNav({
       }
 
       if (!pluginMap.has(groupName)) {
-        const slug = toSlug(groupName);
+        const slug = pluginSlug(groupName);
         pluginMap.set(groupName, {
           name: groupName,
           slug,

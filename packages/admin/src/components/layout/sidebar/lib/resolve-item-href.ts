@@ -1,4 +1,5 @@
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import type { PluginMetadata } from "@admin/types/branding";
 
 import type { MainMenuItem } from "../sidebar-types";
@@ -24,13 +25,7 @@ export function resolveItemHref(
   if (item.id === "settings" && settingsHref) return settingsHref;
   if (item.id.startsWith("standalone-")) {
     const slug = item.id.replace("standalone-", "");
-    const sp = visibleStandalonePlugins.find(
-      p =>
-        p.name
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-+|-+$/g, "") === slug
-    );
+    const sp = visibleStandalonePlugins.find(p => pluginSlug(p.name) === slug);
     const firstCol = sp?.collections?.[0];
     return firstCol
       ? buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: firstCol })

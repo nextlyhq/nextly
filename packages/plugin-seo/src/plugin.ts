@@ -183,6 +183,14 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     homepage: "https://nextlyhq.com",
     repository: "https://github.com/nextlyhq/nextly",
     license: "MIT",
+    // How the plugin presents itself wherever the admin lists it. Without a
+    // description the plugins list shows a bare name, which says nothing about
+    // what installing this does. The other first-party plugins declare theirs
+    // in the same place.
+    admin: {
+      description:
+        "Add an SEO meta field group to your collections, with title, description and social preview fields",
+    },
     category: "seo",
     tags: ["seo", "meta"],
     contributes,
