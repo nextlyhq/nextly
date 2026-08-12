@@ -57,12 +57,21 @@ const PRIMITIVE = resolve(PACKAGES, "ui/src/components/tabs.tsx");
 /** The components whose appearance the primitive owns. */
 const OWNED_TAGS = ["TabsList", "TabsTrigger"];
 
+/** The module a call site reaches the primitive through. */
+const OWNING_MODULE = "@nextlyhq/ui";
+
 /**
  * What a call site may not put in a `className`.
  *
- * Each pattern is a way of taking the indicator over rather than positioning it.
- * `border-b-*` covers both removing the underline (`border-b-0`) and redrawing
- * it.
+ * One entry per appearance category the primitive declares, because a contract
+ * that names five categories and checks two reports conformance on the three it
+ * never looked at. Each is a way of taking an appearance over rather than
+ * positioning the control.
+ *
+ * The state rules are scoped to ink and border deliberately: a call site may
+ * still tint its own surface per state, and `FieldEditor` legitimately does with
+ * `data-[state=active]:bg-background/50` — the panel behind the strip is its
+ * own, while the letterform colour and the underline are not.
  */
 const CLASS_RULES: Array<{ pattern: RegExp; why: string }> = [
   {
@@ -72,6 +81,22 @@ const CLASS_RULES: Array<{ pattern: RegExp; why: string }> = [
   {
     pattern: /\brounded-[^\s"'`}]+/,
     why: "sets a corner — tabs are square so the underline stays flush, pinned by radius-tier-contract",
+  },
+  {
+    pattern: /\bdata-\[state=(?:active|inactive)\]:(?:text|border)-/,
+    why: "repaints a state's ink or border — the primitive drives both from the same data attribute",
+  },
+  {
+    pattern: /\bhover:(?:text|border)-/,
+    why: "repaints the hover state, which the primitive already matches to the active colour",
+  },
+  {
+    pattern: /\bfocus-visible:(?:ring|outline)/,
+    why: "redraws the focus ring, which is a 2px WCAG 2.2 treatment the primitive applies uniformly",
+  },
+  {
+    pattern: /\bdisabled:/,
+    why: "restates the disabled treatment the primitive applies",
   },
 ];
 
@@ -113,14 +138,18 @@ function sourceFiles(dir: string, found: string[] = []): string[] {
 /**
  * Parse as TSX rather than matching element text with a regular expression.
  *
- * Two failures made this necessary and both were found by review rather than by
- * the suite, which is the argument for a parser over another pattern. A regex
- * bounded by the next `>` truncates at the arrow in
- * `onClick={() => {}} className="border-b-0"`, so the forbidden class sat past
- * the end of the match and a real override read as conforming. And matching from
- * `<TabsTrigger` onwards begins after any comment marker, so a JSX example
- * inside a docblock looked like a live call site. A parser gets both right for
- * the same reason: it is reading the grammar instead of a proxy for it.
+ * A pattern bounded by the next `>` cannot delimit a JSX element: the `>` in
+ * `onClick={() => {}} className="border-b-0"` closes the match, leaving the
+ * class outside it, so an override reads as conforming. A pattern beginning at
+ * `<TabsTrigger` cannot see a comment marker either, since the marker sits
+ * before the match starts, so a JSX example inside a docblock reads as a live
+ * call site. Both are the same defect — the delimiters of a JSX element are
+ * grammatical, and no character-class approximation of them holds.
+ *
+ * A parser resolves both by construction, and makes three further things
+ * readable that no pattern reaches: attributes individually rather than as tag
+ * text, string literals nested inside a template or a conditional, and a tag
+ * bound to the component through a local alias.
  */
 function parse(file: string, source: string): ts.SourceFile {
   return ts.createSourceFile(
@@ -135,21 +164,39 @@ function parse(file: string, source: string): ts.SourceFile {
 /**
  * The local names that refer to an owned component in this file.
  *
- * An import alias (`import { TabsTrigger as Trigger }`) and a re-binding
- * (`const Trigger = TabsTrigger`) both render the same component under a
- * different tag, which a check keyed on the exported name cannot see. Resolved
- * within the file only: a name assigned in another module stays opaque, and the
- * docblock says so.
+ * Resolved from the IMPORT rather than from the spelling. A name is a claim
+ * made by whoever wrote the file, and two files can spell the same identifier
+ * for different components: one defining its own `TabsList`, or importing a
+ * `TabsTrigger` from some other library, would otherwise be held to this
+ * primitive's contract and fail for carrying a corner it is entitled to.
+ *
+ * Two bindings are followed because both render the same component under
+ * another tag: an import alias (`import { TabsTrigger as Trigger }`) and a
+ * re-binding (`const Trigger = TabsTrigger`). Within the file only — a name
+ * assigned in another module stays opaque, and the docblock says so.
+ *
+ * A relative specifier counts too, so a future call site inside `packages/ui`
+ * reaching `../tabs` directly is covered rather than silently exempt.
  */
+function importsTheOwningModule(node: ts.ImportDeclaration): boolean {
+  if (!ts.isStringLiteral(node.moduleSpecifier)) return false;
+  const from = node.moduleSpecifier.text;
+  return from === OWNING_MODULE || /(^|\/)tabs$/.test(from);
+}
+
 function ownedTagNames(sourceFile: ts.SourceFile): Set<string> {
-  const names = new Set(OWNED_TAGS);
+  const names = new Set<string>();
   const visit = (node: ts.Node): void => {
-    if (
-      ts.isImportSpecifier(node) &&
-      node.propertyName &&
-      OWNED_TAGS.includes(node.propertyName.text)
-    ) {
-      names.add(node.name.text);
+    if (ts.isImportDeclaration(node) && importsTheOwningModule(node)) {
+      const bindings = node.importClause?.namedBindings;
+      if (bindings && ts.isNamedImports(bindings)) {
+        for (const specifier of bindings.elements) {
+          // `propertyName` is the exported name when the import is aliased, and
+          // absent otherwise — so the exported name is whichever is present.
+          const exported = (specifier.propertyName ?? specifier.name).text;
+          if (OWNED_TAGS.includes(exported)) names.add(specifier.name.text);
+        }
+      }
     }
     if (
       ts.isVariableDeclaration(node) &&
@@ -311,6 +358,9 @@ describe("the tab indicator contract", () => {
     expect(scanned.length).toBeGreaterThan(5);
   });
 
+  /** Every probe imports the way a real call site does, so tags resolve. */
+  const IMPORT = `import { TabsList, TabsTrigger } from "${OWNING_MODULE}";\n`;
+
   it.each([
     [
       "a forbidden class after an arrow-function prop",
@@ -337,15 +387,40 @@ describe("the tab indicator contract", () => {
       "a violation on a locally aliased tag",
       'const Trigger = TabsTrigger;\n<Trigger className="border-b-0" />',
     ],
+    // One per appearance category the contract claims. A category the primitive
+    // declares and the rules never read reports conformance it did not check.
     [
-      "a violation on an import alias",
-      'import { TabsTrigger as Trigger } from "x";\n<Trigger className="rounded-md" />',
+      "an active-state ink override",
+      '<TabsTrigger className="data-[state=active]:text-destructive">x</TabsTrigger>',
     ],
-  ])("catches %s", (_label, source) => {
-    // The positive controls. Each is a shape the previous regex-based scan
-    // returned clean on, or a shape no version of it could read. Without these
-    // a rule that can never match anything passes the suite while checking
-    // nothing.
+    [
+      "an inactive-state border override",
+      '<TabsTrigger className="data-[state=inactive]:border-primary">x</TabsTrigger>',
+    ],
+    [
+      "a hover override",
+      '<TabsTrigger className="hover:border-transparent">x</TabsTrigger>',
+    ],
+    [
+      "a focus-ring override",
+      '<TabsTrigger className="focus-visible:ring-0">x</TabsTrigger>',
+    ],
+    [
+      "a disabled-state override",
+      '<TabsTrigger className="disabled:opacity-100">x</TabsTrigger>',
+    ],
+  ])("catches %s", (_label, body) => {
+    // The positive controls. Each is a shape the previous pattern-based scan
+    // returned clean on, or a category no version of it read at all. Without
+    // these, a rule that can never match anything passes the suite while
+    // checking nothing.
+    expect(violationsIn("probe.tsx", IMPORT + body)).not.toEqual([]);
+  });
+
+  it("catches a violation reached through an import alias", () => {
+    const source =
+      `import { TabsTrigger as Trigger } from "${OWNING_MODULE}";\n` +
+      '<Trigger className="rounded-md" />';
     expect(violationsIn("probe.tsx", source)).not.toEqual([]);
   });
 
@@ -363,14 +438,34 @@ describe("the tab indicator contract", () => {
       '<TabsList className="justify-start gap-0 overflow-x-auto h-8" />',
     ],
     [
+      "a per-state surface tint, which the surface owns",
+      '<TabsTrigger className="w-full data-[state=active]:bg-background/50">x</TabsTrigger>',
+    ],
+    [
       "an unrelated element carrying a corner",
       '<div className="rounded-md" />\n<TabsList />',
     ],
-  ])("does not report %s", (_label, source) => {
+  ])("does not report %s", (_label, body) => {
     // The complement, and the reason this is a contract rather than a ban. A
     // check that flags a documented example or a legitimate layout class gets
-    // switched off, and then it enforces nothing at all.
-    expect(violationsIn("probe.tsx", source)).toEqual([]);
+    // switched off, and then it enforces nothing at all. The surface tint is
+    // load-bearing: a real call site depends on it.
+    expect(violationsIn("probe.tsx", IMPORT + body)).toEqual([]);
+  });
+
+  it("does not claim a same-named component from another module", () => {
+    // Ownership follows the import, not the spelling. A file with its own
+    // `TabsList`, or one importing that name from elsewhere, is entitled to any
+    // corner it likes, and holding it to this contract would fail the whole UI
+    // suite over a component this primitive has nothing to do with.
+    const imported =
+      'import { TabsList } from "some-other-library";\n' +
+      '<TabsList className="rounded-md border-b-0" />';
+    expect(violationsIn("probe.tsx", imported)).toEqual([]);
+    const local =
+      "function TabsList() { return null; }\n" +
+      '<TabsList className="rounded-md" />';
+    expect(violationsIn("probe.tsx", local)).toEqual([]);
   });
 
   it("no call site overrides the tab indicator", () => {

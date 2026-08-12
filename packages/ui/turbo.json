@@ -18,18 +18,24 @@
       // `dist` was current meant re-implementing turbo's input tracking and
       // every error in it passed stale declarations.
       "dependsOn": ["$TURBO_EXTENDS$", "build"],
-      // The contrast alpha-utilities guard scans admin and plugin source, so
-      // those trees are real inputs to this package's tests. $TURBO_EXTENDS$
-      // inherits the root test inputs (so they stay in sync and nothing is
-      // dropped) and appends the scanned call-site trees, so a faint alpha
-      // utility added in a call-site package invalidates the cached pass
-      // instead of hiding behind it. The root task supplies dependsOn / cache.
+      // Two guards here read source from OTHER packages: the contrast
+      // alpha-utilities scan, and the tab-indicator contract. Those trees are
+      // therefore real inputs to this package's tests, and a task whose inputs
+      // omit what it reads answers from cache after its subject changed --
+      // reporting a pass over a violation it never saw.
+      //
+      // Every package rather than the three that motivated it, because the
+      // scans walk `packages/` and a list of names drifts the moment a package
+      // is added. That is the deliberate cost: an edit anywhere in the monorepo
+      // invalidates this package's test cache. Naming a subset would be cheaper
+      // and would restore exactly the hole this closes.
+      //
+      // $TURBO_EXTENDS$ inherits the root test inputs so they stay in sync and
+      // nothing is dropped. The root task supplies dependsOn / cache.
       "inputs": [
         "$TURBO_EXTENDS$",
         "vitest.config.ts",
-        "$TURBO_ROOT$/packages/admin/src/**",
-        "$TURBO_ROOT$/packages/plugin-form-builder/src/**",
-        "$TURBO_ROOT$/packages/plugin-page-builder/src/**"
+        "$TURBO_ROOT$/packages/*/src/**"
       ]
     },
     "test:coverage": {
@@ -45,9 +51,7 @@
       "inputs": [
         "$TURBO_EXTENDS$",
         "vitest.config.ts",
-        "$TURBO_ROOT$/packages/admin/src/**",
-        "$TURBO_ROOT$/packages/plugin-form-builder/src/**",
-        "$TURBO_ROOT$/packages/plugin-page-builder/src/**"
+        "$TURBO_ROOT$/packages/*/src/**"
       ]
     }
   }
