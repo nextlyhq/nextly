@@ -55,7 +55,13 @@ export interface ComponentRow {
  */
 export interface ComponentInstanceData {
   id?: string;
-  _componentType?: string;
+  /**
+   * The type discriminator is reached through `readFieldGroupType`, not declared here.
+   *
+   * Naming the key in this shape would fix ONE spelling into the type, and the storage migration
+   * renames it — so the declaration would go stale exactly when a document could carry either
+   * one. The index signature below already admits it; the accessor is what knows which.
+   */
   [key: string]: unknown;
 }
 

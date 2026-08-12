@@ -37,6 +37,10 @@ import {
   companionNotReadyMessage,
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import {
+  currentFieldGroupTypeKey,
+  readFieldGroupType,
+} from "../storage/field-group-type-key";
 
 import {
   COMPONENT_META_KEYS,
@@ -1125,19 +1129,24 @@ export class FieldGroupMutationService extends BaseService {
 
       for (let i = 0; i < instances.length; i++) {
         const instance = instances[i];
-        const componentType = instance[STORAGE_FORMAT.wireTypeKey];
+        // Asked rather than indexed: an instance written under the other spelling of this key
+        // would otherwise read as missing, and a missing type is DROPPED below.
+        const componentType = readFieldGroupType(instance);
 
         if (!componentType) {
-          this.logger.warn("Multi-component instance missing _componentType", {
-            fieldName,
-            index: i,
-          });
+          this.logger.warn(
+            `Multi-component instance missing ${currentFieldGroupTypeKey}`,
+            {
+              fieldName,
+              index: i,
+            }
+          );
           continue;
         }
 
         if (!allowedSlugs.includes(componentType)) {
           this.logger.warn(
-            "Multi-component instance has invalid _componentType",
+            `Multi-component instance has invalid ${currentFieldGroupTypeKey}`,
             {
               fieldName,
               componentType,
@@ -1301,7 +1310,8 @@ export class FieldGroupMutationService extends BaseService {
 
       for (let i = 0; i < instances.length; i++) {
         const instance = instances[i];
-        const componentType = instance[STORAGE_FORMAT.wireTypeKey];
+        // Asked rather than indexed, for the same reason: an unresolved type skips the row.
+        const componentType = readFieldGroupType(instance);
 
         if (!componentType || !allowedSlugs.includes(componentType)) continue;
 

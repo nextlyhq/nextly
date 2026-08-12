@@ -19,6 +19,7 @@
 import type { FieldConfig } from "../../collections/fields/types";
 import { IMMUTABLE_SYSTEM_FIELDS_ANY_ENTITY } from "../../lib/immutable-system-fields";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import { readFieldGroupType } from "../field-groups/storage/field-group-type-key";
 import { isFieldLocalized } from "../i18n/classify-fields";
 
 /**
@@ -379,9 +380,9 @@ function pruneContainerValue(
   // keeps a key that this row's component has since lost merely because a
   // sibling component still declares it — and the save path, which serializes
   // against the row's own schema, then drops it without saying so.
-  const rowType = (value as { _componentType?: unknown })[
-    STORAGE_FORMAT.wireTypeKey
-  ];
+  // Asked rather than indexed: a snapshot being restored was written under the schema of its
+  // day, so its type key may carry either spelling.
+  const rowType = readFieldGroupType(value);
   const rowSchema =
     isComponentValue && typeof rowType === "string"
       ? componentSchemas?.get(rowType)
@@ -550,10 +551,9 @@ function partitionAllowedInstances(
 ): { kept: unknown; rejected: string[] } {
   if (allowed === null) return { kept: value, rejected: [] };
 
-  const typeOf = (row: unknown): string | undefined =>
-    typeof row === "object" && row !== null
-      ? (row as { _componentType?: string })[STORAGE_FORMAT.wireTypeKey]
-      : undefined;
+  // Asked rather than indexed. A row whose type does not resolve is treated as untyped, and
+  // an untyped row is dropped here — so reading only one spelling would discard live instances.
+  const typeOf = (row: unknown): string | undefined => readFieldGroupType(row);
 
   // A row keeps its place when its type is allowed, or when this field stores
   // no type at all. Where a type IS required, a row without one cannot be
