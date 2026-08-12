@@ -48,9 +48,10 @@ export const MAIN_MENU_ITEMS: MainMenuItem[] = [
   },
 ];
 
-// Plugins is always listed, including on an install with none registered: the
-// entry is the only route to the plugin directory, so hiding it until a plugin
-// exists leaves a new install unable to find the page that installs one.
+// Plugins is always listed, including on an install with none registered. The
+// entry is the only route to `/admin/plugins`, which is the installed-plugins
+// list; hiding it until a plugin exists leaves a new install unable to reach
+// that page at all.
 export const getFilteredMenuItems = (showBuilder: boolean) =>
   MAIN_MENU_ITEMS.filter(item => {
     if (item.id === "builders" && !showBuilder) return false;

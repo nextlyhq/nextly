@@ -23,9 +23,11 @@ interface PluginsSectionInputs {
  * Two arms, and they admit different users on purpose:
  *
  * - `canManageSettings` shows the entry unconditionally, including on a fresh
- *   project with nothing installed. The plugins page is how a plugin gets
- *   installed, so gating it on already having one leaves a new project with no
- *   route to it.
+ *   project with nothing installed. `/admin/plugins` is the installed-plugins
+ *   list; today its empty state explains that plugins are added to the Nextly
+ *   config, and it offers no directory or install action. Hiding the entry
+ *   until a plugin exists means a new project cannot reach even that
+ *   explanation.
  * - The collections arm keeps the entry for a user who can read a plugin-owned
  *   collection but cannot manage settings. They reach that collection through
  *   the sub-sidebar; `resolveItemHref` deliberately does not navigate them to
