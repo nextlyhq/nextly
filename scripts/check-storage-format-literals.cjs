@@ -41,7 +41,6 @@
  *   but it is broad, and a stored-row FIXTURE written with the raw key is one of the ways a
  *   completed rename gets quietly reverted later. There is currently no automatic way to tell a
  *   fixture from an assertion about the format, so this stays a review-time concern.
- * - **The pinned `packages/admin` sites** below, which are reported on every run and do not fail.
  * - **Comment and doc-block lines**, filtered on purpose: prose describing the format does not read
  *   it, and requiring the docs to avoid naming the thing they document makes them worse.
  *
@@ -97,52 +96,6 @@ const ALLOWED = [
   /\.test-d\.ts:/,
 ];
 
-/**
- * Known-outstanding sites: reported every run, not failing, and PINNED individually.
- *
- * `packages/admin` cannot reach the catalog — `STORAGE_FORMAT` is not exported from any surface
- * admin imports — so fixing these needs a public accessor export, which is an API decision rather
- * than a mechanical edit. They are listed here instead of allowlisted so every run states that
- * they exist and how many remain: an allowlist would make them disappear, and a gate whose output
- * shrinks silently is how the original 43 accumulated.
- *
- * 🔴 Pinned as exact source text rather than as a path pattern, and that distinction is the whole
- * point. A pattern like `^packages/admin/` exempts every file the directory will ever contain, so
- * a NEW hardcoded reader lands reported-but-passing and CI stays green — which is the regression
- * this gate exists to catch, reintroduced by the mechanism that was supposed to track its own
- * debt. Matching the text means a known site is tolerated and anything else is not.
- *
- * Counted, not just matched: duplicating a pinned line is a new site, and a set would accept it.
- *
- * Line numbers are deliberately absent — they move under edits elsewhere in the file, and a pin
- * that breaks on unrelated churn gets re-pinned reflexively, which is how a control stops being
- * read. Text is stable while the site is unfixed, which is exactly as long as it needs to be.
- *
- * This list must reach empty, and the gate says so on every run. It is not a place to move an
- * inconvenient hit to: the correct response to a new hit is the accessor, never a new line here.
- */
-const PENDING_OCCURRENCES = {
-  "packages/admin/src/components/features/entries/fields/structured/ComponentInput.tsx":
-    [
-      "defaultValues._componentType = componentType;",
-      "const currentType = currentData?._componentType as string | undefined;",
-      "const itemComponentType = itemData._componentType as",
-    ],
-  "packages/admin/src/components/features/versions/value-display/FieldValueDisplay.tsx":
-    [
-      "? (instance as { _componentType?: string })._componentType",
-      "? ((instance as { _componentType?: string })._componentType ?? null)",
-    ],
-};
-const PENDING_TRACKED_IN =
-  "tasks/left-tasks/2026-08-12-0800-storage-key-read-by-literal-blocks-b2.md";
-
-/** Split a grep line into the path and the source text, dropping the line number. */
-function splitGrepLine(line) {
-  const m = /^([^:]+):(\d+):(.*)$/.exec(line);
-  if (!m) return null;
-  return { path: m[1], lineNo: m[2], text: m[3].trim() };
-}
 
 function grep(label, pattern, opts = {}) {
   const {
@@ -199,30 +152,10 @@ function grep(label, pattern, opts = {}) {
     // Comments and doc blocks describe the format; they do not read it.
     .filter(l => !/:\s*(\/\/|\*|\/\*)/.test(l.replace(/^[^:]*:\d+:/, ":")));
 
-  // Classify each hit against the pinned occurrences. A hit is tolerated only when its file AND
-  // its source text are pinned, and only as many times as they were pinned; everything else fails,
-  // including a second copy of a pinned line.
-  const remainingBudget = new Map();
-  for (const [path, texts] of Object.entries(PENDING_OCCURRENCES)) {
-    for (const text of texts) {
-      const key = `${path}::${text}`;
-      remainingBudget.set(key, (remainingBudget.get(key) ?? 0) + 1);
-    }
-  }
-
-  const pending = [];
-  const failing = [];
-  for (const l of lines) {
-    const parsed = splitGrepLine(l);
-    const key = parsed ? `${parsed.path}::${parsed.text}` : null;
-    const budget = key ? (remainingBudget.get(key) ?? 0) : 0;
-    if (budget > 0) {
-      remainingBudget.set(key, budget - 1);
-      pending.push(l);
-    } else {
-      failing.push(l);
-    }
-  }
+  // Every hit fails. The admin sites that were once pinned here are converted, so there is no
+  // tolerated set left — and a list that matches nothing is worse than no list, because it would
+  // silently re-admit exactly those lines if they came back.
+  const failing = lines;
 
   if (failing.length > 0) {
     failures++;
@@ -234,15 +167,6 @@ function grep(label, pattern, opts = {}) {
     console.log(`✓ ${label}`);
   }
 
-  if (pending.length > 0) {
-    console.log(
-      `  ⧗ ${pending.length} pinned known-outstanding site(s) not yet failing — ${PENDING_TRACKED_IN}`
-    );
-    for (const l of pending) console.log(`      ${l}`);
-    console.log(
-      `  ⧗ this list must reach empty; a NEW hit is a failure, never a new pin`
-    );
-  }
 }
 
 // 🔴 BOTH generations are banned, not only the legacy one.
