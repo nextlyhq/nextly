@@ -62,6 +62,79 @@ Two rules follow, and the second is the one that gets missed:
   reconstructing the same call in the test. A hand-copied argument list keeps
   passing after someone edits the line the test exists to watch.
 
+## Derivation cannot see DELETION, and the green looks identical
+
+Deriving fixes drift. It does not fix removal, and those are different failures:
+
+- **The subject gains a member the check forgot** → deriving makes this
+  impossible. The case exists the moment the member does.
+- **The subject LOSES a member** → still silent. The derived population shrinks
+  with it, every remaining case passes, and the suite reports green over a
+  subject that stopped doing something.
+
+A derived check inherits its subject's blind spots: it can only assert about
+what the subject currently says. Removing the subject removes the assertion —
+and removes its test alongside, so the count drops without a failure.
+
+So: **derive the population, pin by name the members whose absence would itself
+be the regression.** Deriving answers "did we forget to check something that
+exists". A by-name pin answers "did something stop existing". Most checks need
+both and are written with only the first.
+
+Worked example, from this repo. `packages/nextly/src/__tests__/export-contract.test.ts`
+hand-listed 6 entry points while `package.json` published 42, and pinned the
+expected count beside the list it counted — so both sides moved together and a
+new subpath was never checked. It now derives the matrix from
+`Object.keys(manifest.exports)`, which closes the addition case completely.
+
+It still carries one hardcoded assertion:
+
+```ts
+expect(declaredSubpaths).toContain("./field-group-type");
+```
+
+because the derived matrix would pass just as happily if that subpath were
+dropped from `package.json` — the published surface would simply be described as
+smaller. That entry point is the supported way to read a field group's type, and
+its absence sends callers back to reading the raw storage key by hand, which is
+the defect the whole rename exists to remove. Deriving cannot express that; only
+naming it can.
+
+The same shape applies to a derived check over routes, over registered field
+types, over dialects in a matrix: derive so nothing new escapes, then name the
+one or two whose disappearance is the thing you are actually afraid of.
+
+## A pattern matching a common word is a narrowing check in reverse
+
+The separating-property test has a mirror image. A check can also fail by
+matching too MUCH, and it fails more convincingly, because a hit reads as
+evidence while a miss reads as nothing.
+
+Measured here, scanning every open PR for the 22 forbidden identifiers in
+`export-contract.test.ts`. The count fell to nothing under each refinement:
+
+| pass                                            | result                              |
+| ----------------------------------------------- | ----------------------------------- |
+| substring match on added lines                  | **10 PRs flagged**                  |
+| ...restricted to lines containing `export`      | 4 lines, one PR, all prose comments |
+| word-boundary match on the 21 DISTINCTIVE names | **0**                               |
+
+Every hit came from `component`, the one entry in the list that is also an
+ordinary English word: "renders the same detail-page component type". Acting on
+the first number would have meant warning ten lanes about nothing.
+
+Note the middle pass, because it is the more instructive failure. Filtering to
+lines containing `export` looks like the rigorous move and is itself unsound: a
+re-export inside a block puts the binding on its own line, so `  ComponentConfig,`
+carries no `export` and the filter drops the exact case it was written to catch.
+One narrowing check laid over one widening one, each hiding the other's defect.
+
+An identifier list containing an ordinary word is the tell. Match at a
+granularity the language distinguishes — a word boundary, a parsed binding — or
+read every hit before reporting a number. **A count is not a finding until
+something has looked at what it counted**, and "I filtered it" is not the same
+as having looked.
+
 ## A derived check must match on three axes, not one
 
 Asking "does it compute the same thing" is not enough:
