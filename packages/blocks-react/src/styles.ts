@@ -383,10 +383,29 @@ export function migrationChangedWhatDraws(
   // format: it agrees on every ordinary slot name and diverges on the ones the
   // escaping exists for, so the mismatch appears only for the documents this
   // check most needs to read.
+  // Only nodes whose rules could be in the MAIN sheet are asked. Condition
+  // gating moves a withheld node's rules into the per-node map instead, and it
+  // withholds whole subtrees, so a descendant flipping to drawless leaves the
+  // delivered CSS exactly as correct as it was. Marking the artifact repaired
+  // for one of those costs every OTHER block on the page its styling, since a
+  // caller without a compile context has no way to recompile and the stored
+  // sheet is withheld entire — a far larger regression than the stale rules
+  // this exists to drop.
+  //
+  // Membership is by IDENTITY rather than by resolving the pointer again: the
+  // gating pass REMOVES nodes, so positions shift and the same pointer
+  // addresses a different node in that tree. Surviving nodes keep their
+  // reference, which is what makes the set meaningful.
+  const survivesGating = new Set<BlockNode>();
+  if (Array.isArray(stages.gated.nodes)) {
+    walkNodes(stages.gated.nodes, node => survivesGating.add(node));
+  }
+
   return stages.rewritten.some(entry => {
     const before = nodeAtPointer(stages.sanitized, entry.path);
     const after = nodeAtPointer(stages.migrated, entry.path);
     if (before === undefined || after === undefined) return false;
+    if (!survivesGating.has(after)) return false;
     return !drawsNothing(before) && drawsNothing(after);
   });
 }
