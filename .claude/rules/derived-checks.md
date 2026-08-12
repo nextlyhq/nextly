@@ -99,10 +99,16 @@ existing", which neither of the others can see.
 Worked example, from this repo. `packages/nextly/src/__tests__/export-contract.test.ts`
 hand-listed 6 entry points while `package.json` published 42, and pinned the
 expected count beside the list it counted — so both sides moved together and a
-new subpath was never checked. It now derives the matrix from
-`Object.keys(manifest.exports)`, which closes the addition case completely.
+new subpath was never checked.
 
-It still carries one hardcoded assertion:
+It now does all three. The matrix comes from `Object.keys(manifest.exports)`,
+which is TOTAL — the whole manifest, with no predicate or glob between, which is
+what makes the addition case genuinely closed rather than merely relocated. Its
+length is then asserted against `declaredSubpaths.length` and against zero, so a
+mapping that silently selected a subset, or none, fails instead of deleting its
+own cases.
+
+And it still carries one hardcoded assertion:
 
 ```ts
 expect(declaredSubpaths).toContain("./field-group-type");
