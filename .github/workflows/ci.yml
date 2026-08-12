@@ -100,6 +100,9 @@ jobs:
       - name: Drizzle v1 legacy gate
         run: pnpm check:drizzle-v1-legacy
 
+      - name: Storage-spelling gate (field-group storage format)
+        run: pnpm check:storage-format-literals
+
       # The drizzle-v1 migration's own safety net (review-driven: these
       # suites previously executed in NO CI job because the `nextly`
       # package's full test task carries a pre-existing failing baseline).

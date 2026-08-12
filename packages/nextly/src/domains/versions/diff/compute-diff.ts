@@ -24,6 +24,7 @@ import { dequal } from "dequal";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { normalizeStoredValue } from "../../../shared/lib/normalize-stored-value";
 import { defineOwnProperty } from "../../../shared/lib/own-property";
+import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 
 import { reconcileById, type ItemMatch } from "./reconcile-list";
 import { diffText } from "./text-diff";
@@ -182,8 +183,9 @@ function enrichedComponentSchemas(
   ).componentSchemas;
 }
 function componentTypeOf(item: Record<string, unknown>): string | undefined {
-  const tag = item._componentType;
-  return typeof tag === "string" ? tag : undefined;
+  // Asked rather than read: the stored spelling of this key changes with the storage migration,
+  // and a document written under the other one would otherwise diff as untyped.
+  return readFieldGroupType(item);
 }
 
 function asObject(value: unknown): Record<string, unknown> {
