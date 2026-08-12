@@ -177,8 +177,28 @@ function usePreferences(store: PreferenceStore) {
     );
   }, [store]);
 
+  // The newest preferences, reachable from a callback that must not go stale.
+  const latest = React.useRef(preferences);
+  latest.current = preferences;
+
+  /**
+   * Takes a CHANGE rather than a value, and this is load-bearing.
+   *
+   * `react-resizable-panels` calls `onLayoutChanged` once a drag settles, from
+   * a handler React captured when the panel was rendered. Handed a whole
+   * record built by spreading `preferences` from that render, a drag begun
+   * before an unrelated change would write the OLD record back with only the
+   * layout replaced — silently discarding whichever field moved in between.
+   *
+   * Measured, not theorised: opening a panel and then dragging its separator
+   * wrote `leftPanel: null` back over the open panel, so the panel vanished on
+   * the next load. jsdom cannot see this — its inert `ResizeObserver` means
+   * `onLayoutChanged` never fires there — which is why it took a browser.
+   */
   const update = React.useCallback(
-    (next: ShellPreferences) => {
+    (change: (current: ShellPreferences) => ShellPreferences) => {
+      const next = change(latest.current);
+      latest.current = next;
       setPreferences(next);
       writePreferences(store, next);
     },
@@ -264,7 +284,7 @@ function ShellRegions({
   className,
 }: Omit<BuilderShellProps, "store"> & {
   preferences: ShellPreferences;
-  update: (next: ShellPreferences) => void;
+  update: (change: (current: ShellPreferences) => ShellPreferences) => void;
 }) {
   const regionRefs = React.useRef<Record<Region, HTMLElement | null>>({
     rail: null,
@@ -277,10 +297,10 @@ function ShellRegions({
   const openPanel = preferences.leftPanel;
 
   const selectPanel = (panel: LeftPanel) =>
-    update({
-      ...preferences,
-      leftPanel: panelAfterRailClick(openPanel, panel),
-    });
+    update(current => ({
+      ...current,
+      leftPanel: panelAfterRailClick(current.leftPanel, panel),
+    }));
 
   return (
     <div
@@ -347,7 +367,7 @@ function ShellRegions({
           orientation="horizontal"
           defaultLayout={preferences.layout ?? undefined}
           onLayoutChanged={layout => {
-            update({ ...preferences, layout: { ...layout } });
+            update(current => ({ ...current, layout: { ...layout } }));
           }}
           className="min-w-0 flex-1"
         >

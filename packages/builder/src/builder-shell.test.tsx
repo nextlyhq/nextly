@@ -205,6 +205,29 @@ describe("preferences", () => {
     expect(screen.getByText("fonts panel")).toBeTruthy();
   });
 
+  it("a later write does not clobber an earlier one", () => {
+    // The stale-closure defect a browser found and jsdom cannot: a callback
+    // React captured at render time, handed a whole record built by spreading
+    // that render's preferences, writes the OLD record back with one field
+    // replaced. Two writes in a row from separate handlers is the shape.
+    //
+    // Driven through the rail because it is the only writer reachable here —
+    // `onLayoutChanged` never fires under an inert ResizeObserver, which is
+    // exactly why the Playwright spec is the one that caught it.
+    const store = memoryStore();
+    stubViewport(true);
+    render(<BuilderShell onExit={vi.fn()} store={store} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Tokens" }));
+    fireEvent.click(screen.getByRole("button", { name: "Layers" }));
+
+    // The second write must have been computed from the FIRST write's result,
+    // not from the render both handlers were created in.
+    expect(JSON.parse(store.value as string)).toMatchObject({
+      leftPanel: "layers",
+    });
+  });
+
   it("opens no panel when a stored one no longer exists", () => {
     // A preference outlives the release that wrote it. Restoring a removed
     // panel leaves a region rendering nothing, with no obvious way back.
