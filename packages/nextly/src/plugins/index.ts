@@ -9,6 +9,14 @@
  */
 
 export { AdminPlacement } from "./admin-placement";
+// From the import-free modules rather than through `plugin-context`, so this
+// barrel does not decide whether a consumer pays for the plugin runtime.
+export {
+  PLUGIN_CATEGORIES,
+  isPluginCategory,
+  type PluginCategory,
+} from "./plugin-categories";
+export { pluginAdminSlug } from "./plugin-slug";
 export { collectDeclarations } from "./declarations";
 export type { PluginDeclaration } from "./declarations";
 export type { AdminPlacement as AdminPlacementType } from "./admin-placement";
@@ -19,7 +27,6 @@ export {
   type PluginAdminAppearance,
   type PluginAdminConfig,
   type PluginActionRegistry,
-  type PluginCategory,
   type PluginContext,
   type PluginDefinition,
   type PluginFilterRegistry,

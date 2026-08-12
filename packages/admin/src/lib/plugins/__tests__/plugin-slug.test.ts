@@ -3,10 +3,11 @@ import { describe, expect, it } from "vitest";
 import { pluginSlug } from "../plugin-slug";
 
 /**
- * The contract shared with `pluginAdminSlug` in core, which derives the same
- * slug server-side. The two cannot import one another, so this table is the
- * only thing that fails when either side drifts. Changing a row here without
- * changing core is the mistake it exists to catch.
+ * `pluginSlug` re-exports core's `pluginAdminSlug`, so these cases run against
+ * the same implementation the server uses to namespace plugin admin routes and
+ * to look up host `pluginOverrides`. There is nothing left to drift: a change
+ * to core's derivation fails here, and there is no admin-side copy that could
+ * be changed without failing here.
  */
 const CASES: Array<[string, string]> = [
   ["@acme/p", "acme-p"],

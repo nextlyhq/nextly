@@ -3,6 +3,9 @@
  * both read it without a build step.
  */
 
+/** The packages a server-safe entry point is allowed to reach. */
+export const SERVER_SAFE_ALLOWED_PACKAGES: Set<string>;
+
 /** One published entry point. */
 export interface PublishedEntry {
   /** The export key, such as `.` or `./color`. */

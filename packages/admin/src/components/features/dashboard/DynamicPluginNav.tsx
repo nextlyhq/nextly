@@ -29,6 +29,7 @@ import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useCollections } from "@admin/hooks/queries";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { filterCollectionItems } from "@admin/lib/permissions/authorization";
+import { isCollectionPlacedElsewhere } from "@admin/lib/plugins/collection-placement";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { cn } from "@admin/lib/utils";
 import type { ApiCollection } from "@admin/types/entities";
@@ -41,6 +42,33 @@ interface DynamicPluginNavProps {
   isActive: (href?: string) => boolean;
   /** Search query to filter plugins */
   search?: string;
+}
+
+/**
+ * The Installed Plugins entry.
+ *
+ * One implementation, used while collections load and after they settle. The
+ * link reads admin-meta only, so it is available in both states, and rendering
+ * it twice from two places is how the two would drift.
+ */
+function PluginOverviewLink({
+  isActive,
+}: {
+  isActive: (href?: string) => boolean;
+}) {
+  const active = isActive("/admin/plugins");
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild isActive={active}>
+        <Link href={ROUTES.PLUGINS}>
+          <Package
+            className={cn("shrink-0", !active && "text-muted-foreground")}
+          />
+          <span>Installed Plugins</span>
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
 }
 
 /**
@@ -60,9 +88,11 @@ function PluginSkeleton() {
 interface PluginEntry {
   name: string;
   slug: string;
-  /** Whether this plugin's items have been placed in another section */
-  isPlaced: boolean;
-  /** The plugin's collections (only shown when not placed) */
+  /**
+   * The plugin's collections that belong under Plugins. Empty when every one
+   * of them is rendered in another section, which is what makes a group
+   * unrenderable here — there is no separate placement flag to disagree with.
+   */
   collections: ApiCollection[];
 }
 
@@ -82,7 +112,18 @@ export function DynamicPluginNav({
   const { capabilities } = useCurrentUserPermissions();
   const branding = useBranding();
 
-  const { data, isLoading, error } = useCollections(
+  // `error` is deliberately not read. The two things this panel renders have
+  // different data sources: collection entries come from this query, and the
+  // overview link comes from admin-meta, so a collections failure must not
+  // remove the overview link — on mobile it is the only sidebar route to
+  // /admin/plugins.
+  //
+  // Whether the collection entries survive is `data`'s business, not this
+  // flag's. A failed background refetch keeps the last successful result, so
+  // the entries stay; only a first load that never succeeded leaves `data`
+  // empty. Reading `error` here would blank the entries in the first case too,
+  // replacing a still-accurate list with nothing.
+  const { data, isLoading } = useCollections(
     {
       pagination: { page: 0, pageSize: 100 },
       sorting: [{ field: "name", direction: "asc" }],
@@ -113,38 +154,6 @@ export function DynamicPluginNav({
   // Plugin-level metadata with declared placement
   const pluginMetadata = branding?.plugins;
 
-  // Build a lookup: collection group slug → plugin metadata
-  // Matches by checking if any collection in the group belongs to a plugin's collections list
-  const groupToPluginMeta = React.useMemo(() => {
-    const map = new Map<string, NonNullable<typeof pluginMetadata>[number]>();
-    if (!pluginMetadata) return map;
-    for (const meta of pluginMetadata) {
-      const collectionSlugs = new Set(meta.collections ?? []);
-      for (const collection of allPluginCollections) {
-        if (collectionSlugs.has(collection.name)) {
-          const groupSlug = pluginSlug(collection.admin?.group || "");
-          if (groupSlug && !map.has(groupSlug)) {
-            map.set(groupSlug, meta);
-          }
-        }
-      }
-    }
-    return map;
-  }, [pluginMetadata, allPluginCollections]);
-
-  // Helper: determine if a plugin group is placed in another sidebar section
-  // Uses config-only placement (no user overrides)
-  const isPluginPlaced = React.useCallback(
-    (slug: string): boolean => {
-      const meta = groupToPluginMeta.get(slug);
-      const placement = meta?.placement ?? meta?.group;
-      if (!placement || placement === "plugins") return false;
-      // "standalone" plugins get their own top-level sidebar icon, so treat as placed
-      return true;
-    },
-    [groupToPluginMeta]
-  );
-
   // Build plugin entries from ALL plugin collections (so the plugin always appears
   // with its Settings link), but only include visible collections as sub-items
   const plugins = React.useMemo(() => {
@@ -164,13 +173,19 @@ export function DynamicPluginNav({
         pluginMap.set(groupName, {
           name: groupName,
           slug,
-          isPlaced: isPluginPlaced(slug),
           collections: [],
         });
       }
 
-      // Only add to sub-items if the collection is visible and permitted
-      if (visibleCollectionIds.has(collection.id)) {
+      // A sub-item must be visible, permitted, and not already rendered in
+      // another section. Placement is declared per collection and read from the
+      // plugin that owns it, so a collection carrying no `admin.group` heading
+      // is still placed: the heading groups collections for display and says
+      // nothing about which section owns them.
+      if (
+        visibleCollectionIds.has(collection.id) &&
+        !isCollectionPlacedElsewhere(collection.name, pluginMetadata)
+      ) {
         pluginMap.get(groupName)!.collections.push(collection);
       }
     }
@@ -190,19 +205,38 @@ export function DynamicPluginNav({
     return Array.from(pluginMap.values()).sort((a, b) =>
       a.name.localeCompare(b.name)
     );
-  }, [allPluginCollections, visibleCollectionIds, isPluginPlaced, search]);
+  }, [allPluginCollections, visibleCollectionIds, pluginMetadata, search]);
+
+  // The overview link is shown only to users who can open the page it points
+  // at: /admin/plugins is manage-settings guarded, and a collection reader
+  // opens this panel to reach their plugin's collections. Linking them to a
+  // route that redirects would replace working navigation with a bounce.
+  const canOpenOverview = capabilities.canManageSettings;
 
   if (isLoading) {
     if (isCollapsed) return null;
-    return <PluginSkeleton />;
+    // The skeleton stands in for the collection entries only. The overview
+    // link reads admin-meta, which has already resolved, so replacing the whole
+    // panel would make /admin/plugins unreachable for as long as a slow or
+    // hung collections request lasts — and on mobile the rail item is a button
+    // that opens this panel rather than navigating, so there is no other way in.
+    return (
+      <>
+        {canOpenOverview && <PluginOverviewLink isActive={isActive} />}
+        <PluginSkeleton />
+      </>
+    );
   }
 
-  // `plugins` is derived from plugin-owned collections, but a plugin that
-  // only contributes pages/settings/slots owns none — the overview must stay
-  // reachable whenever anything is installed, or those plugins are invisible.
-  const hasInstalledPlugins = (pluginMetadata?.length ?? 0) > 0;
-
-  if (error || (plugins.length === 0 && !hasInstalledPlugins)) {
+  // A collections failure does NOT suppress the overview link. That
+  // destination reads admin-meta, not collections, so it is still reachable;
+  // only the collection-derived entries below are lost. On mobile the primary
+  // plugins icon is a button that opens this panel rather than navigating, so
+  // suppressing the link here would leave a settings manager with no route to
+  // the page during an unrelated API failure.
+  //
+  // Nothing to offer at all is the one case that renders nothing.
+  if (!canOpenOverview && plugins.length === 0) {
     return null;
   }
 
@@ -216,10 +250,7 @@ export function DynamicPluginNav({
     isActive("/admin/plugins") ||
     plugins.some(p => {
       if (isActive(getPluginUrl(p.slug))) return true;
-      if (!p.isPlaced) {
-        return p.collections.some(c => isActive(getCollectionUrl(c)));
-      }
-      return false;
+      return p.collections.some(c => isActive(getCollectionUrl(c)));
     });
 
   // Collapsed mode: single icon with dropdown listing the overview + plugin names
@@ -230,37 +261,23 @@ export function DynamicPluginNav({
         isActive={isActive}
         isAnyActive={isAnyPluginActive}
         getPluginUrl={getPluginUrl}
+        getCollectionUrl={getCollectionUrl}
+        canOpenPluginPages={canOpenOverview}
       />
     );
   }
 
-  // Expanded mode — the overview link goes to the plugins list; each plugin
-  // has its own detail page now, so linking a plugin's slug here would land
-  // on one plugin instead of the overview.
-  const overviewHref = ROUTES.PLUGINS;
-  const isOverviewActive = isActive("/admin/plugins");
-
-  // Plugins with unplaced collections (shown as expandable with collection sub-items)
-  const pluginsWithCollections = plugins.filter(
-    p => !p.isPlaced && p.collections.length > 0
-  );
+  // A group is expandable exactly when it retains a collection to expand into.
+  // Two plugins can share a display group — every group-less collection lands
+  // under "Other" — so one of them being placed elsewhere says nothing about
+  // the group, and a group-level answer would hide the other plugin's
+  // reachable collection behind a rail item that opens an empty panel.
+  const pluginsWithCollections = plugins.filter(p => p.collections.length > 0);
 
   return (
     <>
-      {/* Installed Plugins overview link */}
-      <SidebarMenuItem>
-        <SidebarMenuButton asChild isActive={isOverviewActive}>
-          <Link href={overviewHref}>
-            <Package
-              className={cn(
-                "shrink-0",
-                !isOverviewActive && "text-muted-foreground"
-              )}
-            />
-            <span>Installed Plugins</span>
-          </Link>
-        </SidebarMenuButton>
-      </SidebarMenuItem>
+      {/* Installed Plugins overview link, for users who can open that page */}
+      {canOpenOverview && <PluginOverviewLink isActive={isActive} />}
 
       {/* Plugin collections (only for plugins not placed elsewhere) */}
       {pluginsWithCollections.map(plugin => {
@@ -330,11 +347,21 @@ function CollapsedPluginDropdown({
   isActive,
   isAnyActive,
   getPluginUrl,
+  getCollectionUrl,
+  canOpenPluginPages,
 }: {
   plugins: PluginEntry[];
   isActive: (href?: string) => boolean;
   isAnyActive: boolean;
   getPluginUrl: (slug: string) => string;
+  getCollectionUrl: (collection: ApiCollection) => string;
+  /**
+   * Whether this user can open `/admin/plugins` and the per-plugin detail
+   * pages, both guarded by `manage-settings`. When false the dropdown offers
+   * the plugin's collections instead, which are what such a user came here to
+   * reach; listing the guarded pages would make every item a redirect.
+   */
+  canOpenPluginPages: boolean;
 }) {
   const [isOpen, setIsOpen] = React.useState(false);
   const timeoutRef = React.useRef<NodeJS.Timeout | null>(null);
@@ -384,38 +411,71 @@ function CollapsedPluginDropdown({
           <DropdownMenuLabel>Plugins</DropdownMenuLabel>
           <DropdownMenuSeparator />
           {/* The overview stays reachable even when no plugin owns a
-              collection — metadata-only plugins are listed there. */}
-          <DropdownMenuItem asChild>
-            <Link
-              href={ROUTES.PLUGINS}
-              data-active={isActive(ROUTES.PLUGINS) ? "true" : undefined}
-              className={cn(
-                "flex w-full cursor-pointer items-center gap-2 transition-none admin-dropdown-item",
-                isActive(ROUTES.PLUGINS) && "font-bold!"
-              )}
-            >
-              <Package className="h-4 w-4" />
-              <span>Installed Plugins</span>
-            </Link>
-          </DropdownMenuItem>
-          {plugins.map(plugin => {
-            const href = getPluginUrl(plugin.slug);
-            const active = isActive(href);
-            return (
-              <DropdownMenuItem key={plugin.slug} asChild>
-                <Link
-                  href={href}
-                  data-active={active ? "true" : undefined}
-                  className={cn(
-                    "flex w-full cursor-pointer items-center gap-2 transition-none admin-dropdown-item",
-                    active && "font-bold!"
-                  )}
-                >
-                  <Package className="h-4 w-4" />
-                  <span>{plugin.name}</span>
-                </Link>
-              </DropdownMenuItem>
-            );
+              collection: metadata-only plugins are listed there. */}
+          {canOpenPluginPages && (
+            <DropdownMenuItem asChild>
+              <Link
+                href={ROUTES.PLUGINS}
+                data-active={isActive(ROUTES.PLUGINS) ? "true" : undefined}
+                className={cn(
+                  "flex w-full cursor-pointer items-center gap-2 transition-none admin-dropdown-item",
+                  isActive(ROUTES.PLUGINS) && "font-bold!"
+                )}
+              >
+                <Package className="h-4 w-4" />
+                <span>Installed Plugins</span>
+              </Link>
+            </DropdownMenuItem>
+          )}
+          {plugins.flatMap(plugin => {
+            // A user who can open plugin pages navigates by plugin. One who
+            // cannot navigates to the collections themselves, which are the
+            // only destinations here they are permitted to reach.
+            if (canOpenPluginPages) {
+              const href = getPluginUrl(plugin.slug);
+              const active = isActive(href);
+              return [
+                <DropdownMenuItem key={plugin.slug} asChild>
+                  <Link
+                    href={href}
+                    data-active={active ? "true" : undefined}
+                    className={cn(
+                      "flex w-full cursor-pointer items-center gap-2 transition-none admin-dropdown-item",
+                      active && "font-bold!"
+                    )}
+                  >
+                    <Package className="h-4 w-4" />
+                    <span>{plugin.name}</span>
+                  </Link>
+                </DropdownMenuItem>,
+              ];
+            }
+            // No placement check here: `plugin.collections` already excludes
+            // anything rendered in another section, so both this menu and the
+            // expanded view list the same set.
+            return plugin.collections.map(collection => {
+              const href = getCollectionUrl(collection);
+              const active = isActive(href);
+              const label =
+                collection.labels?.plural ||
+                collection.label ||
+                collection.name;
+              return (
+                <DropdownMenuItem key={collection.id} asChild>
+                  <Link
+                    href={href}
+                    data-active={active ? "true" : undefined}
+                    className={cn(
+                      "flex w-full cursor-pointer items-center gap-2 transition-none admin-dropdown-item",
+                      active && "font-bold!"
+                    )}
+                  >
+                    <Package className="h-4 w-4" />
+                    <span>{label}</span>
+                  </Link>
+                </DropdownMenuItem>
+              );
+            });
           })}
         </DropdownMenuContent>
       </DropdownMenu>

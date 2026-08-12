@@ -37,7 +37,33 @@ describe("resolveItemHref", () => {
     ).toBe(ROUTES.SINGLES);
   });
 
-  it("keeps the plugins icon as a sub-sidebar opener (no landing page)", () => {
+  it("routes the plugins icon to the section landing page when the user can open it", () => {
+    expect(
+      resolveItemHref(
+        makeItem({ id: "plugins", label: "Plugins", href: "#" }),
+        [],
+        undefined,
+        true
+      )
+    ).toBe(ROUTES.PLUGINS);
+  });
+
+  it("keeps the plugins icon a sub-sidebar opener without manage-settings", () => {
+    // The icon is shown to users who can read a plugin-owned collection, which
+    // is a wider set than the page's own guard admits. Navigating them would
+    // bounce them to the dashboard and remove their only route to that
+    // collection, so they keep the sub-sidebar.
+    expect(
+      resolveItemHref(
+        makeItem({ id: "plugins", label: "Plugins", href: "#" }),
+        [],
+        undefined,
+        false
+      )
+    ).toBe("#");
+  });
+
+  it("defaults to the sub-sidebar when the caller states no capability", () => {
     expect(
       resolveItemHref(
         makeItem({ id: "plugins", label: "Plugins", href: "#" }),

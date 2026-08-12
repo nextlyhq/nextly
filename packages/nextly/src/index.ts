@@ -400,6 +400,11 @@ export {
   collectDeclarations,
   definePlugin,
   createPluginContext,
+  // Runtime companions to `PluginCategory`, so a plugin author can enumerate
+  // the vocabulary and narrow a free-form value rather than restating either.
+  PLUGIN_CATEGORIES,
+  isPluginCategory,
+  pluginAdminSlug,
   type PluginAdminAppearance,
   type PluginAdminConfig,
   type PluginCategory,
