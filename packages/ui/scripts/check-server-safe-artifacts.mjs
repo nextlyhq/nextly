@@ -37,10 +37,17 @@
  * the supported floor removed first. That is enough to answer the browser-global question for the
  * whole `engines` range, because those globals are the only difference that a deletion can model.
  *
- * It is NOT enough for built-in MODULES. An artifact importing something added after the floor —
- * `node:sqlite`, say — resolves on a current build machine and fails on the floor with
- * `ERR_UNKNOWN_BUILTIN_MODULE`, and no amount of deleting globals emulates that. Only running this
- * gate under the oldest supported Node settles it; nothing here can.
+ * It is NOT enough for built-in MODULES, nor for METHODS added to objects that already existed.
+ * An artifact importing something added after the floor — `node:sqlite`, say — resolves on a
+ * current build machine and fails on the floor with `ERR_UNKNOWN_BUILTIN_MODULE`; one calling
+ * `Object.groupBy` or `Promise.withResolvers` runs here and throws there. Deleting globals emulates
+ * neither, and deleting MEMBERS is worse than not trying: a global is one property nothing internal
+ * depends on, while a method belongs to an object every module in the process shares, this check
+ * included, so removing it manufactures failures rather than finding them. The list would also be
+ * unbounded and hand-maintained, which is the shape the rest of this file exists to avoid.
+ *
+ * Only running this gate under the oldest supported Node settles any of it; nothing here can. The
+ * build currently selects Node 22 through `.nvmrc`, so the floor is not what this answers for.
  *
  * It answers IMPORT safety, not call safety. `export const cn = () => document.body` imports
  * cleanly and throws when a Server Component calls it. Catching that means analysing browser
