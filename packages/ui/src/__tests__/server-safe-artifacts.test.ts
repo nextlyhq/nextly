@@ -245,6 +245,29 @@ describe("reading an artifact's specifiers", () => {
     ).toEqual(["react"]);
   });
 
+  it("does not read a named class as the loader it shadows", () => {
+    // A named class binds its own name throughout its body, exactly as a named function expression
+    // does. Only functions were doing that, so a call inside such a body read as the ambient loader
+    // and rejected an artifact that loads nothing — the direction that costs a correct lane a red
+    // build rather than letting a dependency through.
+    expect(
+      read(
+        `const C = class require { static f() { return require("react"); } };`
+      )
+    ).toEqual([]);
+    expect(
+      read(`class require { static f() { return require("react"); } }`)
+    ).toEqual([]);
+    // The controls, in both directions a careless fix breaks: the binding does not escape the class
+    // body, and an UNNAMED class shadows nothing at all.
+    expect(
+      read(`const C = class require {};\nexport const r = require("react");`)
+    ).toEqual(["react"]);
+    expect(
+      read(`const C = class { static f() { return require("react"); } };`)
+    ).toEqual(["react"]);
+  });
+
   it("sees a loader declared in a braceless switch case", () => {
     // A switch's CaseBlock is ONE lexical scope shared by every clause, so a `const` in a case
     // without braces belongs to it. Recognising only blocks and source files left the declaration

@@ -260,6 +260,17 @@ export function specifiersIn(source, fileName) {
       }
     }
 
+    // A named CLASS binds its own name throughout its body, exactly as a named function expression
+    // does — `const C = class require { ... }` makes `require` the class inside those braces. Only
+    // functions were doing this, so a call in such a body read as the ambient loader and rejected
+    // an artifact that loads nothing.
+    if (
+      (ts.isClassDeclaration(scope) || ts.isClassExpression(scope)) &&
+      scope.name !== undefined
+    ) {
+      add(scope.name.text);
+    }
+
     if (ts.isCatchClause(scope) && scope.variableDeclaration !== undefined) {
       eachBoundName(scope.variableDeclaration.name, add);
     }

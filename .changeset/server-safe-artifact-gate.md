@@ -22,6 +22,7 @@
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
 "@nextlyhq/builder": patch
+"@nextlyhq/module-specifiers": patch
 ---
 
 Check the built server-safe entry points against what the build recorded, and stop publishing the

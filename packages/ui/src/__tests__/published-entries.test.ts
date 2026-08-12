@@ -345,6 +345,32 @@ function exportedNames(source: string): string[] {
   const hasModifier = (node: ts.Node, kind: ts.SyntaxKind): boolean =>
     modifiersOf(node).some(modifier => modifier.kind === kind);
 
+  /**
+   * Whether a namespace body declares anything that EXISTS at runtime.
+   *
+   * Interfaces and type aliases emit nothing, so a namespace holding only those is erased whole. A
+   * nested namespace counts only if it in turn holds a value, which is why this recurses.
+   */
+  const hasValueMember = (body: ts.ModuleBody | undefined): boolean => {
+    if (body === undefined || !ts.isModuleBlock(body)) return false;
+    return body.statements.some(member => {
+      if (
+        ts.isInterfaceDeclaration(member) ||
+        ts.isTypeAliasDeclaration(member)
+      ) {
+        return false;
+      }
+      if (ts.isModuleDeclaration(member)) return hasValueMember(member.body);
+      // A `const enum` inlines its members and emits no object, exactly as at the top level.
+      if (ts.isEnumDeclaration(member)) {
+        return !modifiersOf(member).some(
+          modifier => modifier.kind === ts.SyntaxKind.ConstKeyword
+        );
+      }
+      return true;
+    });
+  };
+
   // Names this file declares in TYPE space, and names it declares in VALUE space.
   //
   // `interface Foo {}` followed by `export { Foo }` marks nothing type-only — not the declaration,
@@ -378,6 +404,17 @@ function exportedNames(source: string): string[] {
       // Two exceptions, both binding a name that no consumer can use as a VALUE:
       // `import type Foo = require(...)`, and a `const enum`, whose members are inlined at each
       // use site so the enum object itself is never emitted.
+      // An UNMARKED import-equals settles nothing — the alias takes whatever space the target
+      // publishes — so it belongs in neither space, and the export branch refuses it. Without
+      // this, splitting the alias and the export across two statements walked around the refusal
+      // the single-statement form already had.
+      if (
+        ts.isImportEqualsDeclaration(statement) &&
+        statement.isTypeOnly !== true
+      ) {
+        importedUnsettled.add(statement.name.text);
+        continue;
+      }
       const typeOnlyAlias =
         ts.isImportEqualsDeclaration(statement) && statement.isTypeOnly;
       const constEnum =
@@ -405,7 +442,11 @@ function exportedNames(source: string): string[] {
       const bindings = clause.namedBindings;
       if (bindings === undefined) continue;
       if (ts.isNamespaceImport(bindings)) {
-        unsettled.add(bindings.name.text);
+        // `import * as Foo` always binds a runtime module-namespace OBJECT, even when the target
+        // declares only types — TypeScript lets a consumer use it as a value. Treating it as
+        // unsettled refused a valid module/declaration pair, which costs a correct lane a red
+        // build. `import type * as Foo` is still a type, and the clause check above catches it.
+        (clause.isTypeOnly ? typeSpace : valueSpace).add(bindings.name.text);
         continue;
       }
       for (const element of bindings.elements) {
@@ -543,7 +584,12 @@ function exportedNames(source: string): string[] {
       continue;
     }
     if (ts.isModuleDeclaration(statement)) {
-      if (ts.isIdentifier(statement.name)) found.push(statement.name.text);
+      // A namespace publishes a runtime object only if it CONTAINS one. `declare namespace Foo {
+      // interface X {} }` emits nothing and a consumer using `Foo` as a value gets TS2708, so
+      // recording it let a module exporting a real `Foo` compare equal to a declaration with none.
+      if (ts.isIdentifier(statement.name) && hasValueMember(statement.body)) {
+        found.push(statement.name.text);
+      }
       continue;
     }
     if (
@@ -702,6 +748,68 @@ describe("reading the names a module publishes", () => {
     expect(exportedNames(`export import Foo = require("./foo.cjs");`)).toEqual([
       "<unsupported: import-equals alias Foo from ./foo.cjs>",
     ]);
+  });
+
+  it("records a namespace import as the runtime object it is", () => {
+    // `import * as Foo` binds a module-namespace OBJECT even when the target declares only types,
+    // and a consumer may use it as a value. Treating it as unsettled refused a valid pair, which
+    // is the direction that costs a correct lane a red build.
+    expect(
+      exportedNames(`import * as Foo from "./x.mjs";\nexport { Foo };`)
+    ).toEqual(["Foo"]);
+    // The control one keyword away: a type-only namespace import publishes nothing.
+    expect(
+      exportedNames(`import type * as Foo from "./x.mjs";\nexport { Foo };`)
+    ).toEqual([]);
+  });
+
+  it("refuses a split import-equals as firmly as the single-statement form", () => {
+    // Same alias and export written across two statements. The space pass used to call it a value,
+    // so it walked straight around the refusal the one-line form already had.
+    expect(
+      exportedNames(`import Foo = require("./foo.cjs");\nexport { Foo };`)
+    ).toEqual(["<unsupported: export of imported Foo>"]);
+    // And the type-only spelling still settles it: no runtime binding, nothing recorded.
+    expect(
+      exportedNames(`import type Foo = require("./foo.cjs");\nexport { Foo };`)
+    ).toEqual([]);
+  });
+
+  it("leaves out an ambient namespace holding only types", () => {
+    // `declare namespace Foo { interface X {} }` emits nothing; a consumer using `Foo` as a value
+    // gets TS2708. Recording it let a module exporting a real `Foo` compare equal to a declaration
+    // exposing none.
+    expect(
+      exportedNames(`export declare namespace Foo { interface X {} }`)
+    ).toEqual([]);
+    expect(
+      exportedNames(`export declare namespace Foo { type X = string; }`)
+    ).toEqual([]);
+    // A nested namespace of types is still only types.
+    expect(
+      exportedNames(
+        `export declare namespace Foo { namespace Bar { interface X {} } }`
+      )
+    ).toEqual([]);
+    // The controls: a namespace holding anything that EXISTS at runtime publishes a value.
+    expect(
+      exportedNames(`export declare namespace Foo { const x: number; }`)
+    ).toEqual(["Foo"]);
+    expect(
+      exportedNames(`export declare namespace Foo { function f(): void; }`)
+    ).toEqual(["Foo"]);
+    expect(
+      exportedNames(
+        `export declare namespace Foo { namespace Bar { const x: number; } }`
+      )
+    ).toEqual(["Foo"]);
+    // And a const enum inside one emits nothing either, same rule as at the top level.
+    expect(
+      exportedNames(`export declare namespace Foo { const enum M { On } }`)
+    ).toEqual([]);
+    expect(
+      exportedNames(`export declare namespace Foo { enum M { On } }`)
+    ).toEqual(["Foo"]);
   });
 
   it("leaves out an ambient const enum", () => {
