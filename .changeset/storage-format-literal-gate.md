@@ -24,4 +24,4 @@
 "@nextlyhq/builder": patch
 ---
 
-A field group instance now reports its type whichever spelling the stored document uses, so content written before and after the storage rename both read. Reading that type is one shared call rather than a key spelled out at each site, which is what keeps the rename a change in a single place.
+A field group instance now reports its type whichever spelling the stored document uses, so content written before and after the storage rename both read. A `where` filter on the type keeps working under either spelling, and version snapshots keep recording the type of components nested inside a dynamic zone. Reading that type is one shared call rather than a key spelled out at each site, which is what keeps the rename a change in a single place.

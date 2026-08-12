@@ -28,10 +28,30 @@
  * same shape as `check-drizzle-v1-legacy.cjs`, which guards a comparable "compiles fine, wrong at
  * runtime" class.
  *
- * Its limit is worth stating rather than discovering: a spelling assembled at runtime
- * (`"_component" + "Type"`) passes. That is not the failure mode this exists for — the 43 sites it
- * was written against are all plain literals — but it is why the catalog remains the rule and this
- * is only what makes the rule hold.
+ * ## 🔴 What a PASS here does NOT mean
+ *
+ * Stated rather than left to be inferred, because the next reader's honest reading of a green run
+ * decides whether they look further. A scan reports on the forms it can see, and these are the
+ * forms it cannot:
+ *
+ * - **A spelling assembled at runtime** — `"_component" + "Type"`, a template literal, or the key
+ *   reached through a variable or a constant defined elsewhere. Nothing textual can follow that.
+ * - **TEST files and `__tests__/`**, exempted wholesale. A test that asserts concrete stored bytes
+ *   cannot describe them indirectly without asserting nothing, so the exemption is deliberate —
+ *   but it is broad, and a stored-row FIXTURE written with the raw key is one of the ways a
+ *   completed rename gets quietly reverted later. There is currently no automatic way to tell a
+ *   fixture from an assertion about the format, so this stays a review-time concern.
+ * - **The pinned `packages/admin` sites** below, which are reported on every run and do not fail.
+ * - **Comment and doc-block lines**, filtered on purpose: prose describing the format does not read
+ *   it, and requiring the docs to avoid naming the thing they document makes them worse.
+ *
+ * What a pass DOES mean is narrower and still worth having: no product source line outside the
+ * catalog, the accessor and the migration engine names either spelling of the table, the column or
+ * the content key, and none reads that key from the catalog instead of through the accessor.
+ *
+ * The gate is also only as current as the run: a file that gains its first occurrence after a
+ * sweep is not exempt, so this is worth running against the merge target immediately before
+ * merging rather than trusting the state at branch time.
  */
 
 const { execFileSync } = require("node:child_process");
