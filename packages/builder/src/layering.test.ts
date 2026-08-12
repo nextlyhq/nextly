@@ -4,7 +4,12 @@ import { fileURLToPath } from "node:url";
 
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { collectModules, TEST_MODULE } from "./source-modules";
+import {
+  collectModules,
+  MODULE_EXTENSIONS,
+  TEST_GLOBS,
+  TEST_MODULE,
+} from "./source-modules";
 
 /**
  * The package's layering contract, enforced rather than documented.
@@ -472,6 +477,27 @@ describe("the builder's layering contract", () => {
     // program has paid for repeatedly.
     expect(files.length).toBeGreaterThan(0);
     expect(files.some(f => f.endsWith("index.ts"))).toBe(true);
+  });
+
+  it("asks the runner to collect every extension it treats as a test", () => {
+    // The globs and the allowlist agree about the word "test". That is an
+    // internal-consistency property and it is worth checking here, but it is
+    // NOT what catches a narrowed extension list: this assertion lives in a
+    // file the globs decide whether to collect, so dropping `ts` un-collects
+    // the check along with everything else and the run reports `1 passed (1)`
+    // in green. Measured, not supposed.
+    //
+    // What survives that is in `vitest.global-setup.ts`, which runs before any
+    // file is collected and compares the globs against the tests on disk.
+    expect(TEST_GLOBS).toHaveLength(MODULE_EXTENSIONS.length);
+    for (const extension of MODULE_EXTENSIONS) {
+      expect(TEST_GLOBS).toContain(`src/**/*.test.${extension}`);
+    }
+    // And every glob names a file this package would classify as a test, so the
+    // runner and the allowlist cannot mean different things by the word.
+    for (const glob of TEST_GLOBS) {
+      expect(TEST_MODULE.test(glob)).toBe(true);
+    }
   });
 
   it("reads every extension it claims to, not only the common ones", () => {

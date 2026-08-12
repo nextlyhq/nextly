@@ -23,6 +23,7 @@
  */
 import {
   frameContentOrigin,
+  frameInsetOf,
   pointToCanvas,
   pointToHost,
   rectToHost,
@@ -78,4 +79,4 @@ export function mapFrameRectToHost(
  * site is how one of them ends up adding the inset unscaled. The measurement
  * stays in the driver; the sums stay in the editor's module.
  */
-export { frameContentOrigin, type FrameInset };
+export { frameContentOrigin, frameInsetOf, type FrameInset };
