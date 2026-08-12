@@ -23,9 +23,11 @@
  */
 
 import {
+  countNodes,
   findNode,
   isNodeType,
   MAX_DEPTH,
+  MAX_NODES,
   isNodeVersion,
   isPlainRecord,
   walkNodes,
@@ -264,8 +266,16 @@ function isJsonValue(value: unknown, seen: Set<object> = new Set()): boolean {
   }
 
   if (!isPlainRecord(value)) return false;
-  for (const entry of Object.values(value)) {
-    if (!isJsonValue(entry, seen)) return false;
+  // Own KEYS as well as values. `Object.values` reports only enumerable
+  // string-keyed properties, so a symbol-named or non-enumerable own property
+  // is invisible to it — it stays in the live document and `JSON.stringify`
+  // drops it from the stored op, which is the same divergence a function value
+  // produces and by the same silence.
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") return false;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !descriptor.enumerable) return false;
+    if (!isJsonValue(descriptor.value, seen)) return false;
   }
   seen.delete(held);
   return true;
@@ -548,6 +558,34 @@ function assertNodeShape(node: BlockNode, verb: string): void {
 }
 
 /**
+ * Refuses an insert that would push the document past the engine's node cap.
+ *
+ * `insertNode` places whatever it is handed, so a subtree large enough to break
+ * the cap enters history as a successful edit — and the engine's strict
+ * validator then reports `node-count-exceeded` on every save and publish. The
+ * author is left with a document they cannot store and an undo entry for the
+ * edit that did it.
+ *
+ * Counted with the engine's own `countNodes` against its own `MAX_NODES`, for
+ * the same reason the depth bound asks `MAX_DEPTH`: a second opinion about how
+ * large a document may be is a second contract to keep in step.
+ */
+function assertFitsNodeCap(
+  nodes: BlockNode[],
+  incoming: BlockNode[],
+  verb: string
+): void {
+  const total = countNodes(nodes) + countNodes(incoming);
+  if (total > MAX_NODES) {
+    throw new OpError(
+      `${verb}: this would leave the document holding ${String(total)} nodes, ` +
+        `past the ${String(MAX_NODES)} a document may hold. The edit would ` +
+        `apply and then fail to save.`
+    );
+  }
+}
+
+/**
  * Refuses an id that addresses nothing.
  *
  * `findNode` answers `undefined` for a non-string just as it does for an id the
@@ -737,6 +775,7 @@ export function applyOp(nodes: BlockNode[], op: BuilderOp): AppliedOp {
       // accept whatever they are handed, so a malformed subtree is in the
       // document by the time anything downstream could object.
       assertNodeShape(op.node, "insert");
+      assertFitsNodeCap(nodes, [op.node], "insert");
       const lockedId = lockedWithin(op.node);
       if (lockedId !== undefined) {
         throw new OpError(

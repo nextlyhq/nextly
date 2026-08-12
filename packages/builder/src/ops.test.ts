@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { applyOp, OpError, type BuilderOp, type NodePatch } from "./ops";
 
-import { MAX_DEPTH, updateNode, type BlockNode } from "@nextlyhq/blocks-engine";
+import {
+  MAX_DEPTH,
+  MAX_NODES,
+  updateNode,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
 
 function node(id: string, slots?: Record<string, BlockNode[]>): BlockNode {
   return {
@@ -789,6 +794,66 @@ describe("an op whose own shape is wrong", () => {
     }
     expect(thrown).toBeInstanceOf(OpError);
     expect(thrown).not.toBeInstanceOf(TypeError);
+  });
+
+  it.each<[string, () => Record<string, unknown>]>([
+    [
+      "a symbol-named own property",
+      () => {
+        const props: Record<string, unknown> = { changed: "yes" };
+        (props as Record<string | symbol, unknown>)[Symbol("lost")] = "x";
+        return props;
+      },
+    ],
+    [
+      "a non-enumerable own property",
+      () => {
+        const props: Record<string, unknown> = { changed: "yes" };
+        Object.defineProperty(props, "hidden", {
+          value: "x",
+          enumerable: false,
+        });
+        return props;
+      },
+    ],
+  ])("refuses a patch value JSON cannot see: %s", (_label, build) => {
+    // Invisible to `Object.values`, which is how the value check missed them:
+    // both stay in the live document and `JSON.stringify` drops them from the
+    // stored op, so a replay rebuilds a document the author never saw. Same
+    // divergence as a function value, reached through the KEY rather than the
+    // value.
+    expect(() =>
+      applyOp(forest(), {
+        kind: "update",
+        id: "a",
+        patch: { props: build() },
+      })
+    ).toThrow(OpError);
+  });
+
+  it("refuses an insert that would pass the document's node cap", () => {
+    // `insertNode` places whatever it is handed, so without this the edit
+    // enters history and the engine's validator then refuses every save.
+    const wide = node("wide");
+    wide.slots = {
+      main: Array.from({ length: MAX_NODES }, (_unused, index) =>
+        node(`bulk-${String(index)}`)
+      ),
+    };
+    expect(() =>
+      applyOp(forest(), { kind: "insert", node: wide, at: { index: 0 } })
+    ).toThrow(OpError);
+  });
+
+  it("still accepts an insert that fits", () => {
+    // The control. A cap computed wrongly — counting the whole forest twice,
+    // say — would refuse ordinary inserts while satisfying the test above.
+    const applied = applyOp(forest(), {
+      kind: "insert",
+      node: node("modest"),
+      at: { index: 0 },
+    });
+    expect(applied.nodes[0]?.id).toBe("modest");
   });
 
   it("refuses a slot named after an inherited member inside a subtree", () => {
