@@ -25,6 +25,7 @@ import { resolvePluginIcon } from "@admin/lib/plugins/resolve-plugin-icon";
 import { cn } from "@admin/lib/utils";
 import type { ApiCollection } from "@admin/types/entities";
 
+import { hasPluginsSection } from "./lib/has-plugins-section";
 import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-href";
 import type { MainMenuCategory, MainMenuItem } from "./sidebar-types";
 import { getFilteredMenuItems } from "./sidebar-types";
@@ -222,18 +223,16 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       isSinglesError ||
       permittedSingles.some(single => !single.admin?.hidden));
 
-  const hasPluginsSection =
-    capabilities.canViewCollections &&
-    (hasPermissionDataPending ||
-      isCollectionsLoading ||
-      isCollectionsError ||
-      permittedCollections.some(collection => {
-        if (!collection.admin?.isPlugin || collection.admin?.hidden)
-          return false;
-        const placement = getCollectionPlacement(collection);
-        return !placement || placement === "plugins";
-      }) ||
-      (branding?.plugins?.length ?? 0) > 0);
+  const pluginsSectionVisible = hasPluginsSection(capabilities, {
+    isPending:
+      hasPermissionDataPending || isCollectionsLoading || isCollectionsError,
+    hasVisiblePluginCollection: permittedCollections.some(collection => {
+      if (!collection.admin?.isPlugin || collection.admin?.hidden) return false;
+      const placement = getCollectionPlacement(collection);
+      return !placement || placement === "plugins";
+    }),
+    installedPluginCount: branding?.plugins?.length ?? 0,
+  });
 
   const hasMediaSection = hasPermissionDataPending
     ? true
@@ -270,7 +269,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
           case "singles":
             return hasSinglesSection;
           case "plugins":
-            return hasPluginsSection;
+            return pluginsSectionVisible;
           case "media":
             return hasMediaSection;
           case "settings":
@@ -285,7 +284,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       filteredMenuItems,
       hasCollectionsSection,
       hasSinglesSection,
-      hasPluginsSection,
+      pluginsSectionVisible,
       hasMediaSection,
       hasSettingsSection,
       hasBuildersSection,
@@ -466,7 +465,12 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
                 : ROUTES.SETTINGS;
 
   const resolveItemHref = (item: MainMenuItem): string =>
-    resolveItemHrefHelper(item, visibleStandalonePlugins, settingsHref);
+    resolveItemHrefHelper(
+      item,
+      visibleStandalonePlugins,
+      settingsHref,
+      capabilities.canManageSettings
+    );
 
   // Resolve collections for the active standalone plugin section
   const pluginCollectionsForSection = useMemo(() => {
