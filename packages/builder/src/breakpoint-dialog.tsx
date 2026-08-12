@@ -1,5 +1,17 @@
 "use client";
 
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  Input,
+  Label,
+} from "@nextlyhq/ui";
+import { cn } from "@nextlyhq/ui/utils";
 import { Plus, Trash2, TriangleAlert } from "lucide-react";
 import * as React from "react";
 
@@ -13,20 +25,7 @@ import {
   type BreakpointDef,
   type BreakpointIssue,
   type BreakpointSet,
-} from "../lib/breakpoints";
-import { cn } from "../lib/utils";
-
-import { Button } from "./button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "./dialog";
-import { Input } from "./input";
-import { Label } from "./label";
+} from "./breakpoints";
 
 /** What each axis is called and what it responds to, in the author's terms. */
 const AXIS_COPY: Record<BreakpointAxis, { title: string; hint: string }> = {

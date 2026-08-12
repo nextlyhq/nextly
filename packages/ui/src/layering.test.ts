@@ -22,22 +22,21 @@
  * implementations agree the day they are written and drift silently after —
  * and records defects from five unrelated packages behind it.
  *
- * WHAT THIS FILE DOES NOT ESTABLISH, stated first because a green suite here
- * would otherwise read as the whole claim: this package is NOT block-agnostic
- * today. `lib/breakpoints.ts` reimplements the compiler's breakpoint drop
- * rules and `breakpoint-dialog.tsx` consumes them. Both are green under every
- * assertion below, because a second implementation of a rule is not an import
- * — it is ordinary code, and no import scan can see it.
+ * WHAT THIS FILE ESTABLISHES, and what it does not. The checks decide one
+ * narrow thing: this package takes no DIRECT dependency on the engine, by
+ * manifest or by import. That is a PRECONDITION for the layer being
+ * block-agnostic, not evidence that it is — a second implementation of an
+ * engine rule is ordinary code, not an import, and no scan below can see one.
  *
- * So the invariant asserted is the narrow one the checks actually decide: this
- * package takes no DIRECT dependency on the engine, by manifest or by import.
- * That is worth holding on its own — it is what keeps a block-aware component
- * from being casually added here — but it is a precondition for the layer being
- * block-agnostic, not evidence that it is.
+ * The known counter-example is GONE as of 2026-08-12. `lib/breakpoints.ts` and
+ * `breakpoint-dialog.tsx` restated the compiler's breakpoint drop rules and
+ * were green under every assertion here for exactly that reason. They now live
+ * in `packages/builder`, which depends on the engine and imports its cap and
+ * types rather than mirroring them. The `./breakpoints` subpath was removed
+ * from this package's export map in the same change.
  *
- * The remaining half is a MOVE: `lib/breakpoints.ts` and `breakpoint-dialog.tsx`
- * belong in `packages/builder`, which already depends on the engine and can
- * derive those rules instead of restating them.
+ * So no restatement is KNOWN to remain — which is a weaker claim than none
+ * existing, and deliberately worded that way.
  *
  * Placement is worth enforcing precisely because availability is not enough.
  * `baseStyles` on the block definition is the supported way to declare a

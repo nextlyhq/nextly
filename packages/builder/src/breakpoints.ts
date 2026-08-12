@@ -12,12 +12,29 @@
  * a definition the compiler would discard, checked here so the editor can say so
  * while the author is still looking at the field.
  *
- * The types mirror the block engine's structurally rather than importing it:
- * this package publishes browser components and must not take a dependency on
- * the engine to describe a shape that is three fields wide.
+ * The types and the cap are IMPORTED from the engine, not restated. This module
+ * lived in `@nextlyhq/ui` until 2026-08-12, where it could not import the engine
+ * — that package is the block-agnostic layer — so it mirrored the engine's
+ * shapes structurally and kept its own copy of the cap. Two implementations of
+ * one rule agree the day they are written and drift silently after, which is
+ * what `.claude/rules/derived-checks.md` is about, and it is why this belongs
+ * here: `packages/builder` already depends on the engine and can ASK.
  *
- * @module lib/breakpoints
+ * What is still restated, stated plainly rather than left to be discovered: the
+ * per-rule DROP decisions below mirror `compile-page.ts` rather than calling it.
+ * The compiler makes those decisions inline while emitting, so there is no
+ * predicate to call yet. Exporting one from the engine — so the compiler and
+ * this editor ask the same function — is the remaining half of this fix, and it
+ * is an engine change, not a builder one.
+ *
+ * @module breakpoints
  */
+import {
+  MAX_BREAKPOINTS_PER_AXIS,
+  type BreakpointAxis,
+  type BreakpointDef,
+  type BreakpointSet,
+} from "@nextlyhq/blocks-engine";
 
 /**
  * The reserved id for the unconditional context.
@@ -30,46 +47,19 @@
 export const BASE_BREAKPOINT_ID = "base";
 
 /**
- * Maximum breakpoints per axis, the unconditional base included.
+ * Re-exported from the engine so a consumer of this module needs one import,
+ * while the VALUE still has exactly one definition — the engine's.
  *
  * @experimental
  */
-export const MAX_BREAKPOINTS_PER_AXIS = 7;
-
-/**
- * The two axes a breakpoint may respond to.
- *
- * @experimental
- */
-export type BreakpointAxis = "viewport" | "container";
+export { MAX_BREAKPOINTS_PER_AXIS };
+export type { BreakpointAxis, BreakpointDef, BreakpointSet };
 
 /** @experimental */
 export const BREAKPOINT_AXES: readonly BreakpointAxis[] = [
   "viewport",
   "container",
 ];
-
-/**
- * One breakpoint definition. Desktop-first: a bound is an upper bound.
- *
- * @experimental
- */
-export interface BreakpointDef {
-  id: string;
-  label: string;
-  /** Upper bound in CSS pixels. */
-  maxWidth?: number;
-}
-
-/**
- * The site's breakpoint definitions on both axes.
- *
- * @experimental
- */
-export interface BreakpointSet {
-  viewport: BreakpointDef[];
-  container: BreakpointDef[];
-}
 
 /**
  * Why a definition would not survive compilation.
