@@ -197,6 +197,17 @@ function hostPolicies(): (object | undefined)[] {
       remotePatterns: [{ protocol: "https", hostname: "example.com" }],
       trustedFrameOrigins: ["https://example.com"],
     },
+    // A policy that PERMITS everything the host answers with leaves the refusal
+    // paths unreachable, and the policy above allows exactly the origin the
+    // media resolver returns. This one allows a different origin, so a resolved
+    // record is refused while a relative `src` still passes — `isFetchableUrl`
+    // admits any non-remote url — which is the one arrangement that reaches
+    // `core/image`'s fallback to the typed prop, and the state where `embed`
+    // has trusted origins configured and the stored one is not among them.
+    {
+      remotePatterns: [{ protocol: "https", hostname: "cdn.test" }],
+      trustedFrameOrigins: ["https://cdn.test"],
+    },
   ];
 }
 
