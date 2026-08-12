@@ -42,7 +42,6 @@ import {
   hashManifest,
   hashRegistryIdentity,
   MIGRATION_TARGET,
-  tableRenamesOf,
   type ManifestEntry,
   type RegistryRow,
 } from "./manifest";
@@ -372,18 +371,17 @@ export async function runFieldGroupMigration(
       // reports a plan the database has already been scored against rather than one the manifest
       // merely proposes.
       if (dryRun) {
-        // Expanded through the same helper the executable steps use. A localized field group
-        // carries its companion `_locales` rename on the SAME manifest entry, so reading `from`
-        // and `to` off the entry reports one rename where two will happen -- and the one it omits
-        // is the one an operator is least likely to predict.
-        // Entries the reconciliation found already applied are dropped. A resumed run starts
-        // after the recorded step and a torn step skips a source that is already absent, so
-        // reporting a satisfied entry tells the operator an object will be renamed that has
-        // already moved — on a resume, which is exactly when they are deciding whether the
-        // remaining work is safe to continue.
-        const renames = reconciled
-          .filter(entry => entry.satisfied !== true)
-          .flatMap(entry => tableRenamesOf(entry));
+        // Read from reconciliation rather than re-derived here, and that is the whole of it. The
+        // question "which renames remain" is one catalog resolution per physical table, and
+        // reconciliation has just done exactly that; asking it a second time in a second place is
+        // how the two came to disagree.
+        //
+        // What they disagreed about: a localized field group carries its `_locales` companion on
+        // the SAME entry, so an entry is unsatisfied while EITHER table remains. Filtering on that
+        // reported both when a run torn between the two had already moved the base — during a
+        // resume, which is precisely when an operator is judging whether the remaining work is
+        // safe to continue.
+        const renames = reconciled.flatMap(entry => entry.pendingTableRenames);
         logger.info?.("field-group migration dry run", {
           phase: FIELD_GROUP_MIGRATION_PHASE,
           direction,
