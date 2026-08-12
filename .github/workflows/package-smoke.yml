@@ -30,6 +30,10 @@ on:
       # can alter the packed artifacts and introduce exactly the module-scope
       # browser access this job exists to catch.
       - "pnpm-lock.yaml"
+      # The root manifest carries `engines.node`, which decides the version legs
+      # below. A change there needs this job to run under the NEW range rather
+      # than only be told by a unit test that the two disagree.
+      - "package.json"
       - ".github/workflows/package-smoke.yml"
 
 # Least privilege at the top. The one job that files an issue asks for more, so
