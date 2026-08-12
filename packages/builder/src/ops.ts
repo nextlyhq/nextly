@@ -248,40 +248,73 @@ function describe(value: unknown): string {
  * `NaN` and the infinities are excluded for the same reason: they serialize to
  * `null`, so the value that comes back is not the value written.
  */
-function isJsonValue(value: unknown, seen: Set<object> = new Set()): boolean {
-  if (value === null) return true;
-  if (typeof value === "string" || typeof value === "boolean") return true;
-  if (typeof value === "number") {
-    // Negative zero is finite and survives nothing: `JSON.stringify(-0)` writes
-    // `0`, so an accepted op replays as a DIFFERENT value and `1 / offset`
-    // flips sign after a crash restore. Refused rather than canonicalized,
-    // because silently rewriting an author's value is the other way to make the
-    // live document and its stored form disagree.
-    return Number.isFinite(value) && !Object.is(value, -0);
-  }
-  if (typeof value !== "object") return false;
+/**
+ * How deep a single VALUE inside a node may nest.
+ *
+ * Not the node-tree depth, which `limits.maxDepth` governs: this bounds one
+ * `props` or `styles` value. `JSON.stringify` is itself recursive and overflows
+ * the stack in the low thousands, so a value nested past that crashes
+ * serialization — in the byte cap, in the no-op comparison, in persistence —
+ * before anything can refuse it. Bounding the walk turns that native
+ * `RangeError` into an `OpError` naming the document.
+ *
+ * Generous against real content and far below where the engine gives out: a
+ * hand-authored prop is single digits deep, and a generated one rarely passes
+ * a few dozen.
+ */
+const MAX_VALUE_DEPTH = 512;
 
-  const held = value;
-  // A cycle has no JSON form, and without this the walk would not return.
-  if (seen.has(held)) return false;
-  seen.add(held);
+function isJsonValue(value: unknown): boolean {
+  // ITERATIVE, with an explicit stack. The recursive form exhausted the JS
+  // stack on a deeply nested but otherwise legal value and leaked a native
+  // RangeError, so a document could crash the guard that exists to refuse it
+  // — and the byte cap never got the chance to reject it either.
+  //
+  // `open` tracks the ancestors of the value currently being read, which is
+  // what makes a cycle detectable: a value that is its own descendant has no
+  // JSON form and would otherwise make this walk run forever. Entries are
+  // popped off `open` when their subtree is finished, so a value appearing
+  // twice as SIBLINGS is legal, as JSON allows.
+  const open = new Set<object>();
+  const pending: { value: unknown; depth: number; exiting?: object }[] = [
+    { value, depth: 1 },
+  ];
 
-  if (!hasOnlyJsonOwnKeys(held)) return false;
-
-  if (Array.isArray(value)) {
-    // By index: `every` skips holes, and a hole serializes as `null`.
-    for (let index = 0; index < value.length; index += 1) {
-      if (!isJsonValue(value[index], seen)) return false;
+  while (pending.length > 0) {
+    const entry = pending.pop();
+    if (entry === undefined) break;
+    if (entry.exiting !== undefined) {
+      open.delete(entry.exiting);
+      continue;
     }
-    seen.delete(held);
-    return true;
-  }
+    if (entry.depth > MAX_VALUE_DEPTH) return false;
+    const current = entry.value;
+    if (current === null) continue;
+    if (typeof current === "string" || typeof current === "boolean") continue;
+    if (typeof current === "number") {
+      if (!Number.isFinite(current) || Object.is(current, -0)) return false;
+      continue;
+    }
+    if (typeof current !== "object") return false;
 
-  if (!isPlainRecord(value)) return false;
-  for (const entry of Object.values(value)) {
-    if (!isJsonValue(entry, seen)) return false;
+    const held: object = current;
+    if (open.has(held)) return false;
+    if (!hasOnlyJsonOwnKeys(held)) return false;
+    open.add(held);
+    pending.push({ value: undefined, depth: entry.depth, exiting: held });
+
+    if (Array.isArray(held)) {
+      // By index: `every` skips holes, and a hole serializes as `null`.
+      for (let index = 0; index < held.length; index += 1) {
+        pending.push({ value: held[index], depth: entry.depth + 1 });
+      }
+      continue;
+    }
+    if (!isPlainRecord(held)) return false;
+    for (const child of Object.values(held)) {
+      pending.push({ value: child, depth: entry.depth + 1 });
+    }
   }
-  seen.delete(held);
   return true;
 }
 
@@ -797,7 +830,11 @@ function assertForestEntries(nodes: BlockNode[]): void {
             `a list of nodes.`
         );
       }
-      pending.push(...children);
+      // Pushed one at a time. `push(...children)` passes each child as a call
+      // ARGUMENT, and V8 caps those around 100k — so a slot wide enough to
+      // exceed it throws a native RangeError before this walk can refuse the
+      // document, and before a removal could repair it.
+      for (const child of children) pending.push(child);
     }
   }
 }
