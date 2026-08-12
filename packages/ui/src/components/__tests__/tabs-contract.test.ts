@@ -205,7 +205,25 @@ function utilityOf(cls: string): Utility {
  * fades, and reporting it would be a false positive. `!opacity-100` is not
  * legitimate, and the first clause catches it.
  */
+/**
+ * Whether a variant retargets the rule at something other than this element.
+ *
+ * `[&>span]:border-b-0` styles a CHILD of the trigger, so it can no more repaint
+ * the trigger's underline than a rule in another file could. Treating it as one
+ * more qualifier makes `wins()` vacuously true against an unqualified owned
+ * class, and a legitimate call site fails the repository-wide suite.
+ *
+ * A combinator after the `&` is what separates the two: `[&>span]` and `[&_p]`
+ * (Tailwind spells a descendant space as `_`) point elsewhere, while `[&:hover]`
+ * and `[&[data-x]]` still qualify this element and must keep counting.
+ */
+function retargets(variant: string): boolean {
+  const selector = /^\[(.*)\]$/.exec(variant)?.[1];
+  return selector !== undefined && /&\s*[>+~_]/.test(selector);
+}
+
 function wins(owned: Utility, caller: Utility): boolean {
+  if (caller.variants.some(retargets)) return false;
   if (caller.important && !owned.important) return true;
   return owned.variants.every(variant => caller.variants.includes(variant));
 }
@@ -279,7 +297,22 @@ const UTILITY_PROPERTIES: Array<{ utility: RegExp; properties: string[] }> = [
   },
   { utility: /^-?mb-/, properties: ["margin-bottom"] },
   { utility: /^text-/, properties: ["color"] },
-  { utility: /^ring(-|$)/, properties: ["box-shadow"] },
+  // The ring is drawn through custom properties that `box-shadow` then reads,
+  // so an arbitrary assignment to one of them repaints it without ever naming
+  // `box-shadow`. Offset first: `ring-offset-2` also matches the ring pattern.
+  {
+    utility: /^ring-offset(-|$)/,
+    properties: [
+      "box-shadow",
+      "--tw-ring-offset-width",
+      "--tw-ring-offset-color",
+      "--tw-ring-offset-shadow",
+    ],
+  },
+  {
+    utility: /^ring(-|$)/,
+    properties: ["box-shadow", "--tw-ring-color", "--tw-ring-shadow"],
+  },
   { utility: /^outline(-|$)/, properties: ["outline"] },
   { utility: /^opacity-/, properties: ["opacity"] },
   { utility: /^cursor-/, properties: ["cursor"] },
@@ -292,11 +325,20 @@ function propertiesOf(bare: string): string[] {
   );
 }
 
-/** Every CSS property the primitive's owned appearance reaches. */
-const OWNED_CSS_PROPERTIES = new Set(
-  Object.values(OWNED_BY_SLOT)
-    .flat()
-    .flatMap(cls => propertiesOf(utilityOf(cls).bare))
+/**
+ * The CSS properties each slot's own appearance reaches, kept apart.
+ *
+ * A union across both slots forbids on one element what only the other draws:
+ * the trigger's focus ring uses `box-shadow`, so a union rejected a shadow on
+ * the LIST, which is a different DOM element and cannot replace that ring. The
+ * class side was already per slot; this is the same question and gets the same
+ * answer.
+ */
+const OWNED_CSS_PROPERTIES: Record<string, Set<string>> = Object.fromEntries(
+  Object.entries(OWNED_BY_SLOT).map(([slot, classes]) => [
+    slot,
+    new Set(classes.flatMap(cls => propertiesOf(utilityOf(cls).bare))),
+  ])
 );
 
 /**
@@ -329,8 +371,10 @@ function expandsTo(property: string): string[] {
   return [kebab];
 }
 
-function ownsStyleProperty(property: string): boolean {
-  return expandsTo(property).some(p => OWNED_CSS_PROPERTIES.has(p));
+function ownsStyleProperty(slot: string, property: string): boolean {
+  const owned = OWNED_CSS_PROPERTIES[slot];
+  if (!owned) return false;
+  return expandsTo(property).some(p => owned.has(p));
 }
 
 /**
@@ -521,25 +565,48 @@ function styleObjectFor(
   if (ts.isObjectLiteralExpression(expression)) return expression;
   if (!ts.isIdentifier(expression)) return undefined;
 
-  let resolved: ts.ObjectLiteralExpression | undefined;
-  const visit = (node: ts.Node): void => {
-    if (
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      node.name.text === expression.text &&
-      node.initializer &&
-      ts.isObjectLiteralExpression(node.initializer)
-    ) {
-      resolved = node.initializer;
-    }
-    ts.forEachChild(node, visit);
+  // Resolved by walking OUT from the element, innermost scope first, rather
+  // than by searching the file for the name. A whole-file search takes whichever
+  // matching declaration is visited last, so an unrelated `const s` in a later
+  // function both hides a real violation and, in the other order, invents one.
+  // Which declaration a name refers to is a lexical question, and the answer is
+  // the nearest enclosing one.
+  const declared = (scope: ts.Node): ts.ObjectLiteralExpression | undefined => {
+    let found: ts.ObjectLiteralExpression | undefined;
+    // Only the scope's OWN statements, so a declaration nested inside a
+    // sibling function is not mistaken for one in this scope.
+    ts.forEachChild(scope, statement => {
+      if (!ts.isVariableStatement(statement)) return;
+      for (const declaration of statement.declarationList.declarations) {
+        if (
+          ts.isIdentifier(declaration.name) &&
+          declaration.name.text === expression.text &&
+          declaration.initializer &&
+          ts.isObjectLiteralExpression(declaration.initializer)
+        ) {
+          found = declaration.initializer;
+        }
+      }
+    });
+    return found;
   };
-  visit(sourceFile);
-  return resolved;
+
+  for (
+    let scope: ts.Node | undefined = attribute;
+    scope;
+    scope = scope.parent
+  ) {
+    if (ts.isBlock(scope) || ts.isSourceFile(scope) || ts.isCaseClause(scope)) {
+      const found = declared(scope);
+      if (found) return found;
+    }
+  }
+  return undefined;
 }
 
 /** An owned inline property declared anywhere inside an object literal. */
 function ownedStyleProperty(
+  slot: string,
   object: ts.ObjectLiteralExpression
 ): string | undefined {
   let found: string | undefined;
@@ -553,7 +620,7 @@ function ownedStyleProperty(
         : ts.isStringLiteral(node.name)
           ? node.name.text
           : undefined;
-      if (name && ownsStyleProperty(name)) found ??= name;
+      if (name && ownsStyleProperty(slot, name)) found ??= name;
     }
     ts.forEachChild(node, visit);
   };
@@ -584,7 +651,7 @@ function violationsIn(file: string, source: string): Violation[] {
           const name = attribute.name.getText(sourceFile);
           if (name === "style") {
             const object = styleObjectFor(attribute, sourceFile);
-            const property = object && ownedStyleProperty(object);
+            const property = object && ownedStyleProperty(exported, object);
             if (property) {
               found.push({
                 file,
@@ -657,7 +724,14 @@ describe("the tab indicator contract", () => {
     expect(unmapped).toEqual([]);
     // ...and the derived set is not empty, which an over-eager filter would
     // also produce while every assertion above stayed green.
-    expect(OWNED_CSS_PROPERTIES.size).toBeGreaterThan(3);
+    for (const [slot, properties] of Object.entries(OWNED_CSS_PROPERTIES)) {
+      expect(properties.size, slot).toBeGreaterThan(0);
+    }
+    // The trigger draws more than the strip does, and a union would hide that
+    // the two are kept apart at all.
+    expect(OWNED_CSS_PROPERTIES.TabsTrigger.size).toBeGreaterThan(
+      OWNED_CSS_PROPERTIES.TabsList.size
+    );
   });
 
   it("finds files to check, so a clean result means conforming and not unscanned", () => {
@@ -771,6 +845,10 @@ describe("the tab indicator contract", () => {
     ],
     ["an arbitrary corner", '<TabsList className="[border-radius:8px]" />'],
     [
+      "an arbitrary assignment to the ring's own custom property",
+      '<TabsTrigger className="focus-visible:![--tw-ring-color:red]" />',
+    ],
+    [
       "an arbitrary box-shadow qualified the way the ring is",
       '<TabsTrigger className="focus-visible:[box-shadow:none]" />',
     ],
@@ -857,6 +935,18 @@ describe("the tab indicator contract", () => {
       '<TabsTrigger className="[width:20rem]" />',
     ],
     [
+      "a rule aimed at a child of the trigger",
+      '<TabsTrigger className="[&>span]:border-b-0" />',
+    ],
+    [
+      "a descendant rule written with Tailwind's space",
+      '<TabsTrigger className="[&_p]:rounded-md" />',
+    ],
+    [
+      "a shadow on the strip, which draws no ring",
+      '<TabsList style={{ boxShadow: "0 1px 2px black" }} />',
+    ],
+    [
       // The ring is declared under `focus-visible`, so an unqualified rule
       // loses to it on specificity and the ring still draws when focused. The
       // INLINE form of the same declaration does win, and is reported — the
@@ -874,6 +964,27 @@ describe("the tab indicator contract", () => {
     // switched off, and then it enforces nothing at all. Several of these are
     // load-bearing: real call sites depend on them.
     expect(violationsIn("probe.tsx", IMPORT + body)).toEqual([]);
+  });
+
+  it("resolves a style identifier in its own scope, not by name", () => {
+    // A whole-file name search takes whichever declaration is visited last, so
+    // an unrelated `const s` in a LATER function hid this violation. Both
+    // orders are asserted, because the defect is symmetric: the other order
+    // invents a violation on a tab whose own style is harmless.
+    const hidden = `${IMPORT}function a() { const s = { borderBottomColor: c }; return <TabsTrigger style={s} />; }
+function b() { const s = { width: 2 }; return <div style={s} />; }`;
+    expect(violationsIn("probe.tsx", hidden)).not.toEqual([]);
+
+    const invented = `${IMPORT}function a() { const s = { width: 2 }; return <TabsTrigger style={s} />; }
+function b() { const s = { borderBottomColor: c }; return <div style={s} />; }`;
+    expect(violationsIn("probe.tsx", invented)).toEqual([]);
+  });
+
+  it("still reads a style declared beside the element", () => {
+    // The complement, and the reason the walk starts at the element rather
+    // than at the file: the real violation built its value away from the tag.
+    const source = `${IMPORT}const s = { borderBottomColor: c };\n<TabsTrigger style={s} />`;
+    expect(violationsIn("probe.tsx", source)).not.toEqual([]);
   });
 
   it("does not report an unrelated style defined in a file that renders tabs", () => {
