@@ -449,8 +449,9 @@ describe("this package takes no direct dependency on the block engine", () => {
  * containing only the dependencies it is allowed to use, and run it: a load of anything else fails
  * at that moment, whatever spelling produced it. That is complete in the dimension this is weak
  * in, and blind where this is strong — it only sees code that actually executes, so a resolver
- * behind a branch never taken is invisible to it, and visible here. Neither replaces the other.
- * Tracked as its own task rather than grown into this file.
+ * behind a branch never taken is invisible to it, and visible here. Neither replaces the other,
+ * and neither belongs inside the other: one reads syntax without running anything, the other runs
+ * everything without reading it.
  */
 /**
  * The names that re-expose the global object, so `X.process` is the `process` binding itself.
@@ -611,6 +612,42 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
     return false;
   };
 
+  /**
+   * Whether a node sits in syntax TypeScript ERASES, so it names nothing at runtime.
+   *
+   * `export type require = string`, `declare function require(…)`, `import type { require }` and
+   * any identifier inside a type annotation all compile to no reference at all — refusing them
+   * rejects a type-only API for a runtime property it does not have. This is the same distinction
+   * the loader-module check draws for `import type`, applied to bare identifiers.
+   */
+  const inErasedPosition = (node: ts.Node): boolean => {
+    for (let scope = node.parent; scope !== undefined; scope = scope.parent) {
+      if (ts.isTypeNode(scope)) return true;
+      if (
+        ts.isTypeAliasDeclaration(scope) ||
+        ts.isInterfaceDeclaration(scope)
+      ) {
+        return true;
+      }
+      if (ts.isImportSpecifier(scope) || ts.isExportSpecifier(scope)) {
+        return scope.isTypeOnly || scope.parent.parent.isTypeOnly === true;
+      }
+      if (ts.isImportClause(scope)) return scope.isTypeOnly;
+      // `declare` makes a declaration ambient: it describes something, it does not create it.
+      if (
+        ts.canHaveModifiers(scope) &&
+        ts
+          .getModifiers(scope)
+          ?.some(modifier => modifier.kind === ts.SyntaxKind.DeclareKeyword)
+      ) {
+        return true;
+      }
+      if (ts.isSourceFile(scope)) break;
+    }
+    // A declaration FILE is entirely erased, whatever it contains.
+    return /\.d\.[cm]?ts$/.test(fileName);
+  };
+
   const isMemberName = (node: ts.Identifier): boolean => {
     const parent = node.parent;
     if (parent === undefined) return false;
@@ -731,6 +768,7 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
       ts.isIdentifier(node) &&
       GLOBAL_OBJECTS.has(node.text) &&
       !isMemberName(node) &&
+      !inErasedPosition(node) &&
       capturesHost(node)
     ) {
       found.push(node.text);
@@ -744,13 +782,27 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
       ts.isMetaProperty(node) &&
       node.keywordToken === ts.SyntaxKind.ImportKeyword
     ) {
-      const read = node.parent;
+      // Through the SAME transparent wrappers `receiverIsHost` and `capturesHost` see through.
+      // `(import.meta as { url: string }).url` reads the URL and resolves nothing, but the cast
+      // sits between the meta-property and the member access — so a check reading the immediate
+      // parent refuses a legal read. Three implementations of one notion is how that happened.
+      let read: ts.Node | undefined = node;
+      while (
+        read.parent !== undefined &&
+        (ts.isAsExpression(read.parent) ||
+          ts.isParenthesizedExpression(read.parent) ||
+          ts.isNonNullExpression(read.parent) ||
+          ts.isSatisfiesExpression(read.parent))
+      ) {
+        read = read.parent;
+      }
+      const access = read.parent;
       const isUrl =
-        read !== undefined &&
-        (ts.isPropertyAccessExpression(read) ||
-          ts.isElementAccessExpression(read)) &&
-        read.expression === node &&
-        readsMember(read, "url");
+        access !== undefined &&
+        (ts.isPropertyAccessExpression(access) ||
+          ts.isElementAccessExpression(access)) &&
+        access.expression === read &&
+        readsMember(access, "url");
       if (!isUrl) found.push("import.meta.resolve");
     }
     // The ambient CommonJS names are refused OUTRIGHT, not in the shapes that call them. A rule
@@ -762,7 +814,8 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
     if (
       ts.isIdentifier(node) &&
       (node.text === "require" || node.text === "module") &&
-      !isMemberName(node)
+      !isMemberName(node) &&
+      !inErasedPosition(node)
     ) {
       found.push(node.text);
     }
@@ -773,7 +826,8 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
     if (
       ts.isIdentifier(node) &&
       (node.text === "eval" || node.text === "Function") &&
-      !isMemberName(node)
+      !isMemberName(node) &&
+      !inErasedPosition(node)
     ) {
       found.push(node.text);
     }
@@ -787,7 +841,8 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
     if (
       ts.isIdentifier(node) &&
       node.text === "process" &&
-      !isMemberName(node)
+      !isMemberName(node) &&
+      !inErasedPosition(node)
     ) {
       const parent = node.parent;
       const declares =
@@ -972,6 +1027,33 @@ describe("this package resolves no module at runtime", () => {
         "a.ts"
       )
     ).toEqual(["require"]);
+    // Erased syntax names nothing at runtime, so a type-only API using these words is legal.
+    expect(runtimeResolversIn(`export type require = string;`, "a.ts")).toEqual(
+      []
+    );
+    expect(
+      runtimeResolversIn(
+        `declare function require(id: string): unknown;`,
+        "a.ts"
+      )
+    ).toEqual([]);
+    expect(
+      runtimeResolversIn(`export interface X { process: string }`, "a.ts")
+    ).toEqual([]);
+    // A cast between `import.meta` and `.url` is still a URL read.
+    expect(
+      runtimeResolversIn(
+        `export const u = (import.meta as { url: string }).url;`,
+        "a.ts"
+      )
+    ).toEqual([]);
+    // The separating control: the same cast reading anything else is still refused.
+    expect(
+      runtimeResolversIn(
+        `export const r = (import.meta as { resolve: (s: string) => string }).resolve("x");`,
+        "a.ts"
+      )
+    ).toEqual(["import.meta.resolve"]);
     // The controls: ordinary code names none of them.
     expect(
       runtimeResolversIn(

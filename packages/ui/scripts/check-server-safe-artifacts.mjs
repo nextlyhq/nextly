@@ -391,19 +391,41 @@ export function reachedFrom(entry, read) {
       if (!specifier.startsWith(".")) continue;
       // The output is flat, so joining against the naming file's directory keeps a chunk named
       // from a subdirectory resolving the same way the runtime would.
-      queue.push(posixJoin(dirname(file), specifier));
+      const target = posixJoin(dirname(file), specifier);
+      if (target === undefined) {
+        // Climbs above the output root, so this walk cannot follow it and must not pretend to.
+        // Recorded as an unreadable reach rather than dropped: a consumer resolves it to a real
+        // file outside `dist`, which is exactly the case the scan exists to notice.
+        reached.push({
+          file,
+          missing: false,
+          specifiers: [`<escapes the output tree: ${specifier}>`],
+        });
+        continue;
+      }
+      queue.push(target);
     }
   }
   return reached;
 }
 
-/** Join two output-relative paths the way a module specifier resolves, without touching disk. */
+/**
+ * Join two output-relative paths the way a module specifier resolves, without touching disk.
+ *
+ * Returns `undefined` when the specifier climbs ABOVE the output root. `pop()` on an empty array
+ * is a no-op, so `../../color.mjs` would otherwise resolve to `color.mjs` — the traversal silently
+ * discarded, the walk redirected at a same-named artifact inside `dist`, and neither a missing
+ * file nor an offender reported. A path that leaves the tree is a question this function cannot
+ * answer, so it says so rather than answering a different one.
+ */
 function posixJoin(from, specifier) {
   const parts = from === "." || from === "" ? [] : from.split("/");
   for (const segment of specifier.split("/")) {
     if (segment === "." || segment === "") continue;
-    if (segment === "..") parts.pop();
-    else parts.push(segment);
+    if (segment === "..") {
+      if (parts.length === 0) return undefined;
+      parts.pop();
+    } else parts.push(segment);
   }
   return parts.join("/");
 }

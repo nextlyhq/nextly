@@ -47,9 +47,12 @@ describe("reading an artifact's specifiers", () => {
 
   it("resolves a shadowed require against the scoping rules the language has", () => {
     // The CJS build calls its own `require`, so the one question the scope reader still answers is
-    // whether a call reaches the AMBIENT loader or a local of that name. These cases each cost a
-    // review round when the reader modelled scope one example at a time, so they are pinned
-    // together rather than as separate suites.
+    // whether a call reaches the AMBIENT loader or a local of that name. Pinned together rather
+    // than as separate suites because they are one rule with many shapes: `var` is function
+    // scoped, a class static block is its own `var` scope, a default parameter initializer runs
+    // before the body's `var`s exist, a named class expression binds its own name, and a switch
+    // `CaseBlock` is one shared scope. A reader modelling any of these one example at a time gets
+    // the others wrong.
     const ambient = ["react"];
     const shadowed: string[] = [];
 
