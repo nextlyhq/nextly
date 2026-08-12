@@ -200,6 +200,51 @@ describe("reading an artifact's specifiers", () => {
     ).toEqual(["react"]);
   });
 
+  it("gives a var loader the function scope it actually has", () => {
+    // `var` is function-scoped however deeply it is nested, so this call and that declaration are
+    // the same binding. Attributing the loader to the BLOCK put it out of reach of the call and the
+    // package went unreported — and neither the metafile nor the surviving specifiers name a
+    // package reached this way, so nothing else would have caught it.
+    expect(
+      read(`
+        function f() {
+          { var resolve = import.meta.resolve; }
+          return resolve("react");
+        }
+      `)
+    ).toEqual(["react"]);
+    // The mirror, in the shadowing direction: a `var` in a block DOES shadow the ambient loader
+    // for the whole function, so this call loads nothing.
+    expect(
+      read(`
+        function f() {
+          { var require = (name) => name; }
+          return require("react");
+        }
+      `)
+    ).toEqual([]);
+    // The control that keeps the fix honest: a nested FUNCTION owns its own `var`, so it cannot
+    // shadow a call in the function containing it.
+    expect(
+      read(`
+        function outer() {
+          function inner() { var require = (name) => name; }
+          return require("react");
+        }
+      `)
+    ).toEqual(["react"]);
+    // And `let` is still block-scoped, which is what makes this a `var` rule rather than a
+    // "hoist everything" rule.
+    expect(
+      read(`
+        function f() {
+          { let require = (name) => name; }
+          return require("react");
+        }
+      `)
+    ).toEqual(["react"]);
+  });
+
   it("keeps every loader binding, not the last one declared under a name", () => {
     // Two scopes can each declare a resolver under the same name. Recording one scope per name let
     // the second declaration overwrite the first, so the earlier function's call stopped resolving

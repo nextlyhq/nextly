@@ -228,6 +228,16 @@ export function specifiersIn(source, fileName) {
   };
 
   /**
+   * Whether a declaration list is `let`/`const`, which bind to the enclosing BLOCK.
+   *
+   * Anything else is `var`, which binds to the enclosing function however deeply nested it is.
+   *
+   * @param {ts.VariableDeclarationList} list
+   */
+  const isBlockScoped = list =>
+    (list.flags & (ts.NodeFlags.Let | ts.NodeFlags.Const)) !== 0;
+
+  /**
    * Whether ONE node introduces a binding for `name` in the scope it opens.
    *
    * @param {ts.Node} scope
@@ -254,6 +264,42 @@ export function specifiersIn(source, fileName) {
       eachBoundName(scope.variableDeclaration.name, add);
     }
 
+    // `var` is FUNCTION-scoped, so it belongs to the nearest function or the file rather than to
+    // the block it is written in. Attributing it to the block put a loader out of reach of a call
+    // in the same function — `function f() { { var resolve = import.meta.resolve } resolve(x) }` —
+    // and the package it named went unreported. Nested functions own their own `var`s, so the walk
+    // stops at them.
+    if (ts.isFunctionLike(scope) || ts.isSourceFile(scope)) {
+      const hoisted = node => {
+        if (ts.isFunctionLike(node)) return;
+        if (
+          ts.isVariableStatement(node) &&
+          !isBlockScoped(node.declarationList)
+        ) {
+          for (const declaration of node.declarationList.declarations) {
+            eachBoundName(declaration.name, add);
+          }
+        }
+        const init =
+          ts.isForStatement(node) ||
+          ts.isForInStatement(node) ||
+          ts.isForOfStatement(node)
+            ? node.initializer
+            : undefined;
+        if (
+          init !== undefined &&
+          ts.isVariableDeclarationList(init) &&
+          !isBlockScoped(init)
+        ) {
+          for (const declaration of init.declarations) {
+            eachBoundName(declaration.name, add);
+          }
+        }
+        ts.forEachChild(node, hoisted);
+      };
+      ts.forEachChild(scope, hoisted);
+    }
+
     // Declarations sitting directly in a statement list, plus the initializer of a `for` form,
     // which opens its own scope for the names it declares.
     const statements = ts.isSourceFile(scope)
@@ -263,6 +309,11 @@ export function specifiersIn(source, fileName) {
         : undefined;
     for (const statement of statements ?? []) {
       if (ts.isVariableStatement(statement)) {
+        // A `var` here was already counted by the hoisting walk above, against the function or
+        // file that owns it. Counting it in a BLOCK as well would make the block look like the
+        // binding scope and defeat the fix.
+        if (!isBlockScoped(statement.declarationList) && !ts.isSourceFile(scope))
+          continue;
         for (const declaration of statement.declarationList.declarations) {
           eachBoundName(declaration.name, add);
         }

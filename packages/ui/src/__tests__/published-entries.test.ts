@@ -440,16 +440,25 @@ function exportedNames(source: string): string[] {
         // and `export { x as default }` is the other spelling of a default export.
         for (const element of clause.elements) {
           if (element.isTypeOnly) continue;
-          // Only a list WITHOUT a `from` names local bindings. With one, the name belongs to the
-          // other module and nothing here can decide which space it occupies — recorded as it
-          // stands rather than guessed at.
           const local = (element.propertyName ?? element.name).text;
-          if (
-            statement.moduleSpecifier === undefined &&
-            isTypeOnlyLocal(local)
-          ) {
+          // A list WITH a `from` names a binding in ANOTHER module, and which space it occupies is
+          // decided there. `export { Foo } from "./helper.mjs"` publishes a value or publishes
+          // nothing depending on whether `helper` declares `const Foo` or `interface Foo`, and
+          // recording the name either way makes a declaration re-exporting a type compare equal to
+          // a module publishing a real one.
+          //
+          // REFUSED rather than resolved, for the same reason `export *` is: following it means
+          // reading the target, mapping a declaration file to its runtime twin by extension, and
+          // terminating cycles. Neither file this compares uses the form, so refusing costs
+          // nothing and says so when that changes.
+          if (statement.moduleSpecifier !== undefined) {
+            const from = ts.isStringLiteral(statement.moduleSpecifier)
+              ? statement.moduleSpecifier.text
+              : "?";
+            found.push(`<unsupported: re-export of ${local} from ${from}>`);
             continue;
           }
+          if (isTypeOnlyLocal(local)) continue;
           found.push(element.name.text);
         }
       }
@@ -537,15 +546,27 @@ describe("reading the names a module publishes", () => {
     ).toEqual(["defaults"]);
   });
 
-  it("records a re-exported binding, which publishes a name like any other", () => {
-    // `export { extra } from "./other.mjs"` adds a public binding. Skipped, it was invisible on
-    // BOTH sides at once — the one way a parity comparison reports agreement over a real gap.
+  it("refuses a re-exported binding, whose space another module decides", () => {
+    // Recording the name was the earlier behaviour, and it fails OPEN: whether
+    // `export { extra } from "./other.mjs"` publishes a value depends on whether `other` declares
+    // `const extra` or `interface extra`, so a declaration re-exporting a type compared equal to a
+    // module publishing a real one. Skipping it fails open differently — invisible on BOTH sides,
+    // which is agreement over a real gap.
+    //
+    // Refusing is the third option and the only one that cannot pass wrongly. Resolving it properly
+    // means reading the target, mapping a declaration file to its runtime twin by extension, and
+    // terminating cycles — the unbounded exercise `export *` is already refused for.
     expect(exportedNames(`export { extra } from "./other.mjs";`)).toEqual([
-      "extra",
+      "<unsupported: re-export of extra from ./other.mjs>",
     ]);
+    // The LOCAL name is what another module decides, so a rename is reported by its source name.
     expect(
       exportedNames(`export { extra as renamed } from "./other.mjs";`)
-    ).toEqual(["renamed"]);
+    ).toEqual(["<unsupported: re-export of extra from ./other.mjs>"]);
+    // The control: a list with no `from` names local bindings and is still read exactly.
+    expect(exportedNames(`const extra = 1;\nexport { extra };`)).toEqual([
+      "extra",
+    ]);
   });
 
   it("refuses a star export rather than modelling the module system", () => {
