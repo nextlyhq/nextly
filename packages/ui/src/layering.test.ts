@@ -585,7 +585,30 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
     ) {
       current = current.expression;
     }
-    return ts.isIdentifier(current) && GLOBAL_OBJECTS.has(current.text);
+    if (ts.isIdentifier(current)) return GLOBAL_OBJECTS.has(current.text);
+    // A host object holds ITSELF under each host name — `globalThis.globalThis`,
+    // `globalThis["self"]`, and any chain of them — so reading one off another yields the host
+    // again. Recognising the names but not the self-reference lets one extra hop launder the
+    // receiver, which is the same laundering an alias performs and is refused for the same reason.
+    // Bounded because `GLOBAL_OBJECTS` is closed: the recursion only continues while both the
+    // receiver and the member are host names.
+    if (
+      ts.isPropertyAccessExpression(current) ||
+      ts.isElementAccessExpression(current)
+    ) {
+      const member = ts.isPropertyAccessExpression(current)
+        ? current.name.text
+        : ts.isStringLiteral(current.argumentExpression) ||
+            ts.isNoSubstitutionTemplateLiteral(current.argumentExpression)
+          ? current.argumentExpression.text
+          : undefined;
+      return (
+        member !== undefined &&
+        GLOBAL_OBJECTS.has(member) &&
+        receiverIsHost(current.expression)
+      );
+    }
+    return false;
   };
 
   const isMemberName = (node: ts.Identifier): boolean => {
@@ -596,8 +619,13 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
     // re-expose globals are a closed set the language defines, unlike the open set of member
     // spellings this predicate exists to skip.
     if (ts.isPropertyAccessExpression(parent)) {
-      if (parent.name === node && receiverIsHost(parent.expression))
-        return false;
+      if (parent.name === node && receiverIsHost(parent.expression)) {
+        // Off a host, a RESTRICTED name is a reference to that global and must be reported. A
+        // HOST name is the object's self-reference — `globalThis.self` is the host again — and is
+        // not a reach in itself; `receiverIsHost` already follows the chain, so reporting it here
+        // would name every hop of `globalThis.self.window.require` instead of the reach at its end.
+        return !RESTRICTED_GLOBALS.has(node.text);
+      }
       return parent.name === node;
     }
     if (ts.isQualifiedName(parent)) return parent.right === node;
@@ -931,6 +959,19 @@ describe("this package resolves no module at runtime", () => {
         "a.ts"
       )
     ).toEqual(["process"]);
+    // A host reached through its own self-reference is still the host, in either spelling.
+    expect(
+      runtimeResolversIn(
+        `export const r = globalThis["globalThis"].process;`,
+        "a.ts"
+      )
+    ).toEqual(["process"]);
+    expect(
+      runtimeResolversIn(
+        `export const r = globalThis.self.window.require;`,
+        "a.ts"
+      )
+    ).toEqual(["require"]);
     // The controls: ordinary code names none of them.
     expect(
       runtimeResolversIn(

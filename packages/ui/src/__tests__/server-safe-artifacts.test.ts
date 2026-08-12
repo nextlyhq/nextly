@@ -231,11 +231,29 @@ describe("what the allow-list is allowed to name", () => {
         "utf8"
       )
     ) as { dependencies?: Record<string, string> };
-    const declared = new Set(Object.keys(manifest.dependencies ?? {}));
+    const dependencies = manifest.dependencies ?? {};
+    const declared = new Set(Object.keys(dependencies));
     const undeclared = [...SERVER_SAFE_ALLOWED_PACKAGES].filter(
       name => !declared.has(name)
     );
     expect(undeclared).toEqual([]);
+
+    // A manifest KEY is a name this package chose; it is not the package that name resolves to.
+    // `"clsx": "npm:react@19"` keeps the key, and the artifact and the metafile both keep naming
+    // the external `clsx`, so every check downstream approves a dependency whose real target is
+    // something else entirely. Refused rather than resolved: following the alias means asking the
+    // registry what a range points at, and an allow-list that needs the network to be read is a
+    // different kind of check. No allowed dependency uses one today, so this costs nothing.
+    const aliased = [...SERVER_SAFE_ALLOWED_PACKAGES]
+      .filter(name => (dependencies[name] ?? "").startsWith("npm:"))
+      .map(name => `${name} -> ${dependencies[name]}`);
+
+    expect(
+      aliased,
+      "An allowed package declared through an npm alias resolves to a different package while " +
+        "keeping its key, so the artifact checks approve a name that is not what consumers get. " +
+        "Declare it under its real name, or resolve the alias here before allowing it."
+    ).toEqual([]);
   });
 
   it("has something to check, so the rule cannot pass vacuously", () => {
