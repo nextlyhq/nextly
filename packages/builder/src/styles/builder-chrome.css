@@ -52,15 +52,15 @@
 /**
  * Motion is opt-in, not opt-out.
  *
- * Panel switches and rail transitions animate only where the user has not asked
- * for reduced motion. Written as a positive query rather than
- * `prefers-reduced-motion: reduce` disabling things, so the default for an
- * unstated preference is stillness.
+ * Only elements this package marks with `data-builder-animates` transition, and
+ * only where the user has not asked for reduced motion. Written as a positive
+ * query so the default for an unstated preference is stillness.
+ *
+ * Deliberately NOT a universal `.nx-builder-chrome *` reset. That reaches every
+ * descendant, and the shell's regions are SLOTS filled by callers — a reset
+ * there silently disables animation in a host's own panel, inspector and
+ * top-bar content, which this package has no business deciding.
  */
-.nx-builder-chrome * {
-  transition: none;
-}
-
 @media (prefers-reduced-motion: no-preference) {
   .nx-builder-chrome [data-builder-animates] {
     transition:

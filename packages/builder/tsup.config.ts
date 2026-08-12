@@ -10,11 +10,30 @@ import { defineConfig } from "tsup";
  */
 export default defineConfig({
   entry: ["src/index.ts"],
+  // The entry carries the directive for the whole package. `builder-shell.tsx`
+  // declares its own, but it is bundled as a NON-entry module and treeshaking
+  // drops module-level directives from those — so the published entry would
+  // arrive without it and a Next host would try to render the editor on the
+  // server. The whole package is an editor and is client-only by nature, which
+  // is the same treatment `@nextlyhq/ui`'s root barrel gets.
+  banner: { js: '"use client";' },
+  // The chrome stylesheet is not reachable from the JS graph, so nothing would
+  // emit it. Copied verbatim and published at `./styles.css`: a consumer that
+  // renders the shell without it gets unstyled markup, which is worse than a
+  // build error because it looks like a layout bug.
+  publicDir: "src/styles",
   format: ["esm"],
   dts: true,
   clean: true,
   sourcemap: true,
-  treeshake: true,
+  // Mutually exclusive with the banner above, and correctness wins. Rollup runs
+  // the treeshaking pass and drops module-level directives from the bundle —
+  // including one in the entry source — so a treeshaken build ships without
+  // `"use client"` and a Server Component importing it fails. The bytes are
+  // recovered by consumers, whose own bundlers treeshake this package now that
+  // `sideEffects` is declared. `@nextlyhq/ui` made the same trade for the same
+  // reason.
+  treeshake: false,
   external: [
     "react",
     "react-dom",

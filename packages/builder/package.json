@@ -13,6 +13,9 @@
     "url": "https://github.com/nextlyhq/nextly/issues"
   },
   "type": "module",
+  "sideEffects": [
+    "**/*.css"
+  ],
   "main": "dist/index.mjs",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -21,7 +24,8 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
-    }
+    },
+    "./styles.css": "./dist/builder-chrome.css"
   },
   "files": [
     "dist"

@@ -13,6 +13,7 @@
  * through the port rather than through `localStorage` reached for directly.
  */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BuilderShell } from "./builder-shell";
@@ -218,6 +219,78 @@ describe("preferences", () => {
     );
 
     expect(screen.queryByText(/panel$/)).toBeNull();
+  });
+});
+
+describe("the server render and the first client render agree", () => {
+  it("emits the defaults even when the store has preferences", () => {
+    // The hydration property, and it needs a real server render to state.
+    // Reading storage in the state initializer is the obvious shape: the server
+    // store answers null and emits no panel, the client store answers a stored
+    // panel and emits one, and React 19 answers that divergence by discarding
+    // and rebuilding the subtree. A returning author's layout then arrives as a
+    // flash rather than a layout.
+    const store = memoryStore(
+      JSON.stringify({ ...DEFAULT_PREFERENCES, leftPanel: "fonts" })
+    );
+
+    const markup = renderToString(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        renderPanel={panel => <p>{panel} panel</p>}
+      />
+    );
+
+    // Asserted on the RAIL's pressed state, not on the panel's content. The
+    // panel body is inside `react-resizable-panels`, which renders nothing
+    // measurable on the server — so "the panel content is absent" is true
+    // whatever the preferences say, and a test asserting it passes with this
+    // fix reverted. That was the first version of this test.
+    //
+    // The rail is plain markup the library never touches, so its `aria-pressed`
+    // reflects the preferences the server actually rendered with.
+    expect(markup).toContain('aria-pressed="false"');
+    expect(markup).not.toContain('aria-pressed="true"');
+    // The control: this render really did produce a shell, so the assertions
+    // above are not passing on empty output.
+    expect(markup).toContain("Exit editor");
+  });
+});
+
+describe("F6 region cycling", () => {
+  it("skips a region that is not rendered", () => {
+    // With no panel open the left region does not exist. Cycling the static
+    // list would land on it, focus nothing, and leave the key looking broken
+    // for every press after the first.
+    renderShell({ renderPanel: panel => <p>{panel} panel</p> });
+
+    const rail = screen.getByRole("navigation", { name: "Editor panels" });
+    rail.focus();
+    expect(document.activeElement).toBe(rail);
+
+    fireEvent.keyDown(document, { key: "F6" });
+
+    // The next PRESENT region is the canvas, because the panel is closed.
+    expect(document.activeElement).toBe(
+      screen.getByRole("main", { name: "Canvas" })
+    );
+  });
+
+  it("includes the panel once it is open", () => {
+    // The positive control: a cycle that always skipped the panel would satisfy
+    // the assertion above.
+    renderShell({ renderPanel: panel => <p>{panel} panel</p> });
+
+    fireEvent.click(screen.getByRole("button", { name: "Layers" }));
+    const rail = screen.getByRole("navigation", { name: "Editor panels" });
+    rail.focus();
+
+    fireEvent.keyDown(document, { key: "F6" });
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("region", { name: "Layers" })
+    );
   });
 });
 

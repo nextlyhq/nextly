@@ -30,6 +30,7 @@ import {
   MIN_SHELL_WIDTH,
   PANEL_BOUNDS,
   panelAfterRailClick,
+  RAIL_WIDTH,
   readPreferences,
   writePreferences,
   type LeftPanel,
@@ -148,13 +149,33 @@ function useFitsFullShell(): boolean {
   return fits;
 }
 
-/** Preferences, restored once and written back whenever they change. */
+/**
+ * Preferences, restored AFTER mount and written back whenever they change.
+ *
+ * Reading storage in the initializer is the obvious shape and it is wrong here.
+ * On a server render the default store answers `null`, so the server emits the
+ * defaults; the client initializer reads `localStorage` and emits a restored
+ * panel. React 19 treats that divergence as a hydration failure and rebuilds
+ * the subtree — so a returning author's restored layout arrives as a flash and
+ * a discarded tree rather than as a layout.
+ *
+ * Both first renders therefore start from the defaults, and the stored
+ * preferences are applied in an effect. The cost is one frame of default
+ * chrome; the alternative is a mismatch on every load for anyone who has ever
+ * moved a panel.
+ */
 function usePreferences(store: PreferenceStore) {
-  // Read lazily so storage is touched once, not on every render, and never
-  // during a server render where the default store answers null anyway.
-  const [preferences, setPreferences] = React.useState<ShellPreferences>(() =>
-    readPreferences(store)
-  );
+  const [preferences, setPreferences] =
+    React.useState<ShellPreferences>(DEFAULT_PREFERENCES);
+
+  React.useEffect(() => {
+    const restored = readPreferences(store);
+    // Compared before setting so a host with no stored preferences does not
+    // take a second render for a value that did not change.
+    setPreferences(current =>
+      shallowEqualPreferences(current, restored) ? current : restored
+    );
+  }, [store]);
 
   const update = React.useCallback(
     (next: ShellPreferences) => {
@@ -165,6 +186,29 @@ function usePreferences(store: PreferenceStore) {
   );
 
   return [preferences, update] as const;
+}
+
+/**
+ * Whether two preference records say the same thing.
+ *
+ * The layout is compared by its entries rather than by identity: `readPreferences`
+ * builds a fresh object every call, so identity is always false and the restore
+ * effect would set state on every mount even when nothing changed.
+ */
+function shallowEqualPreferences(
+  a: ShellPreferences,
+  b: ShellPreferences
+): boolean {
+  if (a.leftPanel !== b.leftPanel || a.leftPinned !== b.leftPinned)
+    return false;
+  if (a.layout === b.layout) return true;
+  if (a.layout === null || b.layout === null) return false;
+  const aKeys = Object.keys(a.layout);
+  const bKeys = Object.keys(b.layout);
+  return (
+    aKeys.length === bKeys.length &&
+    aKeys.every(key => a.layout?.[key] === b.layout?.[key])
+  );
 }
 
 /**
@@ -185,16 +229,22 @@ function useRegionCycling(
         run: () => {
           const map = regionRefs.current;
           if (!map) return;
+          // Only regions that are actually rendered. The left panel is absent
+          // whenever the rail has nothing open, and cycling the static list
+          // would land on it, focus nothing, and leave the key looking broken
+          // for every press after the first.
+          const present = REGIONS.filter(region => map[region] !== null);
+          if (present.length === 0) return;
+
           const active = document.activeElement;
-          const currentIndex = REGIONS.findIndex(region => {
-            const element = map[region];
-            return element !== null && element.contains(active);
-          });
+          const currentIndex = present.findIndex(region =>
+            map[region]?.contains(active)
+          );
           // From outside any region, F6 enters the first rather than doing
           // nothing — otherwise the key appears broken until focus happens to
           // land somewhere it recognises.
-          const next = REGIONS[(currentIndex + 1) % REGIONS.length];
-          map[next]?.focus();
+          const next = present[(currentIndex + 1) % present.length];
+          if (next !== undefined) map[next]?.focus();
         },
       },
     ],
@@ -261,7 +311,7 @@ function ShellRegions({
           }}
           tabIndex={-1}
           aria-label="Editor panels"
-          style={{ width: 48 }}
+          style={{ width: RAIL_WIDTH }}
           className="border-[color:var(--nx-builder-border)] flex shrink-0 flex-col items-center gap-1 border-r py-2"
         >
           {LEFT_PANELS.map(panel => {
