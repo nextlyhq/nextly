@@ -812,8 +812,52 @@ export function generateNpmrc(packageManager: PackageManager): string | null {
     "# pnpm-workspace.yaml shipped for its build allowlist as declaring a\n" +
     "# workspace root, which makes `pnpm add <pkg>` demand a -w flag. There is no\n" +
     "# other package here for that check to protect.\n" +
-    "ignore-workspace-root-check=true\n"
+    `${NPMRC_WORKSPACE_ROOT_KEY}=true\n`
   );
+}
+
+/** The setting {@link generateNpmrc} exists to add, named once so the writer can look for it. */
+const NPMRC_WORKSPACE_ROOT_KEY = "ignore-workspace-root-check";
+
+/**
+ * Give a scaffolded project the `.npmrc` its package manager needs, WITHOUT destroying one that
+ * is already there.
+ *
+ * Appends rather than writes. A scaffold does not always land on an empty directory — the CLI
+ * can overlay an existing project, and a `--local-template` can carry its own `.npmrc` — and that
+ * file is where private registries, auth tokens, proxies and `node-linker` live. Replacing it
+ * would break the install that runs moments later, and would do it by pointing at the wrong
+ * registry rather than by failing loudly.
+ *
+ * An existing declaration of the key WINS, whatever its value. Someone who has written
+ * `ignore-workspace-root-check=false` on purpose means it, and a scaffold is not the right place
+ * to overrule them.
+ *
+ * One helper for both scaffold types, because two copies of "write this file" drift: a correction
+ * to the app path that misses the plugin path is invisible until someone scaffolds a plugin.
+ */
+async function writeScaffoldNpmrc(
+  targetDir: string,
+  packageManager: PackageManager
+): Promise<void> {
+  const addition = generateNpmrc(packageManager);
+  if (!addition) return;
+
+  const npmrcPath = path.join(targetDir, ".npmrc");
+  const existing = (await fs.pathExists(npmrcPath))
+    ? await fs.readFile(npmrcPath, "utf-8")
+    : "";
+
+  // Matched at the start of a line so a value mentioning the key, or a commented-out example,
+  // is not read as a declaration.
+  const alreadyDeclared = new RegExp(
+    `^\\s*${NPMRC_WORKSPACE_ROOT_KEY}\\s*=`,
+    "m"
+  ).test(existing);
+  if (alreadyDeclared) return;
+
+  const separator = existing === "" || existing.endsWith("\n") ? "" : "\n";
+  await fs.writeFile(npmrcPath, existing + separator + addition, "utf-8");
 }
 
 // ============================================================
@@ -1046,10 +1090,7 @@ export async function copyTemplate(
   // Step 6d: Undo the side effect of the workspace file above for the pnpm versions that
   // read it as a workspace declaration. Only for pnpm, because npm warns about the setting
   // on every command — see generateNpmrc.
-  const npmrc = generateNpmrc(packageManager);
-  if (npmrc) {
-    await fs.writeFile(path.join(targetDir, ".npmrc"), npmrc, "utf-8");
-  }
+  await writeScaffoldNpmrc(targetDir, packageManager);
 
   // Step 7: Create SQLite data directory if needed
   // SQLite stores its database file at ./data/nextly.db and the parent
@@ -1131,11 +1172,8 @@ async function copyPluginTemplate(opts: {
   await restoreIgnoreFile(targetDir);
 
   // It installs like any other project too, so it meets the same workspace-root refusal the
-  // pnpm workspace file provokes on pnpm 9 — see generateNpmrc.
-  const npmrc = generateNpmrc(packageManager);
-  if (npmrc) {
-    await fs.writeFile(path.join(targetDir, ".npmrc"), npmrc, "utf-8");
-  }
+  // pnpm workspace file provokes on pnpm 9 — through the same writer as the app path.
+  await writeScaffoldNpmrc(targetDir, packageManager);
 
   // Fill plugin placeholders across the copied tree (src/ + dev/).
   const nextlyRange = await resolvePluginNextlyRange(useYalc);

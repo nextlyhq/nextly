@@ -1,0 +1,133 @@
+/**
+ * The `.npmrc` a pnpm scaffold needs must reach the PROJECT, and must not destroy one already
+ * there.
+ *
+ * Both halves are tested by scaffolding onto a real temporary directory rather than by calling
+ * the generator. A test that calls `generateNpmrc` directly stays green if the `copyTemplate`
+ * wiring is deleted outright — it proves a string is produced, not that any project receives it —
+ * and the wiring is the part that can regress.
+ *
+ * The overwrite half matters because a scaffold does not always land on an empty directory: the
+ * CLI can overlay an existing project, and a `--local-template` can carry its own `.npmrc`. That
+ * file is where private registries, auth tokens and proxies live, so replacing it would break the
+ * install that runs moments later — and break it by reaching the wrong registry rather than by
+ * failing outright.
+ */
+import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import type { DatabaseConfig, PackageManager } from "../types";
+import { copyTemplate } from "../utils/template";
+
+const templates = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "..",
+  "..",
+  "templates"
+);
+
+const sqlite: DatabaseConfig = {
+  type: "sqlite",
+  adapter: "@nextlyhq/adapter-sqlite",
+  databaseDriver: "better-sqlite3",
+  connectionUrl: "file:./data/nextly.db",
+  envExample: "file:./data/nextly.db",
+};
+
+let workspace: string;
+
+beforeEach(async () => {
+  workspace = await mkdtemp(join(tmpdir(), "nextly-npmrc-"));
+});
+
+afterEach(async () => {
+  await rm(workspace, { recursive: true, force: true });
+});
+
+/** Scaffolds a blank project and returns its `.npmrc`, or null when none was written. */
+async function scaffold(
+  packageManager: PackageManager,
+  seedNpmrc?: string
+): Promise<string | null> {
+  const target = join(workspace, "app");
+  if (seedNpmrc !== undefined) {
+    await mkdir(target, { recursive: true });
+    await writeFile(join(target, ".npmrc"), seedNpmrc, "utf-8");
+  }
+
+  await copyTemplate({
+    projectName: "app",
+    projectType: "blank",
+    targetDir: target,
+    database: sqlite,
+    packageManager,
+    templateSource: {
+      basePath: join(templates, "base"),
+      templatePath: join(templates, "blank"),
+    },
+    // Set by the installer once it has settled a directory conflict with the user, which is the
+    // situation the overlay cases below are standing in for.
+    allowExistingTarget: seedNpmrc !== undefined,
+  });
+
+  const npmrcPath = join(target, ".npmrc");
+  return existsSync(npmrcPath) ? readFile(npmrcPath, "utf-8") : null;
+}
+
+describe("a pnpm scaffold", () => {
+  it("receives the workspace-root opt-out", async () => {
+    const npmrc = await scaffold("pnpm");
+    expect(npmrc).not.toBeNull();
+    expect(npmrc).toMatch(/^ignore-workspace-root-check=true$/m);
+  }, 60_000);
+
+  it("keeps the settings an existing .npmrc already carried", async () => {
+    const npmrc = await scaffold(
+      "pnpm",
+      "@acme:registry=https://npm.acme.internal/\nnode-linker=hoisted\n"
+    );
+
+    // The point of the case: these decide which registry the install about to run will contact.
+    expect(npmrc).toContain("@acme:registry=https://npm.acme.internal/");
+    expect(npmrc).toContain("node-linker=hoisted");
+    expect(npmrc).toMatch(/^ignore-workspace-root-check=true$/m);
+  }, 60_000);
+
+  it("does not overrule a deliberate setting of the same key", async () => {
+    const npmrc = await scaffold("pnpm", "ignore-workspace-root-check=false\n");
+
+    expect(npmrc).toContain("ignore-workspace-root-check=false");
+    expect(npmrc).not.toContain("ignore-workspace-root-check=true");
+  }, 60_000);
+
+  it("does not mangle a file with no trailing newline", async () => {
+    const npmrc = await scaffold("pnpm", "node-linker=hoisted");
+    expect(npmrc).toContain("node-linker=hoisted\n");
+    expect(npmrc).toMatch(/^ignore-workspace-root-check=true$/m);
+  }, 60_000);
+});
+
+describe("every other package manager", () => {
+  // npm reads `.npmrc` too and answers every command with `npm warn Unknown project config
+  // "ignore-workspace-root-check"`. A permanent warning for the majority, buying them a setting
+  // they cannot use.
+  it.each(["npm", "yarn", "bun"] as const)(
+    "gets no .npmrc from a %s scaffold",
+    async manager => {
+      expect(await scaffold(manager)).toBeNull();
+    },
+    60_000
+  );
+
+  it("leaves an existing .npmrc untouched", async () => {
+    const seeded = "@acme:registry=https://npm.acme.internal/\n";
+    expect(await scaffold("npm", seeded)).toBe(seeded);
+  }, 60_000);
+});
