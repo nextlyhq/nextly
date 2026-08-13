@@ -1,6 +1,6 @@
 /**
- * Run the server-safe subpaths in a project that CANNOT resolve anything they are not allowed to
- * reach, so a stray load fails at that moment rather than being recognised.
+ * Run the server-safe subpaths in a project where every package they may not use is a TRIPWIRE, so
+ * reaching one leaves evidence that survives whatever the caller does about the failure.
  *
  * The other server-safe guards read things. The directive guard looks for a `"use client"` banner,
  * the artifact gate compares what each built file reaches against an allow-list, and the source ban
@@ -8,25 +8,40 @@
  * consumer does, and a model answers only for the cases it encodes: its surface is every way the
  * language can spell a module load, which is unbounded, so it can be extended but never completed.
  *
- * This asks a different question. Install ONLY the packages a server-safe entry point may use, place
- * ONLY the server-safe artifacts, and import them. A load of anything else throws
- * `ERR_MODULE_NOT_FOUND` whatever produced it — a computed specifier, `eval`, a host object, a form
- * nobody has thought of — because the file is not on disk. Nothing has to recognise a spelling.
+ * ## Why a decoy rather than an empty project
+ *
+ * Leaving the forbidden packages out is the obvious design and it has a hole. Absence produces a
+ * signal only when the failure ESCAPES: an entry point that swallows its own error —
+ * `try { createRequire(...)("react") } catch {}` — resolves nothing here and throws nothing out,
+ * so the run is indistinguishable from one that never tried. The same code succeeds in a consumer
+ * where that package is installed, which is the situation that matters.
+ *
+ * Intercepting the request instead does not work either, and this was measured rather than assumed:
+ * patching `Module._resolveFilename` and `Module._load` captures nothing for a require obtained
+ * from `createRequire`, whether reached directly or through `process.getBuiltinModule`. The loader
+ * hooks that would see it do not span the supported Node range — `registerHooks` starts at 22.15,
+ * and `register` is documented not to affect `createRequire` at all.
+ *
+ * So the evidence is written by the thing being reached. Each forbidden package is replaced by a
+ * module that appends its own name to a log and then throws. The throw preserves the old behaviour
+ * for callers that do not catch; the log is what a caller cannot undo. Nothing has to recognise a
+ * spelling, and nothing has to intercept anything, because the record is made after resolution has
+ * already succeeded — by definition, whatever route got there.
  *
  * ## The two halves both have to be asserted
  *
- * A probe that reaches nothing at all blocks every route and reports a perfect pass, so "the
- * forbidden thing failed" is worthless on its own. Both directions are checked here:
+ * A probe that reaches nothing at all trips no wire and reports a perfect pass, so "no wire was
+ * tripped" is worthless on its own. Both directions are checked:
  *
  * - every server-safe subpath must LOAD and expose at least one name, which is what proves the
  *   module was evaluated rather than merely resolved;
- * - a package that is a real dependency of this one and NOT in the allow-list must FAIL to load.
- *   If it succeeds, the isolation did not happen — the tarball was installed normally and pulled
- *   its whole dependency set in beside it — and every other result in the run is vacuous.
+ * - every tripwire must still BE a tripwire when the run ends. If the real package was installed
+ *   over one, its absence of a marker says so — otherwise a project that resolved the package
+ *   under test normally, pulling its whole dependency set in beside it, would pass every other
+ *   assertion here.
  *
- * The second assertion is about the instrument rather than the subject. Without it the expected
- * output of a correctly isolated run and a completely unisolated one differ in nothing this file
- * looks at.
+ * The second is about the instrument rather than the subject. Without it the expected output of a
+ * correctly built project and a completely unisolated one differ in nothing this file looks at.
  *
  * ## What this does NOT establish
  *
@@ -34,10 +49,15 @@
  * never takes is invisible here and visible to the source ban in `src/layering.test.ts`, which is
  * why that ban stays. The two cover different halves and neither subsumes the other.
  *
+ * The tripwires cover the packages this one SHIPS WITH — its dependencies and peer dependencies —
+ * because those are the names that resolve in a real consumer and therefore the ones a forbidden
+ * reach can actually obtain. A package that is neither is not reachable in a consumer either, so
+ * its absence here is the same answer a consumer would give.
+ *
  * Usage, from this package's directory:
  *   tsx scripts/write-server-safe-isolation-probe.ts <directory>            write the project
- *   tsx scripts/write-server-safe-isolation-probe.ts --prune <directory>    drop non-server-safe files
- *   tsx scripts/write-server-safe-isolation-probe.ts --verify <directory>   read what the probes wrote
+ *   tsx scripts/write-server-safe-isolation-probe.ts --arm <directory>      place tripwires, prune
+ *   tsx scripts/write-server-safe-isolation-probe.ts --verify <directory>   read what the run left
  *
  * Through `tsx` rather than `node`, because the lowest supported Node cannot execute TypeScript
  * directly. That is also how the workflow invokes it.
@@ -45,7 +65,6 @@
 import {
   existsSync,
   mkdirSync,
-  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -62,17 +81,23 @@ import {
 /** Where each probe records that it reached the end of its own run. */
 const MARKERS = { esm: "probe-esm.json", cjs: "probe-cjs.json" } as const;
 
+/** Where a tripwire appends its own name when something loads it. */
+const REACHED_LOG = "tripwires-reached.log";
+
+/** Written inside each tripwire so a real package installed over one is detectable. */
+const TRIPWIRE_MARKER = ".is-tripwire";
+
 /** The installed copy of this package inside the probe project. */
 const INSTALLED = join("node_modules", "@nextlyhq", "ui");
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** The `dependencies` this package declares, which decide both what is allowed and what is not. */
-function declaredDependencies(): Record<string, string> {
-  const manifest = JSON.parse(
-    readFileSync(join(packageRoot, "package.json"), "utf8")
-  ) as { dependencies?: Record<string, string> };
-  return manifest.dependencies ?? {};
+/** This package's manifest, which decides both what is allowed and what is faked. */
+function manifest(): {
+  dependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+} {
+  return JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
 }
 
 /**
@@ -82,13 +107,9 @@ function declaredDependencies(): Record<string, string> {
  * newest, so the day either package publishes a major this build never asked for, an unrelated
  * export change fails every pull request for a version the package does not claim to support —
  * and the failure names this probe rather than the upgrade that caused it.
- *
- * An allowed package missing from `dependencies` is refused rather than defaulted, because the two
- * lists then disagree about what a server-safe entry point may reach, and inventing a range hides
- * that disagreement behind an install that happens to work.
  */
 function allowedDependencies(): Record<string, string> {
-  const declared = declaredDependencies();
+  const declared = manifest().dependencies ?? {};
   return Object.fromEntries(
     [...SERVER_SAFE_ALLOWED_PACKAGES].sort().map(name => {
       const range = declared[name];
@@ -105,27 +126,31 @@ function allowedDependencies(): Record<string, string> {
 }
 
 /**
- * A dependency of this package that a server-safe entry point may NOT use.
+ * Every package a server-safe entry point may not reach but COULD obtain in a real consumer.
  *
- * Derived by subtracting the allow-list from the real manifest rather than written down, so it
- * cannot name a package that has since been removed — a sentinel that is absent for the wrong
- * reason fails to load exactly like a working boundary, and would certify an unisolated run.
+ * Dependencies and peer dependencies together, because both resolve where this package is
+ * installed — a peer is absent from `node_modules` here and present in the app that consumes it,
+ * so leaving peers out would mean the routes most worth catching had no wire on them.
  *
- * Sorted before choosing so the same name is picked on every run and a failure names a stable
- * package rather than whichever one the manifest happened to list first.
+ * Derived by subtraction rather than listed, so a package added to the manifest is covered without
+ * anyone remembering to come back here.
  */
-function forbiddenSentinel(): string {
-  const forbidden = Object.keys(declaredDependencies())
+function forbiddenPackages(): string[] {
+  const declared = manifest();
+  const names = new Set([
+    ...Object.keys(declared.dependencies ?? {}),
+    ...Object.keys(declared.peerDependencies ?? {}),
+  ]);
+  const forbidden = [...names]
     .filter(name => !SERVER_SAFE_ALLOWED_PACKAGES.has(name))
     .sort();
   if (forbidden.length === 0) {
     throw new Error(
-      "Every declared dependency is on the server-safe allow-list, so there is no package whose " +
-        "absence can demonstrate that the probe project is isolated. Without that control a run " +
-        "in a fully populated project is indistinguishable from an isolated one."
+      "Every package this one ships with is on the server-safe allow-list, so there is nothing to " +
+        "place a tripwire on. A run in that state asserts only that the allowed packages load."
     );
   }
-  return forbidden[0];
+  return forbidden;
 }
 
 /** The server-safe subpaths, as the export map spells them. */
@@ -145,11 +170,10 @@ function serverSafeSubpaths(): string[] {
 /**
  * The server-safe subpaths as a CONSUMER spells them, which is what both probes import.
  *
- * The writer and the verifier must agree on this exactly: the probes record what they loaded under
- * these names and the verifier looks each one up. Computed in two places, a change to how an
- * export key becomes a specifier lands in one of them, and the verifier then either misses a
- * subpath the probe covered or demands one it never imported — reading, in both directions, as a
- * fault in the package rather than in this file.
+ * The writer and the verifier must agree exactly: the probes record what they loaded under these
+ * names and the verifier looks each one up. Computed in two places, a change to how an export key
+ * becomes a specifier lands in one of them, and the verifier then either misses a subpath the probe
+ * covered or demands one it never imported — reading, in both directions, as a fault in the package.
  */
 function consumerSpecifiers(): string[] {
   return serverSafeSubpaths().map(subpath => `@nextlyhq/ui${subpath.slice(1)}`);
@@ -158,42 +182,36 @@ function consumerSpecifiers(): string[] {
 /**
  * Write the project, its manifest, and both probes.
  *
- * The manifest declares the allow-list and nothing else, which is what makes the boundary real:
- * `npm install` in this directory brings in exactly the packages a server-safe entry point is
- * permitted to reach, and the package under test is placed beside them afterwards rather than
- * installed, so its own dependency set is never resolved.
+ * The manifest declares the allow-list and nothing else, so `npm install` here brings in exactly
+ * the packages a server-safe entry point is permitted to reach. The package under test is placed
+ * beside them afterwards rather than installed, so its own dependency set is never resolved, and
+ * the tripwires then occupy the names that set would have filled.
  */
 function write(target: string): void {
   mkdirSync(target, { recursive: true });
 
-  const dependencies = allowedDependencies();
+  // A marker or log left by an earlier run survives the failure they exist to catch: an artifact
+  // calling `process.exit(0)` during initialisation ends its probe with status 0 before the final
+  // write, and verification then reads the previous run's evidence about artifacts never loaded.
+  for (const stale of [...Object.values(MARKERS), REACHED_LOG]) {
+    rmSync(join(target, stale), { force: true });
+  }
+
   writeFileSync(
     join(target, "package.json"),
-    `${JSON.stringify({ name: "server-safe-isolation-probe", private: true, version: "1.0.0", dependencies }, null, 2)}\n`
+    `${JSON.stringify(
+      {
+        name: "server-safe-isolation-probe",
+        private: true,
+        version: "1.0.0",
+        dependencies: allowedDependencies(),
+      },
+      null,
+      2
+    )}\n`
   );
 
-  const subpaths = serverSafeSubpaths();
-  const sentinel = forbiddenSentinel();
   const specifiers = consumerSpecifiers();
-
-  // RESOLVED, never loaded. Loading answers a wider question than this asks: it runs the module,
-  // so a package that IS present reports itself absent whenever its own initialiser fails — an
-  // incompatible release, a broken optional dependency of its own, anything that throws. Several
-  // of those failures carry the very error code that means "not installed", so no amount of
-  // narrowing the catch separates them; the two cases are indistinguishable once evaluation is
-  // allowed to happen at all.
-  //
-  // Resolution decides presence without executing anything, so the only module whose absence can
-  // be reported is the one named here. Each probe uses its own system's resolver, and neither can
-  // be confused by what the package would have done had it run.
-  const sentinelProbe = (resolve: string) => `let sentinelReached = false;
-try {
-  ${resolve};
-  sentinelReached = true;
-} catch (error) {
-  const code = error && typeof error === "object" ? error.code : undefined;
-  if (code !== "ERR_MODULE_NOT_FOUND" && code !== "MODULE_NOT_FOUND") throw error;
-}`;
 
   // Both module systems, because the export map publishes both and a consumer arriving through
   // `require` resolves different files. Checking one leaves the other's artifacts evaluated by
@@ -206,8 +224,7 @@ for (const specifier of ${JSON.stringify(specifiers)}) {
   const module = await import(specifier);
   loaded[specifier] = Object.keys(module).length;
 }
-${sentinelProbe(`import.meta.resolve(${JSON.stringify(sentinel)})`)}
-writeFileSync(${JSON.stringify(MARKERS.esm)}, JSON.stringify({ loaded, sentinelReached }));
+writeFileSync(${JSON.stringify(MARKERS.esm)}, JSON.stringify({ loaded }));
 `
   );
 
@@ -219,111 +236,139 @@ for (const specifier of ${JSON.stringify(specifiers)}) {
   const module = require(specifier);
   loaded[specifier] = Object.keys(module).length;
 }
-${sentinelProbe(`require.resolve(${JSON.stringify(sentinel)})`)}
-writeFileSync(${JSON.stringify(MARKERS.cjs)}, JSON.stringify({ loaded, sentinelReached }));
+writeFileSync(${JSON.stringify(MARKERS.cjs)}, JSON.stringify({ loaded }));
 `
   );
 
   console.log(
-    `Wrote an isolation probe for ${subpaths.length} server-safe subpaths (${subpaths.join(", ")}) ` +
-      `to ${target}. Allowed dependencies: ` +
-      `${Object.entries(dependencies)
-        .map(([name, range]) => `${name}@${range}`)
-        .join(", ")}. Isolation is demonstrated by ${sentinel} failing to load.`
+    `Wrote an isolation probe for ${specifiers.length} server-safe subpaths to ${target}. Allowed: ` +
+      `${Object.keys(allowedDependencies()).join(", ")}.`
   );
 }
 
 /**
- * Remove every artifact the server-safe subpaths do not own.
+ * Place a tripwire at every forbidden name, and remove the artifacts the server-safe subpaths do
+ * not own.
  *
- * The export map refuses a deep import, so a client subpath cannot be reached by name. A RELATIVE
- * import from inside a server-safe artifact is a different route and the map has nothing to say
- * about it, so those files are deleted rather than left present and unreachable-by-name.
+ * Runs after the install and the unpack, because both would overwrite what it puts down.
+ *
+ * The log path is absolute and baked in at write time. A tripwire computing it from its own
+ * location would have to know how deep it sits, which differs between a scoped and an unscoped
+ * name — and a wire that writes its evidence to the wrong path reports nothing, which is the one
+ * failure mode that looks exactly like success.
  */
-function prune(target: string): void {
+function arm(target: string): void {
   const dist = join(target, INSTALLED, "dist");
   if (!existsSync(dist)) {
     throw new Error(
-      `${dist} does not exist, so there is nothing to prune and the probe would run against a ` +
-        "package that was never placed. Extract the packed tarball there first."
+      `${dist} does not exist, so the package under test was never placed and the probe would run ` +
+        "against nothing. Extract the packed tarball there first."
     );
   }
-  const removed: string[] = [];
-  for (const artifact of clientArtifacts()) {
-    const path = join(dist, artifact);
-    if (existsSync(path)) {
-      rmSync(path);
-      removed.push(artifact);
-    }
+
+  const logPath = join(target, REACHED_LOG);
+  for (const name of forbiddenPackages()) {
+    const home = join(target, "node_modules", ...name.split("/"));
+    mkdirSync(home, { recursive: true });
+
+    // `appendFileSync` before the throw, so evidence exists whatever the caller does with the
+    // error. Appended rather than written, because several tripwires may be reached in one run and
+    // a rewrite would leave only the last.
+    const body =
+      `require("node:fs").appendFileSync(${JSON.stringify(logPath)}, ${JSON.stringify(`${name}\n`)});\n` +
+      `throw new Error(${JSON.stringify(`${name} is not available to a server-safe entry point.`)});\n`;
+    writeFileSync(join(home, "index.cjs"), body);
+    writeFileSync(
+      join(home, "index.mjs"),
+      `import { appendFileSync } from "node:fs";\n` +
+        `appendFileSync(${JSON.stringify(logPath)}, ${JSON.stringify(`${name}\n`)});\n` +
+        `throw new Error(${JSON.stringify(`${name} is not available to a server-safe entry point.`)});\n`
+    );
+    writeFileSync(
+      join(home, "package.json"),
+      `${JSON.stringify(
+        {
+          name,
+          version: "0.0.0",
+          main: "index.cjs",
+          exports: {
+            ".": { import: "./index.mjs", require: "./index.cjs" },
+            "./*": "./index.cjs",
+          },
+        },
+        null,
+        2
+      )}\n`
+    );
+    writeFileSync(join(home, TRIPWIRE_MARKER), "");
   }
+
+  // The export map refuses a deep import, so a client subpath cannot be reached by name. A
+  // RELATIVE import from inside a server-safe artifact is a different route the map says nothing
+  // about, so those files are deleted rather than left present.
+  const removed = clientArtifacts().filter(artifact => {
+    const path = join(dist, artifact);
+    if (!existsSync(path)) return false;
+    rmSync(path);
+    return true;
+  });
   if (removed.length === 0) {
     throw new Error(
       "No client artifacts were removed. Either the build produced none — in which case the " +
-        "package has no client surface and this check is asserting less than it appears to — or " +
-        "the tarball was extracted somewhere other than the path above."
+        "package has no client surface and this check asserts less than it appears to — or the " +
+        "tarball was extracted somewhere other than the path above."
     );
   }
-  console.log(`Removed ${removed.length} client artifacts from ${dist}.`);
+  console.log(
+    `Armed ${forbiddenPackages().length} tripwires and removed ${removed.length} client artifacts.`
+  );
 }
 
 /**
- * Every package name present at the top level of the probe project.
+ * Read what the run left behind, rather than trusting that the probes exited 0.
  *
- * A scope directory is not a package — `@radix-ui` holds them — so it is descended into and its
- * children reported as scoped names.
- */
-function installedPackages(target: string): string[] {
-  const root = join(target, "node_modules");
-  if (!existsSync(root)) return [];
-  const names: string[] = [];
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    if (entry.name.startsWith(".")) continue;
-    if (entry.name.startsWith("@")) {
-      for (const scoped of readdirSync(join(root, entry.name))) {
-        if (!scoped.startsWith(".")) names.push(`${entry.name}/${scoped}`);
-      }
-      continue;
-    }
-    names.push(entry.name);
-  }
-  return names;
-}
-
-/**
- * Packages the probe project holds that a server-safe entry point may not reach.
- *
- * The sentinel answers a question about ONE name, and npm's default layout can add others without
- * touching it: a hoisted install lifts every non-duplicated transitive dependency to the top level,
- * so the day an allowed package gains a dependency of its own, that dependency becomes directly
- * resolvable by the package under test while the sentinel stays missing and both probes still pass.
- *
- * This enumerates what is actually there instead, so a package arriving by any route — hoisting, a
- * lockfile change, a hand-placed directory — is reported by name rather than having to have been
- * predicted. `@nextlyhq/ui` is expected because it is the subject, placed deliberately.
- */
-function unexpectedlyInstalled(target: string): string[] {
-  const permitted = new Set([...SERVER_SAFE_ALLOWED_PACKAGES, "@nextlyhq/ui"]);
-  const unexpected = installedPackages(target)
-    .filter(name => !permitted.has(name))
-    .sort();
-  if (unexpected.length === 0) return [];
-  return [
-    `The probe project holds ${unexpected.length} package(s) outside the allow-list: ` +
-      `${unexpected.join(", ")}. Each is resolvable by the package under test, so the boundary ` +
-      "these probes report on is wider than the allow-list they are checking against.",
-  ];
-}
-
-/**
- * Read what the probes recorded, rather than trusting that they exited 0.
- *
- * A module that ends the process while it initialises exits 0 from inside the import being
- * checked, so the exit status of a probe cannot distinguish "imported everything" from "died on
- * the first one". The marker is written last and is the only evidence that the run completed.
+ * A module that ends the process while it initialises exits 0 from inside the import being checked,
+ * so the exit status of a probe cannot distinguish "imported everything" from "died on the first
+ * one". The marker is written last and is the only evidence that a run completed.
  */
 function verify(target: string): void {
   const expected = consumerSpecifiers();
-  const problems: string[] = [...unexpectedlyInstalled(target)];
+  const problems: string[] = [];
+
+  // The instrument first. A tripwire that is no longer a tripwire means the real package was
+  // installed over it, and every "no wire tripped" result below would then be reporting on a
+  // project that never had the boundary it claims to be testing.
+  const disarmed = forbiddenPackages().filter(
+    name =>
+      !existsSync(
+        join(target, "node_modules", ...name.split("/"), TRIPWIRE_MARKER)
+      )
+  );
+  if (disarmed.length > 0) {
+    problems.push(
+      `${disarmed.length} of ${forbiddenPackages().length} tripwires are missing or were replaced ` +
+        `by a real package (${disarmed.slice(0, 5).join(", ")}${disarmed.length > 5 ? ", ..." : ""}). ` +
+        "Nothing was watching those names, so this run cannot report on them either way."
+    );
+  }
+
+  const logPath = join(target, REACHED_LOG);
+  if (existsSync(logPath)) {
+    const reached = [
+      ...new Set(
+        readFileSync(logPath, "utf8")
+          .split("\n")
+          .filter(line => line.length > 0)
+      ),
+    ].sort();
+    if (reached.length > 0) {
+      problems.push(
+        `A server-safe entry point reached ${reached.join(", ")}. Whether the attempt threw is not ` +
+          "the question: it fails here only because this package is a stand-in, and the same " +
+          "request succeeds in a consumer where the real package is installed."
+      );
+    }
+  }
 
   for (const [system, marker] of Object.entries(MARKERS)) {
     const path = join(target, marker);
@@ -336,16 +381,7 @@ function verify(target: string): void {
     }
     const record = JSON.parse(readFileSync(path, "utf8")) as {
       loaded: Record<string, number>;
-      sentinelReached: boolean;
     };
-
-    if (record.sentinelReached) {
-      problems.push(
-        `The ${system} probe loaded a package outside the allow-list, so the project it ran in was ` +
-          "not isolated and every other result from it is vacuous. The package under test was " +
-          "probably installed rather than placed, which resolves its whole dependency set."
-      );
-    }
 
     for (const specifier of expected) {
       const names = record.loaded[specifier];
@@ -366,23 +402,23 @@ function verify(target: string): void {
   }
   console.log(
     `Both probes loaded all ${expected.length} server-safe subpaths with non-empty exports, and ` +
-      "neither could reach a package outside the allow-list."
+      `none of the ${forbiddenPackages().length} tripwires was reached.`
   );
 }
 
-const MODES = new Set(["--prune", "--verify"]);
+const MODES = new Set(["--arm", "--verify"]);
 const flag = process.argv[2];
 const mode = MODES.has(flag) ? flag : undefined;
 const target = mode === undefined ? process.argv[2] : process.argv[3];
 
 if (target === undefined) {
   console.error(
-    "Usage: tsx scripts/write-server-safe-isolation-probe.ts [--prune|--verify] <directory>. The " +
+    "Usage: tsx scripts/write-server-safe-isolation-probe.ts [--arm|--verify] <directory>. The " +
       "directory is where the probe project is written; it is created if it does not exist."
   );
   process.exit(1);
 }
 
-if (mode === "--prune") prune(target);
+if (mode === "--arm") arm(target);
 else if (mode === "--verify") verify(target);
 else write(target);

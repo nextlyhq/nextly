@@ -363,8 +363,8 @@ jobs:
       # The export map already refuses a deep import, so a client subpath cannot be reached by
       # name. A RELATIVE import from inside a server-safe artifact is a different route that the
       # map says nothing about, so those files are deleted rather than left present.
-      - name: Remove the artifacts the server-safe subpaths do not own
-        run: pnpm --filter @nextlyhq/ui exec tsx scripts/write-server-safe-isolation-probe.ts --prune /tmp/ss-probe
+      - name: Arm the tripwires and remove the artifacts the server-safe subpaths do not own
+        run: pnpm --filter @nextlyhq/ui exec tsx scripts/write-server-safe-isolation-probe.ts --arm /tmp/ss-probe
 
       # Both module systems, because the export map publishes both and `require` resolves
       # different files than `import`. Neither exit status is the assertion — a module that ends
