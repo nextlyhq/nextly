@@ -13,6 +13,7 @@
  * name-based assertion alone.
  */
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { RangeField } from "./index";
@@ -101,26 +102,51 @@ describe("RangeField", () => {
     expect(screen.getByRole("group", { name: "Created date" })).toBeTruthy();
   });
 
-  it("reports each end separately", () => {
-    const onFromChange = vi.fn();
-    const onToChange = vi.fn();
+  it("shows each end's value on its own control", () => {
     render(
       <RangeField
         label="Created date"
         from="2026-01-01"
         to="2026-02-01"
-        onFromChange={onFromChange}
-        onToChange={onToChange}
+        onFromChange={() => {}}
+        onToChange={() => {}}
       />
     );
 
-    // Values land on the right control. Swapping them is the kind of mistake a
-    // labelled-but-unasserted component makes look correct.
     expect((screen.getByLabelText("From") as HTMLInputElement).value).toBe(
       "2026-01-01"
     );
     expect((screen.getByLabelText("To") as HTMLInputElement).value).toBe(
       "2026-02-01"
     );
+  });
+
+  it("reports each end through its own callback", async () => {
+    // The controls are TYPED INTO rather than merely rendered. Passing two
+    // spies and then asserting only the values `from` and `to` supplied would
+    // leave both spies uncalled, so dropping a handler or wiring both ends to
+    // the same one would pass -- the props go in, nothing checks they come out.
+    const user = userEvent.setup();
+    const onFromChange = vi.fn();
+    const onToChange = vi.fn();
+    render(
+      <RangeField
+        label="Created date"
+        from=""
+        to=""
+        onFromChange={onFromChange}
+        onToChange={onToChange}
+      />
+    );
+
+    await user.type(screen.getByLabelText("From"), "a");
+    expect(onFromChange).toHaveBeenCalledWith("a");
+    // The other end stays silent, which is what separates correct wiring from
+    // both inputs reporting through one handler.
+    expect(onToChange).not.toHaveBeenCalled();
+
+    await user.type(screen.getByLabelText("To"), "b");
+    expect(onToChange).toHaveBeenCalledWith("b");
+    expect(onFromChange).toHaveBeenCalledTimes(1);
   });
 });
