@@ -504,7 +504,7 @@ describe("a credential a hand-built provider re-cased before using it", () => {
       configFields: [
         { name: "apiKey", label: "API Key", kind: "password", secret: true },
       ],
-      validateConfig: () => {},
+      parseConfiguration: (input: unknown) => input,
       createAdapterFrom: (input: unknown) => {
         const used = (input as { apiKey: string }).apiKey.toLowerCase();
         return {
@@ -730,7 +730,7 @@ describe("a provider that never passed through the authoring helper", () => {
     configFields: [
       { name: "apiKey", label: "API Key", kind: "password", secret: true },
     ],
-    validateConfig: () => {},
+    parseConfiguration: (input: unknown) => input,
     createAdapterFrom: (input: unknown) => {
       const config = input as { apiKey: string };
       return {

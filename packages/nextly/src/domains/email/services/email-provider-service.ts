@@ -229,6 +229,34 @@ export class EmailProviderService extends BaseService {
    * The message names the variable because the operator is one environment
    * setting away from working, and a variable name is not itself a secret.
    */
+  /**
+   * The parsed configuration a provider returns, as something storable.
+   *
+   * The parsed value is `unknown` by design — the erased form does not expose
+   * the type — so the one property this needs is checked rather than assumed.
+   * A provider whose parser returns something other than an object cannot have
+   * its configuration persisted at all, and failing here names which provider
+   * did it; storing the value regardless would put a string or an array in a
+   * column every reader expects to hold fields.
+   */
+  private storableConfiguration(
+    type: string,
+    parsed: unknown
+  ): Record<string, unknown> {
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Email provider "${type}" parsed its configuration into a ${Array.isArray(parsed) ? "list" : typeof parsed}, and a configuration must be an object of fields. Return the parsed object from \`parseConfig\`.`,
+        logContext: { reason: "email-provider-parsed-not-object", type },
+      });
+    }
+    return parsed as Record<string, unknown>;
+  }
+
   private encryptConfiguration(config: Record<string, unknown>): string {
     if (!this.encryptionSecret) {
       throw new NextlyError({
@@ -643,9 +671,17 @@ export class EmailProviderService extends BaseService {
     // insert. Without this a row stores happily and fails only when something
     // tries to send through it, inside a catch that reports `{ success: false }`
     // -- so the operator learns at the worst moment and with the least detail.
-    getEmailProviderRegistry()
-      .get(data.type)
-      .validateConfig(data.configuration);
+    // The PARSED configuration is what gets stored, so that the row and the
+    // value the adapter runs on are the same thing. They were not: the service
+    // stored whatever the caller sent while the adapter closed over the parse
+    // result, and every difference between the two became a defect somewhere
+    // that read the row.
+    const parsedConfiguration = this.storableConfiguration(
+      data.type,
+      getEmailProviderRegistry()
+        .get(data.type)
+        .parseConfiguration(data.configuration)
+    );
 
     const id = randomUUID();
     const now = new Date();
@@ -656,7 +692,7 @@ export class EmailProviderService extends BaseService {
       type: data.type,
       fromEmail: data.fromEmail,
       fromName: data.fromName ?? null,
-      configuration: this.encryptConfiguration(data.configuration),
+      configuration: this.encryptConfiguration(parsedConfiguration),
       isDefault: data.isDefault ?? false,
       isActive: data.isActive ?? true,
       createdAt: now,
@@ -914,9 +950,12 @@ export class EmailProviderService extends BaseService {
               this.declaredConfigPaths(data.type as string)
             )
           : {};
-      getEmailProviderRegistry()
-        .get(data.type as string)
-        .validateConfig(submitted);
+      const parsedSubmitted = this.storableConfiguration(
+        data.type as string,
+        getEmailProviderRegistry()
+          .get(data.type as string)
+          .parseConfiguration(submitted)
+      );
 
       // Persist the replacement even when the update carried no configuration.
       // Validating `{}` and then not writing it leaves the PREVIOUS provider's
@@ -924,7 +963,7 @@ export class EmailProviderService extends BaseService {
       // parser would receive stale credentials, which is exactly what
       // "a type change replaces rather than merges" is supposed to prevent.
       if (data.configuration === undefined) {
-        updateData.configuration = this.encryptConfiguration(submitted);
+        updateData.configuration = this.encryptConfiguration(parsedSubmitted);
         // This branch REPLACES the stored configuration without the caller
         // having sent one, so the diff below -- which only runs when
         // `data.configuration` is present -- would have reported a type change
@@ -983,9 +1022,12 @@ export class EmailProviderService extends BaseService {
       // `data.type` is applied a few lines above, so a change from smtp to
       // resend would otherwise have its configuration checked by the SMTP
       // parser and stored under resend -- accepted here and unusable at send.
-      getEmailProviderRegistry()
-        .get(effectiveType)
-        .validateConfig(mergedConfig);
+      const parsedMerged = this.storableConfiguration(
+        effectiveType,
+        getEmailProviderRegistry()
+          .get(effectiveType)
+          .parseConfiguration(mergedConfig)
+      );
 
       // Compared BEFORE encryption. Encryption is randomised -- a fresh salt
       // and IV per call -- so two encryptions of identical configuration never
@@ -1002,11 +1044,15 @@ export class EmailProviderService extends BaseService {
       // the type-change branch: comparing against the `{}` fallback would
       // report "unchanged" for a save that replaced a credential nobody could
       // read with one they can.
+      // Compared on the PARSED form, which is what is now stored. Comparing
+      // the merged input against a stored parsed value reported a change on
+      // every save whose parser normalises anything — a trimmed credential
+      // differs from its own stored form on the way in, and never after.
       configurationChanged =
         !existing.readable ||
-        JSON.stringify(existingConfig) !== JSON.stringify(mergedConfig);
+        JSON.stringify(existingConfig) !== JSON.stringify(parsedMerged);
 
-      updateData.configuration = this.encryptConfiguration(mergedConfig);
+      updateData.configuration = this.encryptConfiguration(parsedMerged);
     }
     if (data.isActive !== undefined) updateData.isActive = data.isActive;
     if (data.isDefault !== undefined) updateData.isDefault = data.isDefault;
