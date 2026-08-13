@@ -225,7 +225,7 @@ test.describe("a canvas any Nextly editor could ship", () => {
     const maxSteps = Math.ceil((root!.height * scale) / STEP_PX) + 4;
     const owners: string[] = [];
     const zoneChoices: Array<{
-      owner: string;
+      owner: string | null;
       active: number;
       nearest: number;
       containing: number;
@@ -260,18 +260,20 @@ test.describe("a canvas any Nextly editor could ship", () => {
       // Recorded by POSITION, never by loop index. The descent begins above the
       // region, so nothing measured on the way in is attributed to a position
       // inside it.
-      const inside = driver.pointer().y >= liveTop;
-      const owner = inside ? await driver.readActiveZoneOwner() : null;
-      if (owner !== null) {
-        owners.push(owner);
-        // At every sample, not just the first. A check taken once proves the
-        // mapping at one depth, which is the same weakness the owner check
-        // exists to close.
+      if (driver.pointer().y >= liveTop) {
+        // Containment is measured at EVERY sample inside the region, before
+        // anything is known about whether a target activated. Recording it only
+        // where one did would drop exactly the positions that matter: a canvas
+        // missing most of its zones and activating one leaves the misses
+        // invisible, and the samples that survive all agree.
+        const containing = await driver.zoneContainingPointer();
+        const owner = await driver.readActiveZoneOwner();
+        if (owner !== null) owners.push(owner);
         zoneChoices.push({
           owner,
           active: await driver.readActiveTarget(),
           nearest: await driver.nearestZoneToPointer(),
-          containing: await driver.zoneContainingPointer(),
+          containing,
         });
       }
       await driver.moveBy(0, STEP_PX);
@@ -302,6 +304,15 @@ test.describe("a canvas any Nextly editor could ship", () => {
     // What this does NOT establish is depth priority; the annotation at the top
     // of the test records that and why.
     const contained = zoneChoices.filter(choice => choice.containing >= 0);
+    // A zone under the pointer must be the ACTIVE one. Asserted before the
+    // owner, because ownership of a zone nothing selected says nothing about
+    // what the canvas resolved: a sample where the pointer sits inside a zone
+    // and no target is active is a zone the canvas missed, and it has to fail
+    // rather than quietly leave the set.
+    expect(
+      contained.filter(choice => choice.owner === null),
+      "a zone containing the pointer must have activated a target"
+    ).toEqual([]);
     expect(
       [...new Set(contained.map(choice => choice.owner))],
       "a zone containing the pointer inside the nested region must be its own"
@@ -337,9 +348,9 @@ test.describe("a canvas any Nextly editor could ship", () => {
     // exactly why the containing-zone case is asserted exactly rather than
     // folded in here.
     expect(
-      zoneChoices.filter(
-        choice => Math.abs(choice.active - choice.nearest) > 1
-      ),
+      zoneChoices
+        .filter(choice => choice.active >= 0)
+        .filter(choice => Math.abs(choice.active - choice.nearest) > 1),
       "the resolved zone must be the nearest to the pointer or its neighbour"
     ).toEqual([]);
   });
@@ -513,14 +524,23 @@ test.describe("a canvas any Nextly editor could ship", () => {
     // property of the fixture rather than of the requirement.
     const blocks = await driver.readBlockBoxes();
     const scale = await driver.frameScale();
-    const shortestBlock = Math.min(
-      ...blocks.slice(1).map(box => box.height * scale)
-    );
+    const childHeights = blocks.slice(1).map(box => box.height * scale);
     await driver.cancel();
+    // The children have to EXIST before a bound is derived from them. With only
+    // the root measured — a child selector that stopped matching, a replacement
+    // driver reporting less — `Math.min()` of nothing is `Infinity`, a
+    // "greater than 0" precondition passes on it, and the distance assertion
+    // below accepts any indicator anywhere on screen while reporting this
+    // acceptance point green.
     expect(
-      shortestBlock,
-      "the fixture must have blocks to measure the bound against"
+      childHeights.length,
+      "the fixture must render blocks to measure the bound against"
     ).toBeGreaterThan(0);
+    const shortestBlock = Math.min(...childHeights);
+    expect(
+      Number.isFinite(shortestBlock) && shortestBlock > 0,
+      "the derived bound must be a real distance"
+    ).toBe(true);
 
     // No expected-failure marking: this canvas meets the property. The rect is
     // comparable with the pointer because the driver maps it out of frame
