@@ -2049,10 +2049,16 @@ describe("an inverse that names a parent held twice", () => {
     // traversed, building a longer diagnostic path for every descendant on the
     // way down to a verdict that was settled at level 1,001.
     //
-    // The message is asserted as well as the refusal. Interpolating the path at
-    // that depth produces a thousand `.slots.main[0]` segments, which is longer
-    // than a message may be — so the reason is truncated away and the author
-    // reads breadcrumb with no verdict at the end.
+    // The DEPTH REPORTED is what separates the two. Both refuse this subtree —
+    // the unconditional check catches it either way, so asserting the refusal
+    // or the phrase "cannot be edited" passes with and without the fix. What
+    // differs is where the walk STOPPED: bounded, it reports the machine limit
+    // plus one; unbounded, it walks to the bottom and reports the full 1,201.
+    //
+    // The subject is asserted too, and deliberately carries no path. A thousand
+    // `.slots.main[0]` segments is longer than a message may be, so
+    // interpolating it truncates the reason away and leaves the author reading
+    // breadcrumb with no verdict at the end.
     let root: BlockNode = node("deep-leaf");
     for (let level = 0; level < 1_200; level += 1) {
       root = node(`deep-${String(level)}`, { main: [root] });
@@ -2064,7 +2070,7 @@ describe("an inverse that names a parent held twice", () => {
         { kind: "insert", node: root, at: { index: 0 } },
         { maxDepth: 100_000, maxNodes: 100_000, maxBytes: 100_000_000 }
       )
-    ).toThrow(/cannot be edited/);
+    ).toThrow(/this subtree is nested 1001 levels deep and cannot be edited/);
   });
 
   it("refuses a cap that cannot decide anything", () => {
