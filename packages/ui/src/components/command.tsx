@@ -447,6 +447,10 @@ export {
  * wants the ranking that comes for free, and reaching for `cmdk` directly is not open to every
  * package here.
  *
+ * Bound to a declaration rather than re-exported with `export { x as y }`: the bundler keeps a doc
+ * comment attached to a declaration and drops one attached to an export statement, so the release
+ * tag would not reach the published types.
+ *
  * @experimental
  */
-export { defaultFilter as commandDefaultFilter };
+export const commandDefaultFilter = defaultFilter;
