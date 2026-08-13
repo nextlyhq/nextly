@@ -1658,7 +1658,11 @@ describe("a guard that must not crash on the input it refuses", () => {
     // The op may be accepted or refused — what must NOT happen is a native
     // stack overflow escaping instead of an OpError.
     expect(thrown).not.toBeInstanceOf(RangeError);
-  });
+    // A generous ceiling, not a fix. The fixture size is load-bearing —
+    // 150,000 exceeds V8's call-argument cap, which is the whole point — and CI
+    // runs several matrices at once, so the default budget measures the machine
+    // rather than this code.
+  }, 30_000);
 
   it("refuses a very wide slot without exceeding the call-argument limit", () => {
     // `push(...children)` passes each child as a call ARGUMENT, and V8 caps
@@ -1676,7 +1680,11 @@ describe("a guard that must not crash on the input it refuses", () => {
       thrown = error;
     }
     expect(thrown).not.toBeInstanceOf(RangeError);
-  });
+    // A generous ceiling, not a fix. The fixture size is load-bearing —
+    // 150,000 exceeds V8's call-argument cap, which is the whole point — and CI
+    // runs several matrices at once, so the default budget measures the machine
+    // rather than this code.
+  }, 30_000);
 
   it("counts a very wide slot without exceeding the call-argument limit", () => {
     // An UPDATE, because a remove never reaches the cap check: only an edit
@@ -1703,7 +1711,11 @@ describe("a guard that must not crash on the input it refuses", () => {
     // large. A native RangeError is not: it means the count that decides which
     // one broke before it could decide.
     expect(thrown).not.toBeInstanceOf(RangeError);
-  });
+    // A generous ceiling, not a fix. The fixture size is load-bearing —
+    // 150,000 exceeds V8's call-argument cap, which is the whole point — and CI
+    // runs several matrices at once, so the default budget measures the machine
+    // rather than this code.
+  }, 30_000);
 });
 
 describe("the document's own identity fields", () => {

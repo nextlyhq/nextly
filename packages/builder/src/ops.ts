@@ -1207,6 +1207,13 @@ function assertForestEntries(nodes: BlockNode[]): void {
   // Identity, not id: a cycle is the same OBJECT reached twice, and two
   // distinct nodes sharing an id are a different fault with its own guard.
   const seen = new Set<unknown>();
+  // Collected and checked ONCE at the end rather than per node. `isJsonValue`
+  // allocates a stack and a cycle set per call, so asking it per field turned a
+  // 150,000-node document into six hundred thousand of those — correct, and
+  // slow enough that CI timed out where this machine did not. An array of every
+  // value is itself a JSON value, so one call answers for all of them with one
+  // allocation and one shared budget.
+  const heldValues: unknown[] = [];
   while (pending.length > 0) {
     const entry = pending.pop();
     if (seen.has(entry)) {
@@ -1247,12 +1254,7 @@ function assertForestEntries(nodes: BlockNode[]): void {
     // may not return something that cannot be saved.
     for (const [field, value] of Object.entries(entry)) {
       if (field === "slots") continue;
-      if (!isJsonValue(value)) {
-        throw new OpError(
-          `a node whose "${field}" holds ${describe(value)} cannot be edited: ` +
-            `JSON cannot write that value, so the document would not save.`
-        );
-      }
+      heldValues.push(value);
     }
     // Read as `unknown` rather than cast: the entry has only been established
     // as a record, so claiming it is a BlockNode here would assert the very
@@ -1305,6 +1307,27 @@ function assertForestEntries(nodes: BlockNode[]): void {
       // document, and before a removal could repair it.
       for (const child of children) pending.push(child);
     }
+  }
+
+  // One walk over everything the document holds. What a node HOLDS matters as
+  // much as how it holds it: descriptors say a field is stored rather than
+  // computed and say nothing about the value, so an untouched node carrying a
+  // value JSON cannot write made a successful edit hand back a document that
+  // cannot be saved.
+  if (!isJsonValue(heldValues)) {
+    // The precise offender, found only once the fast path has failed. Naming
+    // the field costs a second walk, and paying for it on every op to describe
+    // a failure that almost never happens is the wrong trade.
+    for (const value of heldValues) {
+      if (isJsonValue(value)) continue;
+      throw new OpError(
+        `a node holding ${describe(value)} cannot be edited: JSON cannot ` +
+          `write that value, so the document would not save.`
+      );
+    }
+    throw new OpError(
+      `this document holds a value JSON cannot write, so it would not save.`
+    );
   }
 }
 
