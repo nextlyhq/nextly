@@ -1887,6 +1887,7 @@ describe("measureBytes agrees with the serializer on hooks and cycles", () => {
     expect(measureBytes(value, Number.POSITIVE_INFINITY)).toEqual({
       bytes: expect.any(Number) as number,
       exceeded: true,
+      reason: "unwritable",
     });
   });
 
@@ -1908,5 +1909,40 @@ describe("measureBytes agrees with the serializer on hooks and cycles", () => {
     const written = Buffer.byteLength(JSON.stringify(value), "utf8");
 
     expect(measureBytes(value, 1_000).bytes).toBe(written);
+  });
+});
+
+describe("measureBytes says WHY a value cannot be stored", () => {
+  it("calls a BigInt unwritable rather than counting it", () => {
+    // `JSON.stringify` THROWS on a BigInt — it neither writes nor drops it — so
+    // counting it as an ordinary value reports a document as fitting that the
+    // writer refuses entirely.
+    expect(measureBytes({ x: 1n }, 100)).toEqual({
+      bytes: expect.any(Number) as number,
+      exceeded: true,
+      reason: "unwritable",
+    });
+  });
+
+  it("calls a boxed BigInt unwritable too", () => {
+    // `Object(1n)` is a BigInt OBJECT, so `typeof` reports "object" and the
+    // walk would treat it as an ordinary record with no own keys.
+    expect(measureBytes({ x: Object(1n) }, 100)).toEqual({
+      bytes: expect.any(Number) as number,
+      exceeded: true,
+      reason: "unwritable",
+    });
+  });
+
+  it("still says over-limit when the document is merely too big", () => {
+    // The distinction is the whole point: these two need opposite advice, and
+    // a single boolean cannot tell an author which one they have.
+    const measured = measureBytes({ x: "y".repeat(500) }, 100);
+
+    expect(measured).toEqual({
+      bytes: expect.any(Number) as number,
+      exceeded: true,
+      reason: "over-limit",
+    });
   });
 });
