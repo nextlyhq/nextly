@@ -2133,13 +2133,41 @@ describe("an inverse that names a parent held twice", () => {
       beta: Array.from({ length: half }, () => 1),
     } as unknown as BlockNode;
 
-    expect(() =>
-      applyOp(
+    // NOT SEPARATING for the budget change, and stated so the next reader does
+    // not take the green for proof. Two fixtures were tried: asserting the
+    // refusal, and asserting the invariant below. Both pass with per-value
+    // budgets restored, because this subtree is rejected by the walk for a
+    // reason that is not the shared budget, and I did not find a fixture where
+    // the two boundaries disagree without something else refusing it first.
+    //
+    // Kept rather than deleted because what it asserts is the rule the whole
+    // module turns on and nothing else in this file states it: refusing the
+    // insert is one acceptable answer and accepting it is the other, but the
+    // store may NOT accept an edit and then refuse the document it produced.
+    // The budget change is argued from the code — one boundary shared a budget,
+    // the other did not — rather than from this test.
+    const limits = {
+      maxDepth: 10,
+      maxNodes: 100,
+      maxBytes: Number.MAX_SAFE_INTEGER,
+    };
+    let applied: BlockDocument | undefined;
+    try {
+      applied = applyOp(
         doc(),
         { kind: "insert", node: carrier, at: { index: 0 } },
-        { maxDepth: 10, maxNodes: 100, maxBytes: Number.MAX_SAFE_INTEGER }
-      )
-    ).toThrow(OpError);
+        limits
+      ).document;
+    } catch (error) {
+      expect(error, "refusing the insert is a valid answer").toBeInstanceOf(
+        OpError
+      );
+      return;
+    }
+
+    expect(() =>
+      applyOp(applied, { kind: "remove", id: "carrier" }, limits)
+    ).not.toThrow();
   }, 60_000);
 
   it("refuses a cap that cannot decide anything", () => {
