@@ -230,6 +230,25 @@ function classValue(node: ts.Expression, file: ts.SourceFile): ClassValue {
   return opaque();
 }
 
+/**
+ * The property a member DECLARES, rather than the source text that spells it.
+ *
+ * `{ className: x }` and `{ "className": x }` are the same property and render
+ * identically; only their spelling differs. `getText()` returns the spelling —
+ * `"className"` WITH the quotes — so comparing it skipped the quoted form
+ * silently, which is the same class of mistake as comparing a display name to
+ * an identifier.
+ *
+ * Returns null for a computed key, whose name is not statically knowable at
+ * all; the caller reports those rather than skipping them.
+ */
+function propertyName(name: ts.PropertyName | undefined): string | null {
+  if (!name) return null;
+  if (ts.isIdentifier(name) || ts.isPrivateIdentifier(name)) return name.text;
+  if (ts.isStringLiteral(name) || ts.isNumericLiteral(name)) return name.text;
+  return null;
+}
+
 /** What one `<SearchBar>` tag passes as class text, and what it hides. */
 function classesOf(
   tag: ts.JsxOpeningElement | ts.JsxSelfClosingElement,
@@ -272,7 +291,7 @@ function classesOf(
         parts.push({ literals: [], opaque: [member.getText(file)] });
         continue;
       }
-      if (member.name?.getText(file) !== "className") continue;
+      if (propertyName(member.name) !== "className") continue;
       if (ts.isPropertyAssignment(member)) {
         parts.push(classValue(member.initializer, file));
         continue;
@@ -337,6 +356,7 @@ describe("SearchBar call sites", () => {
       ["braced", '<SearchBar className={"border-input"} />'],
       ["cn() call", '<SearchBar className={cn("w-full", "border-input")} />'],
       ["object spread", '<SearchBar {...{ className: "border-input" }} />'],
+      ["quoted key", '<SearchBar {...{ "className": "border-input" }} />'],
       ["template", "<SearchBar className={`w-full border-input`} />"],
       [
         "template with a hole",
@@ -420,6 +440,10 @@ describe("SearchBar call sites", () => {
       ["<SearchBar {...{ ...props }} />", "...props"],
       // A computed key cannot be compared as text.
       ['<SearchBar {...{ ["className"]: layout }} />', '["className"]: layout'],
+      // A quoted key is the SAME property as an unquoted one and renders
+      // identically; only the spelling differs. Comparing source text rather
+      // than the declared name skipped it.
+      ['<SearchBar {...{ "className": layout }} />', "layout"],
     ] as const;
 
     for (const [markup, expected] of opaque) {
