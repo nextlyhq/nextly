@@ -26,6 +26,46 @@ final-commit marker, and the check passes over content that was rewritten
 underneath it. When history was rewritten, compare the delta (step 3) rather
 than trusting any single marker.
 
+### None of the steps below can detect a lost tail
+
+They all read `headRefOid`, and **`headRefOid` is the MERGED head** — the
+snapshot GitHub took when it computed the merge, not the branch's current tip.
+A commit pushed after that snapshot is outside the procedure entirely: absent
+from the merge, absent from `headRefOid`, and therefore absent from both sides
+of every comparison here. Each step then confirms that everything which merged,
+merged.
+
+The independent source is the ref itself:
+
+```sh
+BR=$(gh pr view N --json headRefName --jq .headRefName)
+TIP=$(git ls-remote origin "refs/heads/$BR" | cut -f1)   # the branch
+GH=$(gh pr view N --json headRefOid --jq .headRefOid)    # what actually merged
+git fetch origin "$TIP" --quiet
+git log --oneline "$GH..$TIP"          # any output = commits that never merged
+```
+
+**Empty output is evidence only when `TIP` is non-empty.** A deleted branch
+yields an empty `TIP`, the range degenerates, and the check reports clean
+without having looked. Deleted branch means NOT CHECKABLE, and must be said
+that way rather than passed.
+
+Measured against a PR known to have lost two commits and one known intact:
+
+| instrument                              | lost 2 commits | intact    |
+| --------------------------------------- | -------------- | --------- |
+| `headRefOid`'s date predates the merge  | "clean"        | "clean"   |
+| step 3's delta comparison               | IDENTICAL      | IDENTICAL |
+| `git log <headRefOid>..<ls-remote tip>` | 2 STRANDED     | empty     |
+
+The first two are not weak checks; they cannot see this class of defect at all,
+because each derives both of its sides from the snapshot being audited. That is
+worth stating because the delta comparison is the most rigorous-looking option
+on offer, and its thoroughness is what earns the trust it does not deserve here.
+
+Three PRs lost tails on a single day in this repository, one of them carrying a
+P1 and one leaving `main` red, and none was found by the procedure below.
+
 1. Confirm what was actually merged, then FETCH the object before probing it:
 
    ```
@@ -100,12 +140,42 @@ than trusting any single marker.
    them. Whole-object equality is sound only when `main` never touched the
    path. `--stat` is never sound: it reports only that a path was touched, which
    any earlier commit in the same PR already guarantees.
+
+   **This step answers "was the squash rewritten", never "did every commit
+   land".** Both its sides derive from `<headRefOid>`, so a commit pushed after
+   the merge was computed is outside the comparison and it returns IDENTICAL.
+   Run the `ls-remote` check above first; this one is not a substitute for it.
+
 4. If the final commit is a pure revert of an earlier one in the same PR, check the
    NET effect, not the last hunk.
 
 The danger window is push-a-fix-then-merge-immediately, which is what everyone
 does once CI is green and threads are cleared. A PR has already merged here
 missing its last commit, reading as complete with every thread resolved.
+
+**Detection is cleanup; the gate is the fix.** Re-read `git ls-remote` in the
+SAME step as the merge and confirm the tip still matches the revision the green
+checks belong to, restarting the gate if it moved. Everything in this file runs
+after something has already shipped.
+
+## A red head is grounds to look, not a finding
+
+The other half of the same window: the merge snapshots a head, and CI on that
+head is independent of the snapshot. So a PR can merge from a head whose jobs
+had already concluded `failure` — one did here, leaving `main` red.
+
+It does not follow in general. The merge commit is a different tree from the
+head, and it is the one that decides. So establish the state of `main` by
+CONTENT — does it carry the failing assertion, and does it carry the fix —
+rather than by reading a job colour belonging to a tree that was never merged.
+
+**Reading the merge commit's checks instead has its own trap, and it is the one
+that bites.** Querying for `conclusion == "failure"` and finding none reads as
+green and is not: measured on one merge commit here, `Integration (postgres)`,
+`Integration (mysql)`, `Integration (sqlite)` and `Lint / Typecheck / Test /
+Build` were all still `queued` hours later, with two unrelated jobs `completed`.
+Zero failures, because nothing had finished. Assert `success` on each job you
+name; never infer it from the absence of a failure.
 
 ## Before calling a red run flake, name the mechanism
 
