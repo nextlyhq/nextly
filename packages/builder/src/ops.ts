@@ -2260,15 +2260,35 @@ export function applyOp(
   // documents the machine cap allows and name the wrong reason for it. The
   // forest has its own entry walk, its own depth guard and its own per-op value
   // checks; this covers the fields none of those look at.
+  //
+  // ONE budget across every envelope field, not one per field. A fresh
+  // `isJsonValue` call per key lets several fields referencing the same large
+  // dense array each pay the full walk, so a two-million-element array named by
+  // a handful of unknown envelope fields is cheap to construct and forces
+  // hundreds of millions of visits before any cap runs. The same shared
+  // decision the forest and an inserted subtree already use.
+  const envelopeKeys: string[] = [];
+  const envelopeValues: unknown[] = [];
   for (const [key, value] of Object.entries(document)) {
     if (key === "nodes") continue;
-    if (!isJsonValue(value)) {
+    envelopeKeys.push(key);
+    envelopeValues.push(value);
+  }
+  if (!areJsonValues(envelopeValues)) {
+    // The offender named on the failing branch only, where a second walk is
+    // affordable because it runs once and then throws.
+    for (let index = 0; index < envelopeValues.length; index += 1) {
+      if (isJsonValue(envelopeValues[index])) continue;
       throw new OpError(
-        `a document whose ${describe(key)} is ${describe(value)} cannot be edited: ` +
-          `JSON cannot write that value, so the edit would apply and then ` +
-          `fail to save.`
+        `a document whose ${describe(envelopeKeys[index])} is ` +
+          `${describe(envelopeValues[index])} cannot be edited: JSON cannot ` +
+          `write that value, so the edit would apply and then fail to save.`
       );
     }
+    throw new OpError(
+      `this document's fields hold more values than an edit may examine, so ` +
+        `it would not save.`
+    );
   }
   const nodes = document.nodes;
   // Every ENTRY, not just the array. A stored forest carrying a `null` or a
