@@ -27,11 +27,29 @@ const INSTALL_COMMAND = /^pnpm add @nextlyhq\/plugin-seo@\d/;
  * shape a browser on a plain-HTTP origin presents — so the "unavailable" case
  * below is the environment's own default rather than something simulated.
  */
+const ORIGINAL_CLIPBOARD = Object.getOwnPropertyDescriptor(
+  navigator,
+  "clipboard"
+);
+
 function setClipboard(clipboard: Clipboard | undefined) {
   Object.defineProperty(navigator, "clipboard", {
     value: clipboard,
     configurable: true,
   });
+}
+
+/**
+ * Puts back what was there, which in jsdom is no own property at all —
+ * defining one with `undefined` is not the same thing, and it would outlive
+ * these tests for anything else sharing this environment.
+ */
+function restoreClipboard() {
+  if (ORIGINAL_CLIPBOARD) {
+    Object.defineProperty(navigator, "clipboard", ORIGINAL_CLIPBOARD);
+  } else {
+    delete (navigator as { clipboard?: Clipboard }).clipboard;
+  }
 }
 
 let mockBranding: AdminBranding = { plugins: [] } as unknown as AdminBranding;
@@ -58,7 +76,7 @@ function renderDetail(slug: string) {
 afterEach(() => {
   mockBranding = { plugins: [] } as unknown as AdminBranding;
   mockBrandingStatus = { isPending: false, isUnavailable: false };
-  setClipboard(undefined);
+  restoreClipboard();
   vi.restoreAllMocks();
 });
 
