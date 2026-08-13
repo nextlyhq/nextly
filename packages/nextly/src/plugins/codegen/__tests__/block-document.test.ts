@@ -12,6 +12,40 @@ import { describe, expect, it } from "vitest";
 
 import { blockDocumentJsonSchema, parseBlockDocument } from "../block-document";
 
+/**
+ * Run `body` with `fields` reachable through `Object.prototype`.
+ *
+ * The only way to give an ordinary object an inherited property while leaving
+ * it a plain record. Putting the fields on an intermediate prototype changes
+ * the object's own prototype, and the survey refuses that as a non-record
+ * before the ownership rule is ever asked — so a fixture built that way passes
+ * whether or not the rule exists.
+ *
+ * Non-enumerable, so nothing else that enumerates a plain object during the
+ * run sees them, and removed in `finally` so a failing assertion cannot leave
+ * the pollution behind for the rest of the file.
+ */
+function withPrototypeFields(
+  fields: Record<string, unknown>,
+  body: () => void
+): void {
+  for (const [key, value] of Object.entries(fields)) {
+    Object.defineProperty(Object.prototype, key, {
+      value,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    });
+  }
+  try {
+    body();
+  } finally {
+    for (const key of Object.keys(fields)) {
+      delete (Object.prototype as Record<string, unknown>)[key];
+    }
+  }
+}
+
 /** The smallest document the format allows: a page with nothing on it. */
 function emptyPage() {
   return { formatVersion: DOCUMENT_FORMAT_VERSION, kind: "page", nodes: [] };
@@ -430,12 +464,24 @@ describe("block document schema", () => {
     // while `JSON.stringify` writes only own properties and the survey walks
     // only own names. Without this the three disagree: the node parses, and
     // storage receives `{}`.
-    const proto = { id: "a", type: "core/text", version: 1, props: {} };
-    const doc = {
-      ...emptyPage(),
-      nodes: [Object.create(proto) as object],
-    };
-    expect(parseBlockDocument(doc).success).toBe(false);
+    //
+    // Supplied from `Object.prototype` rather than from an intermediate object,
+    // and that is the whole fixture. A node built on a custom prototype is
+    // refused by the survey before the ownership rule is consulted — its
+    // prototype is neither `Object.prototype` nor null, so it is not a plain
+    // record — which means the assertion below would hold with the rule deleted.
+    withPrototypeFields(
+      { id: "a", type: "core/text", version: 1, props: {} },
+      () => {
+        const node = {};
+        // The precondition, asserted rather than assumed: the values really do
+        // resolve, so the refusal is of inheritance and not of an empty node.
+        expect((node as { id?: string }).id).toBe("a");
+
+        const doc = { ...emptyPage(), nodes: [node] };
+        expect(parseBlockDocument(doc).success).toBe(false);
+      }
+    );
   });
 
   it("refuses a node whose OPTIONAL field is inherited", () => {
@@ -443,19 +489,13 @@ describe("block document schema", () => {
     // required names could not see it: `name` is not required, so nothing
     // demanded it be owned, while the parsed value reads back `"inherited"` and
     // storage receives a node with no name at all.
-    const proto = { name: "inherited" };
-    const node = Object.assign(Object.create(proto) as object, {
-      id: "a",
-      type: "core/text",
-      version: 1,
-      props: {},
-    });
-    const parsed = parseBlockDocument({ ...emptyPage(), nodes: [node] });
+    withPrototypeFields({ name: "inherited" }, () => {
+      const node = { id: "a", type: "core/text", version: 1, props: {} };
+      expect((node as { name?: string }).name).toBe("inherited");
 
-    expect(parsed.success).toBe(false);
-    // The property really did resolve through the prototype, so the refusal is
-    // of an inherited value rather than of an absent one.
-    expect((node as { name?: string }).name).toBe("inherited");
+      const doc = { ...emptyPage(), nodes: [node] };
+      expect(parseBlockDocument(doc).success).toBe(false);
+    });
   });
 
   it("says nothing about an optional field that is simply absent", () => {

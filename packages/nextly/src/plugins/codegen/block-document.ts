@@ -470,13 +470,7 @@ const blockNodeObject = z.looseObject({
 
 const blockNodeFields = fieldNamesOf(() => blockNodeObject.shape);
 
-const blockNodeSchema = blockNodeObject.refine(
-  value => ownsResolvedFields(value, blockNodeFields()),
-  {
-    message:
-      "A node must OWN every field it carries; an inherited value is not written to storage.",
-  }
-);
+const blockNodeSchema = blockNodeObject;
 
 /**
  * The stored value of a `blocks` field, and the body of every builder document.
@@ -492,37 +486,39 @@ const blockNodeSchema = blockNodeObject.refine(
  * written for would answer that question wrongly.
  */
 /**
- * Whether every field the schema knows about is OWNED rather than merely
- * reached.
+ * A declared field name that `Object.prototype` supplies, if there is one.
  *
- * The schema reads properties directly, so a value inherited from
- * `Object.prototype` satisfies it — while `JSON.stringify` writes only own
- * properties and the survey enumerates only own names. In an environment where
- * something has put `id`, `type`, `version` and `props` on the prototype, an
- * empty object therefore parsed as a valid node and then persisted as `{}`.
+ * The defect this answers: the schema reads properties by ordinary access, so a
+ * value reached through the prototype satisfies it, while `JSON.stringify`
+ * writes only own properties and the survey enumerates only own names. An empty
+ * object then parses as a valid node and persists as `{}` — and an inherited
+ * OPTIONAL field is worse, because nothing required it and the parsed value
+ * reads it back from a document storage never received.
  *
- * The rule is stated over RESOLVED fields rather than required ones, and that
- * distinction is the whole of it. A required field cannot be missing — zod has
- * already refused that — so listing the required names covered the inherited
- * case for them and left every optional field open: an inherited `name` was
- * read back from the parsed value and absent from storage, the same defect
- * wearing an optional field's clothes. A field that resolves to `undefined` is
- * simply not there, and nothing is claimed about it.
+ * ONE check for the whole document rather than one per object, and the
+ * equivalence is what makes that sound. Every object the survey admits is a
+ * plain record, whose prototype is `Object.prototype` or null; a null-prototype
+ * object inherits nothing at all. So `Object.prototype` is the only place a
+ * document object can reach a field it does not own, and asking it once answers
+ * for every object at once.
  *
- * Checked here rather than in the survey because the survey has no notion of
- * which fields an object DECLARES; this is the layer that knows.
+ * Deliberately NOT the intuitive form, which is to check ownership on each
+ * value as it is validated. A `refine` receives the schema's OUTPUT, and zod
+ * builds that output by copying each declared key onto a fresh object — so the
+ * value handed to the check owns every field unconditionally, whatever the
+ * input did. Written that way the rule cannot fail, and a test using a custom
+ * prototype does not catch it: the survey refuses such an object as a non-record
+ * before the rule is ever consulted, so the fixture never reaches the mechanism
+ * and the assertion passes on a guard that does nothing.
+ *
+ * `in` rather than a read, so no getter on the prototype is invoked by the
+ * check itself. A declared field named for a built-in — `constructor`,
+ * `toString`, `valueOf` — would make this refuse every document; that is
+ * covered without a dedicated assertion, because every test that parses a valid
+ * document would fail at once rather than one test reporting it.
  */
-function ownsResolvedFields(
-  value: unknown,
-  fields: readonly string[]
-): boolean {
-  if (typeof value !== "object" || value === null) return false;
-  const held = value as Record<string, unknown>;
-  return fields.every(
-    field =>
-      held[field] === undefined ||
-      Object.prototype.hasOwnProperty.call(value, field)
-  );
+function shadowedDeclaredField(fields: readonly string[]): string | undefined {
+  return fields.find(field => field in Object.prototype);
 }
 
 /**
@@ -564,13 +560,7 @@ const blockDocumentObject = z.looseObject({
 
 const blockDocumentFields = fieldNamesOf(() => blockDocumentObject.shape);
 
-const blockDocumentSchema = blockDocumentObject.refine(
-  value => ownsResolvedFields(value, blockDocumentFields()),
-  {
-    message:
-      "A document must OWN every field it carries; an inherited value is not written to storage.",
-  }
-);
+const blockDocumentSchema = blockDocumentObject;
 
 /**
  * The shape the schema accepts, as a type.
@@ -655,6 +645,23 @@ export function parseBlockDocument(value: unknown): BlockDocumentParseResult {
       success: false,
       issues: [
         "Document holds a value JSON cannot represent unchanged (a BigInt, a function, a symbol, `undefined`, a non-finite number, `-0`, an object that is not a plain record, an unreadable accessor, or a repeated reference).",
+      ],
+    };
+  }
+
+  // Checked before the schema runs, because it decides whether reading by
+  // property access means anything at all here. With a declared name on
+  // `Object.prototype`, every object in the document resolves that field
+  // whether or not it holds one, so the schema would be validating values the
+  // document does not contain and storage will not receive.
+  const shadowed =
+    shadowedDeclaredField(blockDocumentFields()) ??
+    shadowedDeclaredField(blockNodeFields());
+  if (shadowed !== undefined) {
+    return {
+      success: false,
+      issues: [
+        `Object.prototype carries \`${shadowed}\`, so every object in this document appears to hold a field storage would not receive.`,
       ],
     };
   }
