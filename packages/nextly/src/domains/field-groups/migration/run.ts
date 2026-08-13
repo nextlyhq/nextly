@@ -355,8 +355,17 @@ export async function runFieldGroupMigration(
     return observedLock.kind === "held" ? observedLock : now;
   };
 
-  const contended = async (): Promise<boolean> =>
-    (await observeContention()).kind === "held";
+  // 🔴 The lock is NOT consulted to decide whether to re-read, and removing that gate is the point.
+  //
+  // Two probes cannot see a writer that acquires and releases BETWEEN them. A preview that reads the
+  // old marker, is descheduled while a short migration completes, and then reads the new catalog
+  // observes `not-held` at both ends — so gating on the lock refused a torn read whose sole cause
+  // was contention, in the one case the retry exists for.
+  //
+  // The lock never could carry that weight, and this module's own outcome doc says so: informational
+  // only, true at the instant it was read, unable to gate anything. Movement is the signal that
+  // actually separates a writer from a standing conflict, and it is already measured — so the lock
+  // goes back to being reported rather than obeyed.
 
   /**
    * Build a dry-run outcome, sourcing the lock rather than accepting one.
@@ -638,14 +647,10 @@ export async function runFieldGroupMigration(
           // introspection of that list, and a rename landing in that gap surfaces as the driver's
           // own missing-table error. Recognised by the same predicate the outer loop uses, so the
           // two cannot disagree about what is worth re-reading.
-          if (
-            !dryRun ||
-            !isRetryablePreviewFailure(error, dialect) ||
-            !(await contended())
-          ) {
+          if (!dryRun || !isRetryablePreviewFailure(error, dialect)) {
             throw error;
           }
-          const signature = signatureOf(error, observedLock);
+          const signature = signatureOf(error, await observeContention());
           if (lastSignature !== undefined && signature !== lastSignature) {
             worldMoved = true;
           }
@@ -814,15 +819,14 @@ export async function runFieldGroupMigration(
       if (
         finalAttempt ||
         !dryRun ||
-        !isRetryablePreviewFailure(error, dialect) ||
-        !(await contended())
+        !isRetryablePreviewFailure(error, dialect)
       ) {
         throw error;
       }
       // Recorded here too, so a failure that leaves by the outer door counts towards the same
       // judgement. Two paths deciding "did the world move" from different evidence is the drift
       // this file has already been corrected for twice.
-      const signature = signatureOf(error, observedLock);
+      const signature = signatureOf(error, await observeContention());
       if (lastSignature !== undefined && signature !== lastSignature) {
         worldMoved = true;
       }

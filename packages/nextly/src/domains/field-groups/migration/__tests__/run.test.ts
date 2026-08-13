@@ -1084,9 +1084,11 @@ describe("a preview that meets a writer mid-run", () => {
           "an object using the migrated storage name exists but no recorded progress accounts for it"
     );
 
-    // Raised on the first look. Spending three reads to arrive at the same refusal would be the
-    // cheaper half of the bug; reporting it as movement is the expensive half.
-    expect(markerReads(trace)).toBe(1);
+    // Re-read three times, then raised. The lock is no longer consulted to decide whether to look
+    // again — two probes cannot see a writer that acquires and releases between them — so a quiet
+    // database pays two extra read cycles to reach the same answer. The VERDICT is what matters and
+    // it is unchanged: an unmoving world is a conflict, however many times it is read.
+    expect(markerReads(trace)).toBe(3);
   });
 
   // 🔴 The lock observation is taken once, at the top of the session, and answers "was anyone
@@ -1742,11 +1744,11 @@ describe("a preview that meets a writer mid-run", () => {
           "marker reports a completed migration but the migrated registry is absent"
     );
 
-    // Raised on the first look, because nothing holds the lock: with no writer observable this is
-    // a database that genuinely disagrees with its marker — restored from a backup taken before
-    // the run — rather than one being read mid-flight. Spending three reads to reach the same
-    // answer would only delay it.
-    expect(markerReads(trace)).toBe(1);
+    // Re-read, then raised. Nothing moves across the attempts, which is what identifies a database
+    // that genuinely disagrees with its marker — restored from a backup taken before the run —
+    // rather than one being read mid-flight. Absence of a lock holder is NOT that evidence: a
+    // writer can finish between two probes and be invisible to both.
+    expect(markerReads(trace)).toBe(3);
   });
 
   // 🔴 A run that WRITES holds the lock, which excludes the very writer a retry exists to survive.
