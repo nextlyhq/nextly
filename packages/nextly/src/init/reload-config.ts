@@ -1220,6 +1220,12 @@ async function runReload(opts?: {
         // This path applies DDL by design, so it may establish the lock table
         // rather than proceeding unprotected without one.
         mayCreateLock: true,
+        // Kept, and it is a trade rather than an oversight. This runs only under `next dev`,
+        // where Ctrl+C is how the server is stopped and a claim stranded behind a killed dev
+        // process would refuse every later reload until an operator cleared it by hand. The
+        // residual is a storage migration overlapping the tail of a reload, which takes someone
+        // deliberately running one against a development database.
+        releaseOnInterrupt: true,
       },
       () => {
         reloadStarted = true;
