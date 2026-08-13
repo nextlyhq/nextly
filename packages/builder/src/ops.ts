@@ -389,6 +389,34 @@ const SHAPE_ONLY_LIMITS: DocumentLimits = {
   maxBytes: Number.MAX_SAFE_INTEGER,
 };
 
+/**
+ * Refuses caps that cannot decide anything.
+ *
+ * A limit is only a limit if a comparison against it can come out false. `NaN`
+ * fails that in the most dangerous way — every `>` against it is false, so the
+ * cap reports "fits" for every input rather than refusing every input, and the
+ * failure is invisible at the call site.
+ *
+ * `Infinity` is deliberately refused too, even though it reads as "no limit".
+ * The engine's own walks stop counting at the machine bounds whatever a site
+ * says, so an infinite cap is not the unlimited document it promises; and a
+ * fractional one refuses at a boundary no document can sit exactly on, which
+ * makes the refusal message name a count no author can act on.
+ */
+function assertUsableLimits(limits: DocumentLimits): void {
+  for (const field of ["maxDepth", "maxNodes", "maxBytes"] as const) {
+    const value = limits[field];
+    if (!Number.isSafeInteger(value) || value < 1) {
+      throw new OpError(
+        `a document limit of ${describe(value)} for ${field} cannot decide ` +
+          `anything: every comparison against it answers the same way, so the ` +
+          `cap would be skipped rather than applied. Limits are whole numbers ` +
+          `of at least 1.`
+      );
+    }
+  }
+}
+
 /** Refuses a tree the engine's recursive helpers cannot walk. */
 function assertWalkable(depth: number, subject: string): void {
   if (depth > MAX_WALKABLE_DEPTH) {
@@ -999,28 +1027,40 @@ function assertNodeShape(
     { candidate: node, path: "the node", depth: 1 },
   ];
 
-  // Counted as it walks, and refused the moment the count alone settles it. A
-  // subtree that already holds more nodes than a whole document may is going to
-  // be refused by the cap check either way — but that check runs after this
-  // walk has validated every descendant and after `insertNode` has walked the
-  // subtree a second time to place it. Refusing at `maxNodes + 1` turns work
-  // proportional to what the caller sent into work proportional to what the
-  // document is allowed to hold.
-  let counted = 0;
+  // Counted as it is ENQUEUED, not as it is popped, and against one running
+  // total. A subtree that already holds more nodes than a whole document may is
+  // going to be refused by the cap check either way — but that check runs after
+  // this walk has validated every descendant and after `insertNode` has walked
+  // the subtree a second time to place it. Refusing at `maxNodes + 1` turns
+  // work proportional to what the caller sent into work proportional to what
+  // the document is allowed to hold.
+  //
+  // Counting on the way OUT is what made that guarantee false. A pop-side total
+  // stays at 1 for as long as the root is being processed, so each slot's
+  // length was compared against the cap on its own: a subtree with thousands of
+  // slots holding 4,999 sparse entries each passes a 5,000-node limit slot by
+  // slot and enqueues millions of entries before the first is popped. Every
+  // entry pushed becomes a node or is refused as not being one, so the enqueued
+  // total is the quantity the cap is about, and one counter answers for the
+  // whole walk instead of each list answering for itself.
+  //
+  // Starts at 1 for the root, which `pending` already holds.
+  let queued = 1;
+  const enqueue = (list: readonly unknown[], describePath: string): void => {
+    if (queued + list.length > limits.maxNodes) {
+      throw new OpError(
+        `${verb}: ${describePath} would put this subtree past the ` +
+          `${String(limits.maxNodes)} nodes a whole document may hold, so no ` +
+          `document could hold it. The edit would apply and then fail to save.`
+      );
+    }
+    queued += list.length;
+  };
 
   while (pending.length > 0) {
     const entry = pending.pop();
     if (entry === undefined) break;
     const { candidate, path, depth } = entry;
-
-    counted += 1;
-    if (counted > limits.maxNodes) {
-      throw new OpError(
-        `${verb}: this subtree holds more than the ${String(limits.maxNodes)} ` +
-          `nodes a whole document may, so no document could hold it. The edit ` +
-          `would apply and then fail to save.`
-      );
-    }
 
     // The engine's own limit, asked rather than restated. A subtree deeper than
     // a document may hold is refused here rather than after it is placed.
@@ -1143,17 +1183,11 @@ function assertNodeShape(
       }
       const list = children as unknown[];
       // The LENGTH before the elements, like every other list this module
-      // reads. Counting on the way out still enqueues the whole child list
-      // first, so a sparse `Array(100_000_000)` in one slot allocates a hundred
+      // reads, and against the total rather than this list alone. Copying first
+      // means a sparse `Array(100_000_000)` in one slot allocates a hundred
       // million pending entries before the count can reach the cap — and the
-      // cap was already knowable from the length alone.
-      if (counted + list.length > limits.maxNodes) {
-        throw new OpError(
-          `${verb}: ${path} holds more than the ${String(limits.maxNodes)} ` +
-            `nodes a whole document may, so no document could hold it. The ` +
-            `edit would apply and then fail to save.`
-        );
-      }
+      // cap was already knowable from the lengths.
+      enqueue(list, path);
       // An INDEX loop, for the same reason the string-array check uses one:
       // `forEach` skips holes, so a sparse slot array would be walked as
       // though the missing entries were not there. They serialize as `null`,
@@ -1980,6 +2014,19 @@ export function applyOp(
   op: BuilderOp,
   limits: DocumentLimits = DEFAULT_LIMITS
 ): AppliedOp {
+  // The LIMITS, before anything is judged against them. Every cap in this
+  // module is a `>` comparison, and every comparison against `NaN` is false —
+  // so a single non-finite limit does not loosen a cap, it removes it, and it
+  // does so silently: the walk runs, the check evaluates, and the answer is
+  // always "fits". `{ ...DEFAULT_LIMITS, maxBytes: NaN }` accepts a 3 MB string
+  // through a 2 MiB ceiling with nothing in the result saying a cap was
+  // skipped.
+  //
+  // Checked here rather than trusted from the type. `DocumentLimits` says these
+  // are numbers, which `NaN` and the infinities satisfy; a site reading a limit
+  // from configuration, an environment variable or a JSON column produces one
+  // by parsing a value that was not there.
+  assertUsableLimits(limits);
   // The document itself, before its forest is read. An op arrives beside a
   // document from storage, so neither is more trustworthy than the other.
   if (!isPlainRecord(document) || !Array.isArray(document.nodes)) {

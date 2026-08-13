@@ -1947,7 +1947,49 @@ describe("an inverse that names a parent held twice", () => {
         { kind: "insert", node: oversized, at: { index: 0 } },
         limits
       )
-    ).toThrow(/more than the 50 nodes a whole document may/);
+    ).toThrow(/past the 50 nodes a whole document may hold/);
+  });
+
+  it("counts pending children across slots, not within one", () => {
+    // Many slots, each under the cap, summing far past it. Counting on the way
+    // OUT leaves the total at 1 for as long as the root is being processed, so
+    // every slot's length is compared against the cap on its own and all of
+    // them pass — then millions of entries are queued before the first is
+    // popped.
+    //
+    // The assertion is the REASON rather than exhaustion: both implementations
+    // refuse this subtree eventually, and only the message distinguishes
+    // refusing it from the lengths from refusing it after walking it.
+    const slots: Record<string, BlockNode[]> = {};
+    for (let group = 0; group < 40; group += 1) {
+      slots[`slot${String(group)}`] = Array.from({ length: 40 }, (_u, index) =>
+        node(`child-${String(group)}-${String(index)}`)
+      );
+    }
+    const wide = node("wide", slots);
+    const limits = { maxDepth: 10, maxNodes: 50, maxBytes: 1_000_000 };
+
+    expect(() =>
+      applyOp(doc(), { kind: "insert", node: wide, at: { index: 0 } }, limits)
+    ).toThrow(/past the 50 nodes a whole document may hold/);
+  });
+
+  it("refuses a cap that cannot decide anything", () => {
+    // Every cap here is a `>` comparison and every comparison against `NaN` is
+    // false, so one non-finite limit does not loosen a cap — it removes it, and
+    // silently: the walk runs, the check evaluates, and the answer is always
+    // "fits". `DocumentLimits` types these as numbers, which `NaN` satisfies,
+    // so a site parsing a limit out of configuration produces one by reading a
+    // value that was not there.
+    const huge = "x".repeat(3_000_000);
+
+    expect(() =>
+      applyOp(
+        doc(),
+        { kind: "update", id: "a", patch: { customCss: huge } },
+        { maxDepth: 10, maxNodes: 100, maxBytes: Number.NaN }
+      )
+    ).toThrow(/cannot decide anything/);
   });
 
   it("refuses a document whose node list computes its entries", () => {
