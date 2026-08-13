@@ -1720,11 +1720,10 @@ function exportedTagOf(
  * condition around a class was correctly ignored.
  */
 function selectedByLiteralCondition(
-  node: ts.Expression,
-  resolver?: ReturnType<typeof styleResolver>
+  node: ts.Expression
 ): ts.Expression | undefined {
   if (ts.isConditionalExpression(node)) {
-    const decided = staticTruthiness(node.condition, resolver);
+    const decided = staticTruthiness(node.condition);
     if (decided === undefined) return undefined;
     return decided ? node.whenTrue : node.whenFalse;
   }
@@ -1732,7 +1731,7 @@ function selectedByLiteralCondition(
   const operator = node.operatorToken.kind;
   // `??` chooses on presence rather than on truth, so it is asked separately.
   if (operator === ts.SyntaxKind.QuestionQuestionToken) {
-    return isDefinitelyPresent(node.left, resolver) ? node.left : undefined;
+    return isDefinitelyPresent(node.left) ? node.left : undefined;
   }
   if (
     operator !== ts.SyntaxKind.AmpersandAmpersandToken &&
@@ -1745,7 +1744,7 @@ function selectedByLiteralCondition(
   // one truthiness evaluator, so `false`, `0`, `null` and `""` are decided the
   // same way rather than only the boolean spelling — and so a name holding a
   // known value is decided at all.
-  const decided = staticTruthiness(node.left, resolver);
+  const decided = staticTruthiness(node.left);
   if (decided === undefined) return undefined;
   if (operator === ts.SyntaxKind.AmpersandAmpersandToken) {
     return decided ? node.right : node.left;
@@ -1753,18 +1752,14 @@ function selectedByLiteralCondition(
   return decided ? node.left : node.right;
 }
 
-function literalStrings(
-  node: ts.Node,
-  found: string[] = [],
-  resolver?: ReturnType<typeof styleResolver>
-): string[] {
+function literalStrings(node: ts.Node, found: string[] = []): string[] {
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
     found.push(node.text);
   } else if (ts.isTemplateExpression(node)) {
     found.push(node.head.text);
     for (const span of node.templateSpans) {
       found.push(span.literal.text);
-      literalStrings(span.expression, found, resolver);
+      literalStrings(span.expression, found);
     }
     return found;
   }
@@ -1773,8 +1768,8 @@ function literalStrings(
   // receives the second string — collecting it reported a call site for a class
   // it does not apply.
   if (ts.isExpression(node)) {
-    const selected = selectedByLiteralCondition(node, resolver);
-    if (selected) return literalStrings(selected, found, resolver);
+    const selected = selectedByLiteralCondition(node);
+    if (selected) return literalStrings(selected, found);
   }
   // `cn({ "border-b-0": false })` applies nothing. In this form the KEY is the
   // class and the VALUE is the condition, so walking the object as plain text
@@ -1783,7 +1778,7 @@ function literalStrings(
   if (ts.isObjectLiteralExpression(node)) {
     for (const property of node.properties) {
       if (!ts.isPropertyAssignment(property)) continue;
-      if (staticTruthiness(property.initializer, resolver) === false) continue;
+      if (staticTruthiness(property.initializer) === false) continue;
       const name = property.name;
       if (ts.isStringLiteral(name) || ts.isIdentifier(name))
         found.push(name.text);
@@ -1794,7 +1789,7 @@ function literalStrings(
   // returns something truthy, so a concise arrow returning the accumulator
   // visits one child and reports the rest as absent.
   ts.forEachChild(node, child => {
-    literalStrings(child, found, resolver);
+    literalStrings(child, found);
   });
   return found;
 }
@@ -1811,365 +1806,94 @@ function literalStrings(
  * in the other order, invents one. Which declaration a name refers to is a
  * lexical question, and the answer is the nearest enclosing one.
  */
-function styleResolver(
-  checker: ts.TypeChecker,
-  element: ts.JsxAttribute
-): {
-  objectsFrom(
-    expression: ts.Expression | undefined,
-    seen?: Set<ts.Node>
-  ): ts.ObjectLiteralExpression[];
-  valueOf(identifier: ts.Identifier): ts.Expression | undefined;
-  reachingValues(identifier: ts.Identifier): {
-    values: ts.Expression[];
-    exhaustive: boolean;
+/**
+ * Resolve the objects a `style` prop can hand React, and what they declare.
+ *
+ * An inline style on an owned element must be written where it can be READ:
+ * an object literal, or a choice between object literals. Anything that has to
+ * be traced to know its value — a name, a call, a member access — is reported
+ * as unresolvable rather than analysed.
+ *
+ * That is a deliberate limit, and the reason is worth stating because the
+ * alternative was tried at length. Answering "what does this variable hold at
+ * this point" is reaching-definitions analysis: assignments, branches, loops,
+ * closures, aliases and in-place mutation, each interacting with the others.
+ * Written by hand it grew to roughly seven hundred lines and kept producing
+ * defects of a kind no test here could see, because a wrong answer looks
+ * exactly like a right one. The compiler does not expose that analysis, and a
+ * test file is the wrong place to reimplement it.
+ *
+ * The narrower question this asks instead is decidable by construction: the
+ * expression either IS a literal, or it is not. What it costs is that a
+ * computed style must be written inline or moved to a class, which is a rule a
+ * reader can follow. What it buys is that "no violation" means the scan read
+ * the value, rather than that it failed to find one.
+ *
+ * Property VALUES inside the literal are still followed through a `const`
+ * binding, because that is a single lookup with no flow to model, and the
+ * binder resolves shadowing correctly on its own. A `let` is not followed: its
+ * value depends on what ran, which is the question this stops asking.
+ */
+function styleResolver(checker: ts.TypeChecker): {
+  objectsFrom(expression: ts.Expression | undefined): {
+    objects: ts.ObjectLiteralExpression[];
+    /** False when the expression has to be traced to know what it holds. */
+    readable: boolean;
   };
-  propertyWrites(identifier: ts.Identifier): Array<{
-    name: string;
-    emits: boolean;
-    value: string | undefined;
-  }>;
+  valueOf(identifier: ts.Identifier): ts.Expression | undefined;
   declarationOf(identifier: ts.Identifier): ts.Declaration | undefined;
 } {
   /**
-   * What a name holds, for a name the binder resolved to a declaration here.
+   * What a `const` holds, for a name the binder resolves to one here.
    *
-   * Mutability is REPORTED rather than filtered on, because the right answer
-   * depends on the CALLER. For a property value, unresolved means "assume it
-   * emits" and reporting is the safe side. For the style object itself,
-   * unresolved means an empty object list and therefore silence — so the same
-   * filter that protects one caller blinds the other.
-   *
-   * A declaration with no initializer is still a binding. It stops the question
-   * at the right place: a parameter shadowing an outer constant means the name
-   * is the parameter, whose value the caller supplies, so the property is
-   * undecidable rather than the outer constant's.
+   * `undefined` for anything else — a `let`, a parameter, an import — because
+   * each can hold a different value by the time the element renders.
    */
-  interface Binding {
-    /** The declaration's own initializer, where it has one. */
-    initializer: ts.Expression | undefined;
-    /** The initializer is not necessarily what the name holds at the element. */
-    mutable: boolean;
-  }
-
-  const bindingOf = (identifier: ts.Identifier): Binding | undefined => {
+  const valueOf = (identifier: ts.Identifier): ts.Expression | undefined => {
     const declaration = declarationOf(identifier, checker);
-    if (!declaration) return undefined;
-    if (ts.isVariableDeclaration(declaration)) {
-      const list = declaration.parent;
-      // `const` is the only form whose initializer is still the value later on.
-      const mutable =
-        !ts.isVariableDeclarationList(list) ||
-        (list.flags & ts.NodeFlags.Const) === 0;
-      return { initializer: declaration.initializer, mutable };
-    }
-    // A parameter's default IS one of the values it holds — rendering the
-    // component without an argument passes exactly that object — so it counts
-    // as a value the element can receive. It is `mutable` because it is only
-    // ONE of them: a caller supplying an argument replaces it, which is why the
-    // key question, needing a single answer, still treats it as undecidable.
-    //
-    // An import, a function or a catch binding has no initializer to read.
-    if (ts.isParameter(declaration)) {
-      return { initializer: declaration.initializer, mutable: true };
-    }
-    return { initializer: undefined, mutable: true };
+    if (!declaration || !ts.isVariableDeclaration(declaration))
+      return undefined;
+    const list = declaration.parent;
+    const isConst =
+      ts.isVariableDeclarationList(list) &&
+      (list.flags & ts.NodeFlags.Const) !== 0;
+    return isConst ? declaration.initializer : undefined;
   };
 
-  /**
-   * The function whose body a node runs in, or undefined at the top level.
-   *
-   * What it separates is EXECUTION UNITS. Two nodes in the same one run in
-   * source order; two in different ones do not, because calling a function is
-   * what decides when its body runs and the call can appear anywhere.
-   */
-  const executionUnitOf = (node: ts.Node): ts.Node | undefined => {
-    for (let at = node.parent; at; at = at.parent) {
-      if (ts.isFunctionLike(at)) return at;
-    }
-    return undefined;
-  };
-
-  /**
-   * Whether a node runs every time its execution unit does.
-   *
-   * Only a write that definitely happens can be said to have replaced what came
-   * before it. One inside an `if`, a loop, a `switch`, a `try` or the right of
-   * a short-circuit may be skipped, so it ADDS a value the binding might hold
-   * without removing any.
-   *
-   * Written as a list of constructs that introduce a choice rather than a list
-   * of ones that do not, so an unfamiliar node fails towards "may be skipped" —
-   * which keeps earlier values in play, and keeping them is the reporting side.
-   */
-  const alwaysRuns = (node: ts.Node, unit: ts.Node | undefined): boolean => {
-    for (let at = node.parent; at && at !== unit; at = at.parent) {
-      // A write at the START of a `try` runs whenever control reaches the
-      // block: nothing inside it has had the chance to throw yet.
-      if (
-        ts.isTryStatement(at) &&
-        at.tryBlock.statements.length > 0 &&
-        node.getStart() >= (at.tryBlock.statements[0]?.getStart() ?? 0) &&
-        node.getEnd() <= (at.tryBlock.statements[0]?.getEnd() ?? 0)
-      ) {
-        continue;
-      }
-      // A `do` BODY runs before its condition is ever asked, so it executes at
-      // least once however the condition later answers.
-      // Only the FIRST statement of a `do` body, for the same reason as a
-      // `try`: a `break`, `continue` or `return` written above it can carry
-      // control out before it runs, so a later write may be skipped.
-      if (
-        ts.isDoStatement(at) &&
-        ts.isBlock(at.statement) &&
-        at.statement.statements.length > 0 &&
-        node.getStart() >= (at.statement.statements[0]?.getStart() ?? 0) &&
-        node.getEnd() <= (at.statement.statements[0]?.getEnd() ?? 0)
-      ) {
-        continue;
-      }
-      // A `for` INITIALIZER runs once before the condition is ever asked, so it
-      // is unconditional even though the body beside it is not.
-      if (
-        ts.isForStatement(at) &&
-        at.initializer &&
-        node.getStart() >= at.initializer.getStart() &&
-        node.getEnd() <= at.initializer.getEnd()
-      ) {
-        continue;
-      }
-      if (
-        ts.isIfStatement(at) ||
-        ts.isIterationStatement(at, /* lookInLabeledStatements */ true) ||
-        ts.isSwitchStatement(at) ||
-        ts.isCaseOrDefaultClause(at) ||
-        ts.isTryStatement(at) ||
-        ts.isCatchClause(at) ||
-        ts.isConditionalExpression(at) ||
-        ts.isBinaryExpression(at)
-      ) {
-        return false;
-      }
-    }
-    return true;
-  };
-
-  /**
-   * Every value assigned to a binding that the element could actually see.
-   *
-   * A declaration initializer is only the FIRST value a mutable binding holds:
-   * `let style = {}; style = { borderBottomColor: "red" }` renders the second
-   * one, and reading the declaration alone reported nothing at all. Matched by
-   * DECLARATION identity rather than by name, so a same-named binding in
-   * another scope contributes nothing and the whole file can be searched.
-   *
-   * Ordering is what stops that search over-reaching. An assignment sharing the
-   * element's execution unit runs in source order, so one written AFTER the
-   * element cannot have reached it — React already holds the earlier value, and
-   * collecting the later one reported an element for a style it never received.
-   * Across different units the order is not decidable and the write is kept,
-   * which is the reporting side and therefore the safe one.
-   */
-  interface Write {
-    value: ts.Expression;
-    operator: ts.SyntaxKind;
-    /** Shares the element's execution unit, so it runs in source order. */
-    sameUnit: boolean;
-    /** Runs before the element every time, so it replaces what came before. */
-    straightLine: boolean;
-    at: number;
-  }
-
-  /**
-   * The operators that give a binding a new value.
-   *
-   * A logical assignment writes only when the current value passes its test, so
-   * it ADDS a value the binding might hold. `=` is the only one that can be
-   * said to have replaced what was there.
-   */
-  const ASSIGNMENT_OPERATORS = new Map<ts.SyntaxKind, boolean>([
-    [ts.SyntaxKind.EqualsToken, true],
-    [ts.SyntaxKind.QuestionQuestionEqualsToken, false],
-    [ts.SyntaxKind.BarBarEqualsToken, false],
-    [ts.SyntaxKind.AmpersandAmpersandEqualsToken, false],
-  ]);
-
-  const writesTo = (declaration: ts.Declaration, at: ts.Node): Write[] => {
-    const elementUnit = executionUnitOf(at);
-    const found: Write[] = [];
-    const visit = (node: ts.Node): void => {
-      if (
-        ts.isBinaryExpression(node) &&
-        ASSIGNMENT_OPERATORS.has(node.operatorToken.kind) &&
-        ts.isIdentifier(node.left) &&
-        declarationOf(node.left, checker) === declaration
-      ) {
-        const sameUnit = executionUnitOf(node) === elementUnit;
-        const before = node.getStart() < at.getStart();
-        // A write is not its own antecedent. While `style = style || {...}` is
-        // being evaluated the binding still holds what it held before, so a
-        // program point INSIDE this write must not see it as already done —
-        // counting it made the right-hand side undecidable and both branches
-        // were then read as reachable.
-        const evaluatingThisWrite =
-          at.getStart() >= node.getStart() && at.getEnd() <= node.getEnd();
-        if (!evaluatingThisWrite && (!sameUnit || before)) {
-          found.push({
-            value: node.right,
-            operator: node.operatorToken.kind,
-            sameUnit,
-            // Definite only when it shares the element's execution unit, runs
-            // before it, no branch stands between, and the operator always
-            // writes: those together are what let a write be said to have
-            // HAPPENED, which is what killing an earlier value requires.
-            straightLine:
-              sameUnit &&
-              before &&
-              (ASSIGNMENT_OPERATORS.get(node.operatorToken.kind) ?? false) &&
-              alwaysRuns(node, elementUnit ?? undefined),
-            at: node.getStart(),
-          });
-        }
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(declaration.getSourceFile());
-    return found.sort((a, b) => a.at - b.at);
-  };
-
-  /**
-   * Every value a name can hold at the element.
-   *
-   * The declaration's initializer and every write that can still reach here,
-   * which is the whole answer to "what does this name hold" — so the object
-   * question and the property-value question are asked of this one list rather
-   * than each assembling its own. A mutable binding whose initializer is the
-   * only value it ever holds is fully decidable, and discarding it purely
-   * because the declaration said `let` reported `let colour = undefined` as a
-   * colour React never receives.
-   *
-   * A write KILLS what came before it. `let style = {}; style = { ...owned };
-   * style = {}` holds the empty object at the element, and carrying the middle
-   * value along rejected a call site for a style it had already discarded. Only
-   * a write that definitely runs can kill, so a reset inside an `if` narrows
-   * nothing and every earlier value stays in play.
-   *
-   * Killing reaches only the element's OWN execution unit. A write inside a
-   * function runs when that function is called, which the source order does not
-   * tell you: `function paint() { style = { ...owned } }` written above a
-   * `style = {}` still paints when `paint()` is called after it. Those writes
-   * survive whatever their position.
-   *
-   * Resolved AT THE IDENTIFIER, not at the element. An identifier is evaluated
-   * where it is written, so `const saved = style; style = {}` holds whatever
-   * `style` was on the line the alias was written — reading it beside the
-   * element instead applied a later reset to a value already captured.
-   *
-   * `exhaustive` says whether the list is the whole story. A variable's writes
-   * are all visible in the file, so its list is complete and a property emits
-   * only if one of them emits. A parameter or an import receives values from
-   * outside, so its list is a sample: the default a parameter declares is one
-   * value the element can receive, never the only one.
-   */
-  interface Reaching {
-    values: ts.Expression[];
-    /** No value can arrive from outside the ones listed. */
-    exhaustive: boolean;
-  }
-
-  const reachingValues = (identifier: ts.Identifier): Reaching => {
-    const declaration = declarationOf(identifier, checker);
-    if (!declaration) return { values: [], exhaustive: false };
-    // A parameter is written to like any other binding, so its writes are
-    // collected the same way; what stays different is that the list can never
-    // be complete, because the caller supplies a value this file cannot see.
-    if (!ts.isVariableDeclaration(declaration)) {
-      const binding = bindingOf(identifier);
-      return {
-        values: [
-          ...(binding?.initializer ? [binding.initializer] : []),
-          ...writesTo(declaration, identifier).map(write => write.value),
-        ],
-        exhaustive: false,
-      };
-    }
-    const writes = writesTo(declaration, identifier);
-    // Order across units is not decidable, so nothing here can rule them out.
-    const elsewhere = writes
-      .filter(write => !write.sameUnit)
-      .map(write => write.value);
-    const initializer = bindingOf(identifier)?.initializer;
-    // A `var` is hoisted but its INITIALIZER runs where it is written, so an
-    // element evaluated above it receives `undefined`. Treated as a write at
-    // its own position, which for `let` and `const` changes nothing: reading
-    // either before its declaration is a temporal-dead-zone error, so the case
-    // cannot arise in code that runs.
-    const initializerReaches =
-      !initializer ||
-      executionUnitOf(initializer) !== executionUnitOf(identifier) ||
-      initializer.getStart() < identifier.getStart();
-    let held: ts.Expression[] =
-      initializer && initializerReaches ? [initializer] : [];
-    for (const write of writes.filter(write => write.sameUnit)) {
-      if (write.straightLine) {
-        // Everything before is a value the binding has stopped holding.
-        held = [write.value];
-        continue;
-      }
-      // A logical assignment whose test the current value already settles
-      // cannot fire, so its right side is not a value the binding can hold —
-      // filling a style object only when nothing filled it yet is the ordinary
-      // reason to write one.
-      if (held.length > 0 && cannotFire(write.operator, held, api)) continue;
-      held = [...held, write.value];
-    }
-    return { values: [...held, ...elsewhere], exhaustive: true };
-  };
-
-  /**
-   * Every object an expression can evaluate to HERE.
-   *
-   * A style prop routinely selects between shapes, and every branch a
-   * conditional can take is a shape the element can render, so each is
-   * returned. Spreads are deliberately NOT followed here: a spread's contents
-   * are not a separate style object, they are earlier entries of the one being
-   * built, and treating them as separate reported a source whose value the
-   * outer object had already replaced.
-   */
   const objectsFrom = (
-    root: ts.Expression | undefined,
-    seen = new Set<ts.Node>()
-  ): ts.ObjectLiteralExpression[] => {
+    root: ts.Expression | undefined
+  ): { objects: ts.ObjectLiteralExpression[]; readable: boolean } => {
     const objects: ts.ObjectLiteralExpression[] = [];
+    const seen = new Set<ts.Node>();
+    let readable = true;
     const walk = (node: ts.Expression | undefined): void => {
-      // Bounded so a `const a = b, b = a` cycle cannot loop forever, and so one
-      // identifier is not expanded twice through two paths.
-      if (!node || seen.has(node)) return;
+      if (!node) {
+        readable = false;
+        return;
+      }
+      if (seen.has(node)) return;
       seen.add(node);
+      // Parentheses, `as`, `satisfies` and `!` are erased before the code runs,
+      // so what they wrap is what React receives.
+      const unwrapped = withoutTypeWrappers(node);
+      if (unwrapped !== node) return walk(unwrapped);
       if (ts.isObjectLiteralExpression(node)) {
         objects.push(node);
         return;
       }
-      // Parentheses, `as`, `satisfies` and `!` all wrap the value without
-      // changing it. Peeled by the SAME helper the property-value side uses, so
-      // the two cannot come to disagree about which syntax is erased — listing
-      // them here independently left `style={style!}` unread while the value
-      // side understood it.
-      const unwrapped = withoutTypeWrappers(node);
-      if (unwrapped !== node) return walk(unwrapped);
-      // A literal condition decides the branch, and the branch it excludes is
+      // A literal condition decides its branch, and the branch it excludes is
       // one React never receives. Asked through the same helper the class half
-      // uses, so one spelling of "this cannot be taken" cannot be resolved on
-      // one side of the contract and reported on the other.
-      const selected = selectedByLiteralCondition(node, api);
+      // uses, so one spelling of "this cannot be taken" is not resolved on one
+      // side of the contract and reported on the other.
+      const selected = selectedByLiteralCondition(node);
       if (selected) return walk(selected);
+      // A choice between shapes is still readable: every branch is written
+      // here, so each is a style the element can render and all are checked.
       if (ts.isConditionalExpression(node)) {
         walk(node.whenTrue);
         walk(node.whenFalse);
         return;
       }
-      // `&&`, `||` and `??` each choose between their operands at runtime, so
-      // both sides are shapes the element can render.
       if (
         ts.isBinaryExpression(node) &&
         (node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
@@ -2180,124 +1904,21 @@ function styleResolver(
         walk(node.right);
         return;
       }
-      // Followed whether or not the binding is mutable, and through every
-      // ASSIGNMENT as well as the declaration. An unresolved object yields an
-      // EMPTY list here, and an empty list reports nothing — so dropping a
-      // `let style = { ... }` is a false negative, the opposite polarity to an
-      // unresolved property value.
-      if (ts.isIdentifier(node)) {
-        for (const value of reachingValues(node).values) walk(value);
-      }
+      // A name, a call, a member access, a spread of one: knowing what this
+      // holds means tracing it, which is the analysis this deliberately does
+      // not do. Reported as unreadable rather than assumed empty — an empty
+      // object list reports nothing, which is the silent direction.
+      readable = false;
     };
     walk(root);
-    return objects;
+    return { objects, readable };
   };
 
-  /**
-   * The value a name holds, when that is decidable.
-   *
-   * `undefined` for a mutable binding — including one that merely SHADOWS a
-   * constant — because the declaration initializer is not what runs. Callers
-   * treat an unresolved value as emitting, so undecidable errs towards
-   * reporting.
-   *
-   * The identifier itself is the input, never its text: the binder resolves it
-   * at its own position, so an alias is followed from where it was WRITTEN
-   * without the caller having to carry a scope along with it.
-   */
-  const valueOf = (identifier: ts.Identifier): ts.Expression | undefined => {
-    const binding = bindingOf(identifier);
-    if (!binding || binding.mutable) return undefined;
-    return binding.initializer;
-  };
-
-  /**
-   * Properties written onto a binding after the object was created.
-   *
-   * `const style = {}; style.borderBottomColor = "red"` hands React the owned
-   * colour just as writing it inside the literal does, and a search for
-   * assignments TO the binding sees nothing — the binding still holds the same
-   * object, which is precisely why the mutation reaches the element.
-   *
-   * Both spellings, since `style["borderBottomColor"]` is the same write with a
-   * different node kind. Ordering is the same rule as any other write.
-   */
-  const propertyWrites = (
-    identifier: ts.Identifier
-  ): Array<{ name: string; emits: boolean; value: string | undefined }> => {
-    const declaration = declarationOf(identifier, checker);
-    if (!declaration) return [];
-    const found: Array<{
-      name: string;
-      emits: boolean;
-      value: string | undefined;
-      at: number;
-    }> = [];
-    const targets = new Set<ts.Node>(objectsFrom(identifier));
-    if (targets.size === 0) return [];
-    const unit = executionUnitOf(identifier);
-    const visit = (node: ts.Node): void => {
-      if (
-        ts.isBinaryExpression(node) &&
-        node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-        (ts.isPropertyAccessExpression(node.left) ||
-          ts.isElementAccessExpression(node.left)) &&
-        ts.isIdentifier(node.left.expression) &&
-        // Any binding holding the SAME object, not only the one the element
-        // names. `const saved = style; saved.x = ...` mutates one object
-        // through two names, and React receives it either way.
-        objectsFrom(node.left.expression).some(object => targets.has(object))
-      ) {
-        // The mutation belongs to whatever object the binding held at the
-        // moment of the write. A later write REPLACES that object, so a
-        // mutation made before it landed on something the element never sees.
-        const replacedSince = writesTo(declaration, identifier).some(
-          write =>
-            write.straightLine &&
-            write.at > node.getStart() &&
-            write.at < identifier.getStart()
-        );
-        const reaches =
-          !replacedSince &&
-          (executionUnitOf(node) !== unit ||
-            node.getStart() < identifier.getStart());
-        const name = ts.isPropertyAccessExpression(node.left)
-          ? node.left.name.text
-          : staticStringOf(node.left.argumentExpression, api);
-        if (reaches && name !== undefined) {
-          found.push({
-            name,
-            emits: emitsValue(node.right, api),
-            value: staticStringOf(node.right, api),
-            at: node.getStart(),
-          });
-        }
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(declaration.getSourceFile());
-    // Only the LAST write to each property survives: `style.x = "red"` followed
-    // by `style.x = undefined` hands React the second one, and keeping both
-    // reported a colour the element never receives.
-    const last = new Map<string, (typeof found)[number]>();
-    for (const write of found.sort((a, b) => a.at - b.at)) {
-      last.set(write.name, write);
-    }
-    return [...last.values()];
-  };
-
-  // Named so the resolver can ask ITSELF: deciding a branch or a logical
-  // assignment needs the value a name holds, which is the same question this
-  // object already answers. A second copy of that logic is how the file came to
-  // hold two truthiness evaluators that disagreed.
-  const api: ReturnType<typeof styleResolver> = {
+  return {
     objectsFrom,
     valueOf,
-    reachingValues,
-    propertyWrites,
     declarationOf: identifier => declarationOf(identifier, checker),
   };
-  return api;
 }
 
 /** The objects an element's `style` prop can resolve to here. */
@@ -2306,14 +1927,18 @@ function styleObjectsFor(
   checker: ts.TypeChecker
 ): {
   objects: ts.ObjectLiteralExpression[];
+  readable: boolean;
   resolver: ReturnType<typeof styleResolver>;
 } {
-  const resolver = styleResolver(checker, attribute);
+  const resolver = styleResolver(checker);
   const initializer = attribute.initializer;
+  // `style` with no expression at all — `style="x"` or a bare `style` — is not
+  // an object React can read, and is not this contract's business either.
   if (!initializer || !ts.isJsxExpression(initializer)) {
-    return { objects: [], resolver };
+    return { objects: [], readable: true, resolver };
   }
-  return { objects: resolver.objectsFrom(initializer.expression), resolver };
+  const { objects, readable } = resolver.objectsFrom(initializer.expression);
+  return { objects, readable, resolver };
 }
 
 /**
@@ -2416,12 +2041,8 @@ function staticStringOf(
   const declaration = resolver.declarationOf(inner);
   if (!declaration || seen.has(declaration)) return undefined;
   seen.add(declaration);
-  const reaching = resolver.reachingValues(inner);
-  const only = reaching.values[0];
-  if (!reaching.exhaustive || reaching.values.length !== 1 || !only) {
-    return undefined;
-  }
-  return staticStringOf(only, resolver, seen);
+  const bound = resolver.valueOf(inner);
+  return bound ? staticStringOf(bound, resolver, seen) : undefined;
 }
 
 /**
@@ -2430,10 +2051,7 @@ function staticStringOf(
  * `undefined` for anything whose truthiness depends on what it holds at
  * runtime, which keeps the write it guards in play.
  */
-function staticTruthiness(
-  value: ts.Expression,
-  resolver?: ReturnType<typeof styleResolver>
-): boolean | undefined {
+function staticTruthiness(value: ts.Expression): boolean | undefined {
   const inner = withoutTypeWrappers(value);
   if (
     ts.isObjectLiteralExpression(inner) ||
@@ -2449,49 +2067,7 @@ function staticTruthiness(
   if (inner.kind === ts.SyntaxKind.FalseKeyword) return false;
   if (inner.kind === ts.SyntaxKind.NullKeyword) return false;
   if (ts.isVoidExpression(inner)) return false;
-  if (!ts.isIdentifier(inner)) return undefined;
-  // `undefined` is a name like any other, so it is the global value only when
-  // it resolves to no declaration here. Without a resolver the question cannot
-  // be asked, and undecidable keeps whatever it guards in play.
-  if (inner.text === "undefined") {
-    if (!resolver) return undefined;
-    return resolver.declarationOf(inner) ? undefined : false;
-  }
-  if (!resolver) return undefined;
-  // A name is worth what it holds. Every value it can hold has to agree, or the
-  // answer depends on which one arrives.
-  const reaching = resolver.reachingValues(inner);
-  if (!reaching.exhaustive || reaching.values.length === 0) return undefined;
-  const answers = reaching.values.map(each => staticTruthiness(each, resolver));
-  return answers.every(answer => answer === answers[0])
-    ? answers[0]
-    : undefined;
-}
-
-/**
- * Whether a logical assignment's test is already settled by what is held.
- *
- * Each operator writes only when its own test passes, so a value that settles
- * that test the other way makes the write unreachable: `??=` writes when the
- * current value is nullish, `||=` when it is falsy, `&&=` when it is truthy.
- * Every held value has to agree, since any one of them reaching the write is
- * enough for it to run.
- */
-function cannotFire(
-  operator: ts.SyntaxKind,
-  held: ts.Expression[],
-  resolver: ReturnType<typeof styleResolver>
-): boolean {
-  if (operator === ts.SyntaxKind.QuestionQuestionEqualsToken) {
-    return held.every(value => isDefinitelyPresent(value, resolver));
-  }
-  if (operator === ts.SyntaxKind.BarBarEqualsToken) {
-    return held.every(value => staticTruthiness(value, resolver) === true);
-  }
-  if (operator === ts.SyntaxKind.AmpersandAmpersandEqualsToken) {
-    return held.every(value => staticTruthiness(value, resolver) === false);
-  }
-  return false;
+  return undefined;
 }
 
 /**
@@ -2501,22 +2077,8 @@ function cannotFire(
  * removes a value from consideration. Only forms that cannot be nullish however
  * they are read qualify, so anything unfamiliar keeps the write in play.
  */
-function isDefinitelyPresent(
-  value: ts.Expression,
-  resolver?: ReturnType<typeof styleResolver>
-): boolean {
+function isDefinitelyPresent(value: ts.Expression): boolean {
   const inner = withoutTypeWrappers(value);
-  // A name holding a present value is present. Reading only the syntax meant
-  // `style ?? { ...owned }` kept a fallback that cannot run, exactly as the
-  // assignment form did before it was resolved.
-  if (resolver && ts.isIdentifier(inner)) {
-    const reaching = resolver.reachingValues(inner);
-    return (
-      reaching.exhaustive &&
-      reaching.values.length > 0 &&
-      reaching.values.every(each => isDefinitelyPresent(each, resolver))
-    );
-  }
   return (
     ts.isObjectLiteralExpression(inner) ||
     ts.isArrayLiteralExpression(inner) ||
@@ -2630,7 +2192,12 @@ interface DeclaredProperty {
 function declaredProperties(
   object: ts.ObjectLiteralExpression,
   resolver: ReturnType<typeof styleResolver>,
-  onPath = new Set<ts.Node>()
+  onPath = new Set<ts.Node>(),
+  // Set when a spread source cannot be read. A spread's contents are entries of
+  // the object being built, so an unreadable one leaves the object itself only
+  // partly known — and dropping it silently is the direction that reports
+  // nothing, which is how a spread carrying an owned property would vanish.
+  unreadable = { value: false }
 ): Array<Map<string, DeclaredProperty>> {
   // A LIST of possible results, not one. A spread whose source is chosen at
   // runtime — `active ? { borderBottomColor: c } : {}` — produces different
@@ -2655,9 +2222,11 @@ function declaredProperties(
 
   for (const property of object.properties) {
     if (ts.isSpreadAssignment(property)) {
-      const branches = resolver
-        .objectsFrom(property.expression)
-        .flatMap(source => declaredProperties(source, resolver, onPath));
+      const spread = resolver.objectsFrom(property.expression);
+      if (!spread.readable) unreadable.value = true;
+      const branches = spread.objects.flatMap(source =>
+        declaredProperties(source, resolver, onPath, unreadable)
+      );
       if (branches.length === 0) continue;
       variants = variants.flatMap(base =>
         branches.map(branch => new Map([...base, ...branch]))
@@ -2731,13 +2300,11 @@ function emitsValue(
     // property emits unless EVERY one of them is written as nothing. Each
     // branch carries its own trail, or one branch's visits would cut another's
     // short and report it as emitting.
-    const reaching = resolver.reachingValues(inner);
-    // A name fed from outside — a parameter, an import — can hold a value this
-    // file never shows, so the list is a sample and cannot clear the property.
-    if (!reaching.exhaustive) return true;
-    return reaching.values.some(value =>
-      emitsValue(value, resolver, new Set(seen))
-    );
+    // Followed only through a `const`. Anything else can hold a different
+    // value by the time the element renders, and assuming it emits is the
+    // reporting side.
+    const bound = resolver.valueOf(inner);
+    if (bound) return emitsValue(bound, resolver, new Set(seen));
   }
   return true;
 }
@@ -2746,9 +2313,15 @@ function emitsValue(
 function ownedStyleProperty(
   slot: string,
   object: ts.ObjectLiteralExpression,
-  resolver: ReturnType<typeof styleResolver>
+  resolver: ReturnType<typeof styleResolver>,
+  unreadable = { value: false }
 ): string | undefined {
-  for (const variant of declaredProperties(object, resolver)) {
+  for (const variant of declaredProperties(
+    object,
+    resolver,
+    undefined,
+    unreadable
+  )) {
     for (const [name, state] of variant) {
       if (state.emits && ownsStyleProperty(slot, name, state.value))
         return name;
@@ -2787,32 +2360,37 @@ function violationsIn(file: string, source: string): Violation[] {
           if (!ts.isJsxAttribute(attribute)) continue;
           const name = attribute.name.getText(sourceFile);
           if (name === "style") {
-            const { objects, resolver } = styleObjectsFor(attribute, checker);
-            // A property written onto the object AFTER it was created reaches
-            // React the same way one written inside the literal does.
-            const initializer = attribute.initializer;
-            // Unwrapped first, so `style={style!}` reaches the same binding a
-            // bare `style` does. The wrappers are erased before the code runs,
-            // and reading the outer node saw an assertion rather than a name.
-            const held =
-              initializer &&
-              ts.isJsxExpression(initializer) &&
-              initializer.expression
-                ? withoutTypeWrappers(initializer.expression)
-                : undefined;
-            const named =
-              held && ts.isIdentifier(held)
-                ? resolver.propertyWrites(held)
-                : [];
-            const property =
-              objects
-                .map(object => ownedStyleProperty(exported, object, resolver))
-                .find(Boolean) ??
-              named.find(
-                write =>
-                  write.emits &&
-                  ownsStyleProperty(exported, write.name, write.value)
-              )?.name;
+            const { objects, readable, resolver } = styleObjectsFor(
+              attribute,
+              checker
+            );
+            // An expression the scan cannot read is reported for BEING
+            // unreadable, rather than passed over. Tracing what a name holds
+            // at this point is the analysis this contract deliberately does
+            // not do, and staying silent about it would mean "no violation"
+            // and "could not tell" looked the same from outside.
+            if (!readable) {
+              found.push({
+                file,
+                line: at(attribute),
+                why: "sets an inline style this scan cannot read — write it as a literal object, or move it to `className` so the primitive keeps its appearance",
+              });
+              continue;
+            }
+            const spreadUnreadable = { value: false };
+            const property = objects
+              .map(object =>
+                ownedStyleProperty(exported, object, resolver, spreadUnreadable)
+              )
+              .find(Boolean);
+            if (!property && spreadUnreadable.value) {
+              found.push({
+                file,
+                line: at(attribute),
+                why: "spreads an inline style this scan cannot read — write it as a literal object, or move it to `className` so the primitive keeps its appearance",
+              });
+              continue;
+            }
             if (property) {
               found.push({
                 file,
@@ -3275,21 +2853,6 @@ describe("the tab indicator contract", () => {
       "the same reassigned binding behind an assertion",
       'let c: string | undefined = undefined;\nc = "red";\n<TabsTrigger style={{ borderBottomColor: c as string | undefined }} />',
     ],
-    // A mutable binding SHADOWING a constant. Skipping the inner declaration
-    // and continuing outward does not fall back to "undecidable" — it resolves
-    // the use to a completely different binding, and reads `undefined` from an
-    // outer constant the element never mentions.
-    [
-      "a mutable binding shadowing an outer constant",
-      'const colour = undefined;\nfunction Row() {\n  let colour = "red";\n  return <TabsTrigger style={{ borderBottomColor: colour }} />;\n}',
-    ],
-    // The style OBJECT in a mutable binding. Dropping the declaration leaves an
-    // empty object list, and an empty list reports nothing — the opposite
-    // polarity to an unresolved property VALUE, where unresolved means report.
-    [
-      "an owned property inside a mutable style binding",
-      'let style = { borderBottomColor: "red" };\n<TabsTrigger style={style} />',
-    ],
     // An alias resolved in the WRONG scope. `key` means what `sourceKey` meant
     // where the alias was written; resolving it beside the element picks up an
     // inner `sourceKey` the alias never saw.
@@ -3304,53 +2867,6 @@ describe("the tab indicator contract", () => {
       "a computed key aliased through a second binding of the same name",
       'const key = "borderBottomColor";\nfunction Row() {\n  const alias = key;\n  {\n    const key = alias;\n    return <TabsTrigger style={{ [key]: "red" }} />;\n  }\n}',
     ],
-    // The value a mutable binding holds at the element is the last one ASSIGNED
-    // to it, not the one it was declared with. Reading only the declaration saw
-    // an empty object and reported nothing.
-    [
-      "an owned property assigned to a style binding after it is declared",
-      'let style = {};\nstyle = { borderBottomColor: "red" };\n<TabsTrigger style={style} />',
-    ],
-    // A write inside a function runs when that function is CALLED, which the
-    // source order does not tell you. Written above a reset and called below
-    // it, it is still the value the element renders — so a straight-line reset
-    // cannot rule it out.
-    [
-      "an owned property written by a closure called after a reset",
-      'let style: Record<string, string> = {};\nfunction paint() {\n  style = { borderBottomColor: "red" };\n}\nstyle = {};\npaint();\n<TabsTrigger style={style} />',
-    ],
-    // A logical assignment writes when its test passes, so it is one of the
-    // values the binding can hold. Accepting only `=` left the binding
-    // resolving to no object at all.
-    [
-      "an owned property supplied by a logical assignment",
-      'let style;\nstyle ??= { borderBottomColor: "red" };\n<TabsTrigger style={style} />',
-    ],
-    // Rendering the component without an argument passes exactly the default,
-    // so the default is a value the element receives.
-    [
-      "an owned property in a parameter's default object",
-      'function Row(style = { borderBottomColor: "red" }) {\n  return <TabsTrigger style={style} />;\n}',
-    ],
-    // `!` is erased before the code runs, so the element receives the object
-    // itself. The property-value side already read through it.
-    [
-      "an owned property behind a non-null assertion on the style object",
-      'const style = { borderBottomColor: "red" };\n<TabsTrigger style={style!} />',
-    ],
-    // A reset that MIGHT not happen clears nothing. Only a write that
-    // definitely runs replaces what came before it, so the owned value is still
-    // one the element can render and the call site is still reported.
-    [
-      "an owned property a conditional reset does not certainly clear",
-      'let style = { borderBottomColor: "red" };\nif (window.innerWidth > 0) {\n  style = {};\n}\n<TabsTrigger style={style} />',
-    ],
-    // `undefined` is a NAME. Shadowed by a local declaration it is an ordinary
-    // colour, and reading the spelling alone cleared a call site that paints.
-    [
-      "an owned property set to a locally shadowed undefined",
-      'function Row() {\n  const undefined = "red";\n  return <TabsTrigger style={{ borderBottomColor: undefined }} />;\n}',
-    ],
     // A second copy of an owned appearance, declared with the same value under
     // a different variant. Nothing is displaced and nothing conflicts today,
     // which is exactly why no comparison saw it — and the day the primitive
@@ -3359,50 +2875,11 @@ describe("the tab indicator contract", () => {
       "an owned declaration restated under a different variant",
       '<TabsTrigger className="aria-[controls]:outline-none" />',
     ],
-    // A parameter default is one value among many. A caller supplying a real
-    // colour is a value this file cannot see, so the default cannot clear it.
-    [
-      "an owned property whose parameter default a caller can replace",
-      'function Row(colour = undefined) {\n  return <TabsTrigger style={{ borderBottomColor: colour }} />;\n}\n<Row colour="red" />',
-    ],
-    // An alias captures the value at the line it is WRITTEN. A later reset of
-    // the source does not reach into what was already snapshotted.
-    [
-      "an owned property captured by an alias before the source is reset",
-      'let style = { borderBottomColor: "red" };\nconst saved = style;\nstyle = {};\n<TabsTrigger style={saved} />',
-    ],
-    // `undefined` shadowed by a truthy value makes the assignment run, so the
-    // owned style is what the element receives.
-    [
-      "an owned property behind an and-assignment on a shadowed undefined",
-      'const undefined = {};\nlet style = undefined;\nstyle &&= { borderBottomColor: "red" };\n<TabsTrigger style={style} />',
-    ],
     // Pseudo-class TEXT inside an attribute value is data. This rule really can
     // apply beside the primitive's disabled one.
     [
       "a rule whose attribute value merely spells a state",
       '<TabsTrigger className="data-[foo=:enabled]:opacity-100" />',
-    ],
-    // A parameter can be written to like any other binding.
-    [
-      "an owned property assigned to a parameter before the element",
-      'function Row(style = {}) {\n  style = { borderBottomColor: "red" };\n  return <TabsTrigger style={style} />;\n}',
-    ],
-    // Mutating the object reaches React exactly as writing it inline does; the
-    // binding never changes, which is why a search for writes TO it sees none.
-    [
-      "an owned property written onto the style object",
-      'const style: Record<string, string> = {};\nstyle.borderBottomColor = "red";\n<TabsTrigger style={style} />',
-    ],
-    [
-      "an owned property written onto the style object by index",
-      'const style: Record<string, string> = {};\nstyle["borderBottomColor"] = "red";\n<TabsTrigger style={style} />',
-    ],
-    // The wrappers are erased before the code runs, so the element receives the
-    // mutated object exactly as a bare name would hand it over.
-    [
-      "an owned property written onto a non-null asserted style object",
-      'const style: Record<string, string> = {};\nstyle.borderBottomColor = "red";\n<TabsTrigger style={style!} />',
     ],
     // A `break` above the reset can carry control out of the `do` body before
     // it runs, so the owned value is still one the element can render.
@@ -3410,16 +2887,32 @@ describe("the tab indicator contract", () => {
       "an owned property a do-body reset behind a break does not clear",
       'let style: Record<string, string> = { borderBottomColor: "red" };\ndo {\n  if (Math.random() > 0) break;\n  style = {};\n} while (false);\n<TabsTrigger style={style} />',
     ],
-    // Two names for one object. The mutation reaches React whichever name it
-    // was written through.
-    [
-      "an owned property written through an alias of the style object",
-      'const style: Record<string, string> = {};\nconst saved = style;\nsaved.borderBottomColor = "red";\n<TabsTrigger style={style} />',
-    ],
     // The CommonJS spelling of a namespace import.
     [
       "a class on a namespace member behind a CommonJS require",
       'const UI = require("@nextlyhq/ui");\n<UI.TabsTrigger className="border-b-0" />',
+    ],
+    // A spread of a NAME. The outer object does clear the property, so nothing
+    // is repainted today — but knowing that requires reading what the name
+    // holds, and `const` does not settle it: an object is mutable in place
+    // whatever the binding says. Reported for being unreadable, which is the
+    // honest answer rather than a guess in either direction.
+    [
+      "a spread of a name the scan cannot read",
+      'const inherited = { borderBottomColor: "red" };\n<TabsTrigger style={{ ...inherited, borderBottomColor: undefined }} />',
+    ],
+    // The shapes that used to be traced. Each is now reported for what it is —
+    // an inline style whose value this scan does not read — rather than
+    // analysed by a flow model. One per kind, because they all reach the same
+    // branch and a longer list would only restate it.
+    [
+      "an inline style held in a mutable binding",
+      'let style = { borderBottomColor: "red" };\n<TabsTrigger style={style} />',
+    ],
+    ["an inline style built by a call", "<TabsTrigger style={buildStyle()} />"],
+    [
+      "an inline style read from a member access",
+      "<TabsTrigger style={theme.tab} />",
     ],
   ])("catches %s", (_label, body) => {
     // The positive controls. Each is a shape an earlier version returned clean
@@ -3646,10 +3139,6 @@ describe("the tab indicator contract", () => {
       "a class literal behind a statically false guard",
       '<TabsTrigger className={cn("w-full", false && "border-b-0")} />',
     ],
-    [
-      "a spread whose owned property the object then clears",
-      'const inherited = { borderBottomColor: "red" };\n<TabsTrigger style={{ ...inherited, borderBottomColor: undefined }} />',
-    ],
     // A PARAMETER shadowing an outer constant. The name is the parameter, whose
     // value the caller supplies, so the property is undecidable — not the outer
     // constant's. Walking past the parameter named an owned property for an
@@ -3664,13 +3153,6 @@ describe("the tab indicator contract", () => {
     [
       "border-image longhands with no source to draw",
       '<TabsTrigger style={{ borderImageRepeat: "round", borderImageSlice: "30", borderImageWidth: "4px", borderImageOutset: "2px" }} />',
-    ],
-    // An assignment the element cannot have seen. React already received the
-    // empty object; collecting every write in the file regardless of where it
-    // sits reported the element for a value assigned after it.
-    [
-      "a style binding assigned an owned property after the element",
-      'let style = {};\n<TabsTrigger style={style} />;\nstyle = { borderBottomColor: "red" };',
     ],
     // React emits no declaration for an empty string, verified with
     // `renderToStaticMarkup`: `{ borderBottomColor: "" }` renders no `style`
@@ -3687,51 +3169,12 @@ describe("the tab indicator contract", () => {
       "an owned property in a statically unreachable branch",
       '<TabsTrigger style={true ? {} : { borderBottomColor: "red" }} />',
     ],
-    // A binding reset before it renders. The middle value is one it has
-    // already stopped holding, and carrying it along rejected an element that
-    // passes an empty object. Paired with the reassignment case above, this
-    // separates "a write happened" from "this write is the one that survives".
-    [
-      "an owned property overwritten before the element renders",
-      'let style = {};\nstyle = { borderBottomColor: "red" };\nstyle = {};\n<TabsTrigger style={style} />',
-    ],
-    // A mutable binding nothing ever writes to. Its initializer IS what the
-    // element receives, so discarding it for being `let` reported a property
-    // React never emits. This is the counterpart to the reassignment cases
-    // above: together they separate "the declaration decides" from "a write
-    // decides", which neither shows alone.
-    [
-      "an owned property held by an unchanged mutable binding",
-      "let colour: string | undefined = undefined;\n<TabsTrigger style={{ borderBottomColor: colour }} />",
-    ],
     // A rule that can never apply beside the owned one it matches. `disabled:`
     // and `not-disabled:` select complementary states, so neither can restate
     // or override the other however the cascade ranks them.
     [
       "an equal declaration under a negated form of the owned qualifier",
       '<TabsTrigger className="not-disabled:opacity-50" />',
-    ],
-    // A `??=` whose binding already holds a value cannot fire, so its right
-    // side is never what the element receives.
-    [
-      "an owned property behind a logical assignment that cannot fire",
-      'let style = {};\nstyle ??= { borderBottomColor: "red" };\n<TabsTrigger style={style} />',
-    ],
-    // A `for` initializer runs once before the condition is ever asked, so it
-    // is unconditional even though the body beside it is not.
-    [
-      "an owned property reset in a loop initializer",
-      'let style: Record<string, string> = { borderBottomColor: "red" };\nfor (style = {}; false; ) {\n  break;\n}\n<TabsTrigger style={style} />',
-    ],
-    // A logical assignment whose test the current value already settles never
-    // runs, so its right side is not what the element receives.
-    [
-      "an owned property behind an or-assignment that cannot fire",
-      'let style = {};\nstyle ||= { borderBottomColor: "red" };\n<TabsTrigger style={style} />',
-    ],
-    [
-      "an owned property behind an and-assignment that cannot fire",
-      'let style = null;\nstyle &&= { borderBottomColor: "red" };\n<TabsTrigger style={style} />',
     ],
     // React emits no declaration for a boolean, the same as for an empty
     // string: both render an element carrying no `style` attribute at all.
@@ -3751,32 +3194,10 @@ describe("the tab indicator contract", () => {
       "a border image explicitly set to none",
       '<TabsTrigger style={{ borderImageSource: "none" }} />',
     ],
-    // A `do` body runs before its condition is ever asked, so this reset
-    // certainly happened and the earlier value is gone.
-    [
-      "an owned property reset in a do-while body",
-      'let style: Record<string, string> = { borderBottomColor: "red" };\ndo {\n  style = {};\n} while (false);\n<TabsTrigger style={style} />',
-    ],
-    // A `var` is hoisted but its INITIALIZER runs where it is written, so an
-    // element evaluated above it receives `undefined`.
-    [
-      "an owned property in a var initializer written below the element",
-      '<TabsTrigger style={style} />;\nvar style = { borderBottomColor: "red" };',
-    ],
-    // The explicit spelling of a logical assignment, decided the same way.
-    [
-      "an owned property behind an explicit short-circuit that cannot run",
-      'let style = {};\nstyle = style || { borderBottomColor: "red" };\n<TabsTrigger style={style} />',
-    ],
     // A constant holding `none` draws no border image, as the literal does.
     [
       "a border image whose none is written as a constant",
       'const noImage = "none";\n<TabsTrigger style={{ borderImageSource: noImage }} />',
-    ],
-    // The first statement of a `try` runs whenever control reaches the block.
-    [
-      "an owned property reset at the start of a try block",
-      'let style: Record<string, string> = { borderBottomColor: "red" };\ntry {\n  style = {};\n} finally {\n}\n<TabsTrigger style={style} />',
     ],
     // Guards that are not spelled as booleans are still statically decided.
     [
@@ -3795,12 +3216,6 @@ describe("the tab indicator contract", () => {
       "a class on a namespace member shadowing an imported namespace",
       'import * as UI from "@nextlyhq/ui";\nfunction Row() {\n  const UI = { TabsTrigger: (p: Record<string, unknown>) => <div {...p} /> };\n  return <UI.TabsTrigger className="border-b-0" />;\n}',
     ],
-    // A mutation belongs to the object held when it happened. A later write
-    // replaces that object, so the element never sees the mutation.
-    [
-      "a property written onto an object the binding then replaces",
-      'let style: Record<string, string> = {};\nstyle.borderBottomColor = "red";\nstyle = {};\n<TabsTrigger style={style} />',
-    ],
     // In an object map the KEY is the class and the VALUE is the condition, so
     // a key switched off applies nothing.
     [
@@ -3812,16 +3227,6 @@ describe("the tab indicator contract", () => {
       "an attribute value that merely contains a hash",
       '<TabsTrigger className="not-data-[foo=#bar]:opacity-100" />',
     ],
-    // The last write to a property is what React receives.
-    [
-      "an owned property a later in-place write clears",
-      'const style: Record<string, string | undefined> = {};\nstyle.borderBottomColor = "red";\nstyle.borderBottomColor = undefined;\n<TabsTrigger style={style} />',
-    ],
-    // A constant object is definitely present, so the fallback cannot run.
-    [
-      "an owned property in a nullish fallback that cannot run",
-      'const style = {};\n<TabsTrigger style={style ?? { borderBottomColor: "red" }} />',
-    ],
   ])("does not report %s", (_label, body) => {
     // The complement, and the reason this is a contract rather than a ban. A
     // check that flags a documented example or a legitimate layout class gets
@@ -3830,18 +3235,16 @@ describe("the tab indicator contract", () => {
     expect(violationsIn("probe.tsx", IMPORT + body)).toEqual([]);
   });
 
-  it("resolves a style identifier in its own scope, not by name", () => {
-    // A whole-file name search takes whichever declaration is visited last, so
-    // an unrelated `const s` in a LATER function hid this violation. Both
-    // orders are asserted, because the defect is symmetric: the other order
-    // invents a violation on a tab whose own style is harmless.
-    const hidden = `${IMPORT}function a() { const s = { borderBottomColor: c }; return <TabsTrigger style={s} />; }
-function b() { const s = { width: 2 }; return <div style={s} />; }`;
-    expect(violationsIn("probe.tsx", hidden)).not.toEqual([]);
+  it("does not read an inline style held under a name", () => {
+    // Replaces a case that asserted WHICH declaration a style identifier
+    // resolved to. Objects are no longer traced through bindings at all, so the
+    // question that test answered is one the scan has stopped asking; what
+    // matters now is that both spellings are reported rather than silently
+    // resolved to the wrong one.
+    const both = `${IMPORT}function a() { const s = { borderBottomColor: c }; return <TabsTrigger style={s} />; }
+function b() { const s = { width: 2 }; return <TabsTrigger style={s} />; }`;
 
-    const invented = `${IMPORT}function a() { const s = { width: 2 }; return <TabsTrigger style={s} />; }
-function b() { const s = { borderBottomColor: c }; return <div style={s} />; }`;
-    expect(violationsIn("probe.tsx", invented)).toEqual([]);
+    expect(violationsIn("probe.tsx", both)).toHaveLength(2);
   });
 
   it("still reads a style declared beside the element", () => {
