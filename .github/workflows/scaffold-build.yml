@@ -41,7 +41,7 @@ concurrency:
 
 jobs:
   scaffold-build:
-    name: Scaffold ${{ matrix.template }} with ${{ matrix.pm }}
+    name: Scaffold ${{ matrix.name }}
     runs-on: ubuntu-latest
     # One OS and one Node line. Cross-platform path handling is `scaffold-smoke`'s
     # question and native-module ABI coverage is the nightly matrix's; repeating either
@@ -49,20 +49,66 @@ jobs:
     timeout-minutes: 25
     strategy:
       fail-fast: false
+      # Legs are listed explicitly rather than crossed, because these axes are not independent:
+      # `approach` only means something for a content template, and the download path is a
+      # property of the CLI rather than of any one template. A cross product would spend minutes
+      # on combinations that test nothing new.
+      #
+      # The rule each leg answers to: this job triggers on a set of paths, and every BEHAVIOUR
+      # those paths can change should be exercised by some leg. Triggering on a path whose
+      # behaviour no leg runs is the defect this job exists to catch, turned on itself.
+      #
+      # ONE behaviour is knowingly not covered: the non-sqlite dialects. A scaffold's build
+      # script is `nextly migrate && next build`, so a postgres or mysql leg needs a live and
+      # EMPTY database rather than only a connection string — measured, a postgres scaffold
+      # fails its build with ECONNREFUSED without one. That needs service containers, which is
+      # its own change; until then a CLI edit that misnames an adapter passes here. Tracked, and
+      # said out loud rather than left for someone to find in a green run.
       matrix:
-        # EVERY app template this job's paths can trigger on. Testing one while triggering on
-        # all of them is the failure this job exists to catch, applied to itself: a change to
-        # `blog` would run the job, scaffold `blank`, and pass.
-        template: [blank, blog]
-        pm: [npm]
         include:
-          # One pnpm leg. npm installs a HOISTED tree, so an import of an undeclared transitive
-          # dependency resolves there and the build passes — while the same generated project
-          # fails for anyone invoking the CLI through pnpm, whose layout does not expose
-          # subdependencies at the root. Cheaper than doubling the matrix, and it covers the
-          # asymmetry rather than every combination of it.
-          - template: blank
+          # The default scaffold, and the baseline everything else varies from.
+          - name: blank
+            template: blank
+            pm: npm
+            source: local
+
+          # npm installs a HOISTED tree, so an import of an undeclared transitive dependency
+          # resolves there and the build passes — while the same project fails for anyone
+          # invoking the CLI through pnpm, whose layout does not expose subdependencies at the
+          # root. One leg, because the asymmetry is between the two RESOLVERS rather than
+          # between every template and both of them.
+          - name: blank-pnpm
+            template: blank
             pm: pnpm
+            source: local
+
+          # `blog` is the other app template these paths trigger on.
+          - name: blog-code-first
+            template: blog
+            pm: npm
+            source: local
+            approach: code-first
+
+          # `--yes` selects the code-first default, so `copyTemplate` copies only
+          # `configs/codefirst.config.ts`. Without this leg a break in `visual.config.ts`
+          # triggers the job and passes every leg, while users choosing the supported visual
+          # approach get an unbuildable scaffold.
+          - name: blog-visual
+            template: blog
+            pm: npm
+            source: local
+            approach: visual
+
+          # NO `--local-template`, which is the point: every other leg makes
+          # `resolveTemplateSource` pick the local path and never run `downloadTemplate`. A
+          # broken Codeload URL, archive filter, branch handling or extraction path would
+          # otherwise merge green while every ordinary `blog` invocation fails before
+          # scaffolding. This leg tests the MECHANISM, so it necessarily scaffolds the template
+          # already published rather than the one under review.
+          - name: blog-downloaded
+            template: blog
+            pm: npm
+            source: download
 
     steps:
       - name: Checkout
@@ -111,14 +157,19 @@ jobs:
           #
           # The package manager the CLI installs with follows the one that INVOKED it, so the
           # leg is chosen here rather than by a flag.
+          args="--template ${{ matrix.template }} --yes"
+          # Omitted on the download leg so `resolveTemplateSource` takes the production path.
+          if [ "${{ matrix.source }}" = "local" ]; then
+            args="$args --local-template $GITHUB_WORKSPACE/templates"
+          fi
+          if [ -n "${{ matrix.approach }}" ]; then
+            args="$args --approach ${{ matrix.approach }}"
+          fi
+
           if [ "${{ matrix.pm }}" = "pnpm" ]; then
-            pnpm dlx "$tarball" scaffolded-app \
-              --template ${{ matrix.template }} \
-              --local-template "$GITHUB_WORKSPACE/templates" --yes
+            pnpm dlx "$tarball" scaffolded-app $args
           else
-            npm exec --yes --package="$tarball" -- create-nextly-app scaffolded-app \
-              --template ${{ matrix.template }} \
-              --local-template "$GITHUB_WORKSPACE/templates" --yes
+            npm exec --yes --package="$tarball" -- create-nextly-app scaffolded-app $args
           fi
 
       # The controls, before the build's verdict is worth anything. A job that scaffolded
