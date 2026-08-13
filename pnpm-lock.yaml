@@ -1046,6 +1046,9 @@ importers:
       '@nextlyhq/adapter-drizzle':
         specifier: workspace:*
         version: link:../adapter-drizzle
+      '@nextlyhq/blocks-engine':
+        specifier: workspace:*
+        version: link:../blocks-engine
       '@sanity/diff-match-patch':
         specifier: ^3.2.0
         version: 3.2.0
@@ -1132,9 +1135,6 @@ importers:
       '@nextlyhq/adapter-sqlite':
         specifier: workspace:*
         version: link:../adapter-sqlite
-      '@nextlyhq/blocks-engine':
-        specifier: workspace:*
-        version: link:../blocks-engine
       '@nextlyhq/eslint-config':
         specifier: workspace:*
         version: link:../eslint-config
@@ -13434,7 +13434,7 @@ snapshots:
       '@humanfs/node': 0.16.6
       '@humanwhocodes/module-importer': 1.0.1
       '@humanwhocodes/retry': 0.4.3
-      '@types/estree': 1.0.9
+      '@types/estree': 1.0.8
       ajv: 6.15.0
       chalk: 4.1.2
       cross-spawn: 7.0.6
