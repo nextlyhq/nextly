@@ -16,8 +16,11 @@ const ENTRY: RegistryPlugin = {
   description: "The catalogue's description",
   author: "Acme",
   category: "content",
-  icon: { lucide: "CatalogueGlyph" },
-  configSnippet: "plugins: [thing()]",
+  // A real barrel export, unlike `PluginGlyph` on the installed side below: a
+  // catalogue entry's glyph is type-checked against the icon barrel, while a
+  // plugin declares its own as a free string this admin cannot constrain.
+  icon: { lucide: "Archive" },
+  config: { exportName: "thing", callArgs: "" },
 };
 
 function installed(
@@ -31,7 +34,7 @@ describe("resolveCataloguePresentation", () => {
   it("uses the catalogue when the plugin is not installed", () => {
     const p = resolveCataloguePresentation(ENTRY, undefined);
 
-    expect(p.icon).toEqual({ kind: "lucide", name: "CatalogueGlyph" });
+    expect(p.icon).toEqual({ kind: "lucide", name: "Archive" });
     expect(p.description).toBe("The catalogue's description");
     expect(p.isInstalled).toBe(false);
   });
@@ -59,7 +62,7 @@ describe("resolveCataloguePresentation", () => {
     );
 
     expect(p.description).toBe("The plugin's own description");
-    expect(p.icon).toEqual({ kind: "lucide", name: "CatalogueGlyph" });
+    expect(p.icon).toEqual({ kind: "lucide", name: "Archive" });
   });
 
   it("keeps the catalogue text when an installed plugin declares none", () => {
@@ -96,7 +99,7 @@ describe("resolveCataloguePresentation", () => {
   it("lets an installed glyph outrank a catalogue asset", () => {
     const withAsset: RegistryPlugin = {
       ...ENTRY,
-      icon: { lucide: "CatalogueGlyph", asset: "/catalogue.svg" },
+      icon: { lucide: "Archive", asset: "/catalogue.svg" },
     };
 
     // Positive control: with nothing installed the catalogue asset IS chosen,
@@ -117,7 +120,7 @@ describe("resolveCataloguePresentation", () => {
   it("skips every asset for a surface that cannot render one", () => {
     const withAsset: RegistryPlugin = {
       ...ENTRY,
-      icon: { lucide: "CatalogueGlyph", asset: "/catalogue.svg" },
+      icon: { lucide: "Archive", asset: "/catalogue.svg" },
     };
 
     const p = resolveCataloguePresentation(
@@ -126,6 +129,6 @@ describe("resolveCataloguePresentation", () => {
       { allowAsset: false }
     );
 
-    expect(p.icon).toEqual({ kind: "lucide", name: "CatalogueGlyph" });
+    expect(p.icon).toEqual({ kind: "lucide", name: "Archive" });
   });
 });
