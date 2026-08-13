@@ -276,6 +276,18 @@ const MAX_VALUE_DEPTH = 512;
  */
 const MAX_WALKABLE_DEPTH = 1_000;
 
+/** Refuses a tree the engine's recursive helpers cannot walk. */
+function assertWalkable(depth: number, subject: string): void {
+  if (depth > MAX_WALKABLE_DEPTH) {
+    throw new OpError(
+      `${subject} is nested ${String(depth)} levels deep and cannot be ` +
+        `edited: past ${String(MAX_WALKABLE_DEPTH)} the tree helpers exhaust ` +
+        `the call stack, so no edit to it — including one that would make it ` +
+        `shallower — can be applied.`
+    );
+  }
+}
+
 function isJsonValue(value: unknown): boolean {
   // ITERATIVE, with an explicit stack. The recursive form exhausted the JS
   // stack on a deeply nested but otherwise legal value and leaked a native
@@ -815,7 +827,11 @@ function assertNodeShape(
  * refused.
  */
 function assertForestEntries(nodes: BlockNode[]): void {
-  const pending: unknown[] = [...nodes];
+  // Filled by loop rather than spread: `[...nodes]` is fine, but the pushes
+  // below are not, and a forest wide enough to exceed V8's call-argument cap
+  // would throw before this walk could refuse it.
+  const pending: unknown[] = [];
+  for (const entry of nodes) pending.push(entry);
   while (pending.length > 0) {
     const entry = pending.pop();
     if (!isPlainRecord(entry)) {
@@ -971,7 +987,8 @@ function assertIdIsUnique(nodes: BlockNode[], id: string, verb: string): void {
   // that made the recursive walker throw a native RangeError here — so the
   // guard broke on the input the repair was trying to fix.
   let seen = 0;
-  const pending: BlockNode[] = [...nodes];
+  const pending: BlockNode[] = [];
+  for (const entry of nodes) pending.push(entry);
   while (pending.length > 0) {
     const current = pending.pop();
     if (current === undefined) break;
@@ -1240,15 +1257,7 @@ export function applyOp(
   // saying so is better than letting a native RangeError escape from whichever
   // helper reaches it first. This is deliberately NOT `limits.maxDepth`: that
   // is a product rule a site may relax, and this is a machine one nothing can.
-  const inputDepth = depthOf(nodes);
-  if (inputDepth > MAX_WALKABLE_DEPTH) {
-    throw new OpError(
-      `a document nested ${String(inputDepth)} levels deep cannot be edited: ` +
-        `past ${String(MAX_WALKABLE_DEPTH)} the tree helpers exhaust the call ` +
-        `stack, so no edit to it — including one that would make it shallower ` +
-        `— can be applied.`
-    );
-  }
+  assertWalkable(depthOf(nodes), "this document");
 
   // The op itself, before its discriminant is read. `op.kind` on a `null`
   // leaves this module as a TypeError, which a caller cannot distinguish from
@@ -1282,6 +1291,11 @@ export function applyOp(
       // accept whatever they are handed, so a malformed subtree is in the
       // document by the time anything downstream could object.
       assertNodeShape(op.node, "insert", limits);
+      // The machine cap on the INCOMING subtree as well. A caller that raises
+      // `limits.maxDepth` can otherwise hand in a subtree deeper than the
+      // engine's helpers can walk, and the overflow lands after the document
+      // has been checked rather than before.
+      assertWalkable(depthOf([op.node]), "insert");
       const lockedId = lockedWithin(op.node);
       if (lockedId !== undefined) {
         throw new OpError(
@@ -1319,6 +1333,13 @@ export function applyOp(
       }
 
       assertIdIsUnique(nodes, op.id, "remove");
+      // The ORIGINAL parent too. The removed node may be unique while the
+      // parent it sat under is not, and the inverse restores by naming that
+      // parent — so an undo would place it under whichever match is found
+      // first, which is not necessarily where it came from.
+      if (location.parent !== undefined) {
+        assertIdIsUnique(nodes, location.parent.id, "remove");
+      }
       const lockedId = lockedWithin(node);
       if (lockedId !== undefined) {
         throw new OpError(
@@ -1351,6 +1372,11 @@ export function applyOp(
         throw new OpError(`move: no node with id "${op.id}" in the document.`);
       }
       assertIdIsUnique(nodes, op.id, "move");
+      // Same on the origin side: the inverse moves the node BACK by naming its
+      // original parent, so a duplicated one makes the undo ambiguous.
+      if (location.parent !== undefined) {
+        assertIdIsUnique(nodes, location.parent.id, "move");
+      }
       assertPositionContainer(op.to, "move");
       assertPosition(op.to, "move");
       if (op.to.parentId !== undefined) {

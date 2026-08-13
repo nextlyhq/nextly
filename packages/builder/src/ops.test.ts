@@ -1616,3 +1616,37 @@ describe("the document's own identity fields", () => {
     expect(thrown).not.toBeInstanceOf(RangeError);
   });
 });
+
+describe("an inverse that names a parent held twice", () => {
+  it("refuses a remove whose ORIGINAL parent is duplicated", () => {
+    // The removed node is unique; its parent is not. The inverse restores by
+    // naming that parent, so an undo would place the node under whichever
+    // match is found first rather than where it came from.
+    const twins: BlockNode[] = [
+      node("twin", { main: [node("only-child")] }),
+      node("twin", { main: [] }),
+    ];
+    expect(() =>
+      applyOp(doc(twins), { kind: "remove", id: "only-child" })
+    ).toThrow(/addresses 2 nodes/);
+  });
+
+  it("refuses an insert whose subtree is deeper than the helpers can walk", () => {
+    // The machine cap covered the existing document but not the INCOMING
+    // subtree, so a caller raising limits.maxDepth could hand in a tree the
+    // engine's recursive helpers cannot walk and the overflow landed after the
+    // document had been checked.
+    let leaf = node("in-0");
+    const root = leaf;
+    for (let level = 1; level < 1_200; level += 1) {
+      const next = node(`in-${String(level)}`);
+      leaf.slots = { main: [next] };
+      leaf = next;
+    }
+    const deep: DocumentLimits = { ...DEFAULT_LIMITS, maxDepth: 100_000 };
+
+    expect(() =>
+      applyOp(doc(), { kind: "insert", node: root, at: { index: 0 } }, deep)
+    ).toThrow(/cannot be edited/);
+  });
+});

@@ -165,7 +165,7 @@ reduced test count rather than an obvious stop.
 ```bash
 # Once, and again after changing a dependency. Builds only what this
 # package depends on, not the whole repository.
-pnpm --filter @nextlyhq/builder^... build
+pnpm --filter @nextlyhq/builder... build
 ```
 
 Then, from this directory (`packages/builder`) rather than the repository root —
