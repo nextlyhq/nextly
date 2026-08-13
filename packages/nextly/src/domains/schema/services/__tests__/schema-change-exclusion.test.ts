@@ -300,15 +300,15 @@ describe("a Schema Builder change and the storage migration exclude each other",
   });
 
   it("takes the PRIOR flags from the refreshed record, keeping only what the request set", async () => {
-    // 🔴 Two overlapping Builder saves. The first enables Draft/Published; the second was composed
-    // before that and carries `wasStatus: false` plus a `hasStatus: false` the CALLER filled in
-    // because the request said nothing about status. Planning from those would create the companion
-    // without `_status` while the row ends up saying it has one.
+    // 🔴 Two overlapping Builder saves. The first enabled Draft/Published and committed. The second
+    // was composed before that, so it carries `wasStatus: false`, and it DOES ask for status — so
+    // the plan compares "off" against "on" and emits an ADD COLUMN for `_status` on a table that
+    // already has one.
     //
-    // The request DID set localization, so that value survives the refresh; it said nothing about
-    // status, so the refreshed record decides. Asserting through the plan's own inputs would be
-    // circular, so this observes what the service passes on: `updateData` must not carry a status
-    // change nobody asked for, and the localization the request did ask for must still be applied.
+    // The first version of this test used a scenario whose difference showed up only in the
+    // COMPANION table, which this harness reaches through Drizzle rather than `executeQuery` — so
+    // the break-control passed and the test proved nothing. This scenario lands on the MAIN table,
+    // which is observable here.
     const adapter = makeAdapter({ mainTableExists: true });
     const { service, registry } = makeService(adapter);
     registry.getSingleBySlug.mockResolvedValue({
@@ -331,23 +331,19 @@ describe("a Schema Builder change and the storage migration exclude each other",
         status: false,
         localized: false,
       },
-      updateData: { localized: true },
-      isLocalized: true,
+      updateData: { status: true },
+      isLocalized: false,
       wasLocalized: false,
-      localizedRequested: true,
-      hasStatus: false,
+      localizedRequested: false,
+      hasStatus: true,
       wasStatus: false,
-      statusRequested: false,
+      statusRequested: true,
     } as unknown as Parameters<typeof service.updateSingleSchema>[0]);
 
-    const [, written] = registry.updateSingle.mock.calls[0] as [
-      string,
-      Record<string, unknown>,
-    ];
-    expect(written.localized).toBe(true);
-    // The stale `hasStatus: false` must not have become a DROP of a column the live record has.
-    const statements = adapter.executeQuery.mock.calls.map(([sql]) => sql);
-    expect(statements.join("\n")).not.toMatch(/DROP COLUMN[^\n]*_status/i);
+    const statements = adapter.executeQuery.mock.calls
+      .map(([sql]) => sql)
+      .join("\n");
+    expect(statements).not.toMatch(/ADD COLUMN[^\n]*_status/i);
   });
 
   it("refuses to CREATE onto a table claimed while it waited", async () => {
