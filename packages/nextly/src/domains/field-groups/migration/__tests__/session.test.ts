@@ -79,7 +79,12 @@ function assertLockTable(name: string | undefined): void {
  *   them cannot show that the lock stops holding one.
  */
 function createAdapter(
-  options: { heldBy?: string | null; lockReadError?: unknown } = {}
+  options: {
+    heldBy?: string | null;
+    lockReadError?: unknown;
+    /** Model a database on which no migration has ever run, so the lock table is absent. */
+    lockTableMissing?: boolean;
+  } = {}
 ) {
   const rows = new Map<number, { id: number; owner: string | null }>();
   if (options.heldBy !== undefined) {
@@ -116,7 +121,7 @@ function createAdapter(
       if (options.lockReadError !== undefined) throw options.lockReadError;
       return interpret(statement, rows);
     }),
-    tableExists: vi.fn(async () => true),
+    tableExists: vi.fn(async () => options.lockTableMissing !== true),
     transaction: vi.fn(async (work: (c: unknown) => Promise<unknown>) => {
       open += 1;
       peakOpen = Math.max(peakOpen, open);
@@ -567,6 +572,29 @@ describe("field-group migration session", () => {
         dialect: "mysql",
         label: "preview-6",
         mode: "observe",
+      },
+      async session => {
+        observed = session.lock;
+      }
+    );
+
+    expect(observed).toEqual({ kind: "not-held" });
+  });
+
+  // 🔴 `requireExistingLock` deliberately runs the work WITHOUT a lock when no migration has ever
+  // touched this database, so there is nothing to be excluded from. The session it hands over must
+  // say so: the default observation names a claim string this branch generated and never wrote
+  // anywhere, so advertising it would report exclusion on the one path that takes none.
+  it("reports not-held when it deliberately skips the lock", async () => {
+    const h = createAdapter({ lockTableMissing: true });
+    let observed: LockObservation | undefined;
+
+    await withMigrationSession(
+      {
+        adapter: h.adapter,
+        dialect: "postgresql",
+        label: "optional-lock",
+        requireExistingLock: true,
       },
       async session => {
         observed = session.lock;
