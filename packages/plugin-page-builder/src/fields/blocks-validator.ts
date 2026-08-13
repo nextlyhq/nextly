@@ -113,8 +113,25 @@ export function validateBlocksValue(
   //
   // One question, one answer — and the more precise answer is the one an author
   // can act on.
+  // Safe to walk is not the same as affordable to walk. `unserializableIssues`
+  // serializes the whole document, which is precisely the allocation the
+  // engine's bounded counter refused to make: it stops counting at the cap, so
+  // a document reported as too large may be arbitrarily bigger than the cap and
+  // materializing a full JSON copy of it here would undo that bound.
+  //
+  // Nothing is lost by skipping it. "Too large" is already the complete and
+  // actionable answer, and naming a key inside a document that has to shrink
+  // anyway does not change the repair.
+  //
+  // `document-unwritable` is the opposite case and still runs: the counter
+  // stopped on a value it could not write while still under the cap, and the
+  // engine can only say THAT the document is unwritable, never which key.
+  const tooLarge = documentIssues.some(
+    issue => issue.code === "document-too-large"
+  );
+
   const precise: Issue[] = [];
-  if (structuralIssues.length === 0) {
+  if (structuralIssues.length === 0 && !tooLarge) {
     precise.push(...disallowedBlockIssues(doc, path, label, options));
     precise.push(...unserializableIssues(doc, path, label));
   }
