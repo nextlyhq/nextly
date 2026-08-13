@@ -19,11 +19,14 @@
  *   This file serves as the reference contract.
  */
 /**
- * The numbered shade scale for a status color, mixed from its base the same way
- * the v4 `@theme` block does, so v3 preset consumers get the same utilities the
- * components emit (`bg-destructive-700`, `bg-success-100 text-success-700`, ...).
+ * The numbered shade scale for a color, mixed from its base the same way the v4
+ * `@theme` block does, so v3 preset consumers get the same utilities the
+ * components emit (`bg-destructive-700`, `bg-primary-500`, `border-primary-300`).
+ *
+ * Named for the derivation rather than for one caller: the status colors, the
+ * primary and the accent all use it, and `@theme` derives all five identically.
  */
-const statusScale = (base: string): Record<number, string> => ({
+const tintScale = (base: string): Record<number, string> => ({
   50: `color-mix(in srgb, var(${base}), white 95%)`,
   100: `color-mix(in srgb, var(${base}), white 90%)`,
   200: `color-mix(in srgb, var(${base}), white 70%)`,
@@ -49,14 +52,24 @@ const uiPreset = {
         overlay: "var(--nx-overlay)",
         "overlay-soft": "var(--nx-overlay-soft)",
         "overlay-strong": "var(--nx-overlay-strong)",
-        border: "var(--nx-border)",
+        border: {
+          DEFAULT: "var(--nx-border)",
+          subtle: "var(--nx-border-subtle)",
+          strong: "var(--nx-border-strong)",
+        },
         input: "var(--nx-input)",
+        // The boundary of a control that draws no fill of its own -- an
+        // unchecked checkbox, radio or switch. Separate from `input` because
+        // that one is the field border weight, which sits below the 3:1
+        // non-text minimum by design.
+        "control-border": "var(--nx-control-border)",
         ring: "var(--nx-ring)",
         background: "var(--nx-background)",
         foreground: "var(--nx-foreground)",
         primary: {
           DEFAULT: "var(--nx-primary)",
           foreground: "var(--nx-primary-foreground)",
+          ...tintScale("--nx-primary"),
         },
         secondary: {
           DEFAULT: "var(--nx-secondary)",
@@ -67,18 +80,18 @@ const uiPreset = {
           // Saturated fill for solid buttons, distinct from the text-tuned base.
           solid: "var(--nx-destructive-solid)",
           foreground: "var(--nx-destructive-foreground)",
-          ...statusScale("--nx-destructive"),
+          ...tintScale("--nx-destructive"),
         },
         success: {
           DEFAULT: "var(--nx-success)",
           solid: "var(--nx-success-solid)",
           foreground: "var(--nx-success-foreground)",
-          ...statusScale("--nx-success"),
+          ...tintScale("--nx-success"),
         },
         warning: {
           DEFAULT: "var(--nx-warning)",
           foreground: "var(--nx-warning-foreground)",
-          ...statusScale("--nx-warning"),
+          ...tintScale("--nx-warning"),
         },
         muted: {
           DEFAULT: "var(--nx-muted)",
@@ -87,6 +100,44 @@ const uiPreset = {
         accent: {
           DEFAULT: "var(--nx-accent)",
           foreground: "var(--nx-accent-foreground)",
+          ...tintScale("--nx-accent"),
+        },
+        // The editor's highlight mark, and the syntax colors, so authored
+        // content and code blocks theme like everything else.
+        highlight: {
+          DEFAULT: "var(--nx-highlight)",
+          foreground: "var(--nx-highlight-foreground)",
+        },
+        code: {
+          bg: "var(--nx-code-bg)",
+          fg: "var(--nx-code-fg)",
+          comment: "var(--nx-code-comment)",
+          keyword: "var(--nx-code-keyword)",
+          string: "var(--nx-code-string)",
+          number: "var(--nx-code-number)",
+          function: "var(--nx-code-function)",
+          operator: "var(--nx-code-operator)",
+          punctuation: "var(--nx-code-punctuation)",
+          variable: "var(--nx-code-variable)",
+          tag: "var(--nx-code-tag)",
+          deleted: "var(--nx-code-deleted)",
+          inserted: "var(--nx-code-inserted)",
+        },
+        // `sidebar` and `sidebar-background` are the same value under two
+        // names, and `sidebar-accent` and `sidebar-accent-background` likewise.
+        // Both pairs exist in the v4 block and both spellings are in use, so
+        // dropping either here would leave a live utility generating nothing.
+        sidebar: {
+          DEFAULT: "var(--nx-sidebar-background)",
+          background: "var(--nx-sidebar-background)",
+          foreground: "var(--nx-sidebar-foreground)",
+          primary: "var(--nx-sidebar-primary)",
+          "primary-foreground": "var(--nx-sidebar-primary-foreground)",
+          accent: "var(--nx-sidebar-accent)",
+          "accent-background": "var(--nx-sidebar-accent)",
+          "accent-foreground": "var(--nx-sidebar-accent-foreground)",
+          border: "var(--nx-sidebar-border)",
+          ring: "var(--nx-sidebar-ring)",
         },
         popover: {
           DEFAULT: "var(--nx-popover)",

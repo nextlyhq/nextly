@@ -29,7 +29,7 @@ It is **not** the answer to "what does this entry point actually reach". A
 bundler can inline a dependency, and the specifier then exists nowhere in the
 output — no source reader can see an import that no longer exists. That question
 is answered by reading the built artifact and the bundler's metafile, which
-`packages/ui/scripts/check-server-safe-artifacts.mjs` does deliberately
+`packages/ui/scripts/check-server-safe-artifacts.ts` does deliberately
 separately. Do not merge the two: they take different inputs and answer
 different questions, and neither subsumes the other.
 

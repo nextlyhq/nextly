@@ -31,7 +31,12 @@ export const REGISTRY_ENTRIES: RegistryPlugin[] = [
     category: "content",
     tags: ["blocks", "editor", "pages"],
     icon: { lucide: "Layout" },
-    configSnippet: "plugins: [pageBuilder()]",
+    config: {
+      exportName: "pageBuilder",
+      callArgs: "",
+      adminModule: true,
+      adminStyles: "styles/editor.css",
+    },
     links: {
       homepage: "https://nextlyhq.com",
       repository: "https://github.com/nextlyhq/nextly",
@@ -45,10 +50,14 @@ export const REGISTRY_ENTRIES: RegistryPlugin[] = [
     category: "forms",
     tags: ["forms", "submissions"],
     icon: { lucide: "FileText" },
-    // `formBuilderPlugin`, not `formBuilder()`: the factory returns a
+    // `callArgs: null` — the export goes in uncalled. The factory returns a
     // FormBuilderPluginResult whose definition is at `.plugin`, and the package
     // exports the unwrapped value for exactly this use.
-    configSnippet: "plugins: [formBuilderPlugin]",
+    config: {
+      exportName: "formBuilderPlugin",
+      callArgs: null,
+      adminModule: true,
+    },
     links: {
       homepage: "https://nextlyhq.com",
       repository: "https://github.com/nextlyhq/nextly",
@@ -63,9 +72,19 @@ export const REGISTRY_ENTRIES: RegistryPlugin[] = [
     category: "seo",
     tags: ["seo", "meta"],
     icon: { lucide: "Search" },
-    // `seoPlugin`, and `collections` is required: the plugin adds the SEO group
-    // only to the collections it is given, so a bare call does not type-check.
-    configSnippet: 'plugins: [seoPlugin({ collections: ["posts"] })]',
+    // `collections` is required rather than illustrative: the plugin adds the
+    // SEO group only to the collections it is given, so a bare call does not
+    // type-check.
+    //
+    // A named placeholder, not a plausible slug like "posts". The blank
+    // template ships `collections: []`, and naming a collection the project
+    // does not have makes the eager schema fold throw
+    // NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN at startup — a copied line that
+    // stops the app is worse than one that obviously has to be edited.
+    config: {
+      exportName: "seoPlugin",
+      callArgs: '{ collections: ["your-collection"] }',
+    },
     links: {
       homepage: "https://nextlyhq.com",
       repository: "https://github.com/nextlyhq/nextly",

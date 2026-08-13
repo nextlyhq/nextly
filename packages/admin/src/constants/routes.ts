@@ -107,6 +107,13 @@ export const ROUTES = {
 
   // Plugin routes
   PLUGINS: "/admin/plugins",
+  // Outside the `/admin/plugins/` namespace on purpose. A plugin's detail
+  // address is `/admin/plugins/<slug>`, and a slug is derived from a package
+  // name that may be any string, so a sibling static page there is a page a
+  // plugin can be named after — and whichever of the two wins, the other
+  // becomes unreachable. A different parent removes the collision instead of
+  // ranking it.
+  PLUGIN_BROWSE: "/admin/plugin-directory",
   PLUGIN_DETAIL: "/admin/plugins/[slug]",
   PLUGIN_SETTINGS: "/admin/plugins/[slug]/settings",
 } as const;

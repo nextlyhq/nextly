@@ -93,6 +93,40 @@ describe("resolveWebhookRetentionConfig", () => {
     expect(policy?.intervalMs).toBeGreaterThan(0);
   });
 
+  it("reads an infinite window as keeping everything", () => {
+    // An operator writing `Infinity` has spelled "keep forever" the strongest
+    // way the type allows, and this used to fall back to a default that DELETES
+    // after 30 days. Nothing in this file covered it, which is how it shipped.
+    const policy = resolveWebhookRetentionConfig({
+      eventsMaxAgeMs: Number.POSITIVE_INFINITY,
+      auditEventsMaxAgeMs: Number.POSITIVE_INFINITY,
+      deliveriesMaxAgeMs: Number.POSITIVE_INFINITY,
+    });
+    expect(policy?.eventsMaxAgeMs).toBe(false);
+    expect(policy?.auditEventsMaxAgeMs).toBe(false);
+    expect(policy?.deliveriesMaxAgeMs).toBe(false);
+  });
+
+  it("clamps a window past the storable range instead of producing a bad cutoff", () => {
+    // This resolver had no upper bound at all, so `MAX_SAFE_INTEGER` resolved
+    // to roughly 285,000 years and the cutoff derived from it was a date no
+    // column can hold — a pass that fails every run and is swallowed, leaving
+    // the ledger unpruned while the configuration reads as accepted.
+    const policy = resolveWebhookRetentionConfig({
+      eventsMaxAgeMs: Number.MAX_SAFE_INTEGER,
+    });
+    expect(policy?.eventsMaxAgeMs).toBe(false);
+  });
+
+  it("still lets an operator ask to keep nothing", () => {
+    // Zero is a real position for a delivery ledger, and it must survive the
+    // move to the shared resolver: the row exists to make a redelivery
+    // possible, so an operator who does not want addresses stored at all is
+    // deciding rather than mistyping.
+    const policy = resolveWebhookRetentionConfig({ deliveriesMaxAgeMs: 0 });
+    expect(policy?.deliveriesMaxAgeMs).toBe(0);
+  });
+
   it("clamps an oversized batch to the portable bind-parameter limit", () => {
     // Above this a pass exceeds SQLite's parameter cap and fails every time,
     // and the safe runner swallows it, so retention would stop making progress
