@@ -49,13 +49,13 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "check-types": "tsc --noEmit",
+    "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
     "lint": "eslint . --max-warnings 0",
     "clean": "rimraf dist",
     "test": "vitest run"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
   },
   "dependencies": {
     "@nextlyhq/blocks-engine": "workspace:*"
@@ -81,6 +81,7 @@
     "@nextlyhq/admin": "workspace:*",
     "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
+    "@types/node": "^20.19.17",
     "@types/react": "19.2.0",
     "nextly": "workspace:*",
     "react": "19.2.0",

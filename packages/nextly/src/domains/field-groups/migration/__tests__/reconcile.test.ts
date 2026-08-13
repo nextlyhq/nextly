@@ -102,6 +102,94 @@ describe("a rollback torn before its pointer update", () => {
   });
 });
 
+// A localized field group moves two physical tables on ONE entry, and MySQL
+// commits each rename as it is issued, so a crash lands between them. The entry
+// is unsatisfied while either remains, which is the right answer for the entry
+// and the wrong one for the question "what is left to do".
+describe("a localized entry torn between its two renames", () => {
+  const localized = row({ hasCompanion: true });
+  const plan = buildMigrationManifest([localized]).entries;
+
+  // The base has moved, its companion has not, and the registry has not: the
+  // first entry's rename committed while the crash took everything after it.
+  const TORN_CATALOG = [
+    "dynamic_components",
+    "fg_hero",
+    `comp_hero${STORAGE_FORMAT.companionSuffix}`,
+  ];
+
+  function reconcileTorn() {
+    return reconcilePlan({
+      entries: plan,
+      rows: [localized],
+      tables: TORN_CATALOG,
+      columns: columnsFor(TORN_CATALOG),
+      // Position 1 is `step + 1`, the commit-before-marker window the runner
+      // supports, which is what makes the moved base explicable rather than an
+      // object no recorded progress accounts for.
+      run: { recorded: true, direction: "up", step: 0 },
+      direction: "up",
+      identifierCase: PRESERVING,
+    });
+  }
+
+  it("reports only the rename that has not happened", () => {
+    const entry = reconcileTorn()[0];
+
+    expect(entry?.pendingTableRenames).toEqual([
+      {
+        from: `comp_hero${STORAGE_FORMAT.companionSuffix}`,
+        to: `fg_hero${STORAGE_FORMAT.companionSuffix}`,
+      },
+    ]);
+  });
+
+  // The separating assertion. `satisfied` is the coarser answer, and it is
+  // CORRECT for what it describes -- work remains on this entry. Anything
+  // deriving the outstanding renames from it reports the moved base as still to
+  // move, so this pins that the two answers are allowed to differ.
+  it("stays unsatisfied while its companion is outstanding", () => {
+    expect(reconcileTorn()[0]?.satisfied).toBeUndefined();
+  });
+
+  it("reports both renames before either has happened", () => {
+    const untouched = reconcilePlan({
+      entries: plan,
+      rows: [localized],
+      tables: [
+        "dynamic_components",
+        "comp_hero",
+        `comp_hero${STORAGE_FORMAT.companionSuffix}`,
+      ],
+      columns: columnsFor([
+        "dynamic_components",
+        "comp_hero",
+        `comp_hero${STORAGE_FORMAT.companionSuffix}`,
+      ]),
+      run: { recorded: false },
+      direction: "up",
+      identifierCase: PRESERVING,
+    });
+
+    expect(untouched[0]?.pendingTableRenames).toEqual([
+      { from: "comp_hero", to: "fg_hero" },
+      {
+        from: `comp_hero${STORAGE_FORMAT.companionSuffix}`,
+        to: `fg_hero${STORAGE_FORMAT.companionSuffix}`,
+      },
+    ]);
+  });
+
+  // A column entry moves no table, so an empty list is its real answer. Asserted
+  // because the alternative -- leaving it absent and falling back where it is
+  // missing -- is how the coarser derivation gets back in.
+  it("gives a column entry an empty list rather than none", () => {
+    const column = reconcileTorn().find(entry => entry.kind === "column");
+
+    expect(column?.pendingTableRenames).toEqual([]);
+  });
+});
+
 describe("field-group migration reconciliation", () => {
   const rows = [row()];
   const plan = buildMigrationManifest(rows).entries;

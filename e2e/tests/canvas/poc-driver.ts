@@ -14,8 +14,10 @@ import {
   mapFrameRectToHost,
   type FrameInset,
 } from "./coordinate-mapping";
+import { CanvasCapabilityError } from "./driver";
 import type {
   ActiveTargetReader,
+  CanvasChromeReader,
   CanvasDriver,
   CanvasFixture,
   Point,
@@ -309,6 +311,12 @@ export function createPocDriver(page: Page): CanvasDriver {
       await page.mouse.move(pointer.x, pointer.y);
     },
 
+    async pressAt(point: Point) {
+      pointer = { ...point };
+      await page.mouse.move(pointer.x, pointer.y);
+      await page.mouse.down();
+    },
+
     async moveBy(dx: number, dy: number) {
       pointer = { x: pointer.x + dx, y: pointer.y + dy };
       await page.mouse.move(pointer.x, pointer.y);
@@ -316,6 +324,15 @@ export function createPocDriver(page: Page): CanvasDriver {
 
     async drop() {
       await page.mouse.up();
+    },
+
+    async pressEscape() {
+      // Escape ALONE, with no mouse release after it. `cancel` sends both, so a
+      // test reading drag state through it cannot tell "Escape ended the drag"
+      // from "releasing the button did" — and a canvas whose Escape handler
+      // does nothing passes. Anything asserting Escape's own effect has to
+      // observe the state between the two.
+      await page.keyboard.press("Escape");
     },
 
     async cancel() {
@@ -560,3 +577,68 @@ export function createPocDriver(page: Page): CanvasDriver {
 }
 
 export { DROP_ZONES, ACTIVE_ZONE, LIBRARY_ITEM };
+
+/**
+ * What this canvas can and cannot report about its own chrome.
+ *
+ * Separate from {@link createPocDriver} because these are the readers the
+ * twelve-point acceptance suite needs, and this canvas structurally cannot
+ * answer several of them. Each refusal names the reason rather than returning a
+ * plausible value: an acceptance test that fails with "this canvas draws its
+ * indicator inside the iframe" is a target, and one that fails with `false` is
+ * indistinguishable from a broken harness.
+ */
+export function createPocChromeReader(page: Page): CanvasChromeReader {
+  return {
+    async readIndicators() {
+      // Counted in BOTH documents, because the requirement is one claim: one
+      // indicator, drawn in host chrome. A host-scoped count answers "one" for
+      // a canvas that also leaves one inside the frame.
+      const inHost = await page.locator(DROP_ZONES).count();
+      const inFrame = await page
+        .frameLocator("iframe")
+        .locator(ACTIVE_ZONE)
+        .count();
+      if (inHost === 0 && inFrame > 0) {
+        throw new CanvasCapabilityError(
+          `this canvas draws its insertion indicator inside the iframe with ` +
+            `CSS (${String(inFrame)} in the frame, none in the host), so there ` +
+            `is no host overlay whose count and owner can be reported`
+        );
+      }
+      // The TOTAL, which is what the comment above always claimed and the
+      // return never delivered. With one indicator in each document the old
+      // host-scoped count answered "one" and satisfied the requirement while
+      // two were visible on screen — the precise case a single claim about
+      // "one indicator, in host chrome" exists to refuse.
+      return { count: inHost + inFrame, host: "document" as const };
+    },
+
+    readsInvalidTarget(): Promise<boolean> {
+      throw new CanvasCapabilityError(
+        "this canvas shows nothing over an illegal target, so there is no " +
+          "invalid state to read; absence of an indicator is not a state"
+      );
+    },
+
+    canvasScrollTop(): Promise<number> {
+      throw new CanvasCapabilityError(
+        "this canvas does not autoscroll, so its scroll offset during a drag " +
+          "reports nothing about a behaviour it does not have"
+      );
+    },
+
+    startDragOfBlock(id: string): Promise<void> {
+      throw new CanvasCapabilityError(
+        `this canvas offers no drag for a block already placed in it, so ` +
+          `"${id}" cannot be picked up; only the insert panel is draggable`
+      );
+    },
+
+    undoDepth(): Promise<number> {
+      throw new CanvasCapabilityError(
+        "this canvas keeps no undo history, so there is no depth to count"
+      );
+    },
+  };
+}

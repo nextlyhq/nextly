@@ -82,6 +82,21 @@ export const FIELD_GROUP_MIGRATION_PHASE = "field-group-storage-migration";
 /** What a run did, for the caller to report. */
 export type MigrationOutcome =
   | { ran: false; reason: "already-migrated" | "nothing-to-migrate" }
+  | {
+      ran: false;
+      reason: "dry-run";
+      direction: MigrationDirection;
+      /**
+       * Every table the run would rename, in execution order, companions included.
+       *
+       * 🔴 Deliberately NOT a step count. A run also rewrites customer rows and passes settlement
+       * gates, and those outnumber the renames; reporting a number derived from renames alone
+       * would understate the work while looking authoritative, and computing a second definition
+       * of the plan's size is how it drifts from the one that executes. What a caller can rely on
+       * here is exactly what it says: the storage objects that change name.
+       */
+      renames: readonly { readonly from: string; readonly to: string }[];
+    }
   | { ran: true; direction: MigrationDirection; steps: number };
 
 export interface RunMigrationArgs {
@@ -89,6 +104,50 @@ export interface RunMigrationArgs {
   logger: Logger;
   /** `up` unless an operator is explicitly rolling back. */
   direction: MigrationDirection;
+  /**
+   * Report what the run would do without changing any content or recording any intent.
+   *
+   * 🔴 It is NOT read-only, and the difference matters to whoever runs it. Claiming the session
+   * lock creates `nextly_field_group_lock` if absent and writes an owner into it, so a dry run
+   * issues DDL on first use and fails outright for a role with read-only privileges. That is a
+   * narrower promise than "writes nothing", which is what this said before, and the honest one:
+   * no content is touched and no migration marker is recorded, but the lock is real.
+   *
+   * The lock is deliberate rather than incidental. A plan reported while another run mutates
+   * storage describes a world that no longer exists by the time it is read, and this lock refuses
+   * rather than waits, so contention surfaces as a refusal instead of a stale answer. Making the
+   * preview usable by a read-only operator means building it outside the session, which changes
+   * that guarantee rather than preserving it, and is tracked separately.
+   *
+   * Stops immediately after the plan has been reconciled against the live catalog, which is the
+   * last point before anything is recorded. That placement is the whole value: a plan reported
+   * before reconciliation describes what the manifest says rather than what this database will
+   * actually accept, and the discrepancies between those two are exactly what an operator runs a
+   * dry run to find.
+   *
+   * The session lock is still taken. A report built while another run is mutating storage
+   * describes a world that no longer exists by the time it is read, and the lock refuses rather
+   * than waits, so contention surfaces as a refusal rather than as a stale answer.
+   */
+  dryRun?: boolean;
+  /**
+   * The operator states that a restorable backup exists.
+   *
+   * Required for a run that writes, and deliberately not defaulted. This migration rewrites stored
+   * customer content, and while it is built to be resumable and reversible, neither property helps
+   * against the failures that motivate a backup — a half-applied run on a database whose disk fills,
+   * a rollback whose recorded plan was lost, an operator who discovers afterwards that the wrong
+   * database was targeted.
+   *
+   * Asked for on every environment rather than only production. The engine cannot tell them apart
+   * without reading configuration it otherwise never touches, and every guess is wrong in the
+   * direction that matters: a staging database restored from production carries the same content
+   * as production.
+   *
+   * A dry run does not require it, because a dry run writes no content and records no marker.
+   * It is not read-only — see `dryRun` — but nothing it touches is a thing a backup would restore.
+   */
+  backupConfirmed?: boolean;
 }
 
 /**
@@ -101,7 +160,35 @@ export interface RunMigrationArgs {
 export async function runFieldGroupMigration(
   args: RunMigrationArgs
 ): Promise<MigrationOutcome> {
-  const { adapter, logger, direction } = args;
+  const {
+    adapter,
+    logger,
+    direction,
+    dryRun = false,
+    backupConfirmed = false,
+  } = args;
+
+  // 🔴 A precondition, so it runs before anything else — before the catalog reads, before the
+  // lock. Placing it later would mean a refusal that has already contended for the lock and, on a
+  // resumed run, already read a marker; a caller who forgot the acknowledgement would be told so
+  // only after this had interfered with whatever else was trying to change schema.
+  //
+  // A dry run is exempt because it writes no content and records no marker, and exempting it is
+  // what makes the gate usable:
+  // the operator's first action is to see the plan, and demanding they assert a backup before they
+  // are allowed to look at what would happen teaches them to assert it without meaning it.
+  if (!dryRun && !backupConfirmed) {
+    throw NextlyError.serviceUnavailable({
+      logMessage:
+        "field-group migration refuses to run without a confirmed backup",
+      logContext: {
+        phase: FIELD_GROUP_MIGRATION_PHASE,
+        reason: "no backup acknowledgement",
+        direction,
+      },
+    });
+  }
+
   const dialect: MigrationDialect = adapter.getCapabilities().dialect;
   // Read from the server, not derived from the dialect. MySQL folds table names
   // or not depending on `lower_case_table_names`, which is configuration rather
@@ -278,6 +365,30 @@ export async function runFieldGroupMigration(
         direction,
         identifierCase,
       });
+
+      // The last point at which nothing has been written. Everything above reads: the marker, the
+      // registry, the catalog, and the reconciliation of the plan against them. Returning here
+      // reports a plan the database has already been scored against rather than one the manifest
+      // merely proposes.
+      if (dryRun) {
+        // Read from reconciliation rather than re-derived here, and that is the whole of it. The
+        // question "which renames remain" is one catalog resolution per physical table, and
+        // reconciliation has just done exactly that; asking it a second time in a second place is
+        // how the two came to disagree.
+        //
+        // What they disagreed about: a localized field group carries its `_locales` companion on
+        // the SAME entry, so an entry is unsatisfied while EITHER table remains. Filtering on that
+        // reported both when a run torn between the two had already moved the base — during a
+        // resume, which is precisely when an operator is judging whether the remaining work is
+        // safe to continue.
+        const renames = reconciled.flatMap(entry => entry.pendingTableRenames);
+        logger.info?.("field-group migration dry run", {
+          phase: FIELD_GROUP_MIGRATION_PHASE,
+          direction,
+          renames: renames.length,
+        });
+        return { ran: false, reason: "dry-run", direction, renames };
+      }
 
       // Written before the first statement, never after. A crash between a
       // rename and a post-hoc marker write would leave moved objects with no

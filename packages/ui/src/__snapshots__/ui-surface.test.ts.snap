@@ -45,13 +45,6 @@ exports[`ui public export surface > . surface is unchanged 1`] = `
   "AvatarProps (type)",
   "Badge (value)",
   "BadgeProps (type)",
-  "BreakpointAxis (type)",
-  "BreakpointDef (type)",
-  "BreakpointDialog (value)",
-  "BreakpointDialogProps (type)",
-  "BreakpointIssue (type)",
-  "BreakpointIssueCode (type)",
-  "BreakpointSet (type)",
   "Button (value)",
   "ButtonProps (type)",
   "Card (value)",
@@ -284,23 +277,6 @@ exports[`ui public export surface > . surface is unchanged 1`] = `
   "usePortalContainer (value)",
   "useShortcutManager (value)",
   "useShortcuts (value)",
-]
-`;
-
-exports[`ui public export surface > ./breakpoints surface is unchanged 1`] = `
-[
-  "BASE_BREAKPOINT_ID (value)",
-  "BREAKPOINT_AXES (value)",
-  "BreakpointAxis (type)",
-  "BreakpointDef (type)",
-  "BreakpointIssue (type)",
-  "BreakpointIssueCode (type)",
-  "BreakpointSet (type)",
-  "MAX_BREAKPOINTS_PER_AXIS (value)",
-  "inCascadeOrder (value)",
-  "isUsableWidth (value)",
-  "storedLimitFor (value)",
-  "validateBreakpoints (value)",
 ]
 `;
 

@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  BASE_BREAKPOINT_ID,
+  BASE_BREAKPOINT,
   MAX_BREAKPOINTS_PER_AXIS,
   storedLimitFor,
   validateBreakpoints,
@@ -116,7 +116,7 @@ describe("definitions the compiler drops", () => {
     expect(
       codes(
         set({
-          viewport: [{ id: BASE_BREAKPOINT_ID, label: "Base", maxWidth: 1200 }],
+          viewport: [{ id: BASE_BREAKPOINT, label: "Base", maxWidth: 1200 }],
         })
       )
     ).toEqual(["id-reserved"]);

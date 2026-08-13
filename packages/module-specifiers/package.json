@@ -1,0 +1,32 @@
+{
+  "name": "@nextlyhq/module-specifiers",
+  "version": "0.0.2-alpha.56",
+  "description": "One AST reader for the module specifiers a source file loads. Consumed only by layering guards inside this repository; exports TypeScript source and is never published or bundled.",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@nextlyhq/eslint-config": "workspace:*",
+    "@nextlyhq/tsconfig": "workspace:*",
+    "@types/node": "^20.19.17",
+    "eslint": "^9.39.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
+  }
+}
