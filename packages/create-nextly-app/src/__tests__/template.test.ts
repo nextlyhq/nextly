@@ -25,6 +25,7 @@ vi.mock("fs-extra", () => ({
     readFile: vi.fn(),
     readdir: vi.fn(),
     remove: vi.fn(),
+    move: vi.fn(),
     ensureDir: vi.fn(),
   },
 }));
@@ -153,9 +154,11 @@ describe("generatePackageJson", () => {
   it("should include Next.js scripts", async () => {
     const result = JSON.parse(await generatePackageJson("test", pgDatabase));
     expect(result.scripts.dev).toBe("next dev --turbopack");
-    expect(result.scripts.build).toBe(
-      "nextly migrate && next build && (test -f scripts/build-search-index.mjs && node scripts/build-search-index.mjs || true)"
-    );
+    // No search-index step, and no `search:index`, because no template directory was passed —
+    // so the generator saw a scaffold that does not receive the Pagefind builder. A template
+    // that does ship it is covered in template-search-index.test.ts, against a real tree.
+    expect(result.scripts.build).toBe("nextly migrate && next build");
+    expect(result.scripts["search:index"]).toBeUndefined();
     expect(result.scripts.start).toBe("next start");
     expect(result.scripts.lint).toBe("next lint");
   });
