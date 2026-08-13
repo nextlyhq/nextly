@@ -248,11 +248,16 @@ export class FieldGroupMetadataService {
         adapter: this.adapter,
         logger: this.logger,
         label: `update field group "${input.slug}"`,
-        // A metadata-only edit issues none, but that is not known until the stored fields have been
-        // read — which happens inside. Claiming otherwise here would decide the question from the
-        // request shape, and a request that only toggles `localized` carries no fields while moving
-        // every translatable column.
-        issuesDdl: true,
+        // 🔴 Derived from the request, CONSERVATIVELY, because claiming DDL is not free: the
+        // exclusion may create and seed its lock table, and a deployment whose role holds DML but
+        // not DDL then fails an otherwise valid metadata edit on that `CREATE TABLE`.
+        //
+        // `fields` or `localized` being PRESENT is the conservative test, not whether they turn out
+        // to differ from what is stored. A `localized` toggle carries no fields while moving every
+        // translatable column, so reading the request for "does this touch schema" has to treat the
+        // key's presence as a yes — the comparison that would say otherwise needs the stored row,
+        // which cannot be read before deciding whether to take the lock that protects reading it.
+        issuesDdl: input.fields !== undefined || input.localized !== undefined,
       },
       () => this.updateFieldGroupExcluded(input)
     );
@@ -375,6 +380,16 @@ export class FieldGroupMetadataService {
       resolveComponentTypeColumn,
     } = await import("./field-group-table-provisioning");
 
+    // 🔴 Probed BEFORE the transition, which is the helper's own documented contract. Resolving it
+    // afterwards means a probe that cannot answer rejects the request with the physical move
+    // already committed — an enable that dropped the main table's columns while the registry still
+    // records the group as non-localized. The discriminator is unaffected by the transition, so
+    // asking first is equivalent and fails while nothing has moved.
+    const typeColumn = await resolveComponentTypeColumn(
+      adapter,
+      args.existing.tableName
+    );
+
     await reconcileComponentCompanion({
       slug: args.existing.slug,
       tableName: args.existing.tableName,
@@ -393,7 +408,7 @@ export class FieldGroupMetadataService {
       // PROBED, not the constant: unlike the create path this table already exists and the storage
       // migration may have moved it, so which discriminator column it carries is a fact about the
       // database rather than something this code can infer from its own version.
-      await resolveComponentTypeColumn(adapter, args.existing.tableName),
+      typeColumn,
       args.localized
     );
   }

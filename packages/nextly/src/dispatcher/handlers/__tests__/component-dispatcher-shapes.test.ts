@@ -250,6 +250,35 @@ describe("dispatchComponents, mutations (respondMutation)", () => {
     ];
     expect(Object.keys(patch)).toEqual(["description"]);
   });
+
+  // 🔴 The body is a type ASSERTION over whatever JSON arrived, so a non-boolean survives it. The
+  // string "false" is truthy, which would take the ENABLED branch and drop the main table's
+  // translatable columns — while the registry, which stores `localized === true`, recorded the
+  // group DISABLED. Refusing is the only outcome that keeps those two agreeing.
+  it("updateComponent refuses a non-boolean localized rather than acting on it", async () => {
+    const existing = {
+      slug: "hero",
+      tableName: "comp_hero",
+      fields: [],
+      localized: false,
+      migrationStatus: "applied" as const,
+    };
+    const registry = makeRegistry({
+      isLocked: vi.fn().mockResolvedValue(false),
+      getComponent: vi.fn().mockResolvedValue(existing),
+      updateComponent: vi.fn().mockResolvedValue(existing),
+    });
+    wireRegistry(registry);
+
+    await expect(
+      dispatchComponents("updateComponent", { slug: "hero" }, {
+        localized: "false",
+      } as unknown as Record<string, unknown>)
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    // Nothing was written: the refusal has to happen before the row moves, not after.
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
 });
 
 describe("dispatchComponents, actions (respondAction)", () => {

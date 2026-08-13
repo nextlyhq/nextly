@@ -62,6 +62,7 @@ import {
   getFieldGroupMetadataServiceFromDI,
   getMigrationJournalFromDI,
 } from "../helpers/di";
+import { readRequestLocalized } from "../helpers/request-localized";
 import { requireParam, toNumber } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
@@ -248,7 +249,12 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         description: b?.description,
         admin: b?.admin,
         fields: b?.fields as unknown as FieldDefinition[] | undefined,
-        localized: b?.localized,
+        // 🔴 Read through the shared helper, never off the cast body. `b` is a type assertion over
+        // whatever JSON arrived, so `localized: "false"` survives it as a truthy string: the
+        // transition would take the ENABLED branch and drop the main table's translatable columns
+        // while the registry, which stores `data.localized === true`, recorded the group disabled.
+        // The collection and single dispatchers already read it this way.
+        localized: readRequestLocalized(b),
         source: "ui",
       });
 
