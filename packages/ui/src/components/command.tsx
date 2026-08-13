@@ -1,7 +1,7 @@
 "use client";
 
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { Command as CommandPrimitive } from "cmdk";
+import { Command as CommandPrimitive, defaultFilter } from "cmdk";
 import { Search } from "lucide-react";
 import type {
   ElementRef,
@@ -87,6 +87,18 @@ export interface CommandDialogProps extends DialogPrimitive.DialogProps {
    * `children` is excluded because this component owns the dialog's contents.
    */
   commandProps?: Omit<ComponentPropsWithoutRef<typeof Command>, "children">;
+  /**
+   * Passed to the dialog content this component renders internally.
+   *
+   * The seam that matters here is `onCloseAutoFocus`: this dialog has no trigger, so Radix has
+   * nothing to hand focus back to, and it fires this at the point focus is actually being
+   * returned — after the exit animation, which a timer set at close time cannot know the length
+   * of. `className` is excluded because this component owns the dialog's own layout.
+   */
+  contentProps?: Omit<
+    ComponentPropsWithoutRef<typeof DialogPrimitive.Content>,
+    "children" | "className"
+  >;
 }
 
 /**
@@ -147,6 +159,7 @@ CommandDialogOverlay.displayName = "CommandDialogOverlay";
 const CommandDialog = ({
   children,
   commandProps,
+  contentProps,
   ...props
 }: CommandDialogProps) => {
   const portalContainer = usePortalContainer();
@@ -156,6 +169,7 @@ const CommandDialog = ({
       <DialogPrimitive.Portal container={portalContainer}>
         <CommandDialogOverlay />
         <DialogPrimitive.Content
+          {...contentProps}
           data-slot="command-content"
           className={cn(
             // Position
@@ -425,3 +439,14 @@ export {
   CommandSeparator,
   CommandShortcut,
 };
+
+/**
+ * The command palette's default match scorer, re-exported.
+ *
+ * A caller that overrides `filter` — to keep an opaque item value out of the scoring, say — still
+ * wants the ranking that comes for free, and reaching for `cmdk` directly is not open to every
+ * package here.
+ *
+ * @experimental
+ */
+export { defaultFilter as commandDefaultFilter };

@@ -32,6 +32,7 @@ import {
   CommandShortcut,
   DialogDescription,
   DialogTitle,
+  commandDefaultFilter,
   ShortcutScope,
   useShortcuts,
 } from "@nextlyhq/ui";
@@ -231,52 +232,39 @@ function PaletteSurface({
     [isControlled, onOpenChange]
   );
 
+  // Recorded on the open TRANSITION, in a layout effect so it happens before Radix moves focus
+  // into the dialog. The transition rather than `setOpen`, because a controlling host opens the
+  // palette by flipping `open` and never calls it.
   const wasOpen = React.useRef(false);
-  // Keyed on the actual open/close TRANSITION, and a layout effect so the capture happens before
-  // Radix moves focus into the dialog.
-  //
-  // The transition rather than `setOpen`, because a controlling host opens the palette by
-  // flipping `open` and never calls it — capturing there left the origin empty for exactly the
-  // case the controlled props exist to serve. And the transition rather than every closed render,
-  // because focusing a control does not re-render anything: measured, that version captured
-  // `<body>` from the first render and never saw the button the user was actually on.
   React.useLayoutEffect(() => {
     const opening = !wasOpen.current && open;
-    const closing = wasOpen.current && !open;
     wasOpen.current = open;
+    if (!opening) return;
+    // Any focusable ELEMENT. An `<svg tabindex="0">` becomes `activeElement` and is not an
+    // `HTMLElement`, so narrowing here discards a legitimate origin.
+    openedFrom.current = document.activeElement;
+  }, [open]);
 
-    if (opening) {
-      // Any focusable ELEMENT. An `<svg tabindex="0">` becomes `activeElement` and is not an
-      // `HTMLElement`, so narrowing to one here silently discarded a legitimate origin and left
-      // focus on `<body>`. Whether it can be focused is asked at restore time.
-      openedFrom.current = document.activeElement;
-      return;
-    }
-    if (!closing) return;
-
+  // Radix fires this when it is actually returning focus, which is AFTER the exit animation. A
+  // timer started at close time cannot know that duration — measured against this dialog's
+  // 200ms `animate-out`, the search input is still connected when a zero-delay callback runs, so
+  // focus looks settled, nothing is restored, and it lands on `<body>` once the animation ends.
+  //
+  // Radix's own default is to focus the trigger; this dialog is opened by a keystroke and has
+  // none, so the default resolves to nothing and the event is prevented in favour of the origin.
+  const handleCloseAutoFocus = React.useCallback((event: Event) => {
     const target = openedFrom.current;
     openedFrom.current = null;
-    if (!target) return;
-
-    // Deferred by a task rather than run here, for two reasons. Radix is still unwinding its
-    // focus trap at this point — the search input is measurably still focused and still connected
-    // — so restoring now would be overwritten a moment later by the trap's own final move. And a
-    // chosen command runs after the close, so by the time this fires the DOM already answers
-    // whether the command established focus: if it did, `strayed` is false and nothing is taken
-    // back from it. That is the whole suppression rule, so no separate flag records the intent.
-    const restore = setTimeout(() => {
-      const active = document.activeElement;
-      const strayed =
-        !active || active === document.body || !active.isConnected;
-      // `focus` is on the `HTMLOrSVGElement` mixin rather than on `Element`, so it is asked for
-      // rather than assumed — a focusable element that cannot be re-focused is left alone.
-      const refocus = (target as Partial<HTMLOrSVGElement>).focus;
-      if (target.isConnected && strayed && typeof refocus === "function") {
-        refocus.call(target);
-      }
-    }, 0);
-    return () => clearTimeout(restore);
-  }, [open]);
+    if (!target?.isConnected) return;
+    // `focus` is on the `HTMLOrSVGElement` mixin rather than on `Element`.
+    const refocus = (target as Partial<HTMLOrSVGElement>).focus;
+    if (typeof refocus !== "function") return;
+    // Only once nothing else has claimed focus — a command that moved it deliberately wins.
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    event.preventDefault();
+    refocus.call(target);
+  }, []);
 
   // Cleared when the palette shuts, so a stale search never greets the next opening.
   React.useEffect(() => {
@@ -322,7 +310,12 @@ function PaletteSurface({
   // a group and leaves the groups in their own order, so a better match in a later group would
   // otherwise sit below a weaker one. Headings are what the groups are for, and they say nothing
   // useful about a set of search results.
-  const searching = search.trim().length > 0;
+  // ONE normalised query for both the mode and cmdk. Trimming here while handing cmdk the raw
+  // string meant a whitespace-only input rendered the grouped view while cmdk was already
+  // filtering and hiding separators — two components disagreeing about whether a search is
+  // running.
+  const query = search.trim();
+  const searching = query.length > 0;
   // Grouped FIRST, then flattened. Filtering `commands` again along a second path would be a
   // second answer to "is this command available", and the two would agree only until someone
   // changed one — silently offering a different set while the user is searching, which is the
@@ -353,7 +346,17 @@ function PaletteSurface({
       // input's `aria-labelledby` at it, so leaving this unset produces an EMPTY label — an
       // explicit reference to nothing, which stops the placeholder naming the field and leaves
       // screen-reader users on an unlabelled search control.
-      commandProps={{ label: "Command palette" }}
+      commandProps={{
+        label: "Command palette",
+        // Scores the LABEL and synonyms only. cmdk's default scores an item's value too, and the
+        // value here is an encoded id — opaque fragments would surface unrelated commands, and
+        // every encoded id begins and ends with a quote, so a query containing one matched
+        // everything. The default scorer still does the ranking; it is just given the words a
+        // user is actually typing towards.
+        filter: (_value, search, keywords) =>
+          commandDefaultFilter(keywords?.join(" ") ?? "", search),
+      }}
+      contentProps={{ onCloseAutoFocus: handleCloseAutoFocus }}
     >
       {/*
        * Visually hidden, but the dialog's accessible name and description all the same:
@@ -367,7 +370,7 @@ function PaletteSurface({
       </DialogDescription>
       <CommandInput
         placeholder={placeholder}
-        value={search}
+        value={query}
         onValueChange={setSearch}
       />
       <CommandList>

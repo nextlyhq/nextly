@@ -336,6 +336,7 @@ export {
   CommandEmpty,
   CommandGroup,
   CommandItem,
+  commandDefaultFilter,
   CommandSeparator,
   CommandShortcut,
 } from "./components/command";

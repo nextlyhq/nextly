@@ -551,6 +551,49 @@ describe("the host can drive it", () => {
     expect(searching).toBeLessThanOrEqual(notSearching);
   });
 
+  it("does not match every command on a character from the encoded id", () => {
+    mount(
+      <CommandPalette
+        commands={[
+          { id: "one", label: "Alpha", run: noop },
+          { id: "two", label: "Beta", run: noop },
+        ]}
+        emptyMessage="Nothing to run."
+      />
+    );
+    pressPaletteKey();
+
+    // Every encoded id begins and ends with a quote, and cmdk's default filter scores the item
+    // VALUE as well as its keywords — so a query of `"` matched all of them. The palette scores
+    // the label and synonyms only.
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: '"' } });
+
+    expect(screen.queryByText("Alpha")).toBeNull();
+    expect(screen.queryByText("Beta")).toBeNull();
+    expect(screen.getByText("Nothing to run.")).toBeTruthy();
+  });
+
+  it("treats a whitespace-only query as no search at all", () => {
+    mount(
+      <CommandPalette
+        commands={[
+          { id: "1", label: "Only entry", group: "Panels", run: noop },
+        ]}
+      />
+    );
+    pressPaletteKey();
+
+    // The mode decision and cmdk's filter input have to agree. Trimming for the mode while
+    // handing cmdk the raw string left the palette rendering its grouped view while cmdk was
+    // already filtering, which hid the entries.
+    fireEvent.change(screen.getByRole("combobox"), {
+      target: { value: "   " },
+    });
+
+    expect(screen.getByText("Only entry")).toBeTruthy();
+    expect(screen.getByText("Panels")).toBeTruthy();
+  });
+
   it("names the search field, not just the dialog", () => {
     mount(<CommandPalette commands={[]} />);
     pressPaletteKey();
