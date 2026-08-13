@@ -39,12 +39,7 @@ const plugins: PluginMetadata[] = [
     enabled: false,
     placement: "plugins",
     collections: ["retained"],
-    whenEnabled: {
-      permissions: [
-        { action: "purge", resource: "archive", label: "Purge Archive" },
-      ],
-      routes: [{ method: "DELETE", path: "/archive" }],
-    },
+    whenEnabled: { routes: [{ method: "DELETE", path: "/archive" }] },
   },
 ];
 
@@ -138,7 +133,7 @@ describe("PluginDetailPage", () => {
     expect(screen.getByText("danger")).toBeInTheDocument();
     // Route summary includes the namespaced final URL.
     expect(
-      screen.getByText("GET /api/plugins/acme-forms/submissions/export")
+      screen.getByText("GET /api/plugins/@acme/forms/submissions/export")
     ).toBeInTheDocument();
   });
 
@@ -175,24 +170,25 @@ describe("PluginDetailPage", () => {
 });
 
 /**
- * A disabled plugin grants nothing and mounts nothing, so what it WOULD add is
- * a different claim from what it adds. These pin that the two are shown as
- * different things rather than merged into one list.
+ * A disabled plugin serves no routes, so what it WOULD serve is a different
+ * claim from what it serves. These pin that the two are shown as different
+ * things rather than merged into one list.
  */
 describe("PluginDetailPage dormant disclosure", () => {
-  it("shows a disabled plugin's declarations under their own heading", () => {
+  it("shows a disabled plugin's routes under their own heading", () => {
     render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
 
-    expect(screen.getByText("Would add when enabled")).toBeInTheDocument();
-    expect(screen.getByText("Purge Archive")).toBeInTheDocument();
+    expect(screen.getByText("Would serve when enabled")).toBeInTheDocument();
+    // The RAW package name, which is the namespace the dispatcher registers —
+    // not the admin slug, which is only how this UI addresses the plugin.
     expect(
-      screen.getByText("DELETE /api/plugins/acme-disabled/archive")
+      screen.getByText("DELETE /api/plugins/@acme/disabled/archive")
     ).toBeInTheDocument();
   });
 
   /**
-   * The separating assertion. The active section must NOT claim them — a
-   * merged list would render the same strings and pass the test above.
+   * The separating assertion. A merged list would render the same string and
+   * pass a presence-only check.
    */
   it("keeps them out of what the plugin currently adds", () => {
     render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
@@ -201,16 +197,28 @@ describe("PluginDetailPage dormant disclosure", () => {
       .getByText("What this plugin adds")
       .closest("section");
     expect(contributions).not.toBeNull();
-    expect(within(contributions!).queryByText("Purge Archive")).toBeNull();
-    expect(within(contributions!).queryByText("Permissions")).toBeNull();
+    expect(within(contributions!).queryByText("API routes")).toBeNull();
   });
 
   it("shows no dormant section for an enabled plugin", () => {
     render(<PluginDetailPage params={{ slug: "acme-forms" }} />);
 
-    // The enabled fixture declares permissions and routes, so this asserts the
-    // section is withheld rather than that there was nothing to show.
-    expect(screen.getByText("Permissions")).toBeInTheDocument();
-    expect(screen.queryByText("Would add when enabled")).toBeNull();
+    // The enabled fixture declares a route, so this asserts the section is
+    // withheld rather than that there was nothing to show.
+    expect(screen.getByText("API routes")).toBeInTheDocument();
+    expect(screen.queryByText("Would serve when enabled")).toBeNull();
+  });
+
+  /**
+   * The active section names the same namespace. A scoped package is served at
+   * its raw name, so a slug-derived path here would be wrong for every plugin
+   * whose name has a scope — which is all three first-party ones.
+   */
+  it("names the dispatcher's namespace for an enabled plugin's routes", () => {
+    render(<PluginDetailPage params={{ slug: "acme-forms" }} />);
+
+    expect(
+      screen.getByText("GET /api/plugins/@acme/forms/submissions/export")
+    ).toBeInTheDocument();
   });
 });

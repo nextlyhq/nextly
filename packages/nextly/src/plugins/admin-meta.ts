@@ -92,29 +92,25 @@ export interface PluginAdminMeta {
    */
   routes?: Array<{ method: string; path: string }>;
   /**
-   * What a DISABLED plugin declares but does not currently have.
+   * The routes a DISABLED plugin declares but does not currently serve.
    *
-   * Its own branch rather than entries in `permissions` and `routes`, and the
-   * separation is the point: those two mean "this plugin has these now", and a
-   * disabled plugin has none of them — its routes are not mounted and its
-   * permissions grant nothing. A reader deciding whether to enable it still
-   * needs to see what doing so would add, which is a different question with a
-   * different answer.
+   * Routes only, and the omission of permissions is deliberate. Routes are the
+   * asymmetric half: `collectPluginRoutes` covers enabled plugins only, so a
+   * disabled plugin serves none. Permissions are folded over ALL plugins
+   * including disabled ones, seeded, and assigned — so a disabled plugin's
+   * permissions already exist, and listing them here would claim they are
+   * pending when they are not.
    *
-   * Populated only when the plugin is disabled, so this and the active fields
-   * above are never both present. Nothing may concatenate them: a caller that
-   * did would be claiming a disabled plugin grants permissions it does not.
+   * Populated only when the plugin is disabled, so this and `routes` above are
+   * never both present. Nothing may concatenate them: a caller that did would
+   * be claiming a disabled plugin serves endpoints it does not.
+   *
+   * Only routes that could actually mount appear. A path without a leading
+   * slash makes `collectPluginRoutes` throw at boot once the plugin is
+   * enabled, so presenting it as something enabling would add is a promise
+   * this cannot keep.
    */
-  whenEnabled?: {
-    permissions?: Array<{
-      action: string;
-      resource: string;
-      label?: string;
-      description?: string;
-      danger?: boolean;
-    }>;
-    routes?: Array<{ method: string; path: string }>;
-  };
+  whenEnabled?: { routes?: PluginAdminMeta["routes"] };
   /** Sidebar menu items — present only for enabled plugins. */
   menu?: PluginMenuItem[];
   /** Custom admin pages — present only for enabled plugins. */
@@ -183,39 +179,31 @@ export { pluginAdminSlug } from "./plugin-slug";
  * applies) but contribute NO behavioral admin UI — no menu/pages/settings.
  */
 /**
- * The permissions and routes a plugin DECLARES, shaped for serialization.
+ * The routes a plugin declares that could actually mount, shaped for
+ * serialization.
  *
- * Shared by the enabled and disabled branches so the two describe the same
- * contributions identically — the only difference between them is the name
- * they travel under, and that difference is the whole disclosure. Two shapers
- * would let the dormant view drift into showing a different set from the
- * active one.
+ * The leading-slash rule is `collectPluginRoutes`'s, restated here rather than
+ * shared because that function THROWS on a violation while this one is
+ * describing a plugin whose routes have not been collected yet — the disabled
+ * plugin is precisely the one whose declarations were never validated. Keeping
+ * the rule in step matters: a route this admits and that one rejects is a
+ * route the admin promised and boot refuses.
  *
- * `undefined` when the plugin declares neither, so a caller renders nothing
- * rather than an empty section.
+ * `undefined` when nothing survives, so a caller renders nothing rather than
+ * an empty section.
  */
-function declaredSurface(
+function mountableRoutes(
   plugin: PluginDefinition
-): NonNullable<PluginAdminMeta["whenEnabled"]> | undefined {
-  const surface: NonNullable<PluginAdminMeta["whenEnabled"]> = {};
-
-  const permissions = plugin.contributes?.permissions;
-  if (permissions && permissions.length > 0) {
-    surface.permissions = permissions.map(p => ({
-      action: p.action,
-      resource: p.resource,
-      ...(p.label ? { label: p.label } : {}),
-      ...(p.description ? { description: p.description } : {}),
-      ...(p.danger ? { danger: p.danger } : {}),
-    }));
-  }
-
+): PluginAdminMeta["routes"] | undefined {
   const routes = plugin.contributes?.routes;
-  if (routes && routes.length > 0) {
-    surface.routes = routes.map(r => ({ method: r.method, path: r.path }));
-  }
+  if (!routes || routes.length === 0) return undefined;
 
-  return surface.permissions || surface.routes ? surface : undefined;
+  // Method + path only: handlers/middleware are code and never serialize.
+  const shaped = routes
+    .filter(r => r.path.startsWith("/"))
+    .map(r => ({ method: r.method, path: r.path }));
+
+  return shaped.length > 0 ? shaped : undefined;
 }
 
 export function buildPluginAdminMeta(
@@ -323,16 +311,28 @@ export function buildPluginAdminMeta(
     // Behavioral contributions summarized for the detail page, enabled only:
     // a disabled plugin's routes are not mounted and its permissions grant
     // nothing, so listing them would overstate what the install does.
-    // One shaper, two destinations. Which name the declarations travel under
-    // is the entire difference between "this plugin grants these" and "this
-    // plugin would grant these", and an `if/else` is what stops both being
-    // true at once.
-    const declared = declaredSurface(plugin);
+    // One shaper, two destinations. Which name the routes travel under is the
+    // difference between "this plugin serves these" and "enabling it would
+    // serve these", and an `if/else` is what stops both being true at once.
+    //
+    // Permissions are NOT part of this: they are folded over every plugin,
+    // disabled included, so they are already seeded and are not pending on
+    // anything. Only their listing here is withheld while disabled.
+    const declaredRoutes = mountableRoutes(plugin);
     if (isEnabled) {
-      if (declared?.permissions) meta.permissions = declared.permissions;
-      if (declared?.routes) meta.routes = declared.routes;
-    } else if (declared) {
-      meta.whenEnabled = declared;
+      if (declaredRoutes) meta.routes = declaredRoutes;
+      const permissions = plugin.contributes?.permissions;
+      if (permissions && permissions.length > 0) {
+        meta.permissions = permissions.map(p => ({
+          action: p.action,
+          resource: p.resource,
+          ...(p.label ? { label: p.label } : {}),
+          ...(p.description ? { description: p.description } : {}),
+          ...(p.danger ? { danger: p.danger } : {}),
+        }));
+      }
+    } else if (declaredRoutes) {
+      meta.whenEnabled = { routes: declaredRoutes };
     }
 
     // Custom field types — serialized regardless of enabled state so the
