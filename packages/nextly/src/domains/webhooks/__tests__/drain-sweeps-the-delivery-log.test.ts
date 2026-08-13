@@ -1,0 +1,159 @@
+/**
+ * The scheduled drain is the delivery log's only trigger that outlives writing.
+ *
+ * Every other one is a write — a send, or a content mutation. So an install
+ * that stops writing offers no pass at all, and the rows from its final sends
+ * stay indefinitely under a window that reads as bounded. That is the whole
+ * failure this pass exists to close, and it is invisible from the
+ * configuration: the setting says 90 days and the table says forever.
+ *
+ * The budget is the second half. Nothing waits on a drain, which is what makes
+ * it the right place to spend a FULL prune budget — every other trigger passes
+ * a small cap so a save is not held up. But the drain also makes a wall-clock
+ * promise to a serverless cron route, so a pass that starts with the budget
+ * already spent must hand its turn back rather than consume the interval.
+ */
+
+import { describe, expect, it, vi } from "vitest";
+
+import { resolveAuditRetentionConfig } from "../../audit/retention-config";
+import { resolveEmailRetentionConfig } from "../../email/retention-config";
+import {
+  EMAIL_RETENTION_GATE_KEY,
+  type RetentionGateStore,
+} from "../../retention/gate";
+import { runDrain } from "../run-drain";
+
+/** A database with no events and no deliveries due, so only retention runs. */
+function idleDb(): never {
+  return {
+    select: async () => [],
+    update: async () => [],
+    insert: async () => [],
+    delete: async () => 0,
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(undefined),
+  } as never;
+}
+
+/** A drain with nothing to deliver, so only the retention block runs. */
+function quietDrain(
+  retention: Parameters<typeof runDrain>[0]["retention"],
+  maxDurationMs?: number
+): ReturnType<typeof runDrain> {
+  return runDrain({
+    fanOut: { db: idleDb(), loadEndpoints: async () => [] } as never,
+    deliver: { db: idleDb(), now: () => new Date(0) } as never,
+    maxDurationMs,
+    retention,
+  });
+}
+
+function gateThatGrants(claimed: string[]): RetentionGateStore {
+  return {
+    claim: async (key: string) => {
+      claimed.push(key);
+      return true;
+    },
+    release: async () => undefined,
+  };
+}
+
+describe("the scheduled drain and the delivery log", () => {
+  it("claims the email turn and sweeps", async () => {
+    const claimed: string[] = [];
+    const select = vi.fn(async () => []);
+
+    const result = await quietDrain({
+      emailPolicy: resolveEmailRetentionConfig({ maxAgeMs: 1000 }),
+      prune: {
+        adapter: { select, delete: async () => 0 },
+      } as never,
+      gate: gateThatGrants(claimed),
+    });
+
+    expect(claimed).toContain(EMAIL_RETENTION_GATE_KEY);
+    // Reached the table, rather than merely taking the turn. A pass that
+    // claimed its gate and queried nothing would still leave the log growing
+    // while the marker held the next attempt off for a full interval.
+    expect(select).toHaveBeenCalled();
+    expect(result.pruned.emailDeliveries).toBe(0);
+  });
+
+  it("runs even when webhook and audit retention are both off", async () => {
+    // The dependency used to be built only when a webhook or audit policy
+    // existed. An install that configured neither — plenty do — got no drain
+    // retention object at all, so the delivery log's one scheduled trigger was
+    // decided by two unrelated settings.
+    const claimed: string[] = [];
+
+    await quietDrain({
+      emailPolicy: resolveEmailRetentionConfig(),
+      prune: {
+        adapter: { select: async () => [], delete: async () => 0 },
+      } as never,
+      gate: gateThatGrants(claimed),
+    });
+
+    expect(claimed).toContain(EMAIL_RETENTION_GATE_KEY);
+  });
+
+  it("does not claim a turn for a log configured to keep everything", async () => {
+    // The control. A pass that claimed regardless would write the marker and
+    // hold off the next attempt for a full interval, having decided nothing.
+    const claimed: string[] = [];
+
+    await quietDrain({
+      emailPolicy: resolveEmailRetentionConfig({ maxAgeMs: false }),
+      prune: {
+        adapter: { select: async () => [], delete: async () => 0 },
+      } as never,
+      gate: gateThatGrants(claimed),
+    });
+
+    expect(claimed).not.toContain(EMAIL_RETENTION_GATE_KEY);
+  });
+
+  it("does not consume the interval when the wall-clock budget is spent", async () => {
+    // The drain's promise to a serverless cron route. What matters is that the
+    // interval is not spent on a pass that did no work — reached either by not
+    // claiming the turn or by handing it back, and the caller cannot tell the
+    // two apart. Asserting the outcome rather than the route keeps this true if
+    // the ordering of the claim and the deadline check ever changes.
+    const claimed: string[] = [];
+    const released: string[] = [];
+    const select = vi.fn(async () => []);
+    let ticks = 0;
+
+    await runDrain({
+      fanOut: { db: idleDb(), loadEndpoints: async () => [] } as never,
+      deliver: {
+        db: idleDb(),
+        // First reading starts the clock; every later one is past the budget.
+        now: () => new Date(ticks++ === 0 ? 0 : 10_000),
+      } as never,
+      maxDurationMs: 1,
+      retention: {
+        emailPolicy: resolveEmailRetentionConfig({ maxAgeMs: 1000 }),
+        auditPolicy: resolveAuditRetentionConfig({}),
+        prune: { adapter: { select, delete: async () => 0 } } as never,
+        gate: {
+          claim: async (key: string) => {
+            claimed.push(key);
+            return true;
+          },
+          release: async (key: string) => {
+            released.push(key);
+          },
+        },
+      },
+    });
+
+    // No work done, and no turn held: either it was never taken, or it was
+    // given back.
+    expect(select).not.toHaveBeenCalled();
+    const held =
+      claimed.filter(k => k === EMAIL_RETENTION_GATE_KEY).length -
+      released.filter(k => k === EMAIL_RETENTION_GATE_KEY).length;
+    expect(held).toBe(0);
+  });
+});

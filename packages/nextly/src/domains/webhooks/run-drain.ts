@@ -13,6 +13,11 @@
 import { deliverDueDeliveries, type DeliverDeps } from "./deliver";
 import { fanOutDueEvents, type FanOutDeps } from "./fan-out";
 import { pruneAuditDataSafely } from "../audit/prune";
+import { pruneEmailDataSafely } from "../email/prune";
+import {
+  activeEmailRetention,
+  type ResolvedEmailRetentionConfig,
+} from "../email/retention-config";
 import {
   activeAuditRetention,
   type ResolvedAuditRetentionConfig,
@@ -24,6 +29,7 @@ import {
   releaseRetentionPass,
   type RetentionGateStore,
   AUDIT_RETENTION_DRAIN_GATE_KEY,
+  EMAIL_RETENTION_GATE_KEY,
   WEBHOOK_RETENTION_GATE_KEY,
 } from "../../domains/retention/gate";
 
@@ -59,6 +65,17 @@ export interface RunDrainDeps {
     policy?: ResolvedWebhookRetentionConfig;
     /** Absent when the audit trails are configured to keep everything. */
     auditPolicy?: ResolvedAuditRetentionConfig;
+    /**
+     * Absent when no delivery-log policy was carried.
+     *
+     * Present here for the reason the audit policy is, and more urgently. Every
+     * other trigger for the delivery log is a WRITE — a send, or a content
+     * mutation — so an install that has gone quiet offers no pass at all, and
+     * the rows from its final sends stay indefinitely under a window that reads
+     * as bounded. A scheduled drain is the one trigger that keeps running when
+     * nothing else does.
+     */
+    emailPolicy?: ResolvedEmailRetentionConfig;
     prune: PruneDeps;
     gate: RetentionGateStore;
   };
@@ -85,6 +102,8 @@ export interface RunDrainResult {
     /** Rows removed from the activity and auth trails on this call. */
     activity: number;
     auth: number;
+    /** Rows removed from the email delivery log on this call. */
+    emailDeliveries: number;
   };
 }
 
@@ -96,20 +115,29 @@ export interface RunDrainResult {
  * left for a later drain — this returns once nothing is immediately actionable.
  */
 /**
- * Half of whatever time is left, as an absolute moment.
+ * An equal share of whatever time is left, as an absolute moment.
  *
- * Used to bound the first of two passes so the second is reachable. A fixed
+ * Used to bound a pass so the ones after it are still reachable. A fixed
  * reserve would be a constant to tune per deployment; a share of the remainder
- * adapts to how much the call has already spent, and leaves the later pass a
+ * adapts to how much the call has already spent, and leaves the later passes a
  * meaningful slice whatever that was.
+ *
+ * `ways` counts this pass PLUS the passes that will actually follow, and the
+ * distinction matters: reserving for a pass that will not run leaves the
+ * unclaimable share unused until the next interval, so a ledger needing more
+ * than its share per interval would grow while time sat idle. Callers pass the
+ * number of turns they have already CLAIMED, not the number they might want.
  */
-function halfOfRemaining(
+function shareOfRemaining(
   deadline: Date | undefined,
-  now: () => Date
+  now: () => Date,
+  ways: number
 ): Date | undefined {
-  if (!deadline) return undefined;
+  if (!deadline || ways <= 1) return deadline;
   const remaining = deadline.getTime() - now().getTime();
-  return remaining <= 0 ? deadline : new Date(now().getTime() + remaining / 2);
+  return remaining <= 0
+    ? deadline
+    : new Date(now().getTime() + remaining / ways);
 }
 
 export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
@@ -131,7 +159,13 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
     retried: 0,
     failed: 0,
     abandoned: 0,
-    pruned: { events: 0, deliveries: 0, activity: 0, auth: 0 },
+    pruned: {
+      events: 0,
+      deliveries: 0,
+      activity: 0,
+      auth: 0,
+      emailDeliveries: 0,
+    },
   };
 
   for (let round = 0; round < maxRounds; round += 1) {
@@ -197,6 +231,26 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
           )
         : false;
 
+    // Claimed here too, and for the same reason: the webhook sweep below has to
+    // know how many passes will actually follow before it decides how much of
+    // the remaining time it may spend.
+    const emailPolicy = activeEmailRetention(retention.emailPolicy);
+    const emailPrunes =
+      emailPolicy !== undefined && emailPolicy.maxAgeMs !== false;
+    const emailTurn =
+      emailPrunes && !deadlineSpent()
+        ? await claimRetentionPass(
+            retention.gate,
+            EMAIL_RETENTION_GATE_KEY,
+            emailPolicy!.intervalMs
+          )
+        : false;
+
+    // This pass plus the ones already claimed. Counting CLAIMED turns rather
+    // than configured policies is what stops a reserve being set aside for a
+    // pass that will not run.
+    const ways = 1 + (auditTurn ? 1 : 0) + (emailTurn ? 1 : 0);
+
     const webhookPolicy = retention.policy;
     if (webhookPolicy && !deadlineSpent()) {
       const due = await claimRetentionPass(
@@ -225,7 +279,7 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
             // for a sweep that will not run leaves the unclaimable half unused
             // until the next interval, so a ledger needing more than half a
             // budget per interval would grow while time sat idle.
-            deadline: auditTurn ? halfOfRemaining(deadline, now) : deadline,
+            deadline: shareOfRemaining(deadline, now, ways),
           },
           webhookPolicy
         );
@@ -266,6 +320,30 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
         );
         result.pruned.activity = trails.activity;
         result.pruned.auth = trails.auth;
+      }
+    }
+
+    // The delivery log, at its full batch budget for the same reason the audit
+    // trails get theirs here: every other trigger is a write, which passes a
+    // small cap so a send or a save is not held up. Without this pass an
+    // install that has stopped writing never reaches the configured budget at
+    // all -- and, worse, never offers a pass again, so the rows from its final
+    // sends stay forever under a window that reads as bounded.
+    //
+    // Bounded by BATCHES rather than by the deadline, because the email prune
+    // takes no deadline: it is a fixed number of small, indexed deletes. The
+    // wall-clock promise is kept by not starting once the budget is spent, and
+    // by handing the turn back so the next invocation runs it rather than a
+    // marker holding it off for a full interval.
+    if (emailTurn) {
+      if (deadlineSpent()) {
+        await releaseRetentionPass(retention.gate, EMAIL_RETENTION_GATE_KEY);
+      } else {
+        const swept = await pruneEmailDataSafely(
+          { adapter: retention.prune.adapter, logger: retention.prune.logger },
+          emailPolicy!
+        );
+        result.pruned.emailDeliveries = swept.deliveries;
       }
     }
   }
