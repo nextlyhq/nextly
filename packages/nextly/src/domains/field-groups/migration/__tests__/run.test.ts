@@ -1501,6 +1501,44 @@ describe("a preview that meets a writer mid-run", () => {
     );
   });
 
+  // 🔴 A writer that acquires AND releases between the two lock probes is invisible to both. The
+  // preview reads the old marker, is descheduled while a short migration completes, and then reads
+  // the new catalog — a torn read whose sole cause is contention, with `not-held` at either end.
+  // Gating the retry on lock visibility refused exactly this, in the one case the retry exists for.
+  it("re-reads a tear left by a writer that already finished", async () => {
+    const world: RunWorld = {
+      // Torn: the migrated name is present with nothing recorded accounting for it.
+      tables: [LEGACY_REGISTRY, "fg_hero", MIGRATION_LOCK_TABLE],
+      registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
+      // No holder at any point — the writer came and went between probes.
+    };
+    let reads = 0;
+    world.onMarkerRead = () => {
+      reads += 1;
+      // On the SECOND read: the hook fires between an attempt's marker read and its catalog read,
+      // so repairing at read 1 would hand attempt 1 the coherent world and it would never tear.
+      if (reads !== 2) return;
+      // The writer's work is done and the catalog is coherent again.
+      world.tables = [LEGACY_REGISTRY, "comp_hero", MIGRATION_LOCK_TABLE];
+    };
+    const { adapter, trace } = createRunWorld(world);
+
+    const outcome = await runFieldGroupMigration({
+      adapter,
+      logger,
+      direction: "up",
+      dryRun: true,
+    });
+
+    if (outcome.ran !== false || outcome.reason !== "dry-run") {
+      expect.fail("expected a dry-run outcome, not a 503");
+    }
+    expect(outcome.basis).toEqual({ kind: "reconciled" });
+    // Never observed held, and re-read anyway — which is the whole point.
+    expect(outcome.lock).toEqual({ kind: "not-held" });
+    expect(markerReads(trace)).toBe(2);
+  });
+
   // 🔴 THE control for the durable-claim hole. This lock has no TTL and no auto-steal by design, so
   // a process that dies holding it leaves the row held until an operator clears it. A held row
   // therefore proves ownership was RECORDED, not that anyone is moving — and combined with a
