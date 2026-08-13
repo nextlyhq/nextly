@@ -607,8 +607,8 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
             registryKey="singles"
             ariaLabel="Singles table"
             emptyMessage="No Singles found. Try adjusting your search or filters."
-            // The table owns the pager, so it is mounted once and placed for
-            // whichever view is showing. Same `data` gate as the field group
+            // The table owns the pager, so it is placed for whichever view is
+            // showing. Same `data` gate as the field group
             // list, and for the same reason: the rows are filtered client-side
             // after fetching, so only the server's meta says a response landed.
             footer={

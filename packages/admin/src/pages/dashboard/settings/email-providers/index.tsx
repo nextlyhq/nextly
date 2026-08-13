@@ -816,8 +816,8 @@ function EmailProviderTable() {
             registryKey="email-providers"
             ariaLabel="Email providers table"
             emptyMessage="No email providers configured. Add a provider to start sending emails."
-            // The table owns the pager, so it is mounted once and placed for
-            // whichever view is showing. A provider list is short enough to fit
+            // The table owns the pager, so it is placed for whichever view is
+            // showing. A provider list is short enough to fit
             // one page in most installs; the gate keeps the controls out of the
             // card entirely rather than showing a dead "1 of 1".
             footer={

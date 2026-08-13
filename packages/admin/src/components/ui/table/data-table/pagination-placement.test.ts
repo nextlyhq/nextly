@@ -282,11 +282,61 @@ const NOT_A_TABLE_PAGER = new Map<string, { pagers: string[]; reason: string }>(
       "packages/admin/src/pages/dashboard/users/fields/index.tsx",
       {
         pagers: ["User fields pagination"],
-        reason: "a card list of user fields, with no table",
+        // This page DOES render a table -- a hand-built `<Table>` with its own
+        // drag-and-drop reordering, not a DataTableView. The exemption is from
+        // the RESPONSIVE rule specifically: there is no row-versus-card view
+        // here for a footer to be placed against. It is not licence to detach
+        // the pager, which `ENCLOSED_WITH` below pins to its table's wrapper.
+        reason:
+          "a legacy Table rather than a DataTableView, so there is no " +
+          "row-versus-card view to place a pager for",
       },
     ],
   ]
 );
+
+/**
+ * Exempt pagers that must nonetheless stay inside their table's container.
+ *
+ * Exemption from the responsive rule is not licence to detach. The user-fields
+ * page renders a hand-built `<Table>` inside a `table-wrapper` div that draws
+ * the card, with its pager inside the same div — so moving the pager out would
+ * put it outside the card, which is the visual defect this suite exists for,
+ * on a page the exemption would otherwise excuse entirely.
+ *
+ * Matched on OUR OWN class name rather than a structural relationship, and the
+ * distinction matters: identifying by someone else's spelling is the thing to
+ * avoid, but this class is written in this repository, in the file under test.
+ * Renaming it fails this assertion loudly rather than silently widening it.
+ */
+const ENCLOSED_BY = new Map<string, string>([
+  [
+    "packages/admin/src/pages/dashboard/users/fields/index.tsx",
+    "table-wrapper",
+  ],
+]);
+
+/** Whether some ancestor element of `node` carries `className` containing `marker`. */
+function enclosedBy(
+  node: ts.Node,
+  marker: string,
+  file: ts.SourceFile
+): boolean {
+  for (let current = node.parent; current; current = current.parent) {
+    if (!ts.isJsxElement(current)) continue;
+    for (const property of current.openingElement.attributes.properties) {
+      if (!ts.isJsxAttribute(property)) continue;
+      if (property.name.getText(file) !== "className") continue;
+      const initializer = property.initializer;
+      const text =
+        initializer && ts.isStringLiteral(initializer)
+          ? initializer.text
+          : (initializer?.getText(file) ?? "");
+      if (text.includes(marker)) return true;
+    }
+  }
+  return false;
+}
 
 describe("list pagination", () => {
   it("finds the surfaces at all", () => {
@@ -465,6 +515,30 @@ describe("list pagination", () => {
         `${path} renders detached pagers [${found.join(", ")}] but is ` +
           `exempted for [${pagers.join(", ")}] (${reason})`
       ).toEqual([...pagers].sort());
+    }
+  });
+
+  it("keeps an exempt pager inside its table's container", () => {
+    // Without this, the exemption covers placement too: the whole file is
+    // excused from the responsive rule, so moving its pager out of the card
+    // would leave every other assertion green.
+    for (const [path, marker] of ENCLOSED_BY) {
+      const full = resolve(repo, path);
+      const file = parse(full, readFileSync(full, "utf8"));
+      const pagers = detachedPagers(file);
+      // Reaching the mechanism is asserted, not assumed: a file whose pagers
+      // stopped being found would satisfy the loop below by being empty.
+      expect(
+        pagers.length,
+        `${path} renders no pager to check`
+      ).toBeGreaterThan(0);
+      for (const pager of pagers) {
+        expect(
+          enclosedBy(pager, marker, file),
+          `${path}:${lineOf(pager, file)} sits outside the "${marker}" that ` +
+            `draws the card around its table, so it renders outside the card`
+        ).toBe(true);
+      }
     }
   });
 

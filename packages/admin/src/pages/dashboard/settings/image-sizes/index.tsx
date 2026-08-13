@@ -315,8 +315,8 @@ function ImageSizesContent({
             ? "No image sizes found matching your search."
             : "No image sizes configured."
         }
-        // The table owns the pager, so it is mounted once and placed for
-        // whichever view is showing. This list paginates in memory rather than
+        // The table owns the pager, so it is placed for whichever view is
+        // showing. This list paginates in memory rather than
         // over the wire, so the gate counts the filtered rows: a search that
         // matches nothing should leave no controls behind.
         footer={
