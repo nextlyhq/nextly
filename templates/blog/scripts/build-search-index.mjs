@@ -20,20 +20,66 @@
  */
 
 import { execSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, readdirSync } from "node:fs";
+import { join, resolve } from "node:path";
 
-// Next.js 16 app-router builds emit server HTML under .next/server/app.
-// Pagefind needs a directory of HTML to index. Point at the rendered
-// output; fall back to .next if your build target differs.
+// Next.js 16 app-router builds emit server HTML under .next/server/app, named by
+// route with any route group stripped, so a post at /blog/[slug] lands at
+// blog/<slug>.html.
 const siteDir = process.env.PAGEFIND_SITE_DIR ?? ".next/server/app";
 const outputDir = process.env.PAGEFIND_OUTPUT_DIR ?? "public/pagefind";
 
+// Declared once and used both to invoke Pagefind and to decide whether there is
+// anything for it to read, so the two can never disagree about which pages are
+// meant to be indexed.
+const glob = "blog/**/*.html";
+// The fixed prefix of the glob, i.e. every leading segment before the first
+// wildcard. This is the directory Pagefind will search, derived from the pattern
+// rather than restated beside it, so editing the glob moves the check with it.
+const globSegments = glob.split("/");
+const firstWildcard = globSegments.findIndex(segment => segment.includes("*"));
+const globRoot = globSegments
+  .slice(0, firstWildcard === -1 ? globSegments.length - 1 : firstWildcard)
+  .join("/");
+
+/** Whether any file matching the glob's extension exists beneath `dir`. */
+function containsHtml(dir) {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    // An absent directory means the build produced no pages under it, which is
+    // the same answer as an empty one for the purpose of this check.
+    return false;
+  }
+  return entries.some(entry =>
+    entry.isDirectory()
+      ? containsHtml(join(dir, entry.name))
+      : entry.name.endsWith(".html")
+  );
+}
+
 mkdirSync(resolve(outputDir), { recursive: true });
+
+// A newly scaffolded project has no posts, so nothing renders under blog/ and
+// Pagefind exits non-zero for an empty index. Failing the build there would mean
+// a fresh project cannot build until someone publishes a post, so the empty case
+// is reported and skipped while a genuine Pagefind failure below still stops the
+// build.
+if (!containsHtml(resolve(siteDir, globRoot))) {
+  console.log(
+    `\n• No pages matched ${glob} under ${siteDir} — skipping the search index.`
+  );
+  console.log(
+    "  Publish a post and build again to generate it; /search reports that the"
+  );
+  console.log("  index is missing until then.");
+  process.exit(0);
+}
 
 try {
   execSync(
-    `npx -y pagefind --site ${siteDir} --output-path ${outputDir} --glob "blog/**/*.html"`,
+    `npx -y pagefind --site ${siteDir} --output-path ${outputDir} --glob "${glob}"`,
     { stdio: "inherit" }
   );
   console.log(`\n✓ Search index written to ${outputDir}`);

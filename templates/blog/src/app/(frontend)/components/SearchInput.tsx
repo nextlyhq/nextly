@@ -19,22 +19,15 @@ import { useEffect, useMemo, useState } from "react";
  * renders and shows a help message instead of silently failing.
  */
 
-interface PagefindResult {
-  url: string;
-  meta?: { title?: string };
-  excerpt?: string;
-}
+// Shapes come from the ambient declaration in src/types/pagefind.d.ts, which is
+// the one description of the bundle this file loads at runtime.
+import type { PagefindDocument } from "/pagefind/pagefind.js";
 
-interface PagefindModule {
-  init?: () => Promise<void>;
-  search: (query: string) => Promise<{
-    results: Array<{ data: () => Promise<PagefindResult> }>;
-  }>;
-}
+type PagefindModule = typeof import("/pagefind/pagefind.js");
 
 export function SearchInput() {
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<PagefindResult[]>([]);
+  const [results, setResults] = useState<PagefindDocument[]>([]);
   const [pagefind, setPagefind] = useState<PagefindModule | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -45,11 +38,13 @@ export function SearchInput() {
     let cancelled = false;
     (async () => {
       try {
-        const mod = (await import(
+        const mod: PagefindModule = await import(
           /* webpackIgnore: true */ /* @vite-ignore */
           "/pagefind/pagefind.js"
-        )) as PagefindModule;
+        );
         if (cancelled) return;
+        // Guarded rather than called directly: the bundle is generated at build
+        // time, so a version skew can leave it without the documented init().
         if (typeof mod.init === "function") {
           await mod.init();
         }
