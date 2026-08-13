@@ -526,7 +526,14 @@ export async function seed({
     // collections path (which only knows about user-defined collections
     // like dc_posts) and throws "schema not found"; users is a core
     // collection with its own query namespace.
-    const existing = await nextly.users.findOne({ search: user.email });
+    // `find` + an exact `where`, not `search`: search spans name, email and
+    // custom text fields, so seeding a user whose email appears in someone
+    // else's name would update the wrong account.
+    const found = await nextly.users.find({
+      where: { email: { equals: user.email } },
+      limit: 1,
+    });
+    const existing = found.items[0] ?? null;
     // Build role IDs array if seed-data declares one. Nextly's user
     // mutation service accepts `roles: string[]` in the create/update
     // payload and handles the `user_roles` join rows automatically.
