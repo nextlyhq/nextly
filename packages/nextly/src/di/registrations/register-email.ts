@@ -57,11 +57,19 @@ export function registerEmailServices(ctx: RegistrationContext): void {
           gate: new MetaRetentionGate(adapter),
           logger,
         }),
+        // Derived from the SAME resolution the runner above spreads, not from
+        // the flattened field alone. What is recorded and what is swept are two
+        // halves of one policy, and reading them from different places is how
+        // an install configuring `email.retention.maxAgeMs: 0` through the
+        // public `registerServices()` API got a sweep that honoured it and a
+        // writer that did not — inserting the recipient row it had just asked
+        // never to store.
+        //
         // Read per call, and through `activeEmailRetention`, so a window saved
-        // during development governs what is RECORDED as immediately as it
-        // governs what is swept. A value captured here would leave the two
-        // halves of one policy disagreeing after any hot reload.
-        () => activeEmailRetention(config.emailRetention)
+        // during development governs recording as immediately as it governs
+        // sweeping. A value captured here would leave the two disagreeing after
+        // any hot reload.
+        () => activeEmailRetention(retentionPoliciesFrom(config).emailPolicy)
       )
   );
 

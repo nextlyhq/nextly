@@ -27,7 +27,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { resolveAuditRetentionConfig } from "../../audit/retention-config";
-import { resolveEmailRetentionConfig } from "../../email/retention-config";
+import {
+  activeEmailRetention,
+  resolveEmailRetentionConfig,
+} from "../../email/retention-config";
 import { resolveWebhookRetentionConfig } from "../../webhooks/retention-config";
 import { buildRetentionPasses, retentionPoliciesFrom } from "../passes";
 
@@ -201,6 +204,22 @@ describe("the derived policy list", () => {
     expect(retentionPoliciesFrom({}).emailPolicy?.maxAgeMs).toBe(
       resolveEmailRetentionConfig().maxAgeMs
     );
+  });
+
+  it("gives the writer and the sweep the same answer", () => {
+    // They are two halves of one policy. While the runner resolved the nested
+    // block and the writer read only the flattened field, an install
+    // configuring `email.retention.maxAgeMs: 0` through the public
+    // `registerServices()` API got a sweep that honoured "keep nothing" and a
+    // writer that inserted the recipient row anyway.
+    const nested = { email: { retention: { maxAgeMs: 0 } } };
+
+    // What the SWEEP is built from, and what the WRITER must consult, are the
+    // same expression rather than two that happen to agree today.
+    expect(retentionPoliciesFrom(nested).emailPolicy?.maxAgeMs).toBe(0);
+    expect(
+      activeEmailRetention(retentionPoliciesFrom(nested).emailPolicy)?.maxAgeMs
+    ).toBe(0);
   });
 
   it("builds no pass for a config that configured none", () => {
