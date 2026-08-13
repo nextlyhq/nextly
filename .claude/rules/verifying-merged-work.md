@@ -35,19 +35,50 @@ from the merge, absent from `headRefOid`, and therefore absent from both sides
 of every comparison here. Each step then confirms that everything which merged,
 merged.
 
-The independent source is the ref itself. The guard is part of the check, not a
-note beside it, because the failure it prevents looks exactly like a pass:
+The branch is the only place a stranded commit still exists, so it is where to
+LOOK. It is not a place that can certify, and that limit is structural rather
+than a gap to be patched.
 
-Two remotes are in play and they are not interchangeable. `BASE_REMOTE` holds
-`main` and the merge commit; `HEAD_REMOTE` holds the PR's branch, and for a fork
-that is a different repository entirely:
+**A branch cannot prove a negative.** It is mutable, it is remote, and every
+observation of it is a separate round trip. Each of these erases a tail and
+leaves the range empty, indistinguishable from a branch that never had one:
+
+- a force-push resetting `B` back to merged head `A`;
+- deleting the branch and recreating the same ref at `A`;
+- any reset landing between the timeline read and the `ls-remote` — the two are
+  separate requests and nothing holds the ref still between them.
+
+Enumerating those is not a fix. Three were found by patching this block three
+times, and the fourth is whatever nobody has thought of, because the property
+being asked for — "no commit ever existed here that is not in the merge" — is
+not a property a mutable ref can answer.
+
+So use it as a SCREEN and take the verdict from CONTENT. Any commit it names is
+worth confirming against the merge commit; an empty result means only that this
+cheap look found nothing, never that nothing was lost. When it matters — a
+release, an incident, a PR whose tail you have reason to doubt — verify the
+commits you intended to land by content, per the numbered steps below, and do
+not let an empty range stand in for that.
+
+The guards are inside the block rather than beside it, because the failures they
+prevent all look exactly like a pass. `BASE_REMOTE` holds `main` and the merge
+commit; `HEAD_REMOTE` holds the PR's branch, and for a fork that is a different
+repository entirely:
 
 ```sh
+set -euo pipefail
 PR=<number>
-read -r CROSS OWNER REPO BR GH MERGE < <(gh pr view "$PR" \
+# Captured to a variable first. `read < <(...)` reports the status of `read`,
+# not of the command inside, so a failed `gh` there sets empty fields and the
+# script carries on with them under `set -e`.
+META=$(gh pr view "$PR" \
   --json isCrossRepository,headRepositoryOwner,headRepository,headRefName,headRefOid,mergeCommit \
   --jq '[.isCrossRepository,.headRepositoryOwner.login,.headRepository.name,
-         .headRefName,.headRefOid,.mergeCommit.oid]|@tsv')
+         .headRefName,.headRefOid,.mergeCommit.oid]|@tsv') || {
+  echo "PR#$PR: metadata query failed — NOT CHECKABLE, which is not clean" >&2
+  exit 2
+}
+IFS=$'\t' read -r CROSS OWNER REPO BR GH MERGE <<<"$META"
 BASE_REMOTE=origin                        # must point at the BASE repository
 HEAD_REMOTE=origin
 [ "$CROSS" = true ] && HEAD_REMOTE="https://github.com/$OWNER/$REPO.git"
@@ -57,14 +88,18 @@ HEAD_REMOTE=origin
 # 100 and long PRs here run to three pages: an unpaginated query reads page one
 # and answers zero, which is the reassuring direction. It emits one count per
 # page, hence the sum.
+# Deletion and recreation erases a tail exactly as a force-push does, and the
+# recreated ref reads as ordinary — so both events disqualify. This list is a
+# floor, not a proof: see the note above on why enumeration cannot close this.
 PAGES=$(gh api --paginate "repos/nextlyhq/nextly/issues/$PR/timeline?per_page=100" \
-  --jq '[.[]|select(.event=="head_ref_force_pushed")]|length') || {
+  --jq '[.[]|select(.event=="head_ref_force_pushed" or .event=="head_ref_deleted"
+                    or .event=="head_ref_restored")]|length') || {
   echo "PR#$PR: timeline query failed — NOT CHECKABLE, which is not clean" >&2
   exit 2
 }
 FORCED=$(printf '%s\n' "$PAGES" | awk '{s+=$1} END{print s+0}')
 if [ "${FORCED:-1}" -gt 0 ]; then
-  echo "PR#$PR: $FORCED force-push(es) — NOT CHECKABLE, which is not clean" >&2
+  echo "PR#$PR: $FORCED history-rewrite event(s) — NOT CHECKABLE, not clean" >&2
   exit 2
 fi
 
@@ -73,8 +108,16 @@ if [ -z "$TIP" ]; then
   echo "PR#$PR: no such ref on $HEAD_REMOTE — NOT CHECKABLE, which is not clean" >&2
   exit 2
 fi
-git fetch "$HEAD_REMOTE" "$TIP" --quiet
-git fetch "$BASE_REMOTE" "$MERGE" --quiet
+# Unchecked, these leave `git log` reading whatever objects happen to be local
+# already — a stale answer wearing the same shape as a fresh one.
+git fetch "$HEAD_REMOTE" "$TIP" --quiet || {
+  echo "PR#$PR: could not fetch $TIP — NOT CHECKABLE, which is not clean" >&2
+  exit 2
+}
+git fetch "$BASE_REMOTE" "$MERGE" --quiet || {
+  echo "PR#$PR: could not fetch $MERGE — NOT CHECKABLE, which is not clean" >&2
+  exit 2
+}
 git log --oneline "$GH..$TIP"          # candidates: commits absent from the merge
 ```
 
