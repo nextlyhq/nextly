@@ -1592,6 +1592,33 @@ describe("a guard that must not crash on the input it refuses", () => {
     }
     expect(thrown).not.toBeInstanceOf(RangeError);
   });
+
+  it("counts a very wide slot without exceeding the call-argument limit", () => {
+    // An UPDATE, because a remove never reaches the cap check: only an edit
+    // that could make the document larger is measured against the node and byte
+    // caps, and the counter is where the remaining spread was. A remove walks
+    // the forest and stops, so the case above leaves this path untouched.
+    const wide = node("wide", {
+      main: Array.from({ length: 150_000 }, (_unused, index) =>
+        node(`w-${String(index)}`)
+      ),
+    });
+
+    let thrown: unknown;
+    try {
+      applyOp(doc([wide]), {
+        kind: "update",
+        id: "wide",
+        patch: { name: "renamed" },
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    // Refused or applied, either is a legitimate answer to a document this
+    // large. A native RangeError is not: it means the count that decides which
+    // one broke before it could decide.
+    expect(thrown).not.toBeInstanceOf(RangeError);
+  });
 });
 
 describe("the document's own identity fields", () => {
