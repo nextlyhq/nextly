@@ -219,15 +219,7 @@ describe("an op and its inverse are a round trip", () => {
     expect(failures, failures.join("\n\n")).toEqual([]);
   });
 
-  // `it.fails`, because vitest marks an expected failure on the declaration —
-  // a `test.fail()` call inside the body is Playwright's API and silently does
-  // nothing here. Marking the whole test is acceptable only because the
-  // properties that DO hold were split into their own case above, so this one
-  // is narrow enough that "expected to fail" names a single shortfall.
-  //
-  // It goes red the day the shortfall is fixed, which is what forces the marker
-  // out rather than letting it become permanent.
-  it.fails("restores the document exactly", () => {
+  it("restores the document exactly", () => {
     const failures: string[] = [];
 
     for (let seed = 1; seed <= 60; seed += 1) {
@@ -262,19 +254,6 @@ describe("an op and its inverse are a round trip", () => {
       }
     }
 
-    // The shortfall this is marked for: placing a node into a slot the destination parent does not
-    // already have makes the engine CREATE that slot, and no inverse in this
-    // vocabulary can remove it. Undo therefore restores every node and leaves
-    // `slots: { aside: [] }` behind — a slot the author never made, which the
-    // page-builder validator rejects and which no update can delete, because
-    // updates exclude `slots`.
-    //
-    // Reproducible: seeds 2, 39 and 53 for insert; 35, 40 and 45 for move.
-    //
-    // Left as a target rather than patched, because both candidate fixes change
-    // the persisted format or the authoring rules — record the created slot on
-    // the inverse, or refuse a placement that would create one — and that
-    // decision belongs to the op-format design pass, not to this test.
     expect(failures, failures.join("\n\n")).toEqual([]);
   });
 });

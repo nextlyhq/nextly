@@ -1874,6 +1874,70 @@ describe("an inverse that names a parent held twice", () => {
     expect(reads, "the getter must never be invoked").toBe(0);
   });
 
+  it("undoes a placement that created a slot, slot and all", () => {
+    // Placing into a region the parent does not have makes the engine create
+    // it. Undo removes the node; without the created slot recorded on the
+    // inverse it also leaves the region behind — one the author never made,
+    // which the page-builder validator rejects and no update can delete,
+    // because updates exclude `slots`.
+    const parent = node("outer", { main: [] });
+    const before = doc([parent]);
+
+    const placed = applyOp(before, {
+      kind: "insert",
+      node: node("dropped"),
+      at: { parentId: "outer", slot: "aside", index: 0 },
+    });
+    expect(
+      placed.document.nodes[0]?.slots,
+      "the fixture must actually create the slot, or this tests nothing"
+    ).toEqual({
+      main: [],
+      aside: [expect.objectContaining({ id: "dropped" })],
+    });
+
+    const undone = applyOp(placed.document, placed.inverse);
+    expect(undone.document).toEqual(before);
+  });
+
+  it("keeps a slot the undo did not empty", () => {
+    // The recorded slot is a request the store checks, not a command it obeys.
+    // By the time an undo runs, a later edit may have put other nodes in that
+    // region — dropping it then would delete work nobody asked to delete.
+    const before = doc([node("outer", { main: [] })]);
+    const placed = applyOp(before, {
+      kind: "insert",
+      node: node("first"),
+      at: { parentId: "outer", slot: "aside", index: 0 },
+    });
+    const alsoThere = applyOp(placed.document, {
+      kind: "insert",
+      node: node("second"),
+      at: { parentId: "outer", slot: "aside", index: 1 },
+    });
+
+    const undone = applyOp(alsoThere.document, placed.inverse);
+    expect(
+      undone.document.nodes[0]?.slots?.aside,
+      "a region someone else filled must survive the undo"
+    ).toEqual([expect.objectContaining({ id: "second" })]);
+  });
+
+  it("refuses a slot-drop naming a member every object inherits", () => {
+    // The store only ever derives this field itself, so a hostile one arrives
+    // from storage. Deleting `__proto__` would reach the prototype rather than
+    // the node's own children.
+    const before = doc([node("outer", { main: [node("child")] })]);
+
+    expect(() =>
+      applyOp(before, {
+        kind: "remove",
+        id: "child",
+        dropSlotIfEmpty: { parentId: "outer", slot: "__proto__" },
+      })
+    ).toThrow(/not a usable slot name/);
+  });
+
   it("refuses a remove whose subtree could not be inserted back", () => {
     // The inverse of a remove is an insert of exactly this subtree. A document
     // imported with a node missing a field the shape check requires removes

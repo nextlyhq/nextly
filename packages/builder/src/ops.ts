@@ -607,14 +607,48 @@ export type OpPosition =
       readonly index: number;
     };
 
+/**
+ * A slot an op should remove, IF the op leaves it empty.
+ *
+ * Placing a node into a slot the destination parent does not have makes the
+ * engine create that slot, and removing the node again leaves it behind as an
+ * empty array. An undo that restores every node and adds a region the author
+ * never made has not undone the edit — the page-builder validator rejects an
+ * undeclared empty slot, and no update can delete one, because updates exclude
+ * `slots`.
+ *
+ * Carried on the INVERSE, derived by the store from what the placement actually
+ * did rather than declared by a caller. Nothing else in this vocabulary can
+ * express "and put the parent back the way it was".
+ *
+ * **If empty** is the whole of it, and it is what makes the field safe to
+ * replay. By the time an undo runs, later edits may have put other nodes in
+ * that slot; dropping it then would delete work nobody asked to delete. So this
+ * is a request that the store checks rather than a command it obeys, and a slot
+ * someone has since filled simply stays.
+ */
+export interface SlotAddress {
+  readonly parentId: string;
+  readonly slot: string;
+}
+
 export type BuilderOp =
   | {
       readonly kind: "insert";
       readonly node: BlockNode;
       readonly at: OpPosition;
     }
-  | { readonly kind: "remove"; readonly id: string }
-  | { readonly kind: "move"; readonly id: string; readonly to: OpPosition }
+  | {
+      readonly kind: "remove";
+      readonly id: string;
+      readonly dropSlotIfEmpty?: SlotAddress;
+    }
+  | {
+      readonly kind: "move";
+      readonly id: string;
+      readonly to: OpPosition;
+      readonly dropSlotIfEmpty?: SlotAddress;
+    }
   | {
       readonly kind: "update";
       readonly id: string;
@@ -1214,6 +1248,135 @@ function assertFitsCaps(
  * exhaust the stack and leave a native RangeError where this module promises
  * an `OpError`.
  */
+/**
+ * Refuses a `dropSlotIfEmpty` that could not be carried out or stored.
+ *
+ * The store derives this field itself, so a well-formed one is the only kind it
+ * produces — and an op arrives from storage as often as from here, where
+ * nothing checked it. A slot name reaching the prototype is the sharp case: the
+ * deletion would run against an inherited member rather than an own key.
+ */
+function assertDropSlot(address: unknown, verb: string): void {
+  if (address === undefined) return;
+  if (!isPlainRecord(address) || !hasOnlyJsonOwnKeys(address)) {
+    throw new OpError(
+      `${verb}: a slot to drop of ${describe(address)} names nothing. It is ` +
+        `a parent id and the slot to remove from it.`
+    );
+  }
+  // Read into locals and narrowed with `typeof`, because the shape predicates
+  // in this module deliberately return `boolean` rather than claiming to have
+  // checked a structure they only glanced at. Narrowing here rather than
+  // asserting keeps that property and still gives the checks below a string.
+  const { parentId, slot } = address;
+  if (typeof parentId !== "string" || parentId.length === 0) {
+    throw new OpError(
+      `${verb}: a slot to drop must name the parent it belongs to; ` +
+        `${describe(parentId)} addresses nothing.`
+    );
+  }
+  if (typeof slot !== "string" || slot.length === 0) {
+    throw new OpError(
+      `${verb}: a slot to drop must name the slot; ${describe(slot)} names ` +
+        `no region.`
+    );
+  }
+  if (!isUsableSlotName(slot)) {
+    throw new OpError(
+      `${verb}: "${slot}" is not a usable slot name. It resolves to a member ` +
+        `every object inherits, so removing it would reach the prototype ` +
+        `rather than the node's own children.`
+    );
+  }
+}
+
+/** Whether `parentId` already holds a slot called `slot`. */
+function parentHasSlot(nodes: BlockNode[], at: OpPosition): boolean {
+  if (at.parentId === undefined) return true;
+  const parent = findNode(nodes, at.parentId);
+  if (parent === undefined) return true;
+  return Object.hasOwn(parent.slots ?? {}, at.slot);
+}
+
+/**
+ * The slot an op should offer to drop when undone, or nothing.
+ *
+ * Asked BEFORE the placement, because afterwards the slot exists either way and
+ * the question is unanswerable. A top-level position creates no slot, and a
+ * parent that already had it is not having one created.
+ */
+function slotCreatedBy(
+  nodes: BlockNode[],
+  at: OpPosition
+): SlotAddress | undefined {
+  if (at.parentId === undefined) return undefined;
+  if (parentHasSlot(nodes, at)) return undefined;
+  return { parentId: at.parentId, slot: at.slot };
+}
+
+/**
+ * Removes the named slot when the op has left it empty.
+ *
+ * Returns the forest unchanged in every other case — the parent is gone, the
+ * slot is gone, or something else now lives there. A later edit may have filled
+ * the slot between the original op and its undo, and deleting it then would
+ * take work nobody asked to delete.
+ */
+function dropEmptySlot(nodes: BlockNode[], address: SlotAddress): BlockNode[] {
+  const parent = findNode(nodes, address.parentId);
+  if (parent === undefined) return nodes;
+  const children = parent.slots?.[address.slot];
+  if (!Array.isArray(children) || children.length > 0) return nodes;
+  return rebuild(nodes, current => {
+    if (current.id !== address.parentId) return current;
+    const slots = { ...(current.slots ?? {}) };
+    delete slots[address.slot];
+    // The key removed rather than set to `undefined`: a document is stored as
+    // JSON, where an absent key and one holding `undefined` are the same
+    // document — but every reader between here and storage sees the difference.
+    return Object.keys(slots).length === 0
+      ? omitSlots(current)
+      : { ...current, slots };
+  });
+}
+
+/**
+ * Rebuilds a forest, replacing each node with what `fn` returns for it.
+ *
+ * The engine's `mapForest` does exactly this and is private to `tree.ts`. This
+ * is the one edit the engine's own primitives cannot express — `updateNode`
+ * takes a patch that excludes `slots` by construction — so the choice was
+ * between this and exporting another engine internal during its API freeze.
+ *
+ * Recursive, and bounded by the same machine cap the engine's own version
+ * relies on: `assertWalkable` has already refused anything deeper than the
+ * call stack survives by the time an op is applied, so this recurses exactly as
+ * deep as `insertNode` and `moveNode` already do on the same document.
+ */
+function rebuild(
+  nodes: BlockNode[],
+  fn: (node: BlockNode) => BlockNode
+): BlockNode[] {
+  return nodes.map(node => {
+    const mapped = fn(node);
+    if (mapped.slots === undefined) return mapped;
+    const slots: Record<string, BlockNode[]> = {};
+    for (const [name, children] of Object.entries(mapped.slots)) {
+      slots[name] = rebuild(children, fn);
+    }
+    return { ...mapped, slots };
+  });
+}
+
+/** A node without its `slots` key, for a parent whose last slot just went. */
+function omitSlots(node: BlockNode): BlockNode {
+  // Destructured rather than deleted from a copy: `slots` is optional on
+  // `BlockNode`, so what remains is a `BlockNode` by construction and needs no
+  // assertion claiming so.
+  const { slots: _dropped, ...rest } = node;
+  return rest;
+}
+
 function assertSubtreeIdsAreUnique(
   nodes: BlockNode[],
   root: BlockNode,
@@ -1672,6 +1835,9 @@ export function applyOp(
             `adding it to the document.`
         );
       }
+      // Asked BEFORE the placement, because afterwards the slot exists whether
+      // this insert made it or not, and the question cannot be answered.
+      const createdSlot = slotCreatedBy(nodes, op.at);
       const placed = accepted(
         nodes,
         insertNode(nodes, op.node, op.at),
@@ -1686,7 +1852,13 @@ export function applyOp(
       assertFitsCaps(document, withNodes(document, placed), "insert", limits);
       return {
         document: withNodes(document, placed),
-        inverse: { kind: "remove", id: op.node.id },
+        inverse: {
+          kind: "remove",
+          id: op.node.id,
+          ...(createdSlot === undefined
+            ? {}
+            : { dropSlotIfEmpty: createdSlot }),
+        },
       };
     }
 
@@ -1700,6 +1872,7 @@ export function applyOp(
         );
       }
 
+      assertDropSlot(op.dropSlotIfEmpty, "remove");
       assertIdIsUnique(nodes, op.id, "remove");
       // EVERY id the inverse would carry, not only the root's. The inverse of a
       // remove is an insert of the whole subtree, and `insertNode` refuses a
@@ -1734,15 +1907,20 @@ export function applyOp(
       // Both the node and where it sat, captured before it goes: neither is
       // recoverable from the forest afterwards, which is the whole reason the
       // inverse cannot be computed later.
+      const without = accepted(
+        nodes,
+        removeNode(nodes, op.id),
+        `remove: the document did not accept removing "${op.id}".`
+      );
+      // The slot the original placement created, if this remove is the undo of
+      // one. Applied AFTER the removal, because the slot only becomes empty
+      // once the node is out of it.
+      const pruned =
+        op.dropSlotIfEmpty === undefined
+          ? without
+          : dropEmptySlot(without, op.dropSlotIfEmpty);
       return {
-        document: withNodes(
-          document,
-          accepted(
-            nodes,
-            removeNode(nodes, op.id),
-            `remove: the document did not accept removing "${op.id}".`
-          )
-        ),
+        document: withNodes(document, pruned),
         inverse: { kind: "insert", node, at: positionOf(location) },
       };
     }
@@ -1774,6 +1952,10 @@ export function applyOp(
             `when it holds for the node and not for the section around it.`
         );
       }
+      assertDropSlot(op.dropSlotIfEmpty, "move");
+      // Before the relocation, for the same reason as insert: afterwards the
+      // slot exists whether this move made it or not.
+      const createdSlot = slotCreatedBy(nodes, op.to);
       const moved = accepted(
         nodes,
         moveNode(nodes, op.id, op.to),
@@ -1802,9 +1984,23 @@ export function applyOp(
       // into a slot the parent did not have yet adds that slot's name to what is
       // stored, and a long enough name crosses the byte cap on its own.
       assertFitsCaps(document, withNodes(document, moved), "move", limits);
+      // The slot the original placement created, if this move is the undo of
+      // one. After the relocation, because the slot the node has just left is
+      // only empty once it is out.
+      const settledForest =
+        op.dropSlotIfEmpty === undefined
+          ? moved
+          : dropEmptySlot(moved, op.dropSlotIfEmpty);
       return {
-        document: withNodes(document, moved),
-        inverse: { kind: "move", id: op.id, to: positionOf(location) },
+        document: withNodes(document, settledForest),
+        inverse: {
+          kind: "move",
+          id: op.id,
+          to: positionOf(location),
+          ...(createdSlot === undefined
+            ? {}
+            : { dropSlotIfEmpty: createdSlot }),
+        },
       };
     }
 
