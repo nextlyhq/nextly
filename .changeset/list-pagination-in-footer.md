@@ -27,6 +27,8 @@
 
 Render every list pager inside its table instead of beside it.
 
-Four admin lists passed pagination to `DataTableView`'s `footer`; eight rendered it as a sibling. The footer exists because the pager has to be mounted once — a stateful control otherwise gets a second instance, and new ids, when the layout switches — and because its placement depends on whether the table or the mobile card view is showing, which only `DataTableView` knows. A detached pager sits outside both decisions.
+Some admin lists passed pagination to `DataTableView`'s `footer` and the rest rendered it as a sibling. The footer exists because a pager's placement depends on whether the row table or the mobile card view is showing, and `DataTableView` is the only component that knows: it sits inside the card on desktop and takes the column's gap on mobile. A pager rendered beside the table sits outside that decision, so it lands in the wrong place on one of the two layouts.
 
-API keys, deliveries, collections, field groups, singles, email providers, email templates, image sizes and entries now pass it as `footer`. A test parses the admin sources and fails any `<Pagination>` rendered beside a `<DataTableView>` rather than inside its footer, with the four surfaces that paginate something other than a table named individually.
+API keys, deliveries, collections, field groups, singles, email providers, email templates, image sizes, entries and the media list view now pass it as `footer`. A test parses the admin sources and fails any `<Pagination>` rendered beside a `<DataTableView>` rather than inside its footer; a surface that paginates something other than a table is named individually, by the pager's accessible label.
+
+Two fixes found along the way. Choosing a larger page size on the image sizes list left the page number pointing past the end of the list, showing the empty message over a list that had rows. And the media library's two pagers now carry distinct accessible labels rather than both announcing themselves as "Pagination".
