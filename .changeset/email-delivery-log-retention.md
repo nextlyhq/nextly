@@ -52,7 +52,11 @@ older rows carrying a value the request no longer computed, so it matched
 nothing and reported success — a privacy request that silently under-delivers.
 Retired secrets can now be listed in \`NEXTLY_SECRET_PREVIOUS\`, kept for reading
 and never for writing, and an erasure matches every digest those generations
-could have produced.
+could have produced. It accepts a comma-separated list for the ordinary case and
+a JSON array for the secrets a comma-separated list cannot express — one holding
+a comma or significant whitespace, \`null\` for a generation that was unkeyed, and
+\`""\` for a secret that really was empty. Documented under "Rotating
+\`NEXTLY_SECRET\`" in the environment reference.
 
 Two things are deliberately unchanged. A send already in flight when a deletion
 commits still records its row; closing that would mean keeping a list of the

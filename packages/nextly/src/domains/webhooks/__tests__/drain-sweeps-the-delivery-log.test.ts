@@ -169,6 +169,54 @@ describe("the scheduled drain and the delivery log", () => {
     expect(tables).toContain("email_deliveries");
   });
 
+  it("returns the email turn when an earlier sweep throws", async () => {
+    // The email turn is claimed BEFORE the earlier sweeps run, so that the
+    // webhook sweep can size its share. That ordering means an earlier sweep
+    // throwing skips the branch that would use or return it — and the marker
+    // then holds the full email sweep off for a whole interval. If the same
+    // failure recurs each interval, the delivery log is starved permanently
+    // while the drain reports an error nobody reads.
+    //
+    // The throw is staged where it really comes from: the "safe" wrappers
+    // absorb a prune failure but still report it through the installation's
+    // logger, and an app-supplied logger that throws escapes them.
+    const released: string[] = [];
+
+    await expect(
+      runDrain({
+        fanOut: { db: idleDb(), loadEndpoints: async () => [] } as never,
+        deliver: { db: idleDb(), now: () => new Date(0) } as never,
+        retention: {
+          auditPolicy: resolveAuditRetentionConfig({}),
+          emailPolicy: resolveEmailRetentionConfig({ maxAgeMs: 1000 }),
+          prune: {
+            adapter: {
+              select: async () => {
+                throw new Error("prune query failed");
+              },
+              delete: async () => 0,
+            },
+            logger: {
+              warn: () => {
+                throw new Error("the logging transport is down");
+              },
+            },
+          } as never,
+          gate: {
+            claim: async () => true,
+            release: async (key: string) => {
+              released.push(key);
+            },
+          },
+        },
+      })
+    ).rejects.toThrow();
+
+    // The drain still fails — that is the caller's problem and not this pass's
+    // to hide. What must NOT happen is the turn staying taken.
+    expect(released).toContain(EMAIL_RETENTION_DRAIN_GATE_KEY);
+  });
+
   it("does not consume the interval when the wall-clock budget is spent", async () => {
     // The drain's promise to a serverless cron route. What matters is that the
     // interval is not spent on a pass that did no work — reached either by not

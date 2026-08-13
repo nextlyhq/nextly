@@ -142,7 +142,56 @@ Nextly uses a custom JWT auth system (access + refresh tokens, sessions, API key
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `NEXTLY_SECRET` | Yes (production: ≥ 32 chars) | — | Secret used to sign JWTs and other crypto. Production startup throws if it is missing or shorter than 32 characters. Generate with `openssl rand -base64 32`. |
+| `NEXTLY_SECRET_PREVIOUS` | No | — | Secrets you have RETIRED, newest first. Kept for READING only — nothing new is ever keyed with one. See "Rotating `NEXTLY_SECRET`" below. |
 | `NEXTLY_ALLOWED_ORIGINS` | No | — | Comma-separated list of additional origins allowed for CSRF validation (e.g. `https://admin.example.com,https://staging.example.com`). The app's own origin is always allowed. |
+
+### Rotating `NEXTLY_SECRET`
+
+Rotating the secret re-keys everything derived from it, and the values already
+written do not move. For most of them that fails loudly and is fine — a webhook
+signing secret that no longer decrypts is one an operator re-enters.
+
+The email delivery log is the exception, because it fails **quietly**. Each row
+identifies its recipient by an HMAC of their address, so after a rotation an
+erasure request computes a digest none of the older rows carry, matches nothing,
+and reports success. "No rows matched" is also what a person with no mail looks
+like, so nothing distinguishes the two.
+
+List the old secret in `NEXTLY_SECRET_PREVIOUS` and those rows stay reachable —
+for lookups and for erasure — without becoming writable:
+
+```bash
+NEXTLY_SECRET=the-new-one
+NEXTLY_SECRET_PREVIOUS=the-old-one,an-older-one
+```
+
+**Two spellings, because one of them cannot express every legal secret.** The
+comma-separated form above is the ordinary one. Use the JSON-array form when a
+retired secret contains a comma, or when leading or trailing whitespace is part
+of the key — splitting or trimming those produces a key that was never used,
+which matches nothing and fails in the silent direction:
+
+```bash
+NEXTLY_SECRET_PREVIOUS=["old,with,commas","  spaced  "]
+```
+
+The JSON form also names two generations no string can:
+
+- `null` is the **unkeyed** generation — what an install writes when it has no
+  `NEXTLY_SECRET` at all, which is only possible outside production. Rows
+  written then carry a plain SHA-256 digest that no HMAC reproduces, so
+  enabling a secret later strands them unless you name that generation.
+- `""` is a secret that really was the empty string, which is used as an HMAC
+  key like any other.
+
+```bash
+# was unkeyed in development, now has a secret
+NEXTLY_SECRET_PREVIOUS=[null]
+```
+
+An empty entry in the **comma** form is dropped rather than rejected: a trailing
+comma is the likeliest way to write the list, and nothing about `older,` says a
+second key was meant. Write `[""]` when you mean it.
 
 ---
 
