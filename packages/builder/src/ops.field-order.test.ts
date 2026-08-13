@@ -130,6 +130,11 @@ describe("a node's own fields are written in the declared order", () => {
     // Plain assignment to `__proto__` sets the prototype instead of creating an
     // own property, so a forward-compatible field with that name would vanish
     // from what is stored while every check upstream still saw it.
+    //
+    // This one separates on a DIFFERENT break from the cases above: removing
+    // the canonicalisation call leaves it green, because an untouched node is
+    // never rebuilt. Verified against the break it does detect — replacing
+    // `defineProperty` with `out[field] = ...` fails it and nothing else.
     const hostile = {
       id: "a",
       type: "core/box",
@@ -160,6 +165,12 @@ describe("a node's own fields are written in the declared order", () => {
     // `props` is author data and its key order is observable through
     // `Object.entries`, so canonicalising it would rewrite content rather than
     // structure.
+    //
+    // Stated plainly because it matters to whoever reads this next: this case
+    // passes with AND without the canonicalisation, so it is not coverage of
+    // the current implementation. It guards the boundary of the change — a
+    // later attempt to sort props, which is the obvious next step for someone
+    // who reads "canonical order" and applies it one level deeper.
     const before = doc([
       {
         id: "a",
