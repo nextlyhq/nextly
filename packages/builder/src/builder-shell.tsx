@@ -168,6 +168,20 @@ function useFitsFullShell(): boolean {
 function usePreferences(store: PreferenceStore) {
   const [preferences, setPreferences] =
     React.useState<ShellPreferences>(DEFAULT_PREFERENCES);
+  /**
+   * How many times a store has been READ into this hook.
+   *
+   * Downstream, restoring a layout is a once-per-load act, and "once" has to be
+   * counted against something. Counted against the component's lifetime it is
+   * wrong as soon as the host swaps stores — signing into a second workspace
+   * loads that user's preferences, and a guard that already fired leaves the
+   * previous user's widths on screen.
+   *
+   * A counter rather than the store's identity, because it is the LOAD that
+   * matters: it advances on every read, so a host that passes the same store
+   * object after changing what is behind it still gets a fresh restoration.
+   */
+  const [loadCount, setLoadCount] = React.useState(0);
 
   React.useEffect(() => {
     const restored = readPreferences(store);
@@ -176,6 +190,7 @@ function usePreferences(store: PreferenceStore) {
     setPreferences(current =>
       shallowEqualPreferences(current, restored) ? current : restored
     );
+    setLoadCount(count => count + 1);
   }, [store]);
 
   // The newest preferences, reachable from a callback that must not go stale.
@@ -206,7 +221,7 @@ function usePreferences(store: PreferenceStore) {
     [store]
   );
 
-  return [preferences, update] as const;
+  return [preferences, update, loadCount] as const;
 }
 
 /**
@@ -270,13 +285,16 @@ type PanelGroupHandle =
 function useRestoredLayout(
   groupRef: React.RefObject<PanelGroupHandle | null>,
   layout: ShellPreferences["layout"],
-  leftPanel: ShellPreferences["leftPanel"]
+  leftPanel: ShellPreferences["leftPanel"],
+  loadCount: number
 ): void {
-  const applied = React.useRef(false);
+  const applied = React.useRef(-1);
 
   React.useEffect(() => {
     const group = groupRef.current;
-    if (group === null || layout === null || applied.current) return;
+    if (group === null || layout === null || applied.current === loadCount) {
+      return;
+    }
 
     const mounted = Object.keys(group.getLayout()).sort().join(",");
     const stored = Object.keys(layout).sort().join(",");
@@ -285,12 +303,12 @@ function useRestoredLayout(
     // topology settles.
     if (mounted !== stored) return;
 
-    applied.current = true;
+    applied.current = loadCount;
     group.setLayout(layout);
     // `leftPanel` is not read in the body. It is a dependency because it is what
     // changes the panel set, and the comparison above depends on that having
     // settled.
-  }, [groupRef, layout, leftPanel]);
+  }, [groupRef, layout, leftPanel, loadCount]);
 }
 
 /**
@@ -394,28 +412,81 @@ function useRegionCycling(
         // without reaching for the mouse.
         whenTyping: true,
         run: () => {
-          const map = regionRefs.current;
-          if (!map) return;
-          // Only regions that are actually rendered. The left panel is absent
-          // whenever the rail has nothing open, and cycling the static list
-          // would land on it, focus nothing, and leave the key looking broken
-          // for every press after the first.
-          const present = REGIONS.filter(region => map[region] !== null);
-          if (present.length === 0) return;
-
-          const active = document.activeElement;
-          const currentIndex = present.findIndex(region =>
-            map[region]?.contains(active)
-          );
-          // From outside any region, F6 enters the first rather than doing
-          // nothing — otherwise the key appears broken until focus happens to
-          // land somewhere it recognises.
-          const next = present[(currentIndex + 1) % present.length];
-          if (next !== undefined) map[next]?.focus();
+          focusNextRegion(regionRefs.current);
         },
       },
     ],
     { name: "Builder shell" }
+  );
+}
+
+/**
+ * Move focus to the next rendered region, wrapping around.
+ *
+ * A named function rather than the body of the binding, because TWO paths have
+ * to perform this and they must not be two implementations of it — see
+ * `useSeparatorRegionEscape` for why the second exists.
+ */
+function focusNextRegion(map: Record<Region, HTMLElement | null> | null): void {
+  if (!map) return;
+  // Only regions that are actually rendered. The left panel is absent whenever
+  // the rail has nothing open, and cycling the static list would land on it,
+  // focus nothing, and leave the key looking broken for every press after the
+  // first.
+  const present = REGIONS.filter(region => map[region] !== null);
+  if (present.length === 0) return;
+
+  const active = document.activeElement;
+  const currentIndex = present.findIndex(region =>
+    map[region]?.contains(active)
+  );
+  // From outside any region, F6 enters the first rather than doing nothing —
+  // otherwise the key appears broken until focus happens to land somewhere it
+  // recognises.
+  const next = present[(currentIndex + 1) % present.length];
+  if (next !== undefined) map[next]?.focus();
+}
+
+/**
+ * Let F6 escape a focused drag handle.
+ *
+ * The separators run their own key listener, and it claims F6: it cycles
+ * between separators and calls `preventDefault()`. The shared shortcut manager
+ * deliberately skips an event that has already been prevented — two layers both
+ * acting on one keystroke is the failure it exists to stop — so the shell's
+ * region binding never ran. In the default topology there is exactly ONE
+ * separator, so F6 from a handle re-focused that same handle for ever, which is
+ * the state an author lands in immediately after resizing anything.
+ *
+ * Handled in the CAPTURE phase on the shell root, which is the only place that
+ * runs before the separator's own listener at the target. Propagation is stopped
+ * so the manager does not then cycle a second time on the way back up.
+ *
+ * The region binding stays registered: it is what handles F6 from outside this
+ * subtree, and what puts the shortcut in front of anything that lists them.
+ */
+function useSeparatorRegionEscape(
+  regionRefs: React.RefObject<Record<Region, HTMLElement | null>>,
+  enabled: boolean
+): (event: React.KeyboardEvent<HTMLElement>) => void {
+  return React.useCallback(
+    (event: React.KeyboardEvent<HTMLElement>) => {
+      if (event.key !== "F6" || !enabled) return;
+      // Only from a separator. Everywhere else the manager is the right owner,
+      // and intercepting here would take the key from a host binding that has
+      // every right to it.
+      const target = event.target;
+      if (
+        !(target instanceof HTMLElement) ||
+        target.getAttribute("role") !== "separator"
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      focusNextRegion(regionRefs.current);
+    },
+    [regionRefs, enabled]
   );
 }
 
@@ -430,6 +501,7 @@ function ShellRegions({
   update,
   className,
   active,
+  loadCount,
 }: Omit<BuilderShellProps, "store"> & {
   preferences: ShellPreferences;
   update: (change: (current: ShellPreferences) => ShellPreferences) => void;
@@ -441,6 +513,13 @@ function ShellRegions({
    * and a visible one render identically.
    */
   active: boolean;
+  /**
+   * How many times preferences have been loaded from a store.
+   *
+   * Restoring a layout happens once per load, and this is what "once" is
+   * counted against — see `useRestoredLayout`.
+   */
+  loadCount: number;
 }) {
   const regionRefs = React.useRef<Record<Region, HTMLElement | null>>({
     rail: null,
@@ -449,8 +528,14 @@ function ShellRegions({
     inspector: null,
   });
   useRegionCycling(regionRefs, active);
+  const onKeyDownCapture = useSeparatorRegionEscape(regionRefs, active);
   const groupRef = React.useRef<PanelGroupHandle | null>(null);
-  useRestoredLayout(groupRef, preferences.layout, preferences.leftPanel);
+  useRestoredLayout(
+    groupRef,
+    preferences.layout,
+    preferences.leftPanel,
+    loadCount
+  );
   const chromeRef = React.useRef<HTMLDivElement | null>(null);
   useDesignSystemStylesheet(chromeRef);
 
@@ -465,6 +550,7 @@ function ShellRegions({
   return (
     <div
       ref={chromeRef}
+      onKeyDownCapture={onKeyDownCapture}
       className={cn(
         "nx-builder-chrome flex h-full w-full flex-col overflow-hidden",
         className
@@ -571,7 +657,18 @@ function ShellRegions({
                   aria-label={PANEL_CHROME[openPanel].label}
                   className="bg-[color:var(--nx-builder-surface-raised)] h-full overflow-auto"
                 >
-                  {renderPanel?.(openPanel)}
+                  {/* Keyed by the panel, because the prop's contract says the
+                      result is keyed by the panel and React's default
+                      reconciliation does not honour that. A caller rendering one
+                      component for several panels — `<MyPanel kind={panel} />`,
+                      which is what this package's own README suggests — puts the
+                      same element type at the same position, so switching from
+                      Layers to Tokens UPDATES that instance rather than mounting
+                      a new one: its state, its effects and any uncontrolled
+                      input values follow the author into a different tool. */}
+                  <React.Fragment key={openPanel}>
+                    {renderPanel?.(openPanel)}
+                  </React.Fragment>
                 </section>
               </ResizablePanel>
               <ResizableHandle withGrip />
@@ -643,7 +740,7 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
   const fallbackStore = React.useRef<PreferenceStore | null>(null);
   fallbackStore.current ??= browserStore();
   const resolvedStore = store ?? fallbackStore.current;
-  const [preferences, update] = usePreferences(resolvedStore);
+  const [preferences, update, loadCount] = usePreferences(resolvedStore);
   const fitsFullShell = useFitsFullShell();
 
   return (
@@ -713,6 +810,7 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
             preferences={preferences}
             update={update}
             active={fitsFullShell}
+            loadCount={loadCount}
           />
         </div>
       </TooltipProvider>

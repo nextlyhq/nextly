@@ -27,7 +27,12 @@ export default defineConfig({
   // verbatim copy ships the custom properties without the rules that use them.
   format: ["esm"],
   dts: true,
-  clean: true,
+  // NOT `clean`. This config is one of three producers writing into the same
+  // `dist`, and under `--watch` a clean here deletes the other two's output on
+  // every rebuild — the root entry, the server-safe subpaths and the compiled
+  // stylesheet all vanish until something else happens to rewrite them. The
+  // build script clears the directory once, up front, where nothing races it.
+  clean: false,
   sourcemap: true,
   // Mutually exclusive with the banner above, and correctness wins. Rollup runs
   // the treeshaking pass and drops module-level directives from the bundle —

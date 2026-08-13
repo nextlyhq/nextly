@@ -13,6 +13,7 @@
  * through the port rather than through `localStorage` reached for directly.
  */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import * as React from "react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -468,5 +469,61 @@ describe("the preference store the caller supplies", () => {
 
     expect(second.value).toContain("layers");
     expect(first.value).toBeNull();
+  });
+});
+
+describe("switching between panels", () => {
+  it("mounts the new panel rather than updating the old one", () => {
+    // `renderPanel` is documented as keyed by the panel that is open, and
+    // React's default reconciliation does not honour that: a caller rendering
+    // one component for several panels puts the same element type at the same
+    // position, so switching tools UPDATES that instance. Its state, its
+    // effects and any uncontrolled input values follow the author from Layers
+    // into Tokens, which is a different tool entirely.
+    let mounts = 0;
+    function Probe({ panel }: { panel: string }) {
+      React.useEffect(() => {
+        mounts += 1;
+      }, []);
+      return <p>{panel} panel</p>;
+    }
+
+    renderShell({ renderPanel: panel => <Probe panel={panel} /> });
+
+    fireEvent.click(screen.getByRole("button", { name: "Layers" }));
+    expect(mounts).toBe(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Tokens" }));
+    // A fresh mount, not the same instance handed a new prop. Asserted through
+    // a mount-effect rather than through rendered text: the text changes either
+    // way, so it cannot tell the two apart.
+    expect(mounts).toBe(2);
+  });
+});
+
+describe("F6 from a focused drag handle", () => {
+  it("leaves the separator for the next region", () => {
+    // The separators run their own key listener, and it claims F6: it cycles
+    // between separators and calls `preventDefault()`. The shortcut manager
+    // deliberately skips an already-prevented event, so the shell's region
+    // binding never ran — and with one separator in the default topology, F6
+    // re-focused the same handle for ever. That is the state an author is in
+    // immediately after resizing anything.
+    renderShell({ renderPanel: panel => <p>{panel} panel</p> });
+
+    const separator = screen.getAllByRole("separator")[0];
+    expect(separator).toBeDefined();
+    if (separator === undefined) return;
+    separator.focus();
+    expect(document.activeElement).toBe(separator);
+
+    fireEvent.keyDown(separator, { key: "F6" });
+
+    // Off the handle and onto a region. Which region depends on where the
+    // separator sits; that focus LEFT the separator is the property here.
+    expect(document.activeElement).not.toBe(separator);
+    expect(
+      (document.activeElement as HTMLElement | null)?.getAttribute("aria-label")
+    ).toBeTruthy();
   });
 });
