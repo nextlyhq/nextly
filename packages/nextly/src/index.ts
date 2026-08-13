@@ -394,6 +394,11 @@ export {
   parseBlockDocument,
   type BlockDocumentParseResult,
 } from "./plugins/codegen/block-document";
+// The success shape's `data` IS a `BlockDocument`, so a consumer that parses a
+// document cannot name what it got back without reaching past this barrel into
+// the engine. Re-exported from the engine, which owns the type, so the parser
+// and the shape it returns arrive together.
+export type { BlockDocument } from "@nextlyhq/blocks-engine";
 
 // Plugin System - Types and helpers for creating plugins
 export {

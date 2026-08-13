@@ -87,104 +87,59 @@ describe("measureBytes", () => {
     expect(result.exceeded).toBe(false);
   });
 
-  it("reports a repeated reference, which storage would duplicate", () => {
-    // Not a cycle, and still a document that changes under storage: JSON
-    // duplicates a shared subtree, so what is read back is not what was
-    // validated. Unreachable from `JSON.parse`, which always yields a tree, so
-    // a shared reference means a JavaScript caller built it.
-    const shared = { text: "once" };
-    expect(
-      measureBytes(pageWith({ a: shared, b: shared }), 10_000_000)
-        .unserializable
-    ).toBe(true);
+  it("counts a repeated subtree once per occurrence", () => {
+    // A shared reference is legal JSON: the serializer DUPLICATES the subtree.
+    // Counting it once undercounts by exactly the copy storage will add, which
+    // is how a document over the cap can measure under it.
+    const shared = { text: "x".repeat(1000) };
+    const document = pageWith({ a: shared, b: shared });
 
-    // The control: two structurally equal but distinct objects are a tree, and
-    // must NOT be flagged, or the assertion above passes for a walk that
-    // refuses every document with two similar values in it.
-    expect(
-      measureBytes(
-        pageWith({ a: { text: "once" }, b: { text: "once" } }),
-        10_000_000
-      ).unserializable
-    ).toBe(false);
+    expect(measureBytes(document, Number.MAX_SAFE_INTEGER).bytes).toBe(
+      realBytes(document)
+    );
+    expect(measureBytes(document, Number.MAX_SAFE_INTEGER).unserializable).toBe(
+      false
+    );
   });
 
-  it("reads property values one at a time, not all at once", () => {
-    // The reason the walk uses `for...in` with an indexed read rather than
-    // `Object.entries`: the latter builds the complete array of key/value pairs
-    // before the loop can compare even the first key against the limit, so an
-    // object with hundreds of thousands of keys forces exactly the allocation
-    // this counter exists to avoid.
-    //
-    // Allocation is not observable from a test, but the READ is: a getter fires
-    // when its value is taken. `Object.entries` takes every value up front, so
-    // it would fire all of them regardless of the limit; a lazy walk stops
-    // early. This is the assertion that separates the two — the correctness
-    // tests above pass under either.
-    let reads = 0;
-    const wide: Record<string, unknown> = {};
-    for (let index = 0; index < 5_000; index += 1) {
-      Object.defineProperty(wide, `key${index}`, {
-        enumerable: true,
-        get() {
-          reads += 1;
-          return "x".repeat(100);
-        },
-      });
-    }
-
-    const result = measureBytes(wide, 2_000);
-    expect(result.exceeded).toBe(true);
-    // Measured at 210 — bounded by how many keys fit in the 2,000-byte limit,
-    // not by the object's 5,000. An eager pass reads all 5,000 whatever the
-    // limit is, which is the difference this asserts.
-    expect(reads).toBeLessThan(500);
-  });
-
-  it("stops reading values once the limit is crossed by value bytes", () => {
-    // The companion to the test above, and the one that separates lazy KEYS
-    // from lazy VALUES. That test crosses the limit on key bytes alone, so it
-    // passes for an implementation that stacks every value before measuring
-    // any — which is eager in exactly the half that allocates.
-    //
-    // Here the keys are negligible and the values are large, so the limit can
-    // only be reached by reading them. An implementation that collects values
-    // first runs all 1,000 accessors and holds ~100 MB before consulting the
-    // cap; one that measures as it goes stops after about twenty.
-    let reads = 0;
-    const wide: Record<string, unknown> = {};
-    for (let index = 0; index < 1_000; index += 1) {
-      Object.defineProperty(wide, `k${index}`, {
-        enumerable: true,
-        get() {
-          reads += 1;
-          return "x".repeat(100_000);
-        },
-      });
-    }
-
-    const result = measureBytes(wide, 2 * 1024 * 1024);
-    expect(result.exceeded).toBe(true);
-    // 2 MiB / 100 KB is about 21 values. Bounded by the LIMIT rather than by
-    // the object, which is the property; the margin allows for counting order.
-    expect(reads).toBeLessThan(60);
-  });
-
-  it("reports a throwing accessor rather than letting it escape", () => {
-    // This walk is a precondition for parsing untrusted input, so an exception
-    // escaping it crashes the process doing the checking — the outcome the
-    // bound exists to prevent, arriving through the bound itself. A value that
-    // cannot be read cannot be stored either, so the throw is a verdict.
+  it("refuses an accessor without invoking it", () => {
+    // A getter's return value is not what storage holds, and running it to find
+    // that out is the risk itself: it is caller-supplied code reached while
+    // checking input that is untrusted by definition. The descriptor says a
+    // property is an accessor without evaluating anything.
+    let invoked = 0;
     const hostile: Record<string, unknown> = { ok: 1 };
-    Object.defineProperty(hostile, "boom", {
+    Object.defineProperty(hostile, "computed", {
       enumerable: true,
       get() {
-        throw new Error("accessor");
+        invoked += 1;
+        return "x".repeat(100_000);
       },
     });
 
-    expect(() => measureBytes(hostile, 1024)).not.toThrow();
-    expect(measureBytes(hostile, 1024).unserializable).toBe(true);
+    expect(measureBytes(hostile, 2 * 1024 * 1024).unserializable).toBe(true);
+    expect(invoked).toBe(0);
+  });
+
+  it("reads array elements one at a time", () => {
+    // Arrays are read by index, so a proxy can observe the order. Filling the
+    // stack first reads every element before any is measured, which holds an
+    // entire hostile array in memory while enforcing the cap that exists to
+    // refuse it.
+    let reads = 0;
+    const backing = Array.from({ length: 1_000 }, () => "x".repeat(100_000));
+    const observed = new Proxy(backing, {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^[0-9]+$/.test(key)) reads += 1;
+        return Reflect.get(target, key, receiver) as unknown;
+      },
+    });
+
+    expect(measureBytes({ items: observed }, 2 * 1024 * 1024).exceeded).toBe(
+      true
+    );
+    // 2 MiB / 100 KB is about 21 elements. An eager fill reads all 1,000.
+    expect(reads).toBeLessThan(100);
   });
 
   it("reports symbol-keyed properties on objects and arrays", () => {
@@ -198,7 +153,7 @@ describe("measureBytes", () => {
     expect(measureBytes(array, 1024).unserializable).toBe(true);
 
     // The positive control: an ordinary object and array must NOT be flagged,
-    // or the check above passes for a walk that refuses everything.
+    // or the assertions above pass for a walk that refuses everything.
     expect(measureBytes({ ok: 1 }, 1024).unserializable).toBe(false);
     expect(measureBytes([1, 2], 1024).unserializable).toBe(false);
   });

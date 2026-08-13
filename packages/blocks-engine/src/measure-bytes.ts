@@ -96,13 +96,13 @@ function scalarBytes(value: unknown, budget: number): number {
 /**
  * Everything one pass over an untrusted document can establish.
  *
- * There used to be two walks: this one for size, and a separate structural
- * guard for depth and node count. They visited the same tree, asked different
- * questions, and each carried its own defensive logic — so every property added
- * to one was missing from the other, and four rounds of review found exactly
- * that, one property at a time. Reading a value safely, terminating on a cycle,
- * refusing what JSON rewrites: none of those are questions about SIZE, they are
- * questions about traversing hostile input, and there is one traversal now.
+ * Depth, node count, serialized size, JSON-representability and read safety are
+ * five questions about the same tree, and one traversal answers all of them.
+ * Splitting them across separate walks means each grows its own defensive
+ * logic, and a property added to one is silently absent from the other:
+ * reading a value safely, terminating on a cycle and refusing what JSON
+ * rewrites are not questions about SIZE, they are questions about traversing
+ * hostile input, and they belong to whatever does the traversing.
  *
  * The stack is explicit so deep nesting cannot overflow, every bound stops the
  * walk at its first breach, and no branch reads a value it has not guarded.
@@ -139,6 +139,8 @@ export interface SurveyLimits {
  * count bounds describe the document's structure rather than its data.
  */
 type FrameKind =
+  /** A marker that closes a subtree, removing its root from the active path. */
+  | "leave"
   /** Ordinary data: props, styles, an attribute map, an array of strings. */
   | "value"
   /** An array whose elements are nodes: the envelope's `nodes`, a slot's children. */
@@ -163,15 +165,13 @@ export function surveyDocument(
   let unserializable = false;
   let nodes = 0;
 
-  // Every object reached, not only those on the current path. A repeated
-  // reference is not a cycle in general, but it IS a document that changes
-  // under storage: `JSON.stringify` duplicates a shared subtree and throws on a
-  // true cycle, so in both cases the document read back is not the one that was
-  // validated. Flagging both here also terminates the walk on a cycle
-  // INDEPENDENTLY of the byte cap, which is the property a size bound cannot
-  // provide — a cyclic document of small values never reaches the cap.
-  const seen = new WeakSet<object>();
-
+  // Objects on the CURRENT PATH, not every object seen. A repeated reference
+  // that is not a cycle is legal JSON — the serializer duplicates the subtree —
+  // so skipping it undercounts: two nodes sharing one props object measured
+  // half the real size and passed a cap the document exceeded. Only a reference
+  // that is its own ancestor cannot be serialized at all, and only that one
+  // must stop the walk.
+  const onPath = new Set<object>();
   const stack: Frame[] = [{ value: root, kind: "value", depth: 0 }];
 
   const done = (): DocumentSurvey => ({
@@ -182,14 +182,26 @@ export function surveyDocument(
     unserializable,
   });
 
+  /** Account for a value that cannot contain others. */
+  const takeScalar = (held: unknown): boolean => {
+    bytes += scalarBytes(held, limits.maxBytes - bytes);
+    if (!isSerializableScalar(held)) unserializable = true;
+    return bytes > limits.maxBytes;
+  };
+
   while (stack.length > 0) {
     const frame = stack.pop();
     if (frame === undefined) continue;
+
+    // A leave marker closes the subtree it was pushed with, so `onPath` holds
+    // ancestors only. Pushed BEFORE the children, so it pops after them.
+    if (frame.kind === "leave") {
+      onPath.delete(frame.value as object);
+      continue;
+    }
+
     const { value, kind, depth } = frame;
 
-    // Only a NODE counts. The array holding nodes and the map holding those
-    // arrays are structure, not content, and counting them would make the caps
-    // describe the shape of the encoding rather than the size of the document.
     if (kind === "node") {
       nodes += 1;
       if (depth > limits.maxDepth) return { ...done(), tooDeep: true };
@@ -197,38 +209,52 @@ export function surveyDocument(
     }
 
     if (typeof value !== "object" || value === null) {
-      bytes += scalarBytes(value, limits.maxBytes - bytes);
-      if (!isSerializableScalar(value)) unserializable = true;
-      if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
+      if (takeScalar(value)) return { ...done(), tooLarge: true };
       continue;
     }
 
-    // A second visit means the document is a graph rather than a tree.
-    if (seen.has(value)) {
+    if (onPath.has(value)) {
+      // Its own ancestor. `JSON.stringify` throws here, and descending would
+      // not terminate.
       unserializable = true;
       continue;
     }
-    seen.add(value);
 
-    // Symbol-keyed own properties are dropped by JSON without a word. Cheap on
-    // both objects and arrays; the NAMED equivalent on an array is the same
-    // class and is deliberately not detected, because `Object.keys` allocates a
-    // string per index — measured at over two seconds on an array this walk
-    // otherwise rejects in milliseconds.
-    if (Object.getOwnPropertySymbols(value).length > 0) unserializable = true;
+    // Reflection on a Proxy runs caller-supplied traps, which can throw. This
+    // walk is a precondition for parsing untrusted input, so a trap must not
+    // take down the process doing the checking.
+    try {
+      if (Object.getOwnPropertySymbols(value).length > 0) unserializable = true;
+    } catch {
+      unserializable = true;
+      continue;
+    }
+
+    onPath.add(value);
+    stack.push({ value, kind: "leave", depth: 0 });
 
     if (Array.isArray(value)) {
       bytes += 2 + Math.max(0, value.length - 1);
       if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
 
-      // Elements are measured as the walk reaches them, exactly as object
-      // values are. Pushing the whole array first is lazy in nothing: a
-      // million-element array of large strings would be resident before the cap
-      // was consulted a second time.
-      // A node list's elements are nodes; any other array's elements are data.
       const elementKind: FrameKind = kind === "nodeList" ? "node" : "value";
-      for (let index = value.length - 1; index >= 0; index -= 1) {
-        stack.push({ value: value[index], kind: elementKind, depth });
+      // Read one element, account for it, and only then reach for the next.
+      // Filling the stack first reads every element before any is measured, so
+      // an array of accessors returning large strings holds all of them at once
+      // — the allocation the cap exists to refuse, performed while enforcing it.
+      for (let index = 0; index < value.length; index += 1) {
+        let element: unknown;
+        try {
+          element = value[index];
+        } catch {
+          unserializable = true;
+          continue;
+        }
+        if (typeof element === "object" && element !== null) {
+          stack.push({ value: element, kind: elementKind, depth });
+        } else if (takeScalar(element)) {
+          return { ...done(), tooLarge: true };
+        }
       }
       continue;
     }
@@ -246,27 +272,31 @@ export function surveyDocument(
       properties += 1;
       if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
 
-      // An enumerable accessor is caller-supplied code and can throw. This walk
-      // is a precondition for parsing untrusted input, so an exception escaping
-      // it crashes the process doing the checking — the outcome the bounds exist
-      // to prevent, arriving through the bounds themselves.
-      let held: unknown;
+      // An accessor is caller-supplied code. Its DESCRIPTOR says so without
+      // running it, so a document carrying one is refused rather than executed:
+      // a getter's return value is not what storage would hold, and invoking it
+      // to find that out is the risk itself.
+      let descriptor: PropertyDescriptor | undefined;
       try {
-        held = (value as Record<string, unknown>)[key];
+        descriptor = Object.getOwnPropertyDescriptor(value, key);
       } catch {
         unserializable = true;
         continue;
       }
+      if (descriptor !== undefined && descriptor.get !== undefined) {
+        unserializable = true;
+        continue;
+      }
 
-      // The two places the document's own tree continues: `nodes` on the
-      // envelope, and `slots` on a node. Everything else is data whatever it
-      // holds. Reached by OWN key, so a `slots` inherited through a prototype is
-      // not mistaken for the node's children, while one written as an own
-      // `__proto__` key is walked like any other own property — the case a
-      // dotted read (`node.slots`) gets wrong in both directions.
+      const held = descriptor?.value as unknown;
+
+      // The two places the document's own tree continues. `nodes` is the
+      // ENVELOPE's key, so it is recognised only on the root frame — a props
+      // object with a `nodes` key is data, and treating it as structure would
+      // let arbitrary content inflate the node count and the depth.
       let childKind: FrameKind = "value";
       let childDepth = depth;
-      if (kind === "value" && depth === 0 && key === "nodes") {
+      if (kind === "value" && value === root && key === "nodes") {
         childKind = "nodeList";
         childDepth = 1;
       } else if (kind === "node" && key === "slots") {
@@ -274,22 +304,17 @@ export function surveyDocument(
       } else if (kind === "slotMap") {
         childKind = "nodeList";
         childDepth = depth + 1;
-        // A slot NAMED `__proto__` is refused. `JSON.parse` makes it an ordinary
-        // own key, so it survives storage — but every consumer that rebuilds a
-        // record by assignment drops it, including the published schema's own
-        // validator, so its children would go unchecked while the document read
-        // as valid. Slot names are chosen by a block definition, so forbidding
-        // one reserved word costs an author nothing; leaving it costs a silent
-        // hole in the only structure the format nests through.
+        // A slot named `__proto__` survives JSON as an ordinary own key, while
+        // every consumer that rebuilds a record by assignment drops it — the
+        // published schema's validator included — so its children would go
+        // unchecked while the document read as valid.
         if (key === "__proto__") unserializable = true;
       }
 
       if (typeof held === "object" && held !== null) {
         stack.push({ value: held, kind: childKind, depth: childDepth });
-      } else {
-        bytes += scalarBytes(held, limits.maxBytes - bytes);
-        if (!isSerializableScalar(held)) unserializable = true;
-        if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
+      } else if (takeScalar(held)) {
+        return { ...done(), tooLarge: true };
       }
     }
   }
