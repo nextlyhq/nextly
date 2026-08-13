@@ -353,6 +353,69 @@ export function getMigrationLockDdl(dialect: MigrationDialect): string[] {
 }
 
 /**
+ * Add `expires_at` to a lock table created before that column existed.
+ *
+ * 🔴 `CREATE TABLE IF NOT EXISTS` is a NO-OP against an existing table, so every installation that
+ * has run a Schema Builder change since the lock was introduced holds a two-column row that the
+ * liveness read then references a missing column on. That is not a cosmetic upgrade wrinkle: the
+ * exclusion takes this lock BEFORE the schema sync that would reconcile the column, so the
+ * reconciliation which repairs it can never run — the upgrade path deadlocks on its own repair.
+ *
+ * Emitted separately from the CREATE rather than folded into it because the two answer different
+ * questions, and a caller forbidden from issuing DDL needs to be able to skip both.
+ */
+export function getMigrationLockUpgradeDdl(dialect: MigrationDialect): string {
+  const expiresType =
+    dialect === "postgresql"
+      ? "timestamptz"
+      : dialect === "mysql"
+        ? "datetime"
+        : "integer";
+  // PostgreSQL can say IF NOT EXISTS here; MySQL and SQLite cannot at the versions this supports,
+  // so the duplicate is tolerated by CODE below rather than by syntax.
+  const guard = dialect === "postgresql" ? "IF NOT EXISTS " : "";
+  return `ALTER TABLE ${MIGRATION_LOCK_TABLE} ADD COLUMN ${guard}expires_at ${expiresType}`;
+}
+
+/**
+ * Whether a failed ALTER means the column is already there.
+ *
+ * Classified by the driver's own code where one exists, at the specificity the claim needs — the
+ * same discipline {@link isMissingTable} follows. A wrong answer here is not cosmetic in either
+ * direction: swallowing a real failure would leave the column absent and every later read broken,
+ * while treating "already present" as fatal would refuse every second run.
+ */
+function isDuplicateColumn(error: unknown, dialect: MigrationDialect): boolean {
+  let link: unknown = error;
+  for (
+    let depth = 0;
+    depth < 5 && link !== null && link !== undefined;
+    depth++
+  ) {
+    const code = safeCode(link);
+    const message = link instanceof Error ? link.message : "";
+
+    // 42701 duplicate_column. Postgres also accepts IF NOT EXISTS, so this is the belt to that
+    // brace rather than the only guard.
+    if (dialect === "postgresql" && code === "42701") return true;
+    if (
+      dialect === "mysql" &&
+      (code === "ER_DUP_FIELDNAME" || code === "1060" || code === "42S21")
+    ) {
+      return true;
+    }
+    // SQLite has no distinct code for this, and unlike the missing-table case there is no privilege
+    // model to confuse it with: a duplicate column name is the only thing that produces this text.
+    if (dialect === "sqlite" && /duplicate column name/i.test(message)) {
+      return true;
+    }
+
+    link = (link as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
  * Hold the migration lock for the duration of `fn`.
  *
  * Refuses rather than continuing when the lock is held. The schema pipeline's
@@ -626,6 +689,16 @@ async function ensureLockRow(
   for (const statement of getMigrationLockDdl(dialect)) {
     await adapter.executeQuery(statement);
   }
+
+  // Runs unconditionally rather than behind a "does the column exist" probe, because the probe and
+  // the ALTER would be two round trips racing each other — and the duplicate this may raise is
+  // precisely the answer that probe would have returned.
+  try {
+    await adapter.executeQuery(getMigrationLockUpgradeDdl(dialect));
+  } catch (error) {
+    if (!isDuplicateColumn(error, dialect)) throw error;
+  }
+
   await seedLockRow(adapter);
 }
 

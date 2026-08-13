@@ -830,6 +830,56 @@ describe("field-group migration session", () => {
     }
   });
 
+  // 🔴 `CREATE TABLE IF NOT EXISTS` is a no-op against a table that already exists, so an install
+  // holding the two-column lock row never gains `expires_at` and every liveness read then names a
+  // missing column. The upgrade path deadlocks on its own repair: this lock is taken BEFORE the
+  // schema sync that would reconcile the column.
+  it.each<MigrationDialect>(["postgresql", "mysql", "sqlite"])(
+    "adds the expiry column to a pre-existing lock table on %s",
+    async dialect => {
+      const h = createAdapter({ heldBy: null });
+      await withMigrationSession(
+        { adapter: h.adapter, dialect, label: "run-1" },
+        async () => undefined
+      );
+      const altered = h.ddl.filter(s => /ALTER TABLE/i.test(s));
+      expect(altered).toHaveLength(1);
+      expect(altered[0]).toContain("expires_at");
+    }
+  );
+
+  // The upgrade runs unconditionally, so the SECOND run always meets a column that is already
+  // there. Tolerating that by CODE is what makes the statement safe to issue every time — and a
+  // failure that is NOT a duplicate must still surface, or a genuinely broken ALTER would be
+  // swallowed and every later read would fail on the missing column.
+  it("tolerates the expiry column already existing, but not other failures", async () => {
+    const duplicate = createAdapter({ heldBy: null });
+    duplicate.adapter.executeQuery = vi.fn(async (sql: string) => {
+      if (/ALTER TABLE/i.test(sql))
+        throw new Error("duplicate column name: expires_at");
+      return [];
+    }) as unknown as typeof duplicate.adapter.executeQuery;
+    await expect(
+      withMigrationSession(
+        { adapter: duplicate.adapter, dialect: "sqlite", label: "run-1" },
+        async () => undefined
+      )
+    ).resolves.toBeUndefined();
+
+    const denied = createAdapter({ heldBy: null });
+    denied.adapter.executeQuery = vi.fn(async (sql: string) => {
+      if (/ALTER TABLE/i.test(sql))
+        throw new Error("permission denied for table");
+      return [];
+    }) as unknown as typeof denied.adapter.executeQuery;
+    await expect(
+      withMigrationSession(
+        { adapter: denied.adapter, dialect: "sqlite", label: "run-1" },
+        async () => undefined
+      )
+    ).rejects.toThrowError(/permission denied/);
+  });
+
   it("uses a lock table distinct from the schema pipeline's", () => {
     expect(MIGRATION_LOCK_TABLE).toBe("nextly_field_group_lock");
     expect(MIGRATION_LOCK_TABLE).not.toBe("nextly_migrate_lock");
