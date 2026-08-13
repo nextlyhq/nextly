@@ -379,6 +379,31 @@ describe("a viewport too narrow for the shell", () => {
     expect(screen.queryByRole("main", { name: "Canvas" })).toBeNull();
   });
 
+  it("does not cycle regions while the editor is hidden", () => {
+    // The slots stay mounted behind the notice, which leaves the F6 binding
+    // registered over regions that are all `inert`. Left enabled it consumed the
+    // key, focused nothing a person could see, and — where the host shares the
+    // shortcut manager — took the keystroke from whatever binding of its own
+    // would otherwise have handled it.
+    stubViewport(false);
+    render(
+      <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+        <p data-testid="canvas-slot">the caller&apos;s canvas</p>
+      </BuilderShell>
+    );
+
+    const exit = screen.getByRole("button", { name: "Exit editor" });
+    exit.focus();
+    expect(document.activeElement).toBe(exit);
+
+    fireEvent.keyDown(document, { key: "F6" });
+
+    // Focus has not been pulled into the hidden subtree. jsdom does not
+    // implement `inert`, so nothing but the disabled binding stops it here —
+    // which is exactly the property under test.
+    expect(document.activeElement).toBe(exit);
+  });
+
   it("keeps the class the caller positioned the shell with", () => {
     // The className is how the host places the shell in its own layout — a grid
     // area, a height, a border. Dropping it on this path let the notice escape

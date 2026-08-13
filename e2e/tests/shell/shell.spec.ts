@@ -146,6 +146,35 @@ test.describe("panel widths survive a reload", () => {
     expect(await shell.panelIsOpen()).toBe(true);
     expect(await shell.widthOf("panel")).toBeCloseTo(dragged, -1);
   });
+
+  test("restores a width dragged with no panel open", async ({ page }) => {
+    // The DEFAULT state, and the one the test above cannot speak for.
+    //
+    // Opening a panel first changes the group's topology, which re-registers
+    // every panel — and registration is the only moment `react-resizable-panels`
+    // reads `defaultLayout`. So that test would pass even with restoration
+    // entirely broken, because the click, not the restore, is what applied the
+    // stored value. Here nothing changes the panel set, so the only thing that
+    // can put the width back is restoration itself.
+    const shell = createShellDriver(page);
+    await shell.goto();
+    expect(await shell.panelIsOpen()).toBe(false);
+
+    const before = await shell.widthOf("inspector");
+    await shell.dragSeparator(0, -80);
+    const dragged = await shell.widthOf("inspector");
+    // Without this the reload assertion compares a width to itself and passes
+    // whether or not anything was ever persisted.
+    expect(Math.abs(dragged - before)).toBeGreaterThan(20);
+
+    await page.reload();
+    await page
+      .getByRole("navigation", { name: "Editor panels" })
+      .waitFor({ state: "visible" });
+
+    expect(await shell.panelIsOpen()).toBe(false);
+    expect(await shell.widthOf("inspector")).toBeCloseTo(dragged, -1);
+  });
 });
 
 test.describe("keyboard region cycling", () => {

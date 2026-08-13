@@ -233,6 +233,67 @@ function shallowEqualPreferences(
 }
 
 /**
+ * The panel group's imperative handle, DERIVED from the component's own props.
+ *
+ * Restated as a local interface it would be a second copy of the library's
+ * type, agreeing on the day it was written and silently afterwards. Taken from
+ * `groupRef` it cannot drift: if the handle changes shape, this stops compiling.
+ */
+type PanelGroupHandle =
+  NonNullable<
+    React.ComponentProps<typeof ResizablePanelGroup>["groupRef"]
+  > extends React.Ref<infer Handle>
+    ? NonNullable<Handle>
+    : never;
+
+/**
+ * Apply a restored layout to a group that has already mounted.
+ *
+ * `defaultLayout` cannot do this, and that is a property of the library rather
+ * than of how it is being called. Version 4.12.2 reads that prop when the panels
+ * REGISTER; changing it afterwards only assigns `mutableState.defaultLayout` and
+ * never applies it. Preferences here are restored in an effect, deliberately —
+ * reading storage during render diverges from the server's markup and costs a
+ * hydration failure — so the value always arrives after registration, and the
+ * prop was never going to take.
+ *
+ * The case that hid it: opening a panel CHANGES the panel set, which re-registers
+ * everything and makes the deferred value take effect after all. So a layout
+ * dragged with a panel open appeared to restore, while one dragged with the rail
+ * closed — the default state, and the common one — silently reset on reload.
+ *
+ * Applied once per matching topology. The stored keys are compared with the
+ * mounted ones because they can legitimately disagree: a layout saved with the
+ * left panel open names a panel that is not mounted when it is closed, and
+ * handing the group a layout for panels it does not have is not a restoration.
+ */
+function useRestoredLayout(
+  groupRef: React.RefObject<PanelGroupHandle | null>,
+  layout: ShellPreferences["layout"],
+  leftPanel: ShellPreferences["leftPanel"]
+): void {
+  const applied = React.useRef(false);
+
+  React.useEffect(() => {
+    const group = groupRef.current;
+    if (group === null || layout === null || applied.current) return;
+
+    const mounted = Object.keys(group.getLayout()).sort().join(",");
+    const stored = Object.keys(layout).sort().join(",");
+    // Not an error, and not permanent: the panel may simply not have mounted
+    // yet. `leftPanel` is in the dependencies so this runs again when the
+    // topology settles.
+    if (mounted !== stored) return;
+
+    applied.current = true;
+    group.setLayout(layout);
+    // `leftPanel` is not read in the body. It is a dependency because it is what
+    // changes the panel set, and the comparison above depends on that having
+    // settled.
+  }, [groupRef, layout, leftPanel]);
+}
+
+/**
  * One design-system token, read off the mounted shell.
  *
  * Chosen over any `--nx-builder-*` because those are declared in this package's
@@ -298,12 +359,31 @@ function useDesignSystemStylesheet(
  * owns it" happens — the failure the manager exists to prevent.
  */
 function useRegionCycling(
-  regionRefs: React.RefObject<Record<Region, HTMLElement | null>>
+  regionRefs: React.RefObject<Record<Region, HTMLElement | null>>,
+  enabled: boolean
 ): void {
+  // Read through a ref so the binding's `when` sees the CURRENT answer. The
+  // manager checks it at press time, and a value captured when the binding was
+  // registered would keep reporting whatever was true then.
+  const enabledRef = React.useRef(enabled);
+  enabledRef.current = enabled;
+
   useShortcuts(
     [
       {
         keys: "F6",
+        // Off while the shell is hidden behind the narrow-viewport notice. The
+        // subtree stays mounted there to preserve the caller's slots, which
+        // leaves this binding registered over regions that are all `inert`:
+        // pressing F6 on the notice consumed the key, focused nothing, and —
+        // where the host shares the shortcut manager — took the keystroke from
+        // whatever binding of its own would otherwise have handled it.
+        //
+        // `when` rather than skipping registration, because it is the
+        // manager's own way of saying "not right now": a binding whose
+        // condition is false is passed over and the key goes on to the next
+        // layer, which is exactly the behaviour the host needs back.
+        when: () => enabledRef.current,
         description: "Move to the next area of the editor",
         // The manager's default asks whether the FIRST chord carries a modifier
         // or is Escape, and answers no for a bare function key — so F6 would be
@@ -349,9 +429,18 @@ function ShellRegions({
   preferences,
   update,
   className,
+  active,
 }: Omit<BuilderShellProps, "store"> & {
   preferences: ShellPreferences;
   update: (change: (current: ShellPreferences) => ShellPreferences) => void;
+  /**
+   * Whether this subtree is the one the author is using.
+   *
+   * False while it sits mounted-but-hidden behind the narrow-viewport notice,
+   * which is a state it cannot detect for itself: from in here a hidden shell
+   * and a visible one render identically.
+   */
+  active: boolean;
 }) {
   const regionRefs = React.useRef<Record<Region, HTMLElement | null>>({
     rail: null,
@@ -359,7 +448,9 @@ function ShellRegions({
     canvas: null,
     inspector: null,
   });
-  useRegionCycling(regionRefs);
+  useRegionCycling(regionRefs, active);
+  const groupRef = React.useRef<PanelGroupHandle | null>(null);
+  useRestoredLayout(groupRef, preferences.layout, preferences.leftPanel);
   const chromeRef = React.useRef<HTMLDivElement | null>(null);
   useDesignSystemStylesheet(chromeRef);
 
@@ -435,8 +526,8 @@ function ShellRegions({
 
         <ResizablePanelGroup
           orientation="horizontal"
-          defaultLayout={preferences.layout ?? undefined}
-          onLayoutChanged={(layout, meta) => {
+          groupRef={groupRef}
+          onLayoutChanged={(_layout, meta) => {
             // The group reports every layout it settles on, not only the ones a
             // person asked for. Mounting, recomputing constraints and reacting
             // to a changed default all arrive here too, and the mount pass
@@ -450,7 +541,17 @@ function ShellRegions({
             // separator. Dragging a separator is the one event that states an
             // intent about widths, and it is the only one worth remembering.
             if (!meta.isUserInteraction) return;
-            update(current => ({ ...current, layout: { ...layout } }));
+            const group = groupRef.current;
+            if (group === null) return;
+            // Read back through `getLayout` rather than persisting the argument.
+            // The callback reports FLEX-GROW weights while `setLayout` takes
+            // PERCENTAGES, and restoring now goes through `setLayout`; storing
+            // one unit and replaying it as the other is a bug that only shows up
+            // on a layout whose weights happen not to sum to 100.
+            update(current => ({
+              ...current,
+              layout: { ...group.getLayout() },
+            }));
           }}
           className="min-w-0 flex-1"
         >
@@ -607,7 +708,12 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
           // `display: none` has to be the one that applies.
           className={fitsFullShell ? "contents" : undefined}
         >
-          <ShellRegions {...props} preferences={preferences} update={update} />
+          <ShellRegions
+            {...props}
+            preferences={preferences}
+            update={update}
+            active={fitsFullShell}
+          />
         </div>
       </TooltipProvider>
     </ShortcutProvider>

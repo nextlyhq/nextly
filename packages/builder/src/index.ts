@@ -30,9 +30,11 @@
  *   {@link rectToHost}, {@link frameContentOrigin}, {@link frameInsetOf} — also
  *   published at `@nextlyhq/builder/geometry`, which carries no `"use client"`
  *   banner and so is reachable from a server component.
- * - {@link BuilderShell}, the editor shell, with its declared bounds and
- *   preference port. Those are also published at
- *   `@nextlyhq/builder/shell-state`, again free of the client banner.
+ * - The shell's declared bounds and preference port, also published at
+ *   `@nextlyhq/builder/shell-state`.
+ * - `BuilderShell` itself at `@nextlyhq/builder/shell`, which is the ONLY entry
+ *   carrying `"use client"`. This one does not, so everything above is callable
+ *   from a Server Component.
  * - `@nextlyhq/builder/styles.css`, the chrome's stylesheet. It SUPPLEMENTS the
  *   design system's rather than restating it, so a host loads
  *   `@nextlyhq/ui/styles.css` — or the admin's, which contains it — alongside.
@@ -88,10 +90,16 @@ export {
 export { frameInsetOf } from "./geometry-dom";
 
 /**
- * @experimental The editor shell: rail, one switched panel, canvas, inspector,
- * and the bars around them. Presentational — selection arrives as props.
+ * @experimental The editor shell's props.
+ *
+ * The TYPE only. `BuilderShell` itself lives at `@nextlyhq/builder/shell`, and
+ * this entry deliberately does not re-export it: a value re-export would pull
+ * the component into this bundle, which would then need the `"use client"`
+ * banner, which would make every export above it a client reference — including
+ * the geometry, which a Server Component is supposed to be able to call.
+ *
+ * A type costs nothing at runtime, so it can be described from here.
  */
-export { BuilderShell } from "./builder-shell";
 export type { BuilderShellProps } from "./builder-shell";
 
 /**

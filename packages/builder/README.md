@@ -82,7 +82,7 @@ bumps this package in lockstep with its siblings.
 ### The editor shell
 
 ```tsx
-import { BuilderShell } from "@nextlyhq/builder";
+import { BuilderShell } from "@nextlyhq/builder/shell";
 import "@nextlyhq/ui/styles.css"; // the design system's — see below
 import "@nextlyhq/builder/styles.css"; // the editor chrome's
 
@@ -172,18 +172,29 @@ The persisted layout is PROPORTIONAL. A pixel layout is wrong on the next
 monitor; the pixel bounds still hold because the library re-applies them to
 whatever the proportions resolve to.
 
-### Server-safe subpaths
+### Where the client boundary is
 
-The root entry ships `"use client"`, because the shell is a client component and
-the directive has to survive bundling. Two modules contain no React and are
-published separately so that banner does not reach them:
+**The root entry is server-safe.** `"use client"` is carried by
+`@nextlyhq/builder/shell` alone, which is the only entry containing React:
 
 ```ts
+// Client. The shell is a client component.
+import { BuilderShell } from "@nextlyhq/builder/shell";
+
+// Server-callable. No React in any of them.
+import { BUILDER_PACKAGE_NAME, rectToHost } from "@nextlyhq/builder";
 import { fitsFullShell, PANEL_BOUNDS } from "@nextlyhq/builder/shell-state";
-import { canvasRectToHost } from "@nextlyhq/builder/geometry";
+import { rectToHost } from "@nextlyhq/builder/geometry";
 ```
 
-Both are importable from a Server Component. Neither imports anything at all.
+The split is not tidiness. A banner applies to a whole artifact and everything
+it re-exports, so putting the shell in the root barrel turned the frame geometry
+— plain arithmetic, and public here before the shell existed — into client
+references a Server Component could no longer call, while the export map went on
+advertising callable functions.
+
+`BuilderShellProps` is still described by the root entry: a type is erased, so
+it carries no boundary with it.
 
 This is the same split, for the same reason, as `@nextlyhq/ui`'s `./color` and
 `./utils`. It is not hypothetical tidiness: the geometry already had a consumer

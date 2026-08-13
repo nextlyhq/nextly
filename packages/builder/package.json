@@ -25,6 +25,11 @@
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
+    "./shell": {
+      "types": "./dist/shell.d.ts",
+      "import": "./dist/shell.mjs",
+      "default": "./dist/shell.mjs"
+    },
     "./styles.css": "./dist/builder-chrome.css",
     "./geometry": {
       "types": "./dist/geometry.d.ts",

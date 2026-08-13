@@ -1,6 +1,9 @@
 "use client";
 
-import { BuilderShell, type LeftPanel } from "@nextlyhq/builder";
+import { type LeftPanel } from "@nextlyhq/builder";
+// The shell comes from its own entry: that is the one carrying `"use client"`,
+// which is why the root barrel can stay callable from a Server Component.
+import { BuilderShell } from "@nextlyhq/builder/shell";
 // The design system's sheet FIRST, then the editor's, which supplements it.
 // `@nextlyhq/builder/styles.css` deliberately ships neither the `--nx-*` tokens
 // nor the base reset, because the host already loads a sheet that owns both and

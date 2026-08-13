@@ -39,7 +39,23 @@
  */
 @layer theme, base, components, utilities;
 
-@import "tailwindcss/theme.css" layer(theme);
+/**
+ * The theme is REFERENCED, not imported, and the difference is the whole point.
+ *
+ * `@import "tailwindcss/theme.css"` emits a global `:root, :host` block. Loaded
+ * in the documented order — the design system's sheet, then this one — that
+ * block lands AFTER theirs and wins, so this supplementary sheet silently
+ * replaced the host's theme: `--radius-md` reverted from the design system's
+ * `calc(var(--radius) - 2px)` to Tailwind's `.375rem`, and `--font-mono` from
+ * the Geist-aware stack to Tailwind's default. Controls and type elsewhere in
+ * the host changed the moment the editor's stylesheet loaded.
+ *
+ * `@reference` gives the compiler the same theme to generate utilities against
+ * and emits nothing. The variables those utilities resolve through are declared
+ * by the design system's sheet, which is already required.
+ */
+@reference "tailwindcss";
+
 @import "tailwindcss/utilities.css" layer(utilities);
 
 /* Scan this package's source so the shell's utility classes compile in. */

@@ -27,11 +27,27 @@ import { defineConfig } from "tsup";
  * runs after it.
  */
 export default defineConfig({
-  entry: ["src/geometry.ts", "src/shell-state.ts"],
+  // The ROOT entry is built here too, and that is the point rather than an
+  // accident of grouping. It exports the package name, the frame geometry and
+  // the shell's declared bounds — none of which is React — and it describes
+  // `BuilderShellProps` as a TYPE, which is erased. Built by the client config
+  // it would have inherited the shell's banner and turned every one of those
+  // into a client reference.
+  entry: ["src/index.ts", "src/geometry.ts", "src/shell-state.ts"],
   format: ["esm"],
   dts: true,
   clean: false,
   sourcemap: true,
+  // Only reached through the type side of the root entry's declarations; no
+  // runtime import here pulls any of them in. Declared so `dts` resolves them
+  // rather than trying to bundle a copy.
+  external: [
+    "react",
+    "react-dom",
+    "react/jsx-runtime",
+    "@nextlyhq/ui",
+    "@nextlyhq/plugin-sdk",
+  ],
   // Safe here, unlike the root config: with no directive to preserve, there is
   // nothing for the treeshaking pass to strip.
   treeshake: true,
