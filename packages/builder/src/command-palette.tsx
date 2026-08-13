@@ -60,7 +60,13 @@ export const COMMAND_PALETTE_KEYS = "mod+k";
  * reworded, and a React key that changes on a copy edit remounts the row and drops its state.
  */
 export interface BuilderCommand {
-  /** Stable across renames. Used as the React key and as the search value's suffix. */
+  /**
+   * Stable across renames, and UNIQUE across the assembled list.
+   *
+   * Uniqueness is required rather than merely expected: it is the React key and cmdk's selection
+   * identity, and two rows sharing it are both marked selected, with Enter running the first
+   * whichever the user chose. A host that concatenates registries is where this happens.
+   */
   id: string;
   /** What the user reads. */
   label: string;
@@ -172,15 +178,30 @@ function groupAvailable(
  * open.
  */
 export function CommandPalette(props: CommandPaletteProps): React.JSX.Element {
-  // A scope of its own, so the palette's layer sits one level DEEPER than the host that renders
-  // it. Layers at equal depth are ordered by registration, newest first, which would leave the
-  // modal's hold over the keyboard depending on whether the host happened to register its own
-  // shortcuts before or after the palette mounted.
-  return (
-    <ShortcutScope>
-      <PaletteSurface {...props} />
-    </ShortcutScope>
-  );
+  return <PaletteSurface {...props} />;
+}
+
+/**
+ * The palette's hold on the keyboard while it is open, registered one scope DEEPER than the host.
+ *
+ * Depth is what makes the hold reliable: layers at equal depth are ordered by registration, newest
+ * first, so at the host's own depth whether the modal wins would depend on whether the host
+ * mounted its shortcuts before or after the palette.
+ *
+ * Separate from the opener, and this is the point. Elevating the OPENER too would put `mod+k`
+ * above a blocking layer the host already has up — another modal's — and the palette would open
+ * over it, since the manager resolves the deeper exact binding first. The opener stays ambient so
+ * an existing modal can refuse it; only the hold is elevated, and only while open.
+ */
+function ModalKeyboardHold({ active }: { active: boolean }): null {
+  useShortcuts([], {
+    name: "command-palette-modal",
+    enabled: active,
+    // The manager already exempts text insertion and Tab, so the search field and the dialog's
+    // focus trap keep working underneath this.
+    blocking: true,
+  });
+  return null;
 }
 
 function PaletteSurface({
@@ -298,11 +319,9 @@ function PaletteSurface({
     {
       name: "command-palette",
       enabled,
-      // While open the palette is a modal and owns the keyboard: without this the shell's own
-      // bindings still fire underneath it, so F6 would move focus between panels the user cannot
-      // see. The manager already exempts text insertion and Tab, so the search field and the
-      // dialog's focus trap keep working.
-      blocking: open,
+      // NOT blocking, and at the HOST's depth. The hold while open belongs to
+      // `ModalKeyboardHold` below; an opener that blocked, or that sat deeper than the host,
+      // would answer `mod+k` over a modal the host already has up.
     }
   );
 
@@ -321,6 +340,27 @@ function PaletteSurface({
   // changed one — silently offering a different set while the user is searching, which is the
   // half nobody looks at.
   const available = groupAvailable(commands);
+
+  // Refused rather than rendered. A duplicate id makes cmdk run the WRONG command, silently and
+  // only through the keyboard — the failure a caller is least able to see and least likely to
+  // attribute to their registry. Throwing is the same choice `useShortcuts` makes outside a
+  // provider, and for the same reason: a palette that looks mounted and misfires is worse than
+  // one that refuses to mount.
+  //
+  // Over the AVAILABLE list, so a `when` that hides one of a colliding pair is a resolution
+  // rather than a latent fault.
+  const seen = new Set<string>();
+  for (const { commands: groupCommands } of available) {
+    for (const command of groupCommands) {
+      if (seen.has(command.id)) {
+        throw new Error(
+          `CommandPalette received two available commands with the id "${command.id}". ` +
+            "Ids are the selection identity, so a duplicate runs the wrong command."
+        );
+      }
+      seen.add(command.id);
+    }
+  }
   const groups = searching
     ? [{ group: undefined, commands: available.flatMap(g => g.commands) }]
     : available;
@@ -339,84 +379,89 @@ function PaletteSurface({
   );
 
   return (
-    <CommandDialog
-      open={open}
-      onOpenChange={setOpen}
-      // Names the search input. cmdk renders a hidden label for the command root and points the
-      // input's `aria-labelledby` at it, so leaving this unset produces an EMPTY label — an
-      // explicit reference to nothing, which stops the placeholder naming the field and leaves
-      // screen-reader users on an unlabelled search control.
-      commandProps={{
-        label: "Command palette",
-        // Scores the LABEL and synonyms only. cmdk's default scores an item's value too, and the
-        // value here is an encoded id — opaque fragments would surface unrelated commands, and
-        // every encoded id begins and ends with a quote, so a query containing one matched
-        // everything. The default scorer still does the ranking; it is just given the words a
-        // user is actually typing towards.
-        // Scored against the NORMALISED query rather than cmdk's raw one, so the mode decision
-        // and the matching agree: a whitespace-only input is no search to either, and leading or
-        // trailing space does not quietly change anyone's ranking.
-        filter: (_value, _search, keywords) =>
-          commandDefaultFilter(keywords?.join(" ") ?? "", query),
-      }}
-      contentProps={{ onCloseAutoFocus: handleCloseAutoFocus }}
-    >
-      {/*
-       * Visually hidden, but the dialog's accessible name and description all the same:
-       * `CommandDialog` renders neither, so without these a screen reader announces an unnamed
-       * dialog and Radix logs a missing-description warning. The search field's placeholder is
-       * not a substitute — it names the INPUT, not the dialog that wraps it.
-       */}
-      <DialogTitle className="sr-only">Command palette</DialogTitle>
-      <DialogDescription className="sr-only">
-        Search for a command and press Enter to run it.
-      </DialogDescription>
-      <CommandInput
-        placeholder={placeholder}
-        value={search}
-        onValueChange={setSearch}
-      />
-      <CommandList>
-        <CommandEmpty>{emptyMessage}</CommandEmpty>
-        {groups.map(({ group, commands: groupCommands }, index) => (
-          <React.Fragment
-            key={group === undefined ? "ungrouped" : `group:${group}`}
-          >
-            {index > 0 && <CommandSeparator />}
-            <CommandGroup heading={group}>
-              {groupCommands.map(command => (
-                <CommandItem
-                  key={command.id}
-                  // The id ALONE, because cmdk keys selection on this value and a concatenation
-                  // of free-form fields is not injective: `keywords: ["page"], id: "settings x"`
-                  // and `keywords: ["page", "settings"], id: "x"` produce the same string, and
-                  // cmdk then highlights both rows and activates the first whichever is chosen.
-                  // What the search should MATCH goes to `keywords`, which cmdk reads separately.
-                  //
-                  // ENCODED because cmdk trims the value before using it as the identity, so
-                  // `"save"` and `"save "` — distinct ids by the type's contract — would collide
-                  // again through normalisation rather than through concatenation. The quotes
-                  // `JSON.stringify` adds sit at both ends, so there is no edge whitespace for the
-                  // trim to reach.
-                  //
-                  // `JSON.stringify` rather than `encodeURIComponent`, which is not TOTAL over the
-                  // strings `id: string` admits: a lone UTF-16 surrogate — `"\ud800"`, which
-                  // survives a JSON round trip — raises `URIError` and takes the whole palette
-                  // down during render. Well-formed stringify escapes it instead.
-                  value={JSON.stringify(command.id)}
-                  keywords={[command.label, ...(command.keywords ?? [])]}
-                  onSelect={() => choose(command)}
-                >
-                  {command.label}
-                  {command.shortcut && (
-                    <CommandShortcut>{command.shortcut}</CommandShortcut>
-                  )}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </React.Fragment>
-        ))}
-      </CommandList>
-    </CommandDialog>
+    <>
+      <ShortcutScope>
+        <ModalKeyboardHold active={open} />
+      </ShortcutScope>
+      <CommandDialog
+        open={open}
+        onOpenChange={setOpen}
+        // Names the search input. cmdk renders a hidden label for the command root and points the
+        // input's `aria-labelledby` at it, so leaving this unset produces an EMPTY label — an
+        // explicit reference to nothing, which stops the placeholder naming the field and leaves
+        // screen-reader users on an unlabelled search control.
+        commandProps={{
+          label: "Command palette",
+          // Scores the LABEL and synonyms only. cmdk's default scores an item's value too, and the
+          // value here is an encoded id — opaque fragments would surface unrelated commands, and
+          // every encoded id begins and ends with a quote, so a query containing one matched
+          // everything. The default scorer still does the ranking; it is just given the words a
+          // user is actually typing towards.
+          // Scored against the NORMALISED query rather than cmdk's raw one, so the mode decision
+          // and the matching agree: a whitespace-only input is no search to either, and leading or
+          // trailing space does not quietly change anyone's ranking.
+          filter: (_value, _search, keywords) =>
+            commandDefaultFilter(keywords?.join(" ") ?? "", query),
+        }}
+        contentProps={{ onCloseAutoFocus: handleCloseAutoFocus }}
+      >
+        {/*
+         * Visually hidden, but the dialog's accessible name and description all the same:
+         * `CommandDialog` renders neither, so without these a screen reader announces an unnamed
+         * dialog and Radix logs a missing-description warning. The search field's placeholder is
+         * not a substitute — it names the INPUT, not the dialog that wraps it.
+         */}
+        <DialogTitle className="sr-only">Command palette</DialogTitle>
+        <DialogDescription className="sr-only">
+          Search for a command and press Enter to run it.
+        </DialogDescription>
+        <CommandInput
+          placeholder={placeholder}
+          value={search}
+          onValueChange={setSearch}
+        />
+        <CommandList>
+          <CommandEmpty>{emptyMessage}</CommandEmpty>
+          {groups.map(({ group, commands: groupCommands }, index) => (
+            <React.Fragment
+              key={group === undefined ? "ungrouped" : `group:${group}`}
+            >
+              {index > 0 && <CommandSeparator />}
+              <CommandGroup heading={group}>
+                {groupCommands.map(command => (
+                  <CommandItem
+                    key={command.id}
+                    // The id ALONE, because cmdk keys selection on this value and a concatenation
+                    // of free-form fields is not injective: `keywords: ["page"], id: "settings x"`
+                    // and `keywords: ["page", "settings"], id: "x"` produce the same string, and
+                    // cmdk then highlights both rows and activates the first whichever is chosen.
+                    // What the search should MATCH goes to `keywords`, which cmdk reads separately.
+                    //
+                    // ENCODED because cmdk trims the value before using it as the identity, so
+                    // `"save"` and `"save "` — distinct ids by the type's contract — would collide
+                    // again through normalisation rather than through concatenation. The quotes
+                    // `JSON.stringify` adds sit at both ends, so there is no edge whitespace for the
+                    // trim to reach.
+                    //
+                    // `JSON.stringify` rather than `encodeURIComponent`, which is not TOTAL over the
+                    // strings `id: string` admits: a lone UTF-16 surrogate — `"\ud800"`, which
+                    // survives a JSON round trip — raises `URIError` and takes the whole palette
+                    // down during render. Well-formed stringify escapes it instead.
+                    value={JSON.stringify(command.id)}
+                    keywords={[command.label, ...(command.keywords ?? [])]}
+                    onSelect={() => choose(command)}
+                  >
+                    {command.label}
+                    {command.shortcut && (
+                      <CommandShortcut>{command.shortcut}</CommandShortcut>
+                    )}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </React.Fragment>
+          ))}
+        </CommandList>
+      </CommandDialog>
+    </>
   );
 }

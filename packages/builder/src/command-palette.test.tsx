@@ -20,7 +20,7 @@ import {
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ShortcutProvider, useShortcuts } from "@nextlyhq/ui";
+import { ShortcutProvider, ShortcutScope, useShortcuts } from "@nextlyhq/ui";
 
 import { CommandPalette, type BuilderCommand } from "./command-palette";
 
@@ -617,6 +617,40 @@ describe("the host can drive it", () => {
     expect(screen.getByText("Panels")).toBeTruthy();
   });
 
+  it("refuses two available commands that share an id", () => {
+    // A host concatenating registries is where this arises. cmdk keys selection on the id, so a
+    // duplicate marks both rows selected and Enter runs the first whichever was chosen — the
+    // wrong command, silently, and only through the keyboard.
+    const quiet = vi.spyOn(console, "error").mockImplementation(noop);
+    expect(() =>
+      mount(
+        <CommandPalette
+          commands={[
+            { id: "save", label: "Save draft", run: noop },
+            { id: "save", label: "Save and publish", run: noop },
+          ]}
+        />
+      )
+    ).toThrow(/two available commands with the id "save"/);
+    quiet.mockRestore();
+  });
+
+  it("allows a shared id when only one of the pair is available", () => {
+    // Checked over the AVAILABLE list: a `when` that hides one of a colliding pair resolves the
+    // collision, and refusing there would reject a registry that never renders a duplicate.
+    mount(
+      <CommandPalette
+        commands={[
+          { id: "save", label: "Save draft", when: () => false, run: noop },
+          { id: "save", label: "Save and publish", run: noop },
+        ]}
+      />
+    );
+    pressPaletteKey();
+
+    expect(screen.getByText("Save and publish")).toBeTruthy();
+  });
+
   it("names the search field, not just the dialog", () => {
     mount(<CommandPalette commands={[]} />);
     pressPaletteKey();
@@ -711,6 +745,40 @@ describe("the host can drive it", () => {
     // Still once. Acting on a shell the user cannot see behind the modal is exactly the
     // confusion a blocking layer exists to prevent.
     expect(hostShortcut).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not open over a modal that owns the keyboard", () => {
+    /**
+     * Another modal, registered the way one should be: in a scope of its OWN, so its hold sits
+     * deeper than ambient host shortcuts. That is the same arrangement the palette uses while it
+     * is open.
+     */
+    function HostModal() {
+      return (
+        <ShortcutScope>
+          <HostModalHold />
+        </ShortcutScope>
+      );
+    }
+    function HostModalHold() {
+      useShortcuts([], { name: "host-modal", blocking: true });
+      return null;
+    }
+    mount(
+      <>
+        <HostModal />
+        <CommandPalette
+          commands={[{ id: "a", label: "Should not appear", run: noop }]}
+        />
+      </>
+    );
+
+    pressPaletteKey();
+
+    // The palette's OPENER is ambient, so a deeper modal outranks it. Elevating the opener along
+    // with the palette's own hold would have resolved `mod+k` first and opened this over the
+    // other modal.
+    expect(screen.queryByText("Should not appear")).toBeNull();
   });
 
   it("leaves the keystroke to the browser when it is disabled", () => {
