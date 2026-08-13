@@ -32,6 +32,7 @@ import {
   CommandShortcut,
   DialogDescription,
   DialogTitle,
+  ShortcutScope,
   useShortcuts,
 } from "@nextlyhq/ui";
 import * as React from "react";
@@ -78,7 +79,14 @@ export interface BuilderCommand {
 }
 
 export interface CommandPaletteProps {
-  /** Everything the palette can run. Order within a group is preserved. */
+  /**
+   * Everything the palette can run.
+   *
+   * Order within a group is preserved WHILE THE SEARCH IS EMPTY. Once the user types, matches are
+   * ranked by how well they match, which is what every palette this one will be compared against
+   * does — a list that stayed in registration order would put a worse match above the one the
+   * user is clearly typing towards.
+   */
   commands: readonly BuilderCommand[];
   /**
    * Controls the dialog. Omit both to let the palette own its own open state, which is the usual
@@ -150,7 +158,19 @@ function groupAvailable(
  * is the right failure: a palette that silently registered nothing would look mounted and never
  * open.
  */
-export function CommandPalette({
+export function CommandPalette(props: CommandPaletteProps): React.JSX.Element {
+  // A scope of its own, so the palette's layer sits one level DEEPER than the host that renders
+  // it. Layers at equal depth are ordered by registration, newest first, which would leave the
+  // modal's hold over the keyboard depending on whether the host happened to register its own
+  // shortcuts before or after the palette mounted.
+  return (
+    <ShortcutScope>
+      <PaletteSurface {...props} />
+    </ShortcutScope>
+  );
+}
+
+function PaletteSurface({
   commands,
   open: controlledOpen,
   onOpenChange,
@@ -164,6 +184,13 @@ export function CommandPalette({
   // hotkey and ignored by the dialog. A host that disables itself while the palette is already
   // open closes it by that alone, without needing to drive `open` as well.
   const open = enabled && (isControlled ? controlledOpen : uncontrolledOpen);
+
+  // Masking the state is not enough: `open` above hides it, but the stored `true` survives, so
+  // re-enabling — a shell widening back past its minimum — would reopen the palette without
+  // anyone having pressed the hotkey. Cleared rather than masked, so closing is permanent.
+  React.useEffect(() => {
+    if (!enabled) setUncontrolledOpen(false);
+  }, [enabled]);
 
   const setOpen = React.useCallback(
     (next: boolean) => {
@@ -224,7 +251,15 @@ export function CommandPalette({
   );
 
   return (
-    <CommandDialog open={open} onOpenChange={setOpen}>
+    <CommandDialog
+      open={open}
+      onOpenChange={setOpen}
+      // Names the search input. cmdk renders a hidden label for the command root and points the
+      // input's `aria-labelledby` at it, so leaving this unset produces an EMPTY label — an
+      // explicit reference to nothing, which stops the placeholder naming the field and leaves
+      // screen-reader users on an unlabelled search control.
+      commandProps={{ label: "Command palette" }}
+    >
       {/*
        * Visually hidden, but the dialog's accessible name and description all the same:
        * `CommandDialog` renders neither, so without these a screen reader announces an unnamed

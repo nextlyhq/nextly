@@ -261,6 +261,66 @@ describe("the host can drive it", () => {
     expect(screen.queryByText("Should not appear")).toBeNull();
   });
 
+  it("ranks matches by relevance once the user types", () => {
+    mount(
+      <CommandPalette
+        commands={[
+          { id: "1", label: "Outline zebra", run: noop },
+          { id: "2", label: "Zebra", run: noop },
+        ]}
+      />
+    );
+    pressPaletteKey();
+
+    fireEvent.change(screen.getByRole("combobox"), {
+      target: { value: "zebra" },
+    });
+
+    // The closer match first, ahead of registration order. Pinned because the ordering PROMISE is
+    // scoped to the unfiltered list, and a reader who saw only the unfiltered test would take
+    // registration order to hold here too.
+    const rows = screen
+      .getAllByText(/^(Outline zebra|Zebra)$/)
+      .map(n => n.textContent);
+    expect(rows).toEqual(["Zebra", "Outline zebra"]);
+  });
+
+  it("names the search field, not just the dialog", () => {
+    mount(<CommandPalette commands={[]} />);
+    pressPaletteKey();
+
+    // cmdk points the input's `aria-labelledby` at a hidden label it renders for the command
+    // root. Unset, that label is EMPTY — an explicit reference to nothing, which is worse than no
+    // reference at all because it stops the placeholder naming the field.
+    expect(
+      screen.getByRole("combobox", { name: "Command palette" })
+    ).toBeTruthy();
+  });
+
+  it("stays closed after being re-enabled, rather than reopening itself", () => {
+    const commands: BuilderCommand[] = [
+      { id: "a", label: "Was open", run: noop },
+    ];
+    const { rerender } = mount(<CommandPalette commands={commands} />);
+    pressPaletteKey();
+    expect(screen.getByText("Was open")).toBeTruthy();
+
+    const render = (enabled: boolean) =>
+      rerender(
+        <ShortcutProvider>
+          <CommandPalette commands={commands} enabled={enabled} />
+        </ShortcutProvider>
+      );
+
+    render(false);
+    expect(screen.queryByText("Was open")).toBeNull();
+
+    // Masking `open` would leave the stored `true` intact, so widening the shell back would
+    // reopen a palette nobody asked for.
+    render(true);
+    expect(screen.queryByText("Was open")).toBeNull();
+  });
+
   it("closes an open palette when the host becomes disabled", () => {
     const commands: BuilderCommand[] = [
       { id: "a", label: "Open already", run: noop },
@@ -295,14 +355,16 @@ describe("the host can drive it", () => {
       );
       return null;
     }
-    // Rendered BEFORE the palette so it registers first: layers at equal depth are ordered by
-    // registration, newest on top, which is the arrangement a real shell produces too.
+    // Rendered AFTER the palette, which is the UNFAVOURABLE order: layers at equal depth are
+    // ordered by registration with the newest on top, so a host registering later would win the
+    // key. The palette keeps it only because it registers in a scope of its own, one level
+    // deeper. Putting `Host` first would pass with or without that scope.
     mount(
       <>
-        <Host />
         <CommandPalette
           commands={[{ id: "a", label: "Anything", run: noop }]}
         />
+        <Host />
       </>
     );
 
