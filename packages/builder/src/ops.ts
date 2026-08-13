@@ -888,6 +888,30 @@ export type BuilderOp =
     };
 
 /**
+ * A field's value, but only when the record OWNS it.
+ *
+ * Every decision this module makes about a field is a decision about what will
+ * be STORED, and storing goes through `structuredClone` and object spreads —
+ * both of which copy own enumerable properties and nothing else. A value
+ * resolved through the prototype therefore passes every check and is absent
+ * from the result, so the guard and the writer disagree about the same field.
+ *
+ * `Object.prototype` pollution is the case that makes this reachable, and it is
+ * not exotic: one dependency assigning to it gives every plain object in the
+ * process the same field. Under `Object.prototype.props = {}`, a node literal
+ * with no `props` validates and is stored without one; under an inherited
+ * `kind`, an empty object dispatches as a `remove` and serializes as `{}`, so
+ * the edit applies and crash recovery cannot replay it.
+ *
+ * Returns `undefined` for an inherited field, which is what every caller here
+ * already treats as absent — so the rule is applied by READING through this
+ * rather than by adding a check beside each read.
+ */
+function ownValue(record: Record<string, unknown>, field: string): unknown {
+  return Object.hasOwn(record, field) ? record[field] : undefined;
+}
+
+/**
  * Every field the op vocabulary itself defines.
  *
  * Used to tell an op's OWN fields from the extras a newer editor may have
@@ -1275,7 +1299,7 @@ function assertNodeShape(
     }
 
     for (const [field, contract] of Object.entries(NODE_FIELDS)) {
-      const value = candidate[field];
+      const value = ownValue(candidate, field);
       if (value === undefined) {
         if (contract.optional) continue;
         throw new OpError(
@@ -2099,6 +2123,21 @@ function assertPosition(at: TreePosition, verb: string): void {
   // Asked of `Object.prototype` rather than matched against a written list:
   // the list everyone writes is "__proto__" and "constructor", and "toString"
   // breaks it exactly the same way.
+  // An EMPTY name is a usable object key and not a usable slot. The engine
+  // creates the slot, the placement succeeds, and the inverse then carries
+  // `dropSlotIfEmpty: { slot: "" }` — which `assertDropSlot` refuses for
+  // naming no region. The operation applies and can never be undone.
+  //
+  // Checked on the destination as well as on the cleanup address, because the
+  // two rules have to agree: whatever a position may CREATE, a cleanup must be
+  // able to name.
+  if (at.slot === "") {
+    throw new OpError(
+      `${verb}: a position naming an empty slot creates a child region with ` +
+        `no name, and the undo of that placement could not name it back. Slots ` +
+        `are named.`
+    );
+  }
   if (typeof at.slot === "string" && !isUsableSlotName(at.slot)) {
     throw new OpError(
       `${verb}: ${describe(at.slot)} is not a usable slot name. It resolves to a ` +
@@ -2216,8 +2255,12 @@ function priorValues(
   const unset: RemovableField[] = [];
 
   for (const key of keys) {
-    if (key in held && held[key] !== undefined) {
-      patch[key] = held[key];
+    // OWN, not merely resolvable. An inherited value read as prior state puts
+    // the prototype's value into the inverse patch, so undoing an update
+    // MATERIALISES a field the node never had instead of restoring its absence.
+    const previous = ownValue(held, key);
+    if (previous !== undefined) {
+      patch[key] = previous;
       continue;
     }
     // Absent, so the inverse must REMOVE it to restore what was there. A field
@@ -2491,6 +2534,24 @@ export function applyOp(
     );
   }
 
+  // The op's OWN fields, before its discriminant is read. An op is DISPATCHED
+  // on `kind` and then applied from the fields its branch consumes, and all of
+  // those are persisted — so an op resolving them through `Object.prototype`
+  // deletes a node and then serializes as `{}`. The edit happens; crash
+  // recovery and redo replay nothing.
+  //
+  // Checked against the vocabulary rather than per branch, so a field added to
+  // an op later cannot be dispatched on without being owned.
+  for (const field of OP_VOCABULARY) {
+    if (field in op && !Object.hasOwn(op, field)) {
+      throw new OpError(
+        `an op whose ${describe(field)} comes from the prototype rather than ` +
+          `from the op cannot be applied: the edit would run and the op would ` +
+          `be stored without it, so nothing could replay it.`
+      );
+    }
+  }
+
   switch (op.kind) {
     case "insert": {
       // Refused rather than exempting the inverse from the lock. The inverse of
@@ -2697,7 +2758,6 @@ export function applyOp(
       // A move keeps the node count and can still grow the document: relocating
       // into a slot the parent did not have yet adds that slot's name to what is
       // stored, and a long enough name crosses the byte cap on its own.
-      assertFitsCaps(document, withNodes(document, moved), "move", limits);
       // The slot the original placement created, if this move is the undo of
       // one. After the relocation, because the slot the node has just left is
       // only empty once it is out.
@@ -2706,6 +2766,19 @@ export function applyOp(
         op.dropSlotIfEmpty === undefined
           ? moved
           : dropEmptySlot(moved, op.dropSlotIfEmpty);
+      // Measured on the SETTLED forest, not the intermediate one. The cleanup
+      // is part of this op, so the document it produces is the one that must
+      // fit — and near the byte cap the transient state can be larger than
+      // either end. An undo whose forward move created a slot then measures the
+      // forest with that slot still present, is refused for crossing the cap,
+      // and the edit becomes un-undoable while the state it would restore fits
+      // comfortably.
+      assertFitsCaps(
+        document,
+        withNodes(document, settledForest),
+        "move",
+        limits
+      );
       return {
         document: withNodes(document, settledForest),
         inverse: {

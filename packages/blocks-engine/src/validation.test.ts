@@ -1870,3 +1870,37 @@ describe("measureBytes drops what the serializer drops", () => {
     expect(measureBytes(value, 1_000).bytes).toBe(written);
   });
 });
+
+describe("measureBytes agrees with the serializer on hooks and cycles", () => {
+  it("refuses a cyclic value in exact-count mode instead of hanging", () => {
+    // With no cap, nothing is ever over the limit, so the early return that
+    // stops the walk in capped mode never fires and each visit queues the same
+    // object again. `JSON.stringify` rejects this immediately.
+    const value: Record<string, unknown> = { a: 1 };
+    value.self = value;
+
+    expect(() => measureBytes(value, Number.POSITIVE_INFINITY)).toThrow(
+      /circular/i
+    );
+  });
+
+  it("runs a nested toJSON once, as the writer does", () => {
+    // `JSON.stringify` writes what the hook returns AS-IS; it does not call
+    // `toJSON` again on the replacement. Normalising twice measures a value the
+    // writer never produces.
+    const value = { x: { toJSON: () => ({ toJSON: () => "0123456789" }) } };
+    const written = Buffer.byteLength(JSON.stringify(value), "utf8");
+
+    expect(measureBytes(value, 1_000).bytes).toBe(written);
+  });
+
+  it("still counts a value that appears twice as siblings", () => {
+    // Two references to one object is a tree, not a cycle, and JSON writes it
+    // fine — so the cycle guard must not refuse it.
+    const shared = { a: 1 };
+    const value = { left: shared, right: shared };
+    const written = Buffer.byteLength(JSON.stringify(value), "utf8");
+
+    expect(measureBytes(value, 1_000).bytes).toBe(written);
+  });
+});

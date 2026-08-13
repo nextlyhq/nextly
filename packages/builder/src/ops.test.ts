@@ -2264,6 +2264,81 @@ describe("an inverse that names a parent held twice", () => {
     expect(() => applyOp(doc(), op)).toThrow(/the record of it would fail/);
   });
 
+  it("refuses an inserted node whose required field is inherited", () => {
+    // `structuredClone` copies own properties only, so a node resolving `props`
+    // through the prototype validates and is stored WITHOUT it — a node strict
+    // validation then rejects, produced by an edit nothing objected to.
+    const polluted = Object.prototype as unknown as Record<string, unknown>;
+    polluted.props = {};
+    try {
+      const incoming = {
+        id: "fresh",
+        type: "core/spacer",
+        version: 1,
+      } as unknown as BlockNode;
+
+      expect(() =>
+        applyOp(doc(), { kind: "insert", node: incoming, at: { index: 0 } })
+      ).toThrow(/has no props/);
+    } finally {
+      delete polluted.props;
+    }
+  });
+
+  it("refuses an op that inherits the fields it is applied from", () => {
+    // Dispatched on `kind` and applied from `id`, both resolved through the
+    // prototype: the node is deleted and the op serializes as `{}`, so the edit
+    // happened and nothing can replay it.
+    const polluted = Object.prototype as unknown as Record<string, unknown>;
+    polluted.kind = "remove";
+    polluted.id = "a";
+    try {
+      expect(() => applyOp(doc(), {} as unknown as BuilderOp)).toThrow(
+        /comes from the prototype/
+      );
+    } finally {
+      delete polluted.kind;
+      delete polluted.id;
+    }
+  });
+
+  it("does not put an inherited value into an update's inverse", () => {
+    // `key in held` treats a prototype value as prior document state, so undo
+    // MATERIALISES a field the node never had rather than restoring its
+    // absence.
+    const polluted = Object.prototype as unknown as Record<string, unknown>;
+    polluted.customCss = ".from-prototype{}";
+    try {
+      const { inverse } = applyOp(doc(), {
+        kind: "update",
+        id: "a",
+        patch: { customCss: ".mine{}" },
+      });
+
+      expect(inverse).toEqual({
+        kind: "update",
+        id: "a",
+        patch: {},
+        unset: ["customCss"],
+      });
+    } finally {
+      delete polluted.customCss;
+    }
+  });
+
+  it("refuses a destination naming an empty slot", () => {
+    // The engine would create a child region with no name, and the inverse's
+    // `dropSlotIfEmpty` cannot name it back — so the placement applies and can
+    // never be undone.
+    expect(() =>
+      applyOp(doc(), {
+        kind: "move",
+        id: "b",
+        to: { parentId: "outer", slot: "", index: 0 },
+      })
+    ).toThrow(/empty slot/);
+  });
+
   it("refuses a cap that cannot decide anything", () => {
     // Every cap here is a `>` comparison and every comparison against `NaN` is
     // false, so one non-finite limit does not loosen a cap — it removes it, and

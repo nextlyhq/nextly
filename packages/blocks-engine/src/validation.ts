@@ -585,10 +585,33 @@ export function measureBytes(
   // string inside an array, and `""` for the root — and a hook that reads it
   // either throws on `undefined` or quietly returns something else. Both make
   // this counter disagree with the writer it exists to agree with.
-  const stack: { value: unknown; key: string }[] = [{ value: root, key: "" }];
+  // `normalized` marks a value whose `toJSON` has ALREADY run. `JSON.stringify`
+  // calls the hook once and writes whatever it returns as-is, so re-normalising
+  // a replacement that itself defines `toJSON` measures a value the writer
+  // never produces.
+  //
+  // `exiting` is the subtree's end marker: it pops after everything beneath it
+  // and releases the object from `open`, which is what makes a value appearing
+  // twice as SIBLINGS legal while a value containing ITSELF is refused.
+  const stack: {
+    value: unknown;
+    key: string;
+    normalized?: boolean;
+    exiting?: object;
+  }[] = [{ value: root, key: "" }];
+  // Ancestors of the value being read. Without this the advertised exact-count
+  // mode (`limit` of `Infinity`) never terminates on a cyclic value: nothing is
+  // ever over the limit, so the early return that stops the walk in capped mode
+  // never fires and each visit queues the same object again. `JSON.stringify`
+  // rejects such a value immediately, and this counter exists to agree with it.
+  const open = new Set<object>();
   while (stack.length > 0) {
     const entry = stack.pop();
     if (entry === undefined) break;
+    if (entry.exiting !== undefined) {
+      open.delete(entry.exiting);
+      continue;
+    }
     const popped = entry.value;
     // `toJSON` FIRST, because that is what `JSON.stringify` writes. A value
     // defining it is serialized as whatever it returns, not as the fields it
@@ -601,7 +624,18 @@ export function measureBytes(
     // Load-bearing now that this is exported: inside this package every value
     // reaching it has already been established as plain JSON, so the gap could
     // not open. A public caller has made no such promise.
-    const value = asSerialized(popped, entry.key);
+    const value =
+      entry.normalized === true ? popped : asSerialized(popped, entry.key);
+    if (typeof value === "object" && value !== null) {
+      if (open.has(value)) {
+        throw new TypeError(
+          "Converting circular structure to JSON: a value contains itself, so " +
+            "it has no serialized form to measure."
+        );
+      }
+      open.add(value);
+      stack.push({ value, key: entry.key, exiting: value });
+    }
     if (typeof value === "string") {
       bytes += 2 + utf8ByteLength(value, limit - bytes);
     } else if (typeof value === "number") {
@@ -633,6 +667,7 @@ export function measureBytes(
         stack.push({
           value: serializesAs(written) ? written : null,
           key: String(index),
+          normalized: true,
         });
       }
     } else if (typeof value === "object") {
@@ -666,7 +701,7 @@ export function measureBytes(
       for (const [key, val] of entries) {
         bytes += utf8ByteLength(key, limit) + 3; // quotes + colon
         if (bytes > limit) return { bytes, exceeded: true };
-        stack.push({ value: val, key });
+        stack.push({ value: val, key, normalized: true });
       }
     }
     if (bytes > limit) return { bytes, exceeded: true };
