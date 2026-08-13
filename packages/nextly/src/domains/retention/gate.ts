@@ -55,6 +55,9 @@ export const WEBHOOK_RETENTION_GATE_KEY = "webhooks.retention.lastPassAt";
  * a pass deletes rows older than a cutoff, so a second one finds less to do
  * rather than doing it twice.
  */
+export const AUDIT_RETENTION_GATE_KEY = "audit.retention.lastPassAt";
+export const AUDIT_RETENTION_DRAIN_GATE_KEY = "audit.retention.lastDrainPassAt";
+
 /**
  * The delivery log is gated on its own marker, and offered by the SEND path
  * rather than by a content write.
@@ -66,9 +69,6 @@ export const WEBHOOK_RETENTION_GATE_KEY = "webhooks.retention.lastPassAt";
  * removes.
  */
 export const EMAIL_RETENTION_GATE_KEY = "email.retention.lastPassAt";
-
-export const AUDIT_RETENTION_GATE_KEY = "audit.retention.lastPassAt";
-export const AUDIT_RETENTION_DRAIN_GATE_KEY = "audit.retention.lastDrainPassAt";
 
 /**
  * The atomic claim primitive. Implemented against `nextly_meta` in
