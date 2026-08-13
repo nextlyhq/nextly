@@ -17,11 +17,9 @@ export default defineConfig({
   // server. The whole package is an editor and is client-only by nature, which
   // is the same treatment `@nextlyhq/ui`'s root barrel gets.
   banner: { js: '"use client";' },
-  // The chrome stylesheet is not reachable from the JS graph, so nothing would
-  // emit it. Copied verbatim and published at `./styles.css`: a consumer that
-  // renders the shell without it gets unstyled markup, which is worse than a
-  // build error because it looks like a layout bug.
-  publicDir: "src/styles",
+  // The chrome stylesheet is NOT copied here. It is compiled by `build:css`
+  // with the Tailwind CLI, because the shell draws with utility classes and a
+  // verbatim copy ships the custom properties without the rules that use them.
   format: ["esm"],
   dts: true,
   clean: true,

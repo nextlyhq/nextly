@@ -1,4 +1,27 @@
 /**
+ * The editor chrome's stylesheet, compiled rather than copied.
+ *
+ * `@import "tailwindcss"` plus `@source` is what makes this shippable. The shell
+ * draws with utility classes — `flex`, `border-b`, `size-8` — and copying this
+ * file verbatim delivered the custom properties below while leaving those
+ * classes undefined. A consumer without our Tailwind preset then got the tokens
+ * and no layout: markup that renders, carries its class names, and stacks as
+ * full-width blocks. That reads as a layout bug rather than a missing build
+ * step, which is why it is compiled here instead of documented as a
+ * requirement.
+ *
+ * The theme is NOT imported. `--nx-*` belongs to `@nextlyhq/ui`, which the host
+ * already loads; importing it here would ship a second copy of every token and
+ * make re-theming depend on which stylesheet won. The variables below DERIVE
+ * from those tokens, so a host that re-themes the admin moves the builder with
+ * it.
+ */
+@import "tailwindcss";
+
+/* Scan this package's source so the shell's utility classes compile in. */
+@source "../";
+
+/**
  * The editor chrome's own token layer.
  *
  * Named `--nx-builder-*` and kept separate from `--nx-*` on purpose. The admin's

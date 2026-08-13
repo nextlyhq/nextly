@@ -92,6 +92,15 @@ import "@nextlyhq/builder/styles.css"; // required — see below
 </BuilderShell>;
 ```
 
+`@nextlyhq/builder/styles.css` is COMPILED, not a token file: it carries the
+shell's utility rules as well as the `--nx-builder-*` custom properties, so the
+package works standalone with no Tailwind setup in the host.
+
+If you DO use Tailwind and want to re-theme or extend the chrome, apply
+`@nextlyhq/ui/tailwind-preset` and add this package to your `@source` scan. That
+is optional — the compiled sheet already works — and it is what lets your own
+classes sit alongside the shell's without a second Tailwind build.
+
 **The stylesheet is not optional and nothing will tell you if you forget it.**
 The shell renders its markup, carries its class names, and lays out as a stack
 of full-width blocks — which reads as a layout bug rather than a missing import.
@@ -139,6 +148,25 @@ violated, because the constraint was never per-panel.
 The persisted layout is PROPORTIONAL. A pixel layout is wrong on the next
 monitor; the pixel bounds still hold because the library re-applies them to
 whatever the proportions resolve to.
+
+### Server-safe subpaths
+
+The root entry ships `"use client"`, because the shell is a client component and
+the directive has to survive bundling. Two modules contain no React and are
+published separately so that banner does not reach them:
+
+```ts
+import { fitsFullShell, PANEL_BOUNDS } from "@nextlyhq/builder/shell-state";
+import { canvasRectToHost } from "@nextlyhq/builder/geometry";
+```
+
+Both are importable from a Server Component. Neither imports anything at all.
+
+This is the same split, for the same reason, as `@nextlyhq/ui`'s `./color` and
+`./utils`. It is not hypothetical tidiness: the geometry already had a consumer
+that only worked because it resolved this package through a tsconfig path
+mapping to source, bypassing the published entry — so the export map was
+advertising something the artifact could not deliver.
 
 ### Frame geometry
 
