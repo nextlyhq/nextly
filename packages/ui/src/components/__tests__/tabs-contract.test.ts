@@ -1454,6 +1454,42 @@ function exportedTagOf(
  * covered. A bare identifier contributes nothing, which is the documented hole
  * rather than a silent one.
  */
+/**
+ * The operand a LITERAL condition selects, when the condition decides it.
+ *
+ * `undefined` when the condition is not written as a literal, which means both
+ * operands stay in play — anything depending on state can be taken.
+ *
+ * One implementation for both halves of the contract. The class side resolved
+ * these and the style side did not, so `true ? {} : { borderBottomColor: "red" }`
+ * was reported for a branch the condition can never reach, while the same
+ * condition around a class was correctly ignored.
+ */
+function selectedByLiteralCondition(
+  node: ts.Expression
+): ts.Expression | undefined {
+  if (ts.isConditionalExpression(node)) {
+    if (node.condition.kind === ts.SyntaxKind.TrueKeyword) return node.whenTrue;
+    if (node.condition.kind === ts.SyntaxKind.FalseKeyword) {
+      return node.whenFalse;
+    }
+    return undefined;
+  }
+  if (!ts.isBinaryExpression(node)) return undefined;
+  const left = node.left.kind;
+  // The operand each operator YIELDS, not merely the one it evaluates: `false &&
+  // x` is the value `false`, which names no class and is no style object.
+  if (node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
+    if (left === ts.SyntaxKind.FalseKeyword) return node.left;
+    if (left === ts.SyntaxKind.TrueKeyword) return node.right;
+  }
+  if (node.operatorToken.kind === ts.SyntaxKind.BarBarToken) {
+    if (left === ts.SyntaxKind.TrueKeyword) return node.left;
+    if (left === ts.SyntaxKind.FalseKeyword) return node.right;
+  }
+  return undefined;
+}
+
 function literalStrings(node: ts.Node, found: string[] = []): string[] {
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
     found.push(node.text);
@@ -1468,30 +1504,10 @@ function literalStrings(node: ts.Node, found: string[] = []): string[] {
   // A branch that can never be taken contributes no class. `cn("w-full", false &&
   // "border-b-0")` is the ordinary conditional-class form, and `cn` never
   // receives the second string — collecting it reported a call site for a class
-  // it does not apply. Only literal conditions are decided here; anything whose
-  // value depends on state stays collected, because it can be taken.
-  if (
-    ts.isBinaryExpression(node) &&
-    node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken &&
-    node.left.kind === ts.SyntaxKind.FalseKeyword
-  ) {
-    return found;
-  }
-  if (
-    ts.isBinaryExpression(node) &&
-    node.operatorToken.kind === ts.SyntaxKind.BarBarToken &&
-    node.left.kind === ts.SyntaxKind.TrueKeyword
-  ) {
-    literalStrings(node.left, found);
-    return found;
-  }
-  if (ts.isConditionalExpression(node)) {
-    if (node.condition.kind === ts.SyntaxKind.TrueKeyword) {
-      return literalStrings(node.whenTrue, found);
-    }
-    if (node.condition.kind === ts.SyntaxKind.FalseKeyword) {
-      return literalStrings(node.whenFalse, found);
-    }
+  // it does not apply.
+  if (ts.isExpression(node)) {
+    const selected = selectedByLiteralCondition(node);
+    if (selected) return literalStrings(selected, found);
   }
   // The braces matter. `ts.forEachChild` stops at the first callback that
   // returns something truthy, so a concise arrow returning the accumulator
@@ -1514,7 +1530,10 @@ function literalStrings(node: ts.Node, found: string[] = []): string[] {
  * in the other order, invents one. Which declaration a name refers to is a
  * lexical question, and the answer is the nearest enclosing one.
  */
-function styleResolver(checker: ts.TypeChecker): {
+function styleResolver(
+  checker: ts.TypeChecker,
+  element: ts.JsxAttribute
+): {
   objectsFrom(
     expression: ts.Expression | undefined,
     seen?: Set<ts.Node>
@@ -1561,22 +1580,46 @@ function styleResolver(checker: ts.TypeChecker): {
   };
 
   /**
-   * Every value assigned to a binding anywhere in the file.
+   * The function whose body a node runs in, or undefined at the top level.
+   *
+   * What it separates is EXECUTION UNITS. Two nodes in the same one run in
+   * source order; two in different ones do not, because calling a function is
+   * what decides when its body runs and the call can appear anywhere.
+   */
+  const executionUnitOf = (node: ts.Node): ts.Node | undefined => {
+    for (let at = node.parent; at; at = at.parent) {
+      if (ts.isFunctionLike(at)) return at;
+    }
+    return undefined;
+  };
+
+  /**
+   * Every value assigned to a binding that the element could actually see.
    *
    * A declaration initializer is only the FIRST value a mutable binding holds:
    * `let style = {}; style = { borderBottomColor: "red" }` renders the second
    * one, and reading the declaration alone reported nothing at all. Matched by
    * DECLARATION identity rather than by name, so a same-named binding in
    * another scope contributes nothing and the whole file can be searched.
+   *
+   * Ordering is what stops that search over-reaching. An assignment sharing the
+   * element's execution unit runs in source order, so one written AFTER the
+   * element cannot have reached it — React already holds the earlier value, and
+   * collecting the later one reported an element for a style it never received.
+   * Across different units the order is not decidable and the write is kept,
+   * which is the reporting side and therefore the safe one.
    */
   const assignedValues = (declaration: ts.Declaration): ts.Expression[] => {
+    const elementUnit = executionUnitOf(element);
     const values: ts.Expression[] = [];
     const visit = (node: ts.Node): void => {
       if (
         ts.isBinaryExpression(node) &&
         node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
         ts.isIdentifier(node.left) &&
-        declarationOf(node.left, checker) === declaration
+        declarationOf(node.left, checker) === declaration &&
+        (executionUnitOf(node) !== elementUnit ||
+          node.getStart() < element.getStart())
       ) {
         values.push(node.right);
       }
@@ -1615,6 +1658,12 @@ function styleResolver(checker: ts.TypeChecker): {
       if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node)) {
         return walk(node.expression);
       }
+      // A literal condition decides the branch, and the branch it excludes is
+      // one React never receives. Asked through the same helper the class half
+      // uses, so one spelling of "this cannot be taken" cannot be resolved on
+      // one side of the contract and reported on the other.
+      const selected = selectedByLiteralCondition(node);
+      if (selected) return walk(selected);
       if (ts.isConditionalExpression(node)) {
         walk(node.whenTrue);
         walk(node.whenFalse);
@@ -1681,7 +1730,7 @@ function styleObjectsFor(
   objects: ts.ObjectLiteralExpression[];
   resolver: ReturnType<typeof styleResolver>;
 } {
-  const resolver = styleResolver(checker);
+  const resolver = styleResolver(checker, attribute);
   const initializer = attribute.initializer;
   if (!initializer || !ts.isJsxExpression(initializer)) {
     return { objects: [], resolver };
@@ -1778,6 +1827,13 @@ function staticKeyOf(
  * `undefined` is a NAME, not a keyword, so a local declaration of it is a
  * colour like any other. It counts as nothing only when it resolves to no
  * declaration in this file, which is what the global one does.
+ *
+ * The empty string is React's own spelling of absence, not an assumption made
+ * here: `renderToStaticMarkup(<div style={{ borderBottomColor: "" }} />)`
+ * emits no `style` attribute at all, while the same property with a colour
+ * emits `border-bottom-color:red`. Clearing a style with `""` is an ordinary
+ * conditional form, so reporting it rejected the idiom the check exists to
+ * permit.
  */
 function isDefinitelyNothing(
   initializer: ts.Expression,
@@ -1786,6 +1842,9 @@ function isDefinitelyNothing(
   const value = withoutTypeWrappers(initializer);
   if (ts.isIdentifier(value)) {
     return value.text === "undefined" && !resolver.declarationOf(value);
+  }
+  if (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) {
+    return value.text === "";
   }
   if (value.kind === ts.SyntaxKind.NullKeyword) return true;
   // `void 0` is the other spelling of the same intent.
@@ -2727,6 +2786,28 @@ describe("the tab indicator contract", () => {
       "border-image longhands with no source to draw",
       '<TabsTrigger style={{ borderImageRepeat: "round", borderImageSlice: "30", borderImageWidth: "4px", borderImageOutset: "2px" }} />',
     ],
+    // An assignment the element cannot have seen. React already received the
+    // empty object; collecting every write in the file regardless of where it
+    // sits reported the element for a value assigned after it.
+    [
+      "a style binding assigned an owned property after the element",
+      'let style = {};\n<TabsTrigger style={style} />;\nstyle = { borderBottomColor: "red" };',
+    ],
+    // React emits no declaration for an empty string, verified with
+    // `renderToStaticMarkup`: `{ borderBottomColor: "" }` renders no `style`
+    // attribute at all. Clearing a style with `""` is an ordinary conditional
+    // spelling, so reporting it rejects the idiom the check exists to permit.
+    [
+      "an owned property cleared with an empty string",
+      '<TabsTrigger style={{ borderBottomColor: "" }} />',
+    ],
+    // A branch the condition can never take. The class half already resolves
+    // literal conditions, so reading both branches of a style prop held the two
+    // halves of one contract to different standards.
+    [
+      "an owned property in a statically unreachable branch",
+      '<TabsTrigger style={true ? {} : { borderBottomColor: "red" }} />',
+    ],
   ])("does not report %s", (_label, body) => {
     // The complement, and the reason this is a contract rather than a ban. A
     // check that flags a documented example or a legitimate layout class gets
@@ -2920,10 +3001,32 @@ describe("which files the call-site scan reads", () => {
       false
     );
 
-    // Every file the scan reads has to trigger a rerun, because every one of
-    // them can gain a violation this suite would otherwise keep reporting
-    // clean. Named individually: the list is only ever wrong for a whole tree
-    // at a time, and a bare count says nothing about which.
+    // Every root-and-extension pair the scan CAN read, whether or not the
+    // repository currently holds such a file.
+    //
+    // Checking only the files that exist today is an assertion satisfied by
+    // absence: there is no `.jsx` call site anywhere under a scan root, so
+    // removing `jsx` from every trigger left this case green while the next
+    // `.jsx` file added would change without rerunning the suite. The pairs are
+    // derived from the same two lists the traversal uses, so a root or an
+    // extension added there arrives here on its own.
+    //
+    // Both depths, because they fail differently: a `**/src/**` trigger covers
+    // the nested one and silently misses a file directly under the root.
+    const probes = SCAN_ROOT_NAMES.flatMap(root =>
+      CALL_SITE_EXTENSIONS.flatMap(extension => [
+        resolve(REPO, root, `probe-package/src/nested/probe${extension}`),
+        resolve(REPO, root, `probe-package/probe${extension}`),
+      ])
+    );
+    const unwatchedProbes = probes
+      .filter(path => !isMatch(path, triggers))
+      .map(path => path.replace(`${REPO}/`, ""));
+    expect(unwatchedProbes).toEqual([]);
+
+    // And every file the scan actually reads, which covers shapes no synthetic
+    // path anticipates. Named individually: the list is only ever wrong for a
+    // whole tree at a time, and a bare count says nothing about which.
     const unwatched = scanned().filter(file => !isMatch(file, triggers));
     expect(unwatched).toEqual([]);
   });
