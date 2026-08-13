@@ -21,6 +21,31 @@ function realBytes(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).length;
 }
 
+/**
+ * A length-3 array holding values at `filled` and holes everywhere else.
+ *
+ * Built by assigning into a bare `Array(3)` rather than by `delete`-ing from a
+ * literal, so the holes are genuine absent positions in every engine rather
+ * than whatever a literal with elisions happens to produce.
+ */
+function sparse(filled: number[]): unknown[] {
+  const array = new Array<unknown>(3);
+  for (const index of filled) array[index] = index;
+  return array;
+}
+
+/** A dense array carrying an own property that is not an index. */
+function withExtra(): unknown[] {
+  const array: unknown[] = [1, 2];
+  Object.defineProperty(array, "extra", {
+    value: "dropped",
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+  return array;
+}
+
 describe("measureBytes", () => {
   it("counts exactly what JSON.stringify emits", () => {
     const cases: Array<[string, unknown]> = [
@@ -34,6 +59,10 @@ describe("measureBytes", () => {
       ["control characters", pageWith({ a: "" })],
       ["multibyte", pageWith({ a: "héllo — 世界 \u{1f389}" })],
       ["keys needing escapes", pageWith({ 'a"b': 1, "c\\d": 2 })],
+      ["a hole, which JSON writes as null", pageWith({ a: sparse([0, 2]) })],
+      ["leading and trailing holes", pageWith({ a: sparse([1]) })],
+      ["every position a hole", pageWith({ a: new Array(4) })],
+      ["a non-index property JSON drops", pageWith({ a: withExtra() })],
     ];
 
     for (const [label, value] of cases) {
@@ -56,6 +85,58 @@ describe("measureBytes", () => {
     expect(real).toBeGreaterThan(2 * 1024 * 1024);
     expect(measureBytes(document, Number.MAX_SAFE_INTEGER).bytes).toBe(real);
     expect(measureBytes(document, 2 * 1024 * 1024).exceeded).toBe(true);
+  });
+
+  it("counts the null a hole serializes as, so holes reach the cap", () => {
+    // The mirror of the missing comma, and it hides in the opposite place: the
+    // bytes come from positions that hold NOTHING, so a walk over the values
+    // present finds an almost empty array. 600,000 holes cost four bytes each
+    // in storage and were measured as zero.
+    const document = pageWith({ a: new Array(600_000) });
+
+    const real = realBytes(document);
+    expect(real).toBeGreaterThan(2 * 1024 * 1024);
+    expect(measureBytes(document, Number.MAX_SAFE_INTEGER).bytes).toBe(real);
+    expect(measureBytes(document, 2 * 1024 * 1024).exceeded).toBe(true);
+  });
+
+  it("refuses an array carrying a property JSON would drop", () => {
+    // The array reads back from the caller's own value with `extra` on it and
+    // returns from storage without it. Nothing throws and the size is right,
+    // so the byte count cannot be what reports this.
+    const document = pageWith({ a: withExtra() });
+    const survey = measureBytes(document, Number.MAX_SAFE_INTEGER);
+
+    expect(survey.bytes).toBe(realBytes(document));
+    expect(survey.unserializable).toBe(true);
+
+    // The control: the same array without the extra property is accepted, so
+    // the refusal is of the property rather than of arrays in general.
+    expect(
+      measureBytes(pageWith({ a: [1, 2] }), Number.MAX_SAFE_INTEGER)
+        .unserializable
+    ).toBe(false);
+  });
+
+  it("treats a name that merely looks like an index as a dropped property", () => {
+    // `JSON.stringify` emits positions 0..length-1 and nothing else, so these
+    // are properties it discards — and each converts to a number, which is why
+    // a numeric test rather than a canonical one would have admitted them.
+    for (const name of ["01", "1e1", " 1", "-0", "1.0", "4294967296"]) {
+      const array: unknown[] = [1, 2];
+      Object.defineProperty(array, name, {
+        value: "dropped",
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+      const survey = measureBytes(
+        pageWith({ a: array }),
+        Number.MAX_SAFE_INTEGER
+      );
+      expect(survey.unserializable, name).toBe(true);
+      expect(survey.bytes, name).toBe(realBytes(pageWith({ a: array })));
+    }
   });
 
   it("stops at the limit instead of measuring the whole input", () => {

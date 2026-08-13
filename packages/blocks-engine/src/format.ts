@@ -20,6 +20,11 @@
  */
 
 export {
+  // The map, not only the key list. A consumer that republishes the format has
+  // to state each variant's own required fields, and deriving them from the key
+  // list alone is impossible — so the fields would be written out a second time
+  // and could then disagree with the type built from this map.
+  BINDING_FORMAT_SHAPES,
   BINDING_FORMAT_TYPES,
   BINDING_SOURCES,
   type BindingFormatType,

@@ -42,6 +42,7 @@
 
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import {
+  BINDING_FORMAT_SHAPES,
   BINDING_FORMAT_TYPES,
   BINDING_SOURCES,
   DEFAULT_MAX_DOCUMENT_BYTES,
@@ -54,6 +55,7 @@ import {
   surveyDocument,
 } from "@nextlyhq/blocks-engine/format";
 import type {
+  BindingFormatType,
   BindingSource,
   DocumentKind,
 } from "@nextlyhq/blocks-engine/format";
@@ -261,8 +263,7 @@ const nodeVisibilitySchema = z.looseObject({
  *
  * Built by mapping the engine's own list rather than by writing five shapes
  * out, so a format added to the engine appears here without an edit and one
- * removed cannot linger. `currency` is the only member carrying a required
- * field of its own, which is why it is the only branch named.
+ * removed cannot linger.
  *
  * `looseObject` throughout, like every other object in this module: see
  * {@link blockNodeSchema} for why passing an unknown key through is the whole
@@ -270,15 +271,58 @@ const nodeVisibilitySchema = z.looseObject({
  */
 const formatOptionsSchema = openRecord().optional();
 
-const bindingFormatVariants = bindingFormatTypes.map(type =>
-  type === "currency"
-    ? z.looseObject({
-        type: z.literal(type),
-        currency: z.string(),
-        options: formatOptionsSchema,
-      })
-    : z.looseObject({ type: z.literal(type), options: formatOptionsSchema })
-);
+/**
+ * The engine's shape map, narrowed to what this file can build a schema from.
+ *
+ * The annotation is the check: `BINDING_FORMAT_SHAPES` is assigned INTO it, so
+ * a variant that grows a field the mapping below cannot express stops
+ * compiling here rather than being silently skipped. That keeps
+ * {@link formatFieldSchema} total over everything the map can hold, with no
+ * runtime branch for a case that cannot occur and no throw at import time.
+ */
+const bindingFormatShapes: Readonly<
+  Record<
+    BindingFormatType,
+    Readonly<Record<string, string | number | boolean>> | null
+  >
+> = BINDING_FORMAT_SHAPES;
+
+/**
+ * A required field's schema, from the sample value the engine's map holds.
+ *
+ * The map states each field's type by example, because that is what lets the
+ * engine derive its own `BindingFormat` type from the same declaration. Reading
+ * the example back is how one declaration serves both.
+ */
+function formatFieldSchema(sample: string | number | boolean) {
+  if (typeof sample === "number") return z.number();
+  if (typeof sample === "boolean") return z.boolean();
+  return z.string();
+}
+
+/**
+ * Each variant carries the required fields its entry declares.
+ *
+ * Naming one variant here — `currency` was the only member with a field of its
+ * own — meant a format that later gained a required field would be published as
+ * fieldless, so a producer could satisfy this schema and still be refused by the
+ * engine. Reading the fields from the same map the engine's type is built from
+ * removes the second declaration rather than keeping two in step.
+ */
+const bindingFormatVariants = bindingFormatTypes.map(type => {
+  const shape = bindingFormatShapes[type];
+  const required = Object.fromEntries(
+    Object.entries(shape ?? {}).map(([field, sample]) => [
+      field,
+      formatFieldSchema(sample),
+    ])
+  );
+  return z.looseObject({
+    type: z.literal(type),
+    ...required,
+    options: formatOptionsSchema,
+  });
+});
 
 /**
  * The cast supplies the non-empty shape `z.union` requires, which `map` cannot
@@ -362,79 +406,77 @@ const bindingSchema = z.union([
  * rendering and the manifest's version stamp both read it unconditionally — a
  * node without one cannot be migrated, only guessed at.
  */
-const blockNodeSchema = z
-  .looseObject({
-    id: z.string(),
-    type: z.string(),
-    // A positive SAFE integer, and the ceiling is deliberate rather than an
-    // artefact of the validator. A version above 2^53-1 does not survive JSON:
-    // the text `{"version":9007199254740993}` parses to `...992` and serializes
-    // back as `...992`, so the number read is not the number written. Accepting
-    // it would admit exactly the silent-rewrite class this entry point refuses
-    // for `-0`, `NaN` and the infinities. The published `maximum` states the
-    // bound rather than leaving a consumer to discover it.
-    // A positive integer, with no safe-integer ceiling, because the canonical
-    // `validate()` has none. Two validators disagreeing about which documents
-    // are legal is worse than either rule, and a schema stricter than the
-    // engine refuses documents the engine accepts.
+const blockNodeObject = z.looseObject({
+  id: z.string(),
+  type: z.string(),
+  // A positive integer, with no safe-integer ceiling, because the canonical
+  // `validate()` has none. Two validators disagreeing about which documents
+  // are legal is worse than either rule, and a schema stricter than the
+  // engine refuses documents the engine accepts.
+  //
+  // The earlier ceiling was argued from round-tripping and the argument was
+  // too broad: an ODD integer above 2^53 does not survive JSON, but 1e20 is
+  // exactly representable and round-trips unchanged, so the bound refused
+  // values that were never at risk. The remaining case belongs wherever the
+  // engine decides it, for both validators at once.
+  version: z
+    .number()
+    .refine(value => Number.isInteger(value) && value > 0, {
+      message: "Expected a positive integer",
+    })
+    // The fragment is carried explicitly because a refinement is invisible to
+    // the emitted schema: dropping the ceiling took `"type": "integer"` and
+    // the positivity bound with it, leaving a published contract that
+    // accepted any number while this module still refused one. A schema
+    // looser than the checker beside it sends a producer output that fails on
+    // arrival.
+    .meta({ type: "integer", exclusiveMinimum: 0 }),
+  props: openRecord(),
+  bindings: typedRecord(
+    value => bindingSchema.safeParse(value).success,
+    bindingFragment(),
+    "Expected an object of bindings"
+  ).optional(),
+  get slots() {
+    // The one document-keyed record NOT checked in place, and the exception is
+    // the published schema rather than an oversight. Checking slots with a
+    // predicate takes the node schema out of the emitted tree, and with it the
+    // `$ref` that describes nesting at all: the contract stops saying a slot
+    // holds nodes and says only that it holds an array, so an external consumer
+    // can no longer validate anything below the first level. Describing the
+    // recursion is most of what publishing this format is for.
     //
-    // The earlier ceiling was argued from round-tripping and the argument was
-    // too broad: an ODD integer above 2^53 does not survive JSON, but 1e20 is
-    // exactly representable and round-trips unchanged, so the bound refused
-    // values that were never at risk. The remaining case belongs wherever the
-    // engine decides it, for both validators at once.
-    version: z
-      .number()
-      .refine(value => Number.isInteger(value) && value > 0, {
-        message: "Expected a positive integer",
-      })
-      // The fragment is carried explicitly because a refinement is invisible to
-      // the emitted schema: dropping the ceiling took `"type": "integer"` and
-      // the positivity bound with it, leaving a published contract that
-      // accepted any number while this module still refused one. A schema
-      // looser than the checker beside it sends a producer output that fails on
-      // arrival.
-      .meta({ type: "integer", exclusiveMinimum: 0 }),
-    props: openRecord(),
-    bindings: typedRecord(
-      value => bindingSchema.safeParse(value).success,
-      bindingFragment(),
-      "Expected an object of bindings"
-    ).optional(),
-    get slots() {
-      // The one document-keyed record NOT checked in place, and the exception is
-      // the published schema rather than an oversight. Checking slots with a
-      // predicate takes the node schema out of the emitted tree, and with it the
-      // `$ref` that describes nesting at all: the contract stops saying a slot
-      // holds nodes and says only that it holds an array, so an external consumer
-      // can no longer validate anything below the first level. Describing the
-      // recursion is most of what publishing this format is for.
-      //
-      // What that costs is bounded, and smaller than the alternative. Slot names
-      // are declared by block definitions rather than typed by authors, so a slot
-      // literally named `constructor` is refused; and the parsed copy of a slot
-      // named `__proto__` is dropped, so its children go structurally unchecked.
-      // Neither loses data, because the value returned is the caller's own.
-      return z.record(z.string(), z.array(blockNodeSchema)).optional();
-    },
-    styles: nodeStylesSchema.optional(),
-    classes: z.array(z.string()).optional(),
-    visibility: nodeVisibilitySchema.optional(),
-    locked: z.boolean().optional(),
-    name: z.string().optional(),
-    customCss: z.string().optional(),
-    cssId: z.string().optional(),
-    attributes: typedRecord(
-      value => typeof value === "string",
-      { type: "string" },
-      "Expected an object of strings"
-    ).optional(),
-    migrationFailed: z.boolean().optional(),
-  })
-  .refine(ownsRequiredFields, {
+    // What that costs is bounded, and smaller than the alternative. Slot names
+    // are declared by block definitions rather than typed by authors, so a slot
+    // literally named `constructor` is refused; and the parsed copy of a slot
+    // named `__proto__` is dropped, so its children go structurally unchecked.
+    // Neither loses data, because the value returned is the caller's own.
+    return z.record(z.string(), z.array(blockNodeSchema)).optional();
+  },
+  styles: nodeStylesSchema.optional(),
+  classes: z.array(z.string()).optional(),
+  visibility: nodeVisibilitySchema.optional(),
+  locked: z.boolean().optional(),
+  name: z.string().optional(),
+  customCss: z.string().optional(),
+  cssId: z.string().optional(),
+  attributes: typedRecord(
+    value => typeof value === "string",
+    { type: "string" },
+    "Expected an object of strings"
+  ).optional(),
+  migrationFailed: z.boolean().optional(),
+});
+
+const blockNodeFields = fieldNamesOf(() => blockNodeObject.shape);
+
+const blockNodeSchema = blockNodeObject.refine(
+  value => ownsResolvedFields(value, blockNodeFields()),
+  {
     message:
-      "A node must OWN its id, type, version and props; an inherited value is not written to storage.",
-  });
+      "A node must OWN every field it carries; an inherited value is not written to storage.",
+  }
+);
 
 /**
  * The stored value of a `blocks` field, and the body of every builder document.
@@ -450,7 +492,8 @@ const blockNodeSchema = z
  * written for would answer that question wrongly.
  */
 /**
- * The fields a node must own, rather than merely reach.
+ * Whether every field the schema knows about is OWNED rather than merely
+ * reached.
  *
  * The schema reads properties directly, so a value inherited from
  * `Object.prototype` satisfies it — while `JSON.stringify` writes only own
@@ -458,55 +501,76 @@ const blockNodeSchema = z
  * something has put `id`, `type`, `version` and `props` on the prototype, an
  * empty object therefore parsed as a valid node and then persisted as `{}`.
  *
- * Checked here rather than in the survey because the survey has no notion of
- * which fields a node REQUIRES; this is the layer that knows.
- */
-const NODE_OWN_FIELDS = ["id", "type", "version", "props"] as const;
-
-/**
- * The envelope's required fields, which need the same treatment as a node's.
+ * The rule is stated over RESOLVED fields rather than required ones, and that
+ * distinction is the whole of it. A required field cannot be missing — zod has
+ * already refused that — so listing the required names covered the inherited
+ * case for them and left every optional field open: an inherited `name` was
+ * read back from the parsed value and absent from storage, the same defect
+ * wearing an optional field's clothes. A field that resolves to `undefined` is
+ * simply not there, and nothing is claimed about it.
  *
- * `parseBlockDocument({})` succeeded where `Object.prototype` carried a valid
- * `formatVersion`, `kind` and `nodes`, for exactly the reason a node did: the
- * schema reads properties directly while storage writes only own ones.
+ * Checked here rather than in the survey because the survey has no notion of
+ * which fields an object DECLARES; this is the layer that knows.
  */
-const DOCUMENT_OWN_FIELDS = ["formatVersion", "kind", "nodes"] as const;
-
-function ownsFields(value: unknown, fields: readonly string[]): boolean {
+function ownsResolvedFields(
+  value: unknown,
+  fields: readonly string[]
+): boolean {
   if (typeof value !== "object" || value === null) return false;
-  return fields.every(field =>
-    Object.prototype.hasOwnProperty.call(value, field)
+  const held = value as Record<string, unknown>;
+  return fields.every(
+    field =>
+      held[field] === undefined ||
+      Object.prototype.hasOwnProperty.call(value, field)
   );
 }
 
-function ownsRequiredFields(value: unknown): boolean {
-  return ownsFields(value, NODE_OWN_FIELDS);
+/**
+ * The declared field names of an object schema, read from the schema itself.
+ *
+ * Writing the list out beside the schema is the same second declaration this
+ * module removed from the format variants: the two agree when written and
+ * nothing makes them stay that way, so a field added above would keep its
+ * inherited value silently.
+ *
+ * Read on first use rather than at module scope. `blockNodeSchema`'s `slots` is
+ * a getter that names the node schema, so touching the shape while this module
+ * is still initializing would reach it before it is bound.
+ */
+function fieldNamesOf(shape: () => Record<string, unknown>): () => string[] {
+  let names: string[] | undefined;
+  return () => (names ??= Object.keys(shape()));
 }
 
-const blockDocumentSchema = z
-  .looseObject({
-    formatVersion: z.literal(DOCUMENT_FORMAT_VERSION),
-    kind: z.enum(documentKinds),
-    nodes: z.array(blockNodeSchema),
-    settings: z
-      .looseObject({
-        styles: nodeStylesSchema.optional(),
-        customCss: z.string().optional(),
-      })
-      .optional(),
-    /**
-     * A usage index for media the document references, so reference tracking
-     * never needs a full tree walk. Derived on write; a reader that finds it
-     * absent walks the tree rather than concluding there is no media.
-     */
-    assets: z
-      .looseObject({ mediaIds: z.array(z.string()).optional() })
-      .optional(),
-  })
-  .refine(value => ownsFields(value, DOCUMENT_OWN_FIELDS), {
+const blockDocumentObject = z.looseObject({
+  formatVersion: z.literal(DOCUMENT_FORMAT_VERSION),
+  kind: z.enum(documentKinds),
+  nodes: z.array(blockNodeSchema),
+  settings: z
+    .looseObject({
+      styles: nodeStylesSchema.optional(),
+      customCss: z.string().optional(),
+    })
+    .optional(),
+  /**
+   * A usage index for media the document references, so reference tracking
+   * never needs a full tree walk. Derived on write; a reader that finds it
+   * absent walks the tree rather than concluding there is no media.
+   */
+  assets: z
+    .looseObject({ mediaIds: z.array(z.string()).optional() })
+    .optional(),
+});
+
+const blockDocumentFields = fieldNamesOf(() => blockDocumentObject.shape);
+
+const blockDocumentSchema = blockDocumentObject.refine(
+  value => ownsResolvedFields(value, blockDocumentFields()),
+  {
     message:
-      "A document must OWN its formatVersion, kind and nodes; an inherited value is not written to storage.",
-  });
+      "A document must OWN every field it carries; an inherited value is not written to storage.",
+  }
+);
 
 /**
  * The shape the schema accepts, as a type.

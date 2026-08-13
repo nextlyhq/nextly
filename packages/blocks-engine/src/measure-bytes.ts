@@ -222,6 +222,10 @@ export interface DocumentSurvey {
    * symbol, a symbol-keyed property, `undefined`, a non-finite number, `-0`, an
    * object that is not a plain record, an accessor that threw, or a repeated
    * reference.
+   *
+   * Also the two shapes JSON rewrites rather than refuses, which are easy to
+   * miss because nothing throws: an array HOLE, which comes back as `null`, and
+   * a non-index own property on an array, which is dropped entirely.
    */
   unserializable: boolean;
 }
@@ -261,14 +265,38 @@ interface Frame {
   /**
    * Iteration state for a `members` frame.
    *
-   * `names` is present for a record and absent for an array, where the index
-   * IS the key and materializing one string per index is the allocation this
-   * walk exists to avoid. `memberKind` is what an element or value becomes.
+   * `names` is the member list for a record AND for an array. Both containers
+   * have to answer the same question — which own properties does JSON actually
+   * emit — and an array that walked `0..length-1` instead could not see a
+   * non-index own property, which JSON silently drops.
+   *
+   * `keyed` says whether JSON writes `"key":` before each member, which is the
+   * only respect in which the two containers differ here. `emitted` records
+   * whether an earlier member of THIS container produced output, so the
+   * separating comma is counted from what was written rather than from the
+   * iteration index — a skipped member would otherwise leave a comma with
+   * nothing on one side of it.
    */
   names?: string[];
-  length?: number;
   index?: number;
   containerKind?: FrameKind;
+  keyed?: boolean;
+  emitted?: boolean;
+}
+
+/**
+ * The array index a property name denotes, or -1 if it denotes none.
+ *
+ * `JSON.stringify` emits positions `0..length-1` and nothing else, so a name is
+ * an element exactly when it is the CANONICAL decimal form of such a position.
+ * `"01"`, `"1e2"`, `" 1"` and `"-0"` all convert to a number and none of them
+ * is an index — round-tripping through `String` is what separates them, and
+ * they are properties JSON drops rather than elements it writes.
+ */
+function arrayIndexOf(name: string, length: number): number {
+  const index = Number(name);
+  if (!Number.isInteger(index) || index < 0 || index >= length) return -1;
+  return String(index) === name ? index : -1;
 }
 
 export function surveyDocument(
@@ -325,33 +353,40 @@ export function surveyDocument(
     if (frame.kind === "members") {
       const container = frame.value as object;
       const index = frame.index ?? 0;
-      const isRecord = frame.names !== undefined;
-      const total = isRecord ? frame.names!.length : (frame.length ?? 0);
-      if (index >= total) continue;
+      const names = frame.names ?? [];
+      if (index >= names.length) continue;
 
-      stack.push({ ...frame, index: index + 1 });
-
-      const key = isRecord ? frame.names![index] : index;
+      const keyed = frame.keyed === true;
+      const key = names[index];
       const member = readMember(container, key);
-      if (!member.present) {
-        unserializable = true;
-        continue;
-      }
+
       // Enumerability means different things to the serializer on the two
       // containers. `JSON.stringify` omits a non-enumerable RECORD property —
       // so the schema, which reads directly, would see a field storage drops —
       // but it serializes an array element by index regardless. Applying the
       // record rule to both refused documents JSON handles correctly.
-      if (isRecord && !member.enumerable) {
+      const skipped = !member.present || (keyed && !member.enumerable);
+
+      // Read BEFORE the continuation is pushed, so `emitted` carries this
+      // member's outcome; the continuation still goes on the stack ahead of the
+      // child, which is what keeps the subtree measured before the container is
+      // asked for its next descriptor.
+      stack.push({
+        ...frame,
+        index: index + 1,
+        emitted: frame.emitted === true || !skipped,
+      });
+
+      if (skipped) {
         unserializable = true;
         continue;
       }
 
-      if (isRecord) {
+      if (keyed) {
         bytes +=
-          utf8ByteLength(String(key), limits.maxBytes) +
+          utf8ByteLength(key, limits.maxBytes) +
           3 +
-          (index > 0 ? 1 : 0);
+          (frame.emitted === true ? 1 : 0);
         if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
       }
 
@@ -359,7 +394,7 @@ export function surveyDocument(
       const placement = memberPlacement(
         frame.containerKind ?? "value",
         frame.depth,
-        String(key),
+        key,
         container === root
       );
       if (placement === "refused") {
@@ -431,14 +466,55 @@ export function surveyDocument(
         unserializable = true;
         continue;
       }
+      // Brackets and the separating commas, which `length` alone fixes: JSON
+      // writes one element per position whether or not that position is
+      // present. Counted BEFORE the names are enumerated, so an array too large
+      // to store is refused without materializing a key list for it.
       bytes += 2 + Math.max(0, length - 1);
       if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
+
+      // Own NAMES rather than the positions `0..length-1`, because the two
+      // differ in both directions and JSON treats each difference differently.
+      // A position with no property is a HOLE, which JSON writes as `null`; a
+      // name that is not a position is a property JSON DROPS. Walking positions
+      // saw neither: the holes cost nothing and the extra properties were
+      // invisible, so an array measured smaller than it serializes and one
+      // carrying a field storage discards was reported as storage-preserving.
+      let names: string[];
+      try {
+        names = Object.getOwnPropertyNames(value);
+      } catch {
+        unserializable = true;
+        continue;
+      }
+
+      const elements: string[] = [];
+      for (const name of names) {
+        if (arrayIndexOf(name, length) >= 0) {
+          elements.push(name);
+        } else if (name !== "length") {
+          // `length` is the one own property JSON omits by design. Anything
+          // else here is data the caller can read back from the value it passed
+          // in and will not find in storage.
+          unserializable = true;
+        }
+      }
+
+      // Every position without a property serializes as `null`, four bytes
+      // each. A sparse array is legal input to `JSON.stringify` and it is the
+      // one shape where the emitted size is driven by what is ABSENT.
+      const holes = length - elements.length;
+      if (holes > 0) {
+        unserializable = true;
+        bytes += holes * 4;
+        if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
+      }
 
       stack.push({
         value,
         kind: "members",
         depth,
-        length,
+        names: elements,
         index: 0,
         containerKind: kind,
       });
@@ -472,6 +548,7 @@ export function surveyDocument(
       names,
       index: 0,
       containerKind: kind,
+      keyed: true,
     });
   }
 

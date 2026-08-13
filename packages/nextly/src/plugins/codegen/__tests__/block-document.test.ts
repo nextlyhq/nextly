@@ -438,6 +438,38 @@ describe("block document schema", () => {
     expect(parseBlockDocument(doc).success).toBe(false);
   });
 
+  it("refuses a node whose OPTIONAL field is inherited", () => {
+    // The same defect wearing an optional field's clothes, and listing the
+    // required names could not see it: `name` is not required, so nothing
+    // demanded it be owned, while the parsed value reads back `"inherited"` and
+    // storage receives a node with no name at all.
+    const proto = { name: "inherited" };
+    const node = Object.assign(Object.create(proto) as object, {
+      id: "a",
+      type: "core/text",
+      version: 1,
+      props: {},
+    });
+    const parsed = parseBlockDocument({ ...emptyPage(), nodes: [node] });
+
+    expect(parsed.success).toBe(false);
+    // The property really did resolve through the prototype, so the refusal is
+    // of an inherited value rather than of an absent one.
+    expect((node as { name?: string }).name).toBe("inherited");
+  });
+
+  it("says nothing about an optional field that is simply absent", () => {
+    // The separating control. A rule phrased over DECLARED fields rather than
+    // resolved ones would refuse every node that omits an optional field, which
+    // is nearly all of them.
+    const doc = {
+      ...emptyPage(),
+      nodes: [{ id: "a", type: "core/text", version: 1, props: {} }],
+    };
+    expect(Object.hasOwn(doc.nodes[0]!, "name")).toBe(false);
+    expect(parseBlockDocument(doc).success).toBe(true);
+  });
+
   it("still accepts a node that owns its fields", () => {
     // The control. A check that refused every node would satisfy the assertion
     // above while rejecting every real document.
