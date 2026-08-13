@@ -89,6 +89,11 @@ export function validateBlocksValue(
 
   const doc = value as BlockDocument;
   const issues: Issue[] = [];
+  // Two of the engine's verdicts are about the whole document rather than its
+  // STRUCTURE: it is too large, or it holds a value JSON cannot write. Neither
+  // makes the tree unsafe to walk, so neither should block the richer walks
+  // below — blocking on them costs the author the more useful answer.
+  const NON_STRUCTURAL = new Set(["document-too-large", "document-unwritable"]);
 
   // The engine owns every structural rule: ids, depth, node and byte caps,
   // slot legality, the kind enum, binding and style shapes.
@@ -96,8 +101,46 @@ export function validateBlocksValue(
     breakpoints: NO_BREAKPOINTS,
     mode: "forgiving",
   }).filter(issue => issue.severity === "error");
+  const structuralIssues = documentIssues.filter(
+    issue => !NON_STRUCTURAL.has(issue.code)
+  );
+
+  // The engine's whole-document verdict is a SUMMARY of what the walk below
+  // reports precisely, so it is held back until that walk has run: if the walk
+  // names the offending keys, the summary says the same thing less usefully and
+  // is dropped; if the walk reaches nothing, the summary is the only answer
+  // there is and must survive.
+  //
+  // One question, one answer — and the more precise answer is the one an author
+  // can act on.
+  // Safe to walk is not the same as affordable to walk. `unserializableIssues`
+  // serializes the whole document, which is precisely the allocation the
+  // engine's bounded counter refused to make: it stops counting at the cap, so
+  // a document reported as too large may be arbitrarily bigger than the cap and
+  // materializing a full JSON copy of it here would undo that bound.
+  //
+  // Nothing is lost by skipping it. "Too large" is already the complete and
+  // actionable answer, and naming a key inside a document that has to shrink
+  // anyway does not change the repair.
+  //
+  // `document-unwritable` is the opposite case and still runs: the counter
+  // stopped on a value it could not write while still under the cap, and the
+  // engine can only say THAT the document is unwritable, never which key.
+  const tooLarge = documentIssues.some(
+    issue => issue.code === "document-too-large"
+  );
+
+  const precise: Issue[] = [];
+  if (structuralIssues.length === 0 && !tooLarge) {
+    precise.push(...disallowedBlockIssues(doc, path, label, options));
+    precise.push(...unserializableIssues(doc, path, label));
+  }
+  const namesUnwritableKeys = precise.some(
+    issue => issue.code === "UNSERIALIZABLE_VALUE"
+  );
 
   for (const issue of documentIssues) {
+    if (issue.code === "document-unwritable" && namesUnwritableKeys) continue;
     issues.push({
       path,
       // The engine's codes are the documented repair vocabulary. Translating
@@ -111,10 +154,16 @@ export function validateBlocksValue(
   // The allow-list walk reads node types, which is only safe once the engine
   // has confirmed the tree is well formed. A malformed node would otherwise
   // throw here and turn a rejected document into a server error.
-  if (documentIssues.length === 0) {
-    issues.push(...disallowedBlockIssues(doc, path, label, options));
-    issues.push(...unserializableIssues(doc, path, label));
-  }
+  //
+  // "Well formed" is about STRUCTURE, though, and the engine also reports two
+  // whole-document verdicts that say nothing about it: the document is too
+  // large, or it holds a value JSON cannot write. Neither makes the tree unsafe
+  // to walk, and blocking on them costs the author the more useful answer —
+  // the engine says a document is unwritable, while this walk says WHICH key.
+  //
+  // Without this, the two checks answered the same question and the coarser one
+  // won purely by running first.
+  issues.push(...precise);
 
   if (issues.length <= MAX_REPORTED_ISSUES) return issues;
   const withheld = issues.length - MAX_REPORTED_ISSUES;

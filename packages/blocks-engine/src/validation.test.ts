@@ -1887,6 +1887,7 @@ describe("measureBytes agrees with the serializer on hooks and cycles", () => {
     expect(measureBytes(value, Number.POSITIVE_INFINITY)).toEqual({
       bytes: expect.any(Number) as number,
       exceeded: true,
+      reason: "unwritable",
     });
   });
 
@@ -1908,5 +1909,178 @@ describe("measureBytes agrees with the serializer on hooks and cycles", () => {
     const written = Buffer.byteLength(JSON.stringify(value), "utf8");
 
     expect(measureBytes(value, 1_000).bytes).toBe(written);
+  });
+});
+
+describe("measureBytes says WHY a value cannot be stored", () => {
+  it("calls a BigInt unwritable rather than counting it", () => {
+    // `JSON.stringify` THROWS on a BigInt — it neither writes nor drops it — so
+    // counting it as an ordinary value reports a document as fitting that the
+    // writer refuses entirely.
+    expect(measureBytes({ x: 1n }, 100)).toEqual({
+      bytes: expect.any(Number) as number,
+      exceeded: true,
+      reason: "unwritable",
+    });
+  });
+
+  it("calls a boxed BigInt unwritable too", () => {
+    // `Object(1n)` is a BigInt OBJECT, so `typeof` reports "object" and the
+    // walk would treat it as an ordinary record with no own keys.
+    expect(measureBytes({ x: Object(1n) }, 100)).toEqual({
+      bytes: expect.any(Number) as number,
+      exceeded: true,
+      reason: "unwritable",
+    });
+  });
+
+  it("reports whichever refusal the bounded walk reaches first", () => {
+    // A document can be BOTH unwritable and over the limit, and one `reason`
+    // can only carry one of them. Which one surfaces is decided by traversal:
+    // the walk returns at the FIRST refusal it reaches and never looks further,
+    // because establishing that no unwritable value exists anywhere would mean
+    // reading the whole document — exactly the unbounded pass this counter
+    // exists to avoid.
+    //
+    // The traversal is a LIFO stack, so an object's LAST entry is visited
+    // first. That makes the answer depend on declaration order, which is
+    // pinned here as the measured behaviour rather than defended as a policy:
+    // nothing outside this walk can predict it, so no caller may rely on which
+    // reason arrives for a document that is both.
+    const reached = measureBytes({ pad: "x".repeat(500), bad: 1n }, 100);
+    const notReached = measureBytes({ bad: 1n, pad: "x".repeat(500) }, 100);
+
+    expect(reached.exceeded && reached.reason).toBe("unwritable");
+    expect(notReached.exceeded && notReached.reason).toBe("over-limit");
+
+    // What a caller MAY rely on, and the reason both spellings are safe to
+    // reject on: either way the document is refused.
+    expect([reached.exceeded, notReached.exceeded]).toEqual([true, true]);
+  });
+
+  it("writes an object that only CLAIMS to be a BigInt", () => {
+    // `Symbol.toStringTag` is an ordinary writable property of the document
+    // under inspection, so `Object.prototype.toString` reports whatever the
+    // document says. This value tags itself `[object BigInt]` and the writer
+    // stores it regardless, which is why the refusal is decided by the internal
+    // slot instead: classifying by the tag would let block props declare
+    // themselves unstorable and lock their own author out.
+    const spoof = { [Symbol.toStringTag]: "BigInt", x: 1 };
+    const written = JSON.stringify({ v: spoof });
+
+    // The positive control for the pair: the writer really does store one and
+    // really does refuse the other, so the two cases are genuinely different
+    // rather than both being accepted.
+    expect(written).toBe('{"v":{"x":1}}');
+    expect(() => JSON.stringify({ v: Object(1n) })).toThrow(TypeError);
+
+    expect(measureBytes({ v: spoof }, 1_000)).toEqual({
+      bytes: Buffer.byteLength(written, "utf8"),
+      exceeded: false,
+    });
+  });
+
+  it("still says over-limit when the document is merely too big", () => {
+    // The distinction is the whole point: these two need opposite advice, and
+    // a single boolean cannot tell an author which one they have.
+    const measured = measureBytes({ x: "y".repeat(500) }, 100);
+
+    expect(measured).toEqual({
+      bytes: expect.any(Number) as number,
+      exceeded: true,
+      reason: "over-limit",
+    });
+  });
+});
+
+describe("measureBytes reads nothing the writer would not", () => {
+  it("does not invoke a Symbol.toStringTag getter the document defined", () => {
+    // `JSON.stringify` ignores symbol keys, so it never runs this getter and
+    // stores the object as `{}`. A measurement that runs it is executing
+    // document-supplied code the writer does not, which lets a throwing getter
+    // escape a function contracted to report rather than raise, and lets a
+    // getter with side effects mutate a document while it is being measured.
+    let reads = 0;
+    const watched = { x: 1 };
+    Object.defineProperty(watched, Symbol.toStringTag, {
+      get: () => {
+        reads += 1;
+        return "BigInt";
+      },
+      configurable: true,
+    });
+
+    const measured = measureBytes({ v: watched }, 1_000);
+
+    expect(reads, "the tag getter ran during measurement").toBe(0);
+    // And the verdict still matches the writer, which stores it.
+    expect(measured.exceeded).toBe(false);
+  });
+
+  it("does not raise when a tag getter throws, because the writer stores it", () => {
+    const hostile = { x: 1 };
+    Object.defineProperty(hostile, Symbol.toStringTag, {
+      get: () => {
+        throw new Error("tag getter");
+      },
+      configurable: true,
+    });
+
+    // The control: the writer really does accept this value, so refusing it
+    // or raising here would be a disagreement with the thing being counted.
+    expect(JSON.stringify({ v: hostile })).toBe('{"v":{"x":1}}');
+    expect(() => measureBytes({ v: hostile }, 1_000)).not.toThrow();
+    expect(measureBytes({ v: hostile }, 1_000).exceeded).toBe(false);
+  });
+
+  it("still refuses a boxed BigInt that carries a tag of its own", () => {
+    // The slot check is what a declared tag falls through to, so this is the
+    // case proving the fall-through still reaches the right answer.
+    const tagged = Object(1n) as object;
+    Object.defineProperty(tagged, Symbol.toStringTag, {
+      value: "Object",
+      configurable: true,
+    });
+    expect(measureBytes({ v: tagged }, 1_000).exceeded).toBe(true);
+  });
+});
+
+describe("measureBytes probes a value only where the writer does", () => {
+  it("does not execute a proxy's descriptor trap", () => {
+    // The writer reads `toJSON` and own keys, and never asks for
+    // `Symbol.toStringTag`. A probe that does is observable through a Proxy
+    // trap even when no ordinary getter is involved, and a trap that throws
+    // turns a document the writer stores into a raised error.
+    const trapped: string[] = [];
+    const hostile = new Proxy(
+      { x: 1 },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          trapped.push(String(key));
+          if (key === Symbol.toStringTag) throw new Error("descriptor trap");
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      }
+    );
+
+    // The control: the writer really does accept it, so raising here would be
+    // a disagreement with the thing being counted.
+    expect(JSON.stringify({ v: hostile })).toBe('{"v":{"x":1}}');
+    expect(() => measureBytes({ v: hostile }, 1_000)).not.toThrow();
+    expect(
+      trapped.filter(key => key.includes("toStringTag")),
+      "the counter asked for a symbol the writer never asks for"
+    ).toEqual([]);
+  });
+
+  it("refuses a boxed BigInt whose prototype was replaced", () => {
+    // A prototype-based filter would call this an ordinary object. The writer
+    // still refuses it, so the counter has to as well or the two disagree
+    // about a document that cannot be stored.
+    const disguised = Object(1n) as object;
+    Object.setPrototypeOf(disguised, Object.prototype);
+
+    expect(() => JSON.stringify({ v: disguised })).toThrow(TypeError);
+    expect(measureBytes({ v: disguised }, 1_000).exceeded).toBe(true);
   });
 });
