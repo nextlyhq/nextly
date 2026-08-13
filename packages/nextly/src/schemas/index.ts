@@ -264,6 +264,9 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "media_folders",
   "image_sizes",
   "nextly_meta",
+  // Read by live introspection. Absent here, the table is created and then invisible to every
+  // snapshot, so the drift check proposes adding it again on every run.
+  "nextly_field_group_lock",
   "dynamic_collections",
   "dynamic_singles",
   STORAGE_FORMAT.registryTable,
