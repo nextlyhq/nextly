@@ -356,6 +356,81 @@ describe("an op that cannot apply", () => {
     );
   });
 
+  it("refuses a slot wider than the walk may enqueue, before copying it", () => {
+    // The root forest is bounded before it is copied; a slot's children are the
+    // same list one level down and were not. `new Array(n)` sets a length and
+    // allocates nothing, so this document is free to construct and free to
+    // hold, and enqueueing it first is a hundred million allocations before the
+    // first hole can be popped and refused.
+    //
+    // The SIZE is what separates. At five million the unbounded walk still
+    // finishes, because it enqueues everything and then refuses on the first
+    // entry it pops; a hundred million is where that difference stops being
+    // one of speed.
+    const wide = new Array(100_000_000) as BlockNode[];
+    const document = doc([node("outer", { main: wide })]);
+
+    expect(() => applyOp(document, { kind: "remove", id: "outer" })).toThrow(
+      OpError
+    );
+  }, 30_000);
+
+  it("bounds the walk across slots, not within one", () => {
+    // Five lists, each comfortably under the per-list bound, summing past it.
+    // A bound applied per list accepts every one of them and enqueues the sum;
+    // only a running total refuses.
+    //
+    // Cheap because it asserts on the REASON rather than on exhaustion. Both
+    // implementations throw here — the unbounded one gets there by popping a
+    // hole and calling it a malformed node — so the message is what separates
+    // them, and the fixture stays small enough to run in milliseconds.
+    const slots: Record<string, BlockNode[]> = {};
+    for (let i = 0; i < 5; i += 1) {
+      slots[`slot${String(i)}`] = new Array(1_000_000) as BlockNode[];
+    }
+    const document = doc([node("outer", slots)]);
+
+    expect(() => applyOp(document, { kind: "remove", id: "outer" })).toThrow(
+      /entries an edit may walk/
+    );
+  }, 30_000);
+
+  it("cuts an untrusted id where the message is composed, not after", () => {
+    // The `OpError` constructor bounds what is STORED, so a message-length
+    // assertion passes whether or not the value was cut at the call site — it
+    // is satisfied by the backstop and says nothing about the allocation.
+    //
+    // What separates them is the TAIL. Cut at composition, the id contributes
+    // about a hundred characters and the rest of the sentence survives;
+    // interpolated raw, the message is twenty megabytes and the constructor
+    // truncates it mid-id, so everything after the id is gone.
+    const id = "x".repeat(20_000_000);
+
+    expect(() => applyOp(doc(), { kind: "remove", id })).toThrow(
+      /in the document/
+    );
+  }, 30_000);
+
+  it("compares an over-cap value fully when the cap check would allow it", () => {
+    // A site that lowers `maxBytes` leaves existing documents over it, and the
+    // repairability rule lets an edit that makes the overage no worse through.
+    // A comparison budget derived from that same cap runs out before it can
+    // answer, reports a structurally identical value as a change, and the cap
+    // check then permits it — a no-op recorded in history whose inverse is also
+    // a no-op, which is exactly what the no-op guard exists to refuse.
+    const text = Array.from({ length: 200 }, (_unused, i) => i);
+    const document = doc([{ ...node("a"), props: { text } }]);
+    const limits = { maxDepth: 10, maxNodes: 100, maxBytes: 50 };
+
+    expect(() =>
+      applyOp(
+        document,
+        { kind: "update", id: "a", patch: { props: { text: [...text] } } },
+        limits
+      )
+    ).toThrow(/already holds every value/);
+  });
+
   it("refuses a value with more parts than any cap allows, unexamined", () => {
     // Depth is not the only way a value gets too big to examine. A SHALLOW
     // value with millions of parts costs a full traversal in the domain walks —

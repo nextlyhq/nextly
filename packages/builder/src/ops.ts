@@ -269,19 +269,28 @@ const MAX_QUOTED_LENGTH = 100;
  */
 const MAX_MESSAGE_LENGTH = 2_000;
 
+/**
+ * An untrusted string cut to what a message may carry, without quoting it.
+ *
+ * Separate from {@link describe} so the two places that need a bounded string —
+ * a quoted value and a path segment — share one implementation of the cut
+ * rather than each carrying its own. A second copy agrees on the day it is
+ * written and drifts the moment either limit moves.
+ */
+function clipped(value: string): string {
+  return value.length > MAX_QUOTED_LENGTH
+    ? `${value.slice(0, MAX_QUOTED_LENGTH)}…`
+    : value;
+}
+
 function describe(value: unknown): string {
   if (typeof value === "string") {
-    return value.length > MAX_QUOTED_LENGTH
-      ? `"${value.slice(0, MAX_QUOTED_LENGTH)}…"`
-      : `"${value}"`;
+    return `"${clipped(value)}"`;
   }
   // Numbers included: `BigInt` has no length bound either, and a literal with
   // millions of digits is as long a string as any.
   if (typeof value === "bigint") {
-    const digits = String(value);
-    return digits.length > MAX_QUOTED_LENGTH
-      ? `${digits.slice(0, MAX_QUOTED_LENGTH)}…n`
-      : `${digits}n`;
+    return `${clipped(String(value))}n`;
   }
   if (typeof value === "object" && value !== null) {
     return Array.isArray(value) ? "an array" : "an object";
@@ -393,16 +402,26 @@ function assertWalkable(depth: number, subject: string): void {
 }
 
 /**
- * How many values a structural comparison may visit before the answer is moot.
+ * How many values a structural comparison may visit before it gives up.
  *
- * Derived from the byte cap rather than chosen. The smallest thing a value can
- * contribute to serialized JSON is one byte, so a value with more parts than the
- * cap has bytes cannot fit under it whatever the comparison would have said —
- * and the cap check that follows is the one entitled to refuse it.
+ * A MACHINE bound, deliberately not derived from `limits.maxBytes`. Deriving it
+ * from the byte cap read as sound — a value with more parts than the cap has
+ * bytes cannot fit under it — but that reasoning holds only while the cap check
+ * downstream is entitled to refuse the result, and the repairability rule says
+ * it is not. A site that lowers `maxBytes` under an existing document leaves an
+ * update that rewrites an identical over-cap value exhausting the budget,
+ * reported as a change, and then permitted by the cap check because it is
+ * exactly the size the document already was: a no-op recorded in history whose
+ * inverse is also a no-op, which is the entry this comparison exists to refuse.
+ *
+ * At the machine bound it is decisive instead of merely safe. `equalWithin`
+ * descends only where both sides agree structurally, so the walk is driven by
+ * the side taken from the document — and {@link assertForestEntries} has
+ * already refused any document whose held values exceed this many parts. No
+ * value reaching the comparison can exhaust it, so the "ran out" answer stops
+ * being reachable rather than staying reachable and safe.
  */
-function comparisonBudget(limits: DocumentLimits): number {
-  return limits.maxBytes + 1;
-}
+const COMPARISON_BUDGET = MAX_VALUE_PARTS;
 
 /**
  * Structural equality, bounded, and never through a serializer.
@@ -766,16 +785,19 @@ export type BuilderOp =
  */
 export class OpError extends Error {
   constructor(message: string) {
-    // Bounded HERE rather than at each of the sites that build a message, which
-    // is the only version that stays true. The values these messages name come
-    // from storage or from an agent, so they are attacker-controlled: a 5 MB
-    // malformed id produced a 5 MB `message`, doubling the memory and then
-    // carrying it into every log and telemetry sink that records the refusal.
+    // A backstop on what is STORED, and only that. The values these messages
+    // name come from storage or from an agent, so they are
+    // attacker-controlled: a 5 MB malformed id produced a 5 MB `message` and
+    // carried it into every log and telemetry sink that records the refusal.
+    // Every message passes through here, so no site can put an unbounded one
+    // into a log.
     //
-    // Every message passes through this constructor, so a site added later
-    // cannot reintroduce it by interpolating a value directly — which is what
-    // happened to the first fix, applied to the value formatter while the ids
-    // were being interpolated straight into the string.
+    // What it cannot bound is the ALLOCATION, because a template literal is
+    // fully evaluated before the constructor is entered: a site interpolating a
+    // 5 MB id builds the 5 MB string first and this slices a copy of it. That
+    // is why the sites render untrusted values through `describe` or `clipped`
+    // instead of interpolating them directly — the cut has to happen where the
+    // string is composed, and this only catches what escapes that.
     super(
       message.length > MAX_MESSAGE_LENGTH
         ? `${message.slice(0, MAX_MESSAGE_LENGTH)}…`
@@ -853,14 +875,14 @@ function assertPatchNames(op: Extract<BuilderOp, { kind: "update" }>): void {
   for (const [key, value] of Object.entries(op.patch)) {
     if (!isPatchField(key)) {
       throw new OpError(
-        `update: "${key}" is not a field this op may set. Ids and types are ` +
+        `update: ${describe(key)} is not a field this op may set. Ids and types are ` +
           `identity, children move through the structural ops, and anything ` +
           `else named here is not part of a node.`
       );
     }
     if (value === undefined) {
       throw new OpError(
-        `update: "${key}" is set to undefined. A value that disappears when the ` +
+        `update: ${describe(key)} is set to undefined. A value that disappears when the ` +
           `op is stored would make a replayed edit do nothing; name it in ` +
           `\`unset\` instead, which survives being written down.`
       );
@@ -874,7 +896,7 @@ function assertPatchNames(op: Extract<BuilderOp, { kind: "update" }>): void {
     // value is known to be plain data.
     if (!isJsonValue(value)) {
       throw new OpError(
-        `update: "${key}" holds a value JSON cannot carry unchanged. A patch ` +
+        `update: ${describe(key)} holds a value JSON cannot carry unchanged. A patch ` +
           `is stored as JSON, so a value it drops or rewrites would replay as ` +
           `something else — or not at all.`
       );
@@ -885,7 +907,7 @@ function assertPatchNames(op: Extract<BuilderOp, { kind: "update" }>): void {
     // then on, with nothing between the op and the tree to notice.
     if (!NODE_FIELDS[key].holds(value)) {
       throw new OpError(
-        `update: "${key}" cannot hold ${describe(value)}. Writing it ` +
+        `update: ${describe(key)} cannot hold ${describe(value)}. Writing it ` +
           `would leave the node holding a value of the wrong kind, which every ` +
           `later read treats as data.`
       );
@@ -923,7 +945,7 @@ function assertPatchNames(op: Extract<BuilderOp, { kind: "update" }>): void {
   for (const key of names) {
     if (isPlainRecord(op.patch) && Object.hasOwn(op.patch, key)) {
       throw new OpError(
-        `update: "${key}" is named both as a value to write and as a field to ` +
+        `update: ${describe(key)} is named both as a value to write and as a field to ` +
           `remove. One op cannot do both, and applying it would keep neither ` +
           `the value nor a record of which was meant.`
       );
@@ -931,11 +953,13 @@ function assertPatchNames(op: Extract<BuilderOp, { kind: "update" }>): void {
   }
   for (const key of names) {
     if (!isPatchField(key)) {
-      throw new OpError(`update: "${key}" is not a field this op may remove.`);
+      throw new OpError(
+        `update: ${describe(key)} is not a field this op may remove.`
+      );
     }
     if (!mayRemove(key)) {
       throw new OpError(
-        `update: "${key}" is required on every node and cannot be removed. A ` +
+        `update: ${describe(key)} is required on every node and cannot be removed. A ` +
           `node without it is not a node, and the inverse could not restore one.`
       );
     }
@@ -1051,7 +1075,7 @@ function assertNodeShape(
       if (Object.hasOwn(NODE_FIELDS, key)) continue;
       if (!isJsonValue(extra)) {
         throw new OpError(
-          `${verb}: ${path} carries "${key}", which holds ${describe(extra)} — ` +
+          `${verb}: ${path} carries ${describe(key)}, which holds ${describe(extra)} — ` +
             `a value JSON cannot write. The node would enter the document and ` +
             `the next save would be refused.`
         );
@@ -1112,7 +1136,7 @@ function assertNodeShape(
       // whole child list disappears during an unrelated later edit.
       if (!isUsableSlotName(slot)) {
         throw new OpError(
-          `${verb}: ${path} carries a slot named "${slot}", which every object ` +
+          `${verb}: ${path} carries a slot named ${describe(slot)}, which every object ` +
             `already inherits. Its children could not be told apart from that ` +
             `member, and rebuilding the slot map would drop them.`
         );
@@ -1136,8 +1160,13 @@ function assertNodeShape(
       // and a `null` in a child list is not a node.
       for (let index = 0; index < list.length; index += 1) {
         pending.push({
+          // The slot segment CUT as it is composed, not where the path is
+          // finally read. A path is inherited by every descendant, so an
+          // unbounded slot name is copied into one string per node beneath it
+          // — the allocation the refusal exists to avoid, paid before any
+          // message is built.
           candidate: list[index],
-          path: `${path}.slots.${slot}[${index}]`,
+          path: `${path}.slots.${clipped(slot)}[${index}]`,
           depth: depth + 1,
         });
       }
@@ -1222,19 +1251,27 @@ function assertForestEntries(nodes: BlockNode[]): void {
   // list is what every check below reads from.
   assertListIsData(nodes, "a document's nodes");
   const pending: unknown[] = [];
-  // Budgeted while enqueueing, like every other list this walk reads. Copying
-  // the root array first means a cheap sparse `Array(100_000_000)` allocates a
-  // hundred million pending entries before the first `undefined` can earn a
-  // refusal — the work bounded by what the caller declared rather than by what
-  // a document may hold.
-  if (nodes.length > MAX_VALUE_PARTS) {
-    throw new OpError(
-      `a document holding more than ${String(MAX_VALUE_PARTS)} top-level ` +
-        `entries cannot be edited: no document may hold that many nodes, so ` +
-        `the answer is settled by the length alone.`
-    );
-  }
-  for (const entry of nodes) pending.push(entry);
+  // Every list this walk copies is bounded BEFORE the copy, against ONE running
+  // total rather than per list. Copying first means a cheap sparse
+  // `Array(100_000_000)` allocates a hundred million pending entries before the
+  // first `undefined` can earn a refusal; a per-list bound closes that for one
+  // wide list and leaves a document spreading the same width across many slots,
+  // where every individual length passes. The total is what the caller
+  // declared, so the total is what the walk is bounded by.
+  let enqueued = 0;
+  const enqueue = (list: readonly unknown[], subject: string): void => {
+    if (enqueued + list.length > MAX_VALUE_PARTS) {
+      throw new OpError(
+        `${subject} would put this document past the ` +
+          `${String(MAX_VALUE_PARTS)} entries an edit may walk. No document ` +
+          `may hold that many nodes, so the answer is settled by the lengths ` +
+          `alone.`
+      );
+    }
+    enqueued += list.length;
+    for (const entry of list) pending.push(entry);
+  };
+  enqueue(nodes, "a document's nodes");
   // Every node reached, so a document that holds itself is refused rather than
   // walked forever. A forest is a tree by intent and not by construction: an
   // in-process document can be handed to `applyOp` with a node inside its own
@@ -1324,7 +1361,7 @@ function assertForestEntries(nodes: BlockNode[]): void {
       // its inverse cannot restore children it never saw.
       if (!isUsableSlotName(name)) {
         throw new OpError(
-          `a document holding a slot named "${name}" cannot be edited. That ` +
+          `a document holding a slot named ${describe(name)} cannot be edited. That ` +
             `name resolves to a member every object inherits, so rebuilding ` +
             `the node would drop the slot's children instead of keeping them.`
         );
@@ -1337,11 +1374,12 @@ function assertForestEntries(nodes: BlockNode[]): void {
       }
       // Each child list by the same rule as the root's, and before it is read.
       assertListIsData(children, "a slot's children");
-      // Pushed one at a time. `push(...children)` passes each child as a call
+      // Through the same bounded copy as the root list. Pushed one at a time
+      // rather than spread: `push(...children)` passes each child as a call
       // ARGUMENT, and V8 caps those around 100k — so a slot wide enough to
       // exceed it throws a native RangeError before this walk can refuse the
       // document, and before a removal could repair it.
-      for (const child of children) pending.push(child);
+      enqueue(children, "a slot's children");
     }
   }
 
@@ -1501,7 +1539,7 @@ function assertDropSlot(address: unknown, verb: string): void {
   }
   if (!isUsableSlotName(slot)) {
     throw new OpError(
-      `${verb}: "${slot}" is not a usable slot name. It resolves to a member ` +
+      `${verb}: ${describe(slot)} is not a usable slot name. It resolves to a member ` +
         `every object inherits, so removing it would reach the prototype ` +
         `rather than the node's own children.`
     );
@@ -1647,7 +1685,7 @@ function assertSubtreeIdsAreUnique(
   for (const held of subtreeIds(root)) {
     if ((counts.get(held) ?? 0) > 1) {
       throw new OpError(
-        `${verb}: "${held}" addresses ${String(counts.get(held))} nodes and ` +
+        `${verb}: ${describe(held)} addresses ${String(counts.get(held))} nodes and ` +
           `sits inside what this would remove. The inverse restores the whole ` +
           `subtree by insert, and an insert repeating an id is refused — so ` +
           `this edit would apply and could never be undone.`
@@ -1693,7 +1731,7 @@ function assertIdIsUnique(nodes: BlockNode[], id: string, verb: string): void {
   }
   if (seen > 1) {
     throw new OpError(
-      `${verb}: "${id}" addresses ${String(seen)} nodes, and an id is ` +
+      `${verb}: ${describe(id)} addresses ${String(seen)} nodes, and an id is ` +
         `identity. Removing or moving it would delete every one of them while ` +
         `the undo restored a single node, so the rest would vanish with no ` +
         `record of the edit that took them.`
@@ -1796,14 +1834,14 @@ function assertPosition(at: TreePosition, verb: string): void {
   // breaks it exactly the same way.
   if (typeof at.slot === "string" && !isUsableSlotName(at.slot)) {
     throw new OpError(
-      `${verb}: "${at.slot}" is not a usable slot name. It resolves to a ` +
+      `${verb}: ${describe(at.slot)} is not a usable slot name. It resolves to a ` +
         `member every object inherits, so the document's own children could ` +
         `not be told apart from it.`
     );
   }
   if (at.parentId !== undefined && typeof at.slot !== "string") {
     throw new OpError(
-      `${verb}: a position inside "${at.parentId}" must name its slot as a ` +
+      `${verb}: a position inside ${describe(at.parentId)} must name its slot as a ` +
         `string; ${describe(at.slot)} would create a child region no ` +
         `block declared.`
     );
@@ -1843,7 +1881,7 @@ function positionOf(location: NodeLocation): OpPosition {
   // two become one answer.
   if (location.slot === undefined) {
     throw new OpError(
-      `this node sits inside "${location.parent.id}" without a named slot, so ` +
+      `this node sits inside ${describe(location.parent.id)} without a named slot, so ` +
         `the edit could not be undone.`
     );
   }
@@ -1890,7 +1928,7 @@ function priorValues(
     // application is refused — an undo that cannot run.
     if (!isRemovableField(key)) {
       throw new OpError(
-        `update: this node is missing "${key}", which every node carries, so ` +
+        `update: this node is missing ${describe(key)}, which every node carries, so ` +
           `the edit could not be undone.`
       );
     }
@@ -1986,7 +2024,7 @@ export function applyOp(
     if (key === "nodes") continue;
     if (!isJsonValue(value)) {
       throw new OpError(
-        `a document whose "${key}" is ${describe(value)} cannot be edited: ` +
+        `a document whose ${describe(key)} is ${describe(value)} cannot be edited: ` +
           `JSON cannot write that value, so the edit would apply and then ` +
           `fail to save.`
       );
@@ -2076,7 +2114,7 @@ export function applyOp(
       const lockedId = lockedWithin(op.node);
       if (lockedId !== undefined) {
         throw new OpError(
-          `insert: "${lockedId}" arrives locked, and a locked node cannot be ` +
+          `insert: ${describe(lockedId)} arrives locked, and a locked node cannot be ` +
             `removed — so this insert could never be undone. Unlock it before ` +
             `adding it to the document.`
         );
@@ -2091,7 +2129,7 @@ export function applyOp(
       const placed = accepted(
         nodes,
         insertNode(nodes, incoming, op.at),
-        `insert: the document did not accept "${op.node.id}" at the position ` +
+        `insert: the document did not accept ${describe(op.node.id)} at the position ` +
           `given. The position may name a parent the document does not hold ` +
           `or omit the slot it needs, or the subtree may carry an id the ` +
           `document already uses — ids are identity, so a repeat would make ` +
@@ -2118,7 +2156,7 @@ export function applyOp(
       const location = locateNode(nodes, op.id);
       if (node === undefined || location === undefined) {
         throw new OpError(
-          `remove: no node with id "${op.id}" in the document.`
+          `remove: no node with id ${describe(op.id)} in the document.`
         );
       }
 
@@ -2158,7 +2196,7 @@ export function applyOp(
       const lockedId = lockedWithin(node);
       if (lockedId !== undefined) {
         throw new OpError(
-          `remove: "${lockedId}" is locked and sits inside what this would ` +
+          `remove: ${describe(lockedId)} is locked and sits inside what this would ` +
             `delete. An author locked it against deletion, and removing its ` +
             `ancestor deletes it just as thoroughly.`
         );
@@ -2169,7 +2207,7 @@ export function applyOp(
       const without = accepted(
         nodes,
         removeNode(nodes, op.id),
-        `remove: the document did not accept removing "${op.id}".`
+        `remove: the document did not accept removing ${describe(op.id)}.`
       );
       // The slot the original placement created, if this remove is the undo of
       // one. Applied AFTER the removal, because the slot only becomes empty
@@ -2197,7 +2235,9 @@ export function applyOp(
       const node = findNode(nodes, op.id);
       const location = locateNode(nodes, op.id);
       if (node === undefined || location === undefined) {
-        throw new OpError(`move: no node with id "${op.id}" in the document.`);
+        throw new OpError(
+          `move: no node with id ${describe(op.id)} in the document.`
+        );
       }
       assertIdIsUnique(nodes, op.id, "move");
       // Same on the origin side: the inverse moves the node BACK by naming its
@@ -2213,7 +2253,7 @@ export function applyOp(
       const lockedMoving = lockedWithin(node);
       if (lockedMoving !== undefined) {
         throw new OpError(
-          `move: "${lockedMoving}" is locked and sits inside what this would ` +
+          `move: ${describe(lockedMoving)} is locked and sits inside what this would ` +
             `relocate. A lock is easier to rely on when it means one thing — ` +
             `this node does not move or disappear until you unlock it — than ` +
             `when it holds for the node and not for the section around it.`
@@ -2226,7 +2266,7 @@ export function applyOp(
       const moved = accepted(
         nodes,
         moveNode(nodes, op.id, op.to),
-        `move: the document did not accept "${op.id}" at the position given. ` +
+        `move: the document did not accept ${describe(op.id)} at the position given. ` +
           `The position may name a parent the document does not hold, omit ` +
           `the slot it needs, or sit inside the subtree being moved.`
       );
@@ -2242,7 +2282,7 @@ export function applyOp(
       const settled = locateNode(moved, op.id);
       if (settled !== undefined && samePlace(location, settled)) {
         throw new OpError(
-          `move: "${op.id}" is already at the position given, so this move ` +
+          `move: ${describe(op.id)} is already at the position given, so this move ` +
             `changes nothing. A history entry for it would undo to no visible ` +
             `effect.`
         );
@@ -2276,7 +2316,7 @@ export function applyOp(
       const node = findNode(nodes, op.id);
       if (node === undefined) {
         throw new OpError(
-          `update: no node with id "${op.id}" in the document.`
+          `update: no node with id ${describe(op.id)} in the document.`
         );
       }
       assertIdIsUnique(nodes, op.id, "update");
@@ -2311,7 +2351,7 @@ export function applyOp(
       // it in full to answer a question whose answer cannot matter, and the
       // bounded counter downstream never gets to run.
       const same = (a: unknown, b: unknown): boolean =>
-        equalWithin(a, b, comparisonBudget(limits));
+        equalWithin(a, b, COMPARISON_BUDGET);
       // A name set rather than `includes` on the typed list: the names being
       // compared are the patch's own keys, which are strings, and widening the
       // list to match them would give up the very narrowing that stops a caller
@@ -2324,7 +2364,7 @@ export function applyOp(
       );
       if (!changesSomething) {
         throw new OpError(
-          `update: "${op.id}" already holds every value this op would write, ` +
+          `update: ${describe(op.id)} already holds every value this op would write, ` +
             `so it changes nothing. A history entry for it would undo to no ` +
             `visible effect.`
         );
