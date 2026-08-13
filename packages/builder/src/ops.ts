@@ -27,7 +27,7 @@ import {
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
-  documentBytes,
+  measureBytes,
   findNode,
   isNodeType,
   isNodeVersion,
@@ -866,7 +866,7 @@ function assertNodeShape(
  * nothing is committed until `applyOp` returns. The quota is still enforced
  * before any caller can adopt the result, which is what a quota has to promise.
  *
- * Counted with the engine's own `countNodes` and `documentBytes` against its own
+ * Counted with the engine's own `countNodes` and `measureBytes` against its own
  * `MAX_NODES` and `DEFAULT_MAX_DOCUMENT_BYTES`, for the same reason the depth
  * bound asks `MAX_DEPTH`: a second opinion about how large a document may be is
  * a second contract to keep in step.
@@ -992,11 +992,31 @@ function assertFitsCaps(
   // Size as well as count. A single large string passes a node count and still
   // puts the document past what the engine will store, with the same result:
   // the edit applies, enters history, and every save afterwards is refused.
-  const bytes = documentBytes(result);
-  if (bytes > limits.maxBytes && bytes > documentBytes(before)) {
+  //
+  // COUNTED rather than produced. `documentBytes` answers by building the JSON
+  // string and then a UTF-8 buffer of it, so deciding "is this too big" would
+  // first allocate two copies of the thing being called too big — and an op
+  // carrying a value far past the cap could exhaust the editor before the
+  // refusal it earns. The engine's `measureBytes` walks and counts, stopping
+  // as soon as the answer is settled, and the validator already decides this
+  // question with it.
+  //
+  // The ceiling is what makes one bounded pass decisive. The rule is that an
+  // edit is refused when it crosses the cap or worsens an existing overage —
+  // equivalently, when the result is larger than both the cap and the document
+  // it started from. So the ceiling is the larger of the two, and the common
+  // case never pays for measuring `before` in full: a document already inside
+  // the cap settles it, and only one already over the cap needs its exact size,
+  // which is the repair case a site creates by lowering its own limit.
+  const startingSize = measureBytes(before, limits.maxBytes);
+  const ceiling = startingSize.exceeded
+    ? measureBytes(before, Number.POSITIVE_INFINITY).bytes
+    : limits.maxBytes;
+  const size = measureBytes(result, ceiling);
+  if (size.exceeded) {
     throw new OpError(
-      `${verb}: this would leave the document at ${String(bytes)} bytes, past ` +
-        `the ${String(limits.maxBytes)} it may hold. The edit would ` +
+      `${verb}: this would leave the document over ${String(ceiling)} bytes, ` +
+        `past the ${String(limits.maxBytes)} it may hold. The edit would ` +
         `apply and then fail to save.`
     );
   }
@@ -1151,6 +1171,22 @@ function assertPosition(at: TreePosition, verb: string): void {
       `${verb}: a position inside "${at.parentId}" must name its slot as a ` +
         `string; ${describe(at.slot)} would create a child region no ` +
         `block declared.`
+    );
+  }
+  // And the other half of it. A position naming a slot without a parent has no
+  // meaning — a slot is a region OF something — and the engine does not refuse
+  // it, it ignores the slot and places the node at the document root. So a
+  // replayed history carrying `{ slot: "main", index: 0 }` silently becomes an
+  // edit the author never made, in a different part of the document, and its
+  // inverse addresses where it actually landed rather than where it said.
+  //
+  // Refused rather than reinterpreted: the op vocabulary's type already makes
+  // this unsayable, and this is the same rule for input that never met it.
+  if (at.parentId === undefined && at.slot !== undefined) {
+    throw new OpError(
+      `${verb}: a position naming slot ${describe(at.slot)} must also name ` +
+        `the parent it is a slot of. At the top level there is no slot to ` +
+        `name, and the node would be placed at the document root instead.`
     );
   }
 }

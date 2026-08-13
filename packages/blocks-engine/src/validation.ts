@@ -539,7 +539,18 @@ function utf8ByteLength(s: string, budget: number): number {
  * When the walk completes under the limit, `bytes` is an exact-enough estimate;
  * when `exceeded` is true it stopped early.
  */
-function measureBytes(
+/**
+ * Serialized size, counted rather than produced, stopping once past `limit`.
+ *
+ * `documentBytes` answers the same question by building the JSON string and
+ * then a UTF-8 buffer of it, which is fine for a document already known to be
+ * of reasonable size and is the wrong tool for DECIDING that. An oversized
+ * value has to be rejected without first allocating two copies of itself.
+ *
+ * Pass `Number.POSITIVE_INFINITY` for an exact count with no early exit; any
+ * finite limit makes `bytes` a lower bound once `exceeded` is true.
+ */
+export function measureBytes(
   root: unknown,
   limit: number
 ): { bytes: number; exceeded: boolean } {

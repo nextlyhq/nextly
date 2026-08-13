@@ -69,7 +69,7 @@ export {
 } from "./tree";
 export type { NodeLocation, TreePosition } from "./tree";
 
-export { validate, ISSUE_CODES } from "./validation";
+export { validate, ISSUE_CODES, measureBytes } from "./validation";
 /**
  * The registry-independent facts about a node, exported so a caller holding no
  * block registry can still refuse a malformed one. The editor's op layer is the

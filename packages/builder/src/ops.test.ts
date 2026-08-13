@@ -335,6 +335,49 @@ describe("an op that cannot apply", () => {
   ])("refuses a persisted op that names a parent and no slot: %s", (_l, op) => {
     expect(() => applyOp(doc(), op as BuilderOp)).toThrow(OpError);
   });
+
+  // The other half of the same rule, and the one the engine does not enforce:
+  // handed a slot with no parent it ignores the slot and places the node at the
+  // document root. A replayed history carrying this becomes an edit the author
+  // never made, somewhere else in the document, with an inverse addressing
+  // where it landed rather than where it said.
+  it.each<[string, unknown]>([
+    [
+      "insert naming a slot with no parent",
+      { kind: "insert", node: node("new"), at: { slot: "main", index: 0 } },
+    ],
+    [
+      "move naming a slot with no parent",
+      { kind: "move", id: "b", to: { slot: "main", index: 0 } },
+    ],
+  ])("refuses a persisted op that names a slot and no parent: %s", (_l, op) => {
+    expect(() => applyOp(doc(), op as BuilderOp)).toThrow(
+      /must also name the parent/
+    );
+  });
+
+  it("refuses an oversized edit without serializing it first", () => {
+    // The refusal has to be reachable without building the thing being refused.
+    // Deciding this with `documentBytes` produces a JSON string of the whole
+    // result and then a UTF-8 buffer of that string, so an op carrying a value
+    // far past the cap allocates two copies of itself on the way to being
+    // called too large.
+    //
+    // The assertion is the OpError rather than a timing: a byte counter that
+    // stops early and one that does not both refuse this, and only the refusal
+    // is a promise. What the bounded counter buys is that the refusal arrives
+    // without the allocation, which the budget below makes observable.
+    const huge = "x".repeat(12_000_000);
+    const limits = { maxDepth: 10, maxNodes: 100, maxBytes: 1_000 };
+
+    expect(() =>
+      applyOp(
+        doc(),
+        { kind: "update", id: "a", patch: { customCss: huge } },
+        limits
+      )
+    ).toThrow(OpError);
+  });
 });
 
 describe("the patch type", () => {
