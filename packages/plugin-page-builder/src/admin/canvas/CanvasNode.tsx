@@ -85,13 +85,18 @@ function classFor(
 }
 
 /** Render a slot's children with drop targets (parity-safe per container type). */
-function renderSlot(node: BlockNode, slotName: string): ReactNode {
+function renderSlot(
+  node: BlockNode,
+  slotName: string,
+  ownerPath: readonly string[]
+): ReactNode {
   const children = node.slots?.[slotName] ?? [];
   if (children.length === 0) {
     return (
       <DropZone
         key="dz-empty"
         parentId={node.id}
+        ownerPath={ownerPath}
         slot={slotName}
         index={0}
         empty
@@ -106,6 +111,7 @@ function renderSlot(node: BlockNode, slotName: string): ReactNode {
         key={child.id}
         node={child}
         parentId={node.id}
+        parentPath={ownerPath}
         slot={slotName}
         index={i}
         dropBeforeIndex={i}
@@ -117,13 +123,20 @@ function renderSlot(node: BlockNode, slotName: string): ReactNode {
   const out: ReactNode[] = [];
   children.forEach((child, i) => {
     out.push(
-      <DropZone key={`dz-${i}`} parentId={node.id} slot={slotName} index={i} />
+      <DropZone
+        key={`dz-${i}`}
+        parentId={node.id}
+        ownerPath={ownerPath}
+        slot={slotName}
+        index={i}
+      />
     );
     out.push(
       <DraggableNode
         key={child.id}
         node={child}
         parentId={node.id}
+        parentPath={ownerPath}
         slot={slotName}
         index={i}
       />
@@ -133,6 +146,7 @@ function renderSlot(node: BlockNode, slotName: string): ReactNode {
     <DropZone
       key={`dz-${children.length}`}
       parentId={node.id}
+      ownerPath={ownerPath}
       slot={slotName}
       index={children.length}
     />
@@ -140,11 +154,14 @@ function renderSlot(node: BlockNode, slotName: string): ReactNode {
   return out;
 }
 
-function buildSlots(node: BlockNode): Record<string, ReactNode> {
+function buildSlots(
+  node: BlockNode,
+  ownerPath: readonly string[]
+): Record<string, ReactNode> {
   const slots: Record<string, ReactNode> = {};
   if (node.slots) {
     for (const name of Object.keys(node.slots)) {
-      slots[name] = renderSlot(node, name);
+      slots[name] = renderSlot(node, name, ownerPath);
     }
   }
   return slots;
@@ -170,7 +187,7 @@ export function CanvasNode({ node }: { node: BlockNode }): ReactNode {
   const element = def.render({
     props: node.props,
     node,
-    slots: buildSlots(node),
+    slots: buildSlots(node, [node.id]),
     className,
     // The canvas renders the same blocks the published page does, so it has to
     // hand them the same allowlist. Without it every block falls back to an
@@ -193,12 +210,15 @@ export function CanvasNode({ node }: { node: BlockNode }): ReactNode {
 function DraggableNode({
   node,
   parentId,
+  parentPath,
   slot,
   index,
   dropBeforeIndex,
 }: {
   node: BlockNode;
   parentId: string;
+  /** Root-first ids of the PARENT and its ancestors, the parent last. */
+  parentPath: readonly string[];
   slot: string;
   index: number;
   /** When set (grid child), this element is also an "insert before" drop target. */
@@ -207,6 +227,10 @@ function DraggableNode({
   const { state, remotePatterns, nodeClasses } = useEditor();
   const def = defaultBlockRegistry.get(node.type);
   const selected = state.selectedId === node.id;
+
+  // This node's own root-first path. Derived once so the two droppables below
+  // and the recursive slot render cannot disagree about where this node sits.
+  const selfPath = [...parentPath, node.id];
 
   const { ref: dragRef, isDragging } = useDraggable({
     id: node.id,
@@ -221,7 +245,18 @@ function DraggableNode({
     type: BLOCK_TYPE,
     accept: BLOCK_TYPE,
     disabled: dropBeforeIndex == null,
-    data: { kind: "dropzone", parentId, slot, index: dropBeforeIndex ?? 0 },
+    data: {
+      kind: "dropzone",
+      parentId,
+      ownerPath: parentPath,
+      slot,
+      index: dropBeforeIndex ?? 0,
+    },
+    // Owned by the PARENT, though it is registered on this node's own element
+    // (see the merged ref below). Its priority is therefore the parent's, which
+    // is what lets this node's own zones outrank it while the pointer is
+    // inside this node.
+    collisionPriority: parentPath.length,
   });
 
   // Grid itself: "append" target for its own default slot.
@@ -235,9 +270,14 @@ function DraggableNode({
     data: {
       kind: "dropzone",
       parentId: node.id,
+      ownerPath: selfPath,
       slot: "default",
       index: appendIndex,
     },
+    // Owned by THIS node rather than its parent, so one level deeper than the
+    // `before` target above. Both sit on the same element; only the priority
+    // separates which slot a drop at this point belongs to.
+    collisionPriority: selfPath.length,
   });
 
   const className = classFor(
@@ -267,7 +307,7 @@ function DraggableNode({
   const element = def.render({
     props: node.props,
     node,
-    slots: buildSlots(node),
+    slots: buildSlots(node, selfPath),
     className,
     // The canvas renders the same blocks the published page does, so it has to
     // hand them the same allowlist. Without it every block falls back to an
