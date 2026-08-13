@@ -47,10 +47,8 @@ function adapterWith(idsPerCall: string[][]): {
     },
     delete: async (table, where) => {
       deletes.push({ table, where });
-      const last = deletes.length - 1;
-      const condition = (where.and[0] as { value: string[] }).value;
-      void last;
-      return condition.length;
+      // The double reports what the real adapter would: rows actually removed.
+      return (where.and[0] as { value: string[] }).value.length;
     },
   };
   return { adapter, selects, deletes };
