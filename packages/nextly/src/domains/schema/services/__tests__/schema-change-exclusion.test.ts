@@ -303,6 +303,38 @@ describe("a Schema Builder change and the storage migration exclude each other",
     expect(excludeArgs.map(a => a.mayCreateLock)).toEqual([false, true]);
   });
 
+  it("claims DDL rights for a requested TOGGLE, even when it looks like a no-op", async () => {
+    // 🔴 The lock decision happens BEFORE the record is re-read, so it cannot see the transition the
+    // plan will actually make. A `localized: false` save composed while the Single was unlocalized
+    // looks like no change against the caller's flags — and if another save enabled localization in
+    // the meantime, the refreshed flags make it a true→false transition whose DDL DROPS the
+    // companion. Deciding from the stale flags would run that unclaimed.
+    //
+    // So the question asked here is "did the request set a toggle", not "does the toggle change
+    // anything": the first is answerable without the refresh, the second is not.
+    const adapter = makeAdapter();
+    const { service } = makeService(adapter);
+
+    await service.updateSingleSchema({
+      slug: "page",
+      existing: {
+        slug: "page",
+        tableName: "single_page",
+        fields: [],
+        schemaHash: "unchanged",
+      },
+      updateData: { localized: false },
+      isLocalized: false,
+      wasLocalized: false,
+      localizedRequested: true,
+      hasStatus: false,
+      wasStatus: false,
+      statusRequested: false,
+    } as unknown as Parameters<typeof service.updateSingleSchema>[0]);
+
+    expect(excludeArgs[0]?.mayCreateLock).toBe(true);
+  });
+
   it("refuses when the Single became locked while it waited", async () => {
     // Replaces an earlier test that asserted planning uses the refreshed record. That property can
     // no longer be OBSERVED: a refreshed record whose definitions differ is now refused outright,

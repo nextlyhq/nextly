@@ -227,6 +227,31 @@ interface UpdateDdlPlan {
  * when it is certain. A wrong yes costs one `CREATE TABLE IF NOT EXISTS` for the lock; a wrong no
  * would let a schema change run with no lock table to claim.
  */
+/**
+ * Could this request reach schema DDL at all? Answered from the request ALONE, before the refresh.
+ *
+ * 🔴 Deliberately a SECOND function rather than a reuse of {@link requestsSchemaWork}, because the
+ * two answer different questions at different moments and the repository's one-question-one-answer
+ * rule is about the same question being computed twice.
+ *
+ * This one decides whether the exclusion may CREATE the lock table, so it has to be settled BEFORE
+ * the lock is taken — which is before the record can be re-read. It therefore cannot look at any
+ * `was*` flag: those describe a state the caller sampled and another save may already have changed.
+ * Asking only what the REQUEST set keeps it correct under that ignorance.
+ *
+ * The invariant that makes the pair safe: everything `requestsSchemaWork` calls schema work, this
+ * calls possible schema work. A false here must mean no DDL under any refreshed state. A label,
+ * admin, versioning, revalidation or webhook save sets none of these three and still claims no DDL
+ * rights, which is what keeps a DML-only deployment able to make those edits.
+ */
+function mayIssueSchemaDdl(input: UpdateSingleSchemaInput): boolean {
+  return (
+    input.fields !== undefined ||
+    input.localizedRequested ||
+    input.statusRequested
+  );
+}
+
 function requestsSchemaWork(input: UpdateSingleSchemaInput): boolean {
   const { fields, isLocalized, wasLocalized, statusRequested } = input;
   if (fields !== undefined) return true;
@@ -451,7 +476,12 @@ export class SingleMetadataService {
         // writes a registry row and nothing else. Claiming DDL rights for it would make a
         // deployment whose role has DML but not DDL start refusing metadata edits that worked
         // before, because taking the exclusion would try to CREATE the lock table.
-        issuesDdl: requestsSchemaWork(input),
+        //
+        // 🔴 Asked CONSERVATIVELY, and of the request rather than of the transition. This is decided
+        // before the lock, so before the record is re-read — and a toggle that looks like a no-op
+        // against the caller's stale flags can become a real transition against the refreshed ones,
+        // whose DDL would then run with no claim held.
+        issuesDdl: mayIssueSchemaDdl(input),
       },
       () => this.updateSingleSchemaExcluded(input)
     );
