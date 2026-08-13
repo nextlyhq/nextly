@@ -13,8 +13,9 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-import { emailProvidersSqlite } from "../../../schemas/email-providers/sqlite";
+import { getCoreSchema } from "../../../schemas";
 import type { Logger } from "../../../services/shared";
+import { createTableBody } from "../../schema/pipeline/sql-templates/create-table-body";
 import { defineEmailProvider } from "../provider-definition";
 import {
   getEmailProviderRegistry,
@@ -50,26 +51,30 @@ const logger: Logger = {
   debug: vi.fn(),
 };
 
+/**
+ * The real `email_providers` table, built from the core schema.
+ *
+ * A hand-copied `CREATE TABLE` keeps passing after the production column list
+ * moves, and reports coverage it never re-checked.
+ */
 function createInMemoryDb() {
   const sqlite = new Database(":memory:");
-  sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS email_providers (
-      id            TEXT    PRIMARY KEY,
-      name          TEXT    NOT NULL,
-      type          TEXT    NOT NULL,
-      from_email    TEXT    NOT NULL,
-      from_name     TEXT,
-      configuration TEXT    NOT NULL,
-      is_default    INTEGER NOT NULL DEFAULT 0,
-      is_active     INTEGER NOT NULL DEFAULT 1,
-      created_at    INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
-      updated_at    INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
+  const spec = getCoreSchema("sqlite").tables.find(
+    t => t.name === "email_providers"
+  );
+  if (!spec) {
+    // A vitest failure rather than a thrown error: the table vanishing from
+    // the core schema is a broken precondition of this fixture, not a runtime
+    // fault, and naming it that way names the file that needs updating.
+    expect.fail(
+      "email_providers is absent from the core schema — this fixture can no longer be derived from it."
     );
-  `);
-  return {
-    sqlite,
-    db: drizzle({ client: sqlite, schema: { emailProvidersSqlite } }),
-  };
+  }
+  sqlite.exec(
+    `CREATE TABLE "email_providers" (\n${createTableBody(spec, (id: string) => `"${id}"`)}\n)`
+  );
+  // No `schema` option: these tests only ever go through the service.
+  return { sqlite, db: drizzle({ client: sqlite }) };
 }
 
 /** A provider whose parser is whatever the case under test needs it to be. */
@@ -194,5 +199,45 @@ describe("a configuration whose parse is not a fixed point", () => {
     const provider = await write("omitting", { apiKey: "k" });
 
     expect(provider.id).toBeTruthy();
+  });
+
+  // `toJSON` turns the record into a scalar, so the value the column holds is
+  // not an object however the parsed value looked.
+  it("refuses a parser whose value serialises to a scalar", async () => {
+    register("to-json", input => ({
+      apiKey: String((input as { apiKey: unknown }).apiKey),
+      toJSON: () => "flattened",
+    }));
+
+    await expect(write("to-json", { apiKey: "k" })).rejects.toThrow(
+      /must be an object of fields/
+    );
+  });
+
+  // A `bigint` cannot be written as JSON at all, and the raw TypeError would
+  // reach the caller as a generic internal failure naming nothing.
+  it("refuses a parser returning a value JSON cannot serialise", async () => {
+    register("bigint", input => ({
+      apiKey: String((input as { apiKey: unknown }).apiKey),
+      window: 1n,
+    }));
+
+    await expect(write("bigint", { apiKey: "k" })).rejects.toThrow(
+      /cannot be written as JSON/
+    );
+  });
+
+  // A parser that normalises IN PLACE and returns its input. The comparison
+  // must not end up holding the same object on both sides.
+  it("refuses a parser that derives by mutating its input", async () => {
+    register("mutating", input => {
+      const value = input as { apiKey: string };
+      value.apiKey = Buffer.from(value.apiKey).toString("base64");
+      return value;
+    });
+
+    await expect(write("mutating", { apiKey: "secret" })).rejects.toThrow(
+      /parsing what would be saved does not return what was saved/
+    );
   });
 });

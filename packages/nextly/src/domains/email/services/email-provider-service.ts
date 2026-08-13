@@ -291,7 +291,59 @@ export class EmailProviderService extends BaseService {
     // Rejecting it is the same answer as for a `Date`, and for the same
     // reason — return only what the column can hold.
     const stored = parsed as Record<string, unknown>;
-    const roundTripped: unknown = JSON.parse(JSON.stringify(stored));
+
+    // Serialised ONCE and parsed TWICE. `roundTripped` is what a reader gets
+    // and is handed to the parser; `unchanged` is an independent copy that
+    // nothing else touches, and it is what the comparison is made against.
+    //
+    // Two objects rather than one because a parser may normalise IN PLACE and
+    // return its input, which is an ordinary thing to write. Comparing the
+    // result against the object it just mutated compares a value with itself
+    // and passes whatever the parser did -- so an in-place derivation would
+    // have walked through the check this exists to be.
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(stored);
+    } catch (error) {
+      // A `bigint`, a cycle, or a `toJSON` that throws. Reported as the
+      // provider-configuration fault it is, because the raw `TypeError` would
+      // surface as a generic internal failure naming neither the provider nor
+      // what to change.
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Email provider "${type}" parsed its configuration into a value that cannot be written as JSON, so it cannot be stored. Return only what JSON can carry from \`parseConfig\`.`,
+        logContext: {
+          reason: "email-provider-configuration-not-serialisable",
+          type,
+          detail: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+
+    const roundTripped: unknown = JSON.parse(serialized);
+    const unchanged: unknown = JSON.parse(serialized);
+
+    // Checked again after the round trip, not only before it. A `toJSON` -- on
+    // the object itself or on a `Date` inside it -- can turn a record into a
+    // scalar or a list, and the first guard read the value the parser returned
+    // rather than the value the column will hold. A passthrough parser then
+    // makes the two sides agree, so the fixed-point check accepts it and every
+    // later reader gets something it assumes is an object of fields.
+    if (
+      typeof roundTripped !== "object" ||
+      roundTripped === null ||
+      Array.isArray(roundTripped)
+    ) {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Email provider "${type}" parsed its configuration into a value that becomes a ${Array.isArray(roundTripped) ? "list" : typeof roundTripped} once written as JSON, and a configuration must be an object of fields. Return the parsed object from \`parseConfig\`.`,
+        logContext: {
+          reason: "email-provider-stored-form-not-object",
+          type,
+        },
+      });
+    }
+
     let reparsed: unknown;
     try {
       reparsed = provider.parseConfiguration(roundTripped);
@@ -301,10 +353,10 @@ export class EmailProviderService extends BaseService {
       // Left as one outcome: both mean the row could not be read back.
       reparsed = undefined;
     }
-    if (!isDeepStrictEqual(reparsed, roundTripped)) {
+    if (!isDeepStrictEqual(reparsed, unchanged)) {
       throw new NextlyError({
         code: "BUSINESS_RULE_VIOLATION",
-        publicMessage: `Email provider "${type}" cannot store this configuration, because parsing what would be saved does not return what was saved. Its \`parseConfig\` must accept its own output unchanged — derive values in \`createAdapter\` instead, and return only what JSON can carry.`,
+        publicMessage: `Email provider "${type}" cannot store this configuration, because parsing what would be saved does not return what was saved. Its \`parseConfig\` must accept its own output unchanged -- derive values in \`createAdapter\` instead, and return only what JSON can carry.`,
         logContext: { reason: "email-provider-parse-not-a-fixed-point", type },
       });
     }
