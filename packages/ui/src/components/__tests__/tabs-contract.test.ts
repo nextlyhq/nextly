@@ -153,6 +153,16 @@ interface Utility {
   variants: string[];
   /** The utility with variants and importance removed: `border-b-0`. */
   bare: string;
+  /**
+   * The class exactly as written, variants included.
+   *
+   * Kept because the two questions need different halves of it. Which utility
+   * BEATS which is decided on the bare form, since importance and variants are
+   * compared separately. Which properties it TOUCHES has to be asked of the
+   * whole class: the variant is what carries the selector, and compiling
+   * `border-b-0` alone cannot show that `[&>span]:border-b-0` lands on a child.
+   */
+  full: string;
   important: boolean;
 }
 
@@ -188,6 +198,7 @@ function utilityOf(cls: string): Utility {
   const segments = splitAtDepthZero(withoutImportance(cls));
   return {
     important,
+    full: cls,
     // The last segment is the utility; everything before it qualifies it.
     bare: segments[segments.length - 1] ?? "",
     variants: segments.slice(0, -1).filter(Boolean),
@@ -195,39 +206,95 @@ function utilityOf(cls: string): Utility {
 }
 
 /**
- * Whether a variant aims the rule at something other than this element.
+ * Whether a compiled selector aims its declarations at something other than the
+ * element carrying the class.
  *
- * `[&>span]:border-b-0` styles a CHILD of the trigger and `before:border-b-0`
- * styles its generated content, so neither can repaint the trigger's own
- * underline. Counted as qualifiers they make the specificity test vacuously
- * true against an unqualified owned class, and a legitimate call site fails the
- * repository-wide suite.
+ * Asked of the SELECTOR Tailwind emitted rather than of the variant that was
+ * written, because the variant is a spelling and the selector is the thing
+ * itself. A list of pseudo-elements and a pattern over bracketed variants
+ * stood here and could not see Tailwind's own child variants: `*:border-b-0`
+ * compiles to `:is(& > *)` and `**:rounded-md` to `:is(& *)`, so both read as
+ * qualifiers on the tab and their declarations were credited to it. The same
+ * blindness covered `divide-y-0`, whose bottom border lands inside
+ * `:where(& > :not(:last-child))` and belongs to the children.
  *
- * Two forms, and both are about WHERE the rule lands rather than WHEN:
+ * Three ways a rule leaves the host, and nothing else counts:
  *
- * - a combinator after the `&` — `[&>span]`, `[&_p]`, Tailwind spelling a
- *   descendant space as `_`. `[&:hover]` and `[&[data-x]]` still qualify THIS
- *   element and must keep counting.
- * - a pseudo-element — `before`, `after`, `placeholder`, `marker` and the rest
- *   generate or address a box that is not the host.
+ * - a combinator after `&` — `& >`, `& +`, `& ~`
+ * - whitespace after `&`, which is a descendant — `& p`, `:is(& *)`
+ * - a pseudo-element — `&::before`, `&::placeholder`
+ *
+ * `&:hover`, `&:focus-visible` and `&[data-state=active]` all still qualify the
+ * host and must keep counting, which is why the test is for what FOLLOWS the
+ * `&` rather than for punctuation anywhere in the selector.
  */
-const PSEUDO_ELEMENTS = new Set([
-  "before",
-  "after",
-  "placeholder",
-  "marker",
-  "selection",
-  "file",
-  "first-letter",
-  "first-line",
-  "backdrop",
-]);
+function retargets(selector: string): boolean {
+  return (
+    /&\s*[>+~]/.test(selector) ||
+    /&\s+\S/.test(selector) ||
+    /&::/.test(selector)
+  );
+}
 
-function retargets(variant: string): boolean {
-  if (PSEUDO_ELEMENTS.has(variant)) return true;
-  const selector = /^\[(.*)\]$/.exec(variant)?.[1];
-  if (selector === undefined) return false;
-  return /&\s*[>+~_]/.test(selector) || /&::/.test(selector);
+/**
+ * Split a CSS block into its own declarations and the rules nested inside it.
+ *
+ * Tailwind nests: a variant becomes an inner rule whose selector refines `&`,
+ * so the declarations that belong to the host and the declarations that belong
+ * to a child sit in one string and are told apart only by which block holds
+ * them. Reading the string flat is what credited a child's border to the tab.
+ */
+interface NestedRule {
+  selector: string;
+  body: string;
+}
+
+function partition(block: string): {
+  declarations: string;
+  rules: NestedRule[];
+} {
+  const rules: NestedRule[] = [];
+  let declarations = "";
+  let buffer = "";
+  let index = 0;
+  while (index < block.length) {
+    const character = block[index];
+    if (character === "{") {
+      const selector = buffer.trim();
+      buffer = "";
+      let depth = 1;
+      const start = index + 1;
+      index += 1;
+      while (index < block.length && depth > 0) {
+        if (block[index] === "{") depth += 1;
+        else if (block[index] === "}") depth -= 1;
+        index += 1;
+      }
+      rules.push({ selector, body: block.slice(start, index - 1) });
+      continue;
+    }
+    buffer += character;
+    if (character === ";") {
+      declarations += buffer;
+      buffer = "";
+    }
+    index += 1;
+  }
+  return { declarations: `${declarations}${buffer}`, rules };
+}
+
+/**
+ * The part of a compiled utility that applies to the element wearing the class.
+ *
+ * Everything a retargeting rule contains is dropped along with it, at any depth,
+ * so a declaration inside `:is(& > *)` never reaches the property comparison and
+ * a caller styling its children is not reported for styling the tab.
+ */
+function hostCss(block: string): string {
+  const { declarations, rules } = partition(block);
+  return rules
+    .filter(rule => !retargets(rule.selector))
+    .reduce((text, rule) => text + hostCss(rule.body), declarations);
 }
 
 /**
@@ -272,7 +339,6 @@ function normaliseVariant(variant: string): string {
  * fades and reporting it would be a false positive.
  */
 function wins(owned: Utility, caller: Utility): boolean {
-  if (caller.variants.some(retargets)) return false;
   if (caller.important && !owned.important) return true;
   // The mirror of the clause above, and it has to be stated rather than left to
   // the variant test: an important owned declaration beats an unimportant caller
@@ -288,9 +354,9 @@ function wins(owned: Utility, caller: Utility): boolean {
 }
 
 function takesOver(owned: Utility, caller: Utility): boolean {
-  const ownedProperties = new Set(reachedBy(owned.bare));
+  const ownedProperties = new Set(reachedBy(owned.full));
   if (ownedProperties.size === 0) return false;
-  const callerProperties = propertiesOf(caller.bare);
+  const callerProperties = propertiesOf(caller.full);
   if (!callerProperties.some(property => ownedProperties.has(property))) {
     return false;
   }
@@ -377,7 +443,11 @@ const AT_PROPERTY = /@property[^{]*\{[^}]*\}/g;
  * The caller's side of the comparison: what a class actually writes.
  */
 function setBy(css: string): string[] {
-  const body = css.replace(AT_PROPERTY, "");
+  // The leading `;` is what makes the FIRST declaration of a block matchable:
+  // `hostCss` returns declarations without the brace that used to open them, so
+  // a pattern anchored on `{` or `;` would skip whichever came first in each
+  // rule — and for a single-declaration utility that is the whole utility.
+  const body = `;${hostCss(css.replace(AT_PROPERTY, ""))}`;
   return [...body.matchAll(/[{;]\s*(--[a-zA-Z0-9-]+|[a-z-]+)\s*:/g)].map(
     match => match[1] ?? ""
   );
@@ -397,7 +467,7 @@ function setBy(css: string): string[] {
  * rather than a property.
  */
 function readBy(css: string): string[] {
-  const body = css.replace(AT_PROPERTY, "");
+  const body = hostCss(css.replace(AT_PROPERTY, ""));
   return [...body.matchAll(/var\(\s*(--tw-[a-zA-Z0-9-]+)/g)].map(
     match => match[1] ?? ""
   );
@@ -457,7 +527,7 @@ function ownedCssProperties(): Record<string, Set<string>> {
   ownedProperties ??= Object.fromEntries(
     Object.entries(OWNED_BY_SLOT).map(([slot, classes]) => [
       slot,
-      new Set(classes.flatMap(cls => reachedBy(utilityOf(cls).bare))),
+      new Set(classes.flatMap(cls => reachedBy(cls))),
     ])
   );
   return ownedProperties;
@@ -969,7 +1039,7 @@ describe("the tab indicator contract", () => {
     // treatment were not, though the contract claims all five.
     const unmapped = Object.values(OWNED_BY_SLOT)
       .flat()
-      .filter(cls => reachedBy(utilityOf(cls).bare).length === 0);
+      .filter(cls => reachedBy(cls).length === 0);
     expect(unmapped).toEqual([]);
     // ...and the derived set is not empty, which an over-eager filter would
     // also produce while every assertion above stayed green.
@@ -1195,6 +1265,17 @@ describe("the tab indicator contract", () => {
       "an inline property whose value is a variable rather than nothing",
       "<TabsTrigger style={{ borderBottomColor: c }} />",
     ],
+    // The controls for the child variants above: the same utilities aimed at
+    // the tab itself are still reported, so the exclusion is about WHERE the
+    // declaration lands rather than about which utility was written.
+    [
+      "the same border utility aimed at the tab rather than its children",
+      '<TabsTrigger className="border-b-0" />',
+    ],
+    [
+      "the same corner utility aimed at the tab rather than its descendants",
+      '<TabsTrigger className="rounded-md" />',
+    ],
   ])("catches %s", (_label, body) => {
     // The positive controls. Each is a shape an earlier version returned clean
     // on, or a category it never read. Without these, a check that can never
@@ -1336,6 +1417,22 @@ describe("the tab indicator contract", () => {
     [
       "an inline property set to null",
       "<TabsTrigger style={{ borderBottomColor: null }} />",
+    ],
+    // Tailwind's own child variants. `*` compiles to `:is(& > *)` and `**` to
+    // `:is(& *)`, so both land on children and neither can repaint the tab.
+    [
+      "a child variant removing a border from the tab's children",
+      '<TabsTrigger className="*:border-b-0" />',
+    ],
+    [
+      "a descendant variant rounding the tab's descendants",
+      '<TabsTrigger className="**:rounded-md" />',
+    ],
+    // `divide-*` draws BETWEEN children: its bottom border is emitted inside
+    // `:where(& > :not(:last-child))` and never applies to the host.
+    [
+      "a divide utility, whose border belongs to the children",
+      '<TabsTrigger className="divide-y-0" />',
     ],
   ])("does not report %s", (_label, body) => {
     // The complement, and the reason this is a contract rather than a ban. A
