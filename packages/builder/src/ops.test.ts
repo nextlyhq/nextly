@@ -366,9 +366,18 @@ describe("an op that cannot apply", () => {
     // serialized JSON, so this exceeds any default document cap as well.
     // Refusing it unexamined agrees with the answer a full walk would reach.
     //
-    // An array rather than an object with millions of keys: both take the same
-    // path, and building this fixture is most of the test's cost.
-    const wide = new Array(5_000_000).fill(1) as number[];
+    // SPARSE, and a hundred million of them. `new Array(n)` sets a length and
+    // allocates nothing, so this is free to construct and free to hold — the
+    // cheap-to-produce, expensive-to-examine shape a guard like this exists
+    // for.
+    //
+    // The SIZE is what makes the case separating. At five million, a walk with
+    // no length check still finished in under a second, because it enqueued
+    // every element and then refused on the first one it popped — so the case
+    // passed either way and proved nothing. At a hundred million, enqueueing
+    // first is the difference between one comparison and a hundred million
+    // allocations.
+    const wide = new Array(100_000_000) as number[];
 
     expect(() =>
       applyOp(doc(), { kind: "update", id: "a", patch: { props: { wide } } })

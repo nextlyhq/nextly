@@ -513,23 +513,25 @@ function isJsonValue(value: unknown): boolean {
     pending.push({ value: undefined, depth: entry.depth, exiting: held });
 
     if (Array.isArray(held)) {
-      // The budget is spent while ENQUEUEING, not only while popping. A sparse
-      // `Array(100_000_000)` costs nothing to construct and nothing to hold, and
-      // the loop below would put a hundred million entries on the stack before
-      // a single one came back off it to be counted. Refusing at the bound
-      // means the memory this walk uses is bounded by the bound rather than by
-      // what the caller declared.
-      //
+      // The LENGTH first, before a single element is enqueued. Counting while
+      // enqueueing still pays for the whole budget before refusing — four
+      // million allocations, which is seconds under an instrumented runner and
+      // was enough to time CI out while finishing in under one second here. An
+      // array longer than the budget cannot fit under it whatever its contents
+      // are, and that is knowable in one comparison.
+      if (parts + held.length > MAX_VALUE_PARTS) return false;
+      parts += held.length;
       // By index: `every` skips holes, and a hole serializes as `null`.
       for (let index = 0; index < held.length; index += 1) {
-        if (parts++ > MAX_VALUE_PARTS) return false;
         pending.push({ value: held[index], depth: entry.depth + 1 });
       }
       continue;
     }
     if (!isPlainRecord(held)) return false;
-    for (const child of Object.values(held)) {
-      if (parts++ > MAX_VALUE_PARTS) return false;
+    const members = Object.values(held);
+    if (parts + members.length > MAX_VALUE_PARTS) return false;
+    parts += members.length;
+    for (const child of members) {
       pending.push({ value: child, depth: entry.depth + 1 });
     }
   }
@@ -1213,17 +1215,14 @@ function assertForestEntries(nodes: BlockNode[]): void {
   // hundred million pending entries before the first `undefined` can earn a
   // refusal — the work bounded by what the caller declared rather than by what
   // a document may hold.
-  let rootParts = 0;
-  for (const entry of nodes) {
-    if (rootParts++ > MAX_VALUE_PARTS) {
-      throw new OpError(
-        `a document holding more than ${String(MAX_VALUE_PARTS)} top-level ` +
-          `entries cannot be edited: no document may hold that many nodes, so ` +
-          `the answer is settled before the list is read.`
-      );
-    }
-    pending.push(entry);
+  if (nodes.length > MAX_VALUE_PARTS) {
+    throw new OpError(
+      `a document holding more than ${String(MAX_VALUE_PARTS)} top-level ` +
+        `entries cannot be edited: no document may hold that many nodes, so ` +
+        `the answer is settled by the length alone.`
+    );
   }
+  for (const entry of nodes) pending.push(entry);
   // Every node reached, so a document that holds itself is refused rather than
   // walked forever. A forest is a tree by intent and not by construction: an
   // in-process document can be handed to `applyOp` with a node inside its own
