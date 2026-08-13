@@ -492,6 +492,35 @@ export class SingleMetadataService {
         },
       });
     }
+
+    // 🔴 Refreshing the record fixes what this request PLANS from. It does not fix what the request
+    // WRITES: the caller composed `updateData.fields` against the definitions it read, and those are
+    // written back verbatim at the end. A storage migration that renamed the field-group vocabulary
+    // in between would be undone by this save, under a marker that now says it settled.
+    //
+    // Answered as a lost update rather than as a vocabulary problem, deliberately. Comparing the
+    // stored schema hash the caller saw against the one that is there now catches the migration AND
+    // the ordinary case of two people editing the same Single, in one check that cannot disagree
+    // with the vocabulary it is meant to police. Translating the payload instead would mean this
+    // service silently rewriting a user's submitted definitions, which is a guess about intent.
+    //
+    // Compared only when BOTH hashes are present: a record stored before the hash existed cannot be
+    // checked, and refusing those would break every update to them. That gap is real and is the
+    // reason this is a check rather than a guarantee.
+    const seenHash = input.existing.schemaHash;
+    const liveHash = current.schemaHash;
+    if (seenHash && liveHash && seenHash !== liveHash) {
+      throw NextlyError.conflict({
+        logContext: {
+          reason:
+            "single's stored schema changed while this request awaited the exclusion",
+          slug: input.slug,
+          seenSchemaHash: seenHash,
+          currentSchemaHash: liveHash,
+        },
+      });
+    }
+
     return current;
   }
 

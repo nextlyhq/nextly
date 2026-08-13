@@ -293,6 +293,77 @@ describe("a Schema Builder change and the storage migration exclude each other",
     expect(statements.join("\n")).toMatch(/ADD COLUMN[^\n]*heading/i);
   });
 
+  it("refuses the WRITE when the stored schema moved while it waited", async () => {
+    // 🔴 Refreshing the record fixes what the update PLANS from and not what it WRITES. The caller
+    // composes `updateData.fields` from the definitions it read, and those go back verbatim — so a
+    // storage migration that renamed the field-group vocabulary in between would be undone by this
+    // save. Exercised through `updateData` on purpose: the sibling test above passes `updateData:
+    // {}` and therefore never touches the writeback path this guards.
+    const adapter = makeAdapter({ mainTableExists: true });
+    const { service, registry } = makeService(adapter);
+    registry.getSingleBySlug.mockResolvedValue({
+      slug: "page",
+      tableName: "single_page",
+      fields: [],
+      locked: false,
+      schemaHash: "after-the-migration",
+    });
+
+    await expect(
+      service.updateSingleSchema({
+        slug: "page",
+        existing: {
+          slug: "page",
+          tableName: "single_page",
+          fields: [],
+          schemaHash: "before-the-migration",
+        },
+        updateData: { fields: [{ name: "hero", type: "component" }] },
+        fields: [{ name: "hero", type: "component" }],
+        isLocalized: false,
+        wasLocalized: false,
+        hasStatus: false,
+        wasStatus: false,
+        statusRequested: false,
+      } as unknown as Parameters<typeof service.updateSingleSchema>[0])
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+
+    // Nothing written: the stale payload must not reach the registry at all.
+    expect(registry.updateSingle).not.toHaveBeenCalled();
+  });
+
+  it("still allows an update when the stored schema did not move", async () => {
+    // The positive control. Without it, a check that refused EVERY update would satisfy the test
+    // above, and the refusal would look like coverage while breaking ordinary saves.
+    const adapter = makeAdapter({ mainTableExists: true });
+    const { service, registry } = makeService(adapter);
+    registry.getSingleBySlug.mockResolvedValue({
+      slug: "page",
+      tableName: "single_page",
+      fields: [],
+      locked: false,
+      schemaHash: "unchanged",
+    });
+
+    await service.updateSingleSchema({
+      slug: "page",
+      existing: {
+        slug: "page",
+        tableName: "single_page",
+        fields: [],
+        schemaHash: "unchanged",
+      },
+      updateData: { label: "Page renamed" },
+      isLocalized: false,
+      wasLocalized: false,
+      hasStatus: false,
+      wasStatus: false,
+      statusRequested: false,
+    } as unknown as Parameters<typeof service.updateSingleSchema>[0]);
+
+    expect(registry.updateSingle).toHaveBeenCalled();
+  });
+
   it("keeps the claim through an interrupt, because the work is not idempotent", async () => {
     // The signal does not stop the work. A session that released here would hand the row to a
     // storage migration while this change was still between its DDL and its registry write, which
