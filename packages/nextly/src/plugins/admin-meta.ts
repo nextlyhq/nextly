@@ -19,11 +19,7 @@ import type {
   PluginMenuItem,
 } from "./admin-contributions";
 import type { FieldSurface } from "./contributions";
-import {
-  type CollectedPermission,
-  collectCustomPermissions,
-  type PermissionConfigSource,
-} from "./permissions/collect-permissions";
+import type { CollectedPermission } from "./permissions/collect-permissions";
 import { pluginCollectionSlugs } from "./plugin-admin-meta";
 import type {
   PluginAdminAppearance,
@@ -254,18 +250,26 @@ function mountableRoutes(
 export function buildPluginAdminMeta(
   plugins: PluginDefinition[],
   pluginOverrides: Record<string, PluginOverride> | undefined,
-  config: PermissionConfigSource
+  permissions: readonly CollectedPermission[]
 ): PluginAdminMeta[] {
   // The permissions that actually become rows, indexed by the plugin that owns
-  // them. Folded once for the whole list rather than read off each plugin's own
-  // declaration, because a declaration and a seeded permission are not the same
-  // set: `collectCustomPermissions` drops a `publish`/`unpublish` declaration
-  // whose resource is a collection or single, since the seeder emits that slug
-  // itself and keeps the row ownerless. Reading the declaration instead would
-  // put the plugin's label and danger flag on a permission no plugin owns, and
-  // the page would describe a grant the roles data does not have.
+  // them.
+  //
+  // TAKEN rather than folded here. A declaration and a seeded permission are
+  // not the same set — `collectCustomPermissions` drops a `publish`/`unpublish`
+  // declaration whose resource is a collection or single, since the seeder
+  // emits that slug itself and keeps the row ownerless — so this must read the
+  // collected set rather than `contributes.permissions`. But collecting it here
+  // as well as at the caller would compute one authoritative answer twice and
+  // leave two projections of it free to drift; `collectPluginInfo` already
+  // collects the same set for the CLI's slug summary.
+  //
+  // `source` rather than `owner` decides what belongs to a plugin: the host's
+  // sentinel owner is the literal `"app"`, and a plugin may legally be named
+  // that, which would file every host-declared permission under it.
   const ownedPermissions = new Map<string, CollectedPermission[]>();
-  for (const permission of collectCustomPermissions(config, plugins)) {
+  for (const permission of permissions) {
+    if (permission.source !== "plugin") continue;
     const owned = ownedPermissions.get(permission.owner);
     if (owned) owned.push(permission);
     else ownedPermissions.set(permission.owner, [permission]);

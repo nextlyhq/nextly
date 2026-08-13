@@ -64,9 +64,14 @@ export function collectPluginInfo(
 ): PluginInfo[] {
   const resolved = resolvePlugins(plugins, { coreVersion: opts.coreVersion });
 
+  // Collected ONCE. Both views below derive from this list — the slug summary
+  // here and the display metadata `buildPluginAdminMeta` serializes — so the
+  // CLI and the admin cannot disagree about which permissions a plugin owns.
+  const collectedPermissions = collectCustomPermissions(config, resolved);
+
   // Custom permissions across all plugins, grouped by declaring owner (plugin name).
   const permissionsByOwner = new Map<string, string[]>();
-  for (const perm of collectCustomPermissions(config, resolved)) {
+  for (const perm of collectedPermissions) {
     const list = permissionsByOwner.get(perm.owner) ?? [];
     list.push(perm.slug);
     permissionsByOwner.set(perm.owner, list);
@@ -84,10 +89,9 @@ export function collectPluginInfo(
   // Admin menu/page/settings (host overrides only affect placement/appearance,
   // not these counts, so we fold with no overrides).
   const adminMetaByName = new Map(
-    buildPluginAdminMeta(resolved, undefined, config).map(meta => [
-      meta.name,
-      meta,
-    ])
+    buildPluginAdminMeta(resolved, undefined, collectedPermissions).map(
+      meta => [meta.name, meta]
+    )
   );
 
   return resolved.map(plugin => {

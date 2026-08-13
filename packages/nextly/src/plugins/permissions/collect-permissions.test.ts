@@ -46,6 +46,7 @@ describe("collectCustomPermissions", () => {
         name: "Manage SEO",
         description: undefined,
         owner: "@acme/seo",
+        source: "plugin",
         group: "General",
         danger: false,
       },
@@ -121,6 +122,9 @@ describe("collectCustomPermissions", () => {
         name: "Export Reports",
         description: undefined,
         owner: "app",
+        // The host's declarations are discriminated from a plugin's by this
+        // rather than by `owner`, which a plugin named `app` would share.
+        source: "app",
         group: "General",
         danger: false,
       },

@@ -115,7 +115,7 @@ describe("buildPluginAdminMeta", () => {
     const meta = buildPluginAdminMeta(
       [plugin("@acme/one"), plugin("@acme/two")],
       undefined,
-      {}
+      []
     );
 
     // The positive control: it really does produce metadata for both, so the
@@ -130,7 +130,7 @@ describe("buildPluginAdminMeta", () => {
       buildPluginAdminMeta(
         [plugin("@acme/plugin-seo"), plugin("acme_plugin_seo")],
         undefined,
-        {}
+        []
       );
     } catch (error) {
       reason = (error as { logContext?: { reason?: string } }).logContext
