@@ -171,9 +171,15 @@ export type MigrationOutcome =
        * writing, the renames above describe a world that is moving, and an operator who cannot see
        * that would read a partially-applied plan as the plan.
        *
-       * When `basis` reports the plan unreconciled, this is the observation that JUSTIFIED that
-       * answer rather than the one the session opened with — the two differ exactly when a writer
-       * claimed the lock after the preview began.
+       * 🔴 It does NOT justify `basis`, and an unreconciled preview may well report `not-held`.
+       * What earns an unreconciled answer is the world CHANGING between attempts; the lock is read
+       * independently and reported for whatever it happens to show. A writer that acquires and
+       * releases entirely between two probes is invisible to both — the retry supports that case on
+       * purpose — so a plan can be unreconciled with nothing observably holding the lock. Read the
+       * two fields as separate facts rather than as a claim and its evidence.
+       *
+       * It is the freshest observation available rather than the one the session opened with, so a
+       * writer that claimed after the preview began is not missed.
        *
        * 🔴 Informational only. It was true at the moment it was read and may not be by the time it
        * is acted on, so it can no more gate a write than any other stale read. The lock itself is
