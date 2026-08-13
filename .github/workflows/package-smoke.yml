@@ -332,6 +332,56 @@ jobs:
       - name: Verify the render happened and both halves covered every subpath
         run: pnpm --filter @nextlyhq/ui exec tsx scripts/write-server-safe-rsc-app.ts --verify /tmp/rsc-app
 
+      # The steps above answer "does this render in a real Next build". They cannot answer "could
+      # it have reached something it is not allowed to", because that app resolves the package's
+      # whole dependency set: installing the tarball normally brings in 71 packages, of which
+      # exactly two are on the server-safe allow-list. A stray load there simply succeeds.
+      #
+      # These steps remove the opportunity rather than looking for the act. The project declares
+      # only the allowed packages, so a load of anything else throws whatever produced it — a
+      # computed specifier, `eval`, a host object — because the file is not on disk and nothing
+      # has to recognise a spelling.
+      - name: Write the isolation probe project
+        run: pnpm --filter @nextlyhq/ui exec tsx scripts/write-server-safe-isolation-probe.ts /tmp/ss-probe
+
+      # `npm install` with no arguments installs what the generated manifest declares, which is the
+      # allow-list and nothing else.
+      - name: Install ONLY the allowed dependencies
+        run: |
+          cd /tmp/ss-probe
+          npm install --no-audit --no-fund
+
+      # Extracted rather than installed, and this is the whole mechanism. `npm install <tarball>`
+      # would read the package's own manifest and resolve its 25 dependencies into the same
+      # node_modules, which is precisely the isolation being established. Unpacking places the
+      # files without ever consulting that manifest.
+      - name: Place the packed package WITHOUT resolving its dependencies
+        run: |
+          mkdir -p /tmp/ss-probe/node_modules/@nextlyhq/ui
+          tar -xzf /tmp/ui-pack/*.tgz -C /tmp/ss-probe/node_modules/@nextlyhq/ui --strip-components=1
+
+      # The export map already refuses a deep import, so a client subpath cannot be reached by
+      # name. A RELATIVE import from inside a server-safe artifact is a different route that the
+      # map says nothing about, so those files are deleted rather than left present.
+      - name: Arm the tripwires and remove the artifacts the server-safe subpaths do not own
+        run: pnpm --filter @nextlyhq/ui exec tsx scripts/write-server-safe-isolation-probe.ts --arm /tmp/ss-probe
+
+      # Both module systems, because the export map publishes both and `require` resolves
+      # different files than `import`. Neither exit status is the assertion — a module that ends
+      # the process while initialising exits 0 from inside the import being checked — so each
+      # probe records what it loaded and the verify step reads that.
+      - name: Load every server-safe subpath under both module systems
+        run: |
+          cd /tmp/ss-probe
+          node probe.mjs
+          node probe.cjs
+
+      # Audits the run AND the environment it ran in. A probe project that was not actually
+      # isolated loads everything happily and would report a clean pass, so this also requires
+      # that a package outside the allow-list could NOT be reached.
+      - name: Verify the probes completed and the project was isolated
+        run: pnpm --filter @nextlyhq/ui exec tsx scripts/write-server-safe-isolation-probe.ts --verify /tmp/ss-probe
+
   # A red nightly must surface without anyone watching the Actions tab. A red
   # pull request does not need an issue filed: it is already red on the PR, in
   # front of the person who caused it.
