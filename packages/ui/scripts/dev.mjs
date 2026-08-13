@@ -66,11 +66,22 @@ function tsupEntry() {
  * Named so a failure says which output stopped being rebuilt. "the server-safe watcher exited" is
  * actionable in a way that a bare exit code is not.
  */
+/**
+ * `--watch src`, not a bare `--watch`.
+ *
+ * tsup's default watch root is the package directory, and from there it notices nothing: measured
+ * on this package, an edit to `src/lib/color/index.ts` produced no rebuild and the artifact was
+ * byte-identical 25 seconds later. Pointing the root at `src` makes the same edit rebuild.
+ *
+ * The failure it removes is silent, which is why the argument is worth a comment: the watcher
+ * prints `Watching for changes in "."` and keeps running, so a contributor has positive evidence
+ * that it works while consuming a `dist` that stopped changing.
+ */
 const WATCHERS = [
-  { label: "client", args: ["--watch"] },
+  { label: "client", args: ["--watch", "src"] },
   {
     label: "server-safe",
-    args: ["--config", "tsup.server-safe.config.ts", "--watch"],
+    args: ["--config", "tsup.server-safe.config.ts", "--watch", "src"],
   },
 ];
 
