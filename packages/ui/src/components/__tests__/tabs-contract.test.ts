@@ -234,6 +234,37 @@ function utilityOf(cls: string): Utility {
  * Split at TOP-LEVEL combinators only, so a combinator inside `:is(...)`,
  * `:where(...)` or `:not(...)` does not cut the selector it belongs to.
  */
+/**
+ * Whether a selector actually refers to its parent.
+ *
+ * Tailwind escapes the candidate into the class name it generates, so
+ * `[&>span]:border-b-0` becomes a rule whose SELECTOR contains `\&` — a literal
+ * ampersand in an identifier, not a parent reference. Testing for the character
+ * alone read that top-level class rule as a nested refinement and folded its
+ * name into the selector being measured, which inflated the specificity of
+ * every arbitrary-variant class.
+ */
+function referencesParent(selector: string): boolean {
+  return /(^|[^\\])&/.test(selector);
+}
+
+function splitTopLevel(text: string, separator: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index] ?? "";
+    if (character === "(" || character === "[") depth += 1;
+    else if (character === ")" || character === "]") depth -= 1;
+    else if (depth === 0 && character === separator) {
+      parts.push(text.slice(start, index));
+      start = index + 1;
+    }
+  }
+  parts.push(text.slice(start));
+  return parts;
+}
+
 function subjectOf(selector: string): string {
   let depth = 0;
   let start = 0;
@@ -247,6 +278,15 @@ function subjectOf(selector: string): string {
 }
 
 function retargets(selector: string): boolean {
+  // A selector LIST is one rule with several subjects, and the declarations
+  // land on all of them. `&,&>span` puts the tab itself first, so scanning the
+  // unsplit string took `span` as the only subject and discarded a rule that
+  // does remove the underline. Retargeting therefore has to hold for EVERY
+  // branch before the rule can be dropped.
+  const branches = splitTopLevel(selector, ",");
+  if (branches.length > 1) {
+    return branches.every(branch => retargets(branch.trim()));
+  }
   const subject = subjectOf(selector.trim());
   // A pseudo-element is a box the host generates, not the host.
   if (subject.includes("::")) return true;
@@ -261,7 +301,7 @@ function retargets(selector: string): boolean {
   // `&`, but the element receiving the declarations is the RIGHT-hand one,
   // which is the tab. Testing for "any combinator after an `&`" read that as
   // aimed elsewhere and let a sibling rule remove the underline unseen.
-  return !subject.includes("&");
+  return !referencesParent(subject);
 }
 
 /**
@@ -325,7 +365,9 @@ function hostCss(block: string): string {
       // A selector that never mentions `&` is not a refinement of the host: it is
       // the utility's own class rule at the top, or an at-rule wrapping it. Only
       // selectors that reposition `&` can move the declarations off the element.
-      .filter(rule => !rule.selector.includes("&") || !retargets(rule.selector))
+      .filter(
+        rule => !referencesParent(rule.selector) || !retargets(rule.selector)
+      )
       .reduce((text, rule) => text + hostCss(rule.body), declarations)
   );
 }
@@ -395,10 +437,57 @@ function wins(owned: Utility, caller: Utility): boolean {
  * `&` stands for the utility's own class, so it counts as one class. Ids are
  * counted for completeness; Tailwind emits none.
  */
-function specificityOf(selector: string): [number, number, number] {
+type Specificity = [number, number, number];
+
+const ZERO: Specificity = [0, 0, 0];
+
+function add(a: Specificity, b: Specificity): Specificity {
+  return [
+    (a[0] ?? 0) + (b[0] ?? 0),
+    (a[1] ?? 0) + (b[1] ?? 0),
+    (a[2] ?? 0) + (b[2] ?? 0),
+  ];
+}
+
+/**
+ * A selector's specificity, as the three counts the cascade compares.
+ *
+ * `&` stands for the utility's own class, so it counts as one class.
+ *
+ * The functional pseudo-classes are the part that cannot be counted by pattern.
+ * `:where()` contributes NOTHING however complex its argument, and `:is()`,
+ * `:not()` and `:has()` contribute the specificity of their most specific
+ * branch rather than of all of them. Counting their contents as ordinary text
+ * ranked `[&:where(:focus-visible)]:ring-0` above the primitive's own
+ * `focus-visible` rule, and reported a call site that cannot outrank it.
+ */
+const FUNCTIONAL = /:(where|is|not|has)\(/;
+
+function specificityOf(selector: string): Specificity {
+  const functional = FUNCTIONAL.exec(selector);
+  if (functional) {
+    const open = functional.index + functional[0].length;
+    let depth = 1;
+    let close = open;
+    while (close < selector.length && depth > 0) {
+      if (selector[close] === "(") depth += 1;
+      else if (selector[close] === ")") depth -= 1;
+      close += 1;
+    }
+    const inside = selector.slice(open, close - 1);
+    const rest = selector.slice(0, functional.index) + selector.slice(close);
+    // `:where()` adds nothing; the others add their most specific branch.
+    const contribution =
+      functional[1] === "where"
+        ? ZERO
+        : splitTopLevel(inside, ",")
+            .map(branch => specificityOf(branch.trim()))
+            .reduce((best, one) => (compare(one, best) > 0 ? one : best), ZERO);
+    return add(contribution, specificityOf(rest));
+  }
   const ids = selector.match(/#[\w-]+/g)?.length ?? 0;
   const classes =
-    (selector.match(/&/g)?.length ?? 0) +
+    (selector.match(/(?<!\\\\)&/g)?.length ?? 0) +
     (selector.match(/\.[\w-]+/g)?.length ?? 0) +
     (selector.match(/\[[^\]]*\]/g)?.length ?? 0) +
     (selector.match(/(?<!:):[\w-]+/g)?.length ?? 0);
@@ -424,7 +513,7 @@ function hostSelectorOf(cls: string): string {
   const nested = (block: string): string[] => {
     const { rules } = partition(block);
     return rules.flatMap(rule =>
-      rule.selector.includes("&")
+      referencesParent(rule.selector)
         ? [rule.selector, ...nested(rule.body)]
         : nested(rule.body)
     );
@@ -524,7 +613,51 @@ function takesOver(owned: Utility, caller: Utility): boolean {
   if (!callerProperties.some(property => ownedProperties.has(property))) {
     return false;
   }
+  // Assigning a variable the owned rule READS is a takeover on its own, with no
+  // cascade question to ask. A custom property set on the tab applies to the tab
+  // unconditionally, so the owned rule resolves the caller's value whenever it
+  // applies at all — `[--tw-ring-inset:inset]` moves the focus ring inside from
+  // an unqualified class that out-specifies nothing. Routing it through the
+  // comparison below found nothing to compare: the owned rule never declares the
+  // property it depends on.
+  const dependencies = new Set(dependenciesOf(owned.full));
+  if (callerProperties.some(property => dependencies.has(property)))
+    return true;
   return wins(owned, caller);
+}
+
+/**
+ * The custom properties an owned utility's own appearance is built out of.
+ *
+ * Narrower than everything it reads, because Tailwind uses one property as a
+ * shared canvas: `box-shadow` is a list of `var()` slots, and a ring utility
+ * fills `--tw-ring-shadow` while leaving `--tw-shadow` and the inset slots for
+ * whoever else is on the element. Those peers are read by the ring's own
+ * declaration and are not its dependencies — writing `--tw-shadow` ADDS a
+ * shadow beside the ring rather than changing it, which is why `shadow-sm` is
+ * a legitimate class on a tab.
+ *
+ * The tell is structural: when a value already contains a slot the utility
+ * fills itself, the value is a composition and its other slots belong to
+ * someone else. When it does not — `color: var(--nx-primary)`, or
+ * `--tw-ring-shadow: var(--tw-ring-inset,) ...` — every variable in it is an
+ * input the appearance depends on.
+ */
+function dependenciesOf(cls: string): string[] {
+  const css = compiled(cls);
+  if (css == null) return [];
+  const declarations = declarationsOf(cls);
+  const own = new Set(declarations.keys());
+  const found = new Set<string>();
+  for (const value of declarations.values()) {
+    const referenced = [...value.matchAll(/var\(\s*(--[a-zA-Z0-9-]+)/g)].map(
+      match => match[1] ?? ""
+    );
+    // A value carrying one of this utility's own slots is a shared canvas.
+    if (referenced.some(property => own.has(property))) continue;
+    for (const property of referenced) found.add(property);
+  }
+  return [...found];
 }
 
 /** Which of a component's owned classes a caller's `className` takes over. */
@@ -628,14 +761,19 @@ function setBy(css: string): string[] {
  * so a caller assigning `--tw-ring-inset` moves the focus ring inside the
  * trigger while never naming `box-shadow`.
  *
- * Only Tailwind's own namespace is read. A theme variable such as
- * `--nx-primary` is read by every utility drawing in that colour, so counting it
- * would make `border-b-primary` collide with `text-primary` for sharing a token
- * rather than a property.
+ * EVERY custom property, not only Tailwind's own namespace. A theme variable is
+ * read the same way: the primitive's active ink and its underline both resolve
+ * `var(--nx-primary)`, so a caller assigning `[--nx-primary:red]` on the tab
+ * repaints both without naming `color` or `border-bottom-color` at all.
+ *
+ * Reading a token cannot make two utilities collide, because this side is only
+ * ever compared against what a CALLER WRITES — `border-b-primary` and
+ * `text-primary` both read `--nx-primary` and neither assigns it, so they stay
+ * unrelated. That asymmetry is what makes recording the reads safe.
  */
 function readBy(css: string): string[] {
   const body = hostCss(css.replace(AT_PROPERTY, ""));
-  return [...body.matchAll(/var\(\s*(--tw-[a-zA-Z0-9-]+)/g)].map(
+  return [...body.matchAll(/var\(\s*(--[a-zA-Z0-9-]+)/g)].map(
     match => match[1] ?? ""
   );
 }
@@ -950,35 +1088,23 @@ function literalStrings(node: ts.Node, found: string[] = []): string[] {
 }
 
 /**
- * Every object an element's `style` prop can resolve to here.
+ * Resolve the objects a `style` prop can hand React, and what they end up
+ * declaring.
  *
- * A LIST rather than one object, because a style prop routinely selects between
- * shapes: `style={active ? { borderBottomColor: c } : undefined}` sets the
- * declaration whenever the condition holds, and a resolver that accepted only a
- * top-level object literal or identifier read neither branch and returned clean.
- * Every branch a conditional can take is a shape the element can render, so each
- * one is checked.
- *
- * An identifier is followed to a variable declared in the same file, because the
- * real violation built its value away from the element. Scanning every property
- * assignment in the file instead would fail a surface for an unrelated
- * `const dividerStyle = { borderBottomColor }` that never reaches a tab.
+ * Two questions live together here because they share one piece of machinery:
+ * resolving an identifier to the object it names. That is done by walking OUT
+ * from the element, innermost scope first, rather than by searching the file —
+ * a whole-file search takes whichever matching declaration is visited last, so
+ * an unrelated `const s` in a later function both hides a real violation and,
+ * in the other order, invents one. Which declaration a name refers to is a
+ * lexical question, and the answer is the nearest enclosing one.
  */
-function styleObjectsFor(
-  attribute: ts.JsxAttribute,
-  sourceFile: ts.SourceFile
-): ts.ObjectLiteralExpression[] {
-  const initializer = attribute.initializer;
-  if (!initializer || !ts.isJsxExpression(initializer)) return [];
-  const root = initializer.expression;
-  if (!root) return [];
-
-  // Resolved by walking OUT from the element, innermost scope first, rather
-  // than by searching the file for the name. A whole-file search takes whichever
-  // matching declaration is visited last, so an unrelated `const s` in a later
-  // function both hides a real violation and, in the other order, invents one.
-  // Which declaration a name refers to is a lexical question, and the answer is
-  // the nearest enclosing one.
+function styleResolver(attribute: ts.JsxAttribute): {
+  objectsFrom(
+    expression: ts.Expression | undefined,
+    seen?: Set<ts.Node>
+  ): ts.ObjectLiteralExpression[];
+} {
   const initializerOf = (name: string): ts.Expression | undefined => {
     const declared = (scope: ts.Node): ts.Expression | undefined => {
       let found: ts.Expression | undefined;
@@ -1015,49 +1141,72 @@ function styleObjectsFor(
     return undefined;
   };
 
-  const objects: ts.ObjectLiteralExpression[] = [];
-  // Bounded so a `const a = b, b = a` cycle cannot loop forever, and so one
-  // identifier is not expanded twice through two paths.
-  const seen = new Set<ts.Node>();
-
-  const walk = (node: ts.Expression | undefined): void => {
-    if (!node || seen.has(node)) return;
-    seen.add(node);
-    if (ts.isObjectLiteralExpression(node)) {
-      objects.push(node);
-      // A spread inside the object can carry a declaration of its own.
-      for (const property of node.properties) {
-        if (ts.isSpreadAssignment(property)) walk(property.expression);
+  /**
+   * Every object an expression can evaluate to HERE.
+   *
+   * A style prop routinely selects between shapes, and every branch a
+   * conditional can take is a shape the element can render, so each is
+   * returned. Spreads are deliberately NOT followed here: a spread's contents
+   * are not a separate style object, they are earlier entries of the one being
+   * built, and treating them as separate reported a source whose value the
+   * outer object had already replaced.
+   */
+  const objectsFrom = (
+    root: ts.Expression | undefined,
+    seen = new Set<ts.Node>()
+  ): ts.ObjectLiteralExpression[] => {
+    const objects: ts.ObjectLiteralExpression[] = [];
+    const walk = (node: ts.Expression | undefined): void => {
+      // Bounded so a `const a = b, b = a` cycle cannot loop forever, and so one
+      // identifier is not expanded twice through two paths.
+      if (!node || seen.has(node)) return;
+      seen.add(node);
+      if (ts.isObjectLiteralExpression(node)) {
+        objects.push(node);
+        return;
       }
-      return;
-    }
-    if (ts.isParenthesizedExpression(node)) return walk(node.expression);
-    // `as CSSProperties` and `satisfies` wrap the value without changing it.
-    if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node)) {
-      return walk(node.expression);
-    }
-    if (ts.isConditionalExpression(node)) {
-      walk(node.whenTrue);
-      walk(node.whenFalse);
-      return;
-    }
-    // `&&`, `||` and `??` each choose between their operands at runtime, so both
-    // sides are shapes the element can render.
-    if (
-      ts.isBinaryExpression(node) &&
-      (node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
-        node.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
-        node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken)
-    ) {
-      walk(node.left);
-      walk(node.right);
-      return;
-    }
-    if (ts.isIdentifier(node)) walk(initializerOf(node.text));
+      if (ts.isParenthesizedExpression(node)) return walk(node.expression);
+      // `as CSSProperties` and `satisfies` wrap the value without changing it.
+      if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node)) {
+        return walk(node.expression);
+      }
+      if (ts.isConditionalExpression(node)) {
+        walk(node.whenTrue);
+        walk(node.whenFalse);
+        return;
+      }
+      // `&&`, `||` and `??` each choose between their operands at runtime, so
+      // both sides are shapes the element can render.
+      if (
+        ts.isBinaryExpression(node) &&
+        (node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+          node.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+          node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken)
+      ) {
+        walk(node.left);
+        walk(node.right);
+        return;
+      }
+      if (ts.isIdentifier(node)) walk(initializerOf(node.text));
+    };
+    walk(root);
+    return objects;
   };
 
-  walk(root);
-  return objects;
+  return { objectsFrom };
+}
+
+/** The objects an element's `style` prop can resolve to here. */
+function styleObjectsFor(attribute: ts.JsxAttribute): {
+  objects: ts.ObjectLiteralExpression[];
+  resolver: ReturnType<typeof styleResolver>;
+} {
+  const resolver = styleResolver(attribute);
+  const initializer = attribute.initializer;
+  if (!initializer || !ts.isJsxExpression(initializer)) {
+    return { objects: [], resolver };
+  }
+  return { objects: resolver.objectsFrom(initializer.expression), resolver };
 }
 
 /**
@@ -1100,32 +1249,66 @@ function isDefinitelyNothing(initializer: ts.Expression): boolean {
   return ts.isVoidExpression(initializer);
 }
 
-/** An owned inline property declared anywhere inside an object literal. */
-function ownedStyleProperty(
-  slot: string,
-  object: ts.ObjectLiteralExpression
-): string | undefined {
-  let found: string | undefined;
-  const visit = (node: ts.Node): void => {
+/**
+ * What an object literal actually declares, after spreads and overwrites.
+ *
+ * An object is built in source order and a later key replaces an earlier one,
+ * so the question is never "does this property appear" but "what is it by the
+ * end". `{ ...inherited, borderBottomColor: undefined }` is the shape a typed
+ * style uses to CLEAR an inherited value, and reading the spread source on its
+ * own reported the value the outer object had just removed.
+ *
+ * `true` means React emits a declaration for it.
+ */
+function declaredProperties(
+  object: ts.ObjectLiteralExpression,
+  resolver: ReturnType<typeof styleResolver>,
+  seen = new Set<ts.Node>()
+): Map<string, boolean> {
+  const entries = new Map<string, boolean>();
+  if (seen.has(object)) return entries;
+  seen.add(object);
+
+  for (const property of object.properties) {
+    if (ts.isSpreadAssignment(property)) {
+      // Every object the spread can be gets merged, because any of them may be
+      // the one present at runtime; a later key still overwrites all of them.
+      for (const source of resolver.objectsFrom(property.expression, seen)) {
+        for (const [name, emits] of declaredProperties(
+          source,
+          resolver,
+          seen
+        )) {
+          entries.set(name, emits);
+        }
+      }
+      continue;
+    }
+    if (ts.isPropertyAssignment(property)) {
+      const name = propertyNameOf(property.name);
+      if (name) entries.set(name, !isDefinitelyNothing(property.initializer));
+      continue;
+    }
     // A shorthand entry is a different node kind with the same effect:
     // `{ borderBottomColor }` sets the property just as `{ borderBottomColor: c }`
     // does, and a visitor keyed on `PropertyAssignment` alone walks past it.
-    const name = ts.isPropertyAssignment(node)
-      ? propertyNameOf(node.name)
-      : ts.isShorthandPropertyAssignment(node)
-        ? node.name.text
-        : undefined;
-    // A property React cannot emit is not a declaration. `{ borderBottomColor:
-    // undefined }` is what a typed style object looks like when it deliberately
-    // leaves an owned property alone, and reporting it rejects the very shape a
-    // call site should be using to opt out.
-    const emitted =
-      !ts.isPropertyAssignment(node) || !isDefinitelyNothing(node.initializer);
-    if (name && emitted && ownsStyleProperty(slot, name)) found ??= name;
-    ts.forEachChild(node, visit);
-  };
-  visit(object);
-  return found;
+    if (ts.isShorthandPropertyAssignment(property)) {
+      entries.set(property.name.text, true);
+    }
+  }
+  return entries;
+}
+
+/** An owned inline property this object still declares once it is complete. */
+function ownedStyleProperty(
+  slot: string,
+  object: ts.ObjectLiteralExpression,
+  resolver: ReturnType<typeof styleResolver>
+): string | undefined {
+  for (const [name, emits] of declaredProperties(object, resolver)) {
+    if (emits && ownsStyleProperty(slot, name)) return name;
+  }
+  return undefined;
 }
 
 interface Violation {
@@ -1150,8 +1333,9 @@ function violationsIn(file: string, source: string): Violation[] {
           if (!ts.isJsxAttribute(attribute)) continue;
           const name = attribute.name.getText(sourceFile);
           if (name === "style") {
-            const property = styleObjectsFor(attribute, sourceFile)
-              .map(object => ownedStyleProperty(exported, object))
+            const { objects, resolver } = styleObjectsFor(attribute);
+            const property = objects
+              .map(object => ownedStyleProperty(exported, object, resolver))
               .find(Boolean);
             if (property) {
               found.push({
@@ -1480,6 +1664,21 @@ describe("the tab indicator contract", () => {
       "an equally specific variant emitted after the focus ring",
       '<TabsTrigger className="aria-[controls]:ring-0" />',
     ],
+    // A selector LIST has several subjects, and the first one here is the tab.
+    [
+      "a selector list whose first branch is the tab itself",
+      '<TabsTrigger className="[&,&>span]:border-b-0" />',
+    ],
+    // A custom property assigned on the tab applies to the tab unconditionally,
+    // so it changes every owned rule that reads it whatever their variants say.
+    [
+      "an unqualified write to a ring variable the primitive reads",
+      '<TabsTrigger className="[--tw-ring-inset:inset]" />',
+    ],
+    [
+      "a theme token the primitive draws its ink and underline from",
+      '<TabsTrigger className="[--nx-primary:red]" />',
+    ],
   ])("catches %s", (_label, body) => {
     // The positive controls. Each is a shape an earlier version returned clean
     // on, or a category it never read. Without these, a check that can never
@@ -1637,6 +1836,17 @@ describe("the tab indicator contract", () => {
     [
       "a divide utility, whose border belongs to the children",
       '<TabsTrigger className="divide-y-0" />',
+    ],
+    // `:where()` contributes no specificity however complex its argument, so
+    // this cannot out-rank the primitive's own focus rule.
+    [
+      "a zero-specificity variant that cannot outrank the focus ring",
+      '<TabsTrigger className="[&:where(:focus-visible)]:ring-0" />',
+    ],
+    // An object is built in source order: the later key clears the spread.
+    [
+      "a spread whose owned property the object then clears",
+      'const inherited = { borderBottomColor: "red" };\n<TabsTrigger style={{ ...inherited, borderBottomColor: undefined }} />',
     ],
   ])("does not report %s", (_label, body) => {
     // The complement, and the reason this is a contract rather than a ban. A
