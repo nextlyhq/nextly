@@ -47,6 +47,14 @@ window, and any window longer than a date can express, now mean keep forever.
 Values that ask for less than the default, or for nothing coherent, still fall
 back to the default, because that direction cannot lose data.
 
+How long a window a trail can express is stated by the trail rather than shared,
+because it is set by the column the cutoff is compared against and those differ.
+Content activity is compared against a column counting from 1970 and so tops out
+around fifty years; the audit, event and delivery trails count from a calendar
+year and accept far longer windows. Sharing one ceiling would have meant a
+window a column can hold being answered with "never prune", which is unbounded
+growth on a setting that asked for the opposite.
+
 Two positions each trail holds on its own are unchanged: `false` still means
 keep forever everywhere, and a delivery ledger set to zero still keeps nothing,
 which is a real choice for a table whose only purpose is making a retry

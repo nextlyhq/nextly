@@ -13,7 +13,10 @@
  * @module domains/webhooks/retention-config
  */
 
-import { resolveRetentionWindow } from "../retention/window";
+import {
+  CALENDAR_COLUMN_MAX_OFFSET_MS,
+  resolveRetentionWindow,
+} from "../retention/window";
 
 /**
  * Which retention window governs an event row.
@@ -165,9 +168,17 @@ function positiveInt(value: unknown, fallback: number, max?: number): number {
  * past what a cutoff can express is clamped to `false` instead of producing a
  * date no column can hold — previously a window of `MAX_SAFE_INTEGER` resolved
  * to roughly 285,000 years and the resulting cutoff was unusable.
+ *
+ * Both event and delivery cutoffs are compared against MySQL `DATETIME`
+ * columns, which reach back to year 1000, so that is the bound this trail
+ * carries.
  */
 function maxAge(value: unknown, fallback: number | false): number | false {
-  return resolveRetentionWindow(value, { fallback, zero: "keep-nothing" });
+  return resolveRetentionWindow(value, {
+    fallback,
+    zero: "keep-nothing",
+    maxOffsetMs: CALENDAR_COLUMN_MAX_OFFSET_MS,
+  });
 }
 
 /** The longest window any event class may be kept for. */

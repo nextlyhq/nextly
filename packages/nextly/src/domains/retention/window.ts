@@ -31,21 +31,39 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export type RetentionWindow = number | false;
 
 /**
- * The largest offset whose resulting date every supported column can store.
+ * The largest offset whose cutoff a column counting from the UNIX epoch holds.
  *
- * A window is subtracted from now to form a cutoff, so the bound is set by the
- * narrowest column that receives one. That is not `Date` (±8.64e15 ms) and not
- * MySQL `DATETIME` (from year 1000): it is MySQL `TIMESTAMP`, which
- * `activity_log.created_at` uses and which **starts at 1970**. A cutoff before
- * then is rejected under strict mode, so the pass fails on every run and is
- * swallowed — the trail unpruned while its configuration reads as accepted.
+ * A window is subtracted from now to form a cutoff, so the bound belongs to the
+ * narrowest column that receives one — and the narrowest in this schema is
+ * MySQL `TIMESTAMP`, which **starts at 1970**. A cutoff before then is rejected
+ * under strict mode, so the pass fails on every run and is swallowed: the trail
+ * goes unpruned while its configuration reads as accepted.
  *
  * Fifty years is the conservative form: any clock later than 2020 minus this
  * offset lands after 1970, so it holds without consulting the current time. It
  * is also past the point of meaning — a window longer than the epoch itself can
  * select nothing, because no row can be older than the time it measures from.
+ *
+ * `activity_log.created_at` is the only column in this family.
  */
-export const MAX_STORABLE_OFFSET_MS = 50 * 365 * DAY_MS;
+export const EPOCH_COLUMN_MAX_OFFSET_MS = 50 * 365 * DAY_MS;
+
+/**
+ * The same bound for a column counting from a calendar year rather than 1970.
+ *
+ * MySQL `DATETIME` starts at year 1000, and both Postgres and SQLite reach
+ * further back still, so the narrowest of those is what this expresses. A
+ * thousand years keeps the cutoff at year 1020 or later for any clock after
+ * 2020, which is inside `DATETIME` without consulting the current time.
+ *
+ * A bound is still needed here rather than none at all: `Number.MAX_SAFE_INTEGER`
+ * milliseconds is roughly 285,000 years, past what `Date` itself represents, so
+ * subtracting it yields `Invalid Date` and every comparison built from it is
+ * meaningless.
+ *
+ * `audit_log`, `nextly_events` and `nextly_webhook_deliveries` are this family.
+ */
+export const CALENDAR_COLUMN_MAX_OFFSET_MS = 1000 * 365 * DAY_MS;
 
 /**
  * What a window of exactly zero means to a trail.
@@ -65,6 +83,19 @@ export interface RetentionWindowPolicy {
   fallback: RetentionWindow;
   /** How to read a window of exactly zero. */
   zero: ZeroWindow;
+  /**
+   * The longest window this trail can still express as a cutoff.
+   *
+   * Stated per caller because it is a property of the COLUMN the cutoff is
+   * compared against, not of retention. Applying one trail's bound everywhere
+   * silently disables pruning on trails whose columns reach further back: a
+   * window of 51 years produces a cutoff of 1975, which `DATETIME` stores
+   * without complaint, and refusing it there converts a configured window into
+   * unbounded growth. Pass {@link EPOCH_COLUMN_MAX_OFFSET_MS} or
+   * {@link CALENDAR_COLUMN_MAX_OFFSET_MS} according to the narrowest column the
+   * window reaches.
+   */
+  maxOffsetMs: number;
 }
 
 /**
@@ -91,11 +122,11 @@ export function resolveRetentionWindow(
 ): RetentionWindow {
   if (value === false) return false;
   if (typeof value !== "number" || Number.isNaN(value)) return policy.fallback;
-  // Ordered before the range check on purpose: `Infinity > MAX` is true, so
-  // both land here together and are answered the same way. Separating them is
-  // how the shipped copies came to treat the more extreme request as the less
-  // valid one.
-  if (value > MAX_STORABLE_OFFSET_MS) return false;
+  // `Infinity` is not special-cased: it is greater than every finite bound, so
+  // it lands here alongside any other over-long window and is answered the same
+  // way. Separating the two is how the shipped copies came to treat the more
+  // extreme request as the less valid one.
+  if (value > policy.maxOffsetMs) return false;
   if (value === 0) return policy.zero === "keep-nothing" ? 0 : policy.fallback;
   if (value < 0) return policy.fallback;
   return Math.floor(value);

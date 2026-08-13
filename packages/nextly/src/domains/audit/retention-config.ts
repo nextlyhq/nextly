@@ -12,7 +12,8 @@
  */
 
 import {
-  MAX_STORABLE_OFFSET_MS,
+  CALENDAR_COLUMN_MAX_OFFSET_MS,
+  EPOCH_COLUMN_MAX_OFFSET_MS,
   resolveRetentionWindow,
 } from "../retention/window";
 
@@ -76,24 +77,39 @@ export interface ResolvedAuditRetentionConfig {
 /**
  * A window, resolved by the rule every trail shares.
  *
- * The bound and the direction of each rejection live in
- * `domains/retention/window`, so this trail cannot drift from the others on a
- * question none of them owns alone. Zero is `malformed` here rather than
- * "keep nothing": an audit trail set to zero is far more likely to be a typo
- * than a decision, and erasing the record of who did what is not recoverable.
+ * The direction of each rejection lives in `domains/retention/window`, so this
+ * trail cannot drift from the others on a question none of them owns alone.
+ * Zero is `malformed` here rather than "keep nothing": an audit trail set to
+ * zero is far more likely to be a typo than a decision, and erasing the record
+ * of who did what is not recoverable.
+ *
+ * The bound is the caller's, because the two trails write to different column
+ * types: `maxOffsetMs` names which one governs at each call site below.
  */
-function maxAge(value: MaxAge | undefined, fallback: number): MaxAge {
-  return resolveRetentionWindow(value, { fallback, zero: "malformed" });
+function maxAge(
+  value: MaxAge | undefined,
+  fallback: number,
+  maxOffsetMs: number
+): MaxAge {
+  return resolveRetentionWindow(value, {
+    fallback,
+    zero: "malformed",
+    maxOffsetMs,
+  });
 }
 
+/**
+ * An interval is subtracted from now to decide whether a pass is due, so it has
+ * to stay a real date; a value outside the `Date` range makes that comparison
+ * unanswerable and no pass ever runs again. Unlike a window it is never stored
+ * or compared against a column, so no column sets this ceiling — any finite
+ * bound past the point where an interval means anything will do.
+ */
+const MAX_INTERVAL_MS = 50 * 365 * DAY_MS;
+
 function positive(value: number | undefined, fallback: number): number {
-  // Bounded for the same reason a window is: the gate subtracts the interval
-  // from now to decide whether a pass is due, so a value that leaves the Date
-  // range makes that comparison unanswerable and no pass ever runs again.
   const ms = value as number;
-  return Number.isFinite(ms) && ms > 0 && ms <= MAX_STORABLE_OFFSET_MS
-    ? ms
-    : fallback;
+  return Number.isFinite(ms) && ms > 0 && ms <= MAX_INTERVAL_MS ? ms : fallback;
 }
 
 /** A batch count, which must be a whole number of batches. */
@@ -124,11 +140,21 @@ export function resolveAuditRetentionConfig(
   }
 
   return {
+    // `activity_log.created_at` is a MySQL TIMESTAMP, so its cutoff cannot
+    // predate 1970 — the narrowest column in the schema, and the only one on
+    // this bound.
     activityMaxAgeMs: maxAge(
       input?.activityMaxAgeMs,
-      DEFAULT_ACTIVITY_MAX_AGE_MS
+      DEFAULT_ACTIVITY_MAX_AGE_MS,
+      EPOCH_COLUMN_MAX_OFFSET_MS
     ),
-    authMaxAgeMs: maxAge(input?.authMaxAgeMs, DEFAULT_AUTH_MAX_AGE_MS),
+    // `audit_log.created_at` is a MySQL DATETIME, which reaches back to year
+    // 1000, so this trail accepts windows the one above cannot express.
+    authMaxAgeMs: maxAge(
+      input?.authMaxAgeMs,
+      DEFAULT_AUTH_MAX_AGE_MS,
+      CALENDAR_COLUMN_MAX_OFFSET_MS
+    ),
     intervalMs: positive(
       input?.intervalMs,
       DEFAULT_AUDIT_RETENTION_INTERVAL_MS
