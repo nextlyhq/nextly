@@ -12,7 +12,10 @@ import { getAttachmentLimits } from "../../domains/email/services/attachment-lim
 import { EmailDeliveryService } from "../../domains/email/services/email-delivery-service";
 import type { EmailAttachmentSource } from "../../domains/email/services/email-service";
 import { MetaRetentionGate } from "../../domains/retention/gate";
-import { buildRetentionRunner } from "../../domains/retention/passes";
+import {
+  buildRetentionRunner,
+  retentionPoliciesFrom,
+} from "../../domains/retention/passes";
 import { NextlyError } from "../../errors";
 import { EmailProviderService } from "../../services/email/email-provider-service";
 import { EmailService } from "../../services/email/email-service";
@@ -45,7 +48,12 @@ export function registerEmailServices(ctx: RegistrationContext): void {
         // and the one this wiring exists to prevent.
         buildRetentionRunner({
           adapter,
-          emailPolicy: config.emailRetention,
+          // The same derived list every other write path spreads. Scoping this
+          // runner to email alone would make the send the one path that offers
+          // some domains' passes and not others -- the asymmetry that left this
+          // very table swept only by sends, and so never at all once an install
+          // stopped sending.
+          ...retentionPoliciesFrom(config),
           gate: new MetaRetentionGate(adapter),
           logger,
         }),

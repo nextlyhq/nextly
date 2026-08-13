@@ -12,9 +12,13 @@ import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-co
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
+import type { ResolvedEmailRetentionConfig } from "../domains/email/retention-config";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import { MetaRetentionGate } from "../domains/retention/gate";
-import { buildRetentionRunner } from "../domains/retention/passes";
+import {
+  buildRetentionRunner,
+  retentionPoliciesFrom,
+} from "../domains/retention/passes";
 import { schemaDraftsEnabled } from "../domains/versions/draft-split-eligibility";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
@@ -88,7 +92,20 @@ export class CollectionsHandler {
      * writes through, so a policy that does not reach it is a trail that
      * install never prunes. Absent means the trails are kept in full.
      */
-    auditRetention?: ResolvedAuditRetentionConfig
+    auditRetention?: ResolvedAuditRetentionConfig,
+    /**
+     * Resolved delivery-log retention, forwarded for the same reason and most
+     * consequential here of the three.
+     *
+     * `email_deliveries` was previously swept only by the SEND path, on the
+     * reasoning that sends are what make it grow. True while an install is
+     * sending, and useless the moment it stops: the last rows written are the
+     * newest, and nothing ever offers another pass to remove them. They then
+     * sit indefinitely — recipient digests, under a setting that reads as a
+     * bounded window. Content writes continue after the final send, which is
+     * exactly the property the send path lacks.
+     */
+    emailRetention?: ResolvedEmailRetentionConfig
   ) {
     this.logger = logger;
     // i18n: this handler is constructible outside DI and takes the
@@ -110,8 +127,14 @@ export class CollectionsHandler {
     // to the entry service, which is the seam every write path runs through.
     const retentionRunner = buildRetentionRunner({
       adapter: adapter,
-      webhookPolicy: webhookRetention,
-      auditPolicy: auditRetention,
+      // Derived from the same list every other call site spreads, so a domain
+      // that gains retention later reaches this seam without anyone
+      // remembering to add it here.
+      ...retentionPoliciesFrom({
+        webhookRetention,
+        auditRetention,
+        emailRetention,
+      }),
       gate: new MetaRetentionGate(adapter),
       logger,
     });
