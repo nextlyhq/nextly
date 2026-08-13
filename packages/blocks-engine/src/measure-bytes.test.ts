@@ -160,8 +160,8 @@ describe("measureBytes", () => {
 
   it("refuses an indexed accessor without invoking it", () => {
     // The array counterpart of the object case. Both go through one reader, so
-    // this and its sibling cannot diverge — which is what they did for five
-    // review rounds while the two paths were written separately.
+    // a guard cannot hold on one path and not the other — which is why the
+    // reader exists rather than two matching checks.
     let invoked = 0;
     const array: unknown[] = [1];
     Object.defineProperty(array, "0", {

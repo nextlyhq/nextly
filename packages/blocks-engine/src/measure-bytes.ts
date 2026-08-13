@@ -100,7 +100,9 @@ function scalarBytes(value: unknown, budget: number): number {
  * descriptor says reading it would run caller-supplied code. Neither yields a
  * value, and both mean the document cannot be stored as it stands.
  */
-type Member = { present: true; value: unknown } | { present: false };
+type Member =
+  | { present: true; value: unknown; enumerable: boolean }
+  | { present: false };
 
 /**
  * Read one member of an object or array, without running anything.
@@ -127,7 +129,11 @@ function readMember(container: object, key: string | number): Member {
   if (descriptor.get !== undefined || descriptor.set !== undefined) {
     return { present: false };
   }
-  return { present: true, value: descriptor.value as unknown };
+  return {
+    present: true,
+    value: descriptor.value as unknown,
+    enumerable: descriptor.enumerable === true,
+  };
 }
 
 /**
@@ -289,7 +295,17 @@ export function surveyDocument(
     stack.push({ value, kind: "leave", depth: 0 });
 
     if (Array.isArray(value)) {
-      bytes += 2 + Math.max(0, value.length - 1);
+      // `length` is an own property, so a proxy can throw from reading it.
+      const lengthMember = readMember(value, "length");
+      const length =
+        lengthMember.present && typeof lengthMember.value === "number"
+          ? lengthMember.value
+          : -1;
+      if (length < 0) {
+        unserializable = true;
+        continue;
+      }
+      bytes += 2 + Math.max(0, length - 1);
       if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
 
       const elementKind: FrameKind = kind === "nodeList" ? "node" : "value";
@@ -299,7 +315,7 @@ export function surveyDocument(
       // — the allocation the cap exists to refuse, performed while enforcing it.
       // That applies to OBJECT-valued elements too: pushing them without
       // accounting first defers nothing, because reading them is the cost.
-      for (let index = 0; index < value.length; index += 1) {
+      for (let index = 0; index < length; index += 1) {
         const member = readMember(value, index);
         if (!member.present) {
           unserializable = true;
@@ -322,10 +338,22 @@ export function surveyDocument(
     bytes += 2; // braces
     if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
 
-    let properties = 0;
-    for (const key in value) {
-      if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+    // Own property NAMES rather than `for...in`. Both cost the same for an
+    // object, and this sees the non-enumerable keys `for...in` cannot — which
+    // matters because the two readers must agree: `JSON.stringify` omits a
+    // non-enumerable property while the schema's direct property access still
+    // sees it, so a node whose `id` was non-enumerable parsed successfully and
+    // then serialized without one.
+    let names: string[];
+    try {
+      names = Object.getOwnPropertyNames(value);
+    } catch {
+      unserializable = true;
+      continue;
+    }
 
+    let properties = 0;
+    for (const key of names) {
       bytes +=
         utf8ByteLength(key, limits.maxBytes) + 3 + (properties > 0 ? 1 : 0);
       properties += 1;
@@ -333,6 +361,10 @@ export function surveyDocument(
 
       const member = readMember(value, key);
       if (!member.present) {
+        unserializable = true;
+        continue;
+      }
+      if (!member.enumerable) {
         unserializable = true;
         continue;
       }

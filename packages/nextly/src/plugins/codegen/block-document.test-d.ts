@@ -405,6 +405,15 @@ expectTypeOf<keyof TreePosition>().toEqualTypeOf<
   "parentId" | "slot" | "index"
 >();
 
+// The field types, because the key set does not reach them. `parentId` and
+// `slot` are OPTIONAL — their absence is what addresses a top-level position —
+// while `index` is required, because a position without one is not a position.
+// Making either of the first two required, or `index` optional, changes what a
+// stored operation means without changing a single name.
+expectTypeOf<TreePosition["parentId"]>().toEqualTypeOf<string | undefined>();
+expectTypeOf<TreePosition["slot"]>().toEqualTypeOf<string | undefined>();
+expectTypeOf<TreePosition["index"]>().toEqualTypeOf<number>();
+
 // Bindability is DERIVED from a prop's field type and is never opted into per
 // block. A signature taking anything other than the type name would let a block
 // declare its own answer, which is the design this rule exists to forbid.

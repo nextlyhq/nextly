@@ -534,7 +534,26 @@ export function parseBlockDocument(value: unknown): BlockDocumentParseResult {
     };
   }
 
-  const result = blockDocumentSchema.safeParse(value);
+  // The schema reads the caller's value a SECOND time, by ordinary property
+  // access rather than through the survey's guarded descriptor path. For an
+  // ordinary document the two agree; for a proxy they need not, and a `get`
+  // trap that throws would propagate out of a function whose whole contract is
+  // to report rather than raise. A throw here is therefore a verdict about the
+  // input, not an error in the checker.
+  //
+  // What this cannot promise: a STATEFUL proxy may answer differently again
+  // after this returns. The value belongs to the caller and nothing here can
+  // freeze it, so the guarantee is about what was checked, not about what the
+  // caller does with its own object afterwards.
+  let result: ReturnType<typeof blockDocumentSchema.safeParse>;
+  try {
+    result = blockDocumentSchema.safeParse(value);
+  } catch {
+    return {
+      success: false,
+      issues: ["Document could not be read consistently while being checked."],
+    };
+  }
   if (!result.success) {
     return {
       success: false,
