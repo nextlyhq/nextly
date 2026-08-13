@@ -1612,9 +1612,16 @@ function styleResolver(
         (list.flags & ts.NodeFlags.Const) === 0;
       return { initializer: declaration.initializer, mutable };
     }
-    // A parameter's default is what it holds only when the caller passes
-    // nothing, and an import, a function or a catch binding has no initializer
-    // to read at all. Each is a binding whose value is undecidable here.
+    // A parameter's default IS one of the values it holds — rendering the
+    // component without an argument passes exactly that object — so it counts
+    // as a value the element can receive. It is `mutable` because it is only
+    // ONE of them: a caller supplying an argument replaces it, which is why the
+    // key question, needing a single answer, still treats it as undecidable.
+    //
+    // An import, a function or a catch binding has no initializer to read.
+    if (ts.isParameter(declaration)) {
+      return { initializer: declaration.initializer, mutable: true };
+    }
     return { initializer: undefined, mutable: true };
   };
 
@@ -1678,19 +1685,36 @@ function styleResolver(
    * Across different units the order is not decidable and the write is kept,
    * which is the reporting side and therefore the safe one.
    */
-  const writesTo = (
-    declaration: ts.Declaration
-  ): Array<{ value: ts.Expression; straightLine: boolean; at: number }> => {
+  interface Write {
+    value: ts.Expression;
+    /** Shares the element's execution unit, so it runs in source order. */
+    sameUnit: boolean;
+    /** Runs before the element every time, so it replaces what came before. */
+    straightLine: boolean;
+    at: number;
+  }
+
+  /**
+   * The operators that give a binding a new value.
+   *
+   * A logical assignment writes only when the current value passes its test, so
+   * it ADDS a value the binding might hold. `=` is the only one that can be
+   * said to have replaced what was there.
+   */
+  const ASSIGNMENT_OPERATORS = new Map<ts.SyntaxKind, boolean>([
+    [ts.SyntaxKind.EqualsToken, true],
+    [ts.SyntaxKind.QuestionQuestionEqualsToken, false],
+    [ts.SyntaxKind.BarBarEqualsToken, false],
+    [ts.SyntaxKind.AmpersandAmpersandEqualsToken, false],
+  ]);
+
+  const writesTo = (declaration: ts.Declaration): Write[] => {
     const elementUnit = executionUnitOf(element);
-    const found: Array<{
-      value: ts.Expression;
-      straightLine: boolean;
-      at: number;
-    }> = [];
+    const found: Write[] = [];
     const visit = (node: ts.Node): void => {
       if (
         ts.isBinaryExpression(node) &&
-        node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        ASSIGNMENT_OPERATORS.has(node.operatorToken.kind) &&
         ts.isIdentifier(node.left) &&
         declarationOf(node.left, checker) === declaration
       ) {
@@ -1699,11 +1723,16 @@ function styleResolver(
         if (!sameUnit || before) {
           found.push({
             value: node.right,
+            sameUnit,
             // Definite only when it shares the element's execution unit, runs
-            // before it, and no branch stands between: those three together are
-            // what let a write be said to have HAPPENED.
+            // before it, no branch stands between, and the operator always
+            // writes: those together are what let a write be said to have
+            // HAPPENED, which is what killing an earlier value requires.
             straightLine:
-              sameUnit && before && alwaysRuns(node, elementUnit ?? undefined),
+              sameUnit &&
+              before &&
+              (ASSIGNMENT_OPERATORS.get(node.operatorToken.kind) ?? false) &&
+              alwaysRuns(node, elementUnit ?? undefined),
             at: node.getStart(),
           });
         }
@@ -1731,25 +1760,42 @@ function styleResolver(
    * a write that definitely runs can kill, so a reset inside an `if` narrows
    * nothing and every earlier value stays in play.
    *
+   * Killing reaches only the element's OWN execution unit. A write inside a
+   * function runs when that function is called, which the source order does not
+   * tell you: `function paint() { style = { ...owned } }` written above a
+   * `style = {}` still paints when `paint()` is called after it. Those writes
+   * survive whatever their position.
+   *
    * An empty list means the name resolved to a declaration that carries no
-   * readable value — a parameter, an import — which the callers treat as
-   * undecidable in whichever direction is conservative for them.
+   * readable value — an import, a parameter with no default — which the callers
+   * treat as undecidable in whichever direction is conservative for them.
    */
   const reachingValues = (identifier: ts.Identifier): ts.Expression[] => {
     const declaration = declarationOf(identifier, checker);
     if (!declaration) return [];
     const writes = writesTo(declaration);
-    const lastDefinite = writes.map(w => w.straightLine).lastIndexOf(true);
+    const here = writes.filter(write => write.sameUnit);
+    // Order across units is not decidable, so nothing here can rule them out.
+    const elsewhere = writes
+      .filter(write => !write.sameUnit)
+      .map(write => write.value);
+    const lastDefinite = here
+      .map(write => write.straightLine)
+      .lastIndexOf(true);
     if (lastDefinite === -1) {
       const initializer = bindingOf(identifier)?.initializer;
       return [
         ...(initializer ? [initializer] : []),
-        ...writes.map(w => w.value),
+        ...here.map(write => write.value),
+        ...elsewhere,
       ];
     }
     // The initializer and everything before that write are values the binding
     // has already stopped holding.
-    return writes.slice(lastDefinite).map(w => w.value);
+    return [
+      ...here.slice(lastDefinite).map(write => write.value),
+      ...elsewhere,
+    ];
   };
 
   /**
@@ -1776,11 +1822,13 @@ function styleResolver(
         objects.push(node);
         return;
       }
-      if (ts.isParenthesizedExpression(node)) return walk(node.expression);
-      // `as CSSProperties` and `satisfies` wrap the value without changing it.
-      if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node)) {
-        return walk(node.expression);
-      }
+      // Parentheses, `as`, `satisfies` and `!` all wrap the value without
+      // changing it. Peeled by the SAME helper the property-value side uses, so
+      // the two cannot come to disagree about which syntax is erased — listing
+      // them here independently left `style={style!}` unread while the value
+      // side understood it.
+      const unwrapped = withoutTypeWrappers(node);
+      if (unwrapped !== node) return walk(unwrapped);
       // A literal condition decides the branch, and the branch it excludes is
       // one React never receives. Asked through the same helper the class half
       // uses, so one spelling of "this cannot be taken" cannot be resolved on
@@ -1896,11 +1944,12 @@ function propertyNameOf(
  * `[key as string]` resolves like a bare `key`.
  *
  * `seen` stops a self-referential binding from recursing. It holds DECLARATIONS
- * rather than names: keyed on text, an alias chain crossing a shadowed name
- * stopped at the second spelling of it and returned clean on a call site that
- * paints. Two bindings sharing a name are two entries here. Anything else — a
- * template with substitutions, a call, a member access — stays undecidable and
- * returns undefined, which leaves the property unnamed rather than guessed.
+ * rather than names, because a name is not what a binding IS: two bindings can
+ * share a spelling, and an alias chain may legitimately pass through both. The
+ * declaration is what makes them one binding or two, so it is what a cycle has
+ * to be measured in. Anything else — a template with substitutions, a call, a
+ * member access — stays undecidable and returns undefined, which leaves the
+ * property unnamed rather than guessed.
  *
  * KNOWN LIMIT, and it is a hole rather than a decision to be comfortable with:
  * a reassignable key escapes. `let k = "x"; k = "borderBottomColor";
@@ -2654,6 +2703,33 @@ describe("the tab indicator contract", () => {
     [
       "an owned property assigned to a style binding after it is declared",
       'let style = {};\nstyle = { borderBottomColor: "red" };\n<TabsTrigger style={style} />',
+    ],
+    // A write inside a function runs when that function is CALLED, which the
+    // source order does not tell you. Written above a reset and called below
+    // it, it is still the value the element renders — so a straight-line reset
+    // cannot rule it out.
+    [
+      "an owned property written by a closure called after a reset",
+      'let style: Record<string, string> = {};\nfunction paint() {\n  style = { borderBottomColor: "red" };\n}\nstyle = {};\npaint();\n<TabsTrigger style={style} />',
+    ],
+    // A logical assignment writes when its test passes, so it is one of the
+    // values the binding can hold. Accepting only `=` left the binding
+    // resolving to no object at all.
+    [
+      "an owned property supplied by a logical assignment",
+      'let style;\nstyle ??= { borderBottomColor: "red" };\n<TabsTrigger style={style} />',
+    ],
+    // Rendering the component without an argument passes exactly the default,
+    // so the default is a value the element receives.
+    [
+      "an owned property in a parameter's default object",
+      'function Row(style = { borderBottomColor: "red" }) {\n  return <TabsTrigger style={style} />;\n}',
+    ],
+    // `!` is erased before the code runs, so the element receives the object
+    // itself. The property-value side already read through it.
+    [
+      "an owned property behind a non-null assertion on the style object",
+      'const style = { borderBottomColor: "red" };\n<TabsTrigger style={style!} />',
     ],
     // A reset that MIGHT not happen clears nothing. Only a write that
     // definitely runs replaces what came before it, so the owned value is still
