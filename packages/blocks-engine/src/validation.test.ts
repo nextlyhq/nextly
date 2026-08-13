@@ -1879,9 +1879,15 @@ describe("measureBytes agrees with the serializer on hooks and cycles", () => {
     const value: Record<string, unknown> = { a: 1 };
     value.self = value;
 
-    expect(() => measureBytes(value, Number.POSITIVE_INFINITY)).toThrow(
-      /circular/i
-    );
+    // Reported, not thrown: callers include validators that must turn an
+    // unstorable document into an issue rather than raise. Under a finite limit
+    // this was already the answer, because each revisit added bytes until the
+    // cap stopped the walk; the cycle set is what makes the exact-count mode
+    // reach it instead of never terminating.
+    expect(measureBytes(value, Number.POSITIVE_INFINITY)).toEqual({
+      bytes: expect.any(Number) as number,
+      exceeded: true,
+    });
   });
 
   it("runs a nested toJSON once, as the writer does", () => {

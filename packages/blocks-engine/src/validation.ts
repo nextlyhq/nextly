@@ -627,12 +627,18 @@ export function measureBytes(
     const value =
       entry.normalized === true ? popped : asSerialized(popped, entry.key);
     if (typeof value === "object" && value !== null) {
-      if (open.has(value)) {
-        throw new TypeError(
-          "Converting circular structure to JSON: a value contains itself, so " +
-            "it has no serialized form to measure."
-        );
-      }
+      // REPORTED, not thrown. A cyclic value has no serialized form, so it
+      // cannot be stored — which is a verdict this function already has a way
+      // to express. Throwing would be a different contract: callers here
+      // include validators whose whole job is to turn an unstorable document
+      // into a reported issue, and `plugin-page-builder` pins that a circular
+      // document is "refused rather than raised".
+      //
+      // Under a finite limit this was already the outcome, because each revisit
+      // added bytes until the cap stopped the walk. The cycle set is what makes
+      // the exact-count mode (`limit` of `Infinity`) reach the same answer
+      // instead of never terminating.
+      if (open.has(value)) return { bytes, exceeded: true };
       open.add(value);
       stack.push({ value, key: entry.key, exiting: value });
     }
