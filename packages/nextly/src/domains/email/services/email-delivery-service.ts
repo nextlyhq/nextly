@@ -25,7 +25,7 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
@@ -40,6 +40,7 @@ import {
   EMAIL_RETENTION_CLASS,
   isErasedRecipientHash,
   recipientDigest,
+  recipientDigests,
   storableError,
   type EmailDeliveryInput,
   type EmailDeliveryRecipientKind,
@@ -453,14 +454,21 @@ export class EmailDeliveryService extends BaseService {
   ): Promise<EmailDeliveryRecord[]> {
     const filters = [
       options.recipient !== undefined
-        ? eq(
+        ? inArray(
             this.deliveries.recipientHash,
             // The MAILBOX, as the writer stored it. A caller asking about
             // `Jane <jane@example.com>` is asking about `jane@example.com`,
             // and hashing what they typed answers "no record" for a message
-            // that was sent. The same function the erasure uses, so a lookup
-            // and a removal can never disagree about which rows are a person's.
-            recipientDigest(options.recipient)
+            // that was sent.
+            //
+            // EVERY generation, matching the erasure exactly. A rotation does
+            // not move the rows already written, so a lookup keyed only on the
+            // current secret stops finding a person's older mail — while a
+            // deletion still removes it. The two would then disagree about
+            // which rows are that person's, which is the one thing this table
+            // cannot afford: an operator answering "what do you hold about me"
+            // from the narrower answer would under-report, and confidently.
+            recipientDigests(options.recipient)
           )
         : undefined,
       options.status !== undefined

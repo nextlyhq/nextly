@@ -70,6 +70,58 @@ describe("reaching delivery rows across a secret rotation", () => {
     );
   });
 
+  it("reaches rows written unkeyed while retired secrets are still listed", async () => {
+    // An install mid-rotation that has REMOVED `NEXTLY_SECRET` but not yet
+    // cleared `NEXTLY_SECRET_PREVIOUS`. The writer hashes unkeyed whenever no
+    // current secret is set, so every row written today carries the unkeyed
+    // digest — while the retired generations are HMACs. Computing only those
+    // reaches the OLD rows and misses the new ones, which is the wrong half:
+    // the recent mail is what an erasure request is most likely about.
+    envMock.NEXTLY_SECRET = undefined;
+    envMock.NEXTLY_SECRET_PREVIOUS = RETIRED;
+    vi.resetModules();
+    const { recipientDigests, hashRecipient } = await import(
+      "../delivery-record"
+    );
+
+    const digests = recipientDigests("person@example.com");
+
+    // Taken from the WRITER rather than recomputed here: a hand-built
+    // expectation agrees until the writer changes, which is the drift these
+    // two functions exist to prevent.
+    expect(digests).toContain(hashRecipient("person@example.com"));
+    expect(digests).toContain(digestUnder(RETIRED, "person@example.com"));
+  });
+
+  it("writes under the first digest it would later look for", async () => {
+    // The invariant that makes one of these a narrower view of the other
+    // rather than a second opinion. Checked across every arrangement of the
+    // two variables, because the branch that broke was the one nobody pictured.
+    const arrangements: Array<[string | undefined, string | undefined]> = [
+      [CURRENT, undefined],
+      [CURRENT, RETIRED],
+      [undefined, RETIRED],
+      [undefined, undefined],
+    ];
+
+    for (const [current, previous] of arrangements) {
+      envMock.NEXTLY_SECRET = current;
+      envMock.NEXTLY_SECRET_PREVIOUS = previous;
+      vi.resetModules();
+      const { recipientDigest, recipientDigests, hashRecipient } = await import(
+        "../delivery-record"
+      );
+
+      expect(recipientDigest("person@example.com")).toBe(
+        recipientDigests("person@example.com")[0]
+      );
+      // And that head is what the row actually carries.
+      expect(recipientDigest("person@example.com")).toBe(
+        hashRecipient("person@example.com")
+      );
+    }
+  });
+
   it("does not compare the same digest twice", async () => {
     // An install that lists its CURRENT secret again under the retired key is a
     // plausible copy-paste, and it would otherwise widen every erasure
