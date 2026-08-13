@@ -7,6 +7,7 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import {
   getMigrationLockDdl,
   LOCK_RENEW_INTERVAL_MS,
+  LOCK_RENEWALS_BEFORE_LOSS,
   LOCK_TTL_SECONDS,
   MIGRATION_LOCK_TABLE,
   observeMigrationLock,
@@ -740,7 +741,10 @@ describe("field-group migration session", () => {
         withMigrationSession(
           { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
           async () => {
-            await vi.advanceTimersByTimeAsync(LOCK_RENEW_INTERVAL_MS);
+            // The whole margin, because one failure is deliberately survivable.
+            await vi.advanceTimersByTimeAsync(
+              LOCK_RENEW_INTERVAL_MS * LOCK_RENEWALS_BEFORE_LOSS
+            );
           }
         )
       ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
@@ -769,7 +773,9 @@ describe("field-group migration session", () => {
       const run = withMigrationSession(
         { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
         async () => {
-          await vi.advanceTimersByTimeAsync(LOCK_RENEW_INTERVAL_MS);
+          await vi.advanceTimersByTimeAsync(
+            LOCK_RENEW_INTERVAL_MS * LOCK_RENEWALS_BEFORE_LOSS
+          );
         }
       );
       await expect(run).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
@@ -779,6 +785,46 @@ describe("field-group migration session", () => {
       // its own rather than handed over while that work is in flight.
       expect(h.owner()).toMatch(/^run-1#/);
       expect(h.expiresAt()).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // 🔴 The margin the TTL exists to buy, actually spent. The interval is a quarter of the TTL so
+  // that several attempts can fail before a claim lapses; treating the FIRST error as fatal threw
+  // that away and let a brief connection reset abort a healthy, half-finished migration.
+  it("survives renewal failures short of the margin", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createAdapter({ heldBy: null });
+      const realRunStatement = h.ctx.runStatement.getMockImplementation();
+      let failures = 0;
+      h.ctx.runStatement.mockImplementation(async (statement: SQL) => {
+        // One short of the margin, then recovery — the shape of a blip.
+        if (
+          isRenewalStatement(statement) &&
+          failures < LOCK_RENEWALS_BEFORE_LOSS - 1
+        ) {
+          failures += 1;
+          throw new Error("connection reset");
+        }
+        await realRunStatement?.(statement);
+      });
+
+      await expect(
+        withMigrationSession(
+          { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
+          async () => {
+            await vi.advanceTimersByTimeAsync(
+              LOCK_RENEW_INTERVAL_MS * (LOCK_RENEWALS_BEFORE_LOSS + 1)
+            );
+          }
+        )
+      ).resolves.toBeUndefined();
+
+      expect(failures).toBe(LOCK_RENEWALS_BEFORE_LOSS - 1);
+      // Released normally, because the claim was never lost.
+      expect(h.owner()).toBeNull();
     } finally {
       vi.useRealTimers();
     }

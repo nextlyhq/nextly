@@ -107,6 +107,18 @@ export const LOCK_TTL_SECONDS = 120;
 export const LOCK_RENEW_INTERVAL_MS = (LOCK_TTL_SECONDS / 4) * 1000;
 
 /**
+ * How many renewals must fail IN A ROW before the claim is treated as lost.
+ *
+ * DERIVED from the two constants above rather than written as 4, so the margin the comment
+ * describes and the number the code enforces cannot drift apart when either is retuned. This is
+ * the whole value of the interval being a fraction of the TTL: it buys exactly this many attempts.
+ */
+export const LOCK_RENEWALS_BEFORE_LOSS = Math.max(
+  1,
+  Math.floor((LOCK_TTL_SECONDS * 1000) / LOCK_RENEW_INTERVAL_MS)
+);
+
+/**
  * The database's own clock, and an expiry computed from it, per dialect.
  *
  * 🔴 Never the application's clock. Two processes contending for this row can sit on machines whose
@@ -553,16 +565,31 @@ export async function withMigrationSession<T>(
       })
     );
   };
+  // 🔴 Consecutive FAILURES, not failures. The TTL is four intervals wide precisely so a slow query
+  // or a dropped connection cannot lose a lock that is still held, and treating the first error as
+  // fatal spent that margin without using it — a brief blip aborted a healthy, half-finished
+  // migration. Counted rather than timed: the margin is defined as a number of renewals, so
+  // counting renewals states it directly and keeps the application's clock out of a decision that
+  // has no business depending on it.
+  let consecutiveFailures = 0;
   const renewal = setInterval(() => {
     void renew(adapter, dialect, claim).then(
       held => {
-        if (!held) onLost();
+        // Ownership DISPROVED is not a margin question. The row names someone else, so no number of
+        // retries can win it back and the work is already unprotected.
+        if (!held) {
+          onLost();
+          return;
+        }
+        consecutiveFailures = 0;
       },
-      // A failed renewal is not proof the claim is gone, but it is proof it is no longer being
-      // maintained, and the next one may not arrive before the TTL. Treated as lost, because the
-      // safe error here is stopping a run that still holds the lock rather than continuing one that
-      // does not.
-      onLost
+      () => {
+        // An error is not proof the claim is gone — only proof this attempt could not ask. Retry
+        // while the lease can still be kept alive, and give up once enough have failed in a row
+        // that the next success could no longer land before the claim lapses.
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= LOCK_RENEWALS_BEFORE_LOSS) onLost();
+      }
     );
   }, LOCK_RENEW_INTERVAL_MS);
   // Never a reason for the process to stay alive: this timer exists to protect work that is already
