@@ -6,19 +6,7 @@
  * JavaScript target, two subpaths sharing one artifact — and a check exercised only against the
  * real map would be asserting that today's map is acceptable, which is a different claim.
  */
-import {
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import path, { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { describe, expect, it } from "vitest";
-import ts from "typescript";
 
 import {
   clientBuildEntries,
@@ -295,35 +283,3 @@ describe("the barrel declaration and the export map", () => {
     ).toThrow(/passing vacuously/);
   });
 });
-
-/**
- * Every name a module source publishes.
- *
- * Pure so the reading itself can be checked. Comparing two files it reads the same wrong way
- * returns equal lists and reports parity, so a form neither matcher recognises is invisible in
- * exactly the comparison meant to catch it.
- */
-/**
- * Every name a declaration's binding form introduces.
- *
- * `const { a, b: c } = v` binds `a` and `c`; `const [x, , y] = v` binds `x` and `y`; a rest element
- * binds its own name. Written as a walk rather than a case per shape, because the forms nest.
- */
-function boundNames(name: ts.BindingName): string[] {
-  if (ts.isIdentifier(name)) return [name.text];
-  const found: string[] = [];
-  for (const element of name.elements) {
-    // An array pattern can hold a hole, which binds nothing.
-    if (ts.isOmittedExpression(element)) continue;
-    found.push(...boundNames(element.name));
-  }
-  return found;
-}
-
-// The declaration-parity suite lived here: a reader that extracted every exported name from a
-// module and from the `.d.mts` beside it, and a comparison asserting the two agreed. Both are
-// gone because their subject is gone — these scripts are TypeScript now, so there is no second
-// list of the same facts to drift. The guarantee comes from the compiler: `tsconfig.tests.json`
-// includes `scripts/**/*`, so a consumer naming an export the module does not have fails
-// `check-types` rather than a bespoke comparison that had to model every way ECMAScript can
-// publish a name.

@@ -24,9 +24,12 @@
  * enumerated side lives there, where a deletion is loud, and the derived side lives here, where an
  * addition is free.
  *
- * Usage:
- *   node scripts/write-server-safe-rsc-app.mjs <directory>            write the app
- *   node scripts/write-server-safe-rsc-app.mjs --verify <directory>   check what the build produced
+ * Usage, from this package's directory:
+ *   tsx scripts/write-server-safe-rsc-app.ts <directory>            write the app
+ *   tsx scripts/write-server-safe-rsc-app.ts --verify <directory>   check what the build produced
+ *
+ * Through `tsx` rather than `node`, because the lowest supported Node cannot execute TypeScript
+ * directly. That is also how the workflow invokes it.
  *
  * The two modes share this file, and therefore share ONE derivation of the subpath list. Split
  * across a generator and a separate verifier, the verifier is free to check a different set to the
@@ -41,7 +44,7 @@ const verifying = process.argv[2] === "--verify";
 const target = verifying ? process.argv[3] : process.argv[2];
 if (target === undefined) {
   console.error(
-    "Usage: node scripts/write-server-safe-rsc-app.mjs [--verify] <directory>. The directory is " +
+    "Usage: tsx scripts/write-server-safe-rsc-app.ts [--verify] <directory>. The directory is " +
       "where the app is written; it is created if it does not exist."
   );
   process.exit(1);

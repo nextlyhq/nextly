@@ -688,7 +688,7 @@ async function main() {
       problems.push(
         `${file} reaches ${offending.join(", ")}, which a server-safe entry point may not ` +
           `import. Either the entry gained a client dependency, or the allow-list in ` +
-          `published-entries.mjs needs a deliberate addition.`
+          `published-entries.ts needs a deliberate addition.`
       );
     }
   }

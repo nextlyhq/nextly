@@ -19,10 +19,13 @@
  * list one level down: it would need an edit every six months, and nothing would fail until the
  * major it was missing broke a consumer.
  *
- * Usage:
- *   node scripts/node-matrix.mjs                 print the matrix as JSON
- *   node scripts/node-matrix.mjs --github        write the outputs to $GITHUB_OUTPUT
- *   node scripts/node-matrix.mjs --floor-only    the lowest floor alone, WITHOUT the network
+ * Usage, from this package's directory:
+ *   tsx scripts/node-matrix.ts                 print the matrix as JSON
+ *   tsx scripts/node-matrix.ts --github        write the outputs to $GITHUB_OUTPUT
+ *   tsx scripts/node-matrix.ts --floor-only    the lowest floor alone, WITHOUT the network
+ *
+ * Through `tsx` rather than `node`, because the lowest supported Node cannot execute TypeScript
+ * directly. That is also how the workflow invokes it.
  *
  * `--floor-only` exists because a pull request runs one leg, and that leg is derivable from the
  * manifest alone. Fetching anyway would let an outage at nodejs.org fail a UI pull request that
