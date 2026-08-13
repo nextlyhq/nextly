@@ -2014,6 +2014,24 @@ function withNodes(document: BlockDocument, nodes: BlockNode[]): BlockDocument {
 /**
  * Apply one op, returning the new forest and the op that undoes it.
  *
+ * **A document handed to this function must be treated as immutable
+ * afterwards.** The result SHARES structure with it: untouched nodes are the
+ * same objects, and so are envelope fields like `settings`, because the engine's
+ * tree primitives are persistent and `withNodes` spreads. Mutating the old
+ * document therefore changes the new one, with no op recorded and nothing for
+ * history or autosave to see.
+ *
+ * Stated rather than prevented, deliberately. Detaching the result would mean
+ * deep-copying the whole document on every edit — work proportional to the
+ * document rather than to the edit, on the page builder's hottest path — and it
+ * would discard the structural sharing the primitives exist to provide. That is
+ * the same contract React state, Immer and Automerge run on.
+ *
+ * Note the asymmetry, which is intended: values the caller supplies IN THE OP
+ * are detached by {@link snapshot}, because the caller keeps a reference to a
+ * payload it is likely to reuse and a small copy settles it. The document is a
+ * different size of object and gets a contract instead of a copy.
+ *
  * **The inverse is derived from the state the op is applied TO, never declared
  * by the caller.** A caller-supplied inverse is a second statement of a fact the
  * document already holds, and the two drift the moment anything about the op
