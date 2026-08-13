@@ -1093,10 +1093,29 @@ describe("adminMetaPermissions", () => {
   });
 
   /**
-   * What the degradation must NOT absorb. Asserted on the guard rather than by
-   * provoking a non-collision throw out of the collector, which config alone
-   * cannot do — so this pins the discrimination itself rather than leaving the
-   * rethrow branch as an untested claim.
+   * What the degradation must NOT absorb, asserted at the CALL SITE. Without
+   * this the `catch` can be widened to swallow everything and the suite stays
+   * green — measured, so it is the case this exists for. The plugin throws on
+   * the property the fold reads, standing in for any unexpected failure inside
+   * it; a defect there must reach the caller rather than be reported as an app
+   * with no custom permissions.
+   */
+  it("rethrows a failure that is not a rejected declaration", () => {
+    const exploding = new Proxy({} as PluginDefinition, {
+      get(target, prop) {
+        if (prop === "contributes") throw new TypeError("boom");
+        return Reflect.get(target, prop);
+      },
+    });
+
+    expect(() => adminMetaPermissions({ plugins: [exploding] })).toThrow(
+      TypeError
+    );
+  });
+
+  /**
+   * The guard itself, so a widened code match is caught as well as a widened
+   * catch.
    */
   it("discriminates a collision from any other NextlyError", () => {
     expect(
