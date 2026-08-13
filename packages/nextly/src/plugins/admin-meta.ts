@@ -34,6 +34,7 @@ import type {
 import { pluginAdminSlug } from "./plugin-slug";
 import { collectPluginRoutes } from "./routes/collect-routes";
 import { isRouteError } from "./routes/route-error";
+import { resolvePluginSelf } from "./self";
 import { validatedClientConfig } from "./validate-client-config";
 import { validatePluginSlugs } from "./validate-slugs";
 
@@ -273,7 +274,12 @@ function mountableRoutes(
  * Only the collision is absorbed. Anything else is a defect, and rethrows.
  *
  * The entity slugs are widened with each plugin's CONTRIBUTED collections and
- * singles before folding. Whether a `publish` declaration is the plugin's own
+ * singles before folding, taken from `resolvePluginSelf` so they are the slugs
+ * the entities RESOLVE to. A host may remap one with the public
+ * `plugin.rename({ forms: "contact-forms" })` API and the schema fold seeds
+ * against the renamed slug, so widening with the declared name instead would
+ * leave a `publish:contact-forms` declaration looking plugin-owned while boot
+ * drops it as an adopted lifecycle permission. Whether a `publish` declaration is the plugin's own
  * or one the seeder owns is decided by whether its resource names an entity —
  * and boot merges contributed entities into the config before that question is
  * asked, while this endpoint reads a config where they are still absent. Folded
@@ -296,14 +302,15 @@ export function adminMetaPermissions(
     collections: [
       ...(config.collections ?? []),
       ...plugins.flatMap(plugin =>
-        pluginCollectionSlugs(plugin).map(slug => ({ slug }))
+        Object.values(resolvePluginSelf(plugin).collections).map(slug => ({
+          slug,
+        }))
       ),
     ],
     singles: [
       ...(config.singles ?? []),
-      ...plugins.flatMap(
-        plugin =>
-          plugin.contributes?.singles?.map(s => ({ slug: s.slug })) ?? []
+      ...plugins.flatMap(plugin =>
+        Object.values(resolvePluginSelf(plugin).singles).map(slug => ({ slug }))
       ),
     ],
   };

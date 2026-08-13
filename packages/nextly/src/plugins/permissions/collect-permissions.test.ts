@@ -427,3 +427,58 @@ describe("a CRUD collision on a config entity", () => {
     ).toBe("crud-permission-reserved");
   });
 });
+
+/**
+ * The seeder matches an existing row with `LOWER(action)` and `LOWER(resource)`,
+ * so two declarations differing only by case are ONE row in the database. The
+ * collector has to agree, or two owners both claim a permission the database
+ * attributes to whichever was seeded last.
+ */
+describe("collectCustomPermissions — identity is case-insensitive", () => {
+  it("rejects two declarations that differ only by case", () => {
+    expect(() =>
+      collectCustomPermissions({}, [
+        {
+          name: "@acme/a",
+          version: "1.0.0",
+          contributes: {
+            permissions: [{ action: "Export", resource: "Reports" }],
+          },
+        },
+        {
+          name: "@acme/b",
+          version: "1.0.0",
+          contributes: {
+            permissions: [{ action: "export", resource: "reports" }],
+          },
+        },
+      ] as unknown as PluginDefinition[])
+    ).toThrow();
+  });
+
+  /**
+   * The control: identities that genuinely differ still both collect, so the
+   * rejection above is about the case-folded collision and not about the
+   * collector having become intolerant of two plugins declaring permissions.
+   */
+  it("still collects two genuinely distinct identities", () => {
+    const out = collectCustomPermissions({}, [
+      {
+        name: "@acme/a",
+        version: "1.0.0",
+        contributes: {
+          permissions: [{ action: "Export", resource: "Reports" }],
+        },
+      },
+      {
+        name: "@acme/b",
+        version: "1.0.0",
+        contributes: {
+          permissions: [{ action: "export", resource: "invoices" }],
+        },
+      },
+    ] as unknown as PluginDefinition[]);
+
+    expect(out.map(p => p.slug)).toEqual(["Export-Reports", "export-invoices"]);
+  });
+});

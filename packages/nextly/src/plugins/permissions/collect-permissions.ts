@@ -114,7 +114,16 @@ export function collectCustomPermissions(
     source: "app" | "plugin"
   ): void => {
     const { action, resource } = perm;
-    const key = `${action}:${resource}`;
+    // Compared in lower case, because the SEEDER decides this same question
+    // that way: `ensurePermission` matches an existing row with
+    // `LOWER(action) = LOWER(action)` and `LOWER(resource) = LOWER(resource)`.
+    // Left case-sensitive, `Export:Reports` and `export:reports` are collected
+    // as two permissions from two owners while the database holds ONE row —
+    // attributed to whichever was seeded last — so a plugin's detail page can
+    // claim a permission the roles data gives to someone else. The stored
+    // action and resource keep their declared casing; only the identity used
+    // to dedupe is normalized.
+    const key = `${action.toLowerCase()}:${resource.toLowerCase()}`;
 
     const prev = seen.get(key);
     if (prev !== undefined) {

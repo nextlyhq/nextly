@@ -1100,6 +1100,37 @@ describe("adminMetaPermissions", () => {
   });
 
   /**
+   * A host may remap a contributed entity with the public
+   * `plugin.rename({ forms: "contact-forms" })` API, and the schema fold seeds
+   * against the RENAMED slug. Widening with the declared name would leave a
+   * `publish` declaration on the renamed entity looking plugin-owned.
+   *
+   * `export` on the renamed slug is the positive control: still a genuine
+   * custom permission, so the assertion cannot pass by everything being
+   * dropped.
+   */
+  it("counts a renamed contributed collection under its resolved slug", () => {
+    const collected = adminMetaPermissions({
+      plugins: asPlugins([
+        {
+          name: "@acme/forms",
+          version: "1.0.0",
+          renameMap: { forms: "contact-forms" },
+          contributes: {
+            collections: [{ slug: "forms" }],
+            permissions: [
+              { action: "publish", resource: "contact-forms" },
+              { action: "export", resource: "contact-forms" },
+            ],
+          },
+        },
+      ]),
+    });
+
+    expect(collected.map(p => p.slug)).toEqual(["export-contact-forms"]);
+  });
+
+  /**
    * A reserved system resource is a different REASON but the same rejection,
    * and it is judged against the same pre-transform list — a transformer can
    * drop the offending plugin just as it can resolve a duplicate. Boot still
