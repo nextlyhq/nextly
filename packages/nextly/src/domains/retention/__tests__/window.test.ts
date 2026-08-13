@@ -93,6 +93,33 @@ describe("resolving a retention window", () => {
     expect(resolveRetentionWindow(1000.9, keeping)).toBe(1000);
   });
 
+  it("reads a window that FLOORS to zero the way the trail reads zero", () => {
+    // Rounding is what produces the zero here, so the order of the two steps
+    // decides the outcome. Read before flooring, `0.5` is not `=== 0` and skips
+    // the policy entirely, then floors to a window of zero — a cutoff of now,
+    // which removes the whole trail. It is the one input where the direction
+    // inverts: every other rejection keeps more than honouring it would.
+    expect(resolveRetentionWindow(0.5, keeping)).toBe(FALLBACK);
+    expect(resolveRetentionWindow(0.999, keeping)).toBe(FALLBACK);
+
+    // A ledger that reads zero as "keep nothing" still gets that answer, because
+    // the question asked is the same one — only asked of the whole milliseconds
+    // the window actually resolves to.
+    expect(resolveRetentionWindow(0.5, ledger)).toBe(0);
+
+    // The positive control for the boundary: one whole millisecond is a window,
+    // not a zero, and must survive.
+    expect(resolveRetentionWindow(1, keeping)).toBe(1);
+    expect(resolveRetentionWindow(1.5, keeping)).toBe(1);
+  });
+
+  it("does not let a negative fraction round into a window", () => {
+    // `Math.floor(-0.5)` is `-1`, so flooring before the sign check would turn
+    // an incoherent value into a negative window rather than the fallback.
+    expect(resolveRetentionWindow(-0.5, keeping)).toBe(FALLBACK);
+    expect(resolveRetentionWindow(-0.5, ledger)).toBe(FALLBACK);
+  });
+
   it("passes a fallback of false through unchanged", () => {
     // A trail whose default is already "keep forever" must not acquire a
     // deleting window by being handed a malformed value.

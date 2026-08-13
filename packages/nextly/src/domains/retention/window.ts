@@ -115,6 +115,12 @@ export interface RetentionWindowPolicy {
  *
  * Floored because a window is a whole number of milliseconds; a fractional
  * value is not wrong, only unrepresentable in what it is compared against.
+ * Flooring happens BEFORE the zero reading rather than after, because rounding
+ * is what can PRODUCE a zero: every window under a millisecond floors to one,
+ * and read afterwards it arrives as a window rather than as the zero the policy
+ * exists to judge. On a trail whose policy calls zero malformed, that is the
+ * difference between the default and a cutoff of now — the whole record
+ * removed, from a value that never asked for it.
  */
 export function resolveRetentionWindow(
   value: unknown,
@@ -127,7 +133,11 @@ export function resolveRetentionWindow(
   // way. Separating the two is how the shipped copies came to treat the more
   // extreme request as the less valid one.
   if (value > policy.maxOffsetMs) return false;
-  if (value === 0) return policy.zero === "keep-nothing" ? 0 : policy.fallback;
+  // Ahead of the flooring, because `Math.floor` moves a negative value AWAY
+  // from zero and a fraction like -0.5 would arrive as -1 rather than as the
+  // incoherent value it is.
   if (value < 0) return policy.fallback;
-  return Math.floor(value);
+  const whole = Math.floor(value);
+  if (whole === 0) return policy.zero === "keep-nothing" ? 0 : policy.fallback;
+  return whole;
 }
