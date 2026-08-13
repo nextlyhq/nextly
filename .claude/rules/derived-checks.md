@@ -198,6 +198,65 @@ structure rather than by someone else's spelling, at the granularity your claim
 actually needs — which is the separating-property test applied to the identifier
 itself.
 
+## The THIRD finding of one shape is about the check, not the instance
+
+Two findings that rhyme are a coincidence. The third is a measurement: the check
+is built on something that cannot answer the question, and fixing instances will
+keep producing findings for as long as anyone keeps looking. Every fix is
+correct, every one is followed by another, and the reviewer and the author both
+read the sequence as progress.
+
+So at the third, stop patching and ask which of two things is unreliable,
+because the remedies are different and applying the wrong one looks like
+diligence:
+
+- **The READ** — the check cannot see what it is looking at. Replace the
+  instrument, do not extend it. A regex over source becomes a walk over the
+  compiler's AST; an AST prediction of a runtime value becomes the runtime value
+  itself. Worked example: a source check for a component's class names took
+  thirteen rounds finding spellings it read wrongly — aliases, namespace
+  imports, `{...{ className }}`, `+` concatenation, template interpolation,
+  character references. Each fix was right. The surface it was covering was the
+  whole language, so the only end was to stop predicting the string and read it
+  where it already exists.
+- **The CLASSIFICATION or the POPULATION** — the check sees correctly and
+  decides wrongly, or looks at the wrong set. Identify by structure rather than
+  by a proxy, or enumerate the members instead of counting them. Worked example:
+  an exemption allowing "one detached pager in this file" excused whichever
+  pager came first, because two pagers on one page can be identical in every
+  respect the check could see. Deleting the exempt one and detaching a different
+  one left the count unmoved and every assertion green. Naming the exempt pager
+  fixed it; a bigger allowance never would have.
+
+The tell that separates them: ask whether a human reading the same input would
+get the right answer. If yes, the read is at fault. If a human would also have
+to guess, the classification is.
+
+## A guard that fires on correct code is worse than one that misses
+
+A miss costs whatever the defect costs. A false positive costs the guard — it
+gets suppressed, worked around, or deleted, and takes its true positives with
+it. The two are not symmetric and should not be traded off as if they were.
+
+This decides what to do when a property is **not decidable from what the check
+can see**, which is common and is not a failure. Do not add another exception
+each time one is found; that is the third-finding shape above, wearing the
+costume of thoroughness. Instead:
+
+- Widen the condition so it cannot have gaps, accepting misses. Prefer a PREFIX
+  or a structural property over a list of spellings — a list of Tailwind border
+  widths must keep up with `border-2`, `border-x`, the logical `border-s`,
+  arbitrary `border-[3px]` and whatever ships next, and every gap reports a
+  caller's deliberate border as dead. "Is any other border utility present"
+  cannot have that gap.
+- Say in the file which direction the check errs in, and why. An
+  under-reporting guard that documents itself is honest; one that silently
+  drifts toward under-reporting is the same code with the reader misled.
+
+State the remaining boundary rather than covering it badly. A named limitation
+is a check whose silence means something; an unnamed one is indistinguishable
+from coverage.
+
 ## A bare `catch` is only a defect when its fallback makes a CLAIM
 
 `catch { return conservative }` that degrades to caution is sound for the
