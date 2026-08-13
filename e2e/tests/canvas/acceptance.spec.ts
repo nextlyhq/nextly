@@ -115,7 +115,28 @@ test.describe("a canvas any Nextly editor could ship", () => {
   test("resolves a pointer collision to the innermost container", async ({
     request,
   }) => {
-    note(PLAN_POINT.collisionByDepth, "B-6");
+    // Recorded as falling short even though it passes, because what it measures
+    // is weaker than the property it is named for. Depth priority says the
+    // DEEPER container wins when both could claim the pointer; this canvas has
+    // no such rule — `plugin-page-builder` registers no collision priority
+    // anywhere, while `@dnd-kit/collision` uses the concept throughout — and its
+    // default detector ranks by pointer containment then by the dragged shape's
+    // overlap, neither of which takes depth as an input.
+    //
+    // It passes regardless because the nested container's own gap zones cover
+    // its interior, so the container under the pointer is also the owner of the
+    // zone under the pointer. Separating the two needs a position where an
+    // ancestor's zone competes INSIDE a descendant, and this fixture offers
+    // none: every ancestor zone lies outside the nested container's box.
+    //
+    // So the shortfall is the missing coverage rather than a missing behaviour,
+    // and it is recorded here rather than as an expected failure, which would
+    // report red for a canvas that answers every position correctly.
+    note(
+      PLAN_POINT.collisionByDepth,
+      "B-6",
+      "no position in this fixture makes two depths compete, so depth priority is unseparated"
+    );
     await driver.mountTree(await seedPage(request, NESTED_FIXTURE));
 
     // Searched, not aimed. Activation expands every gap zone from zero height,
@@ -158,13 +179,10 @@ test.describe("a canvas any Nextly editor could ship", () => {
       "the nested region must be tall enough to sample inside its edges"
     ).toBeGreaterThan(0);
 
-    // The descent starts ABOVE the region and enters it under its own steps.
-    // Carrying the pointer straight to the first position to be asserted on
-    // makes that reading the one taken immediately after a long jump, before
-    // the canvas has necessarily resolved the arrival — and the outer container,
-    // which owned the target throughout the approach, is then recorded as
-    // owning a position inside the nested one. Observed once in five runs, at
-    // the first sample and nowhere else.
+    // The descent starts ABOVE the region and enters it under its own steps, so
+    // no assertion rests on the reading taken immediately after the long jump
+    // that carries the pointer here. Every recorded sample then follows one
+    // small step, which is the same treatment for all of them.
     const approach = mapFramePointToHost(
       { x: centreX, y: inner!.top - EDGE_MARGIN_PX },
       origin,
@@ -180,8 +198,7 @@ test.describe("a canvas any Nextly editor could ship", () => {
     // The step is derived from the zone height, and it has to be: a step larger
     // than a zone steps OVER it, so the pointer lands inside a drop zone only by
     // coincidence and the exact assertion below is left with nothing to check.
-    // Measured at a fixed 6px step against 6px zones, 2 samples of 28 were
-    // inside any zone. Half the shortest zone cannot skip one.
+    // Half the shortest zone cannot skip one.
     //
     // Read while the drag is live, because activation is what gives the zones a
     // height at all — measured before it, every zone is 0 and the step derived
@@ -221,8 +238,6 @@ test.describe("a canvas any Nextly editor could ship", () => {
       // so a span taken before the descent describes a layout that has since
       // moved — and the pointer then sits outside the nested container while
       // an assertion written against the stale span still calls it inside.
-      // Measured: two runs in six recorded the outer container owning a zone
-      // that contained the pointer, at positions the stale span called inside.
       const live = (await driver.readBlockBoxes()).find(
         box => box.id === "nx-inner"
       );
@@ -282,17 +297,10 @@ test.describe("a canvas any Nextly editor could ship", () => {
     // gap immediately before the nested container is a legitimate candidate,
     // because the dragged shape overlaps it too — so an ancestor winning there
     // is not a fault, and asserting over every sample makes the test fail on
-    // correct behaviour. Measured: over five runs the root owned the target on
-    // two of them, at the topmost samples of the region and nowhere else.
+    // correct behaviour.
     //
-    // What this does NOT establish is depth priority, and the distinction
-    // matters because the title claims it. This canvas registers no collision
-    // priority at all — the term appears nowhere in `plugin-page-builder`, while
-    // `@dnd-kit/collision` uses it throughout — so the nested container wins
-    // these samples by being the zone under the pointer, not by being the
-    // deeper one. A canvas with no notion of depth passes this, which is why
-    // the boundary case is recorded as an acceptance shortfall rather than
-    // silently widened away.
+    // What this does NOT establish is depth priority; the annotation at the top
+    // of the test records that and why.
     const contained = zoneChoices.filter(choice => choice.containing >= 0);
     expect(
       [...new Set(contained.map(choice => choice.owner))],
@@ -304,9 +312,8 @@ test.describe("a canvas any Nextly editor could ship", () => {
     //
     // Two assertions rather than one, because the canvas answers by two rules.
     // "The nearest zone wins" is not one this canvas follows, so asserting it
-    // outright fails on a legitimate boundary tie. Measured: one sample of 28
-    // resolved to the zone one ordinal away from the nearest, with the pointer
-    // inside neither.
+    // outright fails on a legitimate boundary tie: a zone one ordinal from the
+    // nearest can win when the pointer is inside neither.
     //
     // Inside a zone, the answer is exact and has no tie to lose.
     expect(
