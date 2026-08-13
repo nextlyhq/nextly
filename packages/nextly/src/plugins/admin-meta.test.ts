@@ -942,7 +942,8 @@ describe("dormant routes against the enabled set", () => {
     // Both resolve to /plugins/foo/bar/x.
     const metas = buildPluginAdminMeta(
       [enabledOwner, disabledClaimant],
-      undefined
+      undefined,
+      {}
     );
     const claimant = metas.find(m => m.name === "foo/bar");
 
@@ -955,7 +956,7 @@ describe("dormant routes against the enabled set", () => {
    * than about a route that was never valid.
    */
   it("keeps it when no enabled plugin holds that path", () => {
-    const metas = buildPluginAdminMeta([disabledClaimant], undefined);
+    const metas = buildPluginAdminMeta([disabledClaimant], undefined, {});
     const claimant = metas.find(m => m.name === "foo/bar");
 
     expect(claimant?.whenEnabled?.routes).toEqual([
@@ -966,7 +967,8 @@ describe("dormant routes against the enabled set", () => {
   it("leaves the enabled owner's own route reported", () => {
     const metas = buildPluginAdminMeta(
       [enabledOwner, disabledClaimant],
-      undefined
+      undefined,
+      {}
     );
 
     expect(metas.find(m => m.name === "foo")?.routes).toEqual([
