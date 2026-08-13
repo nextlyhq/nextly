@@ -332,6 +332,41 @@ export async function dragUntilTarget(
 }
 
 /**
+ * The longest dwell a canvas may use INSTEAD of a distance margin.
+ *
+ * The requirement permits hysteresis expressed either way, so a compliant
+ * canvas is allowed to keep showing the previous target for this long after the
+ * pointer has moved. Every reader that asks "which target is active" therefore
+ * has to decide whether it is reading a settled answer or a permitted lag.
+ */
+export const DWELL_ALLOWANCE_MS = 100;
+
+/**
+ * Wait until the active target stops changing, or the permitted dwell elapses.
+ *
+ * A canvas whose hysteresis is a TIMER rather than a distance margin is
+ * entitled to lag: the pointer is over a new zone and the old target is still
+ * correct for up to {@link DWELL_ALLOWANCE_MS}. Every instantaneous read in this
+ * suite therefore asks a question the requirement does not oblige the canvas to
+ * answer yet, and a compliant dwell-based implementation fails a harness that
+ * insists on an immediate one.
+ *
+ * Returns the settled target. Polling rather than sleeping the full allowance so
+ * a distance-margin canvas — which answers immediately — costs one extra read
+ * rather than a fixed delay per call.
+ */
+export async function settledTarget(driver: CanvasDriver): Promise<number> {
+  let previous = await driver.readActiveTarget();
+  const deadline = Date.now() + DWELL_ALLOWANCE_MS;
+  while (Date.now() < deadline) {
+    const current = await driver.readActiveTarget();
+    if (current === previous) return current;
+    previous = current;
+  }
+  return previous;
+}
+
+/**
  * Carry the drag until the pointer is INSIDE a zone, not merely until one is
  * active.
  *
@@ -455,7 +490,13 @@ export async function dragToZoneEdge(
   let previous = first;
   for (let step = 0; step < 120; step += 1) {
     await driver.moveBy(0, FORWARD_STEP_PX);
-    const current = await driver.readActiveTarget();
+    // SETTLED, not sampled. A canvas using the permitted dwell instead of a
+    // distance margin can be traversed across a narrow candidate region faster
+    // than its timer expires, so an immediate read keeps returning the previous
+    // target and the walk concludes the resolver never crosses anything. Both
+    // suites assert `crossed` before their marker, so that compliant
+    // implementation would fail the harness rather than the requirement.
+    const current = await settledTarget(driver);
     if (current >= 0 && current !== previous) {
       crossed = current;
       break;
@@ -515,7 +556,7 @@ export interface JitterProbe {
  */
 export async function jitterAcrossEdge(
   driver: CanvasDriver,
-  { sweeps = 3, dwellAllowanceMs = 100 } = {}
+  { sweeps = 3, dwellAllowanceMs = DWELL_ALLOWANCE_MS } = {}
 ): Promise<JitterProbe> {
   // To P-2 first, then alternating by 4, so the samples are P-2 and P+2 —
   // genuinely opposite sides. Alternating +/-2 from P samples P+2 and P, both
@@ -541,6 +582,13 @@ export async function jitterAcrossEdge(
       marks.push(Date.now());
     }
     const log = await readTransitions();
+    // The TEARDOWN tail counts too. The recorder is still observing between the
+    // final move and the moment it disconnects, so a stall there lets a
+    // compliant dwell timer commit — and that commit lands in the log while
+    // every measured move window stays under the allowance. The probe would
+    // then read a terminal dwell as a jitter-induced transition, which is the
+    // one thing it exists to distinguish.
+    marks.push(Date.now());
     // The widest window that can hold two consecutive pointer EVENTS. Each
     // event fires somewhere inside its own command, so the pair from move `i`
     // and move `i+1` is contained by the span from BEFORE move `i` to AFTER

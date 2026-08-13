@@ -45,6 +45,7 @@ import {
   dragUntilTarget,
   jitterAcrossEdge,
   readShellState,
+  settledTarget,
 } from "./driver";
 import type { CanvasChromeReader, CanvasDriver } from "./driver";
 import { createPocChromeReader, createPocDriver } from "./poc-driver";
@@ -124,7 +125,12 @@ async function engineSignature(driver: CanvasDriver): Promise<{
   resolvesToContainingZone: boolean;
 }> {
   const containing = await driver.zoneContainingPointer();
-  const active = await driver.readActiveTarget();
+  // SETTLED, because a canvas using the permitted dwell rather than a distance
+  // margin is entitled to keep the previous target for up to the allowance
+  // after the pointer moves into a new zone. Sampling immediately reports
+  // `resolvesToContainingZone: false` for a correct engine, which fails the
+  // panel-side control before the marker even when both drags share it.
+  const active = await settledTarget(driver);
   return {
     dragging: await driver.isDragging(),
     resolvesToContainingZone: containing >= 0 && active === containing,
@@ -1015,12 +1021,10 @@ test.describe("a canvas any Nextly editor could ship", () => {
     await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
 
     const before = await driver.readTreeShape();
-    // Read through the SHARED probe. `checklist.spec.ts` asserts the same named
-    // property for the same fixture and driver, and two hand-written copies of
-    // one invariant drift: a correction applied to the richer probe never
-    // reaches this one, and the two disagree while both claiming point 12.
-    // Task 157 holds `checklist.spec.ts` closed, so this side adopts the shared
-    // reader now and that one follows when the file reopens.
+    // Read through the shared probe rather than assembled here. Two
+    // hand-written copies of one invariant drift: a correction applied to one
+    // never reaches the other, and both keep claiming the same property while
+    // disagreeing about it.
     const shellBefore = await readShellState(page, driver);
     await dragFromPanel(driver);
     await driver.cancel();

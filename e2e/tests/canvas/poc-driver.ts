@@ -355,8 +355,7 @@ export function createPocDriver(page: Page): CanvasDriver {
       pointer = { ...point };
       await page.mouse.move(pointer.x, pointer.y);
       await page.mouse.down();
-      pointer = { x: pointer.x + DRAG_THRESHOLD_PX, y: pointer.y };
-      await page.mouse.move(pointer.x, pointer.y);
+      await driver.crossActivationThreshold();
     },
 
     async pressAt(point: Point) {
@@ -366,10 +365,11 @@ export function createPocDriver(page: Page): CanvasDriver {
     },
 
     async crossActivationThreshold() {
-      // The same constant `startDragAt` uses, so this driver has ONE statement
-      // of its activation distance. A second number here would agree today and
-      // drift the moment dnd-kit's sensor is retuned, leaving a control that
-      // silently stops crossing the threshold it exists to cross.
+      // The one place this driver performs its activation motion. `startDragAt`
+      // calls it too, so the GESTURE is single-sourced rather than only the
+      // distance: sharing the constant alone leaves two code paths that agree
+      // today and diverge the moment activation needs a different direction,
+      // several moves, or another event — and both would still compile.
       pointer = { x: pointer.x + DRAG_THRESHOLD_PX, y: pointer.y };
       await page.mouse.move(pointer.x, pointer.y);
     },
