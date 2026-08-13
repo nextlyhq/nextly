@@ -50,6 +50,8 @@ import { useShellIsActive } from "./builder-shell";
  * skips an event another handler already prevented, so on Windows and Linux a toggle would open
  * the palette and then refuse to close it. Escape closes, which is what Radix already gives us
  * and what VS Code does. Better to not make the promise than to keep it on one platform.
+ *
+ * @experimental
  */
 export const COMMAND_PALETTE_KEYS = "mod+k";
 
@@ -58,6 +60,8 @@ export const COMMAND_PALETTE_KEYS = "mod+k";
  *
  * `id` rather than the label as the identity, because labels are user-facing text that gets
  * reworded, and a React key that changes on a copy edit remounts the row and drops its state.
+ *
+ * @experimental
  */
 export interface BuilderCommand {
   /**
@@ -87,6 +91,11 @@ export interface BuilderCommand {
   run: () => void;
 }
 
+/**
+ * What the host gives the palette.
+ *
+ * @experimental
+ */
 export interface CommandPaletteProps {
   /**
    * Everything the palette can run.
@@ -176,6 +185,8 @@ function groupAvailable(
  * Must be rendered inside the shell's `ShortcutProvider` — `useShortcuts` throws otherwise, which
  * is the right failure: a palette that silently registered nothing would look mounted and never
  * open.
+ *
+ * @experimental
  */
 export function CommandPalette(props: CommandPaletteProps): React.JSX.Element {
   return <PaletteSurface {...props} />;
@@ -448,7 +459,12 @@ function PaletteSurface({
               <CommandGroup heading={group}>
                 {groupCommands.map(command => (
                   <CommandItem
-                    key={command.id}
+                    // The searchable metadata is part of the key, so renaming a command REMOUNTS
+                    // its row. cmdk stores an item's keywords when its value is registered and
+                    // refreshes them only when that value changes — and the value is the id,
+                    // stable by contract. Without this the row shows its new label while cmdk
+                    // keeps filtering on the old one, so searching for what is on screen hides it.
+                    key={`${command.id}\u0000${command.label}\u0000${(command.keywords ?? []).join("\u0000")}`}
                     // The id ALONE, because cmdk keys selection on this value and a concatenation
                     // of free-form fields is not injective: `keywords: ["page"], id: "settings x"`
                     // and `keywords: ["page", "settings"], id: "x"` produce the same string, and

@@ -116,6 +116,17 @@ export interface ShortcutLayerOptions {
    * host chooses how deeply its own shortcuts are scoped, so any depth a modal picks can be tied
    * or beaten by a scope the host nests one level further. Priority is the axis the host does not
    * control: ordinary layers leave it at 0 and a modal raises it.
+   *
+   * KNOWN LIMIT, stated so it is not discovered: layers at EQUAL priority still compare depth
+   * before registration order. Two modals therefore stack by how deeply each is scoped rather
+   * than by which opened last, so a modal opened later at a shallower depth can sit under one
+   * opened earlier and nested deeper — while whatever renders them puts the newer on top.
+   *
+   * Fixing it needs the manager to record when a layer is ACTIVATED, which registration order
+   * does not capture: `useShortcuts` registers once at mount and updates its options in place, so
+   * a layer enabled later still carries its mount-time sequence. Not attempted here because
+   * nothing reaches it yet — `priority` is new and one layer sets it, so no two layers currently
+   * share a nonzero value.
    */
   priority?: number;
   /** Whether the layer participates at all. A disabled layer neither matches nor blocks. */

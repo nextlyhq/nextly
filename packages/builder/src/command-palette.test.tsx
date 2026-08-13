@@ -701,6 +701,33 @@ describe("the host can drive it", () => {
     expect(screen.getByText("Save and publish")).toBeTruthy();
   });
 
+  it("searches on a renamed label while the palette stays open", () => {
+    const commands: BuilderCommand[] = [
+      { id: "a", label: "Original name", run: noop },
+    ];
+    const { rerender } = mount(<CommandPalette commands={commands} />);
+    pressPaletteKey();
+
+    // Renamed with the id held stable, which is what the contract asks of a host.
+    rerender(
+      <ShortcutProvider>
+        <CommandPalette
+          commands={[{ id: "a", label: "Renamed thing", run: noop }]}
+        />
+      </ShortcutProvider>
+    );
+    expect(screen.getByText("Renamed thing")).toBeTruthy();
+
+    // cmdk refreshes an item's keywords only when its VALUE changes, and the value is the id.
+    // Without the metadata in the key, the row reads "Renamed thing" while cmdk still filters on
+    // "Original name" — so searching for what is on screen hides it.
+    fireEvent.change(screen.getByRole("combobox"), {
+      target: { value: "Renamed" },
+    });
+
+    expect(screen.getByText("Renamed thing")).toBeTruthy();
+  });
+
   it("names the search field, not just the dialog", () => {
     mount(<CommandPalette commands={[]} />);
     pressPaletteKey();
