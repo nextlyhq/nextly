@@ -47,6 +47,7 @@ import {
   type EmailDeliveryStatus,
 } from "../delivery-record";
 import { eraseRecipientDeliveries } from "../erase-recipient";
+import type { ResolvedEmailRetentionConfig } from "../retention-config";
 
 /**
  * Rows per insert statement.
@@ -169,14 +170,41 @@ export class EmailDeliveryService extends BaseService {
    */
   private readonly retention?: { maybeRun(maxBatches?: number): Promise<void> };
 
+  /**
+   * The live retention policy, or undefined when none was configured.
+   *
+   * A function rather than a value, because a runner built at boot outlives
+   * every hot reload: reading it per call is what lets a saved change take
+   * effect without a restart, and it is the same value the sweep runs on.
+   */
+  private readonly retentionPolicy?: () =>
+    | ResolvedEmailRetentionConfig
+    | undefined;
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
-    retention?: { maybeRun(maxBatches?: number): Promise<void> }
+    retention?: { maybeRun(maxBatches?: number): Promise<void> },
+    retentionPolicy?: () => ResolvedEmailRetentionConfig | undefined
   ) {
     super(adapter, logger);
     this.deliveries = deliveriesTableFor(this.dialect);
     this.retention = retention;
+    this.retentionPolicy = retentionPolicy;
+  }
+
+  /**
+   * Whether this install has asked to keep no delivery history at all.
+   *
+   * A window of zero is not "prune aggressively" — it is an operator saying
+   * they want none of this retained. Writing the row and deleting it later
+   * satisfies neither half of that: the digest is in the table until a pass is
+   * next due, which the gate holds off for a full interval, and the rows
+   * written after the final pass stay indefinitely because nothing offers
+   * another one. Not writing it is the only reading that means what it says.
+   */
+  private keepsNothing(): boolean {
+    return this.retentionPolicy?.()?.maxAgeMs === 0;
   }
 
   /**
@@ -212,25 +240,31 @@ export class EmailDeliveryService extends BaseService {
   async recordAll(inputs: EmailDeliveryInput[]): Promise<void> {
     if (inputs.length === 0) return;
 
-    const now = new Date();
-    // Generated ONCE, outside the retry below. The provider-reference retry
-    // rewrites the rows it was given, and reusing the ids is what makes it a
-    // REPLACEMENT of the refused rows rather than a second set of them.
-    const ids = inputs.map(() => randomUUID());
+    // A zero window means keep nothing, so nothing is written. The sweep is
+    // still offered below: rows recorded before the setting changed are
+    // exactly what an operator who has just asked for none of this expects to
+    // go, and skipping the offer would strand them permanently.
+    if (!this.keepsNothing()) {
+      const now = new Date();
+      // Generated ONCE, outside the retry below. The provider-reference retry
+      // rewrites the rows it was given, and reusing the ids is what makes it a
+      // REPLACEMENT of the refused rows rather than a second set of them.
+      const ids = inputs.map(() => randomUUID());
 
-    // Written in bounded chunks. One `values()` over an unbounded recipient
-    // list exceeds a dialect's bind-parameter or statement-size limit, and
-    // this method swallows its own failures by design -- so a message with a
-    // large BCC list would be dispatched and then lose EVERY row. Each chunk
-    // fails, retries and reports on its own, so one oversized or unlucky slice
-    // cannot take the rest of the batch with it.
-    for (let start = 0; start < inputs.length; start += INSERT_CHUNK_SIZE) {
-      const end = start + INSERT_CHUNK_SIZE;
-      await this.insertChunk(
-        inputs.slice(start, end),
-        ids.slice(start, end),
-        now
-      );
+      // Written in bounded chunks. One `values()` over an unbounded recipient
+      // list exceeds a dialect's bind-parameter or statement-size limit, and
+      // this method swallows its own failures by design -- so a message with a
+      // large BCC list would be dispatched and then lose EVERY row. Each chunk
+      // fails, retries and reports on its own, so one oversized or unlucky
+      // slice cannot take the rest of the batch with it.
+      for (let start = 0; start < inputs.length; start += INSERT_CHUNK_SIZE) {
+        const end = start + INSERT_CHUNK_SIZE;
+        await this.insertChunk(
+          inputs.slice(start, end),
+          ids.slice(start, end),
+          now
+        );
+      }
     }
 
     // Offered after the rows exist, never before: a pass that ran first would

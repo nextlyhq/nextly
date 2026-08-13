@@ -7,6 +7,7 @@
  */
 
 import { EmailErrorCode } from "../../domains/email/errors";
+import { activeEmailRetention } from "../../domains/email/retention-config";
 import { getAttachmentLimits } from "../../domains/email/services/attachment-limits";
 import { EmailDeliveryService } from "../../domains/email/services/email-delivery-service";
 import type { EmailAttachmentSource } from "../../domains/email/services/email-service";
@@ -47,7 +48,12 @@ export function registerEmailServices(ctx: RegistrationContext): void {
           emailPolicy: config.emailRetention,
           gate: new MetaRetentionGate(adapter),
           logger,
-        })
+        }),
+        // Read per call, and through `activeEmailRetention`, so a window saved
+        // during development governs what is RECORDED as immediately as it
+        // governs what is swept. A value captured here would leave the two
+        // halves of one policy disagreeing after any hot reload.
+        () => activeEmailRetention(config.emailRetention)
       )
   );
 
