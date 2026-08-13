@@ -59,17 +59,7 @@ const FONT_PACKAGE_PATTERN = /@fontsource(?:-variable)?\/[a-z0-9-]+/g;
 export async function collectFontDependencies(
   templateDirs: readonly string[]
 ): Promise<string[]> {
-  // Merged by RELATIVE path, later directory winning, because that is what the copy does: a
-  // template that overrides `src/app/layout.tsx` REPLACES base's rather than adding to it. Taking
-  // the union instead would install the faces of a layout the project never receives — a blank
-  // scaffold declaring Geist because base's overwritten layout mentioned it.
-  const effective = new Map<string, string>();
-  for (const root of templateDirs) {
-    if (!root || !(await fs.pathExists(root))) continue;
-    for (const file of await walkSourceFiles(root)) {
-      effective.set(path.relative(root, file), file);
-    }
-  }
+  const effective = await effectiveTemplateFiles(templateDirs);
 
   const found = new Set<string>();
   for (const file of effective.values()) {
@@ -80,6 +70,48 @@ export async function collectFontDependencies(
   }
 
   return [...found].sort();
+}
+
+/**
+ * The files a scaffold of these template directories actually RECEIVES, keyed by their path
+ * inside the project.
+ *
+ * Merged by relative path with the later directory winning, because that is what the copy does: a
+ * template overriding `src/app/layout.tsx` REPLACES base's rather than adding to it. Taking the
+ * union instead would describe a project nobody receives — a blank scaffold declaring the faces of
+ * a layout that was overwritten.
+ *
+ * Shared rather than recomputed per question. Every property derived from "what does this scaffold
+ * contain" has to agree about which files those are, and two walks written months apart would not.
+ */
+async function effectiveTemplateFiles(
+  templateDirs: readonly string[]
+): Promise<Map<string, string>> {
+  const effective = new Map<string, string>();
+  for (const root of templateDirs) {
+    if (!root || !(await fs.pathExists(root))) continue;
+    for (const file of await walkSourceFiles(root)) {
+      effective.set(path.relative(root, file), file);
+    }
+  }
+  return effective;
+}
+
+/** Where a template puts the Pagefind index builder, if it ships one. */
+const SEARCH_INDEX_SCRIPT = path.join("scripts", "build-search-index.mjs");
+
+/**
+ * Whether the scaffold receives the Pagefind index builder.
+ *
+ * READ from the merged template tree rather than inferred from the project type, for the same
+ * reason the font list is: a hand-kept mapping of "which templates have search" is a second answer
+ * to a question the templates already answer, and the two agree only until someone adds one.
+ */
+export async function templateShipsSearchIndex(
+  templateDirs: readonly string[]
+): Promise<boolean> {
+  const effective = await effectiveTemplateFiles(templateDirs);
+  return effective.has(SEARCH_INDEX_SCRIPT);
 }
 
 /**
@@ -504,11 +536,18 @@ export async function generatePackageJson(
     tailwindcss: PINNED_VERSIONS.tailwindcss,
     eslint: PINNED_VERSIONS.eslint,
     "eslint-config-next": runtimeVersions["eslint-config-next"],
-    // Pagefind powers /search in the blog template. Zero-config
-    // static index generated at `next build` time. Templates that
-    // don't ship a /search page simply won't invoke it.
-    pagefind: "^1.1.0",
   };
+
+  // Derived from the merged template tree, so a template that gains or loses the
+  // Pagefind builder changes the generated manifest without anyone editing a list.
+  const shipsSearchIndex = await templateShipsSearchIndex(templateDirs);
+
+  // Pagefind builds the static index behind /search. DECLARED only where the
+  // builder ships, because the index script invokes it through `node`, which
+  // resolves from node_modules — an undeclared dependency that happens to be
+  // fetched on demand by some other route would build here and fail for a user
+  // whose registry or network says otherwise.
+  if (shipsSearchIndex) devDependencies.pagefind = "^1.1.0";
 
   // NOTE: the build-script allowlist (better-sqlite3, sharp, esbuild,
   // unrs-resolver) is NOT emitted here. pnpm 11 no longer reads the `pnpm`
@@ -526,12 +565,29 @@ export async function generatePackageJson(
       // prompts, and child supervision. `nextly dev` is gone; the only
       // supported dev command is the standard `next dev`.
       dev: "next dev --turbopack",
-      // Build: migrate DB + compile Next.js + (if present) generate
-      // the Pagefind search index. Templates without the search
-      // script silently skip the last step.
-      build:
-        "nextly migrate && next build && (test -f scripts/build-search-index.mjs && node scripts/build-search-index.mjs || true)",
-      "search:index": "node scripts/build-search-index.mjs",
+      // Build: migrate the database, compile Next.js, and generate the Pagefind
+      // search index for the templates that ship its builder.
+      //
+      // Whether that last step appears is decided HERE, from the files the
+      // scaffold actually received, rather than by a shell conditional in the
+      // script. Two reasons, and both were live:
+      //
+      // `npm run` uses cmd.exe on Windows, which has no `test` and no `true` —
+      // so the `(test -f … || true)` form this replaces failed for every Windows
+      // user, after `next build` had already succeeded. `&&` is all that remains,
+      // and cmd.exe understands it.
+      //
+      // And `|| true` turned a failed index build into a successful one. The
+      // search page then ships pointing at an index that was never written,
+      // which fails in the browser rather than in CI.
+      build: shipsSearchIndex
+        ? "nextly migrate && next build && node scripts/build-search-index.mjs"
+        : "nextly migrate && next build",
+      // Offered only where the file exists. A script that always fails is worse
+      // than an absent one: it reads as a supported command.
+      ...(shipsSearchIndex
+        ? { "search:index": "node scripts/build-search-index.mjs" }
+        : {}),
       start: "next start",
       lint: "next lint",
       nextly: "nextly",
