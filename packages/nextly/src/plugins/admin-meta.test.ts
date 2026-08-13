@@ -1070,6 +1070,36 @@ describe("adminMetaPermissions", () => {
   });
 
   /**
+   * Boot merges a plugin's contributed entities into the config before asking
+   * whether a `publish` declaration names one; this endpoint reads a config
+   * where they are still absent. Without widening, a plugin publishing to a
+   * collection IT contributes is reported as owning a permission the seeder
+   * takes over and keeps ownerless.
+   *
+   * `export` is the positive control: a genuine custom permission on the same
+   * plugin, which must survive the widening.
+   */
+  it("counts a plugin's own contributed collection as an entity", () => {
+    const collected = adminMetaPermissions({
+      plugins: asPlugins([
+        {
+          name: "@acme/forms",
+          version: "1.0.0",
+          contributes: {
+            collections: [{ slug: "submissions" }],
+            permissions: [
+              { action: "publish", resource: "submissions" },
+              { action: "export", resource: "submissions" },
+            ],
+          },
+        },
+      ]),
+    });
+
+    expect(collected.map(p => p.slug)).toEqual(["export-submissions"]);
+  });
+
+  /**
    * A reserved system resource is a different REASON but the same rejection,
    * and it is judged against the same pre-transform list — a transformer can
    * drop the offending plugin just as it can resolve a duplicate. Boot still

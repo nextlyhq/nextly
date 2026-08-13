@@ -271,12 +271,45 @@ function mountableRoutes(
  * an invalid config should be reported, here it should not blank the admin.
  *
  * Only the collision is absorbed. Anything else is a defect, and rethrows.
+ *
+ * The entity slugs are widened with each plugin's CONTRIBUTED collections and
+ * singles before folding. Whether a `publish` declaration is the plugin's own
+ * or one the seeder owns is decided by whether its resource names an entity —
+ * and boot merges contributed entities into the config before that question is
+ * asked, while this endpoint reads a config where they are still absent. Folded
+ * against the narrow view, a plugin declaring `publish` for a collection it
+ * contributes itself would be reported as owning a permission the seeder takes
+ * over.
+ *
+ * This closes the CONFIG half of that gap and not the database half: a Schema
+ * Builder collection lives in `dynamic_collections` and is unknowable here, so
+ * a declaration naming one is still collected as plugin-owned. That limit is
+ * the collector's own and predates this function — see the Builder-entity case
+ * in `seed-system-permissions.integration.test.ts`.
  */
 export function adminMetaPermissions(
   config: PermissionConfigSource & { plugins?: PluginDefinition[] }
 ): CollectedPermission[] {
+  const plugins = config.plugins ?? [];
+  const withContributed: PermissionConfigSource = {
+    ...config,
+    collections: [
+      ...(config.collections ?? []),
+      ...plugins.flatMap(plugin =>
+        pluginCollectionSlugs(plugin).map(slug => ({ slug }))
+      ),
+    ],
+    singles: [
+      ...(config.singles ?? []),
+      ...plugins.flatMap(
+        plugin =>
+          plugin.contributes?.singles?.map(s => ({ slug: s.slug })) ?? []
+      ),
+    ],
+  };
+
   try {
-    return collectCustomPermissions(config, config.plugins ?? []);
+    return collectCustomPermissions(withContributed, plugins);
   } catch (error) {
     if (isPermissionCollision(error)) return [];
     throw error;
