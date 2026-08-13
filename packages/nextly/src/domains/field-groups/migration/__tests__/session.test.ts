@@ -1,5 +1,4 @@
 import type { SQL } from "drizzle-orm";
-import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it, vi } from "vitest";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -7,67 +6,20 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { NextlyError } from "../../../../errors/nextly-error";
 import {
   getMigrationLockDdl,
+  LOCK_RENEW_INTERVAL_MS,
+  LOCK_TTL_SECONDS,
   MIGRATION_LOCK_TABLE,
+  observeMigrationLock,
   withMigrationSession,
   type LockObservation,
   type MigrationDialect,
 } from "../session";
-
-/**
- * Interpret a statement the way a driver would, against a one-row lock table.
- *
- * The statement is compiled through a real `PgDialect` first, so the double is
- * exercising the SQL and the bound parameters an adapter would actually hand
- * its driver. Reimplementing the query-builder calls instead is what let this
- * module pass its tests while being unable to run at all: the typed CRUD path
- * resolves a table through the schema registry, which has never declared this
- * one.
- */
-function interpret(
-  statement: SQL,
-  rows: Map<number, { id: number; owner: string | null }>
-): Record<string, unknown>[] {
-  const { sql: text, params } = new PgDialect().sqlToQuery(statement);
-  const flat = text.replace(/\s+/g, " ").trim();
-
-  const select = /^SELECT "(\w+)" FROM "([^"]+)" WHERE "id" = \$1$/.exec(flat);
-  if (select) {
-    assertLockTable(select[2]);
-    const row = rows.get(params[0] as number);
-    return row === undefined ? [] : [{ ...row }];
-  }
-
-  const claim = /^UPDATE "([^"]+)" SET "owner" = \$1 WHERE "id" = \$2$/.exec(
-    flat
-  );
-  if (claim) {
-    assertLockTable(claim[1]);
-    const row = rows.get(params[1] as number);
-    if (row === undefined) return [];
-    row.owner = params[0] as string | null;
-    return [];
-  }
-
-  const release =
-    /^UPDATE "([^"]+)" SET "owner" = NULL WHERE "id" = \$1 AND "owner" = \$2$/.exec(
-      flat
-    );
-  if (release) {
-    assertLockTable(release[1]);
-    const row = rows.get(params[0] as number);
-    // A release naming an owner must not clear a row held by someone else.
-    if (row !== undefined && row.owner === params[1]) row.owner = null;
-    return [];
-  }
-
-  throw new Error(`unrecognised statement: ${flat}`);
-}
-
-function assertLockTable(name: string | undefined): void {
-  if (name !== MIGRATION_LOCK_TABLE) {
-    throw new Error(`relation "${String(name)}" does not exist`);
-  }
-}
+import {
+  createLockClock,
+  createLockRow,
+  interpretLockStatement,
+  isRenewalStatement,
+} from "./helpers/migration-lock-double";
 
 /**
  * A single-row lock table backed by an object, plus the two behaviours of the
@@ -77,6 +29,12 @@ function assertLockTable(name: string | undefined): void {
  *   error thrown inside one does NOT come back out intact;
  * - each `transaction()` call takes a connection, so a fake that never counts
  *   them cannot show that the lock stops holding one.
+ *
+ * The lock's own semantics come from {@link interpretLockStatement}, shared with the other suites
+ * that drive this module. Statements reach it compiled through a real `PgDialect`, so the double
+ * exercises the SQL and the bound parameters an adapter would actually hand its driver — which is
+ * what this module needs, having once passed its tests while being unable to run at all because the
+ * typed CRUD path resolves a table through a registry that never declared this one.
  */
 function createAdapter(
   options: {
@@ -84,12 +42,21 @@ function createAdapter(
     lockReadError?: unknown;
     /** Model a database on which no migration has ever run, so the lock table is absent. */
     lockTableMissing?: boolean;
+    /**
+     * Seconds from now until the seeded claim lapses; negative for one that already has.
+     *
+     * Absent leaves the expiry NULL, which is the row a release before this column existed left
+     * behind and which the session reads as live.
+     */
+    expiresIn?: number;
   } = {}
 ) {
-  const rows = new Map<number, { id: number; owner: string | null }>();
-  if (options.heldBy !== undefined) {
-    rows.set(1, { id: 1, owner: options.heldBy });
-  }
+  const clock = createLockClock();
+  const lock = createLockRow(options.heldBy, {
+    clock,
+    expiresAt:
+      options.expiresIn === undefined ? null : clock.now() + options.expiresIn,
+  });
   const ddl: string[] = [];
   let open = 0;
   let peakOpen = 0;
@@ -97,15 +64,18 @@ function createAdapter(
   const ctx = {
     lockRow: vi.fn(async () => undefined),
     insert: vi.fn(async (_t: string, data: Record<string, unknown>) => {
-      const id = data.id as number;
-      if (rows.has(id)) throw new Error("duplicate key");
-      rows.set(id, { id, owner: (data.owner as string | null) ?? null });
+      if (lock.seeded) throw new Error("duplicate key");
+      lock.seeded = true;
+      lock.owner = (data.owner as string | null) ?? null;
+      lock.expiresAt = null;
       return data;
     }),
     runStatement: vi.fn(async (statement: SQL) => {
-      interpret(statement, rows);
+      interpretLockStatement(lock, statement);
     }),
-    queryStatement: vi.fn(async (statement: SQL) => interpret(statement, rows)),
+    queryStatement: vi.fn(async (statement: SQL) =>
+      interpretLockStatement(lock, statement)
+    ),
   };
 
   const adapter = {
@@ -119,7 +89,7 @@ function createAdapter(
       // Models a role that may read the marker and registry but not the lock
       // table -- the case `tableExists` cannot distinguish from absence.
       if (options.lockReadError !== undefined) throw options.lockReadError;
-      return interpret(statement, rows);
+      return interpretLockStatement(lock, statement);
     }),
     tableExists: vi.fn(async () => options.lockTableMissing !== true),
     transaction: vi.fn(async (work: (c: unknown) => Promise<unknown>) => {
@@ -142,11 +112,12 @@ function createAdapter(
     adapter,
     ctx,
     ddl,
-    owner: () => rows.get(1)?.owner ?? null,
+    clock,
+    owner: () => lock.owner,
+    expiresAt: () => lock.expiresAt,
     /** Model another process claiming the row mid-run. */
     takeOver: (owner: string | null) => {
-      const row = rows.get(1);
-      if (row !== undefined) row.owner = owner;
+      if (lock.seeded) lock.owner = owner;
     },
     peakOpen: () => peakOpen,
   };
@@ -602,6 +573,180 @@ describe("field-group migration session", () => {
     );
 
     expect(observed).toEqual({ kind: "not-held" });
+  });
+
+  // 🔴 The claim carries an expiry, and this is the positive control for every test below it: if
+  // the claim stopped writing one, the column would be NULL, every liveness assertion would read
+  // "never expires", and a lock that can no longer be taken over would pass as one that renews.
+  it("writes an expiry with the claim", async () => {
+    const h = createAdapter({ heldBy: null });
+    let expiryDuringRun: number | null = null;
+    await withMigrationSession(
+      { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
+      async () => {
+        expiryDuringRun = h.expiresAt();
+      }
+    );
+    expect(expiryDuringRun).toBe(h.clock.now() + LOCK_TTL_SECONDS);
+    // And the release takes it away again, so a freed row cannot read as a lapsed claim.
+    expect(h.expiresAt()).toBeNull();
+  });
+
+  // A run that died holding the row stopped renewing, so its expiry passing is an OBSERVATION that
+  // it stopped rather than a guess about how long a migration should take. Before this, the only
+  // remedy was an operator clearing the row by hand.
+  it("takes over a claim whose expiry has passed", async () => {
+    const h = createAdapter({ heldBy: "dead-run", expiresIn: -1 });
+    let ownerDuringRun: string | null = null;
+
+    await withMigrationSession(
+      { adapter: h.adapter, dialect: "postgresql", label: "run-2" },
+      async () => {
+        ownerDuringRun = h.owner();
+      }
+    );
+
+    expect(ownerDuringRun).toMatch(/^run-2#/);
+  });
+
+  // 🔴 The deliberate asymmetry. A NULL expiry is the row a release before this column existed left
+  // behind, and the process that wrote it may still be running: stealing the lock from a live
+  // migration is unrecoverable, while refusing until an operator clears a stale row is merely
+  // inconvenient. So age alone never makes that row claimable.
+  it("refuses a claim with no expiry however much time has passed", async () => {
+    const h = createAdapter({ heldBy: "pre-expiry-run" });
+    h.clock.advance(LOCK_TTL_SECONDS * 1000);
+    const ran = vi.fn();
+
+    await expect(
+      withMigrationSession(
+        { adapter: h.adapter, dialect: "postgresql", label: "run-2" },
+        async () => ran()
+      )
+    ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+    expect(ran).not.toHaveBeenCalled();
+    expect(h.owner()).toBe("pre-expiry-run");
+  });
+
+  // The observation and the acquisition answer the same question, so they must not be able to
+  // disagree: naming a dead claim's owner would report contention that no contender would meet, and
+  // the dry-run outcome carrying it would explain a torn read with a run that had already stopped.
+  it("observes a lapsed claim as not-held, exactly as a contender would find it", async () => {
+    const h = createAdapter({ heldBy: "dead-run", expiresIn: -1 });
+    let observed: LockObservation | undefined;
+
+    await withMigrationSession(
+      {
+        adapter: h.adapter,
+        dialect: "postgresql",
+        label: "preview-7",
+        mode: "observe",
+      },
+      async session => {
+        observed = session.lock;
+      }
+    );
+
+    expect(observed).toEqual({ kind: "not-held" });
+  });
+
+  // 🔴 What makes the short TTL safe. Without the renewal a migration outliving its TTL would have
+  // the row taken from underneath it and two runs would rename the same objects — strictly worse
+  // than the refuse-always behaviour this replaces.
+  it("keeps its claim live through a run that outlasts the ttl", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createAdapter({ heldBy: null });
+      let observedMidRun: LockObservation | undefined;
+
+      await withMigrationSession(
+        { adapter: h.adapter, dialect: "postgresql", label: "long-run" },
+        async () => {
+          // Twice the TTL passes on the database's clock, with the renewal firing as it would in a
+          // migration that genuinely takes this long.
+          const step = LOCK_RENEW_INTERVAL_MS / 1000;
+          for (
+            let elapsed = 0;
+            elapsed < LOCK_TTL_SECONDS * 2;
+            elapsed += step
+          ) {
+            h.clock.advance(step);
+            await vi.advanceTimersByTimeAsync(LOCK_RENEW_INTERVAL_MS);
+          }
+          // Read through the production observation rather than the model's field: this is the
+          // answer a second run would get, which is the property that matters.
+          observedMidRun = await observeMigrationLock(h.adapter, "postgresql");
+        }
+      );
+
+      expect(observedMidRun).toMatchObject({ kind: "held" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A renewal that comes back saying the row names someone else means the work in flight is no
+  // longer protected. The run fails loudly rather than finishing against a database another run may
+  // already be rewriting.
+  it("fails the run when its claim was taken over", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createAdapter({ heldBy: null });
+      const reachedTheEnd = vi.fn();
+
+      const run = withMigrationSession(
+        { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
+        async () => {
+          h.takeOver("someone-else");
+          await vi.advanceTimersByTimeAsync(LOCK_RENEW_INTERVAL_MS);
+          reachedTheEnd();
+        }
+      );
+
+      await expect(run).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+
+      // 🔴 The caller sees the refusal while the work is STILL RUNNING — `reachedTheEnd` has not
+      // been reached at the moment the rejection lands, and runs to completion afterwards anyway.
+      // Asserted in both directions rather than left implicit, because it is the documented limit
+      // of this mechanism: JavaScript has no preemption, so losing the claim stops the run being
+      // WAITED on and cannot stop what it had already started. A reader who assumed cancellation
+      // would be building on a guarantee that is not here.
+      expect(reachedTheEnd).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reachedTheEnd).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A renewal that fails is not proof the claim is gone, but it is proof it is no longer being
+  // maintained — and the next attempt may not arrive before the TTL. The safe error is stopping a
+  // run that still holds the lock, not continuing one that does not.
+  it("fails the run when a renewal cannot be made at all", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createAdapter({ heldBy: null });
+      const realRunStatement = h.ctx.runStatement.getMockImplementation();
+      h.ctx.runStatement.mockImplementation(async (statement: SQL) => {
+        // Only the renewal fails. Failing every write for a window would also break the claim or
+        // the release, and the run would then abort for a reason that has nothing to do with this.
+        if (isRenewalStatement(statement)) {
+          throw new Error("connection reset");
+        }
+        await realRunStatement?.(statement);
+      });
+
+      await expect(
+        withMigrationSession(
+          { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
+          async () => {
+            await vi.advanceTimersByTimeAsync(LOCK_RENEW_INTERVAL_MS);
+          }
+        )
+      ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("uses a lock table distinct from the schema pipeline's", () => {

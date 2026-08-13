@@ -13,11 +13,14 @@
  * all three dialects, and is reached through the adapter's typed API instead of
  * dialect-specific SQL.
  *
- * There is deliberately no TTL and no auto-steal. Expiry needs a trusted clock,
- * and skew between application servers is precisely the case where two runs
- * would both conclude the lock had expired and proceed together. A run that
- * dies holding the lock leaves it held, and an operator clears it. For
- * something that rewrites customer data, refusing is the correct failure.
+ * A claim carries an expiry that its holder RENEWS for as long as it is working,
+ * so an expired claim is an observation that the holder stopped rather than a
+ * guess about how long a migration ought to take. Every comparison is made by
+ * the database, in one expression, so no part of it depends on two application
+ * servers' clocks agreeing — which is what makes expiry safe here and is exactly
+ * what a bare TTL cannot promise. A row whose expiry is NULL predates this
+ * column and is treated as live: refusing until an operator clears it is
+ * recoverable, and stealing the lock from a run that is still writing is not.
  *
  * @module domains/field-groups/migration/session
  */
@@ -47,7 +50,7 @@ export const MIGRATION_LOCK_TABLE = "nextly_field_group_lock";
 const LOCK_ROW_ID = 1;
 
 /**
- * The single statement that reads the lock row's owner.
+ * The single statement that reads the lock row: who holds it, and whether that claim is still live.
  *
  * Issued as a Drizzle statement rather than through the typed query builder:
  * that resolves a table through the schema registry and rejects any name the
@@ -55,13 +58,39 @@ const LOCK_ROW_ID = 1;
  * rather than declared in the static schema — the same shape the schema
  * pipeline's own `nextly_migrate_lock` has.
  *
- * Held as one function because two executors run it, and a second copy would be
- * free to disagree about which row the owner lives in.
+ * 🔴 Liveness is decided HERE, in the same row read, because two callers ask it and they must not be
+ * able to disagree. `acquire` uses it to decide whether to refuse; `observeMigrationLock` uses it to
+ * tell an operator who holds the lock. A second spelling of "is this claim still live" would let a
+ * preview report contention from a claim that a run would have taken over, and the two would look
+ * correct read separately.
+ *
+ * The liveness test is a CASE rather than a boolean expression because the dialects return booleans
+ * differently — `true`, `1` and `"1"` all occur — and a caller comparing against one of those three
+ * is a per-dialect defect that unit doubles cannot see. An integer normalises through `Number()` on
+ * every driver.
  */
-function ownerQuery(): SQL {
-  return sql`SELECT ${sql.identifier("owner")}, ${sql.identifier("expires_at")}
+function lockStateQuery(dialect: MigrationDialect): SQL {
+  return sql`SELECT ${sql.identifier("owner")},
+      CASE WHEN ${sql.identifier("owner")} IS NOT NULL
+            AND (${sql.identifier("expires_at")} IS NULL
+                 OR ${sql.identifier("expires_at")} > ${nowExpression(dialect)})
+           THEN 1 ELSE 0 END AS ${sql.identifier("live")}
       FROM ${sql.identifier(MIGRATION_LOCK_TABLE)}
       WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}`;
+}
+
+/** The lock row as the database reports it, with liveness already decided there. */
+interface LockState {
+  readonly owner: string | null;
+  readonly live: boolean;
+}
+
+/** Read the row, or `undefined` when there is no row to read. */
+function toLockState(
+  row: { owner: string | null; live: unknown } | undefined
+): LockState | undefined {
+  if (row === undefined) return undefined;
+  return { owner: row.owner, live: Number(row.live) === 1 };
 }
 
 /**
@@ -74,8 +103,8 @@ function ownerQuery(): SQL {
  * The interval is a quarter of the TTL, so four consecutive renewals have to fail before the claim
  * lapses. A single slow query or a brief connection blip cannot lose a lock that is still held.
  */
-const LOCK_TTL_SECONDS = 120;
-const LOCK_RENEW_INTERVAL_MS = (LOCK_TTL_SECONDS / 4) * 1000;
+export const LOCK_TTL_SECONDS = 120;
+export const LOCK_RENEW_INTERVAL_MS = (LOCK_TTL_SECONDS / 4) * 1000;
 
 /**
  * The database's own clock, and an expiry computed from it, per dialect.
@@ -103,12 +132,16 @@ function expiryExpression(dialect: MigrationDialect): SQL {
   return sql`now() + make_interval(secs => ${LOCK_TTL_SECONDS})`;
 }
 
-/** The owner, read inside the transaction that is about to decide the claim. */
-async function readOwner(
-  ctx: TransactionContext
-): Promise<{ owner: string | null } | undefined> {
-  const rows = await ctx.queryStatement<{ owner: string | null }>(ownerQuery());
-  return rows[0];
+/** The row, read inside the transaction that is about to decide the claim. */
+async function readLockState(
+  ctx: TransactionContext,
+  dialect: MigrationDialect
+): Promise<LockState | undefined> {
+  const rows = await ctx.queryStatement<{
+    owner: string | null;
+    live: unknown;
+  }>(lockStateQuery(dialect));
+  return toLockState(rows[0]);
 }
 
 /** Renew this claim, and report whether it is still ours. */
@@ -128,7 +161,7 @@ async function renew(
     // Read back rather than trusting the update's affected-row count, which dialects report
     // inconsistently. If the row no longer names this claim, someone took the lock over and the work
     // this renewal was protecting is no longer protected.
-    const after = await readOwner(ctx);
+    const after = await readLockState(ctx, dialect);
     return after?.owner === claim;
   });
 }
@@ -136,19 +169,21 @@ async function renew(
 /**
  * The same read, on the adapter's own connection.
  *
- * Separate executor rather than a separate query — both issue `ownerQuery()`,
- * so the two cannot drift into disagreeing about which row the owner lives in.
- * An observing caller wants no transaction at all: opening one to read a single
- * row asks a read-only role for more than the read needs, which is the entire
- * failure this path exists to avoid.
+ * Separate executor rather than a separate query — both issue `lockStateQuery()`,
+ * so the two cannot drift into disagreeing about which row the owner lives in
+ * or about when a claim has lapsed. An observing caller wants no transaction at
+ * all: opening one to read a single row asks a read-only role for more than the
+ * read needs, which is the entire failure this path exists to avoid.
  */
-async function readOwnerOutsideTransaction(
-  adapter: DrizzleAdapter
-): Promise<{ owner: string | null } | undefined> {
-  const rows = await adapter.queryStatement<{ owner: string | null }>(
-    ownerQuery()
-  );
-  return rows[0];
+async function readLockStateOutsideTransaction(
+  adapter: DrizzleAdapter,
+  dialect: MigrationDialect
+): Promise<LockState | undefined> {
+  const rows = await adapter.queryStatement<{
+    owner: string | null;
+    live: unknown;
+  }>(lockStateQuery(dialect));
+  return toLockState(rows[0]);
 }
 
 /** Whether the single lock row is present, read outside any transaction. */
@@ -231,14 +266,21 @@ export function isMissingTable(
  * through `information_schema`, which is filtered by privilege on Postgres and MySQL: a table the
  * role cannot see is reported absent, and the caller would then be told nothing holds the lock
  * while a migration was holding it.
+ *
+ * A LAPSED claim reports `not-held`, because that is what a run contending for the row would find:
+ * `acquire` takes it over. Reporting the dead claim's owner instead would name a holder that
+ * excludes nobody, and the dry-run outcome that carries this observation would explain a torn read
+ * with contention that cannot happen.
  */
 export async function observeMigrationLock(
   adapter: DrizzleAdapter,
   dialect: MigrationDialect
 ): Promise<LockObservation> {
   try {
-    const owner = (await readOwnerOutsideTransaction(adapter))?.owner ?? null;
-    return owner === null ? { kind: "not-held" } : { kind: "held", owner };
+    const state = await readLockStateOutsideTransaction(adapter, dialect);
+    return state?.live === true && state.owner !== null
+      ? { kind: "held", owner: state.owner }
+      : { kind: "not-held" };
   } catch (error) {
     // The lock table is created by the first run that ever claims it, so its absence is a complete
     // answer: nothing can hold a lock whose table does not exist.
@@ -594,7 +636,7 @@ async function acquire(
     // ends, so the read below cannot be overtaken between reading and writing.
     await ctx.lockRow(MIGRATION_LOCK_TABLE, LOCK_ROW_ID);
 
-    const row = await readOwner(ctx);
+    const row = await readLockState(ctx, dialect);
     if (row === undefined) return { ok: false, heldBy: null };
 
     // 🔴 An occupied row refuses only while its claim is still LIVE. The holder renews for as long
@@ -607,20 +649,13 @@ async function acquire(
     // running. Stealing the lock from a live migration is unrecoverable; refusing until an operator
     // clears a stale row is merely inconvenient, and the state is transient anyway.
     //
-    // The comparison is made by the DATABASE, in one expression, so nothing depends on the two
-    // contenders' clocks agreeing.
-    const stillLive = await ctx.queryStatement<{ live: unknown }>(
-      sql`SELECT 1 AS ${sql.identifier("live")}
-          FROM ${sql.identifier(MIGRATION_LOCK_TABLE)}
-          WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}
-            AND ${sql.identifier("owner")} IS NOT NULL
-            AND (${sql.identifier("expires_at")} IS NULL
-                 OR ${sql.identifier("expires_at")} > ${nowExpression(dialect)})`
-    );
-    if (stillLive.length > 0) {
-      return { ok: false, heldBy: row.owner };
-    }
+    // The comparison was made by the DATABASE inside `lockStateQuery`, in one expression, so nothing
+    // depends on the two contenders' clocks agreeing.
+    if (row.live) return { ok: false, heldBy: row.owner };
 
+    // The row is free or its claim has lapsed, and the row lock above means nothing can change that
+    // before this commits — so the write names no owner. Predicating it on the owner we just read
+    // would fail to take over a lapsed claim, which is the state this whole column exists to resolve.
     await ctx.runStatement(
       sql`UPDATE ${sql.identifier(MIGRATION_LOCK_TABLE)}
           SET ${sql.identifier("owner")} = ${claim},
@@ -632,7 +667,7 @@ async function acquire(
     // inconsistently across dialects, and an absent row would otherwise update
     // nothing and still look like a successful claim, running the migration
     // with no exclusion at all.
-    const after = await readOwner(ctx);
+    const after = await readLockState(ctx, dialect);
     if (after?.owner !== claim) {
       return { ok: false, heldBy: after?.owner ?? null };
     }
