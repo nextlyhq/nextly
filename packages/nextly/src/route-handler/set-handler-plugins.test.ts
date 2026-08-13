@@ -15,9 +15,10 @@ import type { PluginDefinition } from "../plugins/plugin-context";
 // a fresh store, and without this that re-import pulls the whole dependency
 // graph six times — measured at 10.07s against vitest's 10s default, which is
 // a timeout waiting for a loaded CI machine rather than a real failure.
+const servicesRegistered = vi.fn(() => true);
 vi.mock("../di", () => ({
   registerServices: vi.fn(),
-  isServicesRegistered: () => true,
+  isServicesRegistered: () => servicesRegistered(),
   shutdownServices: vi.fn(),
   getService: () => undefined,
 }));
@@ -63,6 +64,7 @@ describe("the handler config store", () => {
     vi.resetModules();
     delete (globalThis as { __nextly_bootPlugins?: unknown })
       .__nextly_bootPlugins;
+    servicesRegistered.mockReturnValue(true);
     store = await import("./auth-handler");
   });
 
@@ -156,6 +158,29 @@ describe("the handler config store", () => {
     store.setHandlerPlugins(plugins("@acme/transformed"));
 
     expect(store.getHandlerConfig()).toBeNull();
+  });
+
+  /**
+   * The list describes a RUNNING runtime. `shutdownServices()` and
+   * `clearServices()` both reset the registration flag, and a re-boot that then
+   * FAILS leaves no runtime at all — so continuing to substitute the previous
+   * boot's plugins would report a plugin set and route state that nothing is
+   * serving, indefinitely, since admin-meta never initializes services.
+   */
+  it("stops reporting the booted list once services are no longer registered", () => {
+    store.setHandlerConfig(stored);
+    store.setHandlerPlugins(plugins("@acme/transformed"));
+    expect(store.getHandlerConfig()?.plugins?.map(p => p.name)).toEqual([
+      "@acme/transformed",
+    ]);
+
+    servicesRegistered.mockReturnValue(false);
+
+    // Back to what the author declared, which is the honest answer when no
+    // successful boot stands behind the store.
+    expect(store.getHandlerConfig()?.plugins?.map(p => p.name)).toEqual([
+      "@acme/raw",
+    ]);
   });
 
   /**

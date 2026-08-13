@@ -447,7 +447,7 @@ export default function UserTable() {
                 onChange={setSearch}
                 placeholder="Search users by name or email"
                 isLoading={isFetching}
-                className="max-w-sm flex-1 border-border bg-background text-foreground"
+                className="max-w-sm flex-1"
               />
 
               <div className="flex items-center gap-2">

@@ -486,7 +486,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
           onChange={setSearch}
           placeholder="Search Singles..."
           isLoading={isLoading}
-          className="w-full border-border bg-background text-foreground md:max-w-sm"
+          className="w-full md:max-w-sm"
         />
 
         <div className="flex w-full items-center justify-between gap-2 sm:justify-end md:w-auto">

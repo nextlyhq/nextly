@@ -304,7 +304,7 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
             onChange={setSearch}
             placeholder="Search API keys by name, description, or role..."
             isLoading={isLoading}
-            className="w-full bg-background text-foreground border-input"
+            className="w-full"
           />
         }
         columns={

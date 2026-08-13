@@ -40,7 +40,13 @@ import { cn } from "../lib/utils";
  * @experimental
  */
 const inputVariants = cva(
-  "file:text-foreground placeholder:text-muted-foreground placeholder:opacity-50 selection:bg-primary selection:text-primary-foreground w-full min-w-0 rounded-md border border-input bg-background text-sm transition-all duration-150 outline-none file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 focus:ring-0 focus:ring-offset-0 focus:outline-none focus:border-primary! focus-visible:border-primary! aria-invalid:border-destructive aria-invalid:focus:border-destructive! data-[invalid=true]:border-destructive data-[invalid=true]:focus:border-destructive!",
+  // `text-foreground` is explicit rather than inherited. Tailwind's preflight
+  // sets `color: inherit` on form controls, so without it the typed value takes
+  // whatever colour an ancestor happens to carry -- muted inside a
+  // `text-muted-foreground` block, red inside a `text-destructive` one. Select
+  // and Textarea have always pinned it; Input was the one control that did not,
+  // and callers were compensating by putting the token on a wrapper.
+  "file:text-foreground text-foreground placeholder:text-muted-foreground placeholder:opacity-50 selection:bg-primary selection:text-primary-foreground w-full min-w-0 rounded-md border border-input bg-background text-sm transition-all duration-150 outline-none file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 focus:ring-0 focus:ring-offset-0 focus:outline-none focus:border-primary! focus-visible:border-primary! aria-invalid:border-destructive aria-invalid:focus:border-destructive! data-[invalid=true]:border-destructive data-[invalid=true]:focus:border-destructive!",
   {
     variants: {
       size: {
