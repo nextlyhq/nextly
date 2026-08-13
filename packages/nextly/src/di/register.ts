@@ -42,6 +42,7 @@ import type { AuthService } from "../domains/auth/services/auth-service";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import type { ResolvedEmailRetentionConfig } from "../domains/email/retention-config";
+import { resolveEmailRetentionConfig } from "../domains/email/retention-config";
 import type { EmailDeliveryService } from "../domains/email/services/email-delivery-service";
 import {
   getEmailProviderRegistry,
@@ -460,8 +461,30 @@ export async function registerServices(
   // targets that aren't code/plugin entities are DEFERRED here (candidate
   // Builder-made collections) and finalized after the DB is reachable below —
   // this is how extending/relating to a Builder collection works (P8/D3/R2).
-  const { config: transformedConfig, deferredExtends } =
+  const { config: contributedConfig, deferredExtends } =
     applyPluginSchemaContributionsDeferred(setupConfig, resolvedPlugins);
+
+  // Re-resolved from the TRANSFORMED nested block, because a `setup`
+  // transformer may have replaced it. The flattened `emailRetention` was
+  // computed by `sanitizeConfig` BEFORE any transformer ran, so a plugin
+  // returning `email: { ...config.email, retention: false }` left the two
+  // representations disagreeing — and every reader takes the flattened one, so
+  // the plugin's keep-forever decision was silently overruled by the original
+  // 90-day default. Two representations of one setting only stay honest if the
+  // derived one is recomputed wherever its source can change.
+  //
+  // An explicitly supplied `emailRetention` is left alone. That is a caller
+  // passing the resolved policy directly to `registerServices`, which no
+  // transformer is speaking for.
+  const transformedConfig: typeof contributedConfig =
+    config.emailRetention === undefined && contributedConfig.email !== undefined
+      ? {
+          ...contributedConfig,
+          emailRetention: resolveEmailRetentionConfig(
+            contributedConfig.email.retention
+          ),
+        }
+      : contributedConfig;
 
   // Collect every relationTo (code + plugin) that doesn't resolve to a merged
   // collection (or core target); require dependsOn for cross-plugin relations

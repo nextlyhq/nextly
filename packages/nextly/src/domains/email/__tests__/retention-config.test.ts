@@ -17,6 +17,7 @@ import {
   setEmailRetention,
   type ResolvedEmailRetentionConfig,
 } from "../retention-config";
+import type { EmailConfig } from "../types";
 
 const DEFAULT_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 
