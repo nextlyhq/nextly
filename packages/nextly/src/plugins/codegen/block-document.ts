@@ -241,7 +241,7 @@ const blockDocumentSchema = z.looseObject({
   kind: z.enum(documentKinds),
   nodes: z.array(blockNodeSchema),
   settings: z
-    .object({
+    .looseObject({
       styles: nodeStylesSchema.optional(),
       customCss: z.string().optional(),
     })
@@ -251,7 +251,9 @@ const blockDocumentSchema = z.looseObject({
    * never needs a full tree walk. Derived on write; a reader that finds it
    * absent walks the tree rather than concluding there is no media.
    */
-  assets: z.object({ mediaIds: z.array(z.string()).optional() }).optional(),
+  assets: z
+    .looseObject({ mediaIds: z.array(z.string()).optional() })
+    .optional(),
 });
 
 /**

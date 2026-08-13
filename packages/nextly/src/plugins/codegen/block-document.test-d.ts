@@ -28,6 +28,8 @@ import type {
   BlockDocument,
   BlockNode,
   DocumentKind,
+  LocaleOverlay,
+  LocaleOverlayValue,
   StyleState,
 } from "@nextlyhq/blocks-engine";
 import { expectTypeOf } from "vitest";
@@ -63,6 +65,26 @@ expectTypeOf<keyof BlockNode>().toEqualTypeOf<
   | "attributes"
   | "migrationFailed"
 >();
+
+// ---------------------------------------------------------------------------
+// The frozen locale overlay
+// ---------------------------------------------------------------------------
+
+// Overlays are stored SEPARATELY from the document, so `blockDocumentSchema`
+// never sees one and the golden schema cannot describe it. Without these, the
+// freeze would claim a shape that no check on this PR can reach: `contentMode`
+// could gain a member, or the overlay maps change, and every other assertion
+// here would stay green while stored localized content was reinterpreted.
+expectTypeOf<keyof LocaleOverlay>().toEqualTypeOf<"contentMode" | "props">();
+
+// Closed for the same reason a document kind is: a third mode needs a merge
+// rule at read time before it could mean anything, and adding one silently
+// would change how every existing overlay resolves.
+expectTypeOf<LocaleOverlay["contentMode"]>().toEqualTypeOf<
+  "overlay" | "fork"
+>();
+
+expectTypeOf<keyof LocaleOverlayValue>().toEqualTypeOf<"value" | "src">();
 
 // ---------------------------------------------------------------------------
 // The closed vocabularies

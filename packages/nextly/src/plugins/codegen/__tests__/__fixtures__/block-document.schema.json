@@ -42,7 +42,8 @@
         "customCss": {
           "type": "string"
         }
-      }
+      },
+      "additionalProperties": {}
     },
     "assets": {
       "type": "object",
@@ -53,7 +54,8 @@
             "type": "string"
           }
         }
-      }
+      },
+      "additionalProperties": {}
     }
   },
   "required": ["formatVersion", "kind", "nodes"],
