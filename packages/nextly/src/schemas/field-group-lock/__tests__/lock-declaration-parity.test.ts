@@ -14,13 +14,24 @@
  * Deleting either is not an option. The bootstrap cannot be dropped (ordering), and the declaration
  * cannot be dropped (reconcilability). So they are pinned against each other instead.
  */
-import { getTableColumns } from "drizzle-orm";
+import { getTableConfig as mysqlTableConfig } from "drizzle-orm/mysql-core";
+import { getTableConfig as pgTableConfig } from "drizzle-orm/pg-core";
+import { getTableConfig as sqliteTableConfig } from "drizzle-orm/sqlite-core";
 import { describe, expect, it } from "vitest";
 
 import { getMigrationLockDdl } from "../../../domains/field-groups/migration/session";
-import { fieldGroupLockTables } from "../index";
+import { nextlyFieldGroupLock as myLock } from "../mysql";
+import { nextlyFieldGroupLock as pgLock } from "../postgres";
+import { nextlyFieldGroupLock as slLock } from "../sqlite";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
+/** Each dialect's declared table, normalised to the one thing this compares. */
+const DECLARED: Record<SupportedDialect, () => string[]> = {
+  postgresql: () => pgTableConfig(pgLock).columns.map(c => c.name),
+  mysql: () => mysqlTableConfig(myLock).columns.map(c => c.name),
+  sqlite: () => sqliteTableConfig(slLock).columns.map(c => c.name),
+};
 
 /** The dialects a lock is ever created on. */
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
@@ -48,13 +59,12 @@ describe("the bootstrap DDL and the declared table agree", () => {
     expect(rest).toEqual([]);
     expect(statement).toBeDefined();
 
-    // 🔴 Read through Drizzle's own accessor, not `Object.keys`. A table object carries internals
-    // alongside its columns (`enableRLS` on pg, among others), and the first version of this test
-    // filtered them by name convention — which is a guess about someone else's spelling that goes
-    // stale the moment they add another. `getTableColumns` is the structural answer.
-    const declared = Object.keys(
-      getTableColumns(fieldGroupLockTables(dialect).nextlyFieldGroupLock)
-    );
+    // 🔴 Read through the dialect's own `getTableConfig`, not `Object.keys`. A table object carries
+    // internals alongside its columns (`enableRLS` on pg, among others), and filtering those by
+    // name convention is a guess about someone else's spelling that goes stale the moment they add
+    // another. The drizzle-v1 gate bars the whole-table column accessor, so this follows the prior
+    // art in `schemas/__tests__/activity-log-actor-columns.test.ts` instead.
+    const declared = DECLARED[dialect]();
 
     // Sorted: the order columns appear in a CREATE is not part of the contract.
     expect(columnsInDdl(statement as string).sort()).toEqual(declared.sort());
