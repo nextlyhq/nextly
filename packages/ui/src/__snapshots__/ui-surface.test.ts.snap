@@ -264,6 +264,7 @@ exports[`ui public export surface > . surface is unchanged 1`] = `
   "badgeVariants (value)",
   "buttonVariants (value)",
   "cardVariants (value)",
+  "commandDefaultFilter (value)",
   "createShortcutManager (value)",
   "dialogContentVariants (value)",
   "inputVariants (value)",

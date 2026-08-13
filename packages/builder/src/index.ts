@@ -143,3 +143,17 @@ export type {
   PreferenceStore,
   ShellPreferences,
 } from "./shell-state";
+
+/**
+ * @experimental The command palette's TYPES only.
+ *
+ * The component itself carries `"use client"` and is reached through
+ * `@nextlyhq/builder/shell` beside `BuilderShell`, for the same reason that
+ * entry exists: this root is server-callable, and re-exporting a client
+ * component from it would make importing the geometry pull React into a server
+ * bundle.
+ *
+ * A type costs nothing at runtime, so a host can describe its command list
+ * without reaching for the client entry.
+ */
+export type { BuilderCommand, CommandPaletteProps } from "./command-palette";

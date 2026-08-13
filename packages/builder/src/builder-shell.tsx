@@ -163,6 +163,30 @@ function useFitsFullShell(): boolean {
 }
 
 /**
+ * Whether the shell around this subtree is currently interactive.
+ *
+ * Defaults to `true`, which covers both callers outside a shell entirely and the server render,
+ * where the width is unknowable — the same assumption {@link useFitsFullShell} makes and for the
+ * same reason.
+ */
+const ShellActiveContext = React.createContext(true);
+
+/**
+ * Whether the surrounding shell is interactive, for content that has to answer for itself.
+ *
+ * The shell hides its slots behind `hidden` and `inert` below {@link MIN_SHELL_WIDTH}, which is
+ * enough for anything rendering in place. It is NOT enough for anything that portals to the
+ * document body — a dialog escapes the wrapper and would sit over the narrow-screen notice, fully
+ * interactive. Such a component reads this instead of re-deriving the width, so one media query
+ * decides both and they cannot disagree.
+ *
+ * @experimental
+ */
+export function useShellIsActive(): boolean {
+  return React.useContext(ShellActiveContext);
+}
+
+/**
  * Preferences, restored AFTER mount and written back whenever they change.
  *
  * Reading storage in the initializer is the obvious shape and it is wrong here.
@@ -783,13 +807,18 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
           // `display: none` has to be the one that applies.
           className={fitsFullShell ? "contents" : undefined}
         >
-          <ShellRegions
-            {...props}
-            preferences={preferences}
-            update={update}
-            active={fitsFullShell}
-            loadCount={loadCount}
-          />
+          {/* Published as context as well as applied as attributes, because `hidden` and `inert`
+              only reach what renders INSIDE this wrapper. Slot content that portals to the body
+              escapes both, and needs to be told rather than contained. */}
+          <ShellActiveContext.Provider value={fitsFullShell}>
+            <ShellRegions
+              {...props}
+              preferences={preferences}
+              update={update}
+              active={fitsFullShell}
+              loadCount={loadCount}
+            />
+          </ShellActiveContext.Provider>
         </div>
       </TooltipProvider>
     </ShortcutProvider>
