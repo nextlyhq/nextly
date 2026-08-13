@@ -1059,6 +1059,19 @@ function assertForestEntries(nodes: BlockNode[]): void {
           `Every entry in a forest is a node, at every depth.`
       );
     }
+    // The NODE's own keys, before any field of it is read. `entry.slots` on a
+    // node whose `slots` is an accessor runs that getter, and every helper
+    // downstream reads `id`, `locked` and the rest the same way — so a document
+    // that computes its fields would be executing its own code inside the guard
+    // deciding whether to trust it, and a throwing getter would leave this
+    // module as a native error rather than a refusal.
+    if (!hasOnlyJsonOwnKeys(entry)) {
+      throw new OpError(
+        `a node whose fields are computed rather than stored cannot be ` +
+          `edited. Reading one runs code, and what it returns is not what ` +
+          `would be saved.`
+      );
+    }
     // Read as `unknown` rather than cast: the entry has only been established
     // as a record, so claiming it is a BlockNode here would assert the very
     // thing this walk exists to check.
@@ -1070,7 +1083,21 @@ function assertForestEntries(nodes: BlockNode[]): void {
           `child regions and each holds a list.`
       );
     }
-    for (const children of Object.values(slots)) {
+    for (const [name, children] of Object.entries(slots)) {
+      // The slot NAME, by the same rule an incoming position is held to. A
+      // document already holding a slot called `__proto__` is accepted by a
+      // check that only looks at the value — and then the engine's `mapForest`
+      // rebuilds the node by assigning into an ordinary object, where that
+      // name reaches the prototype setter instead of creating an own key. The
+      // slot's entire child list disappears, the update reports success, and
+      // its inverse cannot restore children it never saw.
+      if (!isUsableSlotName(name)) {
+        throw new OpError(
+          `a document holding a slot named "${name}" cannot be edited. That ` +
+            `name resolves to a member every object inherits, so rebuilding ` +
+            `the node would drop the slot's children instead of keeping them.`
+        );
+      }
       if (!Array.isArray(children)) {
         throw new OpError(
           `a slot holding ${describe(children)} is malformed. Each slot holds ` +
@@ -1682,6 +1709,13 @@ export function applyOp(
       // undo is refused. Checked before the removal for the same reason the
       // root is: an inverse that cannot run is worse than an edit that cannot.
       assertSubtreeIdsAreUnique(nodes, node, "remove");
+      // And the subtree must be INSERTABLE, by the same boundary an incoming
+      // one answers to. The inverse of a remove is an insert of exactly this
+      // subtree, so a document imported with a node missing `props` — or any
+      // other field the shape check requires — removes cleanly and then cannot
+      // be put back. Uniqueness was only half of what makes an inverse
+      // applicable; this is the other half.
+      assertNodeShape(node, "remove", limits);
       // The ORIGINAL parent too. The removed node may be unique while the
       // parent it sat under is not, and the inverse restores by naming that
       // parent — so an undo would place it under whichever match is found

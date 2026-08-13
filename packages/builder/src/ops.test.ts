@@ -1874,6 +1874,25 @@ describe("an inverse that names a parent held twice", () => {
     expect(reads, "the getter must never be invoked").toBe(0);
   });
 
+  it("refuses a remove whose subtree could not be inserted back", () => {
+    // The inverse of a remove is an insert of exactly this subtree. A document
+    // imported with a node missing a field the shape check requires removes
+    // cleanly and then cannot be put back, so the edit applies and undo is
+    // refused — the same class as a repeated id, arriving through a different
+    // gap.
+    const malformed = {
+      id: "holder",
+      type: "core/box",
+      version: 1,
+      props: {},
+      slots: { main: [{ id: "broken", type: "core/box", version: 1 }] },
+    } as unknown as BlockNode;
+
+    expect(() =>
+      applyOp(doc([malformed]), { kind: "remove", id: "holder" })
+    ).toThrow(OpError);
+  });
+
   it("refuses a remove whose subtree repeats an id", () => {
     // The removed container is unique, and two of its DESCENDANTS are not. The
     // inverse of a remove is an insert of the whole subtree, and `insertNode`

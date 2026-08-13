@@ -85,6 +85,50 @@ function seedForest(rnd: () => number, count: number): BlockNode[] {
   return roots;
 }
 
+/**
+ * Corrupts a forest the way an IMPORT does, deterministically per seed.
+ *
+ * The generator above builds well-formed documents, and well-formed input is
+ * the case least likely to be wrong. `applyOp` accepts documents from storage
+ * and from other tools, so the interesting question is what it does with one
+ * that is already malformed — and every answer except `OpError` is a defect:
+ * a native error the caller cannot classify, or an edit whose inverse cannot
+ * run.
+ */
+function corrupt(rnd: () => number, nodes: BlockNode[]): BlockNode[] {
+  const copy = JSON.parse(JSON.stringify(nodes)) as BlockNode[];
+  const spots = locations(copy);
+  const victim = spots[Math.floor(rnd() * spots.length)];
+  if (victim === undefined) return copy;
+  const how = Math.floor(rnd() * 4);
+
+  if (how === 0) {
+    // A field the shape check requires, gone. Removing this subtree yields an
+    // insert inverse that cannot be applied.
+    delete (victim.node as Partial<BlockNode>).props;
+  } else if (how === 1) {
+    // A slot name that reaches the prototype rather than an own key.
+    victim.node.slots = { ...(victim.node.slots ?? {}), ["__proto__"]: [] };
+  } else if (how === 2) {
+    // A field that is computed rather than held.
+    Object.defineProperty(victim.node, "name", {
+      get: () => "computed",
+      enumerable: true,
+      configurable: true,
+    });
+  } else {
+    // A non-enumerable field, which survives every read and is dropped by the
+    // spread that rebuilds the node.
+    Object.defineProperty(victim.node, "version", {
+      value: 1,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  }
+  return copy;
+}
+
 /** One op against the given forest, or `null` when nothing applicable exists. */
 function seedOp(rnd: () => number, nodes: BlockNode[]): BuilderOp | null {
   const spots = locations(nodes);
@@ -137,7 +181,11 @@ describe("an op and its inverse are a round trip", () => {
 
     for (let seed = 1; seed <= 60; seed += 1) {
       const rnd = prng(seed);
-      const before = doc(seedForest(rnd, 1 + Math.floor(rnd() * 4)));
+      // Half the seeds run against a document corrupted the way an import
+      // corrupts one. A well-formed document is the case least likely to be
+      // wrong, and `applyOp` accepts input from storage and from other tools.
+      const forest = seedForest(rnd, 1 + Math.floor(rnd() * 4));
+      const before = doc(rnd() < 0.5 ? forest : corrupt(rnd, forest));
       const op = seedOp(rnd, before.nodes);
       if (op === null) continue;
 
