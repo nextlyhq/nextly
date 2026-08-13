@@ -43,6 +43,21 @@ function catalogueAppearance(
   };
 }
 
+/**
+ * The appearance sources for a catalogue entry, in precedence order.
+ *
+ * Exported so a component rendering the icon takes the ordering from here
+ * instead of writing `[installed, entry]` itself. That second spelling would be
+ * a second answer to which source wins, and the two would agree until one of
+ * them gained a step.
+ */
+export function cataloguePresentationCandidates(
+  entry: RegistryPlugin,
+  installed: Pick<PluginMetadata, "appearance"> | undefined
+): readonly (Pick<PluginMetadata, "appearance"> | undefined)[] {
+  return [installed, catalogueAppearance(entry)];
+}
+
 export interface CataloguePresentation {
   icon: PluginIconSource;
   description: string;
@@ -66,13 +81,16 @@ export function resolveCataloguePresentation(
   opts: { allowAsset?: boolean } = {}
 ): CataloguePresentation {
   return {
-    icon: resolvePluginIconFrom([installed, catalogueAppearance(entry)], {
-      // Unreachable in practice: `catalogueAppearance` always carries a lucide
-      // name, since `RegistryPlugin.icon.lucide` is required. Named rather
-      // than asserted so the chain has a total answer if that ever loosens.
-      fallback: entry.icon.lucide,
-      allowAsset: opts.allowAsset,
-    }),
+    icon: resolvePluginIconFrom(
+      cataloguePresentationCandidates(entry, installed),
+      {
+        // Unreachable in practice: `catalogueAppearance` always carries a lucide
+        // name, since `RegistryPlugin.icon.lucide` is required. Named rather
+        // than asserted so the chain has a total answer if that ever loosens.
+        fallback: entry.icon.lucide,
+        allowAsset: opts.allowAsset,
+      }
+    ),
     // An installed plugin declaring an empty description says nothing, so it
     // does not get to blank the catalogue's text.
     description: installed?.description?.trim()

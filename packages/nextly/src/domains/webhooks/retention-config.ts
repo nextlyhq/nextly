@@ -13,6 +13,11 @@
  * @module domains/webhooks/retention-config
  */
 
+import {
+  CALENDAR_COLUMN_MAX_OFFSET_MS,
+  resolveRetentionWindow,
+} from "../retention/window";
+
 /**
  * Which retention window governs an event row.
  *
@@ -150,13 +155,30 @@ function positiveInt(value: unknown, fallback: number, max?: number): number {
   return max === undefined ? resolved : Math.min(resolved, max);
 }
 
-/** A non-negative duration, `false` for "keep forever", or the fallback. */
+/**
+ * A window, resolved by the rule every trail shares.
+ *
+ * Zero is `keep-nothing` here rather than malformed, preserving what this
+ * ledger already accepted: the row exists to make a redelivery possible, and an
+ * operator who does not want recipient addresses stored at all is expressing a
+ * position rather than making a mistake.
+ *
+ * Two behaviours change, both toward keeping more. `Infinity` now means keep
+ * forever instead of falling back to a window that deletes, and a finite value
+ * past what a cutoff can express is clamped to `false` instead of producing a
+ * date no column can hold — previously a window of `MAX_SAFE_INTEGER` resolved
+ * to roughly 285,000 years and the resulting cutoff was unusable.
+ *
+ * Both event and delivery cutoffs are compared against MySQL `DATETIME`
+ * columns, which reach back to year 1000, so that is the bound this trail
+ * carries.
+ */
 function maxAge(value: unknown, fallback: number | false): number | false {
-  if (value === false) return false;
-  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
-    return Math.floor(value);
-  }
-  return fallback;
+  return resolveRetentionWindow(value, {
+    fallback,
+    zero: "keep-nothing",
+    maxOffsetMs: CALENDAR_COLUMN_MAX_OFFSET_MS,
+  });
 }
 
 /** The longest window any event class may be kept for. */

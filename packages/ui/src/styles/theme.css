@@ -139,6 +139,7 @@
   --color-border-subtle: var(--nx-border-subtle);
   --color-border-strong: var(--nx-border-strong);
   --color-input: var(--nx-input);
+  --color-control-border: var(--nx-control-border);
   --color-ring: var(--nx-ring);
   --color-background: var(--nx-background);
   --color-foreground: var(--nx-foreground);
@@ -758,9 +759,12 @@
    * light enough to read as text on the page is too light for white text, so
    * success splits the fill and destructive flips its ink to black instead.
    * The on-color token is what varies, not just the fill. */
-  /* Darkened from red-500; renders as #d92c32, ~4.8:1 as text on white. */
-  --nx-destructive: oklch(0.5661 0.19 23.03);
-  --nx-destructive-solid: oklch(0.5661 0.19 23.03);
+  /* red-500 itself, the reference palette's red. It is lighter than the 4.5:1
+   * text minimum allows; darkening it to pass reads as a different colour, and
+   * the palette is built around this one. `contrast/accepted.ts` records the
+   * affected pairings with their measured ratios. */
+  --nx-destructive: oklch(0.63 0.19 23.03);
+  --nx-destructive-solid: oklch(0.63 0.19 23.03);
   --nx-destructive-foreground: oklch(1 0 0);
   /* white */
   /* Darkened from green-600; renders as #00852c, ~4.8:1 as text on white. */
@@ -828,10 +832,33 @@
   --nx-overlay-soft: oklch(0 0 0 / 0.4);
   --nx-border-subtle: color-mix(in srgb, oklch(0.92 0 0), transparent 60%);
   --nx-border: oklch(0.92 0 0);
-  /* Alpha raised so the composited strong border clears WCAG 3:1 / ~4:1 (was 2.11:1). */
-  --nx-border-strong: oklch(0.58 0 0);
-  /* Darkened so the field border clears WCAG 3:1 on the page (was 2.32:1). */
-  --nx-input: oklch(0.6154 0 0);
+  /* These two sit BELOW the WCAG 1.4.11 3:1 minimum for a control boundary,
+   * deliberately, to keep the light border weight the palette is designed
+   * around. `contrast/accepted.ts` records each affected pairing with its
+   * measured ratio and is what keeps that visible rather than silent; the
+   * contrast suite reads that list, so neither token can drift further without
+   * failing. */
+  --nx-border-strong: color-mix(in srgb, oklch(0.92 0 0), black 25%);
+  --nx-input: oklch(0.94 0 0);
+  /* The boundary of a control that has NOTHING ELSE to identify it.
+   *
+   * A text field at --nx-input is identifiable without its edge: it carries a
+   * label, a placeholder, a value, and a focus ring the moment it is used. An
+   * unchecked checkbox or radio is only the box. Its border is not decoration
+   * around the control, it IS the control, so 1.4.11's 3:1 applies with nothing
+   * to fall back on -- and at the reference palette's border weight the box is
+   * effectively invisible.
+   *
+   * These were one token, which is why the reference weight could not be taken
+   * without losing the checkbox. They are two questions -- "how heavy is a field
+   * edge" and "can this control be seen at all" -- and they only shared an
+   * answer by accident. Splitting them is what lets the field borders match the
+   * reference while the controls stay identifiable.
+   *
+   * Solved to the LIGHTEST value that still clears 3:1 with the margin the
+   * contrast suite requires, against the darkest surface a control lands on, so
+   * it sits as close to the reference weight as the criterion permits. */
+  --nx-control-border: oklch(0.62 0 0);
   --nx-ring: var(--nx-primary);
 
   /* The base colour of the elevation ramp (--shadow-sm..xl, -inner-subtle,
@@ -871,19 +898,35 @@
   /* Sidebar specific colors - using Slate scale */
   --nx-sidebar-background: oklch(0.99 0 0);
   /* flat with the content surface; nav is separated by borders, not fill */
-  /* Resting nav ink sits a step back from the active ink, so an active row
-   * reads as emphasised by its INK as well as its fill. The chosen palette
-   * used one value for both, which leaves the fill carrying the whole signal
-   * -- and the fill is the part a low-contrast surface weakens first. */
-  --nx-sidebar-foreground: oklch(0.44 0 0);
+  /* Resting and active nav ink are the same value in light mode: nav labels sit
+   * at body-text weight rather than a step back from it, which is the reference
+   * palette's arrangement.
+   *
+   * So the active row is marked by its FILL (--nx-sidebar-accent) TOGETHER WITH
+   * a font-weight change, and the pair is load-bearing rather than decorative.
+   * The fill alone is about 1.11:1, far under the 3:1 WCAG 1.4.11 asks of
+   * information identifying a component's state, and there is no exemption for
+   * a large filled region -- that is 1.4.3, and it is about text. The weight
+   * change is what satisfies the criterion, being a difference that is not a
+   * colour and so carries no ratio at all.
+   *
+   * Removing `data-[active=true]:font-medium` from the sidebar menu buttons
+   * therefore leaves the nav with no conforming active state, and
+   * `contrast/__tests__/sidebar-ink-hierarchy.test.ts` fails per variant if
+   * either loses it.
+   *
+   * Dark mode keeps the two-step ink relationship instead, where a near-white
+   * active ink on a dark row is what separates the states. */
+  --nx-sidebar-foreground: oklch(0 0 0);
   --nx-sidebar-primary: oklch(0 0 0);
   --nx-sidebar-primary-foreground: oklch(1 0 0);
   /* slate-50 */
   --nx-sidebar-accent: oklch(0.94 0 0);
   /* slate-100 */
   --nx-sidebar-accent-foreground: oklch(0 0 0);
-  /* Darkened so the sidebar border clears WCAG 3:1 on its surface (was 1.23:1). */
-  --nx-sidebar-border: oklch(0.63 0 0);
+  /* Below the 3:1 boundary minimum, deliberately, to match the border weight of
+   * the rest of the palette. Recorded in `contrast/accepted.ts`. */
+  --nx-sidebar-border: oklch(0.94 0 0);
   --nx-sidebar-ring: var(--nx-primary);
 
   /* Data table specific colors */
@@ -958,7 +1001,11 @@
   --nx-destructive-foreground: oklch(0 0 0);
   /* Lightened green so it reads as text at WCAG 4.5:1 on the dark page and on
    * the lighter popover surface (was 4.17:1 on the page, 4.29:1 on a popover). */
-  --nx-success: oklch(0.6 0.1921 149.58);
+  /* Lightened a step so success ink clears 4.5:1 on --nx-muted with the margin
+   * the suite requires. Muted is the binding surface here, being the lightest
+   * of the dark surfaces this ink lands on; against card or page it was never
+   * close. */
+  --nx-success: oklch(0.61 0.1921 149.58);
   /* Darker green fill so white on-color button text clears 4.5:1. */
   --nx-success-solid: oklch(0.5225 0.1921 149.58);
   --nx-success-foreground: oklch(1 0 0);
@@ -1010,6 +1057,9 @@
   /* Brightened so the field border clears WCAG 3:1 on the lighter popover
    * surface as well as the page and card (was 1.73:1 on a popover). */
   --nx-input: oklch(0.5445 0 0);
+  /* Dark mode never gave up the boundary minimum, so the control border simply
+     tracks the field border here and the split costs nothing. */
+  --nx-control-border: oklch(0.5445 0 0);
   --nx-ring: var(--nx-primary);
 
   /* Black in dark mode too: the ramp reads as depth against the deep surfaces

@@ -20,6 +20,7 @@ import DashboardPage from "./dashboard/index";
 import MediaLibraryPage from "./dashboard/media/index";
 import PluginDetailPage from "./dashboard/plugins/[slug]";
 import PluginSettingsPage from "./dashboard/plugins/[slug]/settings";
+import PluginBrowsePage from "./dashboard/plugins/browse";
 import PluginsOverviewPage from "./dashboard/plugins/index";
 import CollectionsLandingRedirect from "./dashboard/redirects/CollectionsLandingRedirect";
 import FieldGroupsLandingRedirect from "./dashboard/redirects/FieldGroupsLandingRedirect";
@@ -369,6 +370,14 @@ export const routeConfig: Record<string, RouteConfig> = {
   // Plugin routes
   [ROUTES.PLUGINS]: {
     component: PluginsOverviewPage,
+    type: "private",
+    requiredPermission: "manage-settings",
+  },
+  // Registered outside `/admin/plugins/`, so no ordering rule holds this in
+  // place: the directory and a plugin's detail page cannot match the same
+  // path, whatever the plugin is called.
+  [ROUTES.PLUGIN_BROWSE]: {
+    component: PluginBrowsePage,
     type: "private",
     requiredPermission: "manage-settings",
   },

@@ -63,10 +63,40 @@ import ts from "typescript";
 import {
   SERVER_SAFE_ALLOWED_PACKAGES,
   serverSafeArtifacts,
-} from "./published-entries.mjs";
+} from "./published-entries.js";
+
+/**
+ * The part of esbuild's metafile this scan reads.
+ *
+ * `external` separates a real dependency from an internal chunk, and the scan turns on exactly
+ * that distinction — so it is declared rather than left off a narrower shape than the data has.
+ */
+export interface Metafile {
+  outputs?: Record<
+    string,
+    {
+      inputs?: Record<string, unknown>;
+      imports?: readonly {
+        path?: string;
+        kind?: string;
+        external?: boolean;
+      }[];
+    }
+  >;
+}
+
+/** One artifact the walk reached, and what it names. */
+export interface ReachedFile {
+  /** File name, relative to the output directory. */
+  file: string;
+  /** Whether the walk could not read it. */
+  missing: boolean;
+  /** Every module specifier it names. */
+  specifiers: string[];
+}
 
 /** The directory part of an output-relative file name, or "" for a flat one. */
-const dirname = file =>
+const dirname = (file: string): string =>
   file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : "";
 
 const DIST = join(pathDirname(fileURLToPath(import.meta.url)), "..", "dist");
@@ -83,22 +113,17 @@ const DIST = join(pathDirname(fileURLToPath(import.meta.url)), "..", "dist");
  * A specifier this cannot read as a literal is recorded as an unreadable one rather than skipped,
  * so it fails the allow-list instead of passing in silence.
  *
- * @param {string} source
- * @param {string} fileName
- * @returns {string[]}
  */
-export function specifiersIn(source, fileName) {
+export function specifiersIn(source: string, fileName: string): string[] {
   const tree = ts.createSourceFile(
     fileName,
     source,
     ts.ScriptTarget.Latest,
     true
   );
-  /** @type {string[]} */
-  const found = [];
+  const found: string[] = [];
 
-  /** @param {ts.Node | undefined} node */
-  const record = node => {
+  const record = (node: ts.Node | undefined): void => {
     if (node === undefined) return;
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
       found.push(node.text);
@@ -113,10 +138,11 @@ export function specifiersIn(source, fileName) {
    * `const { require } = someObject` and `const [require] = pair` both bind the name, and reading
    * only `ts.isIdentifier(node.name)` sees neither.
    *
-   * @param {ts.BindingName | undefined} name
-   * @param {(bound: string) => void} add
    */
-  const eachBoundName = (name, add) => {
+  const eachBoundName = (
+    name: ts.BindingName | undefined,
+    add: (bound: string) => void
+  ): void => {
     if (name === undefined) return;
     if (ts.isIdentifier(name)) {
       add(name.text);
@@ -137,21 +163,22 @@ export function specifiersIn(source, fileName) {
    *
    * Anything else is `var`, which binds to the enclosing function however deeply nested it is.
    *
-   * @param {ts.VariableDeclarationList} list
    */
-  const isBlockScoped = list =>
+  const isBlockScoped = (list: ts.VariableDeclarationList): boolean =>
     (list.flags & (ts.NodeFlags.Let | ts.NodeFlags.Const)) !== 0;
 
   /**
    * Whether ONE node introduces a binding for `name` in the scope it opens.
    *
-   * @param {ts.Node} scope
-   * @param {string} name
-   * @param {boolean} fromParameter entered through this scope's own parameter list
+   * @param fromParameter entered through this scope's own parameter list
    */
-  const bindsName = (scope, name, fromParameter = false) => {
+  const bindsName = (
+    scope: ts.Node,
+    name: string,
+    fromParameter = false
+  ): boolean => {
     let found2 = false;
-    const add = bound => {
+    const add = (bound: string): void => {
       if (bound === name) found2 = true;
     };
 
@@ -189,7 +216,7 @@ export function specifiersIn(source, fileName) {
         ts.isSourceFile(scope) ||
         ts.isClassStaticBlockDeclaration(scope))
     ) {
-      const hoisted = node => {
+      const hoisted = (node: ts.Node): void => {
         if (ts.isFunctionLike(node) || ts.isClassStaticBlockDeclaration(node)) {
           return;
         }
@@ -287,11 +314,9 @@ export function specifiersIn(source, fileName) {
    * suppressed a top-level `require("react")` because an unrelated nested function had a
    * parameter of that name.
    *
-   * @param {ts.Node} node
-   * @param {string} name
    */
-  const isShadowed = (node, name) => {
-    let child = node;
+  const isShadowed = (node: ts.Node, name: string): boolean => {
+    let child: ts.Node = node;
     for (let scope = node.parent; scope !== undefined; scope = scope.parent) {
       const fromParameter =
         ts.isFunctionLike(scope) &&
@@ -302,8 +327,7 @@ export function specifiersIn(source, fileName) {
     return false;
   };
 
-  /** @param {ts.Node} node */
-  const visit = node => {
+  const visit = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
       record(node.moduleSpecifier);
     } else if (ts.isImportEqualsDeclaration(node)) {
@@ -339,10 +363,8 @@ export function specifiersIn(source, fileName) {
  * builtin: both are available to server code already. A scoped name keeps two segments, so
  * `@radix-ui/react-slot` is not mistaken for a permitted `@radix-ui`.
  *
- * @param {string} specifier
- * @returns {string | null}
  */
-export function packageOf(specifier) {
+export function packageOf(specifier: string): string | null {
   if (specifier.startsWith(".")) return null;
   // An ABSOLUTE path is not part of the emitted output and is not traversed, so exempting it let
   // a machine-specific path through — one that resolves on the build host and is absent for every
@@ -361,23 +383,27 @@ export function packageOf(specifier) {
  * Every emitted file reachable from one artifact, following the relative specifiers between them.
  *
  * A split build does not put an entry's dependencies in the entry. With code splitting on — tsup's
- * default — `utils.mjs` can be nothing but `export { x } from "./chunk-abc.mjs"`, and the chunk is
+ * default — `utils.mjs` can be nothing but `export { x } from "./chunk-abc.js"`, and the chunk is
  * where `react` would appear. Scanning only the named entry exempts exactly the file that holds
  * what this is looking for.
  *
  * `read` returns the file's text, or null when it is absent — reported rather than thrown, so a
  * missing chunk is a named failure instead of a stack trace from inside the walk.
  *
- * @param {string} entry file name, relative to the output directory
- * @param {(file: string) => string | null} read
- * @returns {Array<{ file: string, missing: boolean, specifiers: string[] }>}
+ * @param entry file name, relative to the output directory
  */
-export function reachedFrom(entry, read) {
-  const seen = new Set();
-  const queue = [entry];
-  const reached = [];
-  while (queue.length > 0) {
-    const file = queue.shift();
+export function reachedFrom(
+  entry: string,
+  read: (file: string) => string | null
+): ReachedFile[] {
+  const seen = new Set<string>();
+  const queue: string[] = [entry];
+  const reached: ReachedFile[] = [];
+  for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
+    // Driven by `shift()` returning `undefined` rather than by `queue.length`, so the loop
+    // condition IS the narrowing. Checking the length and shifting separately leaves `file` typed
+    // `string | undefined` for the whole body, which is answered either by repeating the check or
+    // by asserting past it — and the second hides a real empty-queue bug if the two ever disagree.
     if (seen.has(file)) continue;
     seen.add(file);
     const source = read(file);
@@ -418,7 +444,7 @@ export function reachedFrom(entry, read) {
  * file nor an offender reported. A path that leaves the tree is a question this function cannot
  * answer, so it says so rather than answering a different one.
  */
-function posixJoin(from, specifier) {
+function posixJoin(from: string, specifier: string): string | undefined {
   const parts = from === "." || from === "" ? [] : from.split("/");
   for (const segment of specifier.split("/")) {
     if (segment === "." || segment === "") continue;
@@ -433,14 +459,14 @@ function posixJoin(from, specifier) {
 /**
  * The specifiers reachable from one artifact that a server-safe entry point may not reach.
  *
- * @param {string} entry
- * @param {(file: string) => string | null} read
- * @param {Set<string>} allowed
- * @returns {{ offending: string[], missing: string[] }}
  */
-export function disallowedSpecifiers(entry, read, allowed) {
-  const offending = [];
-  const missing = [];
+export function disallowedSpecifiers(
+  entry: string,
+  read: (file: string) => string | null,
+  allowed: Set<string>
+): { offending: string[]; missing: string[] } {
+  const offending: string[] = [];
+  const missing: string[] = [];
   for (const { file, missing: absent, specifiers } of reachedFrom(
     entry,
     read
@@ -465,10 +491,8 @@ export function disallowedSpecifiers(entry, read, allowed) {
  * names the package — a nested dependency lives under its parent's `node_modules`, and the store
  * layout pnpm uses puts the real name after the last marker too.
  *
- * @param {string} input
- * @returns {string | null}
  */
-export function packageOfInput(input) {
+export function packageOfInput(input: string): string | null {
   const marker = "node_modules/";
   const last = input.lastIndexOf(marker);
   if (last !== -1) {
@@ -501,10 +525,13 @@ export function packageOfInput(input) {
  * Resolved from this package's own root, which is where the bundler's relative input paths are
  * anchored. Memoised because one artifact can carry many inputs from the same package.
  */
-const manifestNames = new Map();
-function manifestName(directory) {
-  if (manifestNames.has(directory)) return manifestNames.get(directory);
-  let name = null;
+const manifestNames = new Map<string, string | null>();
+function manifestName(directory: string): string | null {
+  // `get` widens to `| undefined` even after `has`, and the memo deliberately stores `null` for
+  // "read and unreadable" — so the two absences are told apart here rather than collapsed.
+  const memoised = manifestNames.get(directory);
+  if (memoised !== undefined) return memoised;
+  let name: string | null = null;
   try {
     const manifest = JSON.parse(
       readFileSync(join(DIST, "..", "..", directory, "package.json"), "utf8")
@@ -528,14 +555,14 @@ function manifestName(directory) {
  * Returns null when the artifact has no entry in the metafile, which is a failure to report rather
  * than an empty result to pass.
  *
- * @param {{ outputs?: Record<string, { inputs?: Record<string, unknown> }> }} metafile
- * @param {string} outputName
- * @returns {string[] | null}
  */
-export function bundledPackages(metafile, outputNames) {
+export function bundledPackages(
+  metafile: Metafile,
+  outputNames: string | string[]
+): string[] | null {
   const names = Array.isArray(outputNames) ? outputNames : [outputNames];
-  const packages = new Set();
-  const missing = [];
+  const packages = new Set<string>();
+  const missing: string[] = [];
   // Every file this build emitted, so an import record naming one can be told from one naming a
   // dependency. Read from the metafile rather than from the names being asked about: a chunk is an
   // output of the build without being an artifact anyone asked to check.
@@ -581,8 +608,11 @@ async function main() {
   const artifacts = serverSafeArtifacts();
 
   // One read per format rather than per artifact; the build writes one file for each.
-  const metafiles = { esm: null, cjs: null };
-  for (const format of ["esm", "cjs"]) {
+  const metafiles: Record<"esm" | "cjs", Metafile | null> = {
+    esm: null,
+    cjs: null,
+  };
+  for (const format of ["esm", "cjs"] as const) {
     try {
       metafiles[format] = JSON.parse(
         readFileSync(join(DIST, `metafile-${format}.json`), "utf8")
@@ -602,7 +632,7 @@ async function main() {
 
     // Follows the relative specifiers between emitted files, because a split build puts an entry's
     // dependencies in a chunk beside it rather than in the entry.
-    const read = name => {
+    const read = (name: string): string | null => {
       try {
         return readFileSync(join(DIST, name), "utf8");
       } catch {
@@ -658,7 +688,7 @@ async function main() {
       problems.push(
         `${file} reaches ${offending.join(", ")}, which a server-safe entry point may not ` +
           `import. Either the entry gained a client dependency, or the allow-list in ` +
-          `published-entries.mjs needs a deliberate addition.`
+          `published-entries.ts needs a deliberate addition.`
       );
     }
   }
