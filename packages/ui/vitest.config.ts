@@ -2,6 +2,18 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 /**
+ * The directories the tab-contract scan walks.
+ *
+ * Real paths, not globs, because these are handed to the WATCHER. chokidar
+ * removed glob support in v4, so `watcher.add("<root>/packages/**")` subscribes
+ * to a literal path of that name — which does not exist — and no event is ever
+ * emitted for anything beneath it.
+ */
+const SCAN_ROOTS = ["packages", "apps", "templates"].map(root =>
+  fileURLToPath(new URL(`../../${root}`, import.meta.url)).replace(/\\/g, "/")
+);
+
+/**
  * The repository root, as an absolute path with forward slashes.
  *
  * Vitest matches a rerun trigger against the path its watcher emits, which is
@@ -20,6 +32,22 @@ const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(
 );
 
 export default defineConfig({
+  plugins: [
+    {
+      name: "watch-the-scanned-roots",
+      // Two different mechanisms have to agree before a watch session reruns:
+      // the watcher must EMIT an event for the file, and `forceRerunTriggers`
+      // must MATCH the path it emits. The triggers below only ever answered the
+      // second question. Vitest's server is rooted at this package, so nothing
+      // outside it was watched at all and the matcher was never consulted for
+      // the call sites this suite exists to read — measured with a real
+      // `vitest --watch` session, where touching a `packages/admin` file
+      // produced no rerun while touching one in `packages/ui` did.
+      configureServer(server) {
+        for (const root of SCAN_ROOTS) server.watcher.add(root);
+      },
+    },
+  ],
   test: {
     // The suites read `theme.css` and the package sources through the
     // filesystem rather than importing them, so Vitest has no module

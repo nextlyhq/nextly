@@ -499,13 +499,19 @@ function specificityOf(selector: string): Specificity {
             .reduce((best, one) => (compare(one, best) > 0 ? one : best), ZERO);
     return add(contribution, specificityOf(rest));
   }
-  const ids = selector.match(/#[\w-]+/g)?.length ?? 0;
+  // An attribute selector counts as ONE, and what it holds is data: a `#` or a
+  // `.` inside `[data-foo="#bar"]` is a character in a value, not an id or a
+  // class. Counted verbatim it inflated the caller's rank and overrode a
+  // source-order result that had already decided the question.
+  const attributes = selector.match(/\[[^\]]*\]/g)?.length ?? 0;
+  const structure = selector.replace(/\[[^\]]*\]/g, "");
+  const ids = structure.match(/#[\w-]+/g)?.length ?? 0;
   const classes =
-    (selector.match(/(?<!\\\\)&/g)?.length ?? 0) +
-    (selector.match(/\.[\w-]+/g)?.length ?? 0) +
-    (selector.match(/\[[^\]]*\]/g)?.length ?? 0) +
-    (selector.match(/(?<!:):[\w-]+/g)?.length ?? 0);
-  const elements = selector.match(/::[\w-]+/g)?.length ?? 0;
+    (structure.match(/(?<!\\\\)&/g)?.length ?? 0) +
+    (structure.match(/\.[\w-]+/g)?.length ?? 0) +
+    attributes +
+    (structure.match(/(?<!:):[\w-]+/g)?.length ?? 0);
+  const elements = structure.match(/::[\w-]+/g)?.length ?? 0;
   return [ids, classes, elements];
 }
 
@@ -1663,10 +1669,17 @@ function exportedTagOf(
   if (
     ts.isPropertyAccessExpression(tag) &&
     ts.isIdentifier(tag.expression) &&
-    ownership.namespaces.has(tag.expression.text) &&
     OWNED_EXPORTS.includes(tag.name.text)
   ) {
-    return tag.name.text;
+    // The namespace is a binding too, and a local object can shadow the import
+    // exactly as a local component can shadow a named one. Resolved the same
+    // way, so both spellings answer from the binder rather than from a
+    // file-wide set of names.
+    const declaration = declarationOf(tag.expression, checker);
+    if (declaration) {
+      return ts.isNamespaceImport(declaration) ? tag.name.text : undefined;
+    }
+    if (ownership.namespaces.has(tag.expression.text)) return tag.name.text;
   }
   return undefined;
 }
@@ -1746,6 +1759,20 @@ function literalStrings(
   if (ts.isExpression(node)) {
     const selected = selectedByLiteralCondition(node, resolver);
     if (selected) return literalStrings(selected, found, resolver);
+  }
+  // `cn({ "border-b-0": false })` applies nothing. In this form the KEY is the
+  // class and the VALUE is the condition, so walking the object as plain text
+  // collected a class the caller switched off — and collected an unrelated
+  // key's value as though it were a class name too.
+  if (ts.isObjectLiteralExpression(node)) {
+    for (const property of node.properties) {
+      if (!ts.isPropertyAssignment(property)) continue;
+      if (staticTruthiness(property.initializer, resolver) === false) continue;
+      const name = property.name;
+      if (ts.isStringLiteral(name) || ts.isIdentifier(name))
+        found.push(name.text);
+    }
+    return found;
   }
   // The braces matter. `ts.forEachChild` stops at the first callback that
   // returns something truthy, so a concise arrow returning the accumulator
@@ -1873,7 +1900,18 @@ function styleResolver(
       }
       // A `do` BODY runs before its condition is ever asked, so it executes at
       // least once however the condition later answers.
-      if (ts.isDoStatement(at)) continue;
+      // Only the FIRST statement of a `do` body, for the same reason as a
+      // `try`: a `break`, `continue` or `return` written above it can carry
+      // control out before it runs, so a later write may be skipped.
+      if (
+        ts.isDoStatement(at) &&
+        ts.isBlock(at.statement) &&
+        at.statement.statements.length > 0 &&
+        node.getStart() >= (at.statement.statements[0]?.getStart() ?? 0) &&
+        node.getEnd() <= (at.statement.statements[0]?.getEnd() ?? 0)
+      ) {
+        continue;
+      }
       // A `for` INITIALIZER runs once before the condition is ever asked, so it
       // is unconditional even though the body beside it is not.
       if (
@@ -2188,9 +2226,19 @@ function styleResolver(
         ts.isIdentifier(node.left.expression) &&
         declarationOf(node.left.expression, checker) === declaration
       ) {
+        // The mutation belongs to whatever object the binding held at the
+        // moment of the write. A later write REPLACES that object, so a
+        // mutation made before it landed on something the element never sees.
+        const replacedSince = writesTo(declaration, identifier).some(
+          write =>
+            write.straightLine &&
+            write.at > node.getStart() &&
+            write.at < identifier.getStart()
+        );
         const reaches =
-          executionUnitOf(node) !== unit ||
-          node.getStart() < identifier.getStart();
+          !replacedSince &&
+          (executionUnitOf(node) !== unit ||
+            node.getStart() < identifier.getStart());
         const name = ts.isPropertyAccessExpression(node.left)
           ? node.left.name.text
           : staticStringOf(node.left.argumentExpression, api);
@@ -2697,12 +2745,18 @@ function violationsIn(file: string, source: string): Violation[] {
             // A property written onto the object AFTER it was created reaches
             // React the same way one written inside the literal does.
             const initializer = attribute.initializer;
-            const named =
+            // Unwrapped first, so `style={style!}` reaches the same binding a
+            // bare `style` does. The wrappers are erased before the code runs,
+            // and reading the outer node saw an assertion rather than a name.
+            const held =
               initializer &&
               ts.isJsxExpression(initializer) &&
-              initializer.expression &&
-              ts.isIdentifier(initializer.expression)
-                ? resolver.propertyWrites(initializer.expression)
+              initializer.expression
+                ? withoutTypeWrappers(initializer.expression)
+                : undefined;
+            const named =
+              held && ts.isIdentifier(held)
+                ? resolver.propertyWrites(held)
                 : [];
             const property =
               objects
@@ -3298,6 +3352,18 @@ describe("the tab indicator contract", () => {
       "an owned property written onto the style object by index",
       'const style: Record<string, string> = {};\nstyle["borderBottomColor"] = "red";\n<TabsTrigger style={style} />',
     ],
+    // The wrappers are erased before the code runs, so the element receives the
+    // mutated object exactly as a bare name would hand it over.
+    [
+      "an owned property written onto a non-null asserted style object",
+      'const style: Record<string, string> = {};\nstyle.borderBottomColor = "red";\n<TabsTrigger style={style!} />',
+    ],
+    // A `break` above the reset can carry control out of the `do` body before
+    // it runs, so the owned value is still one the element can render.
+    [
+      "an owned property a do-body reset behind a break does not clear",
+      'let style: Record<string, string> = { borderBottomColor: "red" };\ndo {\n  if (Math.random() > 0) break;\n  style = {};\n} while (false);\n<TabsTrigger style={style} />',
+    ],
   ])("catches %s", (_label, body) => {
     // The positive controls. Each is a shape an earlier version returned clean
     // on, or a category it never read. Without these, a check that can never
@@ -3666,6 +3732,29 @@ describe("the tab indicator contract", () => {
       "a class on a local component shadowing an imported name",
       'function Row() {\n  const TabsTrigger = (p: Record<string, unknown>) => <div {...p} />;\n  return <TabsTrigger className="border-b-0" />;\n}',
     ],
+    // A local object may shadow a namespace import exactly as a local component
+    // may shadow a named one; the tag refers to the local binding.
+    [
+      "a class on a namespace member shadowing an imported namespace",
+      'import * as UI from "@nextlyhq/ui";\nfunction Row() {\n  const UI = { TabsTrigger: (p: Record<string, unknown>) => <div {...p} /> };\n  return <UI.TabsTrigger className="border-b-0" />;\n}',
+    ],
+    // A mutation belongs to the object held when it happened. A later write
+    // replaces that object, so the element never sees the mutation.
+    [
+      "a property written onto an object the binding then replaces",
+      'let style: Record<string, string> = {};\nstyle.borderBottomColor = "red";\nstyle = {};\n<TabsTrigger style={style} />',
+    ],
+    // In an object map the KEY is the class and the VALUE is the condition, so
+    // a key switched off applies nothing.
+    [
+      "a class map entry switched off by its value",
+      '<TabsTrigger className={cn({ "border-b-0": false })} />',
+    ],
+    // A `#` inside an attribute VALUE is data, not an id selector.
+    [
+      "an attribute value that merely contains a hash",
+      '<TabsTrigger className="not-data-[foo=#bar]:opacity-100" />',
+    ],
   ])("does not report %s", (_label, body) => {
     // The complement, and the reason this is a contract rather than a ban. A
     // check that flags a documented example or a legitimate layout class gets
@@ -3906,6 +3995,40 @@ describe("which files the call-site scan reads", () => {
       .filter(path => !isMatch(path, triggers))
       .map(path => path.replace(`${REPO}/`, ""));
     expect(unwatchedProbes).toEqual([]);
+
+    // Matching is only HALF the mechanism, and the half that was never checked
+    // is the one that failed three times: Vitest reruns when its watcher emits
+    // an event AND a trigger matches the path. The server is rooted at this
+    // package, so nothing outside it was watched at all and the matcher was
+    // never consulted for the call sites this suite reads.
+    //
+    // chokidar removed glob support in v4, so a watched entry has to be a REAL
+    // PATH. That is what this asserts, and it is what separates the three
+    // broken generations from the working one: `../**/*.tsx` is not a path,
+    // `<root>/packages/**/*.tsx` is not a path, `<root>/packages` is.
+    const watched: string[] = [];
+    const plugins = (config as { plugins?: unknown[] }).plugins ?? [];
+    for (const plugin of plugins) {
+      const configureServer = (
+        plugin as { configureServer?: (server: unknown) => void }
+      ).configureServer;
+      configureServer?.({
+        watcher: { add: (path: string) => watched.push(path) },
+      });
+    }
+
+    // Proves the hook ran at all before anything is concluded from what it
+    // recorded: an empty list would otherwise satisfy every assertion below.
+    expect(watched.length).toBeGreaterThan(0);
+
+    const notReal = watched.filter(path => !existsSync(path));
+    expect(notReal).toEqual([]);
+
+    const unwatchedRoots = SCAN_ROOTS.filter(
+      root =>
+        !watched.some(path => root === path || root.startsWith(`${path}/`))
+    ).map(root => root.replace(`${REPO}/`, ""));
+    expect(unwatchedRoots).toEqual([]);
 
     // And every file the scan actually reads, which covers shapes no synthetic
     // path anticipates. Named individually: the list is only ever wrong for a
