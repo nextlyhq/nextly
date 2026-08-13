@@ -57,8 +57,12 @@ HEAD_REMOTE=origin
 # 100 and long PRs here run to three pages: an unpaginated query reads page one
 # and answers zero, which is the reassuring direction. It emits one count per
 # page, hence the sum.
-FORCED=$(gh api --paginate "repos/nextlyhq/nextly/issues/$PR/timeline?per_page=100" \
-  --jq '[.[]|select(.event=="head_ref_force_pushed")]|length' | awk '{s+=$1} END{print s+0}')
+PAGES=$(gh api --paginate "repos/nextlyhq/nextly/issues/$PR/timeline?per_page=100" \
+  --jq '[.[]|select(.event=="head_ref_force_pushed")]|length') || {
+  echo "PR#$PR: timeline query failed — NOT CHECKABLE, which is not clean" >&2
+  exit 2
+}
+FORCED=$(printf '%s\n' "$PAGES" | awk '{s+=$1} END{print s+0}')
 if [ "${FORCED:-1}" -gt 0 ]; then
   echo "PR#$PR: $FORCED force-push(es) — NOT CHECKABLE, which is not clean" >&2
   exit 2
@@ -95,6 +99,17 @@ having looked.** Three things produce it, and only the first is unanswerable:
 
 Derive every field in the same command that uses it, and treat an empty tip as a
 refusal to answer.
+
+**Every step in that block either produces an answer or exits 2, and it is worth
+stating as the block's rule rather than leaving it to be rediscovered.** Three
+separate ways of failing open have now been found in these few lines: a branch
+name that resolved to nothing, a force-push count that was computed and never
+read, and an API failure whose exit status was swallowed by the `awk` that
+summed its output — each one turning "I could not look" into "nothing to see".
+A pipeline is the specific trap there, since its status is the LAST command's:
+capture the query's output in its own substitution, check it, and sum
+afterwards. When a third instance of one shape appears, the shape is a property
+of the design rather than of the instances.
 
 **A force-push can erase the evidence, and the range then reports clean.** If
 merged head `A` was followed by stranded commit `B`, and the branch was later
