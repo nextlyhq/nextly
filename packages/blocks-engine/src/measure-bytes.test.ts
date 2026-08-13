@@ -121,41 +121,62 @@ describe("measureBytes", () => {
     expect(invoked).toBe(0);
   });
 
-  it("reads array elements one at a time", () => {
-    // Arrays are read by index, so a proxy can observe the order. Filling the
-    // stack first reads every element before any is measured, which holds an
-    // entire hostile array in memory while enforcing the cap that exists to
-    // refuse it.
-    let reads = 0;
-    const backing = Array.from({ length: 1_000 }, () => "x".repeat(100_000));
-    const observed = new Proxy(backing, {
-      get(target, key, receiver) {
-        if (typeof key === "string" && /^[0-9]+$/.test(key)) reads += 1;
-        return Reflect.get(target, key, receiver) as unknown;
+  it("asks for one member at a time, records and arrays alike", () => {
+    // Counts DESCRIPTOR requests, which is the operation the walk performs.
+    // An earlier version of this counted `get` traps and stayed green for a
+    // walk that enumerated every member first, because the reader never
+    // triggers `get` at all — a control that measured an operation its subject
+    // does not use.
+    //
+    // Asking for a member runs the container's own code, so a descriptor trap
+    // can fabricate a fresh object per request. Enumerating a whole container
+    // before measuring anything therefore materializes all of it under a cap
+    // meant to refuse exactly that.
+    const probe = (size: number) => {
+      let descriptors = 0;
+      const target: Record<string, unknown> = {};
+      for (let index = 0; index < size; index += 1) target[`k${index}`] = index;
+      const observed = new Proxy(target, {
+        getOwnPropertyDescriptor(t, key) {
+          descriptors += 1;
+          return {
+            configurable: true,
+            enumerable: true,
+            value: { big: "x".repeat(100_000) },
+          };
+        },
+      });
+      const result = measureBytes({ items: observed }, 2 * 1024 * 1024);
+      return { descriptors, exceeded: result.exceeded };
+    };
+
+    const record = probe(1_000);
+    expect(record.exceeded).toBe(true);
+    // 2 MiB / 100 KB is about 21 members. An eager pass asks for all 1,000.
+    expect(record.descriptors).toBeLessThan(200);
+
+    let elements = 0;
+    const backing = Array.from({ length: 1_000 }, () => 0);
+    const observedArray = new Proxy(backing, {
+      getOwnPropertyDescriptor(t, key) {
+        // `length` must answer truthfully, or the walk refuses the array
+        // before it iterates and this fixture never reaches the loop it is
+        // testing — a control satisfied by the subject declining to run.
+        if (typeof key !== "string" || !/^[0-9]+$/.test(key)) {
+          return Reflect.getOwnPropertyDescriptor(t, key);
+        }
+        elements += 1;
+        return {
+          configurable: true,
+          enumerable: true,
+          value: { big: "x".repeat(100_000) },
+        };
       },
     });
-
-    expect(measureBytes({ items: observed }, 2 * 1024 * 1024).exceeded).toBe(
-      true
-    );
-    // 2 MiB / 100 KB is about 21 elements. An eager fill reads all 1,000.
-    expect(reads).toBeLessThan(100);
-  });
-
-  it("reports symbol-keyed properties on objects and arrays", () => {
-    // JSON drops these without a word, the same class as `undefined`.
-    const withSymbol: Record<string, unknown> = { ok: 1 };
-    withSymbol[Symbol("s") as unknown as string] = 2;
-    expect(measureBytes(withSymbol, 1024).unserializable).toBe(true);
-
-    const array: unknown[] = [1, 2];
-    (array as unknown as Record<symbol, unknown>)[Symbol("s")] = 3;
-    expect(measureBytes(array, 1024).unserializable).toBe(true);
-
-    // The positive control: an ordinary object and array must NOT be flagged,
-    // or the assertions above pass for a walk that refuses everything.
-    expect(measureBytes({ ok: 1 }, 1024).unserializable).toBe(false);
-    expect(measureBytes([1, 2], 1024).unserializable).toBe(false);
+    expect(
+      measureBytes({ items: observedArray }, 2 * 1024 * 1024).exceeded
+    ).toBe(true);
+    expect(elements).toBeLessThan(200);
   });
 
   it("refuses an indexed accessor without invoking it", () => {

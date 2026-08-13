@@ -425,6 +425,29 @@ describe("block document schema", () => {
     }
   });
 
+  it("refuses a node whose required fields are inherited", () => {
+    // The schema reads properties directly, so an inherited value satisfies it,
+    // while `JSON.stringify` writes only own properties and the survey walks
+    // only own names. Without this the three disagree: the node parses, and
+    // storage receives `{}`.
+    const proto = { id: "a", type: "core/text", version: 1, props: {} };
+    const doc = {
+      ...emptyPage(),
+      nodes: [Object.create(proto) as object],
+    };
+    expect(parseBlockDocument(doc).success).toBe(false);
+  });
+
+  it("still accepts a node that owns its fields", () => {
+    // The control. A check that refused every node would satisfy the assertion
+    // above while rejecting every real document.
+    const doc = {
+      ...emptyPage(),
+      nodes: [{ id: "a", type: "core/text", version: 1, props: {} }],
+    };
+    expect(parseBlockDocument(doc).success).toBe(true);
+  });
+
   it("refuses a sparse node array instead of walking past its holes", () => {
     // A hole is not an absent child, it is a malformed document. `map`
     // preserves holes, so the walk would pop `undefined`, treat it as an

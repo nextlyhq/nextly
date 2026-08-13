@@ -366,53 +366,58 @@ const bindingSchema = z.union([
  * rendering and the manifest's version stamp both read it unconditionally — a
  * node without one cannot be migrated, only guessed at.
  */
-const blockNodeSchema = z.looseObject({
-  id: z.string(),
-  type: z.string(),
-  // A positive SAFE integer, and the ceiling is deliberate rather than an
-  // artefact of the validator. A version above 2^53-1 does not survive JSON:
-  // the text `{"version":9007199254740993}` parses to `...992` and serializes
-  // back as `...992`, so the number read is not the number written. Accepting
-  // it would admit exactly the silent-rewrite class this entry point refuses
-  // for `-0`, `NaN` and the infinities. The published `maximum` states the
-  // bound rather than leaving a consumer to discover it.
-  version: z.number().int().positive(),
-  props: openRecord(),
-  bindings: typedRecord(
-    value => bindingSchema.safeParse(value).success,
-    bindingFragment(),
-    "Expected an object of bindings"
-  ).optional(),
-  get slots() {
-    // The one document-keyed record NOT checked in place, and the exception is
-    // the published schema rather than an oversight. Checking slots with a
-    // predicate takes the node schema out of the emitted tree, and with it the
-    // `$ref` that describes nesting at all: the contract stops saying a slot
-    // holds nodes and says only that it holds an array, so an external consumer
-    // can no longer validate anything below the first level. Describing the
-    // recursion is most of what publishing this format is for.
-    //
-    // What that costs is bounded, and smaller than the alternative. Slot names
-    // are declared by block definitions rather than typed by authors, so a slot
-    // literally named `constructor` is refused; and the parsed copy of a slot
-    // named `__proto__` is dropped, so its children go structurally unchecked.
-    // Neither loses data, because the value returned is the caller's own.
-    return z.record(z.string(), z.array(blockNodeSchema)).optional();
-  },
-  styles: nodeStylesSchema.optional(),
-  classes: z.array(z.string()).optional(),
-  visibility: nodeVisibilitySchema.optional(),
-  locked: z.boolean().optional(),
-  name: z.string().optional(),
-  customCss: z.string().optional(),
-  cssId: z.string().optional(),
-  attributes: typedRecord(
-    value => typeof value === "string",
-    { type: "string" },
-    "Expected an object of strings"
-  ).optional(),
-  migrationFailed: z.boolean().optional(),
-});
+const blockNodeSchema = z
+  .looseObject({
+    id: z.string(),
+    type: z.string(),
+    // A positive SAFE integer, and the ceiling is deliberate rather than an
+    // artefact of the validator. A version above 2^53-1 does not survive JSON:
+    // the text `{"version":9007199254740993}` parses to `...992` and serializes
+    // back as `...992`, so the number read is not the number written. Accepting
+    // it would admit exactly the silent-rewrite class this entry point refuses
+    // for `-0`, `NaN` and the infinities. The published `maximum` states the
+    // bound rather than leaving a consumer to discover it.
+    version: z.number().int().positive(),
+    props: openRecord(),
+    bindings: typedRecord(
+      value => bindingSchema.safeParse(value).success,
+      bindingFragment(),
+      "Expected an object of bindings"
+    ).optional(),
+    get slots() {
+      // The one document-keyed record NOT checked in place, and the exception is
+      // the published schema rather than an oversight. Checking slots with a
+      // predicate takes the node schema out of the emitted tree, and with it the
+      // `$ref` that describes nesting at all: the contract stops saying a slot
+      // holds nodes and says only that it holds an array, so an external consumer
+      // can no longer validate anything below the first level. Describing the
+      // recursion is most of what publishing this format is for.
+      //
+      // What that costs is bounded, and smaller than the alternative. Slot names
+      // are declared by block definitions rather than typed by authors, so a slot
+      // literally named `constructor` is refused; and the parsed copy of a slot
+      // named `__proto__` is dropped, so its children go structurally unchecked.
+      // Neither loses data, because the value returned is the caller's own.
+      return z.record(z.string(), z.array(blockNodeSchema)).optional();
+    },
+    styles: nodeStylesSchema.optional(),
+    classes: z.array(z.string()).optional(),
+    visibility: nodeVisibilitySchema.optional(),
+    locked: z.boolean().optional(),
+    name: z.string().optional(),
+    customCss: z.string().optional(),
+    cssId: z.string().optional(),
+    attributes: typedRecord(
+      value => typeof value === "string",
+      { type: "string" },
+      "Expected an object of strings"
+    ).optional(),
+    migrationFailed: z.boolean().optional(),
+  })
+  .refine(ownsRequiredFields, {
+    message:
+      "A node must OWN its id, type, version and props; an inherited value is not written to storage.",
+  });
 
 /**
  * The stored value of a `blocks` field, and the body of every builder document.
@@ -427,6 +432,27 @@ const blockNodeSchema = z.looseObject({
  * understands the file at all, and a schema that accepted a version it was not
  * written for would answer that question wrongly.
  */
+/**
+ * The fields a node must own, rather than merely reach.
+ *
+ * The schema reads properties directly, so a value inherited from
+ * `Object.prototype` satisfies it — while `JSON.stringify` writes only own
+ * properties and the survey enumerates only own names. In an environment where
+ * something has put `id`, `type`, `version` and `props` on the prototype, an
+ * empty object therefore parsed as a valid node and then persisted as `{}`.
+ *
+ * Checked here rather than in the survey because the survey has no notion of
+ * which fields a node REQUIRES; this is the layer that knows.
+ */
+const NODE_OWN_FIELDS = ["id", "type", "version", "props"] as const;
+
+function ownsRequiredFields(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  return NODE_OWN_FIELDS.every(field =>
+    Object.prototype.hasOwnProperty.call(value, field)
+  );
+}
+
 const blockDocumentSchema = z.looseObject({
   formatVersion: z.literal(DOCUMENT_FORMAT_VERSION),
   kind: z.enum(documentKinds),

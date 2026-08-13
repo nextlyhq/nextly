@@ -155,6 +155,42 @@ function isPlainRecordSafely(value: object): {
 }
 
 /**
+ * What a member of this container becomes, and at what nesting level.
+ *
+ * The two places a document's own tree continues are `nodes` on the envelope
+ * and `slots` on a node; everything else is data whatever it holds. Deciding
+ * this from the CONTAINER's kind rather than from the member's is what keeps an
+ * array of nodes distinguishable from a node, so the caps describe the document
+ * rather than the shape of its encoding.
+ *
+ * A slot named `__proto__` is refused: it survives JSON as an ordinary own key
+ * while every consumer that rebuilds a record by assignment drops it, so its
+ * children would go unchecked while the document read as valid.
+ */
+function memberPlacement(
+  container: FrameKind,
+  depth: number,
+  key: string
+): { kind: FrameKind; depth: number } | "refused" {
+  // An array of nodes holds nodes, at the level the array itself carries.
+  if (container === "nodeList") return { kind: "node", depth };
+  // A node's `slots` is the map whose values are the next level's node lists.
+  if (container === "node") {
+    return key === "slots"
+      ? { kind: "slotMap", depth }
+      : { kind: "value", depth };
+  }
+  // Each slot in that map holds a node list one level deeper.
+  if (container === "slotMap") {
+    if (key === "__proto__") return "refused";
+    return { kind: "nodeList", depth: depth + 1 };
+  }
+  // The envelope's `nodes` starts the tree; anything else is data.
+  if (depth === 0 && key === "nodes") return { kind: "nodeList", depth: 1 };
+  return { kind: "value", depth };
+}
+
+/**
  * Everything one pass over an untrusted document can establish.
  *
  * Depth, node count, serialized size, JSON-representability and read safety are
@@ -202,6 +238,8 @@ export interface SurveyLimits {
 type FrameKind =
   /** A marker that closes a subtree, removing its root from the active path. */
   | "leave"
+  /** A container part-way through its members, resumed after each subtree. */
+  | "members"
   /** Ordinary data: props, styles, an attribute map, an array of strings. */
   | "value"
   /** An array whose elements are nodes: the envelope's `nodes`, a slot's children. */
@@ -216,6 +254,17 @@ interface Frame {
   kind: FrameKind;
   /** Nesting level of the node this frame belongs to; 0 outside the tree. */
   depth: number;
+  /**
+   * Iteration state for a `members` frame.
+   *
+   * `names` is present for a record and absent for an array, where the index
+   * IS the key and materializing one string per index is the allocation this
+   * walk exists to avoid. `memberKind` is what an element or value becomes.
+   */
+  names?: string[];
+  length?: number;
+  index?: number;
+  containerKind?: FrameKind;
 }
 
 export function surveyDocument(
@@ -258,6 +307,63 @@ export function surveyDocument(
     // ancestors only. Pushed BEFORE the children, so it pops after them.
     if (frame.kind === "leave") {
       onPath.delete(frame.value as object);
+      continue;
+    }
+
+    // ONE member at a time, for records and arrays alike.
+    //
+    // The continuation is pushed BEFORE the child, so the child's entire
+    // subtree is measured before this container is asked for its next member.
+    // Enumerating a whole container first is not free even though a reference
+    // costs nothing to hold: asking for a member runs the container's own code
+    // — a descriptor trap can fabricate a fresh object per request — so a
+    // thousand members are materialized before the cap looks at any of them.
+    if (frame.kind === "members") {
+      const container = frame.value as object;
+      const index = frame.index ?? 0;
+      const isRecord = frame.names !== undefined;
+      const total = isRecord ? frame.names!.length : (frame.length ?? 0);
+      if (index >= total) continue;
+
+      stack.push({ ...frame, index: index + 1 });
+
+      const key = isRecord ? frame.names![index] : index;
+      const member = readMember(container, key);
+      if (!member.present || !member.enumerable) {
+        // Absent covers an unreadable member and an accessor; non-enumerable
+        // is a member `JSON.stringify` omits while the schema still reads it.
+        unserializable = true;
+        continue;
+      }
+
+      if (isRecord) {
+        bytes +=
+          utf8ByteLength(String(key), limits.maxBytes) +
+          3 +
+          (index > 0 ? 1 : 0);
+        if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
+      }
+
+      const held = member.value;
+      const placement = memberPlacement(
+        frame.containerKind ?? "value",
+        frame.depth,
+        String(key)
+      );
+      if (placement === "refused") {
+        unserializable = true;
+        continue;
+      }
+
+      if (typeof held === "object" && held !== null) {
+        stack.push({
+          value: held,
+          kind: placement.kind,
+          depth: placement.depth,
+        });
+      } else if (takeScalar(held)) {
+        return { ...done(), tooLarge: true };
+      }
       continue;
     }
 
@@ -308,42 +414,26 @@ export function surveyDocument(
       bytes += 2 + Math.max(0, length - 1);
       if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
 
-      const elementKind: FrameKind = kind === "nodeList" ? "node" : "value";
-      // Read one element, account for it, and only then reach for the next.
-      // Filling the stack first reads every element before any is measured, so
-      // an array of accessors returning large strings holds all of them at once
-      // — the allocation the cap exists to refuse, performed while enforcing it.
-      // That applies to OBJECT-valued elements too: pushing them without
-      // accounting first defers nothing, because reading them is the cost.
-      for (let index = 0; index < length; index += 1) {
-        const member = readMember(value, index);
-        if (!member.present) {
-          unserializable = true;
-          continue;
-        }
-        const element = member.value;
-        if (typeof element === "object" && element !== null) {
-          stack.push({ value: element, kind: elementKind, depth });
-          if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
-        } else if (takeScalar(element)) {
-          return { ...done(), tooLarge: true };
-        }
-      }
+      stack.push({
+        value,
+        kind: "members",
+        depth,
+        length,
+        index: 0,
+        containerKind: kind,
+      });
       continue;
     }
 
     const shape = isPlainRecordSafely(value);
     if (!shape.plain) unserializable = true;
     if (shape.threw) continue;
-    bytes += 2; // braces
-    if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
 
-    // Own property NAMES rather than `for...in`. Both cost the same for an
-    // object, and this sees the non-enumerable keys `for...in` cannot — which
+    // Own property NAMES rather than `for...in`. Both cost the same for a
+    // record, and this sees the non-enumerable keys `for...in` cannot — which
     // matters because the two readers must agree: `JSON.stringify` omits a
     // non-enumerable property while the schema's direct property access still
-    // sees it, so a node whose `id` was non-enumerable parsed successfully and
-    // then serialized without one.
+    // sees it.
     let names: string[];
     try {
       names = Object.getOwnPropertyNames(value);
@@ -352,51 +442,17 @@ export function surveyDocument(
       continue;
     }
 
-    let properties = 0;
-    for (const key of names) {
-      bytes +=
-        utf8ByteLength(key, limits.maxBytes) + 3 + (properties > 0 ? 1 : 0);
-      properties += 1;
-      if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
+    bytes += 2; // braces
+    if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
 
-      const member = readMember(value, key);
-      if (!member.present) {
-        unserializable = true;
-        continue;
-      }
-      if (!member.enumerable) {
-        unserializable = true;
-        continue;
-      }
-      const held = member.value;
-
-      // The two places the document's own tree continues. `nodes` is the
-      // ENVELOPE's key, so it is recognised only on the root frame — a props
-      // object with a `nodes` key is data, and treating it as structure would
-      // let arbitrary content inflate the node count and the depth.
-      let childKind: FrameKind = "value";
-      let childDepth = depth;
-      if (kind === "value" && value === root && key === "nodes") {
-        childKind = "nodeList";
-        childDepth = 1;
-      } else if (kind === "node" && key === "slots") {
-        childKind = "slotMap";
-      } else if (kind === "slotMap") {
-        childKind = "nodeList";
-        childDepth = depth + 1;
-        // A slot named `__proto__` survives JSON as an ordinary own key, while
-        // every consumer that rebuilds a record by assignment drops it — the
-        // published schema's validator included — so its children would go
-        // unchecked while the document read as valid.
-        if (key === "__proto__") unserializable = true;
-      }
-
-      if (typeof held === "object" && held !== null) {
-        stack.push({ value: held, kind: childKind, depth: childDepth });
-      } else if (takeScalar(held)) {
-        return { ...done(), tooLarge: true };
-      }
-    }
+    stack.push({
+      value,
+      kind: "members",
+      depth,
+      names,
+      index: 0,
+      containerKind: kind,
+    });
   }
 
   return done();
