@@ -160,6 +160,8 @@ export const ISSUE_CODES = {
   "node-count-exceeded":
     "The document has more nodes than the allowed maximum.",
   "document-too-large": "The serialized document exceeds the byte limit.",
+  "document-unwritable":
+    "The document holds a value JSON cannot write, so it has no stored form.",
   "document-size-warning":
     "The serialized document is approaching the byte limit.",
   "missing-node-id": "A node is missing its id or the id is empty.",
@@ -575,10 +577,76 @@ function asSerialized(value: unknown, key: string): unknown {
     : value;
 }
 
-export function measureBytes(
-  root: unknown,
-  limit: number
-): { bytes: number; exceeded: boolean } {
+/**
+ * What a byte measurement can say, and the two answers are different questions.
+ *
+ * `exceeded` means "this will not fit", and `reason` says WHY it cannot be
+ * stored — which the caller needs, because the two causes deserve opposite
+ * advice. A document over the limit is fixed by removing content; one holding a
+ * BigInt is not made smaller by deleting blocks, and telling its author it is
+ * "too large" sends them to work that cannot help.
+ *
+ * The union keeps `exceeded` a boolean, so a caller that only asks "does it
+ * fit?" is unchanged, while a caller that reports the problem can narrow on it.
+ */
+export type ByteMeasurement =
+  | { bytes: number; exceeded: false }
+  | { bytes: number; exceeded: true; reason: "over-limit" | "unwritable" };
+
+/**
+ * A value `JSON.stringify` REFUSES, rather than writes or drops.
+ *
+ * The third thing the writer can do with a value, and the one this counter had
+ * no way to express: `undefined`, functions and symbols are DROPPED
+ * ({@link serializesAs}); everything else is written; and a BigInt makes
+ * `JSON.stringify` throw. Counting it as an ordinary value reports
+ * `measureBytes({ x: 1n }, 100)` as fitting in 6 bytes while the writer refuses
+ * the whole document.
+ *
+ * The boxed form is included because `Object(1n)` is a BigInt OBJECT, so
+ * `typeof` reports `"object"` and the walk would treat it as an ordinary record
+ * with no own keys — two bytes for a value that cannot be written at all.
+ *
+ * How that boxed form is detected is stated at the check itself, because the
+ * cheap-looking alternatives are all wrong in ways that are not visible from
+ * here.
+ */
+function refusedByWriter(value: unknown): boolean {
+  if (typeof value === "bigint") return true;
+  if (typeof value !== "object" || value === null) return false;
+  // The internal slot, and NOTHING else. Every cheaper test asks the value a
+  // question, and a value in a block document is untrusted input:
+  //
+  // - `Symbol.toStringTag` is an ordinary writable property, so the tag both
+  //   over-reports — `{ [Symbol.toStringTag]: "BigInt", x: 1 }` is written as
+  //   `{"x":1}` — and runs a document-supplied getter that `JSON.stringify`
+  //   never runs, since it ignores symbol keys entirely.
+  // - Reading that tag's DESCRIPTOR instead avoids the getter and still
+  //   executes a Proxy's `getOwnPropertyDescriptor` trap. Measured: an empty
+  //   proxy whose trap throws only for `Symbol.toStringTag` is written as `{}`
+  //   by the writer while the probe raises out of a function contracted to
+  //   report rather than throw.
+  // - The prototype chain cannot decide it either. Measured:
+  //   `setPrototypeOf(Object(1n), Object.prototype)` is still refused by the
+  //   writer, so a prototype filter reports a storable document that the
+  //   writer then rejects — the counter and the writer disagreeing, which is
+  //   the one thing this function exists to prevent.
+  //
+  // `BigInt.prototype.valueOf` reads an internal slot: measured against a Proxy
+  // logging every trap, it triggers none, and it cannot be spoofed by any
+  // property the document sets. It costs a thrown exception per non-BigInt
+  // object, which is the price of asking a question the value cannot answer
+  // dishonestly; the count is bounded by the byte cap that admits those objects
+  // in the first place.
+  try {
+    BigInt.prototype.valueOf.call(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function measureBytes(root: unknown, limit: number): ByteMeasurement {
   let bytes = 0;
   // Each entry carries the KEY it sits under, because `toJSON` receives it.
   // `JSON.stringify` passes the containing property name — the index as a
@@ -626,6 +694,9 @@ export function measureBytes(
     // not open. A public caller has made no such promise.
     const value =
       entry.normalized === true ? popped : asSerialized(popped, entry.key);
+    if (refusedByWriter(value)) {
+      return { bytes, exceeded: true, reason: "unwritable" };
+    }
     if (typeof value === "object" && value !== null) {
       // REPORTED, not thrown. A cyclic value has no serialized form, so it
       // cannot be stored — which is a verdict this function already has a way
@@ -638,7 +709,9 @@ export function measureBytes(
       // added bytes until the cap stopped the walk. The cycle set is what makes
       // the exact-count mode (`limit` of `Infinity`) reach the same answer
       // instead of never terminating.
-      if (open.has(value)) return { bytes, exceeded: true };
+      if (open.has(value)) {
+        return { bytes, exceeded: true, reason: "unwritable" };
+      }
       open.add(value);
       stack.push({ value, key: entry.key, exiting: value });
     }
@@ -659,7 +732,7 @@ export function measureBytes(
       // BEFORE enqueuing elements: a huge array's comma count alone can exceed
       // the cap, so millions of entries must never be pushed first.
       bytes += 2 + Math.max(0, value.length - 1);
-      if (bytes > limit) return { bytes, exceeded: true };
+      if (bytes > limit) return { bytes, exceeded: true, reason: "over-limit" };
       // An element JSON cannot represent becomes `null` IN AN ARRAY, because an
       // array's length is part of its meaning. The same value inside an object
       // is dropped instead — see below. Normalised here so the walk never has
@@ -703,14 +776,15 @@ export function measureBytes(
       // the validator, which decides the same question with this counter, then
       // does not catch it either.
       bytes += 2 + Math.max(0, entries.length - 1);
-      if (bytes > limit) return { bytes, exceeded: true };
+      if (bytes > limit) return { bytes, exceeded: true, reason: "over-limit" };
       for (const [key, val] of entries) {
         bytes += utf8ByteLength(key, limit) + 3; // quotes + colon
-        if (bytes > limit) return { bytes, exceeded: true };
+        if (bytes > limit)
+          return { bytes, exceeded: true, reason: "over-limit" };
         stack.push({ value: val, key, normalized: true });
       }
     }
-    if (bytes > limit) return { bytes, exceeded: true };
+    if (bytes > limit) return { bytes, exceeded: true, reason: "over-limit" };
   }
   return { bytes, exceeded: false };
 }
@@ -748,8 +822,21 @@ function checkLimits(
   // Measure serialized size with a bounded, non-materializing counter: a
   // document that stays under the node/depth caps but hides a huge string must
   // still be rejected without allocating a full JSON copy of it.
-  const { bytes, exceeded } = measureBytes(doc, limits.maxBytes);
-  if (exceeded) {
+  const measured = measureBytes(doc, limits.maxBytes);
+  const bytes = measured.bytes;
+  // The CAUSE, not just the refusal. A document over the limit is fixed by
+  // removing content; one holding a value JSON cannot write is not made smaller
+  // by deleting blocks, and reporting it as "too large" sends its author to
+  // work that cannot help.
+  if (measured.exceeded && measured.reason === "unwritable") {
+    issues.push({
+      path: "",
+      code: "document-unwritable",
+      severity: "error",
+      message:
+        "Document holds a value JSON cannot write, so it has no stored form.",
+    });
+  } else if (measured.exceeded) {
     issues.push({
       path: "",
       code: "document-too-large",

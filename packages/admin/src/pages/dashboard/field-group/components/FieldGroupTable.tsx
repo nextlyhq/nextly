@@ -455,7 +455,7 @@ export default function FieldGroupTable() {
           onChange={setSearch}
           placeholder="Search field groups..."
           isLoading={isFetching}
-          className="w-full border-border bg-background text-foreground md:max-w-sm"
+          className="w-full md:max-w-sm"
         />
 
         <div className="flex w-full items-center justify-between gap-2 sm:justify-end md:w-auto">

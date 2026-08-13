@@ -78,6 +78,10 @@ describe("the request-path registration input", () => {
    */
   it("still reports the booted list to readers of the config", async () => {
     const { getHandlerConfig } = await import("../auth-handler");
+    // The read is gated on a registered runtime, because the booted list
+    // describes one. This half of the pair is about what the store RECORDS, so
+    // it stands in the state where that gate is open.
+    isServicesRegistered.mockReturnValue(true);
 
     setHandlerConfig(raw);
     setHandlerPlugins(plugins("@acme/declared", "@acme/added-by-setup"));

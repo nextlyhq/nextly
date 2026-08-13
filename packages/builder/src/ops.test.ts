@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { applyOp, OpError, type BuilderOp, type NodePatch } from "./ops";
 
@@ -2716,5 +2716,82 @@ describe("an inverse that names a parent held twice", () => {
     expect(() =>
       applyOp(doc(), { kind: "insert", node: root, at: { index: 0 } }, deep)
     ).toThrow(/cannot be edited/);
+  });
+});
+
+describe("an inherited field is refused only when it would change the edit", () => {
+  const page = (nodes: BlockNode[]): BlockDocument => ({
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes,
+  });
+  const box = (id: string): BlockNode => ({
+    id,
+    type: "core/box",
+    version: 1,
+    props: {},
+  });
+
+  afterEach(() => {
+    delete (Object.prototype as Record<string, unknown>).slot;
+    delete (Object.prototype as Record<string, unknown>).parentId;
+  });
+
+  it("places at the top level while the prototype carries an undefined slot", () => {
+    // A top-level position owns no `slot`, so `"slot" in at` becomes true the
+    // moment anything assigns `undefined` to `Object.prototype`. Refusing on
+    // presence alone turned that into an editor that could not place a node
+    // anywhere — and the inherited `undefined` is exactly what a replay of the
+    // stored op resolves to, so nothing about the placement is unreproducible.
+    (Object.prototype as Record<string, unknown>).slot = undefined;
+
+    const applied = applyOp(page([box("a")]), {
+      kind: "insert",
+      node: box("b"),
+      at: { index: 1 },
+    });
+
+    expect(applied.document.nodes.map(n => n.id)).toEqual(["a", "b"]);
+  });
+
+  it("still refuses an inherited value that WOULD change the placement", () => {
+    // The control for the case above: the guard has to keep rejecting the
+    // pollution it was written for, or the fix has simply removed it.
+    (Object.prototype as Record<string, unknown>).parentId = "a";
+
+    expect(() =>
+      applyOp(page([box("a")]), {
+        kind: "insert",
+        node: box("b"),
+        at: { index: 0 },
+      })
+    ).toThrow(OpError);
+  });
+
+  it("refuses an inherited ACCESSOR without invoking it", () => {
+    // What a getter returns is unknowable without running it, and running
+    // document-supplied code inside a guard whose purpose is to reject before
+    // anything happens is the thing to avoid. So it is assumed significant.
+    let reads = 0;
+    Object.defineProperty(Object.prototype, "slot", {
+      get: () => {
+        reads += 1;
+        return undefined;
+      },
+      configurable: true,
+    });
+
+    try {
+      expect(() =>
+        applyOp(page([box("a")]), {
+          kind: "insert",
+          node: box("b"),
+          at: { index: 0 },
+        })
+      ).toThrow(OpError);
+      expect(reads, "the guard invoked the inherited getter").toBe(0);
+    } finally {
+      delete (Object.prototype as Record<string, unknown>).slot;
+    }
   });
 });
