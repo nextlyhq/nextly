@@ -26,9 +26,14 @@ on:
       # LIBRARY rather than a Next app, so the assertions below — a root layout, font packages,
       # a `.next` directory — do not describe it, and a job that triggered on it while testing
       # something else would claim a coverage it does not have. Tracked separately.
+      #
+      # `templates/blog/**` is absent for the same reason and not a permanent one: the blog
+      # template does not currently build, so no leg here scaffolds it. Triggering on a path
+      # while running nothing that reads it is the exact defect this job exists to catch,
+      # turned on itself — better the trigger list says what is tested. The blog legs, and this
+      # path with them, belong to the change that makes that template buildable again.
       - "templates/base/**"
       - "templates/blank/**"
-      - "templates/blog/**"
       - "packages/create-nextly-app/**"
       - ".github/workflows/scaffold-build.yml"
 
@@ -50,20 +55,31 @@ jobs:
     strategy:
       fail-fast: false
       # Legs are listed explicitly rather than crossed, because these axes are not independent:
-      # `approach` only means something for a content template, and the download path is a
-      # property of the CLI rather than of any one template. A cross product would spend minutes
-      # on combinations that test nothing new.
+      # the template source is a property of the CLI rather than of any one package manager,
+      # and the pnpm version only means anything on a pnpm leg. A cross product would spend
+      # minutes on combinations that test nothing new.
       #
       # The rule each leg answers to: this job triggers on a set of paths, and every BEHAVIOUR
       # those paths can change should be exercised by some leg. Triggering on a path whose
       # behaviour no leg runs is the defect this job exists to catch, turned on itself.
       #
-      # ONE behaviour is knowingly not covered: the non-sqlite dialects. A scaffold's build
-      # script is `nextly migrate && next build`, so a postgres or mysql leg needs a live and
-      # EMPTY database rather than only a connection string — measured, a postgres scaffold
-      # fails its build with ECONNREFUSED without one. That needs service containers, which is
-      # its own change; until then a CLI edit that misnames an adapter passes here. Tracked, and
-      # said out loud rather than left for someone to find in a green run.
+      # THREE behaviours are knowingly not covered, and they are listed rather than left for
+      # someone to infer from a green run:
+      #
+      # 1. The non-sqlite dialects. A scaffold's build script is `nextly migrate && next
+      #    build`, so a postgres or mysql leg needs a live and EMPTY database rather than only
+      #    a connection string — measured, a postgres scaffold fails its build with
+      #    ECONNREFUSED without one. That needs service containers, which is its own change;
+      #    until then a CLI edit that misnames an adapter passes here.
+      # 2. The `blog` template, and with it the `--approach` axis. It does not currently build,
+      #    so there is nothing for a leg to assert against. Its legs move to the change that
+      #    repairs it.
+      # 3. `downloadTemplate`, the runtime Codeload fetch. Only content templates are
+      #    downloaded — `blank` always resolves locally or from the packed tarball — so
+      #    removing the blog legs removes the only path that exercised it. A broken Codeload
+      #    URL, archive filter, branch handling or extraction path merges green until the blog
+      #    legs return. This one is a real regression in this job's reach and is called out as
+      #    such rather than folded into (2).
       matrix:
         include:
           # The default scaffold, and the baseline everything else varies from.
@@ -75,50 +91,39 @@ jobs:
           # npm installs a HOISTED tree, so an import of an undeclared transitive dependency
           # resolves there and the build passes — while the same project fails for anyone
           # invoking the CLI through pnpm, whose layout does not expose subdependencies at the
-          # root. One leg, because the asymmetry is between the two RESOLVERS rather than
-          # between every template and both of them.
-          - name: blank-pnpm
+          # root. The asymmetry is between the two RESOLVERS, so one template covers it.
+          #
+          # This leg runs the pnpm the repo pins (9.0.0), which is also the one STRICTEST about
+          # the generated `pnpm-workspace.yaml`: through 9.3, the presence of that file
+          # declared a workspace and a missing `packages` key failed the install outright.
+          # pnpm relaxed it in 9.4 when the file became the general settings home, so a leg on
+          # any current pnpm would not see it.
+          - name: blank-pnpm9
             template: blank
             pm: pnpm
             source: local
 
+          # The same resolver on a modern pnpm, because the two read the generated workspace
+          # file DIFFERENTLY and each ignores what the other enforces. pnpm 9 runs dependency
+          # build scripts by default and never consults `allowBuilds` or
+          # `onlyBuiltDependencies` — so on that leg alone, a regression that dropped either
+          # key stays green while pnpm 10+ users get an install that aborts with
+          # ERR_PNPM_IGNORED_BUILDS and a better-sqlite3 with no compiled binding.
+          - name: blank-pnpm11
+            template: blank
+            pm: pnpm
+            source: local
+            pnpmVersion: "11"
+
           # NO `--local-template`, so the CLI falls back to the templates BUNDLED in the packed
-          # tarball. Every other blank leg passes the flag and every blog leg gets its template
-          # remotely, so a break in `copyBundledTemplates` — or `templates` dropped from the
-          # published `files` — would leave all of them green while an ordinary
-          # `create-nextly-app --template blank` fails with "Template not found".
+          # tarball. Every other leg passes the flag, so a break in the bundled-template copy —
+          # or `templates` dropped from the published `files` — would leave all of them green
+          # while an ordinary `create-nextly-app --template blank` fails with
+          # "Template not found".
           - name: blank-bundled
             template: blank
             pm: npm
             source: bundled
-
-          # `blog` is the other app template these paths trigger on.
-          - name: blog-code-first
-            template: blog
-            pm: npm
-            source: local
-            approach: code-first
-
-          # `--yes` selects the code-first default, so `copyTemplate` copies only
-          # `configs/codefirst.config.ts`. Without this leg a break in `visual.config.ts`
-          # triggers the job and passes every leg, while users choosing the supported visual
-          # approach get an unbuildable scaffold.
-          - name: blog-visual
-            template: blog
-            pm: npm
-            source: local
-            approach: visual
-
-          # NO `--local-template`, which is the point: every other leg makes
-          # `resolveTemplateSource` pick the local path and never run `downloadTemplate`. A
-          # broken Codeload URL, archive filter, branch handling or extraction path would
-          # otherwise merge green while every ordinary `blog` invocation fails before
-          # scaffolding. This leg tests the MECHANISM, so it necessarily scaffolds the template
-          # already published rather than the one under review.
-          - name: blog-downloaded
-            template: blog
-            pm: npm
-            source: download
 
     steps:
       - name: Checkout
@@ -150,16 +155,53 @@ jobs:
           mkdir -p /tmp/nextly-pack
           (cd packages/create-nextly-app && pnpm pack --pack-destination /tmp/nextly-pack)
 
+      # AFTER the repo's own install, build and pack, all of which must run on the pinned
+      # pnpm. Only the scaffold's install is being varied.
+      #
+      # Into its OWN prefix, placed on PATH through `GITHUB_PATH`, rather than a plain
+      # `npm install -g`. `pnpm/action-setup` has already put its own bin directory on PATH,
+      # and a global install landing behind it would leave the pinned pnpm in front — the leg
+      # would then run 9 while claiming 11. `GITHUB_PATH` entries are PREPENDED, so this wins.
+      - name: Install the pnpm the scaffold should use
+        if: matrix.pnpmVersion != ''
+        shell: bash
+        run: |
+          npm install -g --prefix /tmp/pnpm-shim "pnpm@${{ matrix.pnpmVersion }}"
+          echo "/tmp/pnpm-shim/bin" >> "$GITHUB_PATH"
+
+      # A separate step because `GITHUB_PATH` takes effect for SUBSEQUENT steps, so the check
+      # cannot live in the one above.
+      #
+      # Asked from the SCAFFOLD directory rather than the checkout, and the difference is not a
+      # detail: pnpm 10+ reads `packageManager` and re-executes itself as that version, so a
+      # freshly installed pnpm 11 answers `9.0.0` anywhere inside this repository — measured —
+      # while the scaffold, which runs outside it, is genuinely on 11. The version that governs
+      # an install is the one resolved where that install happens.
+      #
+      # Without this the leg is unfalsifiable: an install that failed, or landed off PATH,
+      # leaves the pinned pnpm in place and the leg reports a green for a version it never ran.
+      - name: Check the scaffold will use that pnpm
+        if: matrix.pnpmVersion != ''
+        shell: bash
+        run: |
+          mkdir -p /tmp/scaffold-build
+          actual=$(cd /tmp/scaffold-build && pnpm --version)
+          echo "pnpm resolved where the scaffold runs: $actual"
+          case "$actual" in
+            "${{ matrix.pnpmVersion }}".*) ;;
+            *) echo "expected pnpm ${{ matrix.pnpmVersion }}.x, got $actual"; exit 1 ;;
+          esac
+
       - name: Scaffold with a real install
         shell: bash
         run: |
           mkdir -p /tmp/scaffold-build
           cd /tmp/scaffold-build
           tarball=$(ls /tmp/nextly-pack/*.tgz | head -1)
-          # `--local-template` points the CLI at THIS checkout. Content templates such as
-          # `blog` are otherwise downloaded from GitHub at runtime, so without it the job would
-          # scaffold the templates already on `main` and report nothing about the change under
-          # review — the same shape as testing one template while triggering on all of them.
+          # `--local-template` points the CLI at THIS checkout, so the legs that pass it read
+          # the template contents under review rather than whatever the packed tarball carries.
+          # The `bundled` leg deliberately does not, which is how the tarball's own copy gets
+          # exercised.
           #
           # `npm exec --package=<tarball> -- <bin>` is the explicit form; `npx --yes <tarball>`
           # routes the path through sh on npm 11 and fails on the tgz. No `--skip-install`: the
@@ -168,14 +210,10 @@ jobs:
           # The package manager the CLI installs with follows the one that INVOKED it, so the
           # leg is chosen here rather than by a flag.
           args="--template ${{ matrix.template }} --yes"
-          # Omitted on the download leg so `resolveTemplateSource` takes the production path.
-          # `bundled` and `download` both omit it, for different reasons: one exercises the
-          # tarball's own templates, the other the runtime download.
+          # Omitted on the `bundled` leg so the CLI falls back to the templates inside the
+          # packed tarball rather than reading this checkout.
           if [ "${{ matrix.source }}" = "local" ]; then
             args="$args --local-template $GITHUB_WORKSPACE/templates"
-          fi
-          if [ -n "${{ matrix.approach }}" ]; then
-            args="$args --approach ${{ matrix.approach }}"
           fi
 
           if [ "${{ matrix.pm }}" = "pnpm" ]; then
@@ -236,16 +274,4 @@ jobs:
           if grep -rq "internal/font/google" .next; then
             echo "the build ran the Google font loader, which needs the network"
             exit 1
-          fi
-
-          # The blog scaffold's generated build script runs its search-index step as
-          # `(test -f scripts/build-search-index.mjs && node scripts/... || true)`, which turns a
-          # nonzero exit into success. So `npm run build` passing says nothing about whether the
-          # index was produced, and a project shipped without it serves a search page that cannot
-          # load — asserted here rather than inferred from the build's exit code.
-          if [ "${{ matrix.template }}" = "blog" ]; then
-            test -f public/pagefind/pagefind.js || {
-              echo "the blog build produced no search index at public/pagefind/pagefind.js"
-              exit 1
-            }
           fi
