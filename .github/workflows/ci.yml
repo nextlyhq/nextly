@@ -595,14 +595,23 @@ jobs:
             sleep 1
           done
 
+          # Liveness AFTER the rebuild, which is a different question from liveness before it: a
+          # watcher that serves one change and then dies leaves contributors editing against
+          # artifacts that stopped updating, and every check above has already passed by then.
+          # The `kill` below is unconditional and succeeds either way, so this has to be asked
+          # first or the answer is lost.
+          alive=yes
+          kill -0 "$dev_pid" 2>/dev/null || alive=no
+
           git checkout -- src/index.ts src/lib/color/index.ts
           kill "$dev_pid" 2>/dev/null || true
 
           # A missing artifact fails here too. Without it, a watcher that produced nothing at all
           # leaves its `before` checksum empty, every later read differs from it, and absence
           # reports itself as a successful rebuild.
-          if [ -n "$missing" ] || [ "$client_rebuilt" = "no" ] || [ "$server_rebuilt" = "no" ]; then
+          if [ -n "$missing" ] || [ "$client_rebuilt" = "no" ] || [ "$server_rebuilt" = "no" ] || [ "$alive" = "no" ]; then
             [ -n "$missing" ] && echo "No artifact from:$missing"
+            [ "$alive" = "no" ] && echo "The dev script exited after rebuilding, so its artifacts stop updating from here."
             [ "$client_rebuilt" = "no" ] && echo "Editing src/index.ts did not change dist/index.mjs, so the client command built once rather than watching."
             [ "$server_rebuilt" = "no" ] && echo "Editing src/lib/color/index.ts did not change dist/color.mjs, so the server-safe command built once rather than watching."
             echo "--- dev script output ---"
