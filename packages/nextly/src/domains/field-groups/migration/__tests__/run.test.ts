@@ -1269,6 +1269,44 @@ describe("a preview that meets a writer mid-run", () => {
     ]);
   });
 
+  // 🔴 The already-migrated exit reaches the same window as every other one: a rollback that claims
+  // the lock AFTER the preview begins is exactly what makes "already migrated" a moving answer.
+  // Reporting the session's opening observation there would conceal the writer this field exists to
+  // expose — the same defect as on the unreconciled exit, standing on a second door.
+  it("reports a holder that arrived after an already-migrated preview began", async () => {
+    const world: RunWorld = {
+      marker: settledRun(),
+      tables: [TARGET_REGISTRY, "fg_hero", MIGRATION_LOCK_TABLE],
+      registryRows: [
+        { id: "1", slug: "hero", table_name: "fg_hero", localized: 0 },
+      ],
+    };
+    const built = createRunWorld(world);
+    // Claims after the session's own observation, which is lock read 1.
+    world.onLockRead = count => {
+      if (count === 1)
+        built.claimLock("field-group-migration:down#arrived-late");
+    };
+
+    const outcome = await runFieldGroupMigration({
+      adapter: built.adapter,
+      logger,
+      direction: "up",
+      dryRun: true,
+    });
+
+    expect(outcome).toMatchObject({ ran: false, reason: "already-migrated" });
+    if (outcome.ran !== false || outcome.reason !== "already-migrated") {
+      expect.fail("expected an already-migrated outcome");
+    }
+    // Judged from the session's opening read this is `not-held`, which would report a database
+    // being rolled back underneath the preview as one nobody is touching.
+    expect(outcome.lock).toEqual({
+      kind: "held",
+      owner: "field-group-migration:down#arrived-late",
+    });
+  });
+
   // 🔴 The retry decision and the reported lock must come from ONE observation. Reducing the
   // recheck to a boolean was enough to decide and not enough to report: the outcome carried the
   // session's opening `not-held` beside a `basis` saying contention, so the single field an

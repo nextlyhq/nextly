@@ -453,9 +453,13 @@ export async function runFieldGroupMigration(
           return {
             ran: false,
             reason: "already-migrated",
-            // Carried on this exit too. Contention is exactly what a preview
-            // returning "nothing to do" would otherwise conceal.
-            ...(dryRun ? { lock: session.lock } : {}),
+            // Carried on this exit too, and re-read rather than taken from the session's opening
+            // observation. This exit reaches the same window every other one does: a `down` run
+            // that claimed the lock AFTER the preview began is exactly what makes "already
+            // migrated" a moving answer, and reporting the opening `not-held` beside it would
+            // conceal the writer this field was added to expose. Both exits ask the same accessor
+            // so they cannot disagree about who was holding it.
+            ...(dryRun ? { lock: await observeContention() } : {}),
           };
         }
 
