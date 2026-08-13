@@ -133,8 +133,17 @@ describe("PluginBrowsePage", () => {
     // The disappearance is the control. Asserting only that SEO survives is
     // satisfied by a page that never filtered at all, which is the same green
     // a search reading the wrong field produces.
-    await waitFor(() =>
-      expect(screen.queryByRole("heading", { name: "Page Builder" })).toBeNull()
+    // The timeout is sized to the debounce, not to taste. `waitFor` defaults
+    // to 1000ms, which is only ~3x a delay the component takes deliberately,
+    // and under a full parallel suite that margin is not enough — this passed
+    // alone and failed in the whole run. The property being asserted is
+    // unchanged; only the patience is.
+    await waitFor(
+      () =>
+        expect(
+          screen.queryByRole("heading", { name: "Page Builder" })
+        ).toBeNull(),
+      { timeout: 5000 }
     );
     expect(screen.getByRole("heading", { name: "SEO" })).toBeInTheDocument();
   });
