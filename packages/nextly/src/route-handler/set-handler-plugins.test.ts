@@ -226,6 +226,25 @@ describe("the handler config store", () => {
     ]);
   });
 
+  /**
+   * The removal case, and the reason the overlay takes `permissions` even when
+   * it is `undefined`. A transformer that drops the LAST app-level declaration
+   * returns `permissions: undefined`; preserving the author's raw list there
+   * leaves `adminMetaPermissions()` folding against a collision the running
+   * config resolved, and it degrades to an empty set — hiding every seeded
+   * plugin permission from the detail page.
+   */
+  it("clears the declared app permissions when boot registered none", () => {
+    store.setHandlerConfig({
+      ...stored,
+      permissions: [{ action: "purge", resource: "cache" }],
+    } as unknown as SanitizedNextlyConfig);
+
+    store.setBootedConfig(booted({ plugins: plugins("@acme/transformed") }));
+
+    expect(store.getHandlerConfig()?.permissions).toBeUndefined();
+  });
+
   it("reports no config when only a plugin list has been recorded", () => {
     store.setBootedConfig(booted({ plugins: plugins("@acme/transformed") }));
 
