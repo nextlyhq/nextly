@@ -623,10 +623,42 @@ export type ByteMeasurement =
  * while a spoofed one passes the tag and is then correctly refused. Neither
  * check is sufficient alone: the tag over-reports and the slot is expensive.
  */
+function definesToStringTag(value: object): boolean {
+  for (
+    let link: object | null = value;
+    link !== null;
+    link = Object.getPrototypeOf(link) as object | null
+  ) {
+    if (
+      Object.getOwnPropertyDescriptor(link, Symbol.toStringTag) !== undefined
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function refusedByWriter(value: unknown): boolean {
   if (typeof value === "bigint") return true;
   if (typeof value !== "object" || value === null) return false;
-  if (Object.prototype.toString.call(value) !== "[object BigInt]") return false;
+  // The tag is consulted only where the DOCUMENT has not defined one, which is
+  // the ordinary case and the cheap one. There the tag is the engine's own
+  // answer, no accessor exists to run, and no builtin other than a BigInt
+  // object reports `[object BigInt]`.
+  //
+  // Presence is decided by descriptor lookup rather than by reading the value,
+  // because reading it would invoke a document-supplied getter — code
+  // `JSON.stringify` never runs, since it ignores symbol keys entirely. A
+  // throwing getter would escape a function whose whole contract is to report
+  // rather than raise, and a getter with side effects would let a document
+  // mutate itself while being measured.
+  if (!definesToStringTag(value)) {
+    return Object.prototype.toString.call(value) === "[object BigInt]";
+  }
+  // A document-defined tag decides nothing, so the internal slot does. This
+  // costs a thrown exception, and it is reached only by values that declare a
+  // tag — rare in a block document, and the only place the cost can be
+  // provoked deliberately.
   try {
     BigInt.prototype.valueOf.call(value);
     return true;

@@ -2034,3 +2034,55 @@ describe("measureBytes stays cheap on ordinary objects", () => {
     ).toBe(false);
   });
 });
+
+describe("measureBytes reads nothing the writer would not", () => {
+  it("does not invoke a Symbol.toStringTag getter the document defined", () => {
+    // `JSON.stringify` ignores symbol keys, so it never runs this getter and
+    // stores the object as `{}`. A measurement that runs it is executing
+    // document-supplied code the writer does not, which lets a throwing getter
+    // escape a function contracted to report rather than raise, and lets a
+    // getter with side effects mutate a document while it is being measured.
+    let reads = 0;
+    const watched = { x: 1 };
+    Object.defineProperty(watched, Symbol.toStringTag, {
+      get: () => {
+        reads += 1;
+        return "BigInt";
+      },
+      configurable: true,
+    });
+
+    const measured = measureBytes({ v: watched }, 1_000);
+
+    expect(reads, "the tag getter ran during measurement").toBe(0);
+    // And the verdict still matches the writer, which stores it.
+    expect(measured.exceeded).toBe(false);
+  });
+
+  it("does not raise when a tag getter throws, because the writer stores it", () => {
+    const hostile = { x: 1 };
+    Object.defineProperty(hostile, Symbol.toStringTag, {
+      get: () => {
+        throw new Error("tag getter");
+      },
+      configurable: true,
+    });
+
+    // The control: the writer really does accept this value, so refusing it
+    // or raising here would be a disagreement with the thing being counted.
+    expect(JSON.stringify({ v: hostile })).toBe('{"v":{"x":1}}');
+    expect(() => measureBytes({ v: hostile }, 1_000)).not.toThrow();
+    expect(measureBytes({ v: hostile }, 1_000).exceeded).toBe(false);
+  });
+
+  it("still refuses a boxed BigInt that carries a tag of its own", () => {
+    // The slot check is what a declared tag falls through to, so this is the
+    // case proving the fall-through still reaches the right answer.
+    const tagged = Object(1n) as object;
+    Object.defineProperty(tagged, Symbol.toStringTag, {
+      value: "Object",
+      configurable: true,
+    });
+    expect(measureBytes({ v: tagged }, 1_000).exceeded).toBe(true);
+  });
+});
