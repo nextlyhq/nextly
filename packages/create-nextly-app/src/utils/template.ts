@@ -18,9 +18,20 @@ const PROJECT_TYPES_WITH_FORM_BUILDER: ReadonlySet<ProjectType> = new Set([
 ]);
 
 /**
- * The version range every font package is scaffolded at. One range because they
- * are released together and a project mixing lines would ship two copies of the
- * same metric-adjusted fallback.
+ * The version range every font package is scaffolded at.
+ *
+ * One range because they are released together, and a project mixing lines would ship two copies
+ * of the same face.
+ *
+ * Safe to state here rather than carry per-template because the layouts import the package ROOT
+ * (`@fontsource-variable/inter`) rather than a file inside it. There is no asset path that a
+ * different release line could rename out from under the import, so a skew cannot produce a
+ * missing-file build failure.
+ *
+ * What it would NOT cover, stated so the limit is visible rather than discovered: a template
+ * importing a SUBPATH such as `.../wght.css`, or one needing a different MAJOR. No template does
+ * either, so the range stays a constant until one does — at which point it belongs with the
+ * template rather than here.
  */
 const FONT_PACKAGE_RANGE = "^5.3.0";
 
