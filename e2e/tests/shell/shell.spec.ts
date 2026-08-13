@@ -316,6 +316,18 @@ test.describe("the unpainted predicate", () => {
     expect(isUnpainted(measurement)).toBe(true);
   });
 
+  test("sees a zero-alpha colour from a SECOND modern function", async ({
+    page,
+  }) => {
+    // `oklch` alone would leave the predicate looking like it recognises one
+    // function rather than one alpha SEPARATOR. `color()` serializes the same
+    // way and shares no function name with it, so passing both is what
+    // separates "handles the slash form" from "handles oklch".
+    await page.setContent(chromeWith("color(srgb 1 0 0 / 0)"));
+
+    expect(isUnpainted(await measureShellRender(page))).toBe(true);
+  });
+
   test("sees a zero-alpha non-black legacy colour as unpainted", async ({
     page,
   }) => {

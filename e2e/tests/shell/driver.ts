@@ -89,8 +89,9 @@ export interface ShellRenderMeasurement {
   /** The resolved `display`, which only this package's stylesheet sets. */
   display: string | null;
   /**
-   * The background's alpha as the BROWSER computes it, or null when it could
-   * not be determined. Never derived by matching colour syntax in Node.
+   * The alpha of the browser's own computed background, or null when there is
+   * no colour to read. Read from the alpha SEPARATOR, so it does not depend on
+   * which colour function the browser chose to serialize into.
    */
   backgroundAlpha: number | null;
 }
@@ -113,29 +114,31 @@ export async function measureShellRender(
   const styles = await chrome.evaluate(element => {
     const computed = getComputedStyle(element);
     const background = computed.backgroundColor;
-    // The alpha is decided by the BROWSER, not by matching colour syntax here.
-    // `getComputedStyle` does not universally serialize to legacy `rgba(...)`:
-    // this repository's tokens are authored in `oklch`, and a computed value can
-    // preserve a modern colour function — which a syntax matcher reads as
-    // "unrecognised" and therefore, fatally, as "painted".
+    // `getComputedStyle` returns a colour the browser has ALREADY serialized,
+    // and CSS gives that serialization exactly two places to put an alpha:
     //
-    // Canvas `fillStyle` is the browser's own normaliser: assigning any colour
-    // it can parse and reading it back yields `#rrggbb` when opaque and
-    // `rgba(r, g, b, a)` when not. A sentinel detects the case where the
-    // assignment was REJECTED, so an unparseable value reports `null` — unknown
-    // — rather than silently borrowing the sentinel's own opacity.
-    const SENTINEL = "#010203";
-    const context = document.createElement("canvas").getContext("2d");
-    let alpha: number | null = null;
-    if (context !== null) {
-      context.fillStyle = SENTINEL;
-      context.fillStyle = background;
-      const normalised = context.fillStyle;
-      if (normalised !== SENTINEL || background === SENTINEL) {
-        const parsed = /^rgba?\([^)]*,\s*([\d.]+)\s*\)$/.exec(normalised);
-        alpha = parsed === null ? 1 : Number(parsed[1]);
-      }
-    }
+    //   legacy   rgba(r, g, b, A)       — a fourth comma-separated value
+    //   modern   oklch(l c h / A)       — a value after a slash
+    //            color(srgb r g b / A)
+    //
+    // So the alpha is read from the SEPARATOR rather than from the colour
+    // function's name. Enumerating names is what fails here: this repository
+    // authors its tokens in `oklch`, Chromium preserves that function in the
+    // computed value, and a matcher that knows only `rgba(...)` reads a fully
+    // transparent chrome as "unrecognised" and therefore, fatally, as painted.
+    //
+    // A colour carrying neither separator is opaque. `alpha` stays null only
+    // when there is no colour to read at all, which callers treat as unknown.
+    const parseAlpha = (colour: string): number | null => {
+      const raw =
+        /\/\s*([\d.]+%?)\s*\)\s*$/.exec(colour)?.[1] ??
+        /^rgba\(\s*[^,]+,\s*[^,]+,\s*[^,]+,\s*([\d.]+%?)\s*\)$/.exec(
+          colour
+        )?.[1];
+      if (raw === undefined) return 1;
+      return raw.endsWith("%") ? Number(raw.slice(0, -1)) / 100 : Number(raw);
+    };
+    const alpha = background === "" ? null : parseAlpha(background);
     return { background, display: computed.display, alpha };
   });
   return {
@@ -150,11 +153,11 @@ export async function measureShellRender(
 /**
  * A chrome that draws nothing, whatever colour it nominally is.
  *
- * Takes the MEASUREMENT rather than a colour string, because the only reliable
- * reader of a computed colour is the browser that computed it. An earlier
- * version compared two literal spellings and then parsed legacy `rgba(...)` in
- * Node; both were claims about how a value happens to be written, and this
- * repository's `oklch` tokens are exactly the case that breaks them.
+ * Takes the MEASUREMENT rather than a colour string, so the decision is made
+ * from a value the browser resolved. Two earlier versions instead asked how the
+ * colour was SPELT — first comparing literal strings, then matching legacy
+ * `rgba(...)` — and this repository's `oklch` tokens are exactly the case that
+ * breaks both.
  *
  * An UNKNOWN alpha is treated as painted on purpose: the readiness check exists
  * to explain a broken page, and reporting "the chrome drew nothing" because a
