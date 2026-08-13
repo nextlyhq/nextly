@@ -357,26 +357,42 @@ describe("an op that cannot apply", () => {
   });
 
   it("refuses an oversized edit without serializing it first", () => {
-    // The refusal has to be reachable without building the thing being refused.
-    // Deciding this with `documentBytes` produces a JSON string of the whole
-    // result and then a UTF-8 buffer of that string, so an op carrying a value
-    // far past the cap allocates two copies of itself on the way to being
-    // called too large.
+    // The refusal has to be reachable WITHOUT building the thing being refused.
+    // Answering "is this too big" by producing a JSON string of the result, and
+    // then a UTF-8 buffer of that string, allocates two copies of the value on
+    // the way to calling it too large.
     //
-    // The assertion is the OpError rather than a timing: a byte counter that
-    // stops early and one that does not both refuse this, and only the refusal
-    // is a promise. What the bounded counter buys is that the refusal arrives
-    // without the allocation, which the budget below makes observable.
+    // Measured against serializing the same value in the same run, so the
+    // comparison is of two operations on one machine rather than against a
+    // constant that means something different on CI. Serializing is a LOWER
+    // bound on the cost being avoided — the buffer comes after it — and the
+    // refusal must come in under it. Measured, the gap is around 27x, so this
+    // has room to spare and still fails outright if the refusal starts
+    // serializing.
     const huge = "x".repeat(12_000_000);
     const limits = { maxDepth: 10, maxNodes: 100, maxBytes: 1_000 };
+    const op: BuilderOp = {
+      kind: "update",
+      id: "a",
+      patch: { customCss: huge },
+    };
 
-    expect(() =>
-      applyOp(
-        doc(),
-        { kind: "update", id: "a", patch: { customCss: huge } },
-        limits
-      )
-    ).toThrow(OpError);
+    const serializeStart = performance.now();
+    JSON.stringify({ ...doc(), extra: huge });
+    const serializeMs = performance.now() - serializeStart;
+
+    const refuseStart = performance.now();
+    expect(() => applyOp(doc(), op, limits)).toThrow(OpError);
+    const refuseMs = performance.now() - refuseStart;
+
+    expect(
+      serializeMs,
+      "the control must take measurable time, or the comparison is noise"
+    ).toBeGreaterThan(0);
+    expect(
+      refuseMs,
+      "the byte cap must refuse an oversized edit without serializing it"
+    ).toBeLessThan(serializeMs);
   });
 });
 
