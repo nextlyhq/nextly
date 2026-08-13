@@ -240,4 +240,54 @@ describe("a configuration whose parse is not a fixed point", () => {
       /parsing what would be saved does not return what was saved/
     );
   });
+
+  // A PASS-THROUGH parser: it accepts both the typed value and its JSON form,
+  // so re-parsing agrees with itself while the value actually stored lost its
+  // type. The Date test above recreates the Date and cannot see this.
+  it("refuses a pass-through parser whose value loses type in the column", async () => {
+    register("passthrough-date", input => {
+      const value = input as { apiKey: unknown; issuedAt?: unknown };
+      return value.issuedAt === undefined
+        ? { apiKey: String(value.apiKey), issuedAt: new Date(0) }
+        : (value as object);
+    });
+
+    await expect(write("passthrough-date", { apiKey: "k" })).rejects.toThrow(
+      /parsing what would be saved does not return what was saved|cannot be written as JSON/
+    );
+  });
+
+  // A root `toJSON` returning undefined makes JSON.stringify return undefined
+  // WITHOUT throwing, so the catch never fires and JSON.parse then throws a
+  // raw SyntaxError the caller sees as a generic internal failure.
+  it("refuses a parser whose value serialises to undefined", async () => {
+    register("to-json-undefined", input => ({
+      apiKey: String((input as { apiKey: unknown }).apiKey),
+      toJSON: () => undefined,
+    }));
+
+    await expect(write("to-json-undefined", { apiKey: "k" })).rejects.toThrow(
+      /cannot be written as JSON/
+    );
+  });
+
+  // A STATEFUL toJSON: the first serialisation is validated, and encryption
+  // serialises the object a second time to a different result.
+  it("stores the serialisation that was validated, not a later one", async () => {
+    let calls = 0;
+    register("stateful", input => {
+      const apiKey = String((input as { apiKey: unknown }).apiKey);
+      return { apiKey, toJSON: () => ({ apiKey, call: ++calls }) };
+    });
+
+    const provider = await write("stateful", { apiKey: "k" }).catch(
+      () => undefined
+    );
+    // Either it is refused, or what was stored is what passed the check --
+    // never a third value produced by serialising again after validation.
+    if (provider) {
+      const stored = await service.getProviderDecrypted(provider.id);
+      expect((stored.configuration as { call?: number }).call).toBe(1);
+    }
+  });
 });

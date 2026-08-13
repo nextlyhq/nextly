@@ -301,7 +301,7 @@ export class EmailProviderService extends BaseService {
     // result against the object it just mutated compares a value with itself
     // and passes whatever the parser did -- so an in-place derivation would
     // have walked through the check this exists to be.
-    let serialized: string;
+    let serialized: string | undefined;
     try {
       serialized = JSON.stringify(stored);
     } catch (error) {
@@ -316,6 +316,22 @@ export class EmailProviderService extends BaseService {
           reason: "email-provider-configuration-not-serialisable",
           type,
           detail: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+
+    // `JSON.stringify` returns `undefined` rather than throwing when the root
+    // has a `toJSON` that returns nothing, so the catch above never sees it and
+    // `JSON.parse(undefined)` then throws a `SyntaxError` the caller reads as a
+    // generic internal failure. Rejected here as the same fault, because it is
+    // one: the value cannot be written to the column.
+    if (serialized === undefined) {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Email provider "${type}" parsed its configuration into a value that cannot be written as JSON, so it cannot be stored. Return only what JSON can carry from \`parseConfig\`.`,
+        logContext: {
+          reason: "email-provider-configuration-not-serialisable",
+          type,
         },
       });
     }
@@ -353,7 +369,21 @@ export class EmailProviderService extends BaseService {
       // Left as one outcome: both mean the row could not be read back.
       reparsed = undefined;
     }
-    if (!isDeepStrictEqual(reparsed, unchanged)) {
+    // TWO properties, and each misses what the other catches.
+    //
+    // The parsed value must SURVIVE the round trip: a `Date`, a `Map`, an
+    // `Infinity` or a class instance is written as something else, and a
+    // pass-through parser that accepts both forms then agrees with itself
+    // while the adapter receives an ISO string where a `Date` was returned.
+    // Re-parsing alone cannot see that, because both sides of it are already
+    // past the column.
+    //
+    // And re-parsing the stored form must RETURN it, which is what catches a
+    // parser that derives rather than one that loses a type.
+    if (
+      !isDeepStrictEqual(stored, unchanged) ||
+      !isDeepStrictEqual(reparsed, unchanged)
+    ) {
       throw new NextlyError({
         code: "BUSINESS_RULE_VIOLATION",
         publicMessage: `Email provider "${type}" cannot store this configuration, because parsing what would be saved does not return what was saved. Its \`parseConfig\` must accept its own output unchanged -- derive values in \`createAdapter\` instead, and return only what JSON can carry.`,
@@ -361,7 +391,14 @@ export class EmailProviderService extends BaseService {
       });
     }
 
-    return stored;
+    // The VALIDATED form, not the object it was derived from. `encryptConfiguration`
+    // serialises again, and returning the original would mean the value written
+    // to the column is the product of a second serialisation that nothing
+    // checked -- so a stateful getter or `toJSON` could store something that
+    // never passed the checks above. Returning what was validated makes "what
+    // is stored is what was checked" true by construction rather than by
+    // argument, and the two are now the same object.
+    return roundTripped as Record<string, unknown>;
   }
 
   private encryptConfiguration(config: Record<string, unknown>): string {
