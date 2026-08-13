@@ -1118,6 +1118,18 @@ function assertNodeShape(
         );
       }
       const list = children as unknown[];
+      // The LENGTH before the elements, like every other list this module
+      // reads. Counting on the way out still enqueues the whole child list
+      // first, so a sparse `Array(100_000_000)` in one slot allocates a hundred
+      // million pending entries before the count can reach the cap — and the
+      // cap was already knowable from the length alone.
+      if (counted + list.length > limits.maxNodes) {
+        throw new OpError(
+          `${verb}: ${path} holds more than the ${String(limits.maxNodes)} ` +
+            `nodes a whole document may, so no document could hold it. The ` +
+            `edit would apply and then fail to save.`
+        );
+      }
       // An INDEX loop, for the same reason the string-array check uses one:
       // `forEach` skips holes, so a sparse slot array would be walked as
       // though the missing entries were not there. They serialize as `null`,

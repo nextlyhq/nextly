@@ -175,20 +175,36 @@ function seedOp(rnd: () => number, nodes: BlockNode[]): BuilderOp | null {
   };
 }
 
+/**
+ * The corpus, generated ONCE and shared.
+ *
+ * Both properties below have to run against the same documents and ops, and
+ * building them separately did not achieve that: the round-trip case consumed a
+ * different number of PRNG draws than the applicability case, so from the first
+ * divergence the two were testing different corpora while appearing to test
+ * one. A property that "compensates" for another cannot do so over inputs the
+ * other never saw.
+ */
+function corpus(): { seed: number; before: BlockDocument; op: BuilderOp }[] {
+  const cases: { seed: number; before: BlockDocument; op: BuilderOp }[] = [];
+  for (let seed = 1; seed <= 60; seed += 1) {
+    const rnd = prng(seed);
+    const forest = seedForest(rnd, 1 + Math.floor(rnd() * 4));
+    // Half corrupted the way an import corrupts one. A well-formed document is
+    // the case least likely to be wrong, and `applyOp` accepts input from
+    // storage and from other tools.
+    const before = doc(rnd() < 0.5 ? forest : corrupt(rnd, forest));
+    const op = seedOp(rnd, before.nodes);
+    if (op !== null) cases.push({ seed, before, op });
+  }
+  return cases;
+}
+
 describe("an op and its inverse are a round trip", () => {
   it("never leaves a native error, and always produces an applicable inverse", () => {
     const failures: string[] = [];
 
-    for (let seed = 1; seed <= 60; seed += 1) {
-      const rnd = prng(seed);
-      // Half the seeds run against a document corrupted the way an import
-      // corrupts one. A well-formed document is the case least likely to be
-      // wrong, and `applyOp` accepts input from storage and from other tools.
-      const forest = seedForest(rnd, 1 + Math.floor(rnd() * 4));
-      const before = doc(rnd() < 0.5 ? forest : corrupt(rnd, forest));
-      const op = seedOp(rnd, before.nodes);
-      if (op === null) continue;
-
+    for (const { seed, before, op } of corpus()) {
       let applied;
       try {
         applied = applyOp(before, op);
@@ -222,22 +238,27 @@ describe("an op and its inverse are a round trip", () => {
   it("restores the document exactly", () => {
     const failures: string[] = [];
 
-    for (let seed = 1; seed <= 60; seed += 1) {
-      const rnd = prng(seed);
-      const before = doc(seedForest(rnd, 1 + Math.floor(rnd() * 4)));
-      const op = seedOp(rnd, before.nodes);
-      if (op === null) continue;
-
+    for (const { seed, before, op } of corpus()) {
       let applied;
       try {
         applied = applyOp(before, op);
       } catch {
+        // Refusing the forward op is a legitimate answer and says nothing about
+        // the round trip.
         continue;
       }
+
       let undone;
       try {
         undone = applyOp(applied.document, applied.inverse);
-      } catch {
+      } catch (error) {
+        // NOT skipped. An inverse that cannot be applied is the loudest way to
+        // fail to restore a document, and continuing here let this case pass on
+        // exactly the failure it is named for.
+        failures.push(
+          `seed ${String(seed)}: ${op.kind} produced an inverse that was ` +
+            `refused, so nothing was restored — ${String(error)}`
+        );
         continue;
       }
 
