@@ -160,6 +160,27 @@ describe("the handler config store", () => {
    * branding, no `db` and no `storage` to report, and a plugin list alone must
    * not be dressed up as a config.
    */
+  /**
+   * A `setup` transformer may ADD a top-level collection or single, and the
+   * permission fold decides whether a `publish` declaration names an entity.
+   * Publishing only the plugin half leaves the endpoint folding against the raw
+   * route config, so a declaration on a transformer-added entity reads as a
+   * plugin-owned custom permission that boot actually drops.
+   */
+  it("reports the entity slugs boot registered, not the declared ones", () => {
+    store.setHandlerConfig(stored);
+
+    store.setBootedConfig({
+      plugins: plugins("@acme/transformed"),
+      collections: [{ slug: "reports" }],
+      singles: [{ slug: "site" }],
+    });
+
+    const view = store.getHandlerConfig();
+    expect(view?.collections?.map(c => c.slug)).toEqual(["reports"]);
+    expect(view?.singles?.map(s => s.slug)).toEqual(["site"]);
+  });
+
   it("reports no config when only a plugin list has been recorded", () => {
     store.setBootedConfig({ plugins: plugins("@acme/transformed") });
 
