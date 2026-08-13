@@ -542,38 +542,84 @@ jobs:
           pnpm dev > /tmp/dev.log 2>&1 &
           dev_pid=$!
 
-          # One artifact per watcher: `index.mjs` is the client config's, and
-          # `color.mjs` belongs to the server-safe config — the one the broken
-          # script never reached.
+          # Wait for the artifacts to exist, which is only enough to take a baseline from. It is
+          # NOT evidence that anything is watching: tsup writes `dist` before it arms its file
+          # watcher, so an edit made in this gap is absorbed by chokidar's initial scan and never
+          # reported. The probe below is what establishes readiness.
           for _ in $(seq 1 120); do
             if [ -f dist/index.mjs ] && [ -f dist/color.mjs ]; then break; fi
             sleep 1
           done
 
+          # One artifact per watcher: `index.mjs` is the client config's, and
+          # `color.mjs` belongs to the server-safe config — the one the broken
+          # script never reached.
           missing=""
           [ -f dist/index.mjs ] || missing="$missing client(dist/index.mjs)"
           [ -f dist/color.mjs ] || missing="$missing server-safe(dist/color.mjs)"
-          # Still running when the artifacts appear, checked BEFORE the kill.
+
+          # Producing the artifacts is not the claim. What separates a watcher from a one-shot
+          # build is that it REBUILDS, so a source is edited and the artifact it produces is
+          # required to change.
           #
-          # Stated plainly, because it is weaker than it looks: this does NOT separate a watcher
-          # from a one-shot build. tsup writes these files before its declaration phase, so a pair
-          # of one-shot builds is still alive at this moment too.
+          # BOTH configs are probed through a source only they own. Editing the server-safe entry
+          # alone would leave the client watcher's argument uncovered: the root barrel re-exports
+          # colour, so that edit rebuilds `index.mjs` as a side effect and a client command
+          # regressed to a one-shot build would still be reported as watching.
           #
-          # The check that WOULD separate them is editing a source and requiring a rebuild. It is
-          # not here because `tsup --watch` in this package does not currently rebuild at all — it
-          # logs `Change detected` and emits nothing, measured on one watcher and on two, and on
-          # the shell script this replaced. That is a real defect and it is filed separately; a
-          # control that fails for a reason this pull request does not cause would only teach
-          # people to ignore it.
+          # An added export rather than a comment: tsup strips comments, so a comment-only edit
+          # leaves the output byte-identical whether or not a rebuild ran, and the probe could not
+          # detect one in either direction.
+          before_client=$(cksum dist/index.mjs | awk '{print $1"-"$2}')
+          before_server=$(cksum dist/color.mjs | awk '{print $1"-"$2}')
+
+          # The edit is REPEATED until a rebuild is seen, rather than made once against a signal
+          # that claims the watcher is ready. tsup logs "Watching for changes" before it expands
+          # the watch path and constructs chokidar, so that line is a proxy: on a slow runner both
+          # configs can log it while neither is listening, and a single edit made then is swallowed
+          # by the initial scan. Retrying removes the proxy — the first rebuild IS the readiness
+          # signal, and nothing has to be assumed about when it arrives.
+          #
+          # Each probe carries the attempt number so repeated appends stay distinct declarations
+          # rather than a redeclaration error that would fail the build for the wrong reason.
+          client_rebuilt=no
+          server_rebuilt=no
+          for i in $(seq 1 45); do
+            [ "$client_rebuilt" = "no" ] &&
+              printf '\nexport const __clientWatcherProbe%s = "probe";\n' "$i" >> src/index.ts
+            [ "$server_rebuilt" = "no" ] &&
+              printf '\nexport const __serverWatcherProbe%s = "probe";\n' "$i" >> src/lib/color/index.ts
+            sleep 2
+            if [ "$(cksum dist/index.mjs | awk '{print $1"-"$2}')" != "$before_client" ]; then
+              client_rebuilt=yes
+            fi
+            if [ "$(cksum dist/color.mjs | awk '{print $1"-"$2}')" != "$before_server" ]; then
+              server_rebuilt=yes
+            fi
+            if [ "$client_rebuilt" = "yes" ] && [ "$server_rebuilt" = "yes" ]; then break; fi
+          done
+
+          # Liveness AFTER the rebuild, which is a different question from liveness before it: a
+          # watcher that serves one change and then dies leaves contributors editing against
+          # artifacts that stopped updating, and every check above has already passed by then.
+          # The `kill` below is unconditional and succeeds either way, so this has to be asked
+          # first or the answer is lost.
           alive=yes
           kill -0 "$dev_pid" 2>/dev/null || alive=no
+
+          git checkout -- src/index.ts src/lib/color/index.ts
           kill "$dev_pid" 2>/dev/null || true
 
-          if [ -n "$missing" ] || [ "$alive" = "no" ]; then
-            [ -n "$missing" ] && echo "The dev script did not produce output for:$missing"
-            [ "$alive" = "no" ] && echo "The dev script exited before its outputs were complete."
+          # A missing artifact fails here too. Without it, a watcher that produced nothing at all
+          # leaves its `before` checksum empty, every later read differs from it, and absence
+          # reports itself as a successful rebuild.
+          if [ -n "$missing" ] || [ "$client_rebuilt" = "no" ] || [ "$server_rebuilt" = "no" ] || [ "$alive" = "no" ]; then
+            [ -n "$missing" ] && echo "No artifact from:$missing"
+            [ "$alive" = "no" ] && echo "The dev script exited after rebuilding, so its artifacts stop updating from here."
+            [ "$client_rebuilt" = "no" ] && echo "Editing src/index.ts did not change dist/index.mjs, so the client command built once rather than watching."
+            [ "$server_rebuilt" = "no" ] && echo "Editing src/lib/color/index.ts did not change dist/color.mjs, so the server-safe command built once rather than watching."
             echo "--- dev script output ---"
             cat /tmp/dev.log
             exit 1
           fi
-          echo "Both commands produced their output and the script was still running."
+          echo "Both commands produced their output, and an edit rebuilt each one."

@@ -12,7 +12,8 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SQL } from "drizzle-orm";
-import { PgDialect } from "drizzle-orm/pg-core";
+
+import { createLockRow, interpretLockStatement } from "./migration-lock-double";
 
 export interface LockingAdapterOptions {
   /** Marker value the `nextly_meta` read returns, or `undefined` for none. */
@@ -36,42 +37,14 @@ export interface LockingAdapterOptions {
 const COMPANION_PROBE = /^SELECT 1 FROM ["`](\w+_locales)["`] LIMIT 0$/;
 
 export function createLockingAdapter(options: LockingAdapterOptions = {}) {
-  const lock: { seeded: boolean; owner: string | null } = {
-    seeded: options.heldBy !== undefined,
-    owner: options.heldBy ?? null,
-  };
+  const lock = createLockRow(options.heldBy);
   const ddl: string[] = [];
 
-  function interpret(statement: SQL): Record<string, unknown>[] {
-    const { sql: text, params } = new PgDialect().sqlToQuery(statement);
-    const flat = text.replace(/\s+/g, " ").trim();
-
-    if (
-      /^SELECT "\w+" FROM "nextly_field_group_lock" WHERE "id" = \$1$/.test(
-        flat
-      )
-    ) {
-      return lock.seeded ? [{ id: 1, owner: lock.owner }] : [];
-    }
-    if (
-      /^UPDATE "nextly_field_group_lock" SET "owner" = \$1 WHERE "id" = \$2$/.test(
-        flat
-      )
-    ) {
-      // An occupied row refuses a new claim, exactly as the real one does.
-      if (lock.owner === null) lock.owner = params[0] as string | null;
-      return [];
-    }
-    if (
-      /^UPDATE "nextly_field_group_lock" SET "owner" = NULL WHERE "id" = \$1 AND "owner" = \$2$/.test(
-        flat
-      )
-    ) {
-      if (lock.owner === params[1]) lock.owner = null;
-      return [];
-    }
-    throw new Error(`unrecognised statement: ${flat}`);
-  }
+  // The lock's own semantics live in one place, shared with the surface that adds them to other
+  // suites' doubles. Two interpreters of the same statements would agree the day they were written
+  // and drift silently afterwards, because each looks correct read on its own.
+  const interpret = (statement: SQL): Record<string, unknown>[] =>
+    interpretLockStatement(lock, statement);
 
   const adapter = {
     dialect: "postgresql" as const,

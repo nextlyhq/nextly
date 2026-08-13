@@ -51,8 +51,10 @@ import type {
   DynamicSingleRecord,
   SingleMigrationStatus,
 } from "../../../schemas/dynamic-singles/types";
+import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
 import type { Logger } from "../../../shared/types";
 import { applyMigrationStatements } from "../../schema/services/apply-migration-statements";
+import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 
 import type { SingleRegistryService } from "./single-registry-service";
 
@@ -144,6 +146,15 @@ export interface UpdateSingleSchemaInput {
   fields?: FieldDefinition[];
   isLocalized: boolean;
   wasLocalized: boolean;
+  /**
+   * Whether the request SET the Internationalization toggle, as opposed to leaving it alone.
+   *
+   * The mirror of {@link UpdateSingleSchemaInput.statusRequested}, and required for the same
+   * reason: `isLocalized` falls back to the value the CALLER read, so once this service re-reads
+   * the record it cannot tell "the user asked for localized: false" from "the user said nothing and
+   * the caller filled in what it saw". Only the first should survive a refresh.
+   */
+  localizedRequested: boolean;
   hasStatus: boolean;
   wasStatus: boolean;
   /**
@@ -199,6 +210,69 @@ interface UpdateDdlPlan {
   ownsMigrationStatus: boolean;
 }
 
+/**
+ * Whether an update request can reach schema DDL at all, from the input alone.
+ *
+ * Two callers need this answer and they need it at different moments, which is why it is a function
+ * rather than a condition written twice. `planUpdate` uses it to decide there is nothing to plan.
+ * `updateSingleSchema` needs it BEFORE the exclusion is taken, to decide whether this operation may
+ * create the lock table — and it cannot ask `planUpdate`, because planning reads the live table and
+ * so has to happen inside the exclusion it is being consulted about.
+ *
+ * A save with no field change still has companion work when the single crosses the
+ * Internationalization boundary, or when Draft/Published is saved on a single that is localized in
+ * either state, because that toggle ADDs or DROPs the companion's own `_status`.
+ *
+ * Conservative in the direction that matters: it answers yes whenever DDL is possible, not only
+ * when it is certain. A wrong yes costs one `CREATE TABLE IF NOT EXISTS` for the lock; a wrong no
+ * would let a schema change run with no lock table to claim.
+ */
+/**
+ * Could this request reach schema DDL at all? Answered from the request ALONE, before the refresh.
+ *
+ * 🔴 Deliberately a SECOND function rather than a reuse of {@link requestsSchemaWork}, because the
+ * two answer different questions at different moments and the repository's one-question-one-answer
+ * rule is about the same question being computed twice.
+ *
+ * This one decides whether the exclusion may CREATE the lock table, so it has to be settled BEFORE
+ * the lock is taken — which is before the record can be re-read. It therefore cannot look at any
+ * `was*` flag: those describe a state the caller sampled and another save may already have changed.
+ * Asking only what the REQUEST set keeps it correct under that ignorance.
+ *
+ * The invariant that makes the pair safe: everything `requestsSchemaWork` calls schema work, this
+ * calls possible schema work. A false here must mean no DDL under any refreshed state. A label,
+ * admin, versioning, revalidation or webhook save sets none of these three and still claims no DDL
+ * rights, which is what keeps a DML-only deployment able to make those edits.
+ */
+function mayIssueSchemaDdl(input: UpdateSingleSchemaInput): boolean {
+  return (
+    input.fields !== undefined ||
+    input.localizedRequested ||
+    input.statusRequested
+  );
+}
+
+function requestsSchemaWork(input: UpdateSingleSchemaInput): boolean {
+  const { fields, isLocalized, wasLocalized, statusRequested } = input;
+  if (fields !== undefined) return true;
+  return (
+    isLocalized !== wasLocalized ||
+    (statusRequested && (isLocalized || wasLocalized))
+  );
+}
+
+/**
+ * One comparable spelling of a stored field list.
+ *
+ * Compared as JSON rather than deeply walked because both sides are the SAME stored value read
+ * twice: if nothing rewrote it, the two are identical, so there is no normalisation to get wrong.
+ * `undefined` and an empty list are deliberately the same answer — a row that has never held field
+ * definitions and one holding none describe the same schema.
+ */
+function stableFieldDefinitions(fields: unknown): string {
+  return JSON.stringify(fields ?? []);
+}
+
 export class SingleMetadataService {
   constructor(
     private readonly registry: SingleRegistryService,
@@ -231,6 +305,33 @@ export class SingleMetadataService {
    * table name. Rejecting after this point would leave a `pending` row behind.
    */
   async createSingle(input: CreateSingleInput): Promise<CreateSingleResult> {
+    // 🔴 The exclusion wraps ALL THREE phases, not just the apply. A storage migration renaming
+    // tables between the plan and the row write would leave this create describing storage that
+    // moved underneath it, and the row is as much a part of the schema as the table is.
+    return withSchemaChangeExcluded(
+      {
+        adapter: this.adapter,
+        logger: this.logger,
+        label: `create single "${input.slug}"`,
+        issuesDdl: true,
+      },
+      () => this.createSingleExcluded(input)
+    );
+  }
+
+  private async createSingleExcluded(
+    input: CreateSingleInput
+  ): Promise<CreateSingleResult> {
+    // 0. RE-ASSERT ownership, now that the exclusion is held.
+    //
+    // 🔴 The caller checked this outside the lock, and an HMR reload can register a code-first
+    // Single onto the same table or slug in between. Without repeating it, the apply below runs
+    // `CREATE TABLE IF NOT EXISTS` against a table the config now owns, reconciles its companion,
+    // and rebinds the RUNTIME schema to this request's fields — and the runtime stays rebound until
+    // the process restarts, even though the registry insert afterwards correctly rejects the
+    // duplicate. The insert is what makes the row safe; it is not what makes the process safe.
+    await this.assertCreateStillPossible(input);
+
     // 1. PLAN, before anything is persisted or executed. The generator is a validator as well as a
     // renderer, so a request it refuses leaves nothing behind at all — no row, no table — and the
     // corrected retry is a fresh create rather than a collision with its own wreckage.
@@ -271,6 +372,41 @@ export class SingleMetadataService {
     slug: string,
     tableName: string | undefined
   ): Promise<void> {
+    return withSchemaChangeExcluded(
+      {
+        adapter: this.adapter,
+        logger: this.logger,
+        label: `delete single "${slug}"`,
+        issuesDdl: true,
+      },
+      () => this.deleteSingleExcluded(slug, tableName)
+    );
+  }
+
+  private async deleteSingleExcluded(
+    slug: string,
+    callerTableName: string | undefined
+  ): Promise<void> {
+    // 🔴 Re-read before dropping anything. The caller checked `locked` outside this exclusion, and
+    // an HMR reload can turn an unlocked UI Single into a locked code-first one in between — after
+    // which this would drop the table and call `deleteSingle(..., { force: true })`, walking past
+    // the registry's own protection for code-owned records. The table name is taken from the fresh
+    // record for the same reason: the caller's copy describes storage as it was.
+    //
+    // A record that has already gone is NOT an error here. Delete is idempotent by intent, and
+    // refusing a second delete would turn a retry into a failure; the teardown below still runs
+    // against the caller's table name so a half-finished delete can be completed.
+    const current = await this.registry.getSingleBySlug(slug);
+    if (current?.locked === true) {
+      throw NextlyError.forbidden({
+        logContext: {
+          reason: "single became locked while awaiting the exclusion",
+          slug,
+        },
+      });
+    }
+    const tableName = current?.tableName ?? callerTableName;
+
     const adapter = this.adapter;
     if (tableName && adapter) {
       // Embedded field-group instances point back at this table by a plain string with no foreign
@@ -331,6 +467,74 @@ export class SingleMetadataService {
   async updateSingleSchema(
     input: UpdateSingleSchemaInput
   ): Promise<UpdateSingleSchemaResult> {
+    return withSchemaChangeExcluded(
+      {
+        adapter: this.adapter,
+        logger: this.logger,
+        label: `update single schema "${input.slug}"`,
+        // A save that changes only labels, admin options, versioning, revalidation or webhooks
+        // writes a registry row and nothing else. Claiming DDL rights for it would make a
+        // deployment whose role has DML but not DDL start refusing metadata edits that worked
+        // before, because taking the exclusion would try to CREATE the lock table.
+        //
+        // 🔴 Asked CONSERVATIVELY, and of the request rather than of the transition. This is decided
+        // before the lock, so before the record is re-read — and a toggle that looks like a no-op
+        // against the caller's stale flags can become a real transition against the refreshed ones,
+        // whose DDL would then run with no claim held.
+        issuesDdl: mayIssueSchemaDdl(input),
+      },
+      () => this.updateSingleSchemaExcluded(input)
+    );
+  }
+
+  private async updateSingleSchemaExcluded(
+    args: UpdateSingleSchemaInput
+  ): Promise<UpdateSingleSchemaResult> {
+    // 0. RE-READ the record, now that the exclusion is held.
+    //
+    // 🔴 The caller read it BEFORE this lock existed, and a storage migration can complete in
+    // between. Its `data:registry-definitions` step rewrites `dynamic_singles.fields` into the new
+    // field-group vocabulary, so planning from the caller's copy would derive the change from
+    // definitions the database no longer holds — and the registry write at the end would put the
+    // legacy spelling back, under a marker that now says the migration settled.
+    //
+    // Holding a lock over the WORK is not enough when the INPUT was sampled outside it. This is the
+    // same sampled-versus-held argument the exclusion itself rests on, applied one level up.
+    //
+    // Only the record is refreshed. The `is*` / `was*` flags describe what the REQUEST asked for and
+    // what it is transitioning from, which a migration does not touch — it renames vocabulary, not
+    // toggles — so re-deriving them here would substitute this service's reading of the request for
+    // the caller's.
+    const current = await this.refreshForUpdate(args);
+
+    // 🔴 The plugin judge is re-consulted here for the same reason the create re-consults it: an
+    // HMR reload can replace the process-global field-type registry while this request waits, and
+    // `planUpdate` below renders DDL against the NEW registration while `updateData.fields` still
+    // carries options only the old one accepted.
+    const { assertValidPluginFieldOptions } = await import(
+      "../../../api/fields-payload"
+    );
+    assertValidPluginFieldOptions(args.fields ?? []);
+
+    // The `was*` flags describe the state being transitioned FROM, so they follow the refreshed
+    // record. The `is*`/`has*` flags describe what the request asked for — but only where it
+    // actually asked: the caller resolves an absent toggle to the value it read, and that value can
+    // be stale. Where the request said nothing, the refreshed record decides.
+    //
+    // Without this, two overlapping Builder saves plan from mutually inconsistent state: one enables
+    // Draft/Published, the next enables localization carrying `hasStatus: false` from before, and
+    // the companion is created without `_status` while the row ends up saying it has one.
+    const wasLocalized = current.localized === true;
+    const wasStatus = current.status === true;
+    const input: UpdateSingleSchemaInput = {
+      ...args,
+      existing: current,
+      wasLocalized,
+      wasStatus,
+      isLocalized: args.localizedRequested ? args.isLocalized : wasLocalized,
+      hasStatus: args.statusRequested ? args.hasStatus : wasStatus,
+    };
+
     // 1. PLAN. May reject; nothing is persisted and no statement has run.
     const plan = await this.planUpdate(input);
 
@@ -367,6 +571,63 @@ export class SingleMetadataService {
    * SQLite cannot detach — and refusing here, before the apply, is what leaves the table untouched
    * and the caller's field list unsaved.
    */
+  /**
+   * Read the Single again inside the exclusion, and re-check what the caller checked outside it.
+   *
+   * Both refusals are re-checked rather than trusted: a delete that lands while this request waited
+   * leaves nothing to update, and a Single that became `locked` in the same window is code-first
+   * now, so applying a UI edit to it would write a row the config is about to contradict.
+   */
+  private async refreshForUpdate(
+    input: UpdateSingleSchemaInput
+  ): Promise<DynamicSingleRecord> {
+    const current = await this.registry.getSingleBySlug(input.slug);
+
+    if (!current) {
+      throw NextlyError.notFound({
+        logContext: {
+          reason: "single disappeared while awaiting the exclusion",
+          slug: input.slug,
+        },
+      });
+    }
+    if (current.locked) {
+      throw NextlyError.forbidden({
+        logContext: {
+          reason: "single became locked while awaiting the exclusion",
+          slug: input.slug,
+        },
+      });
+    }
+
+    // 🔴 Refreshing the record fixes what this request PLANS from. It does not fix what it WRITES:
+    // the caller composed `updateData.fields` against the definitions it read, and those are written
+    // back verbatim at the end. A storage migration that renamed the field-group vocabulary in
+    // between would be undone by this save, under a marker that now says it settled.
+    //
+    // The DEFINITIONS are compared, not a hash of them. `schema_hash` looks like the cheaper
+    // question and cannot answer this one: the migration's registry step projects only
+    // `["id", fields, config_path]` and rewrites `fields` without recomputing the hash, so the
+    // pre- and post-migration hashes are equal precisely when the vocabulary changed. Comparing the
+    // thing itself needs nothing to be maintained alongside it.
+    //
+    // This also catches the case nobody had named: two people editing one Single, where the second
+    // save silently discarded the first.
+    const seen = stableFieldDefinitions(input.existing.fields);
+    const live = stableFieldDefinitions(current.fields);
+    if (seen !== live) {
+      throw NextlyError.conflict({
+        logContext: {
+          reason:
+            "single's stored field definitions changed while this request awaited the exclusion",
+          slug: input.slug,
+        },
+      });
+    }
+
+    return current;
+  }
+
   private async planUpdate(
     input: UpdateSingleSchemaInput
   ): Promise<UpdateDdlPlan | null> {
@@ -377,21 +638,16 @@ export class SingleMetadataService {
       wasLocalized,
       hasStatus,
       wasStatus,
-      statusRequested,
     } = input;
     const previousFields = (existing.fields ??
       []) as unknown as FieldDefinition[];
 
+    // Asked through the shared predicate rather than restated here. `updateSingleSchema` needs the
+    // same answer BEFORE it takes the exclusion, and two copies of this condition would agree today
+    // and drift silently — with the drift showing up as a schema change running unprotected.
+    if (!requestsSchemaWork(input)) return null;
+
     if (fields === undefined) {
-      // A save with no field change still has companion work when the single is crossing the
-      // Internationalization boundary, or when Draft/Published is saved on a single that is
-      // localized in either state — that toggle ADDs or DROPs the companion's own `_status`.
-      // Without this the flag persisted while the physical schema stayed as it was, stranding
-      // data in the table the new flag says it does not live in.
-      const needsCompanionWork =
-        isLocalized !== wasLocalized ||
-        (statusRequested && (isLocalized || wasLocalized));
-      if (!needsCompanionWork) return null;
       return {
         migrationSQL: "",
         fields: previousFields,
@@ -800,6 +1056,52 @@ export class SingleMetadataService {
    * REJECT the request and must do so before anything is persisted, while the apply must never
    * throw so a failure is still recorded against a row.
    */
+  /**
+   * Re-run the create's ownership preconditions, inside the exclusion.
+   *
+   * Asks the same two questions the caller asked and re-uses the same shared guard for the second,
+   * rather than restating either: a table another Single already owns, and a slug some other
+   * resource kind has taken.
+   */
+  private async assertCreateStillPossible(
+    input: CreateSingleInput
+  ): Promise<void> {
+    const owner = (await this.registry.getAllSingles()).find(
+      single =>
+        single.tableName === input.tableName && single.slug !== input.slug
+    );
+    if (owner) {
+      throw NextlyError.duplicate({
+        logContext: {
+          reason:
+            "another single claimed this table while awaiting the exclusion",
+          slug: input.slug,
+          tableName: input.tableName,
+          ownedBy: owner.slug,
+        },
+      });
+    }
+
+    const adapter = this.adapter;
+    if (adapter) {
+      await assertGlobalResourceSlugAvailable(adapter, input.slug);
+    }
+
+    // 🔴 Re-judged here, not only by the caller, because the thing that judges it can CHANGE while
+    // this request waits. A plugin field's options are validated by the plugin's own
+    // `validateOptions`, read from the process-global field-type registry — and an HMR reload
+    // replaces that registry wholesale from inside this same exclusion. A declaration the previous
+    // registration accepted would otherwise be planned, built and persisted against the new one,
+    // and every later write to the Single would fail on options it rejects.
+    //
+    // Placed alongside the ownership checks so the whole precondition set is re-established in one
+    // place: this method is what a new precondition should be added to.
+    const { assertValidPluginFieldOptions } = await import(
+      "../../../api/fields-payload"
+    );
+    assertValidPluginFieldOptions(input.fields);
+  }
+
   private async planCreate(input: CreateSingleInput): Promise<CreateDdlPlan> {
     const isLocalized = input.localized === true;
     const hasStatus = input.status === true;

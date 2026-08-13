@@ -54,7 +54,10 @@ function makeAdapter(
   // before recording "applied", so a double answering a flat `false` would report every rebuild as
   // failed — the test would then pass for the wrong reason, describing a create that did not work.
   let created = false;
-  return {
+  // A single's schema change runs inside the storage migration's lock, so the double has to answer
+  // the lock's reads and writes as well as its own. Added rather than stubbed: a surface that let
+  // every claim succeed would certify an exclusion that is not there.
+  return withMigrationLockSurface({
     dialect,
     getCapabilities: () => ({ dialect }),
     tableExists: vi.fn(async (name: string) =>
@@ -81,12 +84,16 @@ function makeAdapter(
       execute: async () => ({ rows: [] }),
     })),
     executeQuery: vi.fn(async (sql: string) => {
+      // The lock's own DDL is a `CREATE TABLE` too, and it runs BEFORE the single's. Letting it
+      // through would flip `created` while the main table still did not exist, so the apply would
+      // record every rebuild as applied against a table nothing had built.
+      if (isMigrationLockStatement(sql)) return [];
       executed.push(sql);
       onStatement?.(sql);
       if (/CREATE TABLE/i.test(sql)) created = true;
       return [];
     }),
-  };
+  });
 }
 
 let adapter: ReturnType<typeof makeAdapter>;
@@ -167,6 +174,10 @@ vi.mock(
 );
 
 import { NextlyError } from "../../../errors";
+import {
+  isMigrationLockStatement,
+  withMigrationLockSurface,
+} from "../../../domains/field-groups/migration/__tests__/helpers/migration-lock-double";
 import { SingleMetadataService } from "../../../domains/singles/services/single-metadata-service";
 import type { SingleRegistryService } from "../../../domains/singles/services/single-registry-service";
 import type { Logger } from "../../../shared/types";

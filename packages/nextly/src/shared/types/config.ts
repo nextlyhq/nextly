@@ -17,6 +17,10 @@ import type {
   AuditRetentionConfig,
   ResolvedAuditRetentionConfig,
 } from "../../domains/audit/retention-config";
+import {
+  resolveEmailRetentionConfig,
+  type ResolvedEmailRetentionConfig,
+} from "../../domains/email/retention-config";
 import { normalizeLocalization } from "../../domains/i18n/config/normalize";
 import type {
   LocalizationConfig,
@@ -781,6 +785,15 @@ export interface SanitizedNextlyConfig {
   auditRetention: ResolvedAuditRetentionConfig;
 
   /**
+   * Resolved delivery-log retention.
+   *
+   * Always a policy after sanitization, since the window has a default. The
+   * window itself may be `false`, which is how keeping the log indefinitely is
+   * expressed.
+   */
+  emailRetention: ResolvedEmailRetentionConfig;
+
+  /**
    * Whether the audit seam forces outbox recording regardless of endpoints.
    * Always present after sanitization; defaults to false.
    */
@@ -961,6 +974,11 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     // DELETE rows past them. Keeping everything is `false` — at a single window
     // or at the whole block — so it is stated rather than implied by absence.
     auditRetention: resolveAuditRetentionConfig(config.audit?.retention),
+    // Resolved here for the same reason as the two above: omitting `email`
+    // entirely still produces a window, so a delivery log is bounded by default
+    // rather than growing until someone notices the column that governs it was
+    // never read.
+    emailRetention: resolveEmailRetentionConfig(config.email?.retention),
     // Off unless explicitly enabled; the org-wide audit log flips this to keep
     // recording events when an install has no delivery endpoints.
     webhookAuditEnabled: config.webhooks?.audit ?? false,

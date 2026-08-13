@@ -12,6 +12,11 @@
 
 export { users, accounts, sessions } from "../users/mysql";
 
+// The field-group storage migration's mutual-exclusion row. Present here, and not only in
+// `getCoreSchema`, because this bundle is what decides whether the table EXISTS: it is what
+// `reconcileCore` hands drizzle-kit.
+export { nextlyFieldGroupLock } from "../field-group-lock/mysql";
+
 export {
   emailVerificationTokens,
   passwordResetTokens,

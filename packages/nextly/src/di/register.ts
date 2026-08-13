@@ -37,11 +37,12 @@ import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
 import type { SchemaRegistry } from "../database/schema-registry";
 import { getNextly } from "../direct-api/nextly";
 import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
-import { setAuditRetention } from "../domains/audit/retention-config";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import type { AuthService } from "../domains/auth/services/auth-service";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
+import type { ResolvedEmailRetentionConfig } from "../domains/email/retention-config";
+import { emailRetentionAfterTransform } from "../domains/email/retention-config";
 import type { EmailDeliveryService } from "../domains/email/services/email-delivery-service";
 import {
   getEmailProviderRegistry,
@@ -55,6 +56,7 @@ import {
 } from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import type { MetaService } from "../domains/meta";
+import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import {
   clearFieldTypes,
   registerFieldType,
@@ -97,6 +99,7 @@ import { registerSingleHooks } from "../hooks/register-single-hooks";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
+import { warnUndescribedPlugins } from "../plugins/describe-check";
 import { setInitializedPlugins } from "../plugins/initialized-plugins";
 import {
   collectCustomPermissions,
@@ -311,6 +314,17 @@ export interface NextlyServiceConfig {
   auditRetention?: ResolvedAuditRetentionConfig;
 
   /**
+   * Resolved delivery-log retention.
+   *
+   * Read by the email registration to decide whether to offer a sweep from the
+   * send path. `undefined` means it was never carried through initialization,
+   * in which case nothing prunes `email_deliveries` and the table grows with
+   * every send — which is the state this exists to end, so absence is a real
+   * outcome rather than a neutral default.
+   */
+  emailRetention?: ResolvedEmailRetentionConfig;
+
+  /**
    * Whether the audit seam forces outbox recording regardless of endpoints.
    * Carried from the sanitized config; absent when built without app config.
    */
@@ -448,8 +462,38 @@ export async function registerServices(
   // targets that aren't code/plugin entities are DEFERRED here (candidate
   // Builder-made collections) and finalized after the DB is reachable below —
   // this is how extending/relating to a Builder collection works (P8/D3/R2).
-  const { config: transformedConfig, deferredExtends } =
+  const { config: contributedConfig, deferredExtends } =
     applyPluginSchemaContributionsDeferred(setupConfig, resolvedPlugins);
+
+  // Re-resolved from the TRANSFORMED nested block, because a `setup`
+  // transformer may have replaced it. The flattened `emailRetention` was
+  // computed by `sanitizeConfig` BEFORE any transformer ran, so a plugin
+  // returning `email: { ...config.email, retention: false }` left the two
+  // representations disagreeing — and every reader takes the flattened one, so
+  // the plugin's keep-forever decision was silently overruled by the original
+  // 90-day default.
+  //
+  // UNCONDITIONAL when a nested block exists, and that is the whole point. An
+  // earlier version only recomputed when the flattened field was ABSENT, which
+  // is exactly backwards: on the ordinary `defineConfig()` path sanitization
+  // always populates it, so the guard was false precisely in the case the
+  // recomputation exists for. A derived value has to be recomputed wherever its
+  // SOURCE can change, not wherever it happens to be missing.
+  //
+  // The cost is that an `emailRetention` passed directly to `registerServices`
+  // alongside an `email` block is superseded by that block. The nested form is
+  // the one a transformer can speak for, and a caller supplying both has stated
+  // the same setting twice.
+  const transformedConfig: typeof contributedConfig =
+    contributedConfig.email !== undefined
+      ? {
+          ...contributedConfig,
+          emailRetention: emailRetentionAfterTransform(
+            contributedConfig.email,
+            contributedConfig.emailRetention
+          ),
+        }
+      : contributedConfig;
 
   // Collect every relationTo (code + plugin) that doesn't resolve to a merged
   // collection (or core target); require dependsOn for cross-plugin relations
@@ -531,6 +575,13 @@ export async function registerServices(
   if (transformedConfig.plugins && transformedConfig.plugins.length > 0) {
     const pluginNames = transformedConfig.plugins.map(p => p.name).join(", ");
     resolvedLogger.info?.(`Registered plugins: ${pluginNames}`);
+
+    // Beside the line that names them, because that line is the symptom: a
+    // plugin with no description is one the admin can only ever show by its
+    // package specifier. Warned rather than thrown — the omission is the
+    // plugin author's and breaks nothing, and an operator cannot fix a
+    // third-party package from their own config.
+    warnUndescribedPlugins(transformedConfig.plugins, resolvedLogger);
   }
 
   // ----------------------------------------
@@ -2751,7 +2802,7 @@ export async function shutdownServices(): Promise<void> {
     // process-global too, and its provider closes over this container's
     // registry; clear it so a later instance never resolves a dead one.
     resetWebhookActivation();
-    setAuditRetention(undefined);
+    publishRetentionPolicies(undefined);
     // Hooks live in a registry that outlives the container. Registration runs
     // from config on every init, so leaving it populated means a second
     // instance in the same process appends a fresh copy of every handler and
@@ -2774,7 +2825,7 @@ export function clearServices(): void {
   // Clear the process-global recording activation for the same reason; its
   // provider closes over this container's registry.
   resetWebhookActivation();
-  setAuditRetention(undefined);
+  publishRetentionPolicies(undefined);
   // Cleared with the container for the same reason: re-initializing would
   // otherwise register every configured hook a second time.
   clearActiveHookRegistry();

@@ -195,6 +195,17 @@ export function buildServiceConfig(
       serviceConfig.auditRetention = nextlyConfig.auditRetention;
     }
 
+    // Delivery-log retention — carried for the same reason, and with the same
+    // consequence if it is not: the email registration reads it to decide
+    // whether to offer a sweep, and an uncarried policy leaves the table
+    // unswept while the configuration reads as enforced.
+    if (
+      serviceConfig.emailRetention === undefined &&
+      nextlyConfig?.emailRetention !== undefined
+    ) {
+      serviceConfig.emailRetention = nextlyConfig.emailRetention;
+    }
+
     // Audit seam — carry the resolved flag through so the webhook registration
     // can publish it to the recording gate. `undefined` means not carried; the
     // sanitizer always produces a boolean, so any value here is authoritative.

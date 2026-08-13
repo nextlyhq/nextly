@@ -175,7 +175,13 @@ describe("holding the exclusion for the whole sync", () => {
     let ownerDuringWork: string | null = null;
 
     await withMigrationExcluded(
-      { adapter, logger, label: "db:sync", mayCreateLock: true },
+      {
+        adapter,
+        logger,
+        label: "db:sync",
+        mayCreateLock: true,
+        releaseOnInterrupt: true,
+      },
       () => {
         ownerDuringWork = ownerNow();
         return Promise.resolve();
@@ -193,7 +199,13 @@ describe("holding the exclusion for the whole sync", () => {
     const work = vi.fn(() => Promise.resolve());
 
     const error = await withMigrationExcluded(
-      { adapter, logger, label: "db:sync", mayCreateLock: true },
+      {
+        adapter,
+        logger,
+        label: "db:sync",
+        mayCreateLock: true,
+        releaseOnInterrupt: true,
+      },
       work
     ).catch((caught: unknown) => caught);
 
@@ -207,7 +219,13 @@ describe("holding the exclusion for the whole sync", () => {
   it("issues no DDL when the caller may not change schema", async () => {
     const { adapter, ddlIssued } = createLockingAdapter({});
     await withMigrationExcluded(
-      { adapter, logger, label: "db:sync", mayCreateLock: false },
+      {
+        adapter,
+        logger,
+        label: "db:sync",
+        mayCreateLock: false,
+        releaseOnInterrupt: true,
+      },
       () => Promise.resolve()
     );
     expect(ddlIssued().filter(sql => /CREATE TABLE/i.test(sql))).toEqual([]);
@@ -223,7 +241,13 @@ describe("holding the exclusion for the whole sync", () => {
     const work = vi.fn(() => Promise.resolve());
 
     await withMigrationExcluded(
-      { adapter, logger, label: "db:sync", mayCreateLock: false },
+      {
+        adapter,
+        logger,
+        label: "db:sync",
+        mayCreateLock: false,
+        releaseOnInterrupt: true,
+      },
       work
     );
 
@@ -248,7 +272,13 @@ describe("holding the exclusion for the whole sync", () => {
     try {
       let ownerWhileHeld: string | null = null;
       await withMigrationExcluded(
-        { adapter, logger, label: "db:sync watch", mayCreateLock: true },
+        {
+          adapter,
+          logger,
+          label: "db:sync watch",
+          mayCreateLock: true,
+          releaseOnInterrupt: true,
+        },
         async () => {
           ownerWhileHeld = ownerNow();
           process.emit("SIGINT");
@@ -276,7 +306,13 @@ describe("holding the exclusion for the whole sync", () => {
     let ownerDuringWork: string | null = null;
 
     await withMigrationExcluded(
-      { adapter, logger, label: "db:sync", mayCreateLock: true },
+      {
+        adapter,
+        logger,
+        label: "db:sync",
+        mayCreateLock: true,
+        releaseOnInterrupt: true,
+      },
       () => {
         ownerDuringWork = ownerNow();
         return Promise.resolve();
@@ -295,7 +331,13 @@ describe("holding the exclusion for the whole sync", () => {
     const work = vi.fn(() => Promise.resolve());
 
     const error = await withMigrationExcluded(
-      { adapter, logger, label: "db:sync", mayCreateLock: true },
+      {
+        adapter,
+        logger,
+        label: "db:sync",
+        mayCreateLock: true,
+        releaseOnInterrupt: true,
+      },
       work
     ).catch((caught: unknown) => caught);
 

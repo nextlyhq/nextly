@@ -201,6 +201,10 @@ export function createTableWorld(
 
   const session: MigrationSession = {
     dialect: "postgresql",
+    // This double stands in for a session that CLAIMED the lock, which is what
+    // every step it serves requires — so it reports the lock as held by that
+    // claim, exactly as the real one does.
+    lock: { kind: "held", owner: "table-world" },
     async inTransaction(work) {
       counts.transactions += 1;
       const snapshot = new Map(

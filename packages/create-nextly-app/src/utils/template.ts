@@ -17,6 +17,92 @@ const PROJECT_TYPES_WITH_FORM_BUILDER: ReadonlySet<ProjectType> = new Set([
   "blog",
 ]);
 
+/**
+ * The version range every font package is scaffolded at.
+ *
+ * One range because they are released together, and a project mixing lines would ship two copies
+ * of the same face.
+ *
+ * Safe to state here rather than carry per-template because the layouts import the package ROOT
+ * (`@fontsource-variable/inter`) rather than a file inside it. There is no asset path that a
+ * different release line could rename out from under the import, so a skew cannot produce a
+ * missing-file build failure.
+ *
+ * What it would NOT cover, stated so the limit is visible rather than discovered: a template
+ * importing a SUBPATH such as `.../wght.css`, or one needing a different MAJOR. No template does
+ * either, so the range stays a constant until one does — at which point it belongs with the
+ * template rather than here.
+ */
+const FONT_PACKAGE_RANGE = "^5.3.0";
+
+/** Matches a font package specifier wherever a template imports one. */
+const FONT_PACKAGE_PATTERN = /@fontsource(?:-variable)?\/[a-z0-9-]+/g;
+
+/**
+ * The font packages a scaffold of `projectType` actually needs.
+ *
+ * READ from the template sources rather than listed here. A hand-kept list is a
+ * second answer to a question the templates already answer, and the two only
+ * agree until someone changes a face: a template importing a package the
+ * scaffold never installs fails at `next build` with a module it cannot
+ * resolve, and one installing a package nothing imports ships dead bytes.
+ *
+ * The type's own directory is read as well as `base`'s, because a template that
+ * overrides `layout.tsx` chooses its own faces — reading only `base` would
+ * install Geist for a scaffold that renders in Inter.
+ *
+ * The caller passes the directories it is about to COPY, rather than this
+ * resolving its own. A downloaded or `--local-template` source is a different
+ * tree from the published one, and reading the wrong tree would install the
+ * fonts of templates the project never receives.
+ */
+export async function collectFontDependencies(
+  templateDirs: readonly string[]
+): Promise<string[]> {
+  // Merged by RELATIVE path, later directory winning, because that is what the copy does: a
+  // template that overrides `src/app/layout.tsx` REPLACES base's rather than adding to it. Taking
+  // the union instead would install the faces of a layout the project never receives — a blank
+  // scaffold declaring Geist because base's overwritten layout mentioned it.
+  const effective = new Map<string, string>();
+  for (const root of templateDirs) {
+    if (!root || !(await fs.pathExists(root))) continue;
+    for (const file of await walkSourceFiles(root)) {
+      effective.set(path.relative(root, file), file);
+    }
+  }
+
+  const found = new Set<string>();
+  for (const file of effective.values()) {
+    const contents = await fs.readFile(file, "utf8");
+    for (const match of contents.matchAll(FONT_PACKAGE_PATTERN)) {
+      found.add(match[0]);
+    }
+  }
+
+  return [...found].sort();
+}
+
+/**
+ * Every file under `root` that could carry an import specifier.
+ *
+ * Async, and through the same `fs-extra` surface the rest of this module uses,
+ * so a caller that substitutes the filesystem substitutes this too.
+ */
+async function walkSourceFiles(root: string): Promise<string[]> {
+  const out: string[] = [];
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "node_modules" || entry.name === ".next") continue;
+      out.push(...(await walkSourceFiles(full)));
+    } else if (/\.(?:tsx?|jsx?|mjs|cjs|css)$/.test(entry.name)) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
 export function projectUsesFormBuilder(projectType: ProjectType): boolean {
   return PROJECT_TYPES_WITH_FORM_BUILDER.has(projectType);
 }
@@ -331,12 +417,16 @@ async function resolveRuntimeVersions(): Promise<Record<string, string>> {
  * @param useYalc - When true, omits @nextlyhq/* packages (they'll be yalc-added)
  * @param projectType - Selected template. Determines optional plugin deps
  *   (e.g. `@nextlyhq/plugin-form-builder` ships only with `blog`).
+ * @param templateDirs - The directories being copied for this scaffold. The
+ *   font packages are read from these, so they match the templates the project
+ *   actually receives.
  */
 export async function generatePackageJson(
   projectName: string,
   database: DatabaseConfig,
   useYalc: boolean = false,
-  projectType: ProjectType = "blank"
+  projectType: ProjectType = "blank",
+  templateDirs: readonly string[] = []
 ): Promise<string> {
   // Plugins are a publishable library, not an app — different package.json.
   if (projectType === "plugin") {
@@ -360,6 +450,15 @@ export async function generatePackageJson(
   // to provide it. Admin bundles its own copy, which does not satisfy that peer
   // under isolated node_modules layouts.
   dependencies["lucide-react"] = "^0.544.0";
+
+  // The faces the template's own layout imports. Scaffolded as dependencies
+  // because the layout loads them from `node_modules` rather than fetching them
+  // from fonts.googleapis.com, which made every `next build` — including the
+  // one a CI run does before its browser tests — depend on reaching a third
+  // party, and fail behind a proxy or offline.
+  for (const font of await collectFontDependencies(templateDirs)) {
+    dependencies[font] = FONT_PACKAGE_RANGE;
+  }
 
   if (!useYalc) {
     // Content templates (blog) track the `alpha` dist-tag so they always get a
@@ -583,9 +682,29 @@ export const NATIVE_BUILD_DEPENDENCIES = [
  *     reads the `pnpm` field from package.json at all.
  *   - pnpm 10.6+ reads `onlyBuiltDependencies` (an array; deprecated in 11).
  *
- * Both keys are emitted so native deps compile on any pnpm 10.6+/11. pnpm 9
- * runs build scripts by default and ignores this file; npm/yarn ignore it too,
- * so it is safe to ship in every scaffold regardless of package manager.
+ * Both keys are emitted so native deps compile on any pnpm 10.6+/11. npm and
+ * yarn ignore the file entirely, and pnpm 9 runs build scripts by default, so
+ * it is safe to ship in every scaffold regardless of package manager.
+ *
+ * `packages` is emitted for pnpm 9 specifically. Before pnpm repurposed this
+ * file as the general settings home, its mere presence declared a workspace
+ * and a missing `packages` key was fatal:
+ *
+ *   ERR_PNPM_INVALID_WORKSPACE_CONFIGURATION  packages field missing or empty
+ *
+ * so a scaffold shipping the allowlist alone could not be installed at all on
+ * those versions.
+ *
+ * Measured, installing the file exactly as generated: 8.15.9, 9.0.0, 9.0.6,
+ * 9.1.0, 9.2.0 and 9.3.0 all refuse it; 9.4.0, 9.7.0, 9.15.9, 10.5.2, 10.6.1,
+ * 10.18.3 and 11.0.0 all accept it with or without the key. So the affected
+ * range is pnpm 8 through 9.3 — which includes the 9.0.0 this repository pins,
+ * and therefore the pnpm a contributor following the setup instructions has.
+ *
+ * The empty list is the honest value — a scaffolded app has no workspace
+ * members — and it leaves `pnpm add` behaving normally, which declaring the
+ * project's own root as a member would also have done but with a claim about
+ * the layout that is not true.
  */
 export function generatePnpmWorkspaceYaml(): string {
   const allowBuilds = NATIVE_BUILD_DEPENDENCIES.map(
@@ -601,7 +720,14 @@ export function generatePnpmWorkspaceYaml(): string {
     "# compiled binding (sqlite apps crash at boot) and sharp/esbuild degrade.\n" +
     "#\n" +
     "# pnpm 11+ reads `allowBuilds`; pnpm 10.6+ reads `onlyBuiltDependencies`.\n" +
-    "# npm, yarn, and pnpm 9 ignore this file (they run build scripts by default).\n" +
+    "# npm and yarn ignore this file; pnpm 9 needs neither key, because it runs\n" +
+    "# build scripts by default.\n" +
+    "#\n" +
+    "# It does still READ the file, which is what the empty `packages` list is\n" +
+    "# for: through pnpm 9.3 the presence of this file declares a workspace, and\n" +
+    "# a missing `packages` key fails the install outright. This app has no\n" +
+    "# workspace members.\n" +
+    "packages: []\n" +
     `allowBuilds:\n${allowBuilds}\n` +
     `onlyBuiltDependencies:\n${onlyBuilt}\n`
   );
@@ -792,11 +918,14 @@ export async function copyTemplate(
   }
 
   // Step 6: Generate package.json
+  // The dirs copied above, so the fonts installed are the fonts this scaffold
+  // actually received rather than whatever a separately-resolved tree holds.
   const packageJsonContent = await generatePackageJson(
     projectName,
     database,
     useYalc,
-    projectType
+    projectType,
+    [baseDir, typeDir]
   );
   await fs.writeFile(
     path.join(targetDir, "package.json"),

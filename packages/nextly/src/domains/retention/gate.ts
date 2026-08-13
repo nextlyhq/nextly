@@ -59,6 +59,37 @@ export const AUDIT_RETENTION_GATE_KEY = "audit.retention.lastPassAt";
 export const AUDIT_RETENTION_DRAIN_GATE_KEY = "audit.retention.lastDrainPassAt";
 
 /**
+ * The delivery log is gated on its own marker, and offered by the SEND path
+ * rather than by a content write.
+ *
+ * Rows in `email_deliveries` are created by sends, so sends are when the table
+ * grows — a content write has no relationship to email volume, and an install
+ * that never sends mail has nothing here to prune. Offering it from the write
+ * paths instead would tie the sweep's cadence to a signal unrelated to what it
+ * removes.
+ */
+export const EMAIL_RETENTION_GATE_KEY = "email.retention.lastPassAt";
+
+/**
+ * The delivery log's SECOND marker, for the scheduled drain.
+ *
+ * Gated twice for the reason the audit trails are, and it is the same failure:
+ * two triggers with different jobs offer this pass. Every write path offers it
+ * CAPPED, so a send or a save is not held up by a backlog sweep; the drain
+ * offers it at full budget, and nothing waits on the drain.
+ *
+ * Sharing one marker lets the capped trigger consume the interval first — a
+ * send landing just after the marker came due takes the turn and spends two
+ * batches, and the drain arriving moments later finds nothing to claim. Under
+ * continuous sending that repeats every interval, so the configured budget is
+ * never reachable and the log grows on a setting that reads as enforced.
+ *
+ * Both running in one interval is harmless: a pass deletes rows older than a
+ * cutoff, so the second finds less to do rather than doing it twice.
+ */
+export const EMAIL_RETENTION_DRAIN_GATE_KEY = "email.retention.lastDrainPassAt";
+
+/**
  * The atomic claim primitive. Implemented against `nextly_meta` in
  * {@link MetaRetentionGate}; tests supply their own.
  */

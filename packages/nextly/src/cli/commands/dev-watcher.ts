@@ -91,6 +91,9 @@ export function createDebouncedSync(
             logger,
             label: "db:sync watch",
             mayCreateLock: options.autoSync !== false,
+            // Ctrl+C is the documented way to stop watch mode, and a sync is idempotent, so a
+            // claim stuck behind a dead watcher would block every later sync for no gain.
+            releaseOnInterrupt: true,
           },
           async () => {
             // Before the pushes, for the same reason the one-shot `db:sync` does it: a watched

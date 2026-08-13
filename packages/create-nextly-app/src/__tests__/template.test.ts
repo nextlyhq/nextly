@@ -217,6 +217,30 @@ describe("generatePnpmWorkspaceYaml", () => {
   it("always includes better-sqlite3 in the allowlist", () => {
     expect(NATIVE_BUILD_DEPENDENCIES).toContain("better-sqlite3");
   });
+
+  // pnpm 9 treats the presence of this file as declaring a workspace and
+  // refuses to install without a `packages` key
+  // (ERR_PNPM_INVALID_WORKSPACE_CONFIGURATION). A scaffold that ships the
+  // allowlist alone cannot be installed at all on that line, so the key is
+  // what makes the file safe to emit unconditionally.
+  it("declares packages, so pnpm 9 can install the scaffold", () => {
+    const yaml = generatePnpmWorkspaceYaml();
+    expect(yaml).toMatch(/^packages: \[\]$/m);
+  });
+
+  // A scaffolded app is a single package. Naming any member would claim a
+  // repository layout the scaffold does not create, and pnpm would then look
+  // for manifests that are not there.
+  it("declares no workspace members", () => {
+    const yaml = generatePnpmWorkspaceYaml();
+    const packagesLine = yaml
+      .split("\n")
+      .findIndex(line => line.startsWith("packages:"));
+    expect(packagesLine).toBeGreaterThanOrEqual(0);
+    // A YAML list continues on indented lines; the next top-level key ends it.
+    const next = yaml.split("\n")[packagesLine + 1] ?? "";
+    expect(next).not.toMatch(/^\s+-/);
+  });
 });
 
 // ============================================================
