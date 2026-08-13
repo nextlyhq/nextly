@@ -291,8 +291,19 @@ export class FieldGroupMetadataService {
       assertValidPluginFieldOptions(input.fields);
     }
 
+    // 🔴 Validated HERE, at the boundary every transport crosses, not in each transport. Fixing
+    // the dispatcher alone left the Direct API able to pass `localized: "false"` from JavaScript:
+    // the string is truthy, so the transition would enable and drop the main table's translatable
+    // columns while the registry, storing `data.localized === true`, recorded the group disabled.
+    // The declared type stops a TypeScript caller and stops nothing at runtime, which is exactly
+    // the difference this service exists to stop mattering.
+    const { readRequestLocalized } = await import(
+      "../../../dispatcher/helpers/request-localized"
+    );
+    const requestedLocalized = readRequestLocalized(input);
+
     const wasLocalized = existing.localized === true;
-    const localized = input.localized ?? wasLocalized;
+    const localized = requestedLocalized ?? wasLocalized;
     const fields = (input.fields ??
       existing.fields) as unknown as FieldDefinition[];
 
@@ -327,8 +338,8 @@ export class FieldGroupMetadataService {
           ? { description: input.description }
           : {}),
         ...(input.admin !== undefined ? { admin: input.admin } : {}),
-        ...(input.localized !== undefined
-          ? { localized: input.localized }
+        ...(requestedLocalized !== undefined
+          ? { localized: requestedLocalized }
           : {}),
         ...(input.fields !== undefined
           ? {
