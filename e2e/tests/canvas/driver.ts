@@ -336,7 +336,7 @@ export interface CanvasChromeReader {
  * the measurement this prevents.
  */
 export async function dragUntilTarget(
-  driver: CanvasDriver,
+  driver: EdgeSearchDriver,
   maxSteps = 90
 ): Promise<number> {
   for (let step = 0; step < maxSteps; step += 1) {
@@ -413,6 +413,21 @@ const SETTLE_ROUNDS = 4;
 /** The capability these readers need, so a test can supply exactly it. */
 type TargetReader = Pick<CanvasDriver, "readActiveTarget"> &
   Partial<Pick<CanvasDriver, "dwellAllowanceMs">>;
+
+/**
+ * What an edge search needs, which is less than a whole canvas.
+ *
+ * Declared as the capability rather than the interface so these searches can be
+ * run against a simulated resolver. Three of the dwell fixes in this file are
+ * invisible on a canvas that declares no dwell, and a fix nothing can fail is a
+ * fix nobody can check.
+ */
+type EdgeSearchDriver = Pick<CanvasDriver, "moveBy" | "readActiveTarget"> &
+  Partial<Pick<CanvasDriver, "dwellAllowanceMs">>;
+
+/** {@link EdgeSearchDriver} plus the in-page recorder the jitter probe needs. */
+type JitterDriver = EdgeSearchDriver &
+  Pick<CanvasDriver, "recordActiveTargetTransitions">;
 
 /**
  * Wait for `read` to return something other than `from`, or for the permitted
@@ -618,7 +633,7 @@ export interface ZoneEdge {
  * wrong: the drag still runs and still reports a number.
  */
 export async function dragToZoneEdge(
-  driver: CanvasDriver,
+  driver: EdgeSearchDriver,
   marginPx = 24
 ): Promise<ZoneEdge> {
   const first = await dragUntilTarget(driver);
@@ -724,7 +739,7 @@ export interface JitterProbe {
  * failure, on a machine property, and nothing in its output says so.
  */
 export async function jitterAcrossEdge(
-  driver: CanvasDriver,
+  driver: JitterDriver,
   { sweeps = 3, dwellAllowanceMs = PERMITTED_DWELL_FLOOR_MS } = {}
 ): Promise<JitterProbe> {
   // To P-2 first, then alternating by 4, so the samples are P-2 and P+2 —
