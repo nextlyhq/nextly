@@ -118,14 +118,12 @@ test.describe("a canvas any Nextly editor could ship", () => {
     note(PLAN_POINT.collisionByDepth, "B-6");
     await driver.mountTree(await seedPage(request, NESTED_FIXTURE));
 
-    // SEARCHED, not aimed. Two previous versions computed a coordinate inside
-    // `nx-inner` and moved there — and activation expands every gap zone from
-    // zero height, so the layout the coordinate described no longer existed by
-    // the time the pointer arrived. How far it shifted depended on load, which
-    // is why it resolved to the inner container locally and to the root on CI.
-    //
-    // Descending until the OWNER is the nested container asks the question
-    // directly instead of predicting where the answer will be.
+    // Searched, not aimed. Activation expands every gap zone from zero height,
+    // so a coordinate computed before the drag starts describes a layout that
+    // no longer exists when the pointer arrives, and how far it shifts depends
+    // on how the canvas lays out under load. Descending until the OWNER is the
+    // nested container asks the question directly rather than predicting where
+    // the answer will be.
     await driver.startDragAt(await driver.dragSourceCentre());
 
     const boxes = await driver.readBlockBoxes();
@@ -141,27 +139,46 @@ test.describe("a canvas any Nextly editor could ship", () => {
     );
     await dragPointerTo(driver, top, 1);
 
-    let owner: string | null = null;
+    // EVERY sample taken while the pointer is inside the nested region, not the
+    // first one that agrees. Exiting on the first `nx-inner` would pass an
+    // implementation that resolves correctly at one depth and lets the outer
+    // container win everywhere else in the same region.
+    const bottom = mapFramePointToHost(
+      { x: 0, y: inner!.top + inner!.height },
+      origin,
+      scale
+    );
+    const owners: (string | null)[] = [];
     let active = -1;
+    let nearest = -1;
     for (let step = 0; step < 60; step += 1) {
-      owner = await driver.readActiveZoneOwner();
-      if (owner === "nx-inner") {
-        active = await driver.readActiveTarget();
-        break;
+      if (driver.pointer().y > bottom.y) break;
+      const owner = await driver.readActiveZoneOwner();
+      if (owner !== null) {
+        owners.push(owner);
+        if (active < 0) {
+          active = await driver.readActiveTarget();
+          nearest = await driver.nearestZoneToPointer();
+        }
       }
       await driver.moveBy(0, 6);
     }
-
-    const nearest = active >= 0 ? await driver.nearestZoneToPointer() : -1;
     await driver.cancel();
+
+    expect(
+      owners.length,
+      "the descent must find at least one active zone inside the region"
+    ).toBeGreaterThan(0);
 
     // The separating property: a zone owned by the INNERMOST container under
     // the pointer. A canvas that always lets the outer container win never
     // produces this owner however far the descent goes.
+    // Every one of them, so a canvas that resolves depth at one sample and not
+    // the next cannot pass.
     expect(
-      owner,
-      "the innermost container under the pointer must own a drop zone"
-    ).toBe("nx-inner");
+      [...new Set(owners)],
+      "every zone inside the nested region must be owned by it"
+    ).toEqual(["nx-inner"]);
     // And it must be the nearest, which catches a different fault: a stale rect
     // or an unscaled transform selects a zone that is not the nearest at all.
     expect(active, "and it must be the zone nearest the pointer").toBe(nearest);
@@ -504,33 +521,6 @@ test.describe("a canvas any Nextly editor could ship", () => {
       canvasCost,
       "a move must not re-measure the whole tree"
     ).toBeLessThan(120);
-    await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
-
-    // The canvas cannot answer this at all, and that refusal IS the
-    // shortfall. Asserted as the reader's OWN error type BEFORE the
-    // expectation is marked, so a broken selector, a missing iframe or a
-    // failed seed stays a real failure instead of becoming another
-    // expected one. It also fires the day the capability arrives: this
-    // line goes red first and forces the target below to be rewritten.
-    //
-    // Wrapped in an async thunk because these readers throw SYNCHRONOUSLY:
-    // `expect(reader())` never receives a promise, so `.rejects` cannot see
-    // the refusal and the raw error escapes the assertion entirely.
-    await expect(async () => chrome.undoDepth()).rejects.toThrow(
-      CanvasCapabilityError
-    );
-
-    // Marked only now. Everything above ran unprotected.
-    test.fail(true, "this canvas keeps no undo history to count");
-
-    const before = await chrome.undoDepth();
-    await dragFromPanel(driver);
-    await driver.drop();
-    const after = await chrome.undoDepth();
-
-    // Exactly one. A drop recorded as several makes undo feel broken: the
-    // author presses it once and the block half-moves.
-    expect(after - before, "one drop is one undoable edit").toBe(1);
   });
 
   test("records exactly one undo entry for one drop", async ({ request }) => {
