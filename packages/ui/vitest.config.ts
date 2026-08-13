@@ -10,7 +10,14 @@ export default defineConfig({
       "**/package.json/**",
       "**/vitest.config.*/**",
       "**/vite.config.*/**",
-      "**/src/**/*.{ts,tsx}",
+      // Every extension the tab-contract scan reads, not only the TypeScript
+      // ones. That scan walks the repository with `readFileSync`, so a `.js` or
+      // `.jsx` call site is in no module graph Vitest can invalidate — without
+      // this a watch session keeps showing the previous green after a real
+      // violation is added. Kept in step with `CALL_SITE_EXTENSIONS` in
+      // `src/components/__tests__/tabs-contract.test.ts`, which asserts this
+      // list covers it.
+      "**/src/**/*.{ts,tsx,js,jsx}",
       "**/src/**/*.css",
       // The declaration build runs through both tsup configs, and a child
       // process loads them — they are in no module graph Vitest can invalidate,

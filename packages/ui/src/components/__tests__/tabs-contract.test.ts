@@ -1057,15 +1057,20 @@ const CALL_SITE_EXTENSIONS = [".tsx", ".jsx", ".js"] as const;
  * of them. That is slow, and worse, it makes the result depend on whether
  * somebody happened to build locally — a suite that reads generated output is
  * reading a different repository on each machine.
+ *
+ * Every name here is one that ONLY ever denotes generated output, and the list
+ * is short for that reason rather than by oversight. `build`, `out` and
+ * `coverage` are deliberately absent: they are output conventions at particular
+ * project locations, but they are also ordinary Next.js route segments, so
+ * `app/build/page.js` is a real call site. Pruning by BASENAME anywhere in the
+ * tree would drop it before the extension check ran — a false green produced by
+ * the very list meant to keep the scan honest.
  */
 const GENERATED_DIRECTORIES = new Set([
   "node_modules",
   "dist",
   ".turbo",
   ".next",
-  "coverage",
-  "out",
-  "build",
 ]);
 
 function isCallSite(name: string): boolean {
@@ -2398,9 +2403,18 @@ describe("which files the call-site scan reads", () => {
       mkdirSync(join(dir, ".next"));
       writeFileSync(join(dir, ".next", "chunk.js"), "");
 
+      // And a route that happens to be NAMED like an output directory. Pruning
+      // by basename would drop this, which is a call site going silently
+      // unread — the failure the pruning list is supposed to prevent, caused by
+      // the pruning list.
+      mkdirSync(join(dir, "build"));
+      writeFileSync(join(dir, "build", "page.js"), "");
+
       const found = sourceFiles(dir).map(path => path.slice(dir.length + 1));
 
-      expect(found.sort()).toEqual(["a.tsx", "b.jsx", "d.js"].sort());
+      expect(found.sort()).toEqual(
+        ["a.tsx", "b.jsx", "d.js", join("build", "page.js")].sort()
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2449,6 +2463,31 @@ describe("which files the call-site scan reads", () => {
       // task list exists — and a bare `false` tells them nothing.
       expect({ task, missing }).toEqual({ task, missing: [] });
     }
+  });
+
+  it("reruns in watch mode for every extension it reads", () => {
+    // The scan reaches call sites with `readFileSync`, so Vitest has no module
+    // dependency on them: without an explicit trigger a watch session keeps
+    // displaying the previous green after a real violation is added to a `.js`
+    // or `.jsx` file. `forceRerunTriggers` is what supplies that dependency,
+    // and it is a second list of extensions — so it is checked against the
+    // first rather than trusted to stay in step.
+    const config = readFileSync(
+      resolve(HERE, "../../../vitest.config.ts"),
+      "utf8"
+    );
+    const trigger = /"\*\*\/src\/\*\*\/\*\.\{([^}]+)\}"/.exec(config)?.[1];
+
+    // Proves the pattern found something before anything is concluded from it:
+    // a renamed option or a reformatted config would otherwise read as a pass.
+    expect(trigger).toBeDefined();
+
+    const covered = (trigger ?? "").split(",").map(part => part.trim());
+    const missing = CALL_SITE_EXTENSIONS.map(e => e.slice(1)).filter(
+      extension => !covered.includes(extension)
+    );
+
+    expect(missing).toEqual([]);
   });
 
   it("finds a violation in a .jsx call site", () => {
