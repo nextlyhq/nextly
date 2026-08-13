@@ -111,13 +111,31 @@ export async function measureShellRender(
   };
 }
 
-/** A background that resolved to nothing, however the browser spells it. */
+/**
+ * A background that resolved to nothing, whatever colour it nominally is.
+ *
+ * Reads the ALPHA rather than matching two spellings. The first version compared
+ * against `transparent` and `rgba(0, 0, 0, 0)`, which named a claim about
+ * visibility and implemented a claim about spelling: a chrome resolving to
+ * `rgba(255, 0, 0, 0)` is equally invisible and was classified as painted.
+ *
+ * The CSSOM makes the parse reliable rather than heuristic. `getComputedStyle`
+ * serializes to the legacy comma form and uses `rgba(...)` for ANY alpha other
+ * than exactly 1, so a fourth component is present precisely when the colour is
+ * not fully opaque — there is no modern-syntax or named-colour case to cover
+ * here, because a computed value is never returned in those forms.
+ */
 export function isUnpainted(background: string | null): boolean {
-  return (
-    background === null ||
-    background === "transparent" ||
-    background === "rgba(0, 0, 0, 0)"
-  );
+  if (background === null) return true;
+  const value = background.trim();
+  if (value === "" || value === "transparent") return true;
+  // `rgb(...)` carries no alpha and is therefore opaque by definition.
+  const alpha =
+    /^rgba\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*,\s*([\d.]+)\s*\)$/.exec(
+      value
+    );
+  if (alpha === null) return false;
+  return Number(alpha[1]) === 0;
 }
 
 /**

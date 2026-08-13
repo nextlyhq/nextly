@@ -290,3 +290,24 @@ test.describe("the readiness diagnostic itself", () => {
     expect(String(error)).not.toContain("not in the DOM");
   });
 });
+
+test.describe("the unpainted predicate", () => {
+  test("classifies every zero-alpha colour as unpainted", async () => {
+    // A pure unit assertion, deliberately in the browser suite: it guards the
+    // predicate the browser-only checks depend on, and belongs beside them.
+    //
+    // The non-black case is the one the first version got wrong. It compared
+    // against two literal spellings, which named a claim about VISIBILITY and
+    // implemented a claim about how the browser happened to write the colour.
+    expect(isUnpainted("rgba(0, 0, 0, 0)")).toBe(true);
+    expect(isUnpainted("rgba(255, 0, 0, 0)")).toBe(true);
+    expect(isUnpainted("rgba(12, 34, 56, 0.0)")).toBe(true);
+    expect(isUnpainted("transparent")).toBe(true);
+    expect(isUnpainted(null)).toBe(true);
+
+    // Painted, including a partly transparent colour: something is drawn.
+    expect(isUnpainted("rgb(255, 255, 255)")).toBe(false);
+    expect(isUnpainted("rgba(255, 0, 0, 0.01)")).toBe(false);
+    expect(isUnpainted("rgba(0, 0, 0, 1)")).toBe(false);
+  });
+});
