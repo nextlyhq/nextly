@@ -149,6 +149,65 @@ function classText(tag: string): string | null {
   return null;
 }
 
+/**
+ * The expression with the LITERAL text of its strings blanked out, but the
+ * interpolations of a template literal kept.
+ *
+ * Blanking a template whole is the tempting version and it is wrong: in
+ * `` `w-full ${classes}` `` the interpolation is the only part that can carry an
+ * unknown class, so erasing it leaves an expression that looks entirely static
+ * and reports clean. The literal segments around it are erased for the same
+ * reason ordinary strings are — a word inside one is class text, already read by
+ * the caller, not an identifier.
+ *
+ * Interpolation bodies are processed recursively so a nested literal inside one
+ * (`` `${cn("w-full")}` ``) is erased too rather than being read as a variable.
+ * Length is preserved throughout, so an identifier's offset still describes what
+ * follows it.
+ */
+function withoutLiteralText(source: string): string {
+  let out = "";
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === '"' || ch === "'") {
+      const start = i++;
+      while (i < source.length && source[i] !== ch) {
+        i += source[i] === "\\" ? 2 : 1;
+      }
+      i++;
+      out += " ".repeat(i - start);
+      continue;
+    }
+    if (ch === "`") {
+      const start = i++;
+      let body = "";
+      while (i < source.length && source[i] !== "`") {
+        if (source[i] === "$" && source[i + 1] === "{") {
+          let depth = 1;
+          let end = i + 2;
+          while (end < source.length && depth > 0) {
+            if (source[end] === "{") depth++;
+            else if (source[end] === "}" && --depth === 0) break;
+            end++;
+          }
+          body += `  ${withoutLiteralText(source.slice(i + 2, end))} `;
+          i = end + 1;
+          continue;
+        }
+        body += " ";
+        i++;
+      }
+      i++;
+      out += ` ${body}`.padEnd(i - start, " ");
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
 /** Words that can appear where a class value would, but carry no classes. */
 const NOT_A_CLASS_VALUE = new Set([
   "true",
@@ -178,11 +237,7 @@ const NOT_A_CLASS_VALUE = new Set([
  * Everything else is treated as unreadable and reported.
  */
 function opaqueClassValues(expression: string): string[] {
-  // Blank string literals first, so a word inside one is not read as an
-  // identifier. Length is preserved to keep the following offsets meaningful.
-  const bare = expression.replace(/(["'`])(?:\\.|(?!\1)[^\\])*\1/g, match =>
-    " ".repeat(match.length)
-  );
+  const bare = withoutLiteralText(expression);
   const found: string[] = [];
   for (const identifier of bare.matchAll(/[A-Za-z_$][A-Za-z0-9_$]*/g)) {
     if (NOT_A_CLASS_VALUE.has(identifier[0])) continue;
@@ -221,12 +276,19 @@ function unreadable(tag: string): string[] {
   for (const expression of spreadExpressions(tag)) {
     const inner = expression.trim();
     if (!inner.startsWith("{")) continue;
-    const property = /\bclassName\s*:/.exec(inner);
-    if (property) {
-      opaque.push(
-        ...opaqueClassValues(inner.slice(property.index + property[0].length))
-      );
+    const property = /\bclassName\s*(:)?/.exec(withoutLiteralText(inner));
+    if (!property) continue;
+    if (property[1] === undefined) {
+      // Shorthand, `{...{ className }}`. The property's value IS a variable of
+      // that name, so there is nothing in the source to read -- and the colon
+      // this used to require is exactly what shorthand omits, so the whole
+      // object read as carrying no className at all.
+      opaque.push("className");
+      continue;
     }
+    opaque.push(
+      ...opaqueClassValues(inner.slice(property.index + property[0].length))
+    );
   }
   return opaque;
 }
@@ -311,6 +373,10 @@ describe("SearchBar call sites", () => {
       ["guarded literal", '<SearchBar className={cn(isOpen && "max-w-sm")} />'],
       ["ternary of literals", '<SearchBar className={x ? "a" : "b"} />'],
       ["object spread", '<SearchBar {...{ className: "w-full" }} />'],
+      // A template with no interpolation is as static as a plain string, and a
+      // nested literal inside one is still literal text.
+      ["template, no holes", "<SearchBar className={`w-full max-w-sm`} />"],
+      ["template of a cn()", '<SearchBar className={`${cn("w-full")}`} />'],
     ] as const;
 
     for (const [name, markup] of readable) {
@@ -335,6 +401,17 @@ describe("SearchBar call sites", () => {
         "<SearchBar {...{ className: layout }} />",
         "layout",
       ],
+      // The interpolation is the only part of a template that can carry an
+      // unknown class, so blanking the template whole hides exactly the thing
+      // worth reading.
+      [
+        "template interpolation",
+        "<SearchBar className={`w-full ${classes}`} />",
+        "classes",
+      ],
+      // Shorthand has no colon, which is what a property lookup keys on, so the
+      // object read as carrying no className at all.
+      ["shorthand spread", "<SearchBar {...{ className }} />", "className"],
     ] as const;
 
     for (const [name, markup, expected] of opaque) {

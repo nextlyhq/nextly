@@ -17,6 +17,22 @@ describe("SearchBar", () => {
     expect(screen.getByTestId("search-input")).toBeInTheDocument();
   });
 
+  it("takes its height from the control token, not its own", () => {
+    // Composing Input is only worth anything if Input's decisions survive.
+    // `h-10` here happens to equal today's `--nx-control-height`, so nothing
+    // looks wrong -- and the field would silently stay at 40px the moment a
+    // consumer or the design system moved the token, which is the drift this
+    // component was rewritten to remove.
+    const handleChange = vi.fn();
+    render(<SearchBar value="" onChange={handleChange} />);
+
+    const classes = screen.getByTestId("search-input").className.split(/\s+/);
+    expect(classes).toContain("h-[var(--nx-control-height)]");
+    expect(
+      classes.filter(name => /^h-(?!\[var\(--nx-control-height\)\])/.test(name))
+    ).toEqual([]);
+  });
+
   it("displays custom placeholder", () => {
     const handleChange = vi.fn();
     render(

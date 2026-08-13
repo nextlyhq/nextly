@@ -182,7 +182,14 @@ export const SearchBar = React.forwardRef<HTMLInputElement, SearchBarProps>(
           value={internalValue}
           onChange={handleChange}
           aria-busy={isLoading}
-          className="h-10 pl-10 pr-10 [&::-webkit-search-cancel-button]:appearance-none"
+          // Only what is search-specific: room for the leading icon and the
+          // trailing clear button, and no native cancel glyph beside our own.
+          // Height is deliberately absent -- Input sizes itself from
+          // `--nx-control-height`, and restating it here as `h-10` pinned this
+          // one field at 40px while every other default control followed the
+          // token. That is the same drift this component was rewritten to
+          // remove, one property further in.
+          className="pl-10 pr-10 [&::-webkit-search-cancel-button]:appearance-none"
         />
 
         {/* Right side icons (clear button + loading spinner) */}
