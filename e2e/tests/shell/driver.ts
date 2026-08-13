@@ -64,55 +64,76 @@ function regionLocator(page: Page, region: keyof typeof REGION_NAMES): Locator {
   }
 }
 
+/** How long the shell is given to appear before the page is diagnosed instead. */
+const SHELL_READY_TIMEOUT_MS = 15_000;
+
 /**
- * Fail with the CAUSE when the application did not come up, before any
- * assertion gets the chance to report a symptom instead.
+ * Explain a page that did not come up, rather than letting a later assertion
+ * report a symptom of it.
  *
- * Every geometric check in this file reads a measured box, which is what makes
- * them honest — but it also means a page that never styled produces "the
- * inspector region has no layout box", which reads exactly like a layout
- * regression in the shell. That has now cost two other lanes an afternoon each:
- * their diffs could not reach `packages/builder`, the web server had logged
- * `TypeError: The database connection is not open`, and three assertions
- * observing ONE broken page were read as three independent regressions.
+ * Every geometric check in this file reads a MEASURED box, which is what makes
+ * it honest about an unstyled page — and it means a page that never rendered
+ * reports "the inspector region has no layout box", which is indistinguishable
+ * from a real layout regression in the shell.
  *
- * Three unrelated regressions in a single run is implausible; one page that
- * failed to render, seen three times, is not. This check encodes that reading
- * so the next person does not have to arrive at it.
- *
- * Deliberately placed in `goto`, not in `widthOf`: by the time a width is being
- * measured the test is already asking a question that presupposes a working
- * page, and the answer to a presupposition failure belongs before the question.
+ * Called when the shell fails to appear, and again once it has. The two paths
+ * are different failures and neither implies the other: a route that never
+ * rendered produces no shell at all, while a rendered one can still be missing
+ * its styles.
  */
-async function assertAppRendered(page: Page): Promise<void> {
+async function diagnoseUnrenderedPage(page: Page): Promise<never> {
+  const bodyText = (
+    await page
+      .locator("body")
+      .innerText()
+      .catch(() => "")
+  ).slice(0, 300);
+  const status = page.url();
+  throw new Error(
+    `The editor shell never appeared, so the APPLICATION did not come up — ` +
+      `this is not a layout regression in the shell.\n` +
+      `URL: ${status}\n` +
+      `Body text (first 300 chars): ${bodyText || "<empty>"}\n` +
+      `Check the web-server log before the code. A blank body points at the ` +
+      `server failing to boot; an error screen usually names its own cause.`
+  );
+}
+
+/**
+ * Whether the chrome has a real box and a resolved colour.
+ *
+ * Read as a PAINTED colour rather than as a custom property: asking for
+ * `--nx-builder-surface` returns the declared token stream — the literal text
+ * `var(--nx-muted)` — which is non-empty whether or not anything defines it.
+ * Only the resolved value distinguishes a working style chain from a broken one.
+ */
+async function assertChromePainted(page: Page): Promise<void> {
   const chrome = page.locator(".nx-builder-chrome").first();
   const box = await chrome.boundingBox();
   if (box === null || box.width === 0 || box.height === 0) {
     throw new Error(
-      `The editor shell mounted but has no layout box, so the APPLICATION did ` +
-        `not render — this is not a layout regression in the shell.\n` +
-        `Check the web-server log first. Known causes, all outside any PR's ` +
-        `diff: the playground's database failing to open ` +
-        `("TypeError: The database connection is not open"), and ` +
-        `\`next/font/google\` fetching at BUILD time from fonts.googleapis.com, ` +
-        `which fails a blocked or slow network while naming an internal ` +
-        `turbopack module.`
+      `The editor shell is in the DOM but has no layout box, so the page ` +
+        `rendered without usable styles rather than the shell laying out ` +
+        `wrongly. Check that the document loaded both stylesheets before ` +
+        `reading this as a shell defect.`
     );
   }
 
-  // Painted, not merely boxed. A `var()` chain that cannot resolve computes to
-  // transparent, which is what a missing design-system stylesheet produces —
-  // and that renders a full-size, correctly-structured, entirely unstyled page
-  // whose region widths are all wrong for a reason no shell change caused.
   const background = await chrome.evaluate(
     element => getComputedStyle(element).backgroundColor
   );
   if (background === "rgba(0, 0, 0, 0)" || background === "transparent") {
+    // Deliberately NEUTRAL about which stylesheet is at fault. An unresolvable
+    // `var()` chain and a chrome rule that lost its `background-color` compute
+    // to the same transparent value, so naming one of them would state a cause
+    // this check cannot tell apart — and send the reader to the wrong file.
     throw new Error(
-      `The editor shell rendered but its chrome resolved to no colour, so a ` +
-        `STYLESHEET is missing rather than a layout being wrong. The shell's ` +
-        `own sheet supplements the design system's: the harness must import ` +
-        `"@nextlyhq/ui/styles.css" alongside "@nextlyhq/builder/styles.css".`
+      `The editor shell rendered but its chrome resolved to no colour, so the ` +
+        `style chain is broken somewhere between the design system's tokens ` +
+        `and this package's rules. Either a required stylesheet is absent ` +
+        `("@nextlyhq/ui/styles.css" alongside "@nextlyhq/builder/styles.css") ` +
+        `or the chrome's own declaration regressed. The "both stylesheets ` +
+        `actually loaded" test separates those two.`
     );
   }
 }
@@ -124,10 +145,18 @@ export function createShellDriver(page: Page): ShellDriver {
       // Waits for the shell rather than for the network: the shell restores
       // preferences in an effect after mount, so a test that measured on
       // `load` would read the defaults and call them the restored values.
-      await page
-        .getByRole("navigation", { name: REGION_NAMES.rail })
-        .waitFor({ state: "visible" });
-      await assertAppRendered(page);
+      // The wait is what DIAGNOSES a failed boot, rather than a precondition
+      // for diagnosing one. Waiting first and probing afterwards meant the
+      // central case — a route that never rendered — timed out here and never
+      // reached the probe, so it still surfaced as a bare locator timeout.
+      try {
+        await page
+          .getByRole("navigation", { name: REGION_NAMES.rail })
+          .waitFor({ state: "visible", timeout: SHELL_READY_TIMEOUT_MS });
+      } catch {
+        await diagnoseUnrenderedPage(page);
+      }
+      await assertChromePainted(page);
     },
 
     railItem(label) {
