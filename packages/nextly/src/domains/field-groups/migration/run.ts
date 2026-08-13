@@ -868,10 +868,12 @@ export async function runFieldGroupMigration(
         // Reported only when a plan was actually built by some attempt AND a holder is observed. An
         // empty plan is never reported: "nothing to do" is the silent wrong answer this whole path
         // exists to remove, so an attempt that never got that far refuses instead.
-        if (
-          lastKnownRenames.length === 0 ||
-          (await observeContention()).kind !== "held"
-        ) {
+        // 🔴 The SAME movement decision the inner path uses, not a second verdict computed from
+        // endpoint lock visibility. Two probes cannot see a writer that acquires and releases
+        // between them — a short rename landing between the catalog listing and the select can be
+        // gone before this observation runs — and I had already removed that gate from the inner
+        // path for exactly this reason before reintroducing it here. One question, one answer.
+        if (lastKnownRenames.length === 0 || !movedSinceLastAttempt) {
           throw error;
         }
         const reason = tornReadReason(error);
