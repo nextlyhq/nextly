@@ -672,7 +672,59 @@ function restates(owned: Utility, caller: Utility): boolean {
  * does not see, and the consequence of missing one is a report rather than a
  * silence, which is the safer direction for a check whose findings are read.
  */
-function excludeEachOther(a: string, b: string): boolean {
+/**
+ * A selector with the parts that qualify an ANCESTOR removed.
+ *
+ * A qualifier only contradicts another when both constrain the same element.
+ * Tailwind's `group-*` variants compile to a functional group holding a
+ * descendant combinator — `group-not-disabled:` becomes
+ * `&:is(:where(.group):not(*:disabled) *)` — where the negation describes the
+ * GROUP and the subject is the trailing `*`. Read whole, that negation looks
+ * like a contradiction of the tab's own `:disabled`, and a caller that really
+ * can apply to a disabled tab inside an enabled group was excluded from every
+ * comparison.
+ *
+ * Distinct from `subjectOf`, which picks the last compound after a TOP-LEVEL
+ * combinator: the combinator here sits inside the parentheses, where that scan
+ * cannot see it. This runs first so the two compose rather than overlap.
+ *
+ * Dropping the whole group rather than parsing out its subject is deliberate:
+ * what remains is a selector with FEWER requirements, so it excludes less and
+ * compares more, and comparing is the reporting side.
+ */
+function withoutAncestorQualifiers(selector: string): string {
+  let out = "";
+  let at = 0;
+  while (at < selector.length) {
+    const functional = /^:(is|where|has|not)\(/.exec(selector.slice(at));
+    if (!functional) {
+      out += selector[at];
+      at += 1;
+      continue;
+    }
+    const open = at + functional[0].length;
+    let depth = 1;
+    let end = open;
+    while (end < selector.length && depth > 0) {
+      if (selector[end] === "(") depth += 1;
+      else if (selector[end] === ")") depth -= 1;
+      end += 1;
+    }
+    const inner = selector.slice(open, end - 1);
+    // A combinator at the group's own level means it relates two elements, so
+    // what it requires is not a requirement on the subject.
+    const describesAncestor =
+      splitTopLevel(inner, " ").length > 1 ||
+      splitTopLevel(inner, ">").length > 1;
+    if (!describesAncestor) out += selector.slice(at, end);
+    at = end;
+  }
+  return out;
+}
+
+function excludeEachOther(whole: string, other: string): boolean {
+  const a = withoutAncestorQualifiers(whole);
+  const b = withoutAncestorQualifiers(other);
   const negatedIn = (selector: string): string[] =>
     [...selector.matchAll(/:not\(([^)]*)\)/g)].map(match =>
       // A leading `*` is the universal selector Tailwind writes inside the
@@ -1577,7 +1629,10 @@ function styleResolver(
     seen?: Set<ts.Node>
   ): ts.ObjectLiteralExpression[];
   valueOf(identifier: ts.Identifier): ts.Expression | undefined;
-  reachingValues(identifier: ts.Identifier): ts.Expression[];
+  reachingValues(identifier: ts.Identifier): {
+    values: ts.Expression[];
+    exhaustive: boolean;
+  };
   declarationOf(identifier: ts.Identifier): ts.Declaration | undefined;
 } {
   /**
@@ -1653,6 +1708,16 @@ function styleResolver(
    */
   const alwaysRuns = (node: ts.Node, unit: ts.Node | undefined): boolean => {
     for (let at = node.parent; at && at !== unit; at = at.parent) {
+      // A `for` INITIALIZER runs once before the condition is ever asked, so it
+      // is unconditional even though the body beside it is not.
+      if (
+        ts.isForStatement(at) &&
+        at.initializer &&
+        node.getStart() >= at.initializer.getStart() &&
+        node.getEnd() <= at.initializer.getEnd()
+      ) {
+        continue;
+      }
       if (
         ts.isIfStatement(at) ||
         ts.isIterationStatement(at, /* lookInLabeledStatements */ true) ||
@@ -1687,6 +1752,7 @@ function styleResolver(
    */
   interface Write {
     value: ts.Expression;
+    operator: ts.SyntaxKind;
     /** Shares the element's execution unit, so it runs in source order. */
     sameUnit: boolean;
     /** Runs before the element every time, so it replaces what came before. */
@@ -1708,8 +1774,8 @@ function styleResolver(
     [ts.SyntaxKind.AmpersandAmpersandEqualsToken, false],
   ]);
 
-  const writesTo = (declaration: ts.Declaration): Write[] => {
-    const elementUnit = executionUnitOf(element);
+  const writesTo = (declaration: ts.Declaration, at: ts.Node): Write[] => {
+    const elementUnit = executionUnitOf(at);
     const found: Write[] = [];
     const visit = (node: ts.Node): void => {
       if (
@@ -1719,10 +1785,11 @@ function styleResolver(
         declarationOf(node.left, checker) === declaration
       ) {
         const sameUnit = executionUnitOf(node) === elementUnit;
-        const before = node.getStart() < element.getStart();
+        const before = node.getStart() < at.getStart();
         if (!sameUnit || before) {
           found.push({
             value: node.right,
+            operator: node.operatorToken.kind,
             sameUnit,
             // Definite only when it shares the element's execution unit, runs
             // before it, no branch stands between, and the operator always
@@ -1766,36 +1833,59 @@ function styleResolver(
    * `style = {}` still paints when `paint()` is called after it. Those writes
    * survive whatever their position.
    *
-   * An empty list means the name resolved to a declaration that carries no
-   * readable value — an import, a parameter with no default — which the callers
-   * treat as undecidable in whichever direction is conservative for them.
+   * Resolved AT THE IDENTIFIER, not at the element. An identifier is evaluated
+   * where it is written, so `const saved = style; style = {}` holds whatever
+   * `style` was on the line the alias was written — reading it beside the
+   * element instead applied a later reset to a value already captured.
+   *
+   * `exhaustive` says whether the list is the whole story. A variable's writes
+   * are all visible in the file, so its list is complete and a property emits
+   * only if one of them emits. A parameter or an import receives values from
+   * outside, so its list is a sample: the default a parameter declares is one
+   * value the element can receive, never the only one.
    */
-  const reachingValues = (identifier: ts.Identifier): ts.Expression[] => {
+  interface Reaching {
+    values: ts.Expression[];
+    /** No value can arrive from outside the ones listed. */
+    exhaustive: boolean;
+  }
+
+  const reachingValues = (identifier: ts.Identifier): Reaching => {
     const declaration = declarationOf(identifier, checker);
-    if (!declaration) return [];
-    const writes = writesTo(declaration);
-    const here = writes.filter(write => write.sameUnit);
+    if (!declaration) return { values: [], exhaustive: false };
+    if (!ts.isVariableDeclaration(declaration)) {
+      const binding = bindingOf(identifier);
+      return {
+        values: binding?.initializer ? [binding.initializer] : [],
+        exhaustive: false,
+      };
+    }
+    const writes = writesTo(declaration, identifier);
     // Order across units is not decidable, so nothing here can rule them out.
     const elsewhere = writes
       .filter(write => !write.sameUnit)
       .map(write => write.value);
-    const lastDefinite = here
-      .map(write => write.straightLine)
-      .lastIndexOf(true);
-    if (lastDefinite === -1) {
-      const initializer = bindingOf(identifier)?.initializer;
-      return [
-        ...(initializer ? [initializer] : []),
-        ...here.map(write => write.value),
-        ...elsewhere,
-      ];
+    const initializer = bindingOf(identifier)?.initializer;
+    let held: ts.Expression[] = initializer ? [initializer] : [];
+    for (const write of writes.filter(write => write.sameUnit)) {
+      if (write.straightLine) {
+        // Everything before is a value the binding has stopped holding.
+        held = [write.value];
+        continue;
+      }
+      // A `??=` whose current value is already there cannot fire, so its right
+      // side is not a value the binding can hold — the ordinary way to fill a
+      // style object only when nothing filled it yet.
+      if (
+        write.operator === ts.SyntaxKind.QuestionQuestionEqualsToken &&
+        held.length > 0 &&
+        held.every(isDefinitelyPresent)
+      ) {
+        continue;
+      }
+      held = [...held, write.value];
     }
-    // The initializer and everything before that write are values the binding
-    // has already stopped holding.
-    return [
-      ...here.slice(lastDefinite).map(write => write.value),
-      ...elsewhere,
-    ];
+    return { values: [...held, ...elsewhere], exhaustive: true };
   };
 
   /**
@@ -1858,7 +1948,7 @@ function styleResolver(
       // `let style = { ... }` is a false negative, the opposite polarity to an
       // unresolved property value.
       if (ts.isIdentifier(node)) {
-        for (const value of reachingValues(node)) walk(value);
+        for (const value of reachingValues(node).values) walk(value);
       }
     };
     walk(root);
@@ -1983,6 +2073,26 @@ function staticKeyOf(
     if (bound) return staticKeyOf(bound, resolver, seen);
   }
   return undefined;
+}
+
+/**
+ * Whether a value is certainly neither `null` nor `undefined`.
+ *
+ * Narrow on purpose: it decides whether a `??=` can fire, and answering "yes"
+ * removes a value from consideration. Only forms that cannot be nullish however
+ * they are read qualify, so anything unfamiliar keeps the write in play.
+ */
+function isDefinitelyPresent(value: ts.Expression): boolean {
+  const inner = withoutTypeWrappers(value);
+  return (
+    ts.isObjectLiteralExpression(inner) ||
+    ts.isArrayLiteralExpression(inner) ||
+    ts.isStringLiteral(inner) ||
+    ts.isNoSubstitutionTemplateLiteral(inner) ||
+    ts.isNumericLiteral(inner) ||
+    inner.kind === ts.SyntaxKind.TrueKeyword ||
+    inner.kind === ts.SyntaxKind.FalseKeyword
+  );
 }
 
 /**
@@ -2159,9 +2269,12 @@ function emitsValue(
     // branch carries its own trail, or one branch's visits would cut another's
     // short and report it as emitting.
     const reaching = resolver.reachingValues(inner);
-    if (reaching.length > 0) {
-      return reaching.some(value => emitsValue(value, resolver, new Set(seen)));
-    }
+    // A name fed from outside — a parameter, an import — can hold a value this
+    // file never shows, so the list is a sample and cannot clear the property.
+    if (!reaching.exhaustive) return true;
+    return reaching.values.some(value =>
+      emitsValue(value, resolver, new Set(seen))
+    );
   }
   return true;
 }
@@ -2752,6 +2865,18 @@ describe("the tab indicator contract", () => {
       "an owned declaration restated under a different variant",
       '<TabsTrigger className="aria-[controls]:outline-none" />',
     ],
+    // A parameter default is one value among many. A caller supplying a real
+    // colour is a value this file cannot see, so the default cannot clear it.
+    [
+      "an owned property whose parameter default a caller can replace",
+      'function Row(colour = undefined) {\n  return <TabsTrigger style={{ borderBottomColor: colour }} />;\n}\n<Row colour="red" />',
+    ],
+    // An alias captures the value at the line it is WRITTEN. A later reset of
+    // the source does not reach into what was already snapshotted.
+    [
+      "an owned property captured by an alias before the source is reset",
+      'let style = { borderBottomColor: "red" };\nconst saved = style;\nstyle = {};\n<TabsTrigger style={saved} />',
+    ],
   ])("catches %s", (_label, body) => {
     // The positive controls. Each is a shape an earlier version returned clean
     // on, or a category it never read. Without these, a check that can never
@@ -3042,6 +3167,18 @@ describe("the tab indicator contract", () => {
       "an equal declaration under a negated form of the owned qualifier",
       '<TabsTrigger className="not-disabled:opacity-50" />',
     ],
+    // A `??=` whose binding already holds a value cannot fire, so its right
+    // side is never what the element receives.
+    [
+      "an owned property behind a logical assignment that cannot fire",
+      'let style = {};\nstyle ??= { borderBottomColor: "red" };\n<TabsTrigger style={style} />',
+    ],
+    // A `for` initializer runs once before the condition is ever asked, so it
+    // is unconditional even though the body beside it is not.
+    [
+      "an owned property reset in a loop initializer",
+      'let style: Record<string, string> = { borderBottomColor: "red" };\nfor (style = {}; false; ) {\n  break;\n}\n<TabsTrigger style={style} />',
+    ],
   ])("does not report %s", (_label, body) => {
     // The complement, and the reason this is a contract rather than a ban. A
     // check that flags a documented example or a legitimate layout class gets
@@ -3287,6 +3424,14 @@ describe("which files the call-site scan reads", () => {
     expect(
       excludeEachOther('&[data-state="active"]', '&[data-state="inactive"]')
     ).toBe(true);
+
+    // An ancestor's qualifier is not the subject's. A disabled tab inside a
+    // group that is NOT disabled matches both rules, so they coexist and the
+    // comparison has to run — `group-not-disabled:` compiles the negation into
+    // a descendant group, where it describes the group and not the tab.
+    expect(
+      excludeEachOther("&:is(:where(.group):not(*:disabled) *)", "&:disabled")
+    ).toBe(false);
 
     // The positive control. Without it a test that answered `true` to
     // everything would pass both cases above, and every comparison in the
