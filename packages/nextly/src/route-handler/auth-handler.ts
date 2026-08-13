@@ -77,12 +77,16 @@ export function setHandlerConfig(config: SanitizedNextlyConfig): void {
  * store WITHOUT initializing services, so without this it describes plugins as
  * their author declared them rather than as they actually booted.
  *
- * An empty list is a meaningful value, not an absent one: it is what a
- * transformer that removes every plugin produces, and the store must then stop
- * advertising the plugins the author declared.
+ * Takes the config's own `plugins` shape, optional included, and reads an
+ * absent list as an empty one. A boot that registered no plugins and a boot
+ * whose transformers removed them all are the same fact — the store must stop
+ * advertising the plugins the author declared — and normalizing here rather
+ * than at the call site leaves the caller no branch in which to disagree.
  */
-export function setHandlerPlugins(plugins: PluginDefinition[]): void {
-  _bootPlugins = plugins;
+export function setHandlerPlugins(
+  plugins: PluginDefinition[] | undefined
+): void {
+  _bootPlugins = plugins ?? [];
   foldBootPluginsIntoStore();
 }
 

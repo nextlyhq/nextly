@@ -111,6 +111,20 @@ describe("the handler config store", () => {
   });
 
   /**
+   * The same fact arriving in the config's other spelling. `plugins` is
+   * optional, so a boot that registered none hands over `undefined` rather than
+   * an empty list, and reading that as "boot reported nothing" would leave the
+   * declared plugins on display exactly as an empty list would.
+   */
+  it("clears the declared plugins when boot reported no list at all", () => {
+    store.setHandlerConfig(stored);
+
+    store.setHandlerPlugins(undefined);
+
+    expect(names(store)).toEqual([]);
+  });
+
+  /**
    * The store answers for the route config's existence, not boot's: a process
    * that booted services without ever importing the route module has no
    * branding, no `db` and no `storage` to report, and a plugin list alone must
