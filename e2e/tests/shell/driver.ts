@@ -93,6 +93,15 @@ export interface ShellRenderMeasurement {
    * not be determined. Never derived by matching colour syntax in Node.
    */
   backgroundAlpha: number | null;
+  /**
+   * What the browser's own normaliser returned for that colour.
+   *
+   * Diagnostic rather than load-bearing: it exists so a failing assertion can
+   * report the form the browser ACTUALLY produced, instead of leaving the next
+   * person to infer it. Two versions of this predicate have been wrong about
+   * exactly that.
+   */
+  normalisedBackground: string | null;
 }
 
 /** Read the chrome once, for every reader that needs to know how it looks. */
@@ -107,6 +116,7 @@ export async function measureShellRender(
       background: null,
       display: null,
       backgroundAlpha: null,
+      normalisedBackground: null,
     };
   }
   const box = await chrome.boundingBox();
@@ -127,16 +137,26 @@ export async function measureShellRender(
     const SENTINEL = "#010203";
     const context = document.createElement("canvas").getContext("2d");
     let alpha: number | null = null;
+    let normalised: string | null = null;
     if (context !== null) {
       context.fillStyle = SENTINEL;
       context.fillStyle = background;
-      const normalised = context.fillStyle;
+      normalised = context.fillStyle;
       if (normalised !== SENTINEL || background === SENTINEL) {
         const parsed = /^rgba?\([^)]*,\s*([\d.]+)\s*\)$/.exec(normalised);
         alpha = parsed === null ? 1 : Number(parsed[1]);
       }
     }
-    return { background, display: computed.display, alpha };
+    return {
+      background,
+      display: computed.display,
+      alpha,
+      // What the normaliser actually produced, carried so a failure REPORTS the
+      // browser's behaviour instead of leaving the next reader to guess at it.
+      // Two implementations of this predicate have now been wrong about what a
+      // computed colour looks like; the third should be driven by this value.
+      normalisedBackground: normalised,
+    };
   });
   return {
     present: true,
@@ -144,6 +164,7 @@ export async function measureShellRender(
     background: styles.background,
     display: styles.display,
     backgroundAlpha: styles.alpha,
+    normalisedBackground: styles.normalisedBackground,
   };
 }
 

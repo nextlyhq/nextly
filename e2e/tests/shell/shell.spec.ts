@@ -313,7 +313,15 @@ test.describe("the unpainted predicate", () => {
     const measurement = await measureShellRender(page);
 
     expect(measurement.present).toBe(true);
-    expect(isUnpainted(measurement)).toBe(true);
+    // Reported in the message, because this assertion has now failed twice for
+    // two different wrong reasons and neither failure said what the browser had
+    // actually returned. The next attempt should be driven by this line.
+    expect(
+      isUnpainted(measurement),
+      `computed=${measurement.background} ` +
+        `normalised=${measurement.normalisedBackground} ` +
+        `alpha=${measurement.backgroundAlpha}`
+    ).toBe(true);
   });
 
   test("sees a zero-alpha non-black legacy colour as unpainted", async ({
