@@ -644,6 +644,10 @@ export default function CollectionTable() {
             registryKey="collections"
             ariaLabel="Collections table"
             emptyMessage="No collections found. Try adjusting your search or filters."
+            // The table owns the pager so it is mounted once and lands inside
+            // the card on desktop, in the column's gap on mobile. The gate is
+            // unchanged and still hides the pager before the first response, so
+            // an empty list shows no controls to page through.
             footer={
               data && data.meta.totalPages > 0 ? (
                 <Pagination

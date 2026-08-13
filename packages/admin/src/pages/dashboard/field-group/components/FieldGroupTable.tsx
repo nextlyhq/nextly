@@ -604,6 +604,11 @@ export default function FieldGroupTable() {
             registryKey="components"
             ariaLabel="Field Groups table"
             emptyMessage="No field groups found. Try adjusting your search or filters."
+            // The table owns the pager, so it is mounted once and placed for
+            // whichever view is showing. Gated on `data` rather than on a page
+            // count because this list filters client-side after fetching, so
+            // the server's total is the only reliable signal that a response
+            // has arrived at all.
             footer={
               data ? (
                 <Pagination

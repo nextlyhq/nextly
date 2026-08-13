@@ -111,10 +111,16 @@ const sources = walk(adminSrc).filter(
 /**
  * Surfaces that render a pager for something other than a `DataTableView`.
  *
- * Named individually rather than skipped by a rule, because "this file has no
- * DataTableView" is also what an accidentally-detached pager looks like once
- * someone moves the table into a child component. Each entry states what it
- * paginates instead.
+ * This list is the ONLY thing that excuses a pager from the rule. The tempting
+ * alternative — skip any file with no `DataTableView` in it — is wrong for the
+ * exact reason this list exists: "no table in this file" is also what a
+ * detached pager looks like the moment someone extracts the table into a child
+ * component and leaves the pager behind in the parent. That refactor is the
+ * likeliest way the rule gets broken, and a table-presence gate is blind to
+ * precisely it.
+ *
+ * So every pager outside this list is checked, whether or not a table is
+ * visible beside it. Each entry states what it paginates instead.
  */
 const NOT_A_TABLE_PAGER = new Map<string, string>([
   [
@@ -173,13 +179,16 @@ describe("list pagination", () => {
     expect(detachedPagers(gated)).toHaveLength(0);
   });
 
-  it("renders every table's pager inside the table", () => {
+  it("renders every list pager inside its table", () => {
+    // No table-presence gate. A pager whose table lives in a child component
+    // is exactly the case worth catching, and it is indistinguishable from a
+    // page that legitimately paginates something else -- which is why the
+    // exemption list names those four rather than inferring them.
     const detached: string[] = [];
     for (const path of sources) {
       const relativePath = relative(repo, path);
       if (NOT_A_TABLE_PAGER.has(relativePath)) continue;
       const file = parse(path, readFileSync(path, "utf8"));
-      if (!rendersTable(file)) continue;
       for (const pager of detachedPagers(file)) {
         detached.push(`${relativePath}:${lineOf(pager, file)}`);
       }
@@ -187,10 +196,12 @@ describe("list pagination", () => {
 
     expect(
       detached.sort(),
-      `These render <Pagination> beside <DataTableView> instead of passing it ` +
-        `as \`footer\`. A detached pager is mounted per view rather than once, ` +
-        `and sits outside the responsive decision only DataTableView can make, ` +
-        `so it lands in the wrong place on one of the two layouts:\n${detached.join("\n")}`
+      `These render <Pagination> outside a \`footer\`. A detached pager is ` +
+        `mounted per view rather than once, and sits outside the responsive ` +
+        `decision only DataTableView can make, so it lands in the wrong place ` +
+        `on one of the two layouts. Pass it as DataTableView's \`footer\`; if ` +
+        `this page paginates something that is not a table, add it to ` +
+        `NOT_A_TABLE_PAGER with what it paginates:\n${detached.join("\n")}`
     ).toEqual([]);
   });
 

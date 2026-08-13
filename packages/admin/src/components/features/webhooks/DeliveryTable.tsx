@@ -200,6 +200,11 @@ export const DeliveryTable: React.FC<DeliveryTableProps> = ({
         registryKey="webhook-deliveries"
         ariaLabel="Webhook deliveries table"
         emptyMessage="No deliveries match these filters yet."
+        // Passed to the table rather than rendered beside it, so it is mounted
+        // once and placed by the component that knows which of the two views is
+        // showing. This list is the one most often read on a narrow screen
+        // while chasing a failed delivery, which is the layout a detached pager
+        // gets wrong.
         footer={
           <Pagination
             currentPage={page}

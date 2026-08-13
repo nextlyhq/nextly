@@ -532,6 +532,10 @@ function EmailTemplateTable() {
             registryKey="email-templates"
             ariaLabel="Email templates table"
             emptyMessage="No email templates found. Create a template to get started."
+            // The table owns the pager, so it is mounted once and placed for
+            // whichever view is showing. Ungated here because the totals come
+            // from the server on every response, so the pager can render its
+            // own single-page state rather than needing to be hidden.
             footer={
               <Pagination
                 currentPage={page}
