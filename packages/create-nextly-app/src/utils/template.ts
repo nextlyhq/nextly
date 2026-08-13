@@ -897,11 +897,17 @@ export interface CopyTemplateOptions {
   templateSource?: { basePath: string; templatePath: string };
   /**
    * The package manager the project will be installed with, which decides
-   * whether a `.npmrc` is written — see {@link generateNpmrc}. Omitted is
-   * treated as npm, so a caller that does not know writes nothing rather than
-   * writing a file the wrong tool will warn about.
+   * whether a `.npmrc` is written — see {@link generateNpmrc}.
+   *
+   * REQUIRED, and deliberately so. As an optional field defaulting to npm, the
+   * CLI's one line wiring the detected manager through could be deleted and
+   * every scaffold would silently lose its `.npmrc` — a default is a decision
+   * made for a caller that never stated one, and here the wrong decision is
+   * indistinguishable from the right one until a user runs `pnpm add`. Required
+   * makes that deletion a compile error instead of something a test has to
+   * notice.
    */
-  packageManager?: PackageManager;
+  packageManager: PackageManager;
   /**
    * Suppress the internal "directory already exists" guard. Set by the
    * installer when it has already negotiated a directory conflict with
@@ -936,7 +942,7 @@ export async function copyTemplate(
     useYalc = false,
     approach,
     templateSource,
-    packageManager = "npm",
+    packageManager,
     allowExistingTarget = false,
   } = options;
 
