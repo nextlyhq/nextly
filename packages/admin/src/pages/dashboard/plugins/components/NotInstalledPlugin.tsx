@@ -4,7 +4,7 @@ import { Button } from "@nextlyhq/ui";
 import type React from "react";
 import { useState } from "react";
 
-import { Check, Copy } from "@admin/components/icons";
+import { AlertCircle, Check, Copy } from "@admin/components/icons";
 import { PluginIcon } from "@admin/components/shared/plugin-icon";
 import { adminVersion } from "@admin/lib/admin-version";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
@@ -25,7 +25,33 @@ import type { RegistryPlugin } from "@admin/lib/plugins/registry/types";
  * look somewhere else to learn that something local succeeded.
  */
 function CopyLine({ value, label }: { value: string; label: string }) {
-  const [copied, setCopied] = useState(false);
+  const [outcome, setOutcome] = useState<"idle" | "copied" | "failed">("idle");
+
+  // The Clipboard API needs a secure context, so an admin served over plain
+  // HTTP — a LAN host, a colleague's dev box — has no `navigator.clipboard` at
+  // all, and `writeText` can be rejected by permissions even where it exists.
+  // Both end with the reader having to select the line by hand, so both have
+  // to say so: a button that silently does nothing reads as a broken page.
+  const copy = () => {
+    const clipboard = navigator.clipboard;
+    if (!clipboard) {
+      setOutcome("failed");
+      return;
+    }
+    try {
+      void clipboard.writeText(value).then(
+        () => {
+          setOutcome("copied");
+          window.setTimeout(() => setOutcome("idle"), 2000);
+        },
+        () => setOutcome("failed")
+      );
+    } catch {
+      // A synchronous throw rather than a rejection, which some
+      // implementations do when the document is not focused.
+      setOutcome("failed");
+    }
+  };
 
   return (
     <div>
@@ -43,20 +69,26 @@ function CopyLine({ value, label }: { value: string; label: string }) {
           // Names the thing copied, since several of these sit on one page and
           // "Copy" alone would read identically to a screen reader each time.
           aria-label={`Copy ${label.toLowerCase()}`}
-          onClick={() => {
-            void navigator.clipboard?.writeText(value).then(() => {
-              setCopied(true);
-              window.setTimeout(() => setCopied(false), 2000);
-            });
-          }}
+          onClick={copy}
         >
-          {copied ? (
+          {outcome === "copied" ? (
             <Check className="h-3.5 w-3.5" />
+          ) : outcome === "failed" ? (
+            <AlertCircle className="h-3.5 w-3.5" />
           ) : (
             <Copy className="h-3.5 w-3.5" />
           )}
         </Button>
       </div>
+      {outcome === "failed" && (
+        // Announced, because the only other signal is an icon on the button
+        // the reader just pressed, and the instruction matters more than the
+        // failure: the line above is still there to be selected.
+        <p className="mt-1.5 text-xs text-destructive" role="status">
+          Could not copy to the clipboard. Select the line above and copy it
+          manually.
+        </p>
+      )}
     </div>
   );
 }

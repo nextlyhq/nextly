@@ -2,6 +2,7 @@
 
 import { Badge } from "@nextlyhq/ui";
 import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { Suspense } from "react";
 
 import {
   BookOpen,
@@ -11,7 +12,6 @@ import {
   Globe,
   LayoutDashboard,
   Layers,
-  Loader2,
   Menu as MenuIcon,
   Package,
   Route,
@@ -38,6 +38,7 @@ import { staticRegistrySource } from "@admin/lib/plugins/registry/static-source"
 import type { PluginMetadata } from "@admin/types/branding";
 
 import { NotInstalledPlugin } from "./components/NotInstalledPlugin";
+import { PluginPageLoading } from "./components/PluginPageLoading";
 import { PluginStatusPill } from "./components/PluginsTable";
 
 const PLACEMENT_LABELS: Record<string, string> = {
@@ -140,25 +141,6 @@ function UninstalledOrMissing({ activeSlug }: { activeSlug?: string }) {
 }
 
 /**
- * Shown while the installed-plugin list is still in flight.
- *
- * The alternative — rendering the catalogue view immediately and correcting it
- * when the list lands — flashes install instructions at someone who already
- * has the plugin, and reads as an answer rather than as a wait.
- */
-function LoadingInstalledPlugins() {
-  return (
-    <div
-      className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"
-      role="status"
-    >
-      <Loader2 className="h-4 w-4 animate-spin" />
-      Loading plugin…
-    </div>
-  );
-}
-
-/**
  * Shown when admin-meta failed, so whether this plugin is installed is
  * unknown.
  *
@@ -196,9 +178,16 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
   // empty for a reason that says nothing about the project, and reading it as
   // "not installed" tells someone who HAS this plugin to go and install it.
   if (!plugin) {
-    if (isPending) return <LoadingInstalledPlugins />;
+    if (isPending) return <PluginPageLoading label="Loading plugin…" />;
     if (isUnavailable) return <InstalledPluginsUnavailable />;
-    return <UninstalledOrMissing activeSlug={activeSlug} />;
+    // Its own Suspense boundary: `UninstalledOrMissing` suspends on the
+    // catalogue, and the nearest boundary above is RootLayout's
+    // `fallback={null}`, which would blank the page for the duration.
+    return (
+      <Suspense fallback={<PluginPageLoading label="Loading plugin…" />}>
+        <UninstalledOrMissing activeSlug={activeSlug} />
+      </Suspense>
+    );
   }
 
   const title = plugin.appearance?.label ?? plugin.name;
