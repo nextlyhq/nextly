@@ -59,9 +59,48 @@ const LOCK_ROW_ID = 1;
  * free to disagree about which row the owner lives in.
  */
 function ownerQuery(): SQL {
-  return sql`SELECT ${sql.identifier("owner")}
+  return sql`SELECT ${sql.identifier("owner")}, ${sql.identifier("expires_at")}
       FROM ${sql.identifier(MIGRATION_LOCK_TABLE)}
       WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}`;
+}
+
+/**
+ * How long a claim stays valid without being renewed, and how often it is renewed.
+ *
+ * The TTL is short BECAUSE the holder renews: liveness is maintained by the renewal, so the TTL only
+ * decides how quickly a dead holder's row becomes claimable. A long TTL there would mean a crash
+ * wedges the next run for that long, which is the cost the renewal exists to avoid paying.
+ *
+ * The interval is a quarter of the TTL, so four consecutive renewals have to fail before the claim
+ * lapses. A single slow query or a brief connection blip cannot lose a lock that is still held.
+ */
+const LOCK_TTL_SECONDS = 120;
+const LOCK_RENEW_INTERVAL_MS = (LOCK_TTL_SECONDS / 4) * 1000;
+
+/**
+ * The database's own clock, and an expiry computed from it, per dialect.
+ *
+ * 🔴 Never the application's clock. Two processes contending for this row can sit on machines whose
+ * clocks disagree, and a claim written from one clock and judged against another is decided by that
+ * skew rather than by who holds the lock. Asking the server for both values means every comparison
+ * happens in one frame of reference.
+ *
+ * SQLite stores this column as unix SECONDS (the Drizzle declaration uses `mode: "timestamp"`), so
+ * its expressions are integer arithmetic rather than interval arithmetic.
+ */
+function nowExpression(dialect: MigrationDialect): SQL {
+  if (dialect === "sqlite") return sql`unixepoch()`;
+  return dialect === "mysql" ? sql`NOW()` : sql`now()`;
+}
+
+function expiryExpression(dialect: MigrationDialect): SQL {
+  if (dialect === "sqlite") {
+    return sql`unixepoch() + ${LOCK_TTL_SECONDS}`;
+  }
+  if (dialect === "mysql") {
+    return sql`DATE_ADD(NOW(), INTERVAL ${LOCK_TTL_SECONDS} SECOND)`;
+  }
+  return sql`now() + make_interval(secs => ${LOCK_TTL_SECONDS})`;
 }
 
 /** The owner, read inside the transaction that is about to decide the claim. */
@@ -70,6 +109,28 @@ async function readOwner(
 ): Promise<{ owner: string | null } | undefined> {
   const rows = await ctx.queryStatement<{ owner: string | null }>(ownerQuery());
   return rows[0];
+}
+
+/** Renew this claim, and report whether it is still ours. */
+async function renew(
+  adapter: DrizzleAdapter,
+  dialect: MigrationDialect,
+  claim: string
+): Promise<boolean> {
+  return adapter.transaction(async ctx => {
+    await ctx.lockRow(MIGRATION_LOCK_TABLE, LOCK_ROW_ID);
+    await ctx.runStatement(
+      sql`UPDATE ${sql.identifier(MIGRATION_LOCK_TABLE)}
+          SET ${sql.identifier("expires_at")} = ${expiryExpression(dialect)}
+          WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}
+            AND ${sql.identifier("owner")} = ${claim}`
+    );
+    // Read back rather than trusting the update's affected-row count, which dialects report
+    // inconsistently. If the row no longer names this claim, someone took the lock over and the work
+    // this renewal was protecting is no longer protected.
+    const after = await readOwner(ctx);
+    return after?.owner === claim;
+  });
 }
 
 /**
@@ -368,7 +429,7 @@ export async function withMigrationSession<T>(
     await ensureLockRow(adapter, dialect);
   }
 
-  const acquired = await acquire(adapter, claim);
+  const acquired = await acquire(adapter, dialect, claim);
   if (!acquired.ok) {
     // Raised outside the transaction on purpose: the adapters route every error
     // escaping a transaction callback through `classifyError`, which rewraps
@@ -414,9 +475,51 @@ export async function withMigrationSession<T>(
     process.once("SIGTERM", onTerminate);
   }
 
+  // 🔴 Renew for as long as the work runs. This is what makes the short TTL above safe: without it,
+  // a migration outliving its TTL would have the row taken from underneath it and two runs would
+  // rename the same objects — strictly worse than the refuse-always behaviour this replaces.
+  //
+  // What this CANNOT do is stop `fn`. JavaScript has no preemption, so a lost claim rejects the
+  // caller's await and leaves whatever `fn` had already started running to completion. That is
+  // stated rather than hidden: the guarantee here is that a run which loses its lock FAILS LOUDLY
+  // and stops being waited on, not that its in-flight statement is cancelled. A step runner wanting
+  // stronger behaviour should re-check between steps, which is the only place a cancellation could
+  // land intact.
+  let lostClaim: ((reason: unknown) => void) | undefined;
+  const claimLost = new Promise<never>((_, reject) => {
+    lostClaim = reject;
+  });
+  const onLost = (): void =>
+    lostClaim?.(
+      NextlyError.serviceUnavailable({
+        logMessage:
+          "field-group migration lost its lock while running; another run may hold it",
+        logContext: {
+          reason: "migration lock claim lapsed or was taken over",
+          label,
+        },
+      })
+    );
+  const renewal = setInterval(() => {
+    void renew(adapter, dialect, claim).then(
+      held => {
+        if (!held) onLost();
+      },
+      // A failed renewal is not proof the claim is gone, but it is proof it is no longer being
+      // maintained, and the next one may not arrive before the TTL. Treated as lost, because the
+      // safe error here is stopping a run that still holds the lock rather than continuing one that
+      // does not.
+      onLost
+    );
+  }, LOCK_RENEW_INTERVAL_MS);
+  // Never a reason for the process to stay alive: this timer exists to protect work that is already
+  // running, so if nothing else is pending there is nothing left to protect.
+  renewal.unref?.();
+
   try {
-    return await fn(session);
+    return await Promise.race([fn(session), claimLost]);
   } finally {
+    clearInterval(renewal);
     // Removed before releasing, so a signal arriving during an orderly release
     // cannot start a second one.
     process.off("SIGINT", onInterrupt);
@@ -483,6 +586,7 @@ type Acquisition = { ok: true } | { ok: false; heldBy: string | null };
  */
 async function acquire(
   adapter: DrizzleAdapter,
+  dialect: MigrationDialect,
   claim: string
 ): Promise<Acquisition> {
   return adapter.transaction(async ctx => {
@@ -491,17 +595,36 @@ async function acquire(
     await ctx.lockRow(MIGRATION_LOCK_TABLE, LOCK_ROW_ID);
 
     const row = await readOwner(ctx);
+    if (row === undefined) return { ok: false, heldBy: null };
 
-    // Any occupied row refuses, including one that appears to be ours. Claims
-    // are unique per invocation, so a match would mean something other than
-    // this call wrote it.
-    if (row === undefined || row.owner !== null) {
-      return { ok: false, heldBy: row?.owner ?? null };
+    // 🔴 An occupied row refuses only while its claim is still LIVE. The holder renews for as long
+    // as it is working, so an expiry in the past is an observation that the holder stopped — a
+    // crashed run, or one killed between renewals — rather than a threshold guess about how long a
+    // migration ought to take.
+    //
+    // A NULL expiry is treated as NOT expired, and that asymmetry is deliberate. It is the row a
+    // previous release wrote, before this column existed, and the process that wrote it may still be
+    // running. Stealing the lock from a live migration is unrecoverable; refusing until an operator
+    // clears a stale row is merely inconvenient, and the state is transient anyway.
+    //
+    // The comparison is made by the DATABASE, in one expression, so nothing depends on the two
+    // contenders' clocks agreeing.
+    const stillLive = await ctx.queryStatement<{ live: unknown }>(
+      sql`SELECT 1 AS ${sql.identifier("live")}
+          FROM ${sql.identifier(MIGRATION_LOCK_TABLE)}
+          WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}
+            AND ${sql.identifier("owner")} IS NOT NULL
+            AND (${sql.identifier("expires_at")} IS NULL
+                 OR ${sql.identifier("expires_at")} > ${nowExpression(dialect)})`
+    );
+    if (stillLive.length > 0) {
+      return { ok: false, heldBy: row.owner };
     }
 
     await ctx.runStatement(
       sql`UPDATE ${sql.identifier(MIGRATION_LOCK_TABLE)}
-          SET ${sql.identifier("owner")} = ${claim}
+          SET ${sql.identifier("owner")} = ${claim},
+              ${sql.identifier("expires_at")} = ${expiryExpression(dialect)}
           WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}`
     );
 
@@ -524,7 +647,8 @@ async function release(adapter: DrizzleAdapter, claim: string): Promise<void> {
     // Naming the owner as well makes a release affect only a row we still hold.
     await ctx.runStatement(
       sql`UPDATE ${sql.identifier(MIGRATION_LOCK_TABLE)}
-          SET ${sql.identifier("owner")} = NULL
+          SET ${sql.identifier("owner")} = NULL,
+              ${sql.identifier("expires_at")} = NULL
           WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}
             AND ${sql.identifier("owner")} = ${claim}`
     );
