@@ -107,6 +107,28 @@ describe("inert classes", () => {
     expect(inertClassesIn("pointer-events-none bg-background")).toEqual([
       "bg-background",
     ]);
+    // Zero padding adds no box, so the field still covers the wrapper exactly
+    // and the background is back in the inert case -- the same relationship
+    // `border-0` has to a border colour.
+    expect(inertClassesIn("p-0 bg-background")).toEqual(["bg-background"]);
+    expect(inertClassesIn("px-0 bg-background")).toEqual(["bg-background"]);
+    expect(inertClassesIn("ps-0 bg-background")).toEqual(["bg-background"]);
+    // Real padding on another axis still paints, so the pair is allowed.
+    expect(inertClassesIn("px-0 py-2 bg-background")).toEqual([]);
+  });
+
+  it("leaves an unparseable character reference alone", () => {
+    // This runs inside the development effect, so a throw here takes the
+    // component down rather than warning about it. A code point outside
+    // Unicode's range must therefore come back as written.
+    expect(() => decodeEntities("&#99999999;")).not.toThrow();
+    expect(decodeEntities("&#99999999;")).toBe("&#99999999;");
+    expect(decodeEntities("&#xFFFFFFFF;")).toBe("&#xFFFFFFFF;");
+    // The valid neighbours still decode, so the guard did not simply stop
+    // decoding altogether -- which would pass the assertions above.
+    expect(decodeEntities("&#45;")).toBe("-");
+    expect(decodeEntities("&#x2D;")).toBe("-");
+    expect(inertClassesIn("border&#99999999;input")).toEqual([]);
   });
 
   it("judges the class the element actually receives", () => {

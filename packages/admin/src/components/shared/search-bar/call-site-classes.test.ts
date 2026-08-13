@@ -132,9 +132,17 @@ function localTagNames(file: ts.SourceFile, fromFile: string): Set<string> {
   let importsTheName = false;
   for (const statement of file.statements) {
     if (!ts.isImportDeclaration(statement)) continue;
-    const bindings = statement.importClause?.namedBindings;
-    if (!bindings) continue;
+    const clause = statement.importClause;
+    if (!clause) continue;
     const isOurs = fromExportingModule(statement, fromFile);
+    // A DEFAULT import has no named bindings, so a loop that reads only those
+    // skips it entirely -- and the bare-name fallback below then claims
+    // `import SearchBar from "@vendor/search-kit"` as ours. This module has no
+    // default export, so such a binding is never ours; it only has to suppress
+    // the fallback.
+    if (clause.name?.text === COMPONENT) importsTheName = true;
+    const bindings = clause.namedBindings;
+    if (!bindings) continue;
     if (ts.isNamespaceImport(bindings)) {
       if (isOurs) names.add(`${bindings.name.text}.${COMPONENT}`);
       continue;
@@ -309,6 +317,30 @@ describe("SearchBar call sites", () => {
     expect(
       searchBarTags(shadowedThenUsed),
       "every use of a foreign binding"
+    ).toHaveLength(0);
+
+    // A DEFAULT import has no named bindings at all, so a reader inspecting
+    // only those skips the statement and the bare-name fallback claims the tag.
+    // This module exports no default, so such a binding is never ours.
+    const defaultImport = parse(
+      "default.tsx",
+      'import SearchBar from "@vendor/search-kit";\n' +
+        'const x = <SearchBar className="border-input" />;'
+    );
+    expect(searchBarTags(defaultImport), "foreign default import").toHaveLength(
+      0
+    );
+
+    // The same shape naming OUR module must not match either, for the same
+    // reason: there is no default export for it to bind.
+    const defaultFromUs = parse(
+      "default-ours.tsx",
+      'import SearchBar from "@admin/components/shared/search-bar";\n' +
+        'const x = <SearchBar className="border-input" />;'
+    );
+    expect(
+      searchBarTags(defaultFromUs),
+      "default import of our module"
     ).toHaveLength(0);
   });
 

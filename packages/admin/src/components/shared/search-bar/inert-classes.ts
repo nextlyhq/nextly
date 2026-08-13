@@ -65,6 +65,14 @@ const ZERO_WIDTH = /^border(?:-[xytrbles])?-0$/;
 const PADDING_TOKEN = /^p[xytrbles]?-/;
 
 /**
+ * Padding that adds no box. `p-0` and `px-0` are padding utilities by the
+ * pattern above and leave the field covering the wrapper exactly, which puts a
+ * background beside them back in the inert case the condition carves out — the
+ * same relationship `border-0` has to a border colour.
+ */
+const ZERO_PADDING = /^p[xytrbles]?-0$/;
+
+/**
  * A utility's base, with Tailwind's variant prefixes and `!` removed.
  *
  * `hover:border-input` and `md:dark:border-input` set the same property on the
@@ -101,14 +109,24 @@ export function decodeEntities(text: string): string {
     apos: "'",
     nbsp: " ",
   };
+  // A code point outside Unicode's range makes `String.fromCodePoint` throw,
+  // and this runs inside the development effect -- so an unparseable reference
+  // in a class string would take the component down rather than produce a
+  // warning. A diagnostic must never be able to break what it reports on, so an
+  // out-of-range reference is left exactly as written instead.
+  const fromCodePoint = (value: number, whole: string): string =>
+    Number.isInteger(value) && value >= 0 && value <= 0x10ffff
+      ? String.fromCodePoint(value)
+      : whole;
+
   return text.replace(
     /&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g,
     (whole, body: string) => {
       if (body.startsWith("#x") || body.startsWith("#X")) {
-        return String.fromCodePoint(Number.parseInt(body.slice(2), 16));
+        return fromCodePoint(Number.parseInt(body.slice(2), 16), whole);
       }
       if (body.startsWith("#")) {
-        return String.fromCodePoint(Number.parseInt(body.slice(1), 10));
+        return fromCodePoint(Number.parseInt(body.slice(1), 10), whole);
       }
       return named[body.toLowerCase()] ?? whole;
     }
@@ -136,7 +154,9 @@ export function inertClassesIn(className: string): string[] {
       !FIELD_ONLY.test(base) &&
       !ZERO_WIDTH.test(base)
   );
-  const hasPadding = bases.some(base => PADDING_TOKEN.test(base));
+  const hasPadding = bases.some(
+    base => PADDING_TOKEN.test(base) && !ZERO_PADDING.test(base)
+  );
 
   return tokens.filter((_, index) => {
     const base = bases[index] ?? "";
