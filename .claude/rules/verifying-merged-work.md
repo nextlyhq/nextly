@@ -38,24 +38,38 @@ merged.
 The independent source is the ref itself. The guard is part of the check, not a
 note beside it, because the failure it prevents looks exactly like a pass:
 
+Two remotes are in play and they are not interchangeable. `BASE_REMOTE` holds
+`main` and the merge commit; `HEAD_REMOTE` holds the PR's branch, and for a fork
+that is a different repository entirely:
+
 ```sh
 PR=<number>
-read -r CROSS OWNER REPO BR GH < <(gh pr view "$PR" \
-  --json isCrossRepository,headRepositoryOwner,headRepository,headRefName,headRefOid \
+read -r CROSS OWNER REPO BR GH MERGE < <(gh pr view "$PR" \
+  --json isCrossRepository,headRepositoryOwner,headRepository,headRefName,headRefOid,mergeCommit \
   --jq '[.isCrossRepository,.headRepositoryOwner.login,.headRepository.name,
-         .headRefName,.headRefOid]|@tsv')
-# A fork's branch does not exist on `origin`, and asking origin for it returns
-# the same empty string a deleted branch does.
-REMOTE=origin
-[ "$CROSS" = true ] && REMOTE="https://github.com/$OWNER/$REPO.git"
-TIP=$(git ls-remote "$REMOTE" "refs/heads/$BR" | cut -f1)
+         .headRefName,.headRefOid,.mergeCommit.oid]|@tsv')
+BASE_REMOTE=origin                        # must point at the BASE repository
+HEAD_REMOTE=origin
+[ "$CROSS" = true ] && HEAD_REMOTE="https://github.com/$OWNER/$REPO.git"
+
+# History rewritten? Then the range below cannot certify anything — see next note.
+FORCED=$(gh api "repos/nextlyhq/nextly/issues/$PR/timeline?per_page=100" \
+  --jq '[.[]|select(.event=="head_ref_force_pushed")]|length')
+
+TIP=$(git ls-remote "$HEAD_REMOTE" "refs/heads/$BR" | cut -f1)
 if [ -z "$TIP" ]; then
-  echo "PR#$PR: no such ref on $REMOTE — NOT CHECKABLE, which is not clean" >&2
+  echo "PR#$PR: no such ref on $HEAD_REMOTE — NOT CHECKABLE, which is not clean" >&2
   exit 2
 fi
-git fetch "$REMOTE" "$TIP" --quiet
+git fetch "$HEAD_REMOTE" "$TIP" --quiet
+git fetch "$BASE_REMOTE" "$MERGE" --quiet
 git log --oneline "$GH..$TIP"          # candidates: commits absent from the merge
 ```
+
+Fetch each object from the remote that HAS it. The head commit of a fork PR is
+not on `origin`, so fetching it from there fails and the procedure stops before
+the content checks — reading as a broken verification rather than as a lookup
+pointed at the wrong repository.
 
 **An empty `TIP` degenerates the range and the check reports clean without
 having looked.** Three things produce it, and only the first is unanswerable:
@@ -73,6 +87,23 @@ having looked.** Three things produce it, and only the first is unanswerable:
 
 Derive every field in the same command that uses it, and treat an empty tip as a
 refusal to answer.
+
+**A force-push can erase the evidence, and the range then reports clean.** If
+merged head `A` was followed by stranded commit `B`, and the branch was later
+reset back to `A`, the range is `A..A` — empty, and indistinguishable from a
+branch that never had `B`. Nothing local can recover `B`, because the ref that
+pointed at it is gone.
+
+So `FORCED` is not decoration. A non-zero count means the tip you are comparing
+against is not the history that was pushed, and this check CANNOT certify the
+PR — say NOT CHECKABLE and fall back to content, per-commit, from whatever
+record of the intended commits exists. The timeline reports the event
+(`head_ref_force_pushed`, with the actor and the resulting `commit_id`) but not
+the history it replaced, so detection is all it offers.
+
+Do not reach for the timeline's `committed` entries to recover them: measured on
+a PR with two force-pushes, they number exactly what `pulls/N/commits` returns —
+both describe the current head's history, neither the erased one.
 
 **Output is a CANDIDATE LIST, not a verdict.** The range says only "absent from
 the merged head", and a surviving branch collects commits for other reasons: it
@@ -194,9 +225,12 @@ They are easy to run together and none substitutes for another:
    any earlier commit in the same PR already guarantees.
 
    **This step answers "was the squash rewritten", never "did every commit
-   land".** Both its sides derive from `<headRefOid>`, so a commit pushed after
-   the merge was computed is outside the comparison and it returns IDENTICAL.
-   Run the `ls-remote` check above first; this one is not a substitute for it.
+   land".** The two sides are different objects — the PR side is bounded by
+   `<headRefOid>`, the squash side is `main`'s own history at
+   `<mergeCommit>^..<mergeCommit>` — but neither can contain a commit that never
+   merged, so a commit pushed after the merge was computed is outside both and
+   the comparison returns IDENTICAL. Run the `ls-remote` check above first; this
+   one is not a substitute for it.
 
 4. If the final commit is a pure revert of an earlier one in the same PR, check the
    NET effect, not the last hunk.
@@ -210,10 +244,13 @@ after something has already shipped. Merge with the head you verified as a
 PRECONDITION, so the merge itself refuses when the branch has moved:
 
 ```sh
-gh pr merge "$PR" --squash --admin --match-head-commit "$SHA"
+gh pr merge "$PR" --squash --match-head-commit "$GH"
 ```
 
-`$SHA` is the revision the green checks and the clean review belong to.
+`$GH` is `headRefOid` from the block above — the revision the green checks and
+the clean review belong to. Bind it to that variable rather than retyping a SHA:
+a merge precondition naming the wrong revision either refuses a correct merge or,
+worse, permits the one it was added to stop.
 
 Re-reading `ls-remote` immediately before merging is better than not, and it is
 still two operations: a push arriving between the read and the merge is exactly
@@ -221,6 +258,14 @@ the window being closed, and narrowing a race is not closing one. `--match-head-
 makes the check and the merge a single atomic operation on GitHub's side, which
 is the difference between a boundary and a look — and this file exists because a
 look was taken and the branch moved anyway.
+
+**No `--admin` here, deliberately.** It merges a PR that does not meet the
+repository's requirements — the pending or failing checks and the missing
+reviews — which is precisely what the verified `$GH` exists to protect. Pairing
+them writes a command that pins the exact revision and then waives the reasons
+for pinning it. Where a project genuinely needs the override, add it as its own
+decision and keep `--match-head-commit`: the two flags answer different
+questions, and only one of them is a bypass.
 
 ## A red head is grounds to look, not a finding
 
