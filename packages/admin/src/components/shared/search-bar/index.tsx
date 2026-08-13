@@ -6,6 +6,7 @@ import { Loader2, Search, X } from "@admin/components/icons";
 import { Input } from "@admin/components/ui";
 import { cn } from "@admin/lib/utils";
 
+import { inertClassMessage, inertClassesIn } from "./inert-classes";
 import type { SearchBarProps } from "./types";
 
 /**
@@ -115,6 +116,20 @@ export const SearchBar = React.forwardRef<HTMLInputElement, SearchBarProps>(
   ) => {
     // Internal state for immediate UI updates
     const [internalValue, setInternalValue] = React.useState(value);
+
+    // A class aimed at the field reaches the wrapper and does nothing there,
+    // silently. Warned from inside the component because this is the only
+    // place the FINAL class string exists: a source check has to predict it,
+    // and the ways to write one -- an aliased import, a template, a
+    // concatenation, a character reference, a helper's return value -- are the
+    // whole of JavaScript. Here it is just a string.
+    //
+    // Development only, and effectful rather than computed during render.
+    React.useEffect(() => {
+      if (process.env.NODE_ENV === "production" || !className) return;
+      const inert = inertClassesIn(className);
+      if (inert.length > 0) console.warn(inertClassMessage(inert));
+    }, [className]);
 
     // Sync internal value when parent value changes externally
     React.useEffect(() => {
