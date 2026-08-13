@@ -72,7 +72,7 @@
     "build": "pnpm build:js && node scripts/build-css.mjs",
     "build:js": "rimraf dist && tsup && tsup --config tsup.server-safe.config.ts && tsx scripts/check-client-directive.ts && tsx scripts/check-server-safe-artifacts.ts",
     "build:css": "node scripts/build-css.mjs",
-    "dev": "tsup --watch & tsup --config tsup.server-safe.config.ts --watch & wait",
+    "dev": "node scripts/dev.mjs",
     "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",

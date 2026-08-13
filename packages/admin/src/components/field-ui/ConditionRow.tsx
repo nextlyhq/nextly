@@ -28,6 +28,8 @@ import {
   SelectValue,
 } from "@nextlyhq/ui";
 
+import { RangeField } from "@admin/components/shared/range-field";
+
 /** Every operator a condition can use. */
 export type ConditionOperatorName =
   | "equals"
@@ -325,43 +327,34 @@ export function ConditionRow({
       </Select>
 
       {takesValue && operator === "between" ? (
-        <div className="grid grid-cols-2 gap-1">
-          <Input
-            type={numeric ? "number" : dated ? "date" : "text"}
-            aria-label="Condition value from"
-            // A visible placeholder, not only an aria-label. These fields start
-            // empty and carry no visible label, so without it the border is
-            // the only thing marking where the control is -- and the field
-            // border is deliberately below 1.4.11's 3:1 for controls that have
-            // other cues. This is the other cue.
-            placeholder="From"
-            disabled={readOnly}
-            value={rangeEnd(condition?.value, "min")}
-            onChange={event =>
-              emit({
-                value: {
-                  ...(isRange(condition?.value) ? condition.value : {}),
-                  min: event.target.value,
-                },
-              })
-            }
-          />
-          <Input
-            type={numeric ? "number" : dated ? "date" : "text"}
-            aria-label="Condition value to"
-            placeholder="To"
-            disabled={readOnly}
-            value={rangeEnd(condition?.value, "max")}
-            onChange={event =>
-              emit({
-                value: {
-                  ...(isRange(condition?.value) ? condition.value : {}),
-                  max: event.target.value,
-                },
-              })
-            }
-          />
-        </div>
+        // Labelled rather than placeholder-hinted. These fields start empty and
+        // the field border is deliberately below 1.4.11's 3:1 for controls that
+        // carry other cues, so the label IS the other cue -- and a placeholder
+        // cannot be it when the field is a date, because the control paints its
+        // own format hint and never renders the attribute.
+        <RangeField
+          label="Condition value range"
+          type={numeric ? "number" : dated ? "date" : "text"}
+          disabled={readOnly}
+          from={rangeEnd(condition?.value, "min")}
+          to={rangeEnd(condition?.value, "max")}
+          onFromChange={min =>
+            emit({
+              value: {
+                ...(isRange(condition?.value) ? condition.value : {}),
+                min,
+              },
+            })
+          }
+          onToChange={max =>
+            emit({
+              value: {
+                ...(isRange(condition?.value) ? condition.value : {}),
+                max,
+              },
+            })
+          }
+        />
       ) : takesValue && choices !== undefined ? (
         <Select
           value={scalar(condition?.value)}

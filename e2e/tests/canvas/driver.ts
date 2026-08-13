@@ -179,6 +179,24 @@ export interface CanvasDriver {
   readZoneHeights(): Promise<number[]>;
 
   /**
+   * Ordinal of the drop zone whose mapped rect CONTAINS the current pointer, or
+   * -1 when the pointer is inside none of them.
+   *
+   * The exact form of "the indicator is where the pointer is", and it needs no
+   * tolerance. A zone containing the pointer is the one dnd-kit's default
+   * detector resolves to, so a canvas that answers with any other zone has
+   * mapped the pointer wrongly — which is what both the stale-rect (#1705) and
+   * unscaled-transform (#1706) failures do.
+   *
+   * Containment rather than proximity, because proximity is not a rule this
+   * canvas follows. `@dnd-kit/collision` ranks a containing zone by pointer
+   * intersection FIRST and only falls back to the dragged shape's overlap when
+   * no zone contains the pointer, so the nearest zone by centre distance and
+   * the resolved zone legitimately differ next to a boundary.
+   */
+  zoneContainingPointer(): Promise<number>;
+
+  /**
    * Ordinal of the drop zone geometrically nearest the current pointer.
    *
    * The exact form of "the indicator is where the pointer is": comparing the
@@ -289,4 +307,44 @@ export async function dragUntilTarget(
     if (active >= 0) return active;
   }
   return -1;
+}
+
+/**
+ * Carries a panel drag to a point, measuring from where the pointer ACTUALLY is.
+ *
+ * `startDragAt` is contractually allowed to move past the drag activation
+ * threshold, and the PoC driver shifts 12px doing so. A delta computed from the
+ * SOURCE point therefore overshoots by exactly that, and a replacement driver
+ * with different activation motion overshoots by a different amount — which
+ * defeats the seam this suite exists to keep swappable.
+ *
+ * Shared rather than repeated, so every suite measures the delta the same way.
+ * A per-suite copy of this arithmetic is invisible when it is wrong: the drag
+ * still runs and still ends somewhere plausible, and only the distance is off.
+ *
+ * In steps rather than one jump, because a single move is a teleport and a
+ * canvas that commits on dwell answers a teleport differently from a gesture.
+ */
+export async function dragPointerTo(
+  driver: CanvasDriver,
+  target: Point,
+  steps = 8
+): Promise<void> {
+  // A precondition, not a clamp. Zero or fewer steps runs no move at all, so
+  // the helper resolves with the pointer where it started and the caller's next
+  // assertion reports a canvas fault for a gesture that never happened. A
+  // fractional count leaves the pointer short of the target for the same
+  // reason, with nothing to distinguish it from a canvas that ignored the move.
+  if (!Number.isInteger(steps) || steps < 1) {
+    throw new Error(
+      `dragPointerTo needs a whole number of steps, at least 1; got ${String(steps)}`
+    );
+  }
+  const from = driver.pointer();
+  for (let step = 0; step < steps; step += 1) {
+    await driver.moveBy(
+      (target.x - from.x) / steps,
+      (target.y - from.y) / steps
+    );
+  }
 }

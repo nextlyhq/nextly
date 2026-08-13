@@ -114,6 +114,10 @@ export default defineConfig({
       // double does not appear in a contributor's plugins list or inject a
       // showcase section into the Posts collection.
       NEXTLY_E2E_STYLE_FIXTURE: "1",
+      // The builder-shell harness route, gated the same way and for the same
+      // reason: a dev-only route under `src/app/` is otherwise reachable in
+      // `pnpm dev:app` and indistinguishable from product.
+      NEXTLY_E2E_SHELL_HARNESS: "1",
     },
   },
 

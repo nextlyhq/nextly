@@ -112,6 +112,51 @@ export function createPocDriver(page: Page): CanvasDriver {
     });
   }
 
+  /**
+   * Every drop zone's vertical extent in HOST coordinates, document order.
+   *
+   * ONE snapshot, because the two questions asked of it — which zone contains
+   * the pointer, and which zone's centre is nearest — are two views of the same
+   * geometry. Read separately they agree until a selector, an ordering, the
+   * frame origin or the mapping is corrected in one and not the other, and the
+   * depth probe then compares two different models of the canvas: either a
+   * failure that names the canvas for a fault in the harness, or a pass that is
+   * self-consistent and wrong.
+   *
+   * The centre comes from the mapped edges rather than from mapping the frame's
+   * own centre. Under an affine map the two are equal, and deriving it here
+   * keeps a single mapped value as the source for both answers.
+   */
+  async function mappedZoneSpans(): Promise<
+    { top: number; bottom: number; centre: number }[]
+  > {
+    const rects = await canvasFrame().evaluate(
+      selector =>
+        Array.from(document.querySelectorAll(selector)).map(el => {
+          const r = el.getBoundingClientRect();
+          return { y: r.y, height: r.height };
+        }),
+      DROP_ZONES
+    );
+    if (rects.length === 0) return [];
+
+    const origin = await driver.frameOrigin();
+    const scale = await frameScale();
+    // Mapped by the shared helper rather than multiplied out here. Written
+    // inline this is two numbers scaled and added, which is exactly the shape
+    // no import scan can tell from ordinary arithmetic — so it is the one that
+    // drifts silently when the mapping is corrected.
+    return rects.map(rect => {
+      const top = mapFramePointToHost({ x: 0, y: rect.y }, origin, scale).y;
+      const bottom = mapFramePointToHost(
+        { x: 0, y: rect.y + rect.height },
+        origin,
+        scale
+      ).y;
+      return { top, bottom, centre: (top + bottom) / 2 };
+    });
+  }
+
   let pointer: Point = { x: 0, y: 0 };
 
   const driver: CanvasDriver = {
@@ -239,34 +284,23 @@ export function createPocDriver(page: Page): CanvasDriver {
       );
     },
 
-    async nearestZoneToPointer() {
-      const rects = await canvasFrame().evaluate(
-        selector =>
-          Array.from(document.querySelectorAll(selector)).map(el => {
-            const r = el.getBoundingClientRect();
-            return { y: r.y, height: r.height };
-          }),
-        DROP_ZONES
+    async zoneContainingPointer() {
+      const spans = await mappedZoneSpans();
+      // The FIRST containing zone, not the nearest of several. Gap zones do not
+      // overlap, so at most one can contain a point; taking the first keeps the
+      // answer defined if a canvas ever registers overlapping ones rather than
+      // silently picking whichever compared smaller.
+      return spans.findIndex(
+        span => pointer.y >= span.top && pointer.y <= span.bottom
       );
-      if (rects.length === 0) return -1;
+    },
 
-      const origin = await driver.frameOrigin();
-      const scale = await frameScale();
-      const pointerY = pointer.y;
-
+    async nearestZoneToPointer() {
+      const spans = await mappedZoneSpans();
       let best = -1;
       let bestDistance = Number.POSITIVE_INFINITY;
-      rects.forEach((rect, index) => {
-        // Mapped by the shared helper rather than multiplied out here. Written
-        // inline this is two numbers scaled and added, which is exactly the
-        // shape no import scan can tell from ordinary arithmetic — so it is the
-        // one that drifts silently when the mapping is corrected.
-        const centre = mapFramePointToHost(
-          { x: 0, y: rect.y + rect.height / 2 },
-          origin,
-          scale
-        ).y;
-        const distance = Math.abs(pointerY - centre);
+      spans.forEach((span, index) => {
+        const distance = Math.abs(pointer.y - span.centre);
         if (distance < bestDistance) {
           bestDistance = distance;
           best = index;
