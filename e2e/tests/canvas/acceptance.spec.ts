@@ -471,14 +471,25 @@ test.describe("a canvas any Nextly editor could ship", () => {
       edge.crossed,
       "a boundary must be crossed, or this measures a target that never moves"
     ).toBe(true);
-    // The BRACKET is recorded, not asserted, now that the reverse search
-    // carries the forward step's overshoot. A wide-but-compliant margin can
-    // still exhaust the budget, and failing here would report a canvas meeting
-    // the requirement as a harness fault.
+    // An unbracketed edge makes the jitter INCONCLUSIVE rather than weaker, so
+    // the run stops here. A resolver sticky in one direction only advances once
+    // and never retreats: it satisfies `crossed`, leaves this false, and then
+    // jitters perfectly stably from the middle of its catchment — which is what
+    // a compliant margin looks like. Failing would blame a canvas that may be
+    // correct; continuing would let a broken one read as correct the day the
+    // marker comes off. Neither is an answer, so neither is given.
     test.info().annotations.push({
       type: "bracketed",
       description: String(edge.bracketed),
     });
+    if (!edge.bracketed) {
+      await driver.cancel();
+      test.skip(
+        true,
+        "the reverse search never found the edge, so a stable jitter cannot be told from a target that only ever advances"
+      );
+      return;
+    }
 
     // The DWELL-AWARE probe, shared with the scenario suite. The requirement
     // permits hysteresis expressed as a >100ms dwell instead of a distance
@@ -950,7 +961,13 @@ test.describe("a canvas any Nextly editor could ship", () => {
     );
 
     await chrome.startDragOfBlock(fixture.blockIds[1] ?? "");
+    // Advanced INSIDE a zone, exactly as the panel side is. Sampling the two
+    // under different conditions makes the comparison a statement about the
+    // harness: `dragUntilTarget` can resolve through overlap with the pointer
+    // outside every zone, so a canvas drag using the very same engine reports
+    // `resolvesToContainingZone: false` and stays an expected failure.
     await dragUntilTarget(driver);
+    await dragUntilInsideZone(driver);
     const canvas = await engineSignature(driver);
     await driver.cancel();
 

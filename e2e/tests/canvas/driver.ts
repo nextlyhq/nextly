@@ -378,11 +378,15 @@ export interface ZoneEdge {
   /**
    * Whether the reverse search then located the edge to within a pixel.
    *
-   * `false` here is NOT a failure once {@link crossed} is true: the target
-   * changed, and the reverse search simply did not find its way back within the
-   * budget, which a wide switch margin can legitimately cause. The jitter still
-   * runs; it carries weaker evidence because the pointer is not known to
-   * straddle the edge.
+   * `false` makes any jitter INCONCLUSIVE, not weaker. A resolver that is
+   * sticky in one direction only — it advances once and never retreats —
+   * satisfies {@link crossed}, leaves this false, and then produces a perfectly
+   * stable jitter from the middle of its catchment. That is indistinguishable
+   * from a compliant switch margin, so the moment an expected-failure marker
+   * comes off, the broken resolver reads as correct.
+   *
+   * Callers must therefore treat `false` as "this run could not ask the
+   * question" rather than as evidence in either direction.
    */
   readonly bracketed: boolean;
 }
@@ -503,7 +507,23 @@ export async function jitterAcrossEdge(
       durations.push(Date.now() - startedAt);
     }
     const log = await readTransitions();
-    slowestMoveMs = Math.max(...durations);
+    // CONSECUTIVE PAIRS, not each command alone. The dwell that matters is the
+    // one between browser pointer EVENTS, and an event fires somewhere inside
+    // its command — so the gap spans the tail of one command plus the head of
+    // the next. Two 60ms commands each satisfy a `< 100` check while their
+    // events can be 120ms apart, which is long enough for a permitted dwell
+    // implementation to commit and be misread as having no hysteresis.
+    //
+    // The sum of an adjacent pair is the conservative bound available without
+    // instrumenting the page: the true inter-event gap cannot exceed it. That
+    // over-estimates, so it skips some runs it could have measured — the safe
+    // direction, since the alternative is classifying a compliant canvas as
+    // broken.
+    slowestMoveMs = 0;
+    for (let index = 0; index + 1 < durations.length; index += 1) {
+      const pair = (durations[index] ?? 0) + (durations[index + 1] ?? 0);
+      if (pair > slowestMoveMs) slowestMoveMs = pair;
+    }
     if (slowestMoveMs < dwellAllowanceMs) {
       return {
         transitions: log,

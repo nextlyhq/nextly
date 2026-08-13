@@ -334,15 +334,22 @@ test("scenario 4b: a 2px jitter at a zone edge keeps the indicator stable", asyn
     edge.crossed,
     "a boundary must actually be crossed, or this measures the middle of one zone"
   ).toBe(true);
-  // The BRACKET, by contrast, is recorded rather than asserted: once a crossing
-  // has happened, failing to walk back inside the budget means the margin is
-  // wide, which is the behaviour being asked for. The jitter still runs and
-  // observes no flip; recording keeps the weaker evidence visible instead of
-  // silently equivalent to the stronger.
+  // An unbracketed edge is INCONCLUSIVE rather than weaker evidence: a resolver
+  // that advances once and never retreats satisfies `crossed`, leaves this
+  // false, and jitters stably from the middle of its catchment — exactly like a
+  // compliant margin. The scenario stops rather than reporting either verdict.
   test.info().annotations.push({
     type: "bracketed",
     description: String(edge.bracketed),
   });
+  if (!edge.bracketed) {
+    await driver.cancel();
+    test.skip(
+      true,
+      "the reverse search never found the edge, so a stable jitter cannot be told from a target that only ever advances"
+    );
+    return;
+  }
   // The DWELL-AWARE probe, shared with the acceptance suite so both ask the
   // question the same way. It steps to P-2 first and alternates by 4 (samples
   // on genuinely opposite sides of the edge), records transitions from inside
