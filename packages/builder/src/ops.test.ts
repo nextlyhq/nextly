@@ -282,14 +282,6 @@ describe("an op that cannot apply", () => {
       },
     ],
     [
-      "insert into a parent without naming the slot",
-      {
-        kind: "insert",
-        node: node("new"),
-        at: { parentId: "outer", index: 0 },
-      },
-    ],
-    [
       "insert whose SUBTREE repeats an id the document holds",
       {
         kind: "insert",
@@ -306,10 +298,6 @@ describe("an op that cannot apply", () => {
       },
     ],
     [
-      "move into a parent without naming the slot",
-      { kind: "move", id: "b", to: { parentId: "outer", index: 0 } },
-    ],
-    [
       "move into its own subtree",
       {
         kind: "move",
@@ -324,6 +312,28 @@ describe("an op that cannot apply", () => {
     // from being admitted silently — which for a history means an entry for an
     // edit that never happened, whose inverse throws when someone undoes it.
     expect(() => applyOp(doc(), op)).toThrow(OpError);
+  });
+
+  // Positions the VOCABULARY no longer expresses. `OpPosition` requires a slot
+  // wherever a parent is named, so these two cannot be written by a caller with
+  // a compiler — which is the point of the type. They still arrive from
+  // storage, where nothing checked them, so the runtime refusal is what stands
+  // between a replayed history and a node placed in no region at all.
+  it.each<[string, unknown]>([
+    [
+      "insert into a parent without naming the slot",
+      {
+        kind: "insert",
+        node: node("new"),
+        at: { parentId: "outer", index: 0 },
+      },
+    ],
+    [
+      "move into a parent without naming the slot",
+      { kind: "move", id: "b", to: { parentId: "outer", index: 0 } },
+    ],
+  ])("refuses a persisted op that names a parent and no slot: %s", (_l, op) => {
+    expect(() => applyOp(doc(), op as BuilderOp)).toThrow(OpError);
   });
 });
 
@@ -1660,6 +1670,42 @@ describe("the document's own identity fields", () => {
     }
     expect(thrown).toBeInstanceOf(OpError);
     expect((thrown as OpError).message).toMatch(/levels deep and cannot be/);
+  });
+
+  it("refuses a document whose kind a spread would drop", () => {
+    // A non-enumerable `kind` is READ by every check here and copied by none of
+    // them: `withNodes` builds the result by spreading, and a spread takes
+    // enumerable own properties only. So the document passes validation and the
+    // one it returns has no kind at all — recorded in history, and refused by
+    // the next read of a field nothing downstream is watching for.
+    const hidden = doc();
+    Object.defineProperty(hidden, "kind", {
+      value: hidden.kind,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+    expect(
+      JSON.stringify(hidden),
+      "the fixture must actually lose the field, or this tests nothing"
+    ).not.toContain("kind");
+
+    expect(() => applyOp(hidden, { kind: "remove", id: "a" })).toThrow(OpError);
+  });
+
+  it("refuses a document whose format version is computed", () => {
+    // An accessor runs code to answer, so a guard that reads it is executing
+    // the document's own getter while deciding whether to trust the document.
+    const computed = doc();
+    Object.defineProperty(computed, "formatVersion", {
+      get: () => DOCUMENT_FORMAT_VERSION,
+      enumerable: true,
+      configurable: true,
+    });
+
+    expect(() => applyOp(computed, { kind: "remove", id: "a" })).toThrow(
+      OpError
+    );
   });
 
   it("refuses a document that holds a node inside its own slots", () => {

@@ -481,14 +481,45 @@ function isSlotMap(value: unknown): boolean {
  * gap. Nothing bypasses undo in practice yet, because nothing consumes this
  * module.
  */
+/**
+ * Where an op places a node: at the top level, or inside a named slot.
+ *
+ * A union rather than three independent optional fields, because the engine's
+ * `TreePosition` makes `parentId` and `slot` optional of each other and the two
+ * are not independent: naming a parent without a slot does not say where in
+ * that parent the node goes, and `applyOp` has always refused it. Left as one
+ * loose shape, a caller with a compiler can write `{ parentId: "outer", index:
+ * 0 }`, put it in a typed history or a queue, and find out only when the op
+ * executes — by which time it is recorded and its inverse is meaningless.
+ *
+ * Narrowed HERE rather than in the engine. `TreePosition` is the engine's
+ * published type and its shape is what every other caller compiles against;
+ * this is the op vocabulary's own statement of what an op may say, and it stays
+ * assignable to `TreePosition` so the engine's helpers take it unchanged.
+ *
+ * The runtime checks remain, for the ops that arrive from storage having never
+ * met a compiler.
+ */
+export type OpPosition =
+  | {
+      readonly parentId?: undefined;
+      readonly slot?: undefined;
+      readonly index: number;
+    }
+  | {
+      readonly parentId: string;
+      readonly slot: string;
+      readonly index: number;
+    };
+
 export type BuilderOp =
   | {
       readonly kind: "insert";
       readonly node: BlockNode;
-      readonly at: TreePosition;
+      readonly at: OpPosition;
     }
   | { readonly kind: "remove"; readonly id: string }
-  | { readonly kind: "move"; readonly id: string; readonly to: TreePosition }
+  | { readonly kind: "move"; readonly id: string; readonly to: OpPosition }
   | {
       readonly kind: "update";
       readonly id: string;
@@ -1132,14 +1163,24 @@ function samePlace(a: NodeLocation, b: NodeLocation): boolean {
 }
 
 /** Where a located node sits, in the shape an op addresses. */
-function positionOf(location: NodeLocation): TreePosition {
-  return location.parent === undefined
-    ? { index: location.index }
-    : {
-        parentId: location.parent.id,
-        slot: location.slot,
-        index: location.index,
-      };
+function positionOf(location: NodeLocation): OpPosition {
+  if (location.parent === undefined) return { index: location.index };
+  // A parent with no slot is not a position an op can express, and building one
+  // anyway would put an unapplicable op into the inverse: an undo that names
+  // where to put the node back without saying which region of it. The engine
+  // reports slot and parent independently, so this is the boundary where the
+  // two become one answer.
+  if (location.slot === undefined) {
+    throw new OpError(
+      `this node sits inside "${location.parent.id}" without a named slot, so ` +
+        `the edit could not be undone.`
+    );
+  }
+  return {
+    parentId: location.parent.id,
+    slot: location.slot,
+    index: location.index,
+  };
 }
 
 /**
@@ -1232,6 +1273,25 @@ export function applyOp(
     throw new OpError(
       `a document of ${describe(document)} holds no forest to edit. Every ` +
         `document is a record whose nodes are an array.`
+    );
+  }
+  // The ENVELOPE's own keys, by the same rule its contents are held to, and
+  // before anything reads a field off it.
+  //
+  // `withNodes` builds the result by spreading, and a spread copies enumerable
+  // own properties only — so a `kind` or `formatVersion` defined as
+  // non-enumerable is read and accepted by the checks below and then absent
+  // from the document they admitted. The result enters history without a field
+  // every document must carry, and nothing downstream is looking.
+  //
+  // Accessors are refused for the second reason the value checks refuse them:
+  // reading one runs code, and the guard would be executing the document's own
+  // getters while deciding whether to trust it.
+  if (!hasOnlyJsonOwnKeys(document)) {
+    throw new OpError(
+      `a document carrying a field JSON cannot write, or one computed rather ` +
+        `than held, cannot be edited. Every field a document names must ` +
+        `survive being written down and read back.`
     );
   }
   const nodes = document.nodes;
