@@ -550,24 +550,30 @@ jobs:
             sleep 1
           done
 
-          # Checked BEFORE the kill. Producing both artifacts is not the whole claim: a pair of
-          # one-shot builds — `--watch` dropped by a later edit — writes exactly these files and
-          # then exits, and the loop above would break on the files and report success for a dev
-          # script that no longer watches anything. Still running is what makes them watchers.
-          alive=yes
-          kill -0 "$dev_pid" 2>/dev/null || alive=no
-
-          kill "$dev_pid" 2>/dev/null || true
-
           missing=""
           [ -f dist/index.mjs ] || missing="$missing client(dist/index.mjs)"
           [ -f dist/color.mjs ] || missing="$missing server-safe(dist/color.mjs)"
+          # Still running when the artifacts appear, checked BEFORE the kill.
+          #
+          # Stated plainly, because it is weaker than it looks: this does NOT separate a watcher
+          # from a one-shot build. tsup writes these files before its declaration phase, so a pair
+          # of one-shot builds is still alive at this moment too.
+          #
+          # The check that WOULD separate them is editing a source and requiring a rebuild. It is
+          # not here because `tsup --watch` in this package does not currently rebuild at all — it
+          # logs `Change detected` and emits nothing, measured on one watcher and on two, and on
+          # the shell script this replaced. That is a real defect and it is filed separately; a
+          # control that fails for a reason this pull request does not cause would only teach
+          # people to ignore it.
+          alive=yes
+          kill -0 "$dev_pid" 2>/dev/null || alive=no
+          kill "$dev_pid" 2>/dev/null || true
 
           if [ -n "$missing" ] || [ "$alive" = "no" ]; then
             [ -n "$missing" ] && echo "The dev script did not produce output for:$missing"
-            [ "$alive" = "no" ] && echo "The dev script exited instead of continuing to watch."
+            [ "$alive" = "no" ] && echo "The dev script exited before its outputs were complete."
             echo "--- dev script output ---"
             cat /tmp/dev.log
             exit 1
           fi
-          echo "Both watchers produced output and the script was still watching."
+          echo "Both commands produced their output and the script was still running."

@@ -19,6 +19,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const repoRoot = join(
@@ -85,22 +86,19 @@ function workspaceDirectories(): string[] {
 /**
  * Every manifest whose scripts a contributor runs.
  *
- * The workspace packages, plus the repository root — its scripts run through the same pnpm and
- * break the same way — plus `templates`, which pnpm does not manage but which becomes a user's
- * project verbatim, so a construct there ships the bug rather than merely hosting it.
+ * The workspace packages plus the repository root, whose scripts go through the same pnpm and
+ * break the same way.
+ *
+ * `templates/` is deliberately NOT here: none of those directories contains a `package.json` at
+ * all. A scaffolded project's manifest is GENERATED, which is what `generatedScriptCommands()`
+ * below covers — filtering this list by file existence would silently drop every template while
+ * this suite claimed to scan them.
  */
 function scannedManifests(): {
   path: string;
   scripts: Record<string, string>;
 }[] {
-  const templates = join(repoRoot, "templates");
-  const templateDirs = existsSync(templates)
-    ? readdirSync(templates, { withFileTypes: true })
-        .filter(entry => entry.isDirectory())
-        .map(entry => join(templates, entry.name))
-    : [];
-
-  return [repoRoot, ...workspaceDirectories(), ...templateDirs]
+  return [repoRoot, ...workspaceDirectories()]
     .map(directory => ({
       directory,
       manifest: join(directory, "package.json"),
@@ -118,10 +116,80 @@ function scannedManifests(): {
     });
 }
 
+/** Where a scaffolded project's `scripts` block is actually written. */
+const GENERATOR = join(
+  repoRoot,
+  "packages",
+  "create-nextly-app",
+  "src",
+  "utils",
+  "template.ts"
+);
+
+/**
+ * Every command a scaffolded project's `package.json` will contain.
+ *
+ * A user's project is not in this repository — it is produced by `generatePackageJson` and its
+ * plugin counterpart — so scanning directories cannot see those scripts at all. A forbidden
+ * construct there is worse than one here: it ships to people who never chose it, and their first
+ * build is where it surfaces.
+ *
+ * Read from the generator's own syntax rather than by calling it, because calling it would make
+ * this package depend on `create-nextly-app` at test time; this repository already guards across
+ * package boundaries by reading source, as the contrast utilities do for admin.
+ */
+function generatedScriptCommands(): {
+  path: string;
+  scripts: Record<string, string>;
+}[] {
+  const source = ts.createSourceFile(
+    GENERATOR,
+    readFileSync(GENERATOR, "utf8"),
+    ts.ScriptTarget.Latest,
+    true
+  );
+
+  const blocks: Record<string, string>[] = [];
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isPropertyAssignment(node) &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === "scripts" &&
+      ts.isObjectLiteralExpression(node.initializer)
+    ) {
+      const block: Record<string, string> = {};
+      for (const property of node.initializer.properties) {
+        if (!ts.isPropertyAssignment(property)) continue;
+        const key = ts.isIdentifier(property.name)
+          ? property.name.text
+          : ts.isStringLiteral(property.name)
+            ? property.name.text
+            : undefined;
+        // Only literal commands can be judged. A computed one is reported rather than skipped, so
+        // a script assembled at runtime cannot pass by being unreadable.
+        if (key === undefined) continue;
+        block[key] = ts.isStringLiteral(property.initializer)
+          ? property.initializer.text
+          : ts.isNoSubstitutionTemplateLiteral(property.initializer)
+            ? property.initializer.text
+            : `<non-literal: ${property.initializer.getText(source)}>`;
+      }
+      blocks.push(block);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+
+  return blocks.map((scripts, index) => ({
+    path: `create-nextly-app scripts block #${index + 1}`,
+    scripts,
+  }));
+}
+
 describe("package scripts run on every supported platform", () => {
   // A scan that reads nothing reports no violations, which is the same output as a clean
   // workspace. These separate the two.
-  it("scans the root, every pnpm workspace, and the templates", () => {
+  it("scans the root and every pnpm workspace", () => {
     const paths = scannedManifests().map(({ path }) => path);
     expect(paths).toContain("<root>");
     expect(paths).toContain("packages/ui");
@@ -129,6 +197,21 @@ describe("package scripts run on every supported platform", () => {
     // hand-written directory list would miss.
     expect(paths).toContain("e2e");
     expect(paths.length).toBeGreaterThan(10);
+  });
+
+  // The generator is the only place a scaffolded project's scripts exist, and a scan of it that
+  // silently found nothing would report no violations — the same output as a clean generator.
+  it("reads the scripts a scaffolded project will actually receive", () => {
+    const blocks = generatedScriptCommands();
+    expect(blocks.length).toBeGreaterThanOrEqual(2);
+
+    const commands = blocks.flatMap(({ scripts }) => Object.entries(scripts));
+    expect(commands.length).toBeGreaterThan(5);
+    // Pinned because they are what a user runs first. If the generator stops emitting these, the
+    // scan is reading the wrong thing and should say so rather than pass over an empty set.
+    expect(commands.map(([name]) => name)).toEqual(
+      expect.arrayContaining(["dev", "build"])
+    );
   });
 
   it("recognises the construct it exists to reject, spaced or not", () => {
@@ -154,8 +237,11 @@ describe("package scripts run on every supported platform", () => {
     }
   });
 
-  it("no scanned script backgrounds a process and waits for it", () => {
-    const offenders = scannedManifests().flatMap(({ path, scripts }) =>
+  it("no scanned or generated script backgrounds a process and waits for it", () => {
+    const offenders = [
+      ...scannedManifests(),
+      ...generatedScriptCommands(),
+    ].flatMap(({ path, scripts }) =>
       Object.entries(scripts)
         .filter(([, command]) => BACKGROUND_THEN_WAIT.test(command))
         .map(([name, command]) => `${path} → ${name}: ${command}`)
