@@ -25,6 +25,16 @@ const excludeArgs: {
 /** The flags the companion is built from, captured where the service actually passes them. */
 const companionCalls: Record<string, unknown>[] = [];
 
+/** Set to make the plugin-option validator refuse, standing in for a registry swapped underneath. */
+const pluginOptionRefusal: { error: unknown } = { error: undefined };
+
+vi.mock("../../../../api/fields-payload", () => ({
+  assertValidPluginFieldOptions: vi.fn(() => {
+    if (pluginOptionRefusal.error !== undefined)
+      throw pluginOptionRefusal.error;
+  }),
+}));
+
 vi.mock("../../../singles/services/reconcile-single-companion", () => ({
   reconcileSingleCompanion: vi.fn(async (args: Record<string, unknown>) => {
     companionCalls.push(args);
@@ -166,6 +176,7 @@ function makeService(adapter: ReturnType<typeof makeAdapter>) {
 beforeEach(() => {
   trace.length = 0;
   companionCalls.length = 0;
+  pluginOptionRefusal.error = undefined;
   excludeArgs.length = 0;
   refusal.error = undefined;
 });
@@ -381,6 +392,35 @@ describe("a Schema Builder change and the storage migration exclude each other",
       // From the request, which did ask for this one.
       localized: true,
     });
+  });
+
+  it("re-judges plugin field options INSIDE the exclusion", async () => {
+    // 🔴 The caller validated these already. What can change in between is the JUDGE: a plugin
+    // field's options are checked by that plugin's own `validateOptions`, read from the
+    // process-global registry, and an HMR reload replaces that registry from inside this same
+    // exclusion. A declaration the old registration accepted would otherwise be built and persisted
+    // against the new one, and every later write to the Single would fail.
+    //
+    // The refusal is injected rather than staged through a real plugin swap: what this asserts is
+    // WHERE the check runs, and the trace shows that — the exclusion is held, and nothing else
+    // happened.
+    const adapter = makeAdapter();
+    const { service, registry } = makeService(adapter);
+    pluginOptionRefusal.error = NextlyError.validation({
+      logContext: { reason: "plugin rejected its own options" },
+    });
+
+    await expect(
+      service.createSingle({
+        slug: "page",
+        label: "Page",
+        tableName: "single_page",
+        fields: [{ name: "heading", type: "text" }],
+      } as unknown as Parameters<typeof service.createSingle>[0])
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    expect(trace).toEqual(["exclusion:held"]);
+    expect(registry.registerSingle).not.toHaveBeenCalled();
   });
 
   it("refuses to CREATE onto a table claimed while it waited", async () => {

@@ -1047,6 +1047,20 @@ export class SingleMetadataService {
     if (adapter) {
       await assertGlobalResourceSlugAvailable(adapter, input.slug);
     }
+
+    // 🔴 Re-judged here, not only by the caller, because the thing that judges it can CHANGE while
+    // this request waits. A plugin field's options are validated by the plugin's own
+    // `validateOptions`, read from the process-global field-type registry — and an HMR reload
+    // replaces that registry wholesale from inside this same exclusion. A declaration the previous
+    // registration accepted would otherwise be planned, built and persisted against the new one,
+    // and every later write to the Single would fail on options it rejects.
+    //
+    // Placed alongside the ownership checks so the whole precondition set is re-established in one
+    // place: this method is what a new precondition should be added to.
+    const { assertValidPluginFieldOptions } = await import(
+      "../../../api/fields-payload"
+    );
+    assertValidPluginFieldOptions(input.fields);
   }
 
   private async planCreate(input: CreateSingleInput): Promise<CreateDdlPlan> {
