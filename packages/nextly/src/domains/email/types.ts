@@ -1,3 +1,4 @@
+import type { EmailRetentionConfig } from "./retention-config";
 /**
  * Email Service Types
  *
@@ -243,6 +244,20 @@ export interface EmailConfig {
    * @example 'Nextly <noreply@example.com>'
    */
   from: string;
+
+  /**
+   * How long the delivery log keeps its rows.
+   *
+   * The log records who was written to, identified by a digest of their
+   * address, so it is a record of people rather than of traffic — and it grows
+   * on every send. Omitting this keeps the default window rather than keeping
+   * rows forever, because an unbounded record of recipients is not a reasonable
+   * default for a table an install fills without opting in.
+   *
+   * `false` keeps everything, at a single window or for the whole block, and is
+   * stated rather than implied by absence.
+   */
+  retention?: EmailRetentionConfig | false;
 
   /**
    * Application name injected into templates and the shared layout as the

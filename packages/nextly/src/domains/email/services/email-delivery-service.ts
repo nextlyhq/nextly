@@ -150,9 +150,24 @@ export interface ListDeliveriesOptions {
 export class EmailDeliveryService extends BaseService {
   private deliveries: EmailDeliveriesTable;
 
-  constructor(adapter: DrizzleAdapter, logger: Logger) {
+  /**
+   * Offered after a send is recorded, when retention is configured.
+   *
+   * The trigger is the send rather than a content write, because rows here are
+   * created by sends: that is when the table grows, and an install that never
+   * sends mail has nothing to sweep. `maybeRun` decides whether a pass is
+   * actually due, so this costs an in-process clock check on an ordinary send.
+   */
+  private readonly retention?: { maybeRun(maxBatches?: number): Promise<void> };
+
+  constructor(
+    adapter: DrizzleAdapter,
+    logger: Logger,
+    retention?: { maybeRun(maxBatches?: number): Promise<void> }
+  ) {
     super(adapter, logger);
     this.deliveries = deliveriesTableFor(this.dialect);
+    this.retention = retention;
   }
 
   /**
@@ -208,6 +223,12 @@ export class EmailDeliveryService extends BaseService {
         now
       );
     }
+
+    // Offered after the rows exist, never before: a pass that ran first would
+    // do its work and then be handed the very rows it was meant to bound. It
+    // cannot throw — `maybeRun` absorbs its own failures, and this method's
+    // contract is that a recorded send is never reported as a failed one.
+    await this.retention?.maybeRun();
   }
 
   /**

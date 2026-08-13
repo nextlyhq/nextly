@@ -17,20 +17,32 @@ import {
   activeAuditRetention,
   type ResolvedAuditRetentionConfig,
 } from "../audit/retention-config";
+import { pruneEmailDataSafely, type EmailPruneAdapter } from "../email/prune";
+import {
+  activeEmailRetention,
+  type ResolvedEmailRetentionConfig,
+} from "../email/retention-config";
 import { pruneWebhookDataSafely, type PruneDeps } from "../webhooks/prune";
 import type { ResolvedWebhookRetentionConfig } from "../webhooks/retention-config";
 
 import {
   AUDIT_RETENTION_GATE_KEY,
+  EMAIL_RETENTION_GATE_KEY,
   WEBHOOK_RETENTION_GATE_KEY,
   type RetentionGateStore,
 } from "./gate";
 import { RetentionRunner, type RetentionPass } from "./runner";
 
 export interface RetentionPassInput {
-  adapter: AuditPruneAdapter & PruneDeps["adapter"];
+  adapter: AuditPruneAdapter & PruneDeps["adapter"] & EmailPruneAdapter;
   webhookPolicy?: ResolvedWebhookRetentionConfig | null;
   auditPolicy?: ResolvedAuditRetentionConfig;
+  /**
+   * Resolved delivery-log retention. Absent on every path that does not send
+   * mail, which is why the pass is not simply always present: a container built
+   * without the email services has no table to sweep.
+   */
+  emailPolicy?: ResolvedEmailRetentionConfig;
   gate: RetentionGateStore;
   now?: () => Date;
   logger?: Logger;
@@ -82,6 +94,28 @@ export function buildRetentionPasses(
           return;
         }
         await pruneAuditDataSafely(
+          { adapter: input.adapter, now: input.now, logger: input.logger },
+          policy,
+          maxBatches
+        );
+      },
+    });
+  }
+
+  // Read through `activeEmailRetention` for the reason the audit pass is: a
+  // runner built at boot outlives every hot reload, so a policy captured here
+  // would keep pruning on a window the developer has already changed —
+  // including to `false`, where a stale window goes on deleting rows they have
+  // just asked to keep.
+  const email = activeEmailRetention(input.emailPolicy);
+  if (email) {
+    passes.push({
+      key: EMAIL_RETENTION_GATE_KEY,
+      intervalMs: email.intervalMs,
+      run: async maxBatches => {
+        const policy = activeEmailRetention(input.emailPolicy);
+        if (!policy || policy.maxAgeMs === false) return;
+        await pruneEmailDataSafely(
           { adapter: input.adapter, now: input.now, logger: input.logger },
           policy,
           maxBatches

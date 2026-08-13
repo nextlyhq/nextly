@@ -10,6 +10,8 @@ import { EmailErrorCode } from "../../domains/email/errors";
 import { getAttachmentLimits } from "../../domains/email/services/attachment-limits";
 import { EmailDeliveryService } from "../../domains/email/services/email-delivery-service";
 import type { EmailAttachmentSource } from "../../domains/email/services/email-service";
+import { MetaRetentionGate } from "../../domains/retention/gate";
+import { buildRetentionRunner } from "../../domains/retention/passes";
 import { NextlyError } from "../../errors";
 import { EmailProviderService } from "../../services/email/email-provider-service";
 import { EmailService } from "../../services/email/email-service";
@@ -28,7 +30,25 @@ export function registerEmailServices(ctx: RegistrationContext): void {
   // first because the provider service resolves it for test sends.
   container.registerSingleton<EmailDeliveryService>(
     "emailDeliveryService",
-    () => new EmailDeliveryService(adapter, logger)
+    () =>
+      new EmailDeliveryService(
+        adapter,
+        logger,
+        // The sweep is offered by the SEND path rather than by a content write.
+        // `email_deliveries` rows are created by sends, so sends are when the
+        // table grows; a content write has no relationship to email volume, and
+        // an install that never sends mail has nothing here to prune.
+        //
+        // `undefined` when no policy was carried through initialization, which
+        // leaves the log unswept — a real outcome rather than a neutral default,
+        // and the one this wiring exists to prevent.
+        buildRetentionRunner({
+          adapter,
+          emailPolicy: config.emailRetention,
+          gate: new MetaRetentionGate(adapter),
+          logger,
+        })
+      )
   );
 
   // EmailProviderService — CRUD for email provider configurations

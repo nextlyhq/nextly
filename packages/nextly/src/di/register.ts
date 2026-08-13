@@ -42,6 +42,7 @@ import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import type { AuthService } from "../domains/auth/services/auth-service";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
+import type { ResolvedEmailRetentionConfig } from "../domains/email/retention-config";
 import type { EmailDeliveryService } from "../domains/email/services/email-delivery-service";
 import {
   getEmailProviderRegistry,
@@ -308,6 +309,17 @@ export interface NextlyServiceConfig {
    * which case no audit pass is registered and neither trail is pruned.
    */
   auditRetention?: ResolvedAuditRetentionConfig;
+
+  /**
+   * Resolved delivery-log retention.
+   *
+   * Read by the email registration to decide whether to offer a sweep from the
+   * send path. `undefined` means it was never carried through initialization,
+   * in which case nothing prunes `email_deliveries` and the table grows with
+   * every send — which is the state this exists to end, so absence is a real
+   * outcome rather than a neutral default.
+   */
+  emailRetention?: ResolvedEmailRetentionConfig;
 
   /**
    * Whether the audit seam forces outbox recording regardless of endpoints.

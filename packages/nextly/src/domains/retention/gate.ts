@@ -55,6 +55,18 @@ export const WEBHOOK_RETENTION_GATE_KEY = "webhooks.retention.lastPassAt";
  * a pass deletes rows older than a cutoff, so a second one finds less to do
  * rather than doing it twice.
  */
+/**
+ * The delivery log is gated on its own marker, and offered by the SEND path
+ * rather than by a content write.
+ *
+ * Rows in `email_deliveries` are created by sends, so sends are when the table
+ * grows — a content write has no relationship to email volume, and an install
+ * that never sends mail has nothing here to prune. Offering it from the write
+ * paths instead would tie the sweep's cadence to a signal unrelated to what it
+ * removes.
+ */
+export const EMAIL_RETENTION_GATE_KEY = "email.retention.lastPassAt";
+
 export const AUDIT_RETENTION_GATE_KEY = "audit.retention.lastPassAt";
 export const AUDIT_RETENTION_DRAIN_GATE_KEY = "audit.retention.lastDrainPassAt";
 
