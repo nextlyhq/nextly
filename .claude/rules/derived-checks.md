@@ -222,11 +222,22 @@ asked it the question:
   the aliased spelling, the computed value, the member of the population the
   findings clustered around.
 
-If it passes both, the check is fine and the findings are real: keep fixing them,
-and say so rather than leaving the instrument under suspicion. If it fails
-either, the check is the problem, and only then is it worth asking which of
-three things is unreliable — the remedies differ, and applying the wrong one
-looks like diligence:
+One pair per SUBSHAPE, because a family of findings usually is not one shape.
+A scanner that handles a named alias can still misread a namespace alias and a
+default import — three subshapes that look like one "alias" problem, and
+controls built on the first certify nothing about the other two. Each subshape
+that produced a finding needs its own pair.
+
+And passing them certifies the CHECK on those shapes, not the findings. The
+reported instances still have to be judged one at a time: a control proves the
+instrument answers correctly on an input whose answer you knew, which is a
+different claim from every existing report being real. Where the two are
+confused, a green control run quietly converts open findings into resolved ones.
+
+If the controls pass, keep fixing the findings — and say the instrument was
+checked, rather than leaving it under suspicion. If any fails, the check is the
+problem, and only then is it worth asking which of three things is unreliable —
+the remedies differ, and applying the wrong one looks like diligence:
 
 - **The READ** — the check cannot see what it is looking at. Replace the
   instrument, do not extend it. A regex over source becomes a walk over the
