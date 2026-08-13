@@ -51,7 +51,7 @@ export const emailDeliveriesSqlite = sqliteTable(
 
     messageId: text("message_id"),
 
-    /** Reserved and inert — no pass prunes this table. See the PostgreSQL module. */
+    /** Swept by `domains/email/prune.ts`. See the PostgreSQL definition. */
     retentionClass: text("retention_class").notNull(),
 
     /**

@@ -26,13 +26,11 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { type SQL } from "drizzle-orm";
 
 import type { CollectionHooks } from "../collections/config/define-collection";
-import {
-  setAuditRetention,
-  type ResolvedAuditRetentionConfig,
-} from "../domains/audit/retention-config";
+import { type ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
 import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
+import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url";
@@ -1420,7 +1418,7 @@ async function applyReload(opts?: {
     // policy the process explicitly rejected in force — deleting on windows
     // nothing accepted. The runners read the published value at run time, so
     // committing it here is what makes a saved change take effect.
-    setAuditRetention(newConfig?.auditRetention);
+    publishRetentionPolicies(newConfig);
   };
 
   // databaseAdapter doubles as our DI-readiness probe. We don't need any

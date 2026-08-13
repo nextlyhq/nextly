@@ -10,7 +10,10 @@
  */
 
 import { MetaRetentionGate } from "../../domains/retention/gate";
-import { buildRetentionRunner } from "../../domains/retention/passes";
+import {
+  buildRetentionRunner,
+  retentionPoliciesFrom,
+} from "../../domains/retention/passes";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
 import { MediaService as LegacyMediaService } from "../../services/media";
 import { MediaService as UnifiedMediaService } from "../../services/media/media-service";
@@ -59,8 +62,7 @@ export function registerMediaServices(ctx: RegistrationContext): void {
       // mirroring collections and singles.
       buildRetentionRunner({
         adapter,
-        webhookPolicy: ctx.config.webhookRetention,
-        auditPolicy: ctx.config.auditRetention,
+        ...retentionPoliciesFrom(ctx.config),
         gate: new MetaRetentionGate(adapter),
         logger,
       }),

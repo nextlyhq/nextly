@@ -7,9 +7,15 @@
  */
 
 import { EmailErrorCode } from "../../domains/email/errors";
+import { activeEmailRetention } from "../../domains/email/retention-config";
 import { getAttachmentLimits } from "../../domains/email/services/attachment-limits";
 import { EmailDeliveryService } from "../../domains/email/services/email-delivery-service";
 import type { EmailAttachmentSource } from "../../domains/email/services/email-service";
+import { MetaRetentionGate } from "../../domains/retention/gate";
+import {
+  buildRetentionRunner,
+  retentionPoliciesFrom,
+} from "../../domains/retention/passes";
 import { NextlyError } from "../../errors";
 import { EmailProviderService } from "../../services/email/email-provider-service";
 import { EmailService } from "../../services/email/email-service";
@@ -28,7 +34,43 @@ export function registerEmailServices(ctx: RegistrationContext): void {
   // first because the provider service resolves it for test sends.
   container.registerSingleton<EmailDeliveryService>(
     "emailDeliveryService",
-    () => new EmailDeliveryService(adapter, logger)
+    () =>
+      new EmailDeliveryService(
+        adapter,
+        logger,
+        // The sweep is offered by the SEND path rather than by a content write.
+        // `email_deliveries` rows are created by sends, so sends are when the
+        // table grows; a content write has no relationship to email volume, and
+        // an install that never sends mail has nothing here to prune.
+        //
+        // `undefined` when no policy was carried through initialization, which
+        // leaves the log unswept — a real outcome rather than a neutral default,
+        // and the one this wiring exists to prevent.
+        buildRetentionRunner({
+          adapter,
+          // The same derived list every other write path spreads. Scoping this
+          // runner to email alone would make the send the one path that offers
+          // some domains' passes and not others -- the asymmetry that left this
+          // very table swept only by sends, and so never at all once an install
+          // stopped sending.
+          ...retentionPoliciesFrom(config),
+          gate: new MetaRetentionGate(adapter),
+          logger,
+        }),
+        // Derived from the SAME resolution the runner above spreads, not from
+        // the flattened field alone. What is recorded and what is swept are two
+        // halves of one policy, and reading them from different places is how
+        // an install configuring `email.retention.maxAgeMs: 0` through the
+        // public `registerServices()` API got a sweep that honoured it and a
+        // writer that did not — inserting the recipient row it had just asked
+        // never to store.
+        //
+        // Read per call, and through `activeEmailRetention`, so a window saved
+        // during development governs recording as immediately as it governs
+        // sweeping. A value captured here would leave the two disagreeing after
+        // any hot reload.
+        () => activeEmailRetention(retentionPoliciesFrom(config).emailPolicy)
+      )
   );
 
   // EmailProviderService — CRUD for email provider configurations

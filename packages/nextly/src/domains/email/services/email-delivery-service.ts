@@ -6,11 +6,18 @@
  * of each recipient. One row per RECIPIENT, so the question "did this person
  * receive it" has an answer for someone who was copied.
  *
- * **This is a log, not a queue, and nothing prunes it yet.** Nothing drains it,
- * nothing retries, no retention pass reads its `retention_class`, and the
- * reserved columns stay inert — see `schemas/email-deliveries/postgres.ts` for
- * why that distinction is written into the schema rather than only decided
- * here. An install sending at volume will grow this table until a pass exists.
+ * **This is a log, not a queue.** It is PRUNED — `domains/email/prune.ts` sweeps
+ * it by retention class and age, offered from this service after a send is
+ * recorded, because rows here are created by sends and that is when the table
+ * grows. It is still not DRAINED: nothing retries, and `next_attempt_at` and
+ * `attempts` stay inert. See `schemas/email-deliveries/postgres.ts` for why
+ * that distinction is written into the schema rather than only decided here.
+ *
+ * The two halves cover different populations, and neither is sufficient alone.
+ * The sweep bounds every row by age, whoever it belonged to and whichever
+ * secret hashed it. `erase-recipient.ts` answers a named request on demand, and
+ * only for people a caller can name — many recipients never had an account at
+ * all.
  *
  * @module domains/email/services/email-delivery-service
  */
@@ -18,12 +25,13 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import { warnQuietly } from "../../retention/safe-log";
 import {
   deliveriesTableFor,
   type EmailDeliveriesTable,
@@ -32,12 +40,14 @@ import {
   EMAIL_RETENTION_CLASS,
   isErasedRecipientHash,
   recipientDigest,
+  recipientDigests,
   storableError,
   type EmailDeliveryInput,
   type EmailDeliveryRecipientKind,
   type EmailDeliveryStatus,
 } from "../delivery-record";
 import { eraseRecipientDeliveries } from "../erase-recipient";
+import type { ResolvedEmailRetentionConfig } from "../retention-config";
 
 /**
  * Rows per insert statement.
@@ -150,9 +160,67 @@ export interface ListDeliveriesOptions {
 export class EmailDeliveryService extends BaseService {
   private deliveries: EmailDeliveriesTable;
 
-  constructor(adapter: DrizzleAdapter, logger: Logger) {
+  /**
+   * Offered after a send is recorded, when retention is configured.
+   *
+   * The trigger is the send rather than a content write, because rows here are
+   * created by sends: that is when the table grows, and an install that never
+   * sends mail has nothing to sweep. `maybeRun` decides whether a pass is
+   * actually due, so this costs an in-process clock check on an ordinary send.
+   */
+  private readonly retention?: { maybeRun(maxBatches?: number): Promise<void> };
+
+  /**
+   * The live retention policy, or undefined when none was configured.
+   *
+   * A function rather than a value, because a runner built at boot outlives
+   * every hot reload: reading it per call is what lets a saved change take
+   * effect without a restart, and it is the same value the sweep runs on.
+   */
+  private readonly retentionPolicy?: () =>
+    | ResolvedEmailRetentionConfig
+    | undefined;
+
+  constructor(
+    adapter: DrizzleAdapter,
+    logger: Logger,
+    retention?: { maybeRun(maxBatches?: number): Promise<void> },
+    retentionPolicy?: () => ResolvedEmailRetentionConfig | undefined
+  ) {
     super(adapter, logger);
     this.deliveries = deliveriesTableFor(this.dialect);
+    this.retention = retention;
+    this.retentionPolicy = retentionPolicy;
+  }
+
+  /**
+   * Whether this install has asked to keep no delivery history at all.
+   *
+   * A window of zero is not "prune aggressively" — it is an operator saying
+   * they want none of this retained. Writing the row and deleting it later
+   * satisfies neither half of that: the digest is in the table until a pass is
+   * next due, which the gate holds off for a full interval, and the rows
+   * written after the final pass stay indefinitely because nothing offers
+   * another one. Not writing it is the only reading that means what it says.
+   */
+  private keepsNothing(): boolean {
+    // Guarded for the same reason the retention offer below is, and I added
+    // this call without it right beside the one I had just guarded. The
+    // callback is INJECTED and does real work — it resolves the policy from the
+    // config on every send — so a throw here escapes `recordAll`, whose whole
+    // contract is that a provider-accepted send is never reported as failed.
+    //
+    // A failing read means "no zero window", which continues recording. The
+    // other direction would silently stop writing the log the moment a policy
+    // read broke, which is the failure this table exists to make impossible.
+    try {
+      return this.retentionPolicy?.()?.maxAgeMs === 0;
+    } catch (error) {
+      warnQuietly(this.logger, "Email retention policy could not be read", {
+        error,
+      });
+      return false;
+    }
   }
 
   /**
@@ -188,27 +256,68 @@ export class EmailDeliveryService extends BaseService {
   async recordAll(inputs: EmailDeliveryInput[]): Promise<void> {
     if (inputs.length === 0) return;
 
-    const now = new Date();
-    // Generated ONCE, outside the retry below. The provider-reference retry
-    // rewrites the rows it was given, and reusing the ids is what makes it a
-    // REPLACEMENT of the refused rows rather than a second set of them.
-    const ids = inputs.map(() => randomUUID());
+    // A zero window means keep nothing, so nothing is written. The sweep is
+    // still offered below: rows recorded before the setting changed are
+    // exactly what an operator who has just asked for none of this expects to
+    // go, and skipping the offer would strand them permanently.
+    if (!this.keepsNothing()) {
+      const now = new Date();
+      // Generated ONCE, outside the retry below. The provider-reference retry
+      // rewrites the rows it was given, and reusing the ids is what makes it a
+      // REPLACEMENT of the refused rows rather than a second set of them.
+      const ids = inputs.map(() => randomUUID());
 
-    // Written in bounded chunks. One `values()` over an unbounded recipient
-    // list exceeds a dialect's bind-parameter or statement-size limit, and
-    // this method swallows its own failures by design -- so a message with a
-    // large BCC list would be dispatched and then lose EVERY row. Each chunk
-    // fails, retries and reports on its own, so one oversized or unlucky slice
-    // cannot take the rest of the batch with it.
-    for (let start = 0; start < inputs.length; start += INSERT_CHUNK_SIZE) {
-      const end = start + INSERT_CHUNK_SIZE;
-      await this.insertChunk(
-        inputs.slice(start, end),
-        ids.slice(start, end),
-        now
+      // Written in bounded chunks. One `values()` over an unbounded recipient
+      // list exceeds a dialect's bind-parameter or statement-size limit, and
+      // this method swallows its own failures by design -- so a message with a
+      // large BCC list would be dispatched and then lose EVERY row. Each chunk
+      // fails, retries and reports on its own, so one oversized or unlucky
+      // slice cannot take the rest of the batch with it.
+      for (let start = 0; start < inputs.length; start += INSERT_CHUNK_SIZE) {
+        const end = start + INSERT_CHUNK_SIZE;
+        await this.insertChunk(
+          inputs.slice(start, end),
+          ids.slice(start, end),
+          now
+        );
+      }
+    }
+
+    // Offered after the rows exist, never before: a pass that ran first would
+    // do its work and then be handed the very rows it was meant to bound.
+    //
+    // Contained here as well as inside the runner, and the duplication is
+    // deliberate. `retention` is INJECTED, so what arrives is whatever the
+    // composition root or a test handed over, and this method cannot verify
+    // that it absorbs its own failures — while the contract it would break is
+    // this method's own: the rows are already written, so a rejection here
+    // reports an accepted send as a failed one and invites the caller to send
+    // it twice.
+    try {
+      await this.retention?.maybeRun(
+        EmailDeliveryService.WRITE_PATH_PRUNE_BATCHES
       );
+    } catch (error) {
+      warnQuietly(this.logger, "Email retention pass could not be offered", {
+        error,
+      });
     }
   }
+
+  /**
+   * Batches this runner may spend when a SEND offered the pass.
+   *
+   * A write path wants a bounded amount of work, not a backlog sweep. This
+   * runner carries every domain's policy, so an uncapped offer spends each
+   * one's full configured budget — dozens of delete batches by default — while
+   * the caller waits, AFTER the provider has already accepted the message.
+   * Long enough to hit a serverless request timeout, and the caller's natural
+   * response to a timeout is to send the mail again.
+   *
+   * Two, matching the other mutation services. Full-budget sweeps belong to
+   * triggers nothing is waiting on.
+   */
+  private static readonly WRITE_PATH_PRUNE_BATCHES = 2;
 
   /**
    * One bounded slice of a batch: insert it, and recover the one way that can
@@ -412,14 +521,21 @@ export class EmailDeliveryService extends BaseService {
   ): Promise<EmailDeliveryRecord[]> {
     const filters = [
       options.recipient !== undefined
-        ? eq(
+        ? inArray(
             this.deliveries.recipientHash,
             // The MAILBOX, as the writer stored it. A caller asking about
             // `Jane <jane@example.com>` is asking about `jane@example.com`,
             // and hashing what they typed answers "no record" for a message
-            // that was sent. The same function the erasure uses, so a lookup
-            // and a removal can never disagree about which rows are a person's.
-            recipientDigest(options.recipient)
+            // that was sent.
+            //
+            // EVERY generation, matching the erasure exactly. A rotation does
+            // not move the rows already written, so a lookup keyed only on the
+            // current secret stops finding a person's older mail — while a
+            // deletion still removes it. The two would then disagree about
+            // which rows are that person's, which is the one thing this table
+            // cannot afford: an operator answering "what do you hold about me"
+            // from the narrower answer would under-report, and confidently.
+            recipientDigests(options.recipient)
           )
         : undefined,
       options.status !== undefined
