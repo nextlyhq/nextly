@@ -33,8 +33,134 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Decides whether this commit can affect any of the jobs below, so a change
+  # that provably cannot does not occupy a runner for forty-five minutes.
+  #
+  # The filter lives HERE rather than under `on:`, and the difference is not
+  # stylistic. A workflow skipped by `on.paths-ignore` never creates its checks
+  # at all, so the moment any of these becomes a REQUIRED check, a documentation
+  # pull request waits for a status that is never going to be reported. A job
+  # skipped by `if:` reports `skipped`, which branch protection accepts. This
+  # workflow is the likeliest of all of them to be made required, so it takes
+  # the form that survives that being switched on.
+  #
+  # It is an EXCLUSION list, and that direction is the whole safety property. An
+  # inclusion list answers "does this change match something I know needs
+  # testing", so a package nobody remembered to add is silently untested — the
+  # failure is invisible and arrives as a green tick. An exclusion list answers
+  # "is every changed file one I can prove is inert", so anything unrecognised
+  # runs the full suite. Wrong guesses cost minutes instead of coverage.
+  changes:
+    name: Decide what this commit can affect
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      inert: ${{ steps.decide.outputs.inert }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Both refs of the comparison have to be present. A shallow clone
+          # leaves the merge base missing, `git diff` fails, and the fallback
+          # below runs everything — correct, but it would make this job a
+          # permanent no-op that still looks like it is filtering.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Decide
+        id: decide
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -uo pipefail
+
+          # Anything this job cannot read, it does not get to skip. Every early
+          # exit here sets `inert=false`, so a broken comparison costs a full
+          # run rather than silently certifying a commit nobody examined.
+          fail_open() {
+            echo "inert=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Full CI::$1"
+            exit 0
+          }
+
+          if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ]; then
+            fail_open "no base or head SHA for ${{ github.event_name }}; running everything."
+          fi
+          # A first push to a branch reports an all-zero `before`, and a force
+          # push can leave a base that is no longer fetchable.
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            fail_open "base $BASE_SHA is not present; running everything."
+          fi
+
+          CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null) || \
+            fail_open "could not diff $BASE_SHA..$HEAD_SHA; running everything."
+
+          # No files changed is not evidence of inertness — it is the shape of a
+          # comparison that asked the wrong question.
+          if [ -z "$CHANGED" ]; then
+            fail_open "diff listed no files; running everything."
+          fi
+
+          # Paths that cannot change what any job below builds, runs or packs.
+          # Every entry is a CLAIM that nothing here reads it, checked rather
+          # than assumed, and a wrong entry removes real coverage rather than
+          # merely costing minutes.
+          #
+          # Three near-misses are why the list is this narrow, and each one
+          # looked obviously inert until the repository was searched:
+          #
+          #   *.md anywhere  — `packages/ui/README.md` and
+          #                    `packages/ui/docs/plugin-ui-authoring.md` are
+          #                    READ by portal-docs, authoring-doc-tokens and
+          #                    radius-tier-contract, which assert the docs and
+          #                    `theme.css` agree. Only ROOT-level `*.md` is
+          #                    inert; a nested one can fail a test.
+          #   .changeset/    — the changeset check a few steps below diffs
+          #                    `.changeset/*.md` and pipes it through
+          #                    `scripts/release/check-changesets.mjs`.
+          #   docs/          — safe, but only after confirming every hit for a
+          #                    `docs/` read resolved to `packages/ui/docs/`
+          #                    rather than to this one.
+          #
+          # `.github/**` is absent on purpose: this workflow lives there.
+          INERT='^(docs/|\.claude/|[^/]*\.md$|LICENSE$|\.editorconfig$|\.vscode/)'
+
+          NOT_INERT=$(printf '%s\n' "$CHANGED" | grep -vE "$INERT" || true)
+
+          {
+            echo "### CI scope"
+            echo
+            echo "\`$BASE_SHA\` → \`$HEAD_SHA\`, $(printf '%s\n' "$CHANGED" | wc -l | tr -d ' ') file(s) changed."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -z "$NOT_INERT" ]; then
+            # Named individually rather than counted. A summary saying "12 files
+            # skipped" is unreadable as evidence; the list is what lets someone
+            # notice a path that should never have been on it.
+            {
+              echo
+              echo "Every changed file is inert, so the build, test, e2e and"
+              echo "scaffold jobs were skipped. Files:"
+              echo
+              printf '%s\n' "$CHANGED" | sed 's/^/- `/;s/$/`/'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "inert=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo
+            echo "Running in full. First files requiring it:"
+            echo
+            printf '%s\n' "$NOT_INERT" | head -20 | sed 's/^/- `/;s/$/`/'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "inert=false" >> "$GITHUB_OUTPUT"
+
   ci:
     name: Lint / Typecheck / Test / Build
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -321,6 +447,12 @@ jobs:
   #
   # The suite brings up its own playground on its own port, against its own
   # throwaway sqlite file. Nothing here touches a database anyone wanted.
+  # This job and the two below inherit the scope decision through `ci` rather
+  # than repeating its condition: a job whose `needs` was skipped is skipped
+  # too. That is load-bearing, so it survives being read — adding `if:
+  # always()` or `if: !cancelled()` here to make the job run after a FAILING
+  # `ci` also makes it run after a SKIPPED one, which restores the full cost on
+  # every documentation change.
   e2e:
     name: Browser tests
     needs: [ci]

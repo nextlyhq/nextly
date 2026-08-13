@@ -18,6 +18,7 @@ import {
 } from "../di";
 import type { NextlyServiceConfig } from "../di/register";
 import { buildServiceConfig } from "../init/build-service-config";
+import type { PluginDefinition } from "../plugins/plugin-context";
 import { ensureHmrListener } from "../runtime/hmr-listener";
 import { getImageProcessor } from "../storage/image-processor";
 
@@ -31,6 +32,82 @@ let _dispatcher: ServiceDispatcher | null = null;
 let _storedConfig: SanitizedNextlyConfig | null = null;
 
 /**
+ * The plugin list as boot produced it, or undefined before any boot has run.
+ *
+ * Held separately from `_storedConfig` rather than folded into it, because the
+ * two have independent lifecycles: the route config is re-stored every time the
+ * route module is evaluated, while boot transforms the plugin list once per
+ * process. Writing the transformed list INTO the stored config would leave
+ * whichever write happened to land last as the winner — and both orders occur.
+ * A boot through `getNextly()` or instrumentation runs before the route module
+ * is imported, and route-module HMR re-stores the raw config without booting
+ * again. Either way the raw list would silently replace the booted one.
+ *
+ * On `globalThis`, and NOT module-local, for the same reason `register.ts`
+ * keeps its registration state there: Next.js and Turbopack can evaluate this
+ * module in more than one server module graph, so instrumentation's boot may
+ * call `setHandlerPlugins` on one copy while `/admin-meta` reads another. A
+ * module-local value is `null` in the reading copy, and the endpoint falls back
+ * to disclosing the raw, pre-`setup` list — which is the defect this whole seam
+ * exists to remove, reappearing only under a bundler that duplicates modules.
+ *
+ * `_storedConfig` stays module-local deliberately: it is written by
+ * `createDynamicHandlers` in whichever copy the route module imported, and that
+ * same copy serves the request, so it has no cross-graph reader.
+ */
+const globalForBoot = globalThis as unknown as {
+  __nextly_bootPlugins?: PluginDefinition[];
+};
+
+/**
+ * The merged view, and the exact inputs it was built from.
+ *
+ * Module-local rather than global, because one of its inputs is: a merge of
+ * THIS copy's `_storedConfig` with the shared list. Keyed on the IDENTITY of
+ * both inputs rather than cleared by the writers — a write may land in a
+ * different module copy than the reader, so an invalidation call cannot be
+ * relied on to arrive, while an identity check cannot miss.
+ */
+let _bootView: SanitizedNextlyConfig | null = null;
+let _bootViewInputs: {
+  config: SanitizedNextlyConfig;
+  plugins: PluginDefinition[];
+} | null = null;
+
+/**
+ * The stored config as it BOOTED — the raw route config with boot's plugin list
+ * in place of the declared one.
+ *
+ * Derived at read time, never written back into `_storedConfig`, because the
+ * two answer different questions and only one of them is a registration input.
+ * `_storedConfig` is what `requestPathServiceConfig` hands to
+ * `registerServices`, and boot runs every plugin's `setup` transformer over it.
+ * Folding the transformed list back in would make the next registration
+ * transform boot's OWN OUTPUT: the dev recovery path re-registers when no
+ * localization baseline exists, and an append-style transformer would then
+ * duplicate its plugins and fail slug or route validation.
+ *
+ * Only the plugins are taken from boot: the transformed config carries no
+ * `typescript`, `db` or `storage`, so adopting it wholesale would silently drop
+ * three fields this store holds.
+ */
+function bootView(): SanitizedNextlyConfig | null {
+  const config = _storedConfig;
+  const plugins = globalForBoot.__nextly_bootPlugins;
+  if (!config || !plugins) return config;
+
+  if (
+    !_bootView ||
+    _bootViewInputs?.config !== config ||
+    _bootViewInputs?.plugins !== plugins
+  ) {
+    _bootView = { ...config, plugins };
+    _bootViewInputs = { config, plugins };
+  }
+  return _bootView;
+}
+
+/**
  * Store the nextly config for use during service initialization.
  * Called by `createDynamicHandlers({ config })` in routeHandler.ts.
  */
@@ -39,12 +116,36 @@ export function setHandlerConfig(config: SanitizedNextlyConfig): void {
 }
 
 /**
- * Retrieve the stored nextly config.
+ * Record the plugin list boot produced, and re-point the store at it.
+ *
+ * The store is populated when the route module is imported, which is the
+ * earliest the config exists and is before any `setup` transformer has run.
+ * Boot then transforms the list — a transformer may add, remove, or flip the
+ * `enabled` flag on a plugin — and the public admin-meta endpoint reads this
+ * store WITHOUT initializing services, so without this it describes plugins as
+ * their author declared them rather than as they actually booted.
+ *
+ * Takes the config's own `plugins` shape, optional included, and reads an
+ * absent list as an empty one. A boot that registered no plugins and a boot
+ * whose transformers removed them all are the same fact — the store must stop
+ * advertising the plugins the author declared — and normalizing here rather
+ * than at the call site leaves the caller no branch in which to disagree.
+ */
+export function setHandlerPlugins(
+  plugins: PluginDefinition[] | undefined
+): void {
+  globalForBoot.__nextly_bootPlugins = plugins ?? [];
+}
+
+/**
+ * Retrieve the stored nextly config, as it BOOTED.
+ *
  * Used by the admin-meta endpoint to read branding config without going
- * through the service dispatcher.
+ * through the service dispatcher. Readers of this see boot's plugin list;
+ * service registration reads `_storedConfig` directly and sees the raw one.
  */
 export function getHandlerConfig(): SanitizedNextlyConfig | null {
-  return _storedConfig;
+  return bootView();
 }
 
 /**
