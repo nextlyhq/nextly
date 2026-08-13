@@ -106,6 +106,17 @@ export interface BuilderShellProps {
    * Where chrome preferences live. Defaults to `localStorage` in a browser and
    * to a store that remembers nothing anywhere else, so a server render is a
    * default rather than a crash.
+   *
+   * **Pass a NEW object whenever the data behind it changes** — a different
+   * signed-in user, a different workspace. The shell reloads preferences when
+   * this identity changes, and cannot see a store that quietly starts reading
+   * somewhere else: it would go on showing the previous user's panel widths and
+   * write their preferences into the new target.
+   *
+   * This is the same contract React puts on any value it compares by identity,
+   * and it keeps the port at two methods. The alternative — a subscription or a
+   * revision token — is a third method every host has to implement correctly
+   * for a case that a new object already solves.
    */
   store?: PreferenceStore;
   className?: string;
@@ -177,9 +188,18 @@ function usePreferences(store: PreferenceStore) {
    * loads that user's preferences, and a guard that already fired leaves the
    * previous user's widths on screen.
    *
-   * A counter rather than the store's identity, because it is the LOAD that
-   * matters: it advances on every read, so a host that passes the same store
-   * object after changing what is behind it still gets a fresh restoration.
+   * A counter rather than the store's identity because it is what the guard
+   * downstream compares against, and it says WHICH load was applied rather than
+   * merely that one was.
+   *
+   * It does NOT detect a host mutating the data behind a store it keeps
+   * handing us: the read below is keyed on the store's identity, so an
+   * unchanged object means no read happens at all and this never advances.
+   * That is the documented contract on `store` — a new backing user or
+   * workspace is a new store object — rather than a gap. Detecting it instead
+   * would mean a subscription or a revision token on the port, which is a
+   * third method every host implementing it would have to get right, for a
+   * case a caller can satisfy by passing a new object.
    */
   const [loadCount, setLoadCount] = React.useState(0);
 
@@ -289,22 +309,62 @@ function useRestoredLayout(
   loadCount: number
 ): void {
   const applied = React.useRef(-1);
+  /**
+   * The widths the panels declare, captured before anything is restored over
+   * them.
+   *
+   * Needed because there is no "reset" on the group. A load whose store has NO
+   * saved layout has to put the declared widths back, and by the time that
+   * happens the live layout is the PREVIOUS store's — so the defaults have to
+   * have been remembered from before the first restoration.
+   */
+  const declared = React.useRef<Record<string, number> | null>(null);
 
   React.useEffect(() => {
     const group = groupRef.current;
-    if (group === null || layout === null || applied.current === loadCount) {
+    if (group === null || applied.current === loadCount) return;
+
+    const live = group.getLayout();
+    const mountedIds = Object.keys(live);
+    // Captured on the first run of this effect, which is before any restoration
+    // has been applied, so these really are the declared widths.
+    declared.current ??= live;
+
+    // On the FIRST load there is nothing to reset from — the panels already
+    // carry their declared widths — so a store with no saved layout is simply
+    // a no-op. The defaults are replayed only for a LATER load, which is a
+    // store swap, where what is on screen belongs to the previous store.
+    const isFirstLoad = applied.current === -1;
+    const target = layout ?? (isFirstLoad ? null : declared.current);
+    if (target === null || Object.keys(target).length === 0) {
+      applied.current = loadCount;
+      return;
+    }
+    // Not an error, and not permanent: the panel may simply not have mounted
+    // yet. `leftPanel` is a dependency so this runs again once the topology
+    // settles. Also guards the defaults snapshot, which belongs to whichever
+    // topology was mounted when it was taken.
+    if (
+      mountedIds.length !== Object.keys(target).length ||
+      !mountedIds.every(id => target[id] !== undefined)
+    ) {
       return;
     }
 
-    const mounted = Object.keys(group.getLayout()).sort().join(",");
-    const stored = Object.keys(layout).sort().join(",");
-    // Not an error, and not permanent: the panel may simply not have mounted
-    // yet. `leftPanel` is in the dependencies so this runs again when the
-    // topology settles.
-    if (mounted !== stored) return;
-
     applied.current = loadCount;
-    group.setLayout(layout);
+    // Rebuilt in the MOUNTED order rather than passed through as-is. The
+    // library validates `Object.values(layout)` positionally against its panel
+    // constraints, while a `Record` arriving through the public store port
+    // carries whatever key order the host's JSON happened to have — so an
+    // alphabetised `{canvas, inspector, panel}` would be constrained as though
+    // it were `{panel, canvas, inspector}` and the saved widths clamped to the
+    // wrong bounds. Object key order is insertion order, so rebuilding fixes it.
+    const ordered: Record<string, number> = {};
+    for (const id of mountedIds) {
+      const value = target[id];
+      if (value !== undefined) ordered[id] = value;
+    }
+    group.setLayout(ordered);
     // `leftPanel` is not read in the body. It is a dependency because it is what
     // changes the panel set, and the comparison above depends on that having
     // settled.

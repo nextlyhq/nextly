@@ -47,7 +47,7 @@
   ],
   "scripts": {
     "build": "rimraf dist && tsup && tsup --config tsup.server-safe.config.ts && pnpm run build:css",
-    "dev": "tsup --watch & tsup --config tsup.server-safe.config.ts --watch & pnpm run dev:css & wait",
+    "dev": "node scripts/dev.mjs",
     "check-types": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
