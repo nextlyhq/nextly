@@ -40,30 +40,51 @@ note beside it, because the failure it prevents looks exactly like a pass:
 
 ```sh
 PR=<number>
-BR=$(gh pr view "$PR" --json headRefName --jq .headRefName)   # ASK, never recall
-TIP=$(git ls-remote origin "refs/heads/$BR" | cut -f1)
+read -r CROSS OWNER REPO BR GH < <(gh pr view "$PR" \
+  --json isCrossRepository,headRepositoryOwner,headRepository,headRefName,headRefOid \
+  --jq '[.isCrossRepository,.headRepositoryOwner.login,.headRepository.name,
+         .headRefName,.headRefOid]|@tsv')
+# A fork's branch does not exist on `origin`, and asking origin for it returns
+# the same empty string a deleted branch does.
+REMOTE=origin
+[ "$CROSS" = true ] && REMOTE="https://github.com/$OWNER/$REPO.git"
+TIP=$(git ls-remote "$REMOTE" "refs/heads/$BR" | cut -f1)
 if [ -z "$TIP" ]; then
-  echo "PR#$PR: no such ref on origin — NOT CHECKABLE, which is not clean" >&2
+  echo "PR#$PR: no such ref on $REMOTE — NOT CHECKABLE, which is not clean" >&2
   exit 2
 fi
-GH=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)     # what actually merged
-git fetch origin "$TIP" --quiet
-git log --oneline "$GH..$TIP"          # any output = commits that never merged
+git fetch "$REMOTE" "$TIP" --quiet
+git log --oneline "$GH..$TIP"          # candidates: commits absent from the merge
 ```
 
 **An empty `TIP` degenerates the range and the check reports clean without
-having looked.** Two things produce it, and the second is far likelier than the
-first:
+having looked.** Three things produce it, and only the first is unanswerable:
 
-- the branch was deleted after merging — the answer is NOT CHECKABLE;
+- the branch was deleted after merging — NOT CHECKABLE;
+- **the PR came from a FORK**, so its branch was never on `origin` at all. This
+  one is the trap, because the empty result is indistinguishable from deletion
+  and invites exactly the wrong conclusion. `isCrossRepository` is what settles
+  it, so query the head repository rather than the base;
 - **`$BR` names no ref**, because it was typed from memory or from a task file
   rather than read from `headRefName`. Measured here: a lane checked a PR that
   HAD stranded a commit, used a branch name one word off from the real head ref,
   got an empty tip, and concluded the branch had been auto-deleted. The branch
   existed the whole time, and the correct query reports the stranded commit.
 
-Derive the name in the same command that uses it, and treat an empty tip as a
+Derive every field in the same command that uses it, and treat an empty tip as a
 refusal to answer.
+
+**Output is a CANDIDATE LIST, not a verdict.** The range says only "absent from
+the merged head", and a surviving branch collects commits for other reasons: it
+was force-pushed or rebased, it was reused for follow-up work, or someone kept
+pushing after the merge. Each is legitimately absent from the squash and none is
+a lost tail. Screen with this, then confirm each named commit by CONTENT against
+the merge commit — a marker unique to it, scoped to the path it changed — before
+calling anything lost. Cheap in both directions: the screen costs one command
+and the confirmation is what you can put in a claim.
+
+The symmetry is the point. Reading the range as a verdict OVER-reports; every
+instrument in the table below UNDER-reports. Only the pairing answers.
 
 Measured against a PR known to have lost two commits and one known intact:
 
@@ -184,10 +205,22 @@ The danger window is push-a-fix-then-merge-immediately, which is what everyone
 does once CI is green and threads are cleared. A PR has already merged here
 missing its last commit, reading as complete with every thread resolved.
 
-**Detection is cleanup; the gate is the fix.** Re-read `git ls-remote` in the
-SAME step as the merge and confirm the tip still matches the revision the green
-checks belong to, restarting the gate if it moved. Everything in this file runs
-after something has already shipped.
+**Detection is cleanup; the gate is the fix.** Everything else in this file runs
+after something has already shipped. Merge with the head you verified as a
+PRECONDITION, so the merge itself refuses when the branch has moved:
+
+```sh
+gh pr merge "$PR" --squash --admin --match-head-commit "$SHA"
+```
+
+`$SHA` is the revision the green checks and the clean review belong to.
+
+Re-reading `ls-remote` immediately before merging is better than not, and it is
+still two operations: a push arriving between the read and the merge is exactly
+the window being closed, and narrowing a race is not closing one. `--match-head-commit`
+makes the check and the merge a single atomic operation on GitHub's side, which
+is the difference between a boundary and a look — and this file exists because a
+look was taken and the branch moved anyway.
 
 ## A red head is grounds to look, not a finding
 
