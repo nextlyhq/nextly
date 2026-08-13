@@ -5,7 +5,13 @@
  * rather than an error.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AdminBranding } from "@admin/types/branding";
@@ -154,6 +160,26 @@ describe("plugin detail, not installed", () => {
     expect(
       await screen.findByText('import "@nextlyhq/plugin-form-builder/admin";')
     ).toBeInTheDocument();
+  });
+
+  /**
+   * Page Builder needs both the module and its stylesheet. Form Builder needs
+   * only the module, so a page that showed a stylesheet line for it would be
+   * naming a subpath that does not resolve.
+   */
+  it("asks for the editor stylesheet only where the package exports one", async () => {
+    renderDetail("nextlyhq-plugin-page-builder");
+    expect(
+      await screen.findByText(
+        'import "@nextlyhq/plugin-page-builder/styles/editor.css";'
+      )
+    ).toBeInTheDocument();
+
+    cleanup();
+
+    renderDetail("nextlyhq-plugin-form-builder");
+    await screen.findByText('import "@nextlyhq/plugin-form-builder/admin";');
+    expect(screen.queryByText("Editor stylesheet")).toBeNull();
   });
 
   /**

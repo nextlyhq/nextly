@@ -64,6 +64,18 @@ export interface RegistryPlugin {
      * about the package's export map that only some plugins have.
      */
     adminModule?: boolean;
+    /**
+     * The package subpath of a stylesheet the admin route must import, when
+     * the plugin ships one.
+     *
+     * Separate from `adminModule` because they are separate facts: the
+     * page builder's `/admin` entry registers components and imports no CSS,
+     * so an app that takes only the module gets a registered editor with none
+     * of its layout — the shell, grid, toolbar and panes all come from
+     * `styles/editor.css`. The subpath is stored rather than assumed, since
+     * only some packages export one and they need not agree on its name.
+     */
+    adminStyles?: string;
   };
   links?: { homepage?: string; repository?: string; docs?: string };
 }

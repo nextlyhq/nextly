@@ -15,6 +15,7 @@ import { adminVersion } from "@admin/lib/admin-version";
 import pkg from "../../../../../package.json";
 import {
   adminImportStatement,
+  adminStylesImport,
   importStatement,
   installCommand,
   pluginsArrayEntry,
@@ -111,6 +112,31 @@ describe("config lines", () => {
     // told to import one, or the recipe names a subpath that does not resolve.
     expect(
       adminImportStatement(entry({ exportName: "thing", callArgs: "" }))
+    ).toBeUndefined();
+  });
+
+  /**
+   * Separate from the admin module, because they are separate facts about the
+   * package. Page Builder's `/admin` entry imports no CSS, so a reader who
+   * takes only the module gets a registered editor with no layout at all.
+   */
+  it("asks for the stylesheet only when the package exports one", () => {
+    expect(
+      adminStylesImport(
+        entry({
+          exportName: "thing",
+          callArgs: "",
+          adminStyles: "styles/editor.css",
+        })
+      )
+    ).toBe('import "@acme/thing/styles/editor.css";');
+
+    // A plugin with an admin module but no stylesheet must not be told to
+    // import one — the two are independent.
+    expect(
+      adminStylesImport(
+        entry({ exportName: "thing", callArgs: "", adminModule: true })
+      )
     ).toBeUndefined();
   });
 

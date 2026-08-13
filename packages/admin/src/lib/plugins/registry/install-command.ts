@@ -102,6 +102,20 @@ export function adminImportStatement(
   return plugin.config.adminModule ? `import "${plugin.id}/admin";` : undefined;
 }
 
+/**
+ * The stylesheet import the admin route needs, for plugins that ship one.
+ *
+ * A separate line from `adminImportStatement`, because the module and the
+ * stylesheet are separate imports in the same file and a plugin can ship
+ * either without the other. Taking only the module leaves the editor
+ * registered and unstyled, which looks like a broken build rather than a
+ * missing step.
+ */
+export function adminStylesImport(plugin: RegistryPlugin): string | undefined {
+  const subpath = plugin.config.adminStyles;
+  return subpath ? `import "${plugin.id}/${subpath}";` : undefined;
+}
+
 export function pluginsArrayEntry(plugin: RegistryPlugin): string {
   const { exportName, callArgs } = plugin.config;
   return callArgs === null ? exportName : `${exportName}(${callArgs})`;

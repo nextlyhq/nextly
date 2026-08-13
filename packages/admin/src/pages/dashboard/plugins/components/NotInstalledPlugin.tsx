@@ -11,6 +11,7 @@ import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
 import {
   PACKAGE_MANAGERS,
   adminImportStatement,
+  adminStylesImport,
   importStatement,
   installCommand,
   pluginsArrayEntry,
@@ -136,6 +137,7 @@ export function NotInstalledPlugin({
   const [manager, setManager] = useState<PackageManager>("pnpm");
   const label = categoryLabel(plugin.category);
   const adminImport = adminImportStatement(plugin);
+  const adminStyles = adminStylesImport(plugin);
 
   return (
     <div className="max-w-3xl">
@@ -210,18 +212,28 @@ export function NotInstalledPlugin({
           label="Plugins array entry"
           value={pluginsArrayEntry(plugin)}
         />
-        {adminImport && (
-          <div className="border-t border-border pt-4">
-            <p className="mb-3 text-xs text-muted-foreground">
-              This plugin also ships admin UI, which is registered by importing
-              it in your admin route page. Skip it and the plugin still loads —
-              its editors just fall back to plain inputs.
+        {(adminImport || adminStyles) && (
+          <div className="space-y-3 border-t border-border pt-4">
+            <p className="text-xs text-muted-foreground">
+              This plugin also ships admin UI, registered by importing it in
+              your admin route page. Skip these and the plugin still loads — its
+              editors just fall back to plain inputs
+              {adminStyles ? ", and render unstyled" : ""}.
             </p>
-            <CopyLine
-              label="Admin route import"
-              value={adminImport}
-              file="app/admin/[[...params]]/page.tsx"
-            />
+            {adminImport && (
+              <CopyLine
+                label="Admin route import"
+                value={adminImport}
+                file="app/admin/[[...params]]/page.tsx"
+              />
+            )}
+            {adminStyles && (
+              <CopyLine
+                label="Editor stylesheet"
+                value={adminStyles}
+                file="app/admin/[[...params]]/page.tsx"
+              />
+            )}
           </div>
         )}
       </section>

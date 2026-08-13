@@ -44,7 +44,10 @@ export function PluginCard({
   return (
     <Link
       href={buildRoute(ROUTES.PLUGIN_DETAIL, { slug: pluginSlug(plugin.id) })}
-      className="group flex h-full flex-col gap-3 rounded-lg border border-border bg-card p-4 text-left transition-colors hover:border-primary/40 hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      // `primary/50` on the hover border, not a fainter tint: this is a
+      // non-text affordance signalling that the card is interactive, so it
+      // owes 3:1 against the page surface. /40 measures 2.84:1.
+      className="group flex h-full flex-col gap-3 rounded-lg border border-border bg-card p-4 text-left transition-colors hover:border-primary/50 hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <div className="flex items-start gap-3">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border bg-muted/40">

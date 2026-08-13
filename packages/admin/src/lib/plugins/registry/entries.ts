@@ -31,7 +31,12 @@ export const REGISTRY_ENTRIES: RegistryPlugin[] = [
     category: "content",
     tags: ["blocks", "editor", "pages"],
     icon: { lucide: "Layout" },
-    config: { exportName: "pageBuilder", callArgs: "", adminModule: true },
+    config: {
+      exportName: "pageBuilder",
+      callArgs: "",
+      adminModule: true,
+      adminStyles: "styles/editor.css",
+    },
     links: {
       homepage: "https://nextlyhq.com",
       repository: "https://github.com/nextlyhq/nextly",
