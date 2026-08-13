@@ -709,6 +709,16 @@ export type OpPosition =
 export interface SlotAddress {
   readonly parentId: string;
   readonly slot: string;
+  /**
+   * Whether the placement created the parent's `slots` container itself.
+   *
+   * Removing the last slot is not the same edit as removing the container that
+   * held it. A parent that arrived with an explicit `slots: {}` — which the
+   * page-builder preserves deliberately for a block whose type it does not
+   * recognise — must get that back, not lose the field. Only a placement that
+   * created both may take both away.
+   */
+  readonly containerCreated?: boolean;
 }
 
 export type BuilderOp =
@@ -1198,7 +1208,22 @@ function assertForestEntries(nodes: BlockNode[]): void {
   // list is what every check below reads from.
   assertListIsData(nodes, "a document's nodes");
   const pending: unknown[] = [];
-  for (const entry of nodes) pending.push(entry);
+  // Budgeted while enqueueing, like every other list this walk reads. Copying
+  // the root array first means a cheap sparse `Array(100_000_000)` allocates a
+  // hundred million pending entries before the first `undefined` can earn a
+  // refusal — the work bounded by what the caller declared rather than by what
+  // a document may hold.
+  let rootParts = 0;
+  for (const entry of nodes) {
+    if (rootParts++ > MAX_VALUE_PARTS) {
+      throw new OpError(
+        `a document holding more than ${String(MAX_VALUE_PARTS)} top-level ` +
+          `entries cannot be edited: no document may hold that many nodes, so ` +
+          `the answer is settled before the list is read.`
+      );
+    }
+    pending.push(entry);
+  }
   // Every node reached, so a document that holds itself is refused rather than
   // walked forever. A forest is a tree by intent and not by construction: an
   // in-process document can be handed to `applyOp` with a node inside its own
@@ -1470,6 +1495,13 @@ function assertDropSlot(address: unknown, verb: string): void {
         `rather than the node's own children.`
     );
   }
+  const { containerCreated } = address;
+  if (containerCreated !== undefined && typeof containerCreated !== "boolean") {
+    throw new OpError(
+      `${verb}: a slot to drop says its container was created as ` +
+        `${describe(containerCreated)}, which answers neither yes nor no.`
+    );
+  }
 }
 
 /** Whether `parentId` already holds a slot called `slot`. */
@@ -1493,7 +1525,13 @@ function slotCreatedBy(
 ): SlotAddress | undefined {
   if (at.parentId === undefined) return undefined;
   if (parentHasSlot(nodes, at)) return undefined;
-  return { parentId: at.parentId, slot: at.slot };
+  const parent = findNode(nodes, at.parentId);
+  const containerCreated = parent !== undefined && parent.slots === undefined;
+  return {
+    parentId: at.parentId,
+    slot: at.slot,
+    ...(containerCreated ? { containerCreated: true } : {}),
+  };
 }
 
 /**
@@ -1513,10 +1551,11 @@ function dropEmptySlot(nodes: BlockNode[], address: SlotAddress): BlockNode[] {
     if (current.id !== address.parentId) return current;
     const slots = { ...(current.slots ?? {}) };
     delete slots[address.slot];
-    // The key removed rather than set to `undefined`: a document is stored as
-    // JSON, where an absent key and one holding `undefined` are the same
-    // document — but every reader between here and storage sees the difference.
-    return Object.keys(slots).length === 0
+    // The container goes only if this placement made it. A parent that arrived
+    // with an explicit `slots: {}` gets that back: removing the last slot and
+    // removing the field that held it are different edits, and the second is
+    // not one the placement performed.
+    return Object.keys(slots).length === 0 && address.containerCreated === true
       ? omitSlots(current)
       : { ...current, slots };
   });
@@ -1548,6 +1587,16 @@ function rebuild(
     }
     return { ...mapped, slots };
   });
+}
+
+/** A node without the named keys, for an update that removed fields. */
+function withoutKeys(node: BlockNode, keys: readonly string[]): BlockNode {
+  const next: Record<string, unknown> = { ...node };
+  for (const key of keys) delete next[key];
+  // Asserted rather than narrowed: `keys` has already been established as
+  // removable fields, which are optional on `BlockNode` by construction, so
+  // what remains satisfies the type — but only the runtime check knows that.
+  return next as unknown as BlockNode;
 }
 
 /** A node without its `slots` key, for a parent whose last slot just went. */
@@ -2223,10 +2272,13 @@ export function applyOp(
       assertPatchNames(op);
       const touched = [...Object.keys(op.patch), ...(op.unset ?? [])];
       const before = priorValues(node, touched);
-      // `unset` becomes `undefined` only HERE, at the moment of applying. The
-      // engine's spread leaves the key present holding `undefined`, which the
-      // document sheds the next time it is serialized; the op itself never
-      // carries that value, so persisting it loses nothing.
+      // `unset` becomes `undefined` only HERE, at the moment of applying, and
+      // the key is DELETED immediately afterwards. The engine's spread leaves
+      // it present holding `undefined`, which serializing sheds — but nothing
+      // serializes between one op and the next, and a field holding `undefined`
+      // is not a value JSON can write. So the store handed back a document its
+      // own next call refused: undoing an update that added `customCss`
+      // succeeded, and the redo threw.
       const removals = Object.fromEntries(
         (op.unset ?? []).map(key => [key, undefined])
       ) as NodePatch;
@@ -2270,10 +2322,21 @@ export function applyOp(
       // An update changes no node count and is the easiest way past the byte
       // cap: one large string in `props` is a document the engine will refuse
       // to store, written by an edit nothing objected to.
-      const updated = updateNode(nodes, op.id, {
+      const written = updateNode(nodes, op.id, {
         ...snapshot(op.patch),
         ...removals,
       });
+      // The keys removed rather than left holding `undefined`. A document is
+      // stored as JSON, where an absent key and one holding `undefined` are the
+      // same document — but every reader between here and storage sees the
+      // difference, and this module's own value check is one of them.
+      const cleared = op.unset ?? [];
+      const updated =
+        cleared.length === 0
+          ? written
+          : rebuild(written, current =>
+              current.id === op.id ? withoutKeys(current, cleared) : current
+            );
       assertFitsCaps(document, withNodes(document, updated), "update", limits);
       return {
         document: withNodes(document, updated),

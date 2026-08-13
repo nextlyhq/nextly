@@ -2033,6 +2033,60 @@ describe("an inverse that names a parent held twice", () => {
     ).toMatchObject({ future: { added: "by a later version" } });
   });
 
+  it("undoes an unset without leaving a field the next op refuses", () => {
+    // Clearing a field left an own property holding `undefined`. Serializing
+    // sheds it, but nothing serializes between one op and the next, and a field
+    // holding `undefined` is not a value JSON can write — so the store handed
+    // back a document its own next call refused.
+    const before = doc([node("a")]);
+    const named = applyOp(before, {
+      kind: "update",
+      id: "a",
+      patch: { name: "given" },
+    });
+    const cleared = applyOp(named.document, {
+      kind: "update",
+      id: "a",
+      // An empty patch, because the vocabulary requires one even when an update
+      // only clears fields. Awkward rather than wrong, and noted rather than
+      // changed here: the shape of an update belongs to the format design pass.
+      patch: {},
+      unset: ["name"],
+    });
+
+    expect(
+      Object.hasOwn(
+        cleared.document.nodes[0] as unknown as Record<string, unknown>,
+        "name"
+      ),
+      "a cleared field must be gone, not present holding undefined"
+    ).toBe(false);
+    // The op that used to throw: any edit at all on the returned document.
+    expect(() => applyOp(cleared.document, cleared.inverse)).not.toThrow();
+  });
+
+  it("gives back an empty slots container the placement did not create", () => {
+    // Removing the last slot and removing the field that held it are different
+    // edits. A parent that arrived with an explicit `slots: {}` — which the
+    // page-builder keeps deliberately for a block type it does not recognise —
+    // must get that back rather than lose the field.
+    const parent = { ...node("outer"), slots: {} } as unknown as BlockNode;
+    const before = doc([parent]);
+
+    const placed = applyOp(before, {
+      kind: "insert",
+      node: node("dropped"),
+      at: { parentId: "outer", slot: "aside", index: 0 },
+    });
+    const undone = applyOp(placed.document, placed.inverse);
+
+    expect(undone.document).toEqual(before);
+    expect(
+      undone.document.nodes[0]?.slots,
+      "the container must come back, not vanish with its slot"
+    ).toEqual({});
+  });
+
   it("undoes a placement that created a slot, slot and all", () => {
     // Placing into a region the parent does not have makes the engine create
     // it. Undo removes the node; without the created slot recorded on the
