@@ -199,21 +199,32 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
+          cache: pnpm
 
-      # No install: the script reads the manifest and fetches the release index using built-ins
-      # only. It FAILS rather than falling back to a shorter list, since a narrower matrix passes
-      # while covering less, which is the failure this job exists to prevent one level up.
+      # The script is TypeScript, so this installs to get `tsx`. Node can strip types natively
+      # from 22.6, which would avoid the install — but `engines.node` supports 20.19, where it
+      # cannot, and a contributor whose local build works differently from CI is a worse cost than
+      # one install. Scoped to this package so it stays short.
+      - name: Install
+        run: pnpm install --frozen-lockfile --filter @nextlyhq/ui...
+
+      # The script reads the manifest and fetches the release index using built-ins only. It FAILS
+      # rather than falling back to a shorter list, since a narrower matrix passes while covering
+      # less, which is the failure this job exists to prevent one level up.
       # A pull request runs one leg, and that leg comes from the manifest alone — so it does not
       # fetch. Otherwise an outage at nodejs.org would fail a UI pull request that never needed the
       # released majors, letting an outside service decide whether unrelated work can merge.
       - name: Derive
         id: derive
         run: |
-          node packages/ui/scripts/node-matrix.mjs --github \
+          pnpm --filter @nextlyhq/ui exec tsx scripts/node-matrix.ts --github \
             ${{ github.event_name == 'pull_request' && '--floor-only' || '' }}
 
   server-safe-rsc-build:
@@ -272,7 +283,7 @@ jobs:
       # covered without editing this workflow. A hand-written import list would
       # keep passing on the entries someone remembered.
       - name: Write the Server Component app
-        run: node packages/ui/scripts/write-server-safe-rsc-app.mjs /tmp/rsc-app
+        run: pnpm --filter @nextlyhq/ui exec tsx scripts/write-server-safe-rsc-app.ts /tmp/rsc-app
 
       # Majors are pinned so a Next or React release cannot turn this nightly red
       # for a reason that has nothing to do with the package under test; moving
@@ -319,7 +330,7 @@ jobs:
       # Runs LAST, because it audits both halves: that the route was rendered at build time rather
       # than merely compiled, and that the CommonJS probe reached the end of its own run.
       - name: Verify the render happened and both halves covered every subpath
-        run: node packages/ui/scripts/write-server-safe-rsc-app.mjs --verify /tmp/rsc-app
+        run: pnpm --filter @nextlyhq/ui exec tsx scripts/write-server-safe-rsc-app.ts --verify /tmp/rsc-app
 
   # A red nightly must surface without anyone watching the Actions tab. A red
   # pull request does not need an issue filed: it is already red on the PR, in

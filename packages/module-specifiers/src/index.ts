@@ -19,7 +19,7 @@
  * reach": a bundler can INLINE a dependency, and the specifier then exists
  * nowhere in the output, so no source reader can see it. That question is
  * answered by reading the built artifact and the bundler's metafile, which
- * `packages/ui/scripts/check-server-safe-artifacts.mjs` does deliberately
+ * `packages/ui/scripts/check-server-safe-artifacts.ts` does deliberately
  * separately.
  *
  * @module @nextlyhq/module-specifiers

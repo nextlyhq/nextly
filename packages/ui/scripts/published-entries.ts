@@ -91,6 +91,17 @@ const SUPPORTED_TARGETS = new Set(["types", "default"]);
  * package throws `ERR_REQUIRE_ESM` at the first consumer to try it, because CI ignores attw's
  * `cjs-resolves-to-esm` rule. Checking the extension here is what makes that unshippable.
  */
+/**
+ * `Object.entries` with the key type preserved.
+ *
+ * The built-in widens keys to `string`, which then cannot index a record keyed by a union — so
+ * every per-condition lookup would need a cast. Narrowing once here keeps the call sites honest
+ * about which conditions exist.
+ */
+function typedEntries<T extends object>(value: T): [keyof T, T[keyof T]][] {
+  return Object.entries(value) as [keyof T, T[keyof T]][];
+}
+
 const REQUIRED_EXTENSION = {
   importTypes: ".d.ts",
   requireTypes: ".d.cts",
@@ -98,17 +109,56 @@ const REQUIRED_EXTENSION = {
   requireDefault: ".cjs",
 };
 
+/** One published entry point. */
+export interface PublishedEntry {
+  /** The export key, such as `.` or `./color`. */
+  subpath: string;
+  /** The barrel it is built from, relative to the package root. */
+  source: string;
+  /** The build entry's key, such as `index` or `color`. */
+  name: string;
+  /** The declaration files it resolves to, ESM then CJS. */
+  declarations: string[];
+  /** The JavaScript files it resolves to, ESM then CJS. */
+  artifacts: string[];
+  /** Whether it is importable from server code. */
+  serverSafe: boolean;
+}
+
+/** A barrel this package declares as a build entry. */
+export interface DeclaredBarrel {
+  /** The barrel it is built from, relative to the package root. */
+  source: string;
+  /** Whether it is client code, and so carries a `"use client"` banner. */
+  client: boolean;
+}
+
 /**
- * One published entry point.
+ * One condition's target in an export map.
  *
- * @typedef {object} PublishedEntry
- * @property {string} subpath The export key, such as `.` or `./color`.
- * @property {string} source The barrel it is built from, relative to the package root.
- * @property {string} name The build entry's key, such as `index` or `color`.
- * @property {string[]} declarations The declaration files it resolves to, ESM then CJS.
- * @property {string[]} artifacts The JavaScript files it resolves to, ESM then CJS.
- * @property {boolean} serverSafe Whether it is importable from server code.
+ * Read structurally rather than trusted: a map is free to omit any of these, and every guard
+ * downstream depends on knowing WHICH condition a path came from — so the shape is declared and
+ * the absence of a target is an error the caller raises, not a `undefined` that flows onward.
  */
+interface ConditionTarget {
+  types?: string;
+  default?: string;
+}
+
+/**
+ * A subpath's entry in an export map: a plain string for a stylesheet, or per-condition targets.
+ *
+ * Conditions other than `import` and `require` are permitted by the index signature because a map
+ * is free to declare them — `react-server` is the one this package's guards refuse deliberately,
+ * and refusing it requires being able to READ it. A type that admitted only the two conditions
+ * would make the unsupported case unrepresentable, and a guard cannot reject what it cannot model.
+ */
+type ExportTarget =
+  | string
+  | ({
+      import?: ConditionTarget;
+      require?: ConditionTarget;
+    } & Record<string, ConditionTarget | string | undefined>);
 
 /**
  * The published entry points implied by an export map and a set of declared barrels.
@@ -121,12 +171,14 @@ const REQUIRED_EXTENSION = {
  * target, two subpaths sharing an artifact — and a check that can only ever run against the real
  * `package.json` proves that today's map is acceptable, not that the check works.
  *
- * @param {Record<string, unknown>} exportMap The `exports` field to read.
- * @param {Record<string, {source: string, client: boolean}>} sources The declared barrels.
- * @returns {PublishedEntry[]}
+ * @param exportMap The `exports` field to read.
+ * @param sources The declared barrels.
  */
-export function derivePublishedEntries(exportMap, sources) {
-  const entries = [];
+export function derivePublishedEntries(
+  exportMap: Record<string, ExportTarget>,
+  sources: Record<string, DeclaredBarrel>
+): PublishedEntry[] {
+  const entries: PublishedEntry[] = [];
 
   for (const [subpath, target] of Object.entries(exportMap ?? {})) {
     // A stylesheet maps straight to its file. Every other direct target is refused rather than
@@ -170,23 +222,33 @@ export function derivePublishedEntries(exportMap, sources) {
     // assumes they share it, and a map is free not to: the guards would then inspect files that
     // are emitted but never selected, while the ones `import` and `require` actually resolve to
     // go unchecked.
-    const paths = {
+    const declaredTargets: Record<
+      keyof typeof REQUIRED_EXTENSION,
+      string | undefined
+    > = {
       importTypes: target.import?.types,
       requireTypes: target.require?.types,
       importDefault: target.import?.default,
       requireDefault: target.require?.default,
     };
 
-    for (const [condition, value] of Object.entries(paths)) {
+    // The check PRODUCES the narrowed record rather than only throwing beside it. Validating in
+    // one loop and reading in the next leaves every later use holding `string | undefined` — the
+    // guarantee exists at runtime and not in the type, so each call site either repeats the check
+    // or asserts past it. Building `paths` here means a missing target cannot reach them at all.
+    const paths = {} as Record<keyof typeof REQUIRED_EXTENSION, string>;
+    for (const [condition, value] of typedEntries(declaredTargets)) {
       if (typeof value !== "string") {
         throw new Error(
           `The export "${subpath}" has no ${condition} target, so the file a consumer resolves ` +
             "to cannot be checked. Give it one, or exclude the entry from the export map."
         );
       }
+      paths[condition] = value;
     }
 
-    const file = value => value.replace(/^\.\//, "").replace(/^dist\//, "");
+    const file = (value: string): string =>
+      value.replace(/^\.\//, "").replace(/^dist\//, "");
 
     // Every target must carry the extension its condition requires, and all four must be the SAME
     // build entry under those extensions. tsup names its output after the entry, so that is the
@@ -194,8 +256,8 @@ export function derivePublishedEntries(exportMap, sources) {
     // complete. Derived from `import.default` alone, a map whose `require` targets borrowed
     // ANOTHER entry's basename passed every guard while `require("./a")` resolved to `./b`'s API
     // and `import "./a"` resolved to its own.
-    const buildNames = new Set();
-    for (const [condition, value] of Object.entries(paths)) {
+    const buildNames = new Set<string>();
+    for (const [condition, value] of typedEntries(paths)) {
       const extension = REQUIRED_EXTENSION[condition];
       if (!value.endsWith(extension)) {
         throw new Error(
