@@ -66,6 +66,24 @@ input would hand you a document the engine still rejects, with the diagnostic
 already discarded — so unknown fields survive, and a malformed token reference
 stays malformed for the engine to report.
 
+> **Known limitation: the caps assume an ordinary object.** `parseBlockDocument`
+> establishes its size, depth and node bounds by reading property descriptors,
+> and then hands the same value to the schema, which reads it by ordinary
+> property access. For anything `JSON.parse` produces, or any object you built
+> yourself, those two readings are identical.
+>
+> A `Proxy` can make them differ. One whose descriptors report an empty array
+> while its `get` returns thousands of nodes passes every bound and is then
+> walked in full, so the bounds do not hold for it. A non-enumerable named
+> property on an array is invisible in the same way, and survives on the value
+> you get back although storage drops it.
+>
+> Both have the same cause — two readers of one untrusted value — and the fix is
+> to have the bounded walk produce the value everything downstream uses, which
+> changes what this function RETURNS and so is being done as its own change
+> rather than folded in here. **Pass a value you own, or one from
+> `JSON.parse`, and neither case arises.**
+
 **It answers a narrower question than the engine does.** The schema asks _is
 this the block document format at all_; `validate(doc, ctx)` asks _is this a
 legal document for this app_, against the blocks that are actually registered
