@@ -21,6 +21,8 @@ import {
   withMigrationLockSurface,
   type MigrationLockSurfaceOptions,
 } from "../../../field-groups/migration/__tests__/helpers/migration-lock-double";
+import { FieldGroupMetadataService } from "../../../field-groups/services/field-group-metadata-service";
+import type { FieldGroupRegistryService } from "../../../field-groups/services/field-group-registry-service";
 import { SingleMetadataService } from "../../../singles/services/single-metadata-service";
 import type { SingleRegistryService } from "../../../singles/services/single-registry-service";
 
@@ -172,5 +174,93 @@ describe("a schema change and the storage migration contend for one row", () => 
     expect(registry.registerSingle).not.toHaveBeenCalled();
     // Released on the way out, so a refusal does not strand the row it took to make the decision.
     expect(adapter.migrationLock.ownerNow()).toBeNull();
+  });
+});
+
+/**
+ * The same properties for the other service that was wrapped.
+ *
+ * Kept as its own block rather than folded into the singles cases, because "the singles wrapper
+ * works" says nothing about the field-group one — they are separate call sites and either could be
+ * removed with every assertion above still passing.
+ */
+describe("a field-group create contends for the same row", () => {
+  function makeFieldGroupService(adapter: ReturnType<typeof makeAdapter>) {
+    const registry = {
+      // Answers "no field group owns that table" so the create reaches the DDL path.
+      getAllComponents: vi.fn().mockResolvedValue([]),
+      registerComponent: vi.fn(async (row: unknown) => row),
+    };
+    const service = new FieldGroupMetadataService(
+      registry as unknown as FieldGroupRegistryService,
+      logger,
+      adapter as unknown as DrizzleAdapter
+    );
+    return { service, registry };
+  }
+
+  const FIELD_GROUP_INPUT = {
+    slug: "hero",
+    label: "Hero",
+    tableName: "comp_hero",
+    fields: [{ name: "heading", type: "text" }],
+    source: "ui",
+    locked: false,
+    schemaHash: "hash-for-the-fields-above",
+  };
+
+  const createFieldGroup = (service: FieldGroupMetadataService) =>
+    service.createFieldGroup(
+      FIELD_GROUP_INPUT as unknown as Parameters<
+        typeof service.createFieldGroup
+      >[0]
+    );
+
+  it("holds the lock while the work runs", async () => {
+    const adapter = makeAdapter();
+    let ownerDuringWork: string | null = null;
+    const { service, registry } = makeFieldGroupService(adapter);
+    registry.registerComponent.mockImplementation(async (row: unknown) => {
+      ownerDuringWork = adapter.migrationLock.ownerNow();
+      return row;
+    });
+
+    await createFieldGroup(service);
+
+    expect(ownerDuringWork).toMatch(/^create field group "hero"#/);
+    expect(adapter.migrationLock.ownerNow()).toBeNull();
+  });
+
+  it("refuses, and builds nothing, while another run holds the lock", async () => {
+    const adapter = makeAdapter({ heldBy: "storage migration#other-run" });
+    const { service, registry } = makeFieldGroupService(adapter);
+
+    await expect(createFieldGroup(service)).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+    });
+
+    expect(executed.filter(sql => !isMigrationLockStatement(sql))).toEqual([]);
+    expect(registry.registerComponent).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing at all when the input itself is impossible", async () => {
+    // Taking the exclusion may CREATE and seed the lock table, so a request rejected on its own
+    // contents must be rejected BEFORE that. Otherwise a create refused for a name the database
+    // could never store has still written to the database it is about to report leaving untouched.
+    //
+    // Asserted over EVERY statement rather than only the entity's: here the lock's own DDL is the
+    // thing that must not have run, so filtering it out would remove the evidence.
+    const adapter = makeAdapter({ lockTableExists: false });
+    const { service, registry } = makeFieldGroupService(adapter);
+
+    await expect(
+      service.createFieldGroup({
+        ...FIELD_GROUP_INPUT,
+        tableName: `comp_${"x".repeat(80)}`,
+      } as unknown as Parameters<typeof service.createFieldGroup>[0])
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    expect(executed).toEqual([]);
+    expect(registry.registerComponent).not.toHaveBeenCalled();
   });
 });

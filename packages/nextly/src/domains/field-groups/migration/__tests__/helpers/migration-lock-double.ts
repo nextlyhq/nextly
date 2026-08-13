@@ -19,6 +19,7 @@
 import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 
+import { NextlyError } from "../../../../../errors/nextly-error";
 import { MIGRATION_LOCK_TABLE } from "../../session";
 
 /** The single row the lock is: whether it has been seeded at all, and who holds it. */
@@ -68,7 +69,13 @@ export function interpretLockStatement(
     if (lock.owner === params[1]) lock.owner = null;
     return [];
   }
-  throw new Error(`unrecognised statement: ${flat}`);
+  // `NextlyError.internal` rather than a bare `Error`: this fires only when the statements the
+  // session issues have moved and this interpreter has not, which is a programming mistake in the
+  // same sense the session's own `internal` refusals are.
+  throw NextlyError.internal({
+    logMessage: `migration lock double met an unrecognised statement: ${flat}`,
+    logContext: { reason: "unrecognised migration lock statement", flat },
+  });
 }
 
 /**

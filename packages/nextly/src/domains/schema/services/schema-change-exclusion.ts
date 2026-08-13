@@ -66,6 +66,10 @@ export async function withSchemaChangeExcluded<T>(
       logger: args.logger,
       label: args.label,
       mayCreateLock: args.issuesDdl,
+      // A schema change holds its claim to the end. The signal does not stop `work`, so releasing
+      // here would hand the row to a migration while this change was still writing its DDL and its
+      // registry row — neither atomic nor idempotent, and the exact overlap being prevented.
+      releaseOnInterrupt: false,
     },
     work
   );

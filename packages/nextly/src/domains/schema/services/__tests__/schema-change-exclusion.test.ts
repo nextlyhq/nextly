@@ -16,17 +16,26 @@ const trace: string[] = [];
 /** Set to make the exclusion refuse, standing in for a migration already in flight. */
 const refusal: { error: unknown } = { error: undefined };
 /** What the services asked for, so the arguments are observed rather than assumed. */
-const excludeArgs: { label?: string; mayCreateLock?: boolean }[] = [];
+const excludeArgs: {
+  label?: string;
+  mayCreateLock?: boolean;
+  releaseOnInterrupt?: boolean;
+}[] = [];
 
 vi.mock("../../../field-groups/migration/sync-guard", () => ({
   withMigrationExcluded: vi.fn(
     async (
-      args: { label: string; mayCreateLock: boolean },
+      args: {
+        label: string;
+        mayCreateLock: boolean;
+        releaseOnInterrupt: boolean;
+      },
       work: () => Promise<unknown>
     ) => {
       excludeArgs.push({
         label: args.label,
         mayCreateLock: args.mayCreateLock,
+        releaseOnInterrupt: args.releaseOnInterrupt,
       });
       if (refusal.error !== undefined) throw refusal.error;
       trace.push("exclusion:held");
@@ -37,6 +46,7 @@ vi.mock("../../../field-groups/migration/sync-guard", () => ({
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { NextlyError } from "../../../../errors/nextly-error";
 import type { Logger } from "../../../../shared/types";
 import { SingleMetadataService } from "../../../singles/services/single-metadata-service";
 import type { SingleRegistryService } from "../../../singles/services/single-registry-service";
@@ -136,7 +146,12 @@ describe("a Schema Builder change and the storage migration exclude each other",
     // alone would pass on a service that created the table and then refused.
     const adapter = makeAdapter();
     const { service, registry } = makeService(adapter);
-    refusal.error = new Error("a field group storage migration is in flight");
+    // The error production actually raises, not a bare stand-in: a test that asserts a refusal
+    // propagates should propagate the shape callers will meet.
+    refusal.error = NextlyError.serviceUnavailable({
+      logMessage: "a field group storage migration is in flight",
+      logContext: { reason: "field group storage migration is in flight" },
+    });
 
     await expect(
       service.createSingle({
@@ -145,7 +160,7 @@ describe("a Schema Builder change and the storage migration exclude each other",
         tableName: "single_page",
         fields: [{ name: "heading", type: "text" }],
       } as unknown as Parameters<typeof service.createSingle>[0])
-    ).rejects.toThrow(/in flight/);
+    ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
 
     expect(trace).toEqual([]);
     expect(adapter.executeQuery).not.toHaveBeenCalled();
@@ -166,10 +181,23 @@ describe("a Schema Builder change and the storage migration exclude each other",
       fields: [],
     } as unknown as Parameters<typeof service.createSingle>[0]);
     await service.deleteSingle("page", "single_page");
+    // A flags-only save: `fields` absent means the plan renders no DDL, which is the update shape
+    // most likely to be thought too small to need the exclusion.
+    await service.updateSingleSchema({
+      slug: "page",
+      existing: { slug: "page", tableName: "single_page", fields: [] },
+      updateData: { label: "Page renamed" },
+      isLocalized: false,
+      wasLocalized: false,
+      hasStatus: false,
+      wasStatus: false,
+      statusRequested: false,
+    } as unknown as Parameters<typeof service.updateSingleSchema>[0]);
 
     expect(excludeArgs.map(a => a.label)).toEqual([
       'create single "page"',
       'delete single "page"',
+      'update single schema "page"',
     ]);
   });
 
@@ -183,5 +211,19 @@ describe("a Schema Builder change and the storage migration exclude each other",
     await service.deleteSingle("page", "single_page");
 
     expect(excludeArgs[0]?.mayCreateLock).toBe(true);
+  });
+
+  it("keeps the claim through an interrupt, because the work is not idempotent", async () => {
+    // The signal does not stop the work. A session that released here would hand the row to a
+    // storage migration while this change was still between its DDL and its registry write, which
+    // is the overlap the exclusion exists to prevent — so a schema change opts OUT of the release a
+    // schema SYNC opts into. Observed from the arguments the service actually passes rather than
+    // restated here, so rewording the option cannot leave this asserting a value nobody reads.
+    const adapter = makeAdapter();
+    const { service } = makeService(adapter);
+
+    await service.deleteSingle("page", "single_page");
+
+    expect(excludeArgs[0]?.releaseOnInterrupt).toBe(false);
   });
 });
