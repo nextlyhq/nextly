@@ -30,11 +30,23 @@ import {
   CommandList,
   CommandSeparator,
   CommandShortcut,
+  DialogDescription,
+  DialogTitle,
   useShortcuts,
 } from "@nextlyhq/ui";
 import * as React from "react";
+import { flushSync } from "react-dom";
 
-/** The keystroke that opens the palette, and the one nearly every editor uses for it. */
+/**
+ * The keystroke that OPENS the palette, and the one nearly every editor uses for it.
+ *
+ * Opening only, never toggling. `CommandDialog` renders cmdk's `<Command>` internally and
+ * forwards no props to it, so its vim bindings cannot be turned off from here — and those
+ * bindings claim Ctrl+K for "move selection up" and call `preventDefault()`. The shortcut manager
+ * skips an event another handler already prevented, so on Windows and Linux a toggle would open
+ * the palette and then refuse to close it. Escape closes, which is what Radix already gives us
+ * and what VS Code does. Better to not make the promise than to keep it on one platform.
+ */
 export const COMMAND_PALETTE_KEYS = "mod+k";
 
 /**
@@ -78,6 +90,15 @@ export interface CommandPaletteProps {
   placeholder?: string;
   /** Shown when nothing matches what was typed. */
   emptyMessage?: string;
+  /**
+   * Whether the palette may be opened at all. Defaults to true.
+   *
+   * The dialog PORTALS to the document body, so it escapes any `hidden` or `inert` wrapper the
+   * host has put its own subtree behind — a shell that has disabled itself below a minimum width
+   * would still get an interactive palette floating over its narrow-screen notice. A host in that
+   * state passes false, which both stops the hotkey and closes an already-open palette.
+   */
+  enabled?: boolean;
 }
 
 /**
@@ -86,29 +107,40 @@ export interface CommandPaletteProps {
  * `when` is evaluated here rather than at registration, so a command that becomes available while
  * the palette is open appears on the next render instead of being fixed at mount.
  *
- * Groups keep the order of first appearance rather than being sorted. A palette that reorders
- * itself between openings makes muscle memory impossible, and alphabetical order is not the order
- * anyone thinks in.
+ * NAMED groups keep the order of first appearance rather than being sorted. A palette that
+ * reorders itself between openings makes muscle memory impossible, and alphabetical order is not
+ * the order anyone thinks in.
+ *
+ * Ungrouped commands are partitioned to the FRONT rather than taking their place in that order.
+ * They render without a heading, so leaving them where they first appeared would let a host that
+ * happened to list a grouped command first push a headingless run of items between two named
+ * groups, where they read as belonging to the group above them.
  */
 function groupAvailable(
   commands: readonly BuilderCommand[]
 ): { group?: string; commands: BuilderCommand[] }[] {
-  const order: (string | undefined)[] = [];
+  const namedOrder: string[] = [];
   const byGroup = new Map<string | undefined, BuilderCommand[]>();
 
   for (const command of commands) {
     if (command.when && !command.when()) continue;
-    if (!byGroup.has(command.group)) {
-      byGroup.set(command.group, []);
-      order.push(command.group);
+    let bucket = byGroup.get(command.group);
+    if (!bucket) {
+      bucket = [];
+      byGroup.set(command.group, bucket);
+      if (command.group !== undefined) namedOrder.push(command.group);
     }
-    byGroup.get(command.group)?.push(command);
+    bucket.push(command);
   }
 
-  return order.map(group => ({
-    group,
-    commands: byGroup.get(group) ?? [],
-  }));
+  const ungrouped = byGroup.get(undefined);
+  return [
+    ...(ungrouped ? [{ group: undefined, commands: ungrouped }] : []),
+    ...namedOrder.map(group => ({
+      group,
+      commands: byGroup.get(group) ?? [],
+    })),
+  ];
 }
 
 /**
@@ -124,10 +156,14 @@ export function CommandPalette({
   onOpenChange,
   placeholder = "Search commands…",
   emptyMessage = "No matching commands.",
+  enabled = true,
 }: CommandPaletteProps): React.JSX.Element {
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
   const isControlled = controlledOpen !== undefined;
-  const open = isControlled ? controlledOpen : uncontrolledOpen;
+  // One expression decides whether the palette is showing, so `enabled` cannot be honoured by the
+  // hotkey and ignored by the dialog. A host that disables itself while the palette is already
+  // open closes it by that alone, without needing to drive `open` as well.
+  const open = enabled && (isControlled ? controlledOpen : uncontrolledOpen);
 
   const setOpen = React.useCallback(
     (next: boolean) => {
@@ -155,21 +191,33 @@ export function CommandPalette({
           // The browser binds `mod+k` to the address bar in some hosts, and the palette losing
           // the keystroke to the chrome is the one failure a user cannot work around.
           event.preventDefault();
-          latest.current.setOpen(!latest.current.open);
+          // Open, never toggle — see COMMAND_PALETTE_KEYS. Pressing it again while open is a
+          // no-op rather than a close.
+          latest.current.setOpen(true);
         },
       },
     ],
-    { name: "command-palette" }
+    {
+      name: "command-palette",
+      enabled,
+      // While open the palette is a modal and owns the keyboard: without this the shell's own
+      // bindings still fire underneath it, so F6 would move focus between panels the user cannot
+      // see. The manager already exempts text insertion and Tab, so the search field and the
+      // dialog's focus trap keep working.
+      blocking: open,
+    }
   );
 
   const groups = groupAvailable(commands);
 
   const choose = React.useCallback(
     (command: BuilderCommand) => {
-      // Closed BEFORE running. A command that opens a dialog of its own, or moves focus, competes
-      // with a palette that is still unmounting, and the palette losing that race leaves focus
-      // somewhere neither component chose.
-      setOpen(false);
+      // Closed BEFORE running, and FLUSHED rather than queued. A plain `setOpen(false)` only
+      // schedules the re-render, so `run()` would execute with the dialog still mounted and its
+      // focus trap still holding — and a command that opens a dialog of its own or moves focus
+      // then competes with a palette that is only just unmounting, leaving focus somewhere
+      // neither component chose.
+      flushSync(() => setOpen(false));
       command.run();
     },
     [setOpen]
@@ -177,6 +225,16 @@ export function CommandPalette({
 
   return (
     <CommandDialog open={open} onOpenChange={setOpen}>
+      {/*
+       * Visually hidden, but the dialog's accessible name and description all the same:
+       * `CommandDialog` renders neither, so without these a screen reader announces an unnamed
+       * dialog and Radix logs a missing-description warning. The search field's placeholder is
+       * not a substitute — it names the INPUT, not the dialog that wraps it.
+       */}
+      <DialogTitle className="sr-only">Command palette</DialogTitle>
+      <DialogDescription className="sr-only">
+        Search for a command and press Enter to run it.
+      </DialogDescription>
       <CommandInput placeholder={placeholder} />
       <CommandList>
         <CommandEmpty>{emptyMessage}</CommandEmpty>

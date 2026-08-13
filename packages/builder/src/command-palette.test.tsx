@@ -14,7 +14,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ShortcutProvider } from "@nextlyhq/ui";
+import { ShortcutProvider, useShortcuts } from "@nextlyhq/ui";
 
 import { CommandPalette, type BuilderCommand } from "./command-palette";
 
@@ -49,6 +49,12 @@ function mount(ui: React.ReactElement) {
 function pressPaletteKey() {
   fireEvent.keyDown(document, { key: "k", metaKey: true });
   fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+}
+
+/** A `mod`-chorded host binding, sent both ways for the same reason as {@link pressPaletteKey}. */
+function pressHostChord() {
+  fireEvent.keyDown(document, { key: "b", metaKey: true });
+  fireEvent.keyDown(document, { key: "b", ctrlKey: true });
 }
 
 const noop = () => {};
@@ -120,14 +126,56 @@ describe("the palette offers what the host gives it", () => {
     // A palette that reorders itself between openings makes muscle memory impossible.
     expect(headings).toEqual(["Zulu", "Alpha"]);
   });
+
+  it("lists ungrouped commands first even when a group was supplied before them", () => {
+    // The ordering the type documents. Supplying the GROUPED command first is the whole test:
+    // first-appearance order alone would put the headingless item between two named groups, where
+    // it reads as belonging to the heading above it.
+    mount(
+      <CommandPalette
+        commands={[
+          { id: "1", label: "Grouped thing", group: "Panels", run: noop },
+          { id: "2", label: "Loose thing", run: noop },
+          { id: "3", label: "Other grouped", group: "View", run: noop },
+        ]}
+      />
+    );
+    pressPaletteKey();
+
+    const rows = screen
+      .getAllByText(/^(Grouped thing|Loose thing|Other grouped)$/)
+      .map(n => n.textContent);
+    expect(rows).toEqual(["Loose thing", "Grouped thing", "Other grouped"]);
+  });
 });
 
 describe("running a command", () => {
-  it("asks to close BEFORE it runs the command", () => {
-    // Asserted as CALL ORDER rather than as a closed dialog. `setOpen` is a React state update,
-    // so the DOM cannot have re-rendered by the time a synchronous `run` executes — a test
-    // checking for a vanished element would fail against correct code and tempt someone to
-    // "fix" it by running the command first, which is the ordering this exists to prevent.
+  it("is already gone from the DOM by the time the command runs", () => {
+    // The assertion the ordering exists to earn, and the one a queued `setOpen` cannot satisfy:
+    // the palette must be UNMOUNTED inside `run()`, not merely scheduled to close. A command that
+    // opens a dialog of its own or moves focus competes with a palette still holding the focus
+    // trap, and the palette losing that race leaves focus somewhere neither component chose.
+    let mountedDuringRun: boolean | undefined;
+    mount(
+      <CommandPalette
+        commands={[
+          {
+            id: "act",
+            label: "Do the thing",
+            run: () => {
+              mountedDuringRun = screen.queryByText("Do the thing") !== null;
+            },
+          },
+        ]}
+      />
+    );
+    pressPaletteKey();
+    fireEvent.click(screen.getByText("Do the thing"));
+
+    expect(mountedDuringRun).toBe(false);
+  });
+
+  it("reports the close to a controlling host before running", () => {
     const order: string[] = [];
     mount(
       <CommandPalette
@@ -141,9 +189,17 @@ describe("running a command", () => {
 
     fireEvent.click(screen.getByText("Do the thing"));
 
-    // A command that opens a dialog of its own, or moves focus, competes with a palette still
-    // unmounting; asking to close first is what settles that race.
     expect(order).toEqual(["close:false", "run"]);
+  });
+
+  it("gives the dialog an accessible name and description", () => {
+    mount(<CommandPalette commands={[]} placeholder="Search commands…" />);
+    pressPaletteKey();
+
+    // `CommandDialog` renders neither, and the input's placeholder names the INPUT rather than
+    // the dialog — so without these a screen reader announces an unnamed dialog.
+    const dialog = screen.getByRole("dialog", { name: "Command palette" });
+    expect(dialog.getAttribute("aria-describedby")).toBeTruthy();
   });
 
   it("reports the empty state rather than an empty list", () => {
@@ -171,6 +227,112 @@ describe("the host can drive it", () => {
 
     fireEvent.click(screen.getByText("Visible now"));
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("opens on the hotkey and stays open when it is pressed again", () => {
+    mount(
+      <CommandPalette
+        commands={[{ id: "a", label: "Still here", run: noop }]}
+      />
+    );
+
+    pressPaletteKey();
+    expect(screen.getByText("Still here")).toBeTruthy();
+
+    // Open-only, deliberately. cmdk's vim bindings claim Ctrl+K inside the palette and
+    // `preventDefault()` it, so a toggle would close on Apple platforms and refuse to on
+    // Windows and Linux. Escape closes on all three.
+    pressPaletteKey();
+    expect(screen.getByText("Still here")).toBeTruthy();
+  });
+
+  it("cannot be opened while the host has it disabled", () => {
+    mount(
+      <CommandPalette
+        commands={[{ id: "a", label: "Should not appear", run: noop }]}
+        enabled={false}
+      />
+    );
+
+    pressPaletteKey();
+
+    // The dialog portals out of any `inert` wrapper the host put itself behind, so refusing the
+    // hotkey is the host's only way to keep the palette off a screen it has disabled.
+    expect(screen.queryByText("Should not appear")).toBeNull();
+  });
+
+  it("closes an open palette when the host becomes disabled", () => {
+    const commands: BuilderCommand[] = [
+      { id: "a", label: "Open already", run: noop },
+    ];
+    const { rerender } = mount(<CommandPalette commands={commands} open />);
+    expect(screen.getByText("Open already")).toBeTruthy();
+
+    // A shell that narrows past its minimum width disables itself while the palette is already
+    // up; `enabled` alone has to close it, without the host also driving `open`.
+    rerender(
+      <ShortcutProvider>
+        <CommandPalette commands={commands} open enabled={false} />
+      </ShortcutProvider>
+    );
+
+    expect(screen.queryByText("Open already")).toBeNull();
+  });
+
+  it("holds the keyboard while open, so host shortcuts do not fire underneath it", () => {
+    const hostShortcut = vi.fn();
+    /**
+     * Stands in for the shell. Bound to `mod+b` rather than to the shell's own bare F6 on
+     * purpose: a bare function key is skipped while the user is typing anyway, and the palette
+     * autofocuses its search field — so an F6 probe would go quiet whether or not the layer
+     * blocks, and pass against an unblocked palette. A non-shift modifier fires WHILE typing,
+     * which leaves the blocking layer as the only thing that can suppress it.
+     */
+    function Host() {
+      useShortcuts(
+        [{ keys: "mod+b", description: "A host binding", run: hostShortcut }],
+        { name: "host" }
+      );
+      return null;
+    }
+    // Rendered BEFORE the palette so it registers first: layers at equal depth are ordered by
+    // registration, newest on top, which is the arrangement a real shell produces too.
+    mount(
+      <>
+        <Host />
+        <CommandPalette
+          commands={[{ id: "a", label: "Anything", run: noop }]}
+        />
+      </>
+    );
+
+    // The positive control. Without it, a probe that never reached the manager would report the
+    // suppression below whether or not the layer blocks anything.
+    pressHostChord();
+    expect(hostShortcut).toHaveBeenCalledTimes(1);
+
+    pressPaletteKey();
+    pressHostChord();
+
+    // Still once. Acting on a shell the user cannot see behind the modal is exactly the
+    // confusion a blocking layer exists to prevent.
+    expect(hostShortcut).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the keystroke to the browser when it is disabled", () => {
+    mount(<CommandPalette commands={[]} enabled={false} />);
+
+    const event = new KeyboardEvent("keydown", {
+      key: "k",
+      ctrlKey: true,
+      cancelable: true,
+      bubbles: true,
+    });
+    document.dispatchEvent(event);
+
+    // A disabled layer must not consume the chord: swallowing `mod+k` while refusing to act on
+    // it would take the browser's own shortcut away and give nothing back.
+    expect(event.defaultPrevented).toBe(false);
   });
 
   it("refuses to mount outside a shortcut owner", () => {
