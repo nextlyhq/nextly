@@ -6,11 +6,18 @@
  * of each recipient. One row per RECIPIENT, so the question "did this person
  * receive it" has an answer for someone who was copied.
  *
- * **This is a log, not a queue, and nothing prunes it yet.** Nothing drains it,
- * nothing retries, no retention pass reads its `retention_class`, and the
- * reserved columns stay inert — see `schemas/email-deliveries/postgres.ts` for
- * why that distinction is written into the schema rather than only decided
- * here. An install sending at volume will grow this table until a pass exists.
+ * **This is a log, not a queue.** It is PRUNED — `domains/email/prune.ts` sweeps
+ * it by retention class and age, offered from this service after a send is
+ * recorded, because rows here are created by sends and that is when the table
+ * grows. It is still not DRAINED: nothing retries, and `next_attempt_at` and
+ * `attempts` stay inert. See `schemas/email-deliveries/postgres.ts` for why
+ * that distinction is written into the schema rather than only decided here.
+ *
+ * The two halves cover different populations, and neither is sufficient alone.
+ * The sweep bounds every row by age, whoever it belonged to and whichever
+ * secret hashed it. `erase-recipient.ts` answers a named request on demand, and
+ * only for people a caller can name — many recipients never had an account at
+ * all.
  *
  * @module domains/email/services/email-delivery-service
  */

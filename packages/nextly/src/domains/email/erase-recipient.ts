@@ -85,6 +85,15 @@ export type ErasableDeliveriesTable = Table & { recipientHash: Column };
  * keeping a list of the addresses that asked to be forgotten, which is the
  * opposite of the request.
  *
+ * That includes a send already IN FLIGHT when the deletion commits: it finishes
+ * afterwards and records a row carrying a live digest for someone who has just
+ * been deleted. Accepted deliberately rather than closed. Re-reading the
+ * deletion before each write would pay a query on every send and still leave
+ * the window open between the check and the write, and the only construction
+ * that truly closes it is the tombstone list this paragraph already rejects.
+ * The retention sweep is what bounds it: the row ages out on the ordinary
+ * window rather than persisting indefinitely.
+ *
  * @param db - The caller's open transaction.
  * @param deliveries - The dialect's delivery table.
  * @param address - The recipient, in any form a sender may have written it.
