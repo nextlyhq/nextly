@@ -62,7 +62,6 @@ import { fileURLToPath } from "node:url";
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { twMerge } from "tailwind-merge";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
@@ -158,27 +157,38 @@ interface Utility {
 /**
  * Split a class into the parts that decide whether it beats another.
  *
- * Bracket depth is tracked because a variant can contain a colon of its own —
- * `data-[state=active]` — and splitting on the first one would truncate it.
+ * Every colon is judged at bracket depth zero, for both the final separator and
+ * the variants before it. A bracketed selector can hold colons of its own —
+ * `data-[state=active]`, `[&>span:hover]` — and a plain `split(":")` over the
+ * prefix cuts the second of those into `[&>span` and `hover]`. Neither fragment
+ * is then recognisable as anything, so a rule aimed at a child reads as a rule
+ * aimed at the tab.
  */
-function utilityOf(cls: string): Utility {
-  const important = cls.includes("!");
-  const plain = withoutImportance(cls);
+function splitAtDepthZero(text: string): string[] {
+  const parts: string[] = [];
   let depth = 0;
-  let lastSeparator = -1;
-  for (let i = 0; i < plain.length; i += 1) {
-    const character = plain[i];
+  let start = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const character = text[i];
     if (character === "[") depth += 1;
     else if (character === "]") depth -= 1;
-    else if (character === ":" && depth === 0) lastSeparator = i;
+    else if (character === ":" && depth === 0) {
+      parts.push(text.slice(start, i));
+      start = i + 1;
+    }
   }
+  parts.push(text.slice(start));
+  return parts;
+}
+
+function utilityOf(cls: string): Utility {
+  const important = cls.includes("!");
+  const segments = splitAtDepthZero(withoutImportance(cls));
   return {
     important,
-    variants:
-      lastSeparator >= 0
-        ? plain.slice(0, lastSeparator).split(":").filter(Boolean)
-        : [],
-    bare: lastSeparator >= 0 ? plain.slice(lastSeparator + 1) : plain,
+    // The last segment is the utility; everything before it qualifies it.
+    bare: segments[segments.length - 1] ?? "",
+    variants: segments.slice(0, -1).filter(Boolean),
   };
 }
 
@@ -206,52 +216,98 @@ function utilityOf(cls: string): Utility {
  * legitimate, and the first clause catches it.
  */
 /**
- * Whether a variant retargets the rule at something other than this element.
+ * Whether a variant aims the rule at something other than this element.
  *
- * `[&>span]:border-b-0` styles a CHILD of the trigger, so it can no more repaint
- * the trigger's underline than a rule in another file could. Treating it as one
- * more qualifier makes `wins()` vacuously true against an unqualified owned
- * class, and a legitimate call site fails the repository-wide suite.
+ * `[&>span]:border-b-0` styles a CHILD of the trigger and `before:border-b-0`
+ * styles its generated content, so neither can repaint the trigger's own
+ * underline. Counted as qualifiers they make the specificity test vacuously
+ * true against an unqualified owned class, and a legitimate call site fails the
+ * repository-wide suite.
  *
- * A combinator after the `&` is what separates the two: `[&>span]` and `[&_p]`
- * (Tailwind spells a descendant space as `_`) point elsewhere, while `[&:hover]`
- * and `[&[data-x]]` still qualify this element and must keep counting.
+ * Two forms, and both are about WHERE the rule lands rather than WHEN:
+ *
+ * - a combinator after the `&` — `[&>span]`, `[&_p]`, Tailwind spelling a
+ *   descendant space as `_`. `[&:hover]` and `[&[data-x]]` still qualify THIS
+ *   element and must keep counting.
+ * - a pseudo-element — `before`, `after`, `placeholder`, `marker` and the rest
+ *   generate or address a box that is not the host.
  */
-function retargets(variant: string): boolean {
-  const selector = /^\[(.*)\]$/.exec(variant)?.[1];
-  return selector !== undefined && /&\s*[>+~_]/.test(selector);
-}
+const PSEUDO_ELEMENTS = new Set([
+  "before",
+  "after",
+  "placeholder",
+  "marker",
+  "selection",
+  "file",
+  "first-letter",
+  "first-line",
+  "backdrop",
+]);
 
-function wins(owned: Utility, caller: Utility): boolean {
-  if (caller.variants.some(retargets)) return false;
-  if (caller.important && !owned.important) return true;
-  return owned.variants.every(variant => caller.variants.includes(variant));
+function retargets(variant: string): boolean {
+  if (PSEUDO_ELEMENTS.has(variant)) return true;
+  const selector = /^\[(.*)\]$/.exec(variant)?.[1];
+  if (selector === undefined) return false;
+  return /&\s*[>+~_]/.test(selector) || /&::/.test(selector);
 }
 
 /**
- * The CSS property a Tailwind arbitrary-property utility sets, if it is one.
+ * Spellings of one state that Tailwind emits at equal specificity.
  *
- * `[border-bottom-width:0]` is a declaration wearing a class's clothes, and
- * tailwind-merge deliberately does not reconcile it with `border-b-2` — both
- * survive, and Tailwind emits the arbitrary rule later. So the resolver cannot
- * answer for these and the property is read directly, through the same
- * expansion the inline-style side uses. The two forms are the same act.
+ * Radix sets both the native attribute and its `data-` twin, so
+ * `data-[disabled]` and `disabled` select the same tab. Compared as strings they
+ * look like different qualifiers, and a caller's `data-[disabled]:opacity-100`
+ * then reads as unrelated to the primitive's `disabled:opacity-50` while
+ * overriding it in the browser.
  */
-function arbitraryProperty(bare: string): string | undefined {
-  return /^\[([a-zA-Z-]+):[^\]]*\]$/.exec(bare)?.[1];
+const EQUIVALENT_VARIANTS: Record<string, string> = {
+  "data-[disabled]": "disabled",
+  "data-[state=checked]": "checked",
+  "aria-[disabled=true]": "disabled",
+};
+
+function normaliseVariant(variant: string): string {
+  return EQUIVALENT_VARIANTS[variant] ?? variant;
+}
+
+/**
+ * Whether a caller's utility takes an owned one over.
+ *
+ * Two questions, asked in order.
+ *
+ * **Do they touch the same CSS property?** Answered by mapping each utility to
+ * what it sets, which is the same mapping the inline-style side uses. It
+ * replaced a tailwind-merge conflict test, and the reason is worth keeping:
+ * tailwind-merge groups `border-b-2` and `border-dashed` separately — width and
+ * style are different groups — so it reported no conflict while the underline
+ * went from solid to dashed. Conflicting in a merge and painting the same
+ * property are different questions, and only the second one is this contract's.
+ *
+ * **Which of them wins?** A CSS question, settled the way a browser settles it:
+ * an important caller utility beats an unimportant owned one, and otherwise the
+ * caller must be at least as qualified — carrying every variant the owned class
+ * carries, after equivalent spellings are normalised.
+ *
+ * That second clause is what keeps a plain `opacity-100` legitimate: the
+ * primitive's `disabled:opacity-50` out-specifies it, so the disabled tab still
+ * fades and reporting it would be a false positive.
+ */
+function wins(owned: Utility, caller: Utility): boolean {
+  if (caller.variants.some(retargets)) return false;
+  if (caller.important && !owned.important) return true;
+  const callerVariants = new Set(caller.variants.map(normaliseVariant));
+  return owned.variants
+    .map(normaliseVariant)
+    .every(variant => callerVariants.has(variant));
 }
 
 function takesOver(owned: Utility, caller: Utility): boolean {
-  const property = arbitraryProperty(caller.bare);
-  if (property) {
-    const declared = new Set(expandsTo(property));
-    const ownedProperties = propertiesOf(owned.bare);
-    if (!ownedProperties.some(p => declared.has(p))) return false;
-    return wins(owned, caller);
+  const ownedProperties = new Set(propertiesOf(owned.bare));
+  if (ownedProperties.size === 0) return false;
+  const callerProperties = propertiesOf(caller.bare);
+  if (!callerProperties.some(property => ownedProperties.has(property))) {
+    return false;
   }
-  // Same property? Ask the resolver, on the bare forms.
-  const merged = new Set(twMerge(owned.bare, caller.bare).split(/\s+/));
-  if (merged.has(owned.bare)) return false;
   return wins(owned, caller);
 }
 
@@ -285,16 +341,47 @@ function displacedBy(exported: string, classes: string): string[] {
  * hand, and an owned class matching nothing in it fails the suite rather than
  * quietly reducing coverage.
  */
+/** The three longhands that draw one edge. */
+const EDGE_PROPERTIES = (side: string): string[] => [
+  `border-${side}-width`,
+  `border-${side}-style`,
+  `border-${side}-color`,
+];
+
+/**
+ * Which edge a `border-*` utility paints.
+ *
+ * Side-aware because the primitive owns one edge, not four: `border-t-2` must
+ * not read as touching the underline. The segment after `border` is a side only
+ * when it spells one — `border-dashed` and `border-transparent` name a value
+ * and therefore apply to every edge, the bottom included.
+ *
+ * Which of the three longhands a utility sets is deliberately not decided.
+ * Doing so means knowing Tailwind's scales, and the over-approximation is
+ * confined to a single edge the primitive owns entirely — it draws the width,
+ * the colour, and by omission the style — so widening within that edge cannot
+ * report a caller who left the underline alone.
+ */
+const SIDES: Record<string, string[]> = {
+  t: ["top"],
+  r: ["right"],
+  b: ["bottom"],
+  l: ["left"],
+  x: ["left", "right"],
+  y: ["top", "bottom"],
+  s: ["inline-start"],
+  e: ["inline-end"],
+};
+
+function borderProperties(bare: string): string[] {
+  const rest = bare.slice("border".length).replace(/^-/, "");
+  const side = SIDES[rest.split("-")[0] ?? ""];
+  // No side named: the utility is a value, and a value applies to all edges.
+  return (side ?? ["top", "right", "bottom", "left"]).flatMap(EDGE_PROPERTIES);
+}
+
 const UTILITY_PROPERTIES: Array<{ utility: RegExp; properties: string[] }> = [
   { utility: /^rounded(-|$)/, properties: ["border-radius"] },
-  {
-    utility: /^border(-|$)/,
-    properties: [
-      "border-bottom-width",
-      "border-bottom-style",
-      "border-bottom-color",
-    ],
-  },
   { utility: /^-?mb-/, properties: ["margin-bottom"] },
   { utility: /^text-/, properties: ["color"] },
   // The ring is drawn through custom properties that `box-shadow` then reads,
@@ -320,6 +407,11 @@ const UTILITY_PROPERTIES: Array<{ utility: RegExp; properties: string[] }> = [
 ];
 
 function propertiesOf(bare: string): string[] {
+  // `border-*` is parsed rather than matched, because the side decides whether
+  // it reaches the underline at all.
+  if (/^border(-|$)/.test(bare)) return borderProperties(bare);
+  const arbitrary = /^\[([a-zA-Z-]+):[^\]]*\]$/.exec(bare)?.[1];
+  if (arbitrary) return expandsTo(arbitrary);
   return (
     UTILITY_PROPERTIES.find(entry => entry.utility.test(bare))?.properties ?? []
   );
@@ -611,17 +703,20 @@ function ownedStyleProperty(
 ): string | undefined {
   let found: string | undefined;
   const visit = (node: ts.Node): void => {
-    if (ts.isPropertyAssignment(node)) {
-      // `.text` rather than `getText()`: the latter includes the quotes of a
-      // `{ "borderBottomColor": c }` key, so a quoted property compares unequal
-      // to every name in the list and passes.
-      const name = ts.isIdentifier(node.name)
+    // A shorthand entry is a different node kind with the same effect:
+    // `{ borderBottomColor }` sets the property just as `{ borderBottomColor: c }`
+    // does, and a visitor keyed on `PropertyAssignment` alone walks past it.
+    const name = ts.isPropertyAssignment(node)
+      ? // `.text` rather than `getText()`: the latter includes the quotes of a
+        // `{ "borderBottomColor": c }` key, so a quoted property compares
+        // unequal to every name in the list and passes.
+        ts.isIdentifier(node.name) || ts.isStringLiteral(node.name)
         ? node.name.text
-        : ts.isStringLiteral(node.name)
-          ? node.name.text
-          : undefined;
-      if (name && ownsStyleProperty(slot, name)) found ??= name;
-    }
+        : undefined
+      : ts.isShorthandPropertyAssignment(node)
+        ? node.name.text
+        : undefined;
+    if (name && ownsStyleProperty(slot, name)) found ??= name;
     ts.forEachChild(node, visit);
   };
   visit(object);
@@ -836,6 +931,19 @@ describe("the tab indicator contract", () => {
       '<TabsTrigger className="!opacity-100" />',
     ],
     ["an unqualified important ring", '<TabsTrigger className="!ring-0" />'],
+    // Same property, different tailwind-merge group. Width and style are
+    // separate groups, so a merge test reported no conflict while the underline
+    // went from solid to dashed.
+    [
+      "a border style on the active state",
+      '<TabsTrigger className="data-[state=active]:border-dashed" />',
+    ],
+    // Radix sets the native attribute and its `data-` twin together, so these
+    // select the same tab at equal specificity.
+    [
+      "a state spelled as its data- equivalent",
+      '<TabsTrigger className="data-[disabled]:opacity-100" />',
+    ],
     // Arbitrary properties: a declaration wearing a class's clothes.
     // tailwind-merge deliberately does not reconcile these with predefined
     // utilities, so both survive and Tailwind emits the arbitrary rule later.
@@ -859,6 +967,10 @@ describe("the tab indicator contract", () => {
     [
       "an inline style built away from the element",
       "const s = { borderBottomColor: c };\n<TabsTrigger style={s} />",
+    ],
+    [
+      "a shorthand inline property",
+      "const borderBottomColor = c;\n<TabsTrigger style={{ borderBottomColor }} />",
     ],
     // Bindings.
     [
@@ -933,6 +1045,25 @@ describe("the tab indicator contract", () => {
     [
       "an arbitrary property the primitive does not set",
       '<TabsTrigger className="[width:20rem]" />',
+    ],
+    // Aimed elsewhere. A pseudo-element and a descendant are different boxes,
+    // so neither can repaint the host's underline however it is qualified.
+    [
+      "a rule on generated content before the tab",
+      '<TabsTrigger className="before:border-b-0" />',
+    ],
+    [
+      "a rule on generated content after the tab",
+      '<TabsTrigger className="after:rounded-md" />',
+    ],
+    [
+      "a descendant selector carrying a colon of its own",
+      '<TabsTrigger className="[&>span:hover]:border-b-0" />',
+    ],
+    // Side-aware: the primitive owns one edge, not four.
+    [
+      "a border on an edge the indicator does not use",
+      '<TabsTrigger className="border-t-2 border-t-primary" />',
     ],
     [
       "a rule aimed at a child of the trigger",
