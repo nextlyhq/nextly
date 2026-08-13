@@ -218,28 +218,63 @@ export const DEFAULT_BINDING_SOURCE: BindingSource = "entry";
  * the matching `Intl` formatter; `options` passes through to it. Formatting is
  * declarative data so documents stay language-neutral and agent-writable.
  */
-export type BindingFormat =
-  | { type: "date"; options?: Record<string, unknown> }
-  | { type: "number"; options?: Record<string, unknown> }
-  | { type: "currency"; currency: string; options?: Record<string, unknown> }
-  | { type: "relativeTime"; options?: Record<string, unknown> }
-  | { type: "list"; options?: Record<string, unknown> };
+/**
+ * The formats a bound value may be rendered with, and the extra field each one
+ * requires — the single declaration everything else is derived from.
+ *
+ * A runtime list and a union of shapes are two answers to "what formats
+ * exist", and a type-level equality check between them is a comparison rather
+ * than a derivation: it catches a divergence after both have been written,
+ * while still requiring two synchronized edits to add a format. The generator
+ * reads the list and engine consumers read the union, so between those two
+ * edits they describe different stored formats.
+ *
+ * Declaring the shapes once removes the second answer. The list is the map's
+ * keys, the union is built from its entries, and adding a format is one edit
+ * that cannot be half-made.
+ *
+ * A value of `null` means the variant carries no field of its own; `currency`
+ * is the only one that does, and the type of that field is what the union
+ * needs, not a description of it.
+ */
+export const BINDING_FORMAT_SHAPES = {
+  date: null,
+  number: null,
+  currency: { currency: "" as string },
+  relativeTime: null,
+  list: null,
+} as const;
+
+export type BindingFormatType = keyof typeof BINDING_FORMAT_SHAPES;
+
+/** Every legal `format.type`, as a runtime value. */
+export const BINDING_FORMAT_TYPES = Object.keys(
+  BINDING_FORMAT_SHAPES
+) as readonly BindingFormatType[] as readonly [
+  BindingFormatType,
+  ...BindingFormatType[],
+];
 
 /**
- * Every legal `format.type`, as a runtime value, for the same reason as
- * {@link BINDING_SOURCES}. `currency` is the one variant carrying a required
- * field of its own, so a consumer building a validator iterates this list and
- * special-cases that member rather than transcribing five shapes.
+ * Structured, locale-aware formatting for bound values. Each variant maps to
+ * the matching `Intl` formatter; `options` passes through to it. Formatting is
+ * declarative data so documents stay language-neutral and agent-writable.
+ *
+ * Built from {@link BINDING_FORMAT_SHAPES}: each key becomes a variant carrying
+ * its own required fields, so the union cannot name a format the list omits or
+ * omit one the list names.
  */
-export const BINDING_FORMAT_TYPES = [
-  "date",
-  "number",
-  "currency",
-  "relativeTime",
-  "list",
-] as const;
-
-export type BindingFormatType = (typeof BINDING_FORMAT_TYPES)[number];
+export type BindingFormat = {
+  [K in BindingFormatType]: {
+    type: K;
+    options?: Record<string, unknown>;
+  } & (typeof BINDING_FORMAT_SHAPES)[K] extends null
+    ? { type: K; options?: Record<string, unknown> }
+    : { type: K; options?: Record<string, unknown> } & Omit<
+        NonNullable<(typeof BINDING_FORMAT_SHAPES)[K]>,
+        never
+      >;
+}[BindingFormatType];
 
 // ---------------------------------------------------------------------------
 // Visibility — entry-field conditions + per-breakpoint device visibility

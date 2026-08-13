@@ -54,7 +54,6 @@ import {
   surveyDocument,
 } from "@nextlyhq/blocks-engine/format";
 import type {
-  BindingFormatType,
   BindingSource,
   DocumentKind,
 } from "@nextlyhq/blocks-engine/format";
@@ -92,10 +91,7 @@ const documentKinds = DOCUMENT_KINDS as unknown as readonly [
  * which is precisely the drift reading the engine's constants exists to
  * prevent. The filter states the relationship instead of restating the members.
  */
-const bindingFormatTypes = BINDING_FORMAT_TYPES as unknown as readonly [
-  BindingFormatType,
-  ...BindingFormatType[],
-];
+const bindingFormatTypes = BINDING_FORMAT_TYPES;
 const bindingSourcesWithoutSingle = BINDING_SOURCES.filter(
   source => source !== "single"
 ) as unknown as readonly [BindingSource, ...BindingSource[]];
@@ -377,7 +373,28 @@ const blockNodeSchema = z
     // it would admit exactly the silent-rewrite class this entry point refuses
     // for `-0`, `NaN` and the infinities. The published `maximum` states the
     // bound rather than leaving a consumer to discover it.
-    version: z.number().int().positive(),
+    // A positive integer, with no safe-integer ceiling, because the canonical
+    // `validate()` has none. Two validators disagreeing about which documents
+    // are legal is worse than either rule, and a schema stricter than the
+    // engine refuses documents the engine accepts.
+    //
+    // The earlier ceiling was argued from round-tripping and the argument was
+    // too broad: an ODD integer above 2^53 does not survive JSON, but 1e20 is
+    // exactly representable and round-trips unchanged, so the bound refused
+    // values that were never at risk. The remaining case belongs wherever the
+    // engine decides it, for both validators at once.
+    version: z
+      .number()
+      .refine(value => Number.isInteger(value) && value > 0, {
+        message: "Expected a positive integer",
+      })
+      // The fragment is carried explicitly because a refinement is invisible to
+      // the emitted schema: dropping the ceiling took `"type": "integer"` and
+      // the positivity bound with it, leaving a published contract that
+      // accepted any number while this module still refused one. A schema
+      // looser than the checker beside it sends a producer output that fails on
+      // arrival.
+      .meta({ type: "integer", exclusiveMinimum: 0 }),
     props: openRecord(),
     bindings: typedRecord(
       value => bindingSchema.safeParse(value).success,
@@ -446,32 +463,50 @@ const blockNodeSchema = z
  */
 const NODE_OWN_FIELDS = ["id", "type", "version", "props"] as const;
 
-function ownsRequiredFields(value: unknown): boolean {
+/**
+ * The envelope's required fields, which need the same treatment as a node's.
+ *
+ * `parseBlockDocument({})` succeeded where `Object.prototype` carried a valid
+ * `formatVersion`, `kind` and `nodes`, for exactly the reason a node did: the
+ * schema reads properties directly while storage writes only own ones.
+ */
+const DOCUMENT_OWN_FIELDS = ["formatVersion", "kind", "nodes"] as const;
+
+function ownsFields(value: unknown, fields: readonly string[]): boolean {
   if (typeof value !== "object" || value === null) return false;
-  return NODE_OWN_FIELDS.every(field =>
+  return fields.every(field =>
     Object.prototype.hasOwnProperty.call(value, field)
   );
 }
 
-const blockDocumentSchema = z.looseObject({
-  formatVersion: z.literal(DOCUMENT_FORMAT_VERSION),
-  kind: z.enum(documentKinds),
-  nodes: z.array(blockNodeSchema),
-  settings: z
-    .looseObject({
-      styles: nodeStylesSchema.optional(),
-      customCss: z.string().optional(),
-    })
-    .optional(),
-  /**
-   * A usage index for media the document references, so reference tracking
-   * never needs a full tree walk. Derived on write; a reader that finds it
-   * absent walks the tree rather than concluding there is no media.
-   */
-  assets: z
-    .looseObject({ mediaIds: z.array(z.string()).optional() })
-    .optional(),
-});
+function ownsRequiredFields(value: unknown): boolean {
+  return ownsFields(value, NODE_OWN_FIELDS);
+}
+
+const blockDocumentSchema = z
+  .looseObject({
+    formatVersion: z.literal(DOCUMENT_FORMAT_VERSION),
+    kind: z.enum(documentKinds),
+    nodes: z.array(blockNodeSchema),
+    settings: z
+      .looseObject({
+        styles: nodeStylesSchema.optional(),
+        customCss: z.string().optional(),
+      })
+      .optional(),
+    /**
+     * A usage index for media the document references, so reference tracking
+     * never needs a full tree walk. Derived on write; a reader that finds it
+     * absent walks the tree rather than concluding there is no media.
+     */
+    assets: z
+      .looseObject({ mediaIds: z.array(z.string()).optional() })
+      .optional(),
+  })
+  .refine(value => ownsFields(value, DOCUMENT_OWN_FIELDS), {
+    message:
+      "A document must OWN its formatVersion, kind and nodes; an inherited value is not written to storage.",
+  });
 
 /**
  * The shape the schema accepts, as a type.

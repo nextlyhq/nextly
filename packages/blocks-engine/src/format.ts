@@ -44,6 +44,12 @@ export {
 } from "./limits";
 
 export { measureBytes, surveyDocument } from "./measure-bytes";
+// The types those signatures NAME. An entry point that exports a function whose
+// parameter or return type it does not export is one a consumer cannot write
+// against without reaching past it — which is the coupling this entry exists to
+// avoid.
+export type { DocumentSurvey, SurveyLimits } from "./measure-bytes";
+export type { BlockDocument, BlockNode } from "./document";
 export { isPlainRecord } from "./plain-record";
 
 export {

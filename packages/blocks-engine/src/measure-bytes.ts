@@ -170,7 +170,8 @@ function isPlainRecordSafely(value: object): {
 function memberPlacement(
   container: FrameKind,
   depth: number,
-  key: string
+  key: string,
+  isRoot: boolean
 ): { kind: FrameKind; depth: number } | "refused" {
   // An array of nodes holds nodes, at the level the array itself carries.
   if (container === "nodeList") return { kind: "node", depth };
@@ -185,8 +186,11 @@ function memberPlacement(
     if (key === "__proto__") return "refused";
     return { kind: "nodeList", depth: depth + 1 };
   }
-  // The envelope's `nodes` starts the tree; anything else is data.
-  if (depth === 0 && key === "nodes") return { kind: "nodeList", depth: 1 };
+  // The ENVELOPE's `nodes` starts the tree. Identity, not depth: an additive
+  // top-level field is also at depth zero, so testing depth alone classified
+  // `{ future: { nodes: [...] } }` as the document's own tree and let ordinary
+  // content inflate the node and depth caps.
+  if (isRoot && key === "nodes") return { kind: "nodeList", depth: 1 };
   return { kind: "value", depth };
 }
 
@@ -329,9 +333,16 @@ export function surveyDocument(
 
       const key = isRecord ? frame.names![index] : index;
       const member = readMember(container, key);
-      if (!member.present || !member.enumerable) {
-        // Absent covers an unreadable member and an accessor; non-enumerable
-        // is a member `JSON.stringify` omits while the schema still reads it.
+      if (!member.present) {
+        unserializable = true;
+        continue;
+      }
+      // Enumerability means different things to the serializer on the two
+      // containers. `JSON.stringify` omits a non-enumerable RECORD property —
+      // so the schema, which reads directly, would see a field storage drops —
+      // but it serializes an array element by index regardless. Applying the
+      // record rule to both refused documents JSON handles correctly.
+      if (isRecord && !member.enumerable) {
         unserializable = true;
         continue;
       }
@@ -348,7 +359,8 @@ export function surveyDocument(
       const placement = memberPlacement(
         frame.containerKind ?? "value",
         frame.depth,
-        String(key)
+        String(key),
+        container === root
       );
       if (placement === "refused") {
         unserializable = true;
@@ -361,8 +373,16 @@ export function surveyDocument(
           kind: placement.kind,
           depth: placement.depth,
         });
-      } else if (takeScalar(held)) {
-        return { ...done(), tooLarge: true };
+      } else {
+        // A malformed entry in a node list is still an entry. Accounting for it
+        // as a scalar and never opening a `node` frame let a list of primitives
+        // pass every structural bound, leaving the schema to walk what the caps
+        // exist to refuse.
+        if (placement.kind === "node") {
+          nodes += 1;
+          if (nodes > limits.maxNodes) return { ...done(), tooManyNodes: true };
+        }
+        if (takeScalar(held)) return { ...done(), tooLarge: true };
       }
       continue;
     }
