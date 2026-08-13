@@ -22,6 +22,7 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { ROUTES } from "@admin/constants/routes";
 import { publicApi } from "@admin/lib/api/publicApi";
+import { resolveCataloguePresentation } from "@admin/lib/plugins/registry/resolve-catalogue-presentation";
 import {
   shouldShowFeatured,
   staticRegistrySource,
@@ -31,10 +32,25 @@ import type { AdminBranding, PluginMetadata } from "@admin/types/branding";
 
 import { PluginCard } from "./components/PluginCard";
 
-/** Name, description and tags. Author is deliberately not searched: every
- *  first-party entry shares one, so it would match the whole catalogue. */
-function matches(plugin: RegistryPlugin, query: string): boolean {
-  const haystack = [plugin.name, plugin.description, ...(plugin.tags ?? [])]
+/**
+ * Name, the RENDERED description, and tags.
+ *
+ * The description comes from the same resolution the card renders, so an
+ * installed plugin is searched by the text a reader can actually see. Reading
+ * `plugin.description` here instead would search the catalogue's copy while
+ * the card shows the plugin's own, and typing a word visibly on screen would
+ * make that card disappear.
+ *
+ * Author is deliberately not searched: every first-party entry shares one, so
+ * it would match the whole catalogue.
+ */
+function matches(
+  plugin: RegistryPlugin,
+  installed: Pick<PluginMetadata, "appearance" | "description"> | undefined,
+  query: string
+): boolean {
+  const { description } = resolveCataloguePresentation(plugin, installed);
+  const haystack = [plugin.name, description, ...(plugin.tags ?? [])]
     .join(" ")
     .toLowerCase();
   return haystack.includes(query);
@@ -88,8 +104,11 @@ function BrowseContent(): React.ReactElement {
 
   const normalized = query.trim().toLowerCase();
   const visible = useMemo(
-    () => (normalized ? entries.filter(e => matches(e, normalized)) : entries),
-    [entries, normalized]
+    () =>
+      normalized
+        ? entries.filter(e => matches(e, installedByName.get(e.id), normalized))
+        : entries,
+    [entries, installedByName, normalized]
   );
 
   const featured = useMemo(

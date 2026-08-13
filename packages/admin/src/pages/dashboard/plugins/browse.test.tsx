@@ -5,7 +5,7 @@
  * page answers is a property worth pinning rather than assuming.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ROUTES } from "@admin/constants/routes";
@@ -92,6 +92,41 @@ describe("PluginBrowsePage", () => {
     expect(
       screen.queryByTestId("installed-@nextlyhq/plugin-page-builder")
     ).toBeNull();
+  });
+
+  /**
+   * Search reads what the card renders, not what the catalogue stores. An
+   * installed plugin's own description is what a reader sees, so typing a word
+   * from it must keep the card rather than filter it away.
+   */
+  it("finds a card by the installed description it actually shows", async () => {
+    mockBranding = {
+      plugins: [
+        {
+          name: "@nextlyhq/plugin-seo",
+          description: "Zebra crossing metadata",
+        },
+      ],
+    } as unknown as AdminBranding;
+
+    renderBrowse();
+    await screen.findByText("Zebra crossing metadata");
+
+    fireEvent.change(screen.getByPlaceholderText("Search the directory"), {
+      target: { value: "zebra" },
+    });
+
+    // Waited for, not asserted immediately: `SearchBar` debounces by 300ms, so
+    // a synchronous check runs before the query reaches this page and passes
+    // whatever the search would have done.
+    //
+    // The disappearance is the control. Asserting only that SEO survives is
+    // satisfied by a page that never filtered at all, which is the same green
+    // a search reading the wrong field produces.
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Page Builder" })).toBeNull()
+    );
+    expect(screen.getByRole("heading", { name: "SEO" })).toBeInTheDocument();
   });
 
   it("prefers an installed plugin's own description over the catalogue's", async () => {

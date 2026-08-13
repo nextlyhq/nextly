@@ -1,6 +1,7 @@
 "use client";
 
 import { Badge } from "@nextlyhq/ui";
+import { useSuspenseQuery } from "@tanstack/react-query";
 
 import {
   BookOpen,
@@ -26,8 +27,10 @@ import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
+import { staticRegistrySource } from "@admin/lib/plugins/registry/static-source";
 import type { PluginMetadata } from "@admin/types/branding";
 
+import { NotInstalledPlugin } from "./components/NotInstalledPlugin";
 import { PluginStatusPill } from "./components/PluginsTable";
 
 const PLACEMENT_LABELS: Record<string, string> = {
@@ -66,6 +69,69 @@ export default function PluginDetailPage({
   );
 }
 
+/**
+ * A slug the project has no plugin for.
+ *
+ * Two outcomes, and they are different facts: the catalogue knows this package
+ * and the reader has simply not installed it, or nothing knows it at all. The
+ * first is the ordinary path from the directory, where most entries are not
+ * installed, so it must not be reported as an error.
+ *
+ * Its own component because it queries the catalogue. Held inside
+ * `PluginDetailContent` the query would run for every installed plugin too,
+ * making a `QueryClientProvider` a requirement of rendering a page that has no
+ * need of one.
+ */
+function UninstalledOrMissing({ activeSlug }: { activeSlug?: string }) {
+  const { data: entries } = useSuspenseQuery({
+    queryKey: ["plugin-registry"],
+    queryFn: () => staticRegistrySource.list(),
+  });
+  const entry = activeSlug
+    ? entries.find(e => pluginSlug(e.id) === activeSlug)
+    : undefined;
+
+  if (entry) {
+    return (
+      <div>
+        <Breadcrumbs
+          items={[
+            { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+            { label: "Plugins", href: ROUTES.PLUGINS },
+            { label: "Browse", href: ROUTES.PLUGIN_BROWSE },
+            { label: entry.name },
+          ]}
+          className="mb-6"
+        />
+        <NotInstalledPlugin plugin={entry} />
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <Breadcrumbs
+        items={[
+          { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+          { label: "Plugins", href: ROUTES.PLUGINS },
+          { label: "Not found" },
+        ]}
+        className="mb-6"
+      />
+      <div className="rounded-lg border border-dashed border-border bg-card p-12 text-center">
+        <Package className="h-10 w-10 text-muted-foreground mx-auto mb-4" />
+        <h3 className="text-sm font-medium text-foreground mb-1">
+          Plugin not found
+        </h3>
+        <p className="text-sm text-muted-foreground">
+          No installed plugin matches this address, and it is not in the plugin
+          directory either. It may have been removed from your Nextly config.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
   const branding = useBranding();
   const plugins = branding?.plugins ?? [];
@@ -73,30 +139,11 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
     ? plugins.find(p => pluginSlug(p.name) === activeSlug)
     : undefined;
 
-  if (!plugin) {
-    return (
-      <div>
-        <Breadcrumbs
-          items={[
-            { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
-            { label: "Plugins", href: ROUTES.PLUGINS },
-            { label: "Not found" },
-          ]}
-          className="mb-6"
-        />
-        <div className="rounded-lg border border-dashed border-border bg-card p-12 text-center">
-          <Package className="h-10 w-10 text-muted-foreground mx-auto mb-4" />
-          <h3 className="text-sm font-medium text-foreground mb-1">
-            Plugin not found
-          </h3>
-          <p className="text-sm text-muted-foreground">
-            No installed plugin matches this address. It may have been removed
-            from your Nextly config.
-          </p>
-        </div>
-      </div>
-    );
-  }
+  // Installed metadata is observed; the catalogue is a claim, so the observed
+  // one decides. Only when the project has no such plugin is the catalogue
+  // consulted, and that lookup lives inside `UninstalledOrMissing` so its query
+  // is not a dependency of rendering an installed plugin.
+  if (!plugin) return <UninstalledOrMissing activeSlug={activeSlug} />;
 
   const title = plugin.appearance?.label ?? plugin.name;
 

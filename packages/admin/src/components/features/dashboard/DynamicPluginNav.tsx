@@ -54,9 +54,12 @@ interface DynamicPluginNavProps {
 function PluginOverviewLink({
   isActive,
 }: {
-  isActive: (href?: string) => boolean;
+  isActive: (href?: string, exactMatch?: boolean) => boolean;
 }) {
-  const active = isActive("/admin/plugins");
+  // Exact: `/admin/plugins` is a prefix of `/admin/plugins/browse`, and the
+  // default match treats every descendant as active, so both sibling entries
+  // would highlight at once for anyone on the directory.
+  const active = isActive("/admin/plugins", true);
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active}>

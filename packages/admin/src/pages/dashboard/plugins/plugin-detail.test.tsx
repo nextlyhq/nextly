@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -101,8 +102,21 @@ describe("PluginDetailPage", () => {
     expect(screen.getByText(/its behavior does not load/i)).toBeInTheDocument();
   });
 
-  it("renders a not-found state for an unknown slug", () => {
-    render(<PluginDetailPage params={{ slug: "nope" }} />);
-    expect(screen.getByText("Plugin not found")).toBeInTheDocument();
+  /**
+   * Not found now means neither installed NOR in the plugin directory, so this
+   * path reads the catalogue and needs a query client. A slug that IS in the
+   * catalogue renders the uninstalled view instead, covered in
+   * `not-installed-detail.test.tsx`.
+   */
+  it("renders a not-found state for a slug nothing knows", async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <PluginDetailPage params={{ slug: "nope" }} />
+      </QueryClientProvider>
+    );
+    expect(await screen.findByText("Plugin not found")).toBeInTheDocument();
   });
 });
