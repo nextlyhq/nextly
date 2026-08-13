@@ -99,6 +99,7 @@ import { registerSingleHooks } from "../hooks/register-single-hooks";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
+import { pluginsMissingDescription } from "../plugins/describe-check";
 import { setInitializedPlugins } from "../plugins/initialized-plugins";
 import {
   collectCustomPermissions,
@@ -574,6 +575,19 @@ export async function registerServices(
   if (transformedConfig.plugins && transformedConfig.plugins.length > 0) {
     const pluginNames = transformedConfig.plugins.map(p => p.name).join(", ");
     resolvedLogger.info?.(`Registered plugins: ${pluginNames}`);
+
+    // Beside the line that names them, because that line is the symptom: a
+    // plugin with no description is one the admin can only ever show by its
+    // package specifier. Warned rather than thrown — the omission is the
+    // plugin author's and breaks nothing, and an operator cannot fix a
+    // third-party package from their own config.
+    const undescribed = pluginsMissingDescription(transformedConfig.plugins);
+    if (undescribed.length > 0) {
+      resolvedLogger.warn?.(
+        `Plugins with no admin.description, so the admin can only show their ` +
+          `package name: ${undescribed.join(", ")}`
+      );
+    }
   }
 
   // ----------------------------------------
