@@ -125,6 +125,9 @@ const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 function manifest(): {
   dependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  bundleDependencies?: string[] | boolean;
+  bundledDependencies?: string[] | boolean;
 } {
   return JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
 }
@@ -157,18 +160,35 @@ function allowedDependencies(): Record<string, string> {
 /**
  * Every package a server-safe entry point may not reach but COULD obtain in a real consumer.
  *
- * Dependencies and peer dependencies together, because both resolve where this package is
- * installed — a peer is absent from `node_modules` here and present in the app that consumes it,
- * so leaving peers out would mean the routes most worth catching had no wire on them.
+ * Regular, peer AND optional dependencies together, because all three resolve where this package
+ * is installed. A peer is absent from `node_modules` here and present in the app that consumes it;
+ * an optional one installs for an ordinary consumer unless they pass `--omit=optional`. Leaving
+ * either out would mean the routes most worth catching had no wire on them.
  *
  * Derived by subtraction rather than listed, so a package added to the manifest is covered without
  * anyone remembering to come back here.
  */
 function forbiddenPackages(): string[] {
   const declared = manifest();
+
+  // A bundled dependency is packed INSIDE the tarball, so after extraction the real package sits
+  // at `@nextlyhq/ui/node_modules/<name>` — which resolution starting in `dist` reaches before the
+  // wire at the project's top level. The load would execute real code and leave no record, so this
+  // refuses rather than reporting on a boundary it does not model.
+  const bundled = declared.bundleDependencies ?? declared.bundledDependencies;
+  if (bundled !== undefined && bundled !== false) {
+    throw new Error(
+      "This package declares bundleDependencies. A bundled package is extracted beneath " +
+        "@nextlyhq/ui/node_modules and resolves ahead of a tripwire at the project's top level, so " +
+        "a forbidden load of one would run real code and leave no evidence. Wire the nested " +
+        "location as well before removing this refusal."
+    );
+  }
+
   const names = new Set([
     ...Object.keys(declared.dependencies ?? {}),
     ...Object.keys(declared.peerDependencies ?? {}),
+    ...Object.keys(declared.optionalDependencies ?? {}),
   ]);
   const forbidden = [...names]
     .filter(name => !SERVER_SAFE_ALLOWED_PACKAGES.has(name))
@@ -326,6 +346,25 @@ writeFileSync(${JSON.stringify(MARKERS.cjs)}, JSON.stringify({ loaded }));
  * resolvable by the package under test, and appears in no manifest this script reads — so deriving
  * from the manifest alone leaves exactly the packages nobody predicted without a wire.
  */
+/**
+ * A module that records being reached and then refuses.
+ *
+ * `appendFileSync` before the throw, so the evidence exists whatever the caller does with the
+ * error — that ordering is the whole mechanism. Appended rather than written, because several
+ * wires may be reached in one run and a rewrite would leave only the last.
+ */
+function wireBody(
+  logPath: string,
+  subject: string,
+  system: "cjs" | "esm"
+): string {
+  const record = `${JSON.stringify(logPath)}, ${JSON.stringify(`${subject}\n`)}`;
+  const refuse = `throw new Error(${JSON.stringify(`${subject} is not available to a server-safe entry point.`)});\n`;
+  return system === "cjs"
+    ? `require("node:fs").appendFileSync(${record});\n${refuse}`
+    : `import { appendFileSync } from "node:fs";\nappendFileSync(${record});\n${refuse}`;
+}
+
 function arm(target: string): void {
   const dist = join(target, INSTALLED, "dist");
   if (!existsSync(dist)) {
@@ -350,19 +389,8 @@ function arm(target: string): void {
     rmSync(home, { recursive: true, force: true });
     mkdirSync(home, { recursive: true });
 
-    // `appendFileSync` before the throw, so evidence exists whatever the caller does with the
-    // error. Appended rather than written, because several tripwires may be reached in one run and
-    // a rewrite would leave only the last.
-    const body =
-      `require("node:fs").appendFileSync(${JSON.stringify(logPath)}, ${JSON.stringify(`${name}\n`)});\n` +
-      `throw new Error(${JSON.stringify(`${name} is not available to a server-safe entry point.`)});\n`;
-    writeFileSync(join(home, "index.cjs"), body);
-    writeFileSync(
-      join(home, "index.mjs"),
-      `import { appendFileSync } from "node:fs";\n` +
-        `appendFileSync(${JSON.stringify(logPath)}, ${JSON.stringify(`${name}\n`)});\n` +
-        `throw new Error(${JSON.stringify(`${name} is not available to a server-safe entry point.`)});\n`
-    );
+    writeFileSync(join(home, "index.cjs"), wireBody(logPath, name, "cjs"));
+    writeFileSync(join(home, "index.mjs"), wireBody(logPath, name, "esm"));
     writeFileSync(
       join(home, "package.json"),
       `${JSON.stringify(
@@ -391,24 +419,30 @@ function arm(target: string): void {
     `${JSON.stringify(wired, null, 2)}\n`
   );
 
-  // The export map refuses a deep import, so a client subpath cannot be reached by name. A
-  // RELATIVE import from inside a server-safe artifact is a different route the map says nothing
-  // about, so those files are deleted rather than left present.
-  const removed = clientArtifacts().filter(artifact => {
+  // The client artifacts become wires too, rather than being deleted. Absence stops the load and
+  // reports nothing: a caught `createRequire(import.meta.url)("@nextlyhq/ui")` from a server-safe
+  // artifact would throw on a missing file and be swallowed, while the same self-reference
+  // resolves and evaluates the real client entry in a consumer where those files are present.
+  // Deleting them would reintroduce exactly the blind spot the wires were adopted to remove.
+  const rewired = clientArtifacts().filter(artifact => {
     const path = join(dist, artifact);
     if (!existsSync(path)) return false;
-    rmSync(path);
+    const subject = `@nextlyhq/ui client artifact ${artifact}`;
+    writeFileSync(
+      path,
+      wireBody(logPath, subject, artifact.endsWith(".cjs") ? "cjs" : "esm")
+    );
     return true;
   });
-  if (removed.length === 0) {
+  if (rewired.length === 0) {
     throw new Error(
-      "No client artifacts were removed. Either the build produced none — in which case the " +
+      "No client artifacts were replaced. Either the build produced none — in which case the " +
         "package has no client surface and this check asserts less than it appears to — or the " +
         "tarball was extracted somewhere other than the path above."
     );
   }
   console.log(
-    `Armed ${wired.length} tripwires and removed ${removed.length} client artifacts.`
+    `Armed ${wired.length} package tripwires and replaced ${rewired.length} client artifacts with wires.`
   );
 }
 
