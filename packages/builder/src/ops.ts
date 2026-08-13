@@ -1902,6 +1902,58 @@ function rebuild(
   });
 }
 
+/**
+ * A node whose own fields are written in the DECLARED order.
+ *
+ * An inverse restores a removed field by writing it again, and a written key
+ * lands at the END of the object. So undoing an `unset` of a field that was not
+ * last gives back every value and a different key sequence — and a document is
+ * compared, stored and hashed as JSON, where that is a different document. The
+ * round trip then fails on an edit that restored the data perfectly.
+ *
+ * Ordering the fields the same way every time removes the question rather than
+ * tracking the answer: the alternative is recording the original key sequence on
+ * each inverse, which makes the property hold only while that bookkeeping stays
+ * correct. JSON objects are formally unordered and mature document models do not
+ * treat a node's own field order as meaningful — Automerge's maps have no
+ * insertion order at all, and ProseMirror builds `attrs` from its schema.
+ *
+ * The order comes from {@link NODE_FIELDS}, so there is one statement of the
+ * node's shape rather than a second list that drifts from it. Fields the table
+ * does not know follow, keeping their existing relative order, so a document
+ * written by a newer editor survives a round trip through an older one.
+ *
+ * Order INSIDE a value is untouched. `props` is author data, observable through
+ * `Object.entries`, and {@link equalWithin} compares it order-sensitively for
+ * that reason.
+ *
+ * Assigned through `defineProperty` rather than `out[field] = ...` because a
+ * forward-compatible field could be named `__proto__`, where plain assignment
+ * sets the prototype instead of creating an own property and the field vanishes
+ * from what is stored.
+ */
+function canonicalNode(node: BlockNode): BlockNode {
+  const source = node as unknown as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  const write = (field: string): void => {
+    Object.defineProperty(out, field, {
+      value: source[field],
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  };
+  for (const field of Object.keys(NODE_FIELDS)) {
+    if (Object.hasOwn(source, field)) write(field);
+  }
+  for (const field of Object.keys(source)) {
+    if (!Object.hasOwn(out, field)) write(field);
+  }
+  // Asserted rather than narrowed: every own field of a validated node is
+  // carried across unchanged, so the result holds exactly what the input did.
+  return out as unknown as BlockNode;
+}
+
 /** A node without the named keys, for an update that removed fields. */
 function withoutKeys(node: BlockNode, keys: readonly string[]): BlockNode {
   const next: Record<string, unknown> = { ...node };
@@ -2101,16 +2153,38 @@ function assertPosition(at: TreePosition, verb: string): void {
         `the document root.`
     );
   }
-  if (!Number.isInteger(at.index) || at.index < 0) {
+  // The position's own fields, by the rule the op envelope and every node field
+  // already answer to. `hasOnlyJsonOwnKeys` inspects this record's DESCRIPTORS
+  // and says nothing about which fields it OWNS, so with
+  // `Object.prototype.index = 0` an insert carrying `at: {}` places a node — and
+  // the persisted op contains `"at": {}`, which cannot reproduce that placement
+  // after a restart.
+  //
+  // Read through `ownValue`, not checked beside each read: the list-bound shape
+  // in this file reached nine sites because each round added a guard next to
+  // whichever instance it was shown, and this is the ownership class's fifth.
+  for (const field of ["index", "parentId", "slot"] as const) {
+    if (field in at && !Object.hasOwn(at, field)) {
+      throw new OpError(
+        `${verb}: a position whose ${field} comes from the prototype rather ` +
+          `than from the position cannot be applied: the placement would ` +
+          `happen and the stored op could not reproduce it.`
+      );
+    }
+  }
+  const index = ownValue(at, "index");
+  const parentId = ownValue(at, "parentId");
+  const slot = ownValue(at, "slot");
+  if (!Number.isInteger(index) || (index as number) < 0) {
     throw new OpError(
-      `${verb}: an index of ${describe(at.index)} names no position. ` +
+      `${verb}: an index of ${describe(index)} names no position. ` +
         `A missing or non-numeric index reaches the splice as NaN and puts the ` +
         `node at the front of its parent, which reads as a deliberate move.`
     );
   }
-  if (at.parentId !== undefined && typeof at.parentId !== "string") {
+  if (parentId !== undefined && typeof parentId !== "string") {
     throw new OpError(
-      `${verb}: a parent id of ${describe(at.parentId)} addresses nothing.`
+      `${verb}: a parent id of ${describe(parentId)} addresses nothing.`
     );
   }
   // A slot name that names an inherited member. `insertNode` reads
@@ -2131,24 +2205,24 @@ function assertPosition(at: TreePosition, verb: string): void {
   // Checked on the destination as well as on the cleanup address, because the
   // two rules have to agree: whatever a position may CREATE, a cleanup must be
   // able to name.
-  if (at.slot === "") {
+  if (slot === "") {
     throw new OpError(
       `${verb}: a position naming an empty slot creates a child region with ` +
         `no name, and the undo of that placement could not name it back. Slots ` +
         `are named.`
     );
   }
-  if (typeof at.slot === "string" && !isUsableSlotName(at.slot)) {
+  if (typeof slot === "string" && !isUsableSlotName(slot)) {
     throw new OpError(
-      `${verb}: ${describe(at.slot)} is not a usable slot name. It resolves to a ` +
+      `${verb}: ${describe(slot)} is not a usable slot name. It resolves to a ` +
         `member every object inherits, so the document's own children could ` +
         `not be told apart from it.`
     );
   }
-  if (at.parentId !== undefined && typeof at.slot !== "string") {
+  if (parentId !== undefined && typeof slot !== "string") {
     throw new OpError(
-      `${verb}: a position inside ${describe(at.parentId)} must name its slot as a ` +
-        `string; ${describe(at.slot)} would create a child region no ` +
+      `${verb}: a position inside ${describe(parentId)} must name its slot as a ` +
+        `string; ${describe(slot)} would create a child region no ` +
         `block declared.`
     );
   }
@@ -2863,12 +2937,18 @@ export function applyOp(
       // same document — but every reader between here and storage sees the
       // difference, and this module's own value check is one of them.
       const cleared = op.unset ?? [];
-      const updated =
-        cleared.length === 0
-          ? written
-          : rebuild(written, current =>
-              current.id === op.id ? withoutKeys(current, cleared) : current
-            );
+      // Canonicalised unconditionally, not only when fields were removed. A
+      // patch that WRITES a field the node already had leaves it where it was,
+      // while one that adds a field appends it — so two documents holding the
+      // same values differ by which edit produced them, and the inverse of the
+      // second does not restore the first.
+      const updated = rebuild(written, current =>
+        current.id === op.id
+          ? canonicalNode(
+              cleared.length === 0 ? current : withoutKeys(current, cleared)
+            )
+          : current
+      );
       assertFitsCaps(document, withNodes(document, updated), "update", limits);
       return {
         document: withNodes(document, updated),

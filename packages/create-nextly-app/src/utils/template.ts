@@ -4,7 +4,12 @@ import { fileURLToPath } from "url";
 import fs from "fs-extra";
 
 import { buildNextConfigTemplate } from "../generators/next-config";
-import type { DatabaseConfig, ProjectApproach, ProjectType } from "../types";
+import type {
+  DatabaseConfig,
+  PackageManager,
+  ProjectApproach,
+  ProjectType,
+} from "../types";
 
 /**
  * Templates whose `nextly.config.ts` registers `formBuilderPlugin`. The
@@ -59,17 +64,7 @@ const FONT_PACKAGE_PATTERN = /@fontsource(?:-variable)?\/[a-z0-9-]+/g;
 export async function collectFontDependencies(
   templateDirs: readonly string[]
 ): Promise<string[]> {
-  // Merged by RELATIVE path, later directory winning, because that is what the copy does: a
-  // template that overrides `src/app/layout.tsx` REPLACES base's rather than adding to it. Taking
-  // the union instead would install the faces of a layout the project never receives — a blank
-  // scaffold declaring Geist because base's overwritten layout mentioned it.
-  const effective = new Map<string, string>();
-  for (const root of templateDirs) {
-    if (!root || !(await fs.pathExists(root))) continue;
-    for (const file of await walkSourceFiles(root)) {
-      effective.set(path.relative(root, file), file);
-    }
-  }
+  const effective = await effectiveTemplateFiles(templateDirs);
 
   const found = new Set<string>();
   for (const file of effective.values()) {
@@ -80,6 +75,53 @@ export async function collectFontDependencies(
   }
 
   return [...found].sort();
+}
+
+/**
+ * The files a scaffold of these template directories actually RECEIVES, keyed by their path
+ * inside the project.
+ *
+ * Merged by relative path with the later directory winning, because that is what the copy does: a
+ * template overriding `src/app/layout.tsx` REPLACES base's rather than adding to it. Taking the
+ * union instead would describe a project nobody receives — a blank scaffold declaring the faces of
+ * a layout that was overwritten.
+ *
+ * Shared rather than recomputed per question. Every property derived from "what does this scaffold
+ * contain" has to agree about which files those are, and two walks written months apart would not.
+ */
+async function effectiveTemplateFiles(
+  templateDirs: readonly string[]
+): Promise<Map<string, string>> {
+  const effective = new Map<string, string>();
+  for (const root of templateDirs) {
+    if (!root || !(await fs.pathExists(root))) continue;
+    for (const file of await walkSourceFiles(root)) {
+      effective.set(path.relative(root, file), file);
+    }
+  }
+  return effective;
+}
+
+/** Where a template puts the Pagefind index builder, if it ships one. */
+const SEARCH_INDEX_SCRIPT = path.join("scripts", "build-search-index.mjs");
+
+/**
+ * Whether the scaffolded PROJECT has the Pagefind index builder.
+ *
+ * Read from the finished project directory rather than from the templates it was assembled out
+ * of, and the distinction is the whole point. A template can ship a file that the copy never
+ * carries across — which is exactly what happened to the blog's `scripts/` — and a decision taken
+ * from the source tree then writes a build step naming a file the project does not have.
+ *
+ * Asking the target makes the two impossible to disagree: whatever answers here is what `node`
+ * will resolve at build time, because it is the same directory.
+ *
+ * Must therefore be called AFTER every copy, which is where `generatePackageJson` already sits.
+ */
+export async function projectHasSearchIndexScript(
+  targetDir: string
+): Promise<boolean> {
+  return fs.pathExists(path.join(targetDir, SEARCH_INDEX_SCRIPT));
 }
 
 /**
@@ -152,6 +194,38 @@ const TEXT_EXTENSIONS = new Set([
  * Files to skip during template copy.
  */
 const SKIP_FILES = new Set([".DS_Store", "Thumbs.db", ".gitkeep"]);
+
+/**
+ * The template's ignore file, and the name it has to be SHIPPED under.
+ *
+ * npm removes `.gitignore` from every tarball it packs — always, and with no way to opt out; a
+ * `files` entry does not bring it back. So a template that stores the file under its real name
+ * loses it the moment the CLI is published, and only there: scaffolding from a checkout with
+ * `--local-template` keeps it, which is exactly the arrangement that hides the fault from
+ * everyone working on the repository.
+ *
+ * The consequence is not cosmetic. A scaffold writes a real `.env`, so the first `git add .` in a
+ * new project commits it.
+ *
+ * Storing it dotless and restoring the name on copy is what `create-next-app` and `create-vite`
+ * do, for this reason.
+ */
+const IGNORE_FILE_IN_TEMPLATE = "gitignore";
+const IGNORE_FILE_IN_PROJECT = ".gitignore";
+
+/**
+ * Restore `.gitignore` from the dotless name the template ships it under.
+ *
+ * A no-op when the template carries no ignore file, so a template without one is not given an
+ * empty file it never asked for.
+ */
+async function restoreIgnoreFile(targetDir: string): Promise<void> {
+  const shipped = path.join(targetDir, IGNORE_FILE_IN_TEMPLATE);
+  if (!(await fs.pathExists(shipped))) return;
+  await fs.move(shipped, path.join(targetDir, IGNORE_FILE_IN_PROJECT), {
+    overwrite: true,
+  });
+}
 
 // ============================================================
 // Template Path Resolution
@@ -426,7 +500,15 @@ export async function generatePackageJson(
   database: DatabaseConfig,
   useYalc: boolean = false,
   projectType: ProjectType = "blank",
-  templateDirs: readonly string[] = []
+  templateDirs: readonly string[] = [],
+  /**
+   * The project directory, once every copy has finished.
+   *
+   * Decides the Pagefind build step, which has to be settled against what the project HAS rather
+   * than what its templates ship — see {@link projectHasSearchIndexScript}. Omitting it means
+   * "there is no project on disk to ask", and no search step is emitted.
+   */
+  targetDir?: string
 ): Promise<string> {
   // Plugins are a publishable library, not an app — different package.json.
   if (projectType === "plugin") {
@@ -504,11 +586,20 @@ export async function generatePackageJson(
     tailwindcss: PINNED_VERSIONS.tailwindcss,
     eslint: PINNED_VERSIONS.eslint,
     "eslint-config-next": runtimeVersions["eslint-config-next"],
-    // Pagefind powers /search in the blog template. Zero-config
-    // static index generated at `next build` time. Templates that
-    // don't ship a /search page simply won't invoke it.
-    pagefind: "^1.1.0",
   };
+
+  // Read from the project that was just assembled, so the generated script can only name a
+  // file that is actually there.
+  const shipsSearchIndex = targetDir
+    ? await projectHasSearchIndexScript(targetDir)
+    : false;
+
+  // Pagefind builds the static index behind /search. DECLARED only where the
+  // builder ships, because the index script invokes it through `node`, which
+  // resolves from node_modules — an undeclared dependency that happens to be
+  // fetched on demand by some other route would build here and fail for a user
+  // whose registry or network says otherwise.
+  if (shipsSearchIndex) devDependencies.pagefind = "^1.1.0";
 
   // NOTE: the build-script allowlist (better-sqlite3, sharp, esbuild,
   // unrs-resolver) is NOT emitted here. pnpm 11 no longer reads the `pnpm`
@@ -526,12 +617,29 @@ export async function generatePackageJson(
       // prompts, and child supervision. `nextly dev` is gone; the only
       // supported dev command is the standard `next dev`.
       dev: "next dev --turbopack",
-      // Build: migrate DB + compile Next.js + (if present) generate
-      // the Pagefind search index. Templates without the search
-      // script silently skip the last step.
-      build:
-        "nextly migrate && next build && (test -f scripts/build-search-index.mjs && node scripts/build-search-index.mjs || true)",
-      "search:index": "node scripts/build-search-index.mjs",
+      // Build: migrate the database, compile Next.js, and generate the Pagefind
+      // search index for the templates that ship its builder.
+      //
+      // Whether that last step appears is decided HERE, from the files the
+      // scaffold actually received, rather than by a shell conditional in the
+      // script. Two reasons, and both were live:
+      //
+      // `npm run` uses cmd.exe on Windows, which has no `test` and no `true` —
+      // so the `(test -f … || true)` form this replaces failed for every Windows
+      // user, after `next build` had already succeeded. `&&` is all that remains,
+      // and cmd.exe understands it.
+      //
+      // And `|| true` turned a failed index build into a successful one. The
+      // search page then ships pointing at an index that was never written,
+      // which fails in the browser rather than in CI.
+      build: shipsSearchIndex
+        ? "nextly migrate && next build && node scripts/build-search-index.mjs"
+        : "nextly migrate && next build",
+      // Offered only where the file exists. A script that always fails is worse
+      // than an absent one: it reads as a supported command.
+      ...(shipsSearchIndex
+        ? { "search:index": "node scripts/build-search-index.mjs" }
+        : {}),
       start: "next start",
       lint: "next lint",
       nextly: "nextly",
@@ -733,6 +841,116 @@ export function generatePnpmWorkspaceYaml(): string {
   );
 }
 
+/**
+ * Generate the `.npmrc` for a scaffolded project, or `null` when it needs none.
+ *
+ * Written only for pnpm scaffolds, and only to undo a side effect of shipping
+ * `pnpm-workspace.yaml`: through pnpm 9.3 the presence of that file makes the
+ * project a workspace ROOT, so an ordinary
+ *
+ *     pnpm add zod
+ *
+ * is refused with `ERR_PNPM_ADDING_TO_ROOT` and a suggestion to pass `-w`. The
+ * check exists to stop a dependency landing in a monorepo's root instead of the
+ * package that wanted it; a scaffolded app has no other package, so there is
+ * nothing for it to protect and it only obstructs.
+ *
+ * Measured: 9.0.0 refuses `pnpm add` without this and accepts it with; 10.18.3
+ * and 11.0.0 accept it either way. Two alternatives were measured and rejected —
+ * declaring the root as a member (`packages: ["."]`) is refused identically, and
+ * the same setting written into `pnpm-workspace.yaml` is not read by pnpm 9 at
+ * all, since that file only became the settings home in 10.6.
+ *
+ * NOT written for npm, yarn or bun, which is the whole reason this is a separate
+ * function rather than an unconditional file: npm reads `.npmrc` too and prints
+ *
+ *     npm warn Unknown project config "ignore-workspace-root-check".
+ *     This will stop working in the next major version of npm.
+ *
+ * on every command. A permanent warning for the majority is a poor trade for a
+ * setting they cannot use.
+ *
+ * The residual gap, stated rather than left to be discovered: a project
+ * scaffolded with npm and later opened with pnpm 9.3 or older still meets
+ * `ERR_PNPM_ADDING_TO_ROOT`. That error names its own remedy, and the affected
+ * pnpm range is closed and shrinking.
+ */
+export function generateNpmrc(packageManager: PackageManager): string | null {
+  if (packageManager !== "pnpm") return null;
+
+  return (
+    "# This project is a single package, not a monorepo. pnpm 9 treats the\n" +
+    "# pnpm-workspace.yaml shipped for its build allowlist as declaring a\n" +
+    "# workspace root, which makes `pnpm add <pkg>` demand a -w flag. There is no\n" +
+    "# other package here for that check to protect.\n" +
+    `${NPMRC_WORKSPACE_ROOT_KEY}=true\n`
+  );
+}
+
+/** The setting {@link generateNpmrc} exists to add, named once so the writer can look for it. */
+const NPMRC_WORKSPACE_ROOT_KEY = "ignore-workspace-root-check";
+
+/**
+ * Give a scaffolded project the `.npmrc` its package manager needs, WITHOUT destroying one that
+ * is already there.
+ *
+ * Appends rather than writes. A scaffold does not always land on an empty directory — the CLI
+ * can overlay an existing project, and a `--local-template` can carry its own `.npmrc` — and that
+ * file is where private registries, auth tokens, proxies and `node-linker` live. Replacing it
+ * would break the install that runs moments later, and would do it by pointing at the wrong
+ * registry rather than by failing loudly.
+ *
+ * An existing declaration of the key WINS, whatever its value. Someone who has written
+ * `ignore-workspace-root-check=false` on purpose means it, and a scaffold is not the right place
+ * to overrule them.
+ *
+ * One helper for both scaffold types, because two copies of "write this file" drift: a correction
+ * to the app path that misses the plugin path is invisible until someone scaffolds a plugin.
+ */
+async function writeScaffoldNpmrc(
+  targetDir: string,
+  packageManager: PackageManager
+): Promise<void> {
+  const addition = generateNpmrc(packageManager);
+  if (!addition) return;
+
+  const npmrcPath = path.join(targetDir, ".npmrc");
+
+  // A SYMLINK here is left completely alone. Reading and writing it back would follow the link
+  // and append to whatever it points at — commonly a shared or home-directory config — so a
+  // scaffold would silently edit settings belonging to every other project on the machine.
+  // `lstat` reports the link itself rather than its target, which is the only way to see this:
+  // `pathExists` and `readFile` both resolve it and report the referent as though it were here.
+  //
+  // Skipping means a pnpm 9 user with a linked `.npmrc` still meets ERR_PNPM_ADDING_TO_ROOT on
+  // their first `pnpm add`. That error names its own remedy; silently rewriting a file outside
+  // the project does not, and is not the scaffolder's to make.
+  const link = await fs.lstat(npmrcPath).catch(() => null);
+  if (link?.isSymbolicLink()) return;
+
+  // A HARD link is the same hazard wearing a disguise `lstat` cannot see through: it reports a
+  // regular file, because that is exactly what a hard link is. The shared config and the path
+  // here are one inode, so appending would edit every project pointing at it.
+  //
+  // `nlink` is what separates them — an ordinary file has one directory entry. Checked after the
+  // symlink test rather than instead of it: the two are different relationships and a file can
+  // only be one of them, so neither check subsumes the other.
+  if (link && link.nlink > 1) return;
+
+  const existing = link ? await fs.readFile(npmrcPath, "utf-8") : "";
+
+  // Matched at the start of a line so a value mentioning the key, or a commented-out example,
+  // is not read as a declaration.
+  const alreadyDeclared = new RegExp(
+    `^\\s*${NPMRC_WORKSPACE_ROOT_KEY}\\s*=`,
+    "m"
+  ).test(existing);
+  if (alreadyDeclared) return;
+
+  const separator = existing === "" || existing.endsWith("\n") ? "" : "\n";
+  await fs.writeFile(npmrcPath, existing + separator + addition, "utf-8");
+}
+
 // ============================================================
 // Copy Template (Main Orchestrator)
 // ============================================================
@@ -748,6 +966,19 @@ export interface CopyTemplateOptions {
   approach?: ProjectApproach;
   /** Explicit paths to base and template directories (from download or --local-template) */
   templateSource?: { basePath: string; templatePath: string };
+  /**
+   * The package manager the project will be installed with, which decides
+   * whether a `.npmrc` is written — see {@link generateNpmrc}.
+   *
+   * REQUIRED, and deliberately so. As an optional field defaulting to npm, the
+   * CLI's one line wiring the detected manager through could be deleted and
+   * every scaffold would silently lose its `.npmrc` — a default is a decision
+   * made for a caller that never stated one, and here the wrong decision is
+   * indistinguishable from the right one until a user runs `pnpm add`. Required
+   * makes that deletion a compile error instead of something a test has to
+   * notice.
+   */
+  packageManager: PackageManager;
   /**
    * Suppress the internal "directory already exists" guard. Set by the
    * installer when it has already negotiated a directory conflict with
@@ -782,6 +1013,7 @@ export async function copyTemplate(
     useYalc = false,
     approach,
     templateSource,
+    packageManager,
     allowExistingTarget = false,
   } = options;
 
@@ -818,7 +1050,13 @@ export async function copyTemplate(
   // app — no base app, no next.config/.env generation, no frontend page. Copy
   // the plugin tree as-is, generate its package.json, fill placeholders, done.
   if (projectType === "plugin") {
-    await copyPluginTemplate({ projectName, typeDir, targetDir, useYalc });
+    await copyPluginTemplate({
+      projectName,
+      typeDir,
+      targetDir,
+      useYalc,
+      packageManager,
+    });
     return;
   }
 
@@ -902,6 +1140,18 @@ export async function copyTemplate(
     });
   }
 
+  // The build steps a template brings with it — the blog's Pagefind index builder is the only
+  // one today. Without this the template's own `package.json` scripts name a file the project
+  // never receives, which is how the search index came to be silently absent from every blog
+  // scaffold: the build invoked it behind a `test -f` guard that swallowed the miss.
+  const templateScriptsDir = path.join(typeDir, "scripts");
+  if (await fs.pathExists(templateScriptsDir)) {
+    await fs.copy(templateScriptsDir, path.join(targetDir, "scripts"), {
+      overwrite: false,
+      filter: src => !SKIP_FILES.has(path.basename(src)),
+    });
+  }
+
   const frontendPagePath = path.join(
     targetDir,
     "src",
@@ -925,7 +1175,8 @@ export async function copyTemplate(
     database,
     useYalc,
     projectType,
-    [baseDir, typeDir]
+    [baseDir, typeDir],
+    targetDir
   );
   await fs.writeFile(
     path.join(targetDir, "package.json"),
@@ -942,6 +1193,14 @@ export async function copyTemplate(
     generatePnpmWorkspaceYaml(),
     "utf-8"
   );
+
+  // Step 6c: Give the project back the ignore file npm strips out of the tarball.
+  await restoreIgnoreFile(targetDir);
+
+  // Step 6d: Undo the side effect of the workspace file above for the pnpm versions that
+  // read it as a workspace declaration. Only for pnpm, because npm warns about the setting
+  // on every command — see generateNpmrc.
+  await writeScaffoldNpmrc(targetDir, packageManager);
 
   // Step 7: Create SQLite data directory if needed
   // SQLite stores its database file at ./data/nextly.db and the parent
@@ -977,8 +1236,9 @@ async function copyPluginTemplate(opts: {
   typeDir: string;
   targetDir: string;
   useYalc: boolean;
+  packageManager: PackageManager;
 }): Promise<void> {
-  const { projectName, typeDir, targetDir, useYalc } = opts;
+  const { projectName, typeDir, targetDir, useYalc, packageManager } = opts;
 
   if (!(await fs.pathExists(typeDir))) {
     throw new Error(
@@ -1012,12 +1272,18 @@ async function copyPluginTemplate(opts: {
   // pnpm 11 ignores the package.json `pnpm` field, and the embedded dev/
   // playground uses better-sqlite3 (native build) — so this file is what lets
   // `pnpm install` build it instead of aborting with ERR_PNPM_IGNORED_BUILDS.
-  // Harmless for npm/yarn/pnpm 9.
   await fs.writeFile(
     path.join(targetDir, "pnpm-workspace.yaml"),
     generatePnpmWorkspaceYaml(),
     "utf-8"
   );
+
+  // The plugin scaffold is a git repository too, and npm strips its ignore file the same way.
+  await restoreIgnoreFile(targetDir);
+
+  // It installs like any other project too, so it meets the same workspace-root refusal the
+  // pnpm workspace file provokes on pnpm 9 — through the same writer as the app path.
+  await writeScaffoldNpmrc(targetDir, packageManager);
 
   // Fill plugin placeholders across the copied tree (src/ + dev/).
   const nextlyRange = await resolvePluginNextlyRange(useYalc);

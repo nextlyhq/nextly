@@ -26,6 +26,8 @@ import type {
   PluginDefinition,
 } from "./plugin-context";
 import { pluginAdminSlug } from "./plugin-slug";
+import { collectPluginRoutes } from "./routes/collect-routes";
+import { isRouteError } from "./routes/route-error";
 import { validatedClientConfig } from "./validate-client-config";
 import { validatePluginSlugs } from "./validate-slugs";
 
@@ -90,7 +92,27 @@ export interface PluginAdminMeta {
    * plugin mounts. Present only for enabled plugins (routes of a disabled
    * plugin are not mounted).
    */
-  routes?: Array<{ method: string; path: string }>;
+  routes?: Array<{ method: string; path: string; fullPath: string }>;
+  /**
+   * The routes a DISABLED plugin declares but does not currently serve.
+   *
+   * Routes only, and the omission of permissions is deliberate. Routes are the
+   * asymmetric half: `collectPluginRoutes` covers enabled plugins only, so a
+   * disabled plugin serves none. Permissions are folded over ALL plugins
+   * including disabled ones, seeded, and assigned — so a disabled plugin's
+   * permissions already exist, and listing them here would claim they are
+   * pending when they are not.
+   *
+   * Populated only when the plugin is disabled, so this and `routes` above are
+   * never both present. Nothing may concatenate them: a caller that did would
+   * be claiming a disabled plugin serves endpoints it does not.
+   *
+   * Only routes that could actually mount appear. A path without a leading
+   * slash makes `collectPluginRoutes` throw at boot once the plugin is
+   * enabled, so presenting it as something enabling would add is a promise
+   * this cannot keep.
+   */
+  whenEnabled?: { routes?: PluginAdminMeta["routes"] };
   /** Sidebar menu items — present only for enabled plugins. */
   menu?: PluginMenuItem[];
   /** Custom admin pages — present only for enabled plugins. */
@@ -158,6 +180,67 @@ export { pluginAdminSlug } from "./plugin-slug";
  * Disabled plugins (`enabled: false`) keep their entry (their schema still
  * applies) but contribute NO behavioral admin UI — no menu/pages/settings.
  */
+/**
+ * The routes a plugin would actually serve, with the namespace they answer at.
+ *
+ * Asks `collectPluginRoutes` rather than restating its rules. That function is
+ * the canonical answer to "would these mount": it rejects a path without a
+ * leading slash and rejects two routes sharing a `(method, full path)`.
+ * Re-implementing either predicate here would let the admin advertise a route
+ * boot refuses, which is the whole failure this guards.
+ *
+ * Folded against the plugins that are ALREADY enabled, not against this plugin
+ * alone, because a collision need not be self-inflicted: namespaces are built
+ * from package names, so an enabled `foo` declaring `GET /bar/x` and a
+ * disabled `foo/bar` declaring `GET /x` both resolve to `/plugins/foo/bar/x`.
+ * Enabling the second is what fails, and a fold over one plugin cannot see it.
+ *
+ * The subject is forced enabled, since the question is what WOULD happen. Its
+ * routes are then picked back out by owner: a collision reported against an
+ * already-enabled sibling means the subject's route is the one that could not
+ * be added.
+ *
+ * `undefined` when nothing would mount, so a caller renders nothing rather
+ * than an empty section.
+ */
+function mountableRoutes(
+  plugin: PluginDefinition,
+  siblings: readonly PluginDefinition[]
+): PluginAdminMeta["routes"] | undefined {
+  const routes = plugin.contributes?.routes;
+  if (!routes || routes.length === 0) return undefined;
+
+  // Enabled siblings first, so a collision is attributed to the sibling that
+  // already holds the path and the subject's route is the one rejected.
+  const others = siblings.filter(
+    other => other !== plugin && other.enabled !== false
+  );
+
+  let collected;
+  try {
+    collected = collectPluginRoutes([...others, { ...plugin, enabled: true }]);
+  } catch (error) {
+    // Only route errors reach here — `collectPluginRoutes` throws
+    // `routeInvalidPathError` and `routeCollisionError` and nothing else — and
+    // both mean the same thing to this caller: these declarations do not
+    // mount, so there is nothing honest to advertise. Rethrown otherwise,
+    // since that would be a defect rather than a verdict.
+    if (!isRouteError(error)) throw error;
+    return undefined;
+  }
+
+  // Method + path only, plus the namespace: handlers and middleware are code
+  // and never serialize.
+  const mine = collected.filter(c => c.pluginName === plugin.name);
+  return mine.length > 0
+    ? mine.map(c => ({
+        method: c.method,
+        path: c.path,
+        fullPath: c.fullPath,
+      }))
+    : undefined;
+}
+
 export function buildPluginAdminMeta(
   plugins: PluginDefinition[],
   pluginOverrides: Record<string, PluginOverride> | undefined
@@ -263,7 +346,16 @@ export function buildPluginAdminMeta(
     // Behavioral contributions summarized for the detail page, enabled only:
     // a disabled plugin's routes are not mounted and its permissions grant
     // nothing, so listing them would overstate what the install does.
+    // One shaper, two destinations. Which name the routes travel under is the
+    // difference between "this plugin serves these" and "enabling it would
+    // serve these", and an `if/else` is what stops both being true at once.
+    //
+    // Permissions are NOT part of this: they are folded over every plugin,
+    // disabled included, so they are already seeded and are not pending on
+    // anything. Only their listing here is withheld while disabled.
+    const declaredRoutes = mountableRoutes(plugin, plugins);
     if (isEnabled) {
+      if (declaredRoutes) meta.routes = declaredRoutes;
       const permissions = plugin.contributes?.permissions;
       if (permissions && permissions.length > 0) {
         meta.permissions = permissions.map(p => ({
@@ -274,11 +366,8 @@ export function buildPluginAdminMeta(
           ...(p.danger ? { danger: p.danger } : {}),
         }));
       }
-      const routes = plugin.contributes?.routes;
-      if (routes && routes.length > 0) {
-        // Method + path only: handlers/middleware are code and never serialize.
-        meta.routes = routes.map(r => ({ method: r.method, path: r.path }));
-      }
+    } else if (declaredRoutes) {
+      meta.whenEnabled = { routes: declaredRoutes };
     }
 
     // Custom field types — serialized regardless of enabled state so the
