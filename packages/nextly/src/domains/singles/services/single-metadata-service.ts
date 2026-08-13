@@ -477,6 +477,15 @@ export class SingleMetadataService {
     // the caller's.
     const current = await this.refreshForUpdate(args);
 
+    // 🔴 The plugin judge is re-consulted here for the same reason the create re-consults it: an
+    // HMR reload can replace the process-global field-type registry while this request waits, and
+    // `planUpdate` below renders DDL against the NEW registration while `updateData.fields` still
+    // carries options only the old one accepted.
+    const { assertValidPluginFieldOptions } = await import(
+      "../../../api/fields-payload"
+    );
+    assertValidPluginFieldOptions(args.fields ?? []);
+
     // The `was*` flags describe the state being transitioned FROM, so they follow the refreshed
     // record. The `is*`/`has*` flags describe what the request asked for — but only where it
     // actually asked: the caller resolves an absent toggle to the value it read, and that value can

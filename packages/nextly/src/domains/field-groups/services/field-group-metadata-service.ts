@@ -141,8 +141,20 @@ export class FieldGroupMetadataService {
   private async createFieldGroupExcluded(
     input: CreateFieldGroupInput
   ): Promise<CreateFieldGroupResult> {
-    // 0. REFUSE a table another field group owns, before anything is executed.
+    // 0. RE-ESTABLISH every precondition the caller checked outside this exclusion.
+    //
+    // 🔴 One step, deliberately, and the place a NEW precondition goes. Both of these were checked
+    // by the transport before the lock existed: a table another field group owns, and whether each
+    // plugin field's options satisfy that plugin. The second is the subtle one — what changes while
+    // this request waits is not the input but the JUDGE, because an HMR reload replaces the
+    // process-global field-type registry from inside this same exclusion. A declaration the old
+    // registration accepted would otherwise be built and stored against the new one, and every
+    // later write to the field group would fail on options the active plugin rejects.
     await this.assertTableUnowned(input);
+    const { assertValidPluginFieldOptions } = await import(
+      "../../../api/fields-payload"
+    );
+    assertValidPluginFieldOptions(input.fields);
 
     // 1. PLAN. The generator validates as well as renders, so a request it refuses leaves no table
     // and no row behind.

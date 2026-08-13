@@ -430,6 +430,47 @@ describe("a Schema Builder change and the storage migration exclude each other",
     expect(registry.registerSingle).not.toHaveBeenCalled();
   });
 
+  it("re-judges plugin field options on UPDATE too, not only on create", async () => {
+    // 🔴 Its own test rather than a parameter on the create one. The create fix was applied and the
+    // two sibling call sites — this and the field-group create — were left behind, which is the
+    // defect this file keeps catching: a fix landing in one location while identical code stands a
+    // few lines away. A shared test would have hidden that by covering "the validator runs" rather
+    // than "it runs HERE".
+    const adapter = makeAdapter({ mainTableExists: true });
+    const { service, registry } = makeService(adapter);
+    pluginOptionRefusal.error = NextlyError.validation({
+      errors: [
+        {
+          path: "fields.0.options",
+          code: "invalid_options",
+          message: "plugin rejected its own options",
+        },
+      ],
+    });
+
+    await expect(
+      service.updateSingleSchema({
+        slug: "page",
+        existing: {
+          slug: "page",
+          tableName: "single_page",
+          fields: [],
+          schemaHash: "unchanged",
+        },
+        updateData: { fields: [{ name: "hero", type: "plugin_thing" }] },
+        fields: [{ name: "hero", type: "plugin_thing" }],
+        isLocalized: false,
+        wasLocalized: false,
+        localizedRequested: false,
+        hasStatus: false,
+        wasStatus: false,
+        statusRequested: false,
+      } as unknown as Parameters<typeof service.updateSingleSchema>[0])
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    expect(registry.updateSingle).not.toHaveBeenCalled();
+  });
+
   it("refuses to CREATE onto a table claimed while it waited", async () => {
     // 🔴 The registry insert at the end already rejects the duplicate row, which is why this looks
     // unnecessary and is not. Before that insert the create has already run `CREATE TABLE IF NOT

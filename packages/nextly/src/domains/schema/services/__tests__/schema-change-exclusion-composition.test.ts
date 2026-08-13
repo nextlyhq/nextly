@@ -13,9 +13,20 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+/** Set to make the plugin-option validator refuse, standing in for a registry swapped underneath. */
+const pluginOptionRefusal: { error: unknown } = { error: undefined };
+
+vi.mock("../../../../api/fields-payload", () => ({
+  assertValidPluginFieldOptions: vi.fn(() => {
+    if (pluginOptionRefusal.error !== undefined)
+      throw pluginOptionRefusal.error;
+  }),
+}));
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
+import { NextlyError } from "../../../../errors/nextly-error";
 import type { Logger } from "../../../../shared/types";
 import {
   hashManifest,
@@ -138,6 +149,7 @@ const createSingle = (service: SingleMetadataService) =>
 
 beforeEach(() => {
   executed.length = 0;
+  pluginOptionRefusal.error = undefined;
 });
 
 describe("a schema change and the storage migration contend for one row", () => {
@@ -279,6 +291,33 @@ describe("a field-group create contends for the same row", () => {
 
     expect(ownerDuringWork).toMatch(/^create field group "hero"#/);
     expect(adapter.migrationLock.ownerNow()).toBeNull();
+  });
+
+  it("re-judges plugin field options inside the exclusion", async () => {
+    // 🔴 The field-group twin of the Single create check. It was the call site LEFT BEHIND when the
+    // Single one was fixed, so it gets its own assertion rather than sharing one: a test that only
+    // proves "the validator runs somewhere" is exactly what let this sit unfixed for a round.
+    //
+    // What changes while the request waits is the JUDGE, not the input — an HMR reload replaces the
+    // process-global field-type registry from inside this same exclusion.
+    const adapter = makeAdapter();
+    const { service, registry } = makeFieldGroupService(adapter);
+    pluginOptionRefusal.error = NextlyError.validation({
+      errors: [
+        {
+          path: "fields.0.options",
+          code: "invalid_options",
+          message: "plugin rejected its own options",
+        },
+      ],
+    });
+
+    await expect(createFieldGroup(service)).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
+
+    expect(executed.filter(sql => !isMigrationLockStatement(sql))).toEqual([]);
+    expect(registry.registerComponent).not.toHaveBeenCalled();
   });
 
   it("refuses, and builds nothing, while another run holds the lock", async () => {
