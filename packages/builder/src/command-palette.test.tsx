@@ -10,7 +10,13 @@
  * Every case below is reachable only because commands are DATA. Mounting an editor to test that a
  * disabled command is hidden would make the test about the editor.
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -244,6 +250,104 @@ describe("the host can drive it", () => {
     // Windows and Linux. Escape closes on all three.
     pressPaletteKey();
     expect(screen.getByText("Still here")).toBeTruthy();
+  });
+
+  it("hands focus back to whatever opened it", async () => {
+    render(
+      <ShortcutProvider>
+        <button type="button">Origin control</button>
+        <CommandPalette
+          commands={[{ id: "a", label: "Anything", run: noop }]}
+        />
+      </ShortcutProvider>
+    );
+
+    const origin = screen.getByRole("button", { name: "Origin control" });
+    origin.focus();
+    expect(document.activeElement).toBe(origin);
+
+    pressPaletteKey();
+    // Radix restores focus to the dialog's TRIGGER, and a palette opened by a keystroke has none
+    // — so without the restore, closing drops focus onto <body> and a keyboard user starts again
+    // from the top of the document.
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    await waitFor(() => expect(document.activeElement).toBe(origin));
+  });
+
+  it("leaves focus alone when a command moved it deliberately", async () => {
+    render(
+      <ShortcutProvider>
+        <button type="button">Origin control</button>
+        <button type="button">Command target</button>
+        <CommandPalette
+          commands={[
+            {
+              id: "a",
+              label: "Focus elsewhere",
+              run: () =>
+                screen.getByRole("button", { name: "Command target" }).focus(),
+            },
+          ]}
+        />
+      </ShortcutProvider>
+    );
+
+    const origin = screen.getByRole("button", { name: "Origin control" });
+    origin.focus();
+    pressPaletteKey();
+    fireEvent.click(screen.getByText("Focus elsewhere"));
+
+    // The restore must not undo what the command asked for, including after the deferred pass.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "Command target" })
+      )
+    );
+  });
+
+  it("tells a controlling host to close when it becomes disabled", () => {
+    const onOpenChange = vi.fn();
+    const commands: BuilderCommand[] = [
+      { id: "a", label: "Open already", run: noop },
+    ];
+    const { rerender } = mount(
+      <CommandPalette commands={commands} open onOpenChange={onOpenChange} />
+    );
+
+    rerender(
+      <ShortcutProvider>
+        <CommandPalette
+          commands={commands}
+          open
+          onOpenChange={onOpenChange}
+          enabled={false}
+        />
+      </ShortcutProvider>
+    );
+
+    // Clearing only our own copy would leave the host's `open` true, and the palette would reopen
+    // the moment the shell widened again.
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("gives an ungrouped bucket a key a group name cannot collide with", () => {
+    // Group names are unrestricted, so a host may legitimately name one `__ungrouped`. Sharing a
+    // React key with the ungrouped bucket is duplicate-key reconciliation: a later update can
+    // reuse the wrong fragment and duplicate or drop rows.
+    mount(
+      <CommandPalette
+        commands={[
+          { id: "1", label: "Loose row", run: noop },
+          { id: "2", label: "Named row", group: "__ungrouped", run: noop },
+        ]}
+      />
+    );
+    pressPaletteKey();
+
+    expect(screen.getByText("Loose row")).toBeTruthy();
+    expect(screen.getByText("Named row")).toBeTruthy();
+    expect(screen.getAllByText(/^(Loose row|Named row)$/)).toHaveLength(2);
   });
 
   it("cannot be opened while the host has it disabled", () => {

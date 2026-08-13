@@ -402,6 +402,26 @@ describe("a viewport too narrow for the shell", () => {
     expect(screen.queryByText("Should stay hidden")).toBeNull();
   });
 
+  it("keeps its own answer authoritative over an enabling prop", () => {
+    // `enabled` NARROWS the shell's state rather than replacing it. A host passing a condition of
+    // its own — `enabled={!readOnly}` — would otherwise re-enable the portalling palette on a
+    // viewport where the shell has hidden everything else, which is the case it exists to cover.
+    stubViewport(false);
+    render(
+      <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+        <CommandPalette
+          commands={[{ id: "a", label: "Should stay hidden", run: () => {} }]}
+          enabled
+        />
+      </BuilderShell>
+    );
+
+    fireEvent.keyDown(document, { key: "k", metaKey: true });
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+
+    expect(screen.queryByText("Should stay hidden")).toBeNull();
+  });
+
   it("does not cycle regions while the editor is hidden", () => {
     // The slots stay mounted behind the notice, which leaves the F6 binding
     // registered over regions that are all `inert`. Left enabled it consumed the

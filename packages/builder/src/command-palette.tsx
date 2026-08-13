@@ -108,9 +108,11 @@ export interface CommandPaletteProps {
    * puts its slots behind below its minimum width — without this it would float, fully
    * interactive, over the narrow-screen notice.
    *
-   * Left to the default in a shell. Pass it only to disable the palette for a reason of the
-   * host's own; re-deriving the shell's width here would be a second implementation of a question
-   * the shell already answers.
+   * NARROWS the shell's answer rather than replacing it: passing `false` disables the palette,
+   * and passing `true` does NOT re-enable one inside a shell that has taken itself out of
+   * service. A host condition of its own — `enabled={!readOnly}` — is therefore safe to pass
+   * without also re-deriving the shell's minimum width, which would be a second implementation of
+   * a question the shell already answers.
    */
   enabled?: boolean;
 }
@@ -187,7 +189,11 @@ function PaletteSurface({
   // The shell's own answer, so the width that hides its slots is the width that disables the
   // palette. `true` outside a shell, which is what a standalone caller wants.
   const shellIsActive = useShellIsActive();
-  const enabled = enabledProp ?? shellIsActive;
+  // The prop NARROWS the shell's answer rather than replacing it. A host passing a condition of
+  // its own — `enabled={!readOnly}` — would otherwise re-enable the palette whenever that
+  // condition held, including on a viewport where the shell has hidden everything else, which is
+  // the case this prop exists to cover.
+  const enabled = (enabledProp ?? true) && shellIsActive;
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
   const isControlled = controlledOpen !== undefined;
   // One expression decides whether the palette is showing, so `enabled` cannot be honoured by the
@@ -198,17 +204,56 @@ function PaletteSurface({
   // Masking the state is not enough: `open` above hides it, but the stored `true` survives, so
   // re-enabling — a shell widening back past its minimum — would reopen the palette without
   // anyone having pressed the hotkey. Cleared rather than masked, so closing is permanent.
+  //
+  // A CONTROLLED host owns that state instead, and clearing our copy would leave its `open` still
+  // true and reopen the palette the moment the shell widens. It is told, so its state clears too.
   React.useEffect(() => {
-    if (!enabled) setUncontrolledOpen(false);
-  }, [enabled]);
+    if (enabled) return;
+    setUncontrolledOpen(false);
+    if (isControlled && controlledOpen) onOpenChange?.(false);
+  }, [enabled, isControlled, controlledOpen, onOpenChange]);
+
+  // What had focus when the palette opened, so closing can hand it back. Radix restores focus to
+  // the dialog's TRIGGER, and a palette opened by a keystroke has none — so without this, closing
+  // drops focus onto `<body>` and a keyboard user starts again from the top of the document.
+  const openedFrom = React.useRef<HTMLElement | null>(null);
+  // A command that deliberately moves focus must win over that restore.
+  const commandMovedFocus = React.useRef(false);
 
   const setOpen = React.useCallback(
     (next: boolean) => {
+      if (next) {
+        const active = document.activeElement;
+        openedFrom.current = active instanceof HTMLElement ? active : null;
+        commandMovedFocus.current = false;
+      }
       if (!isControlled) setUncontrolledOpen(next);
       onOpenChange?.(next);
     },
     [isControlled, onOpenChange]
   );
+
+  const wasOpen = React.useRef(false);
+  React.useEffect(() => {
+    const closing = wasOpen.current && !open;
+    wasOpen.current = open;
+    if (!closing) return;
+
+    const target = openedFrom.current;
+    openedFrom.current = null;
+    if (commandMovedFocus.current || !target) return;
+
+    // Deferred by a task rather than run here. Radix is still unwinding its focus trap at this
+    // point — the search input is measurably still focused and still connected — so restoring now
+    // would be overwritten a moment later by the trap's own final move.
+    const restore = setTimeout(() => {
+      const active = document.activeElement;
+      const strayed =
+        !active || active === document.body || !active.isConnected;
+      if (target.isConnected && strayed) target.focus();
+    }, 0);
+    return () => clearTimeout(restore);
+  }, [open]);
 
   // Read through a ref so the binding's `run` never goes stale, without re-registering the layer
   // on every render — re-registering would move it to the top of its depth and change precedence
@@ -255,6 +300,9 @@ function PaletteSurface({
       // then competes with a palette that is only just unmounting, leaving focus somewhere
       // neither component chose.
       flushSync(() => setOpen(false));
+      // Claimed before running: a command that focuses something of its own must not have that
+      // undone by the restore above.
+      commandMovedFocus.current = true;
       command.run();
     },
     [setOpen]
@@ -284,7 +332,9 @@ function PaletteSurface({
       <CommandList>
         <CommandEmpty>{emptyMessage}</CommandEmpty>
         {groups.map(({ group, commands: groupCommands }, index) => (
-          <React.Fragment key={group ?? "__ungrouped"}>
+          <React.Fragment
+            key={group === undefined ? "ungrouped" : `group:${group}`}
+          >
             {index > 0 && <CommandSeparator />}
             <CommandGroup heading={group}>
               {groupCommands.map(command => (
