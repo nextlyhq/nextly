@@ -172,7 +172,11 @@ of the key — splitting or trimming those produces a key that was never used,
 which matches nothing and fails in the silent direction:
 
 ```bash
-NEXTLY_SECRET_PREVIOUS=["old,with,commas","  spaced  "]
+# Single quotes are REQUIRED. Without them the shell strips the inner double
+# quotes and the value becomes `[old,with,commas,  spaced  ]`, which is not
+# JSON — it falls back to comma splitting and derives four keys that were never
+# used, so lookups and erasure silently miss the rows this is meant to reach.
+NEXTLY_SECRET_PREVIOUS='["old,with,commas","  spaced  "]'
 ```
 
 The JSON form also names two generations no string can:
@@ -186,12 +190,13 @@ The JSON form also names two generations no string can:
 
 ```bash
 # was unkeyed in development, now has a secret
-NEXTLY_SECRET_PREVIOUS=[null]
+NEXTLY_SECRET_PREVIOUS='[null]'
 ```
 
 An empty entry in the **comma** form is dropped rather than rejected: a trailing
 comma is the likeliest way to write the list, and nothing about `older,` says a
-second key was meant. Write `[""]` when you mean it.
+second key was meant. Write `'[""]'` when you mean it — with the outer single quotes, for the same
+reason.
 
 ---
 
