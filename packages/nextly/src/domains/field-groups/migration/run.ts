@@ -42,6 +42,7 @@ import {
   hashManifest,
   hashRegistryIdentity,
   MIGRATION_TARGET,
+  retargetName,
   tableRenamesOf,
   type ManifestEntry,
   type RegistryRow,
@@ -357,6 +358,31 @@ export async function runFieldGroupMigration(
   const contended = async (): Promise<boolean> =>
     (await observeContention()).kind === "held";
 
+  /**
+   * What the last attempt saw, so the next one can tell whether anything moved.
+   *
+   * 🔴 A held lock is NOT evidence of a live writer. This lock has no TTL and no auto-steal by
+   * design — a process that dies holding it leaves it held until an operator clears it — so
+   * `{ kind: "held" }` proves that ownership was once RECORDED, not that anyone is moving now.
+   * Judging contention on that alone lets a stale row plus a genuinely permanent mismatch (a
+   * restored marker whose rename was never applied) spend three attempts and then be reported as
+   * contention, which is precisely the storage-conflict-as-traffic answer this path exists to
+   * remove, arriving through a different door.
+   *
+   * So contention has to be evidenced by CHANGE. A live writer moves something between attempts:
+   * the refusal it provokes differs, or the lock changes hands. A dead holder moves nothing, and an
+   * unchanged world across every attempt is the signature that separates the two.
+   */
+  let lastSignature: string | undefined;
+  let worldMoved = false;
+
+  const signatureOf = (error: unknown, lock: LockObservation): string => {
+    const reason = NextlyError.is(error)
+      ? JSON.stringify(error.logContext ?? {})
+      : String(error);
+    return `${lock.kind === "held" ? lock.owner : lock.kind}::${reason}`;
+  };
+
   const runOnce = (finalAttempt: boolean): Promise<MigrationOutcome> =>
     withMigrationSession(
       {
@@ -608,8 +634,20 @@ export async function runFieldGroupMigration(
           ) {
             throw error;
           }
+          const signature = signatureOf(error, observedLock);
+          if (lastSignature !== undefined && signature !== lastSignature) {
+            worldMoved = true;
+          }
+          lastSignature = signature;
           // Not the final attempt: let it out so the whole session runs again, marker included.
           if (!finalAttempt) throw error;
+
+          // 🔴 Out of attempts, and the answer now turns on whether anything MOVED. An identical
+          // failure beside an unchanged lock owner on every attempt is a world standing still, and
+          // the held row behind it is a claim someone left when their process died rather than a
+          // writer at work. Reporting that as contention buries a real storage conflict under the
+          // word traffic — so it is raised, exactly as it would be with no lock row at all.
+          if (!worldMoved) throw error;
 
           // Out of attempts. Report the manifest's plan and say plainly that it was never scored
           // against this database, rather than returning an empty list — which reads as "nothing to
@@ -784,6 +822,14 @@ export async function runFieldGroupMigration(
       ) {
         throw error;
       }
+      // Recorded here too, so a failure that leaves by the outer door counts towards the same
+      // judgement. Two paths deciding "did the world move" from different evidence is the drift
+      // this file has already been corrected for twice.
+      const signature = signatureOf(error, observedLock);
+      if (lastSignature !== undefined && signature !== lastSignature) {
+        worldMoved = true;
+      }
+      lastSignature = signature;
     }
   }
 }
@@ -1074,9 +1120,26 @@ export async function readRegistryRows(
     // `hasCompanion: false`. That feeds the registry hash, so an in-flight run then fails the
     // recorded-hash comparison and raises a PERMANENT refusal — a refusal manufactured by the
     // reading, at the one moment a writer is demonstrably active.
+    // 🔴 BOTH spellings, because the registry row and its companion move in separate commits. MySQL
+    // commits each `RENAME TABLE` as it is issued and the registry row is updated after, so there is
+    // a valid window in which one consistent catalog holds the MIGRATED companion beside a
+    // still-legacy row. Asking only the legacy name there answers "no companion", which changes the
+    // registry hash — and an in-flight run then fails the recorded-hash comparison and refuses
+    // PERMANENTLY, before the retryable block, while the lock reports the writer that caused it.
+    //
+    // Reading both is not a widening: the two names denote the same table on either side of a
+    // rename this migration itself performs, so finding either one is finding the companion.
+    const migratedTable = retargetName({
+      slug: String(row.slug),
+      tableName: String(row.table_name),
+    });
     const hasCompanion =
       isLocalized(row.localized) &&
-      resolveCatalogName(catalog, `${row.table_name}${suffix}`) !== undefined;
+      (resolveCatalogName(catalog, `${row.table_name}${suffix}`) !==
+        undefined ||
+        (migratedTable !== null &&
+          resolveCatalogName(catalog, `${migratedTable}${suffix}`) !==
+            undefined));
     out.push({
       id: String(row.id),
       slug: String(row.slug),

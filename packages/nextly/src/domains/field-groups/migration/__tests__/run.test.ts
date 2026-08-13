@@ -1326,11 +1326,60 @@ describe("a preview that meets a writer mid-run", () => {
     );
   });
 
+  // 🔴 THE control for the durable-claim hole. This lock has no TTL and no auto-steal by design, so
+  // a process that dies holding it leaves the row held until an operator clears it. A held row
+  // therefore proves ownership was RECORDED, not that anyone is moving — and combined with a
+  // genuinely permanent mismatch it would spend three attempts and then report a storage conflict
+  // as contention, which is the answer this whole path exists to remove arriving by another door.
+  // Nothing changes across the attempts here, and an unchanged world is the signature of a claim
+  // nobody is behind.
+  it("refuses a permanent mismatch behind a lock nobody is moving", async () => {
+    const { adapter, trace } = createRunWorld(tornWorld());
+
+    await expect(
+      runFieldGroupMigration({
+        adapter,
+        logger,
+        direction: "up",
+        dryRun: true,
+      })
+    ).rejects.toSatisfy(
+      error =>
+        NextlyError.is(error) &&
+        error.logContext?.reason ===
+          "an object using the migrated storage name exists but no recorded progress accounts for it"
+    );
+
+    // Re-read, because the held row is a reason to look again — but raised, because looking again
+    // found the identical world every time.
+    expect(markerReads(trace)).toBe(3);
+  });
+
   // The plan is reported rather than withheld, and labelled rather than passed off as scored. An
   // empty list would read as "nothing to do", which is the silent wrong answer this whole path
   // exists to remove.
   it("reports an unreconciled plan when the writer never lets go", async () => {
-    const { adapter, trace } = createRunWorld(tornWorld());
+    // 🔴 The world MOVES between attempts, because that is what separates a live writer from a
+    // claim a dead process left behind. Two groups, and which one is caught mid-rename changes each
+    // time — a writer working through its plan. A static world with a held row is the durable-claim
+    // case below, and must refuse rather than be reported as traffic.
+    const world: RunWorld = {
+      tables: [LEGACY_REGISTRY, "comp_other", "fg_hero", MIGRATION_LOCK_TABLE],
+      registryRows: [
+        { id: "1", slug: "hero", table_name: "comp_hero" },
+        { id: "2", slug: "other", table_name: "comp_other" },
+      ],
+      lockOwner: "field-group-migration:up#someone-else",
+    };
+    let reads = 0;
+    world.onMarkerRead = () => {
+      reads += 1;
+      world.tables =
+        reads % 2 === 0
+          ? [LEGACY_REGISTRY, "comp_hero", "fg_other", MIGRATION_LOCK_TABLE]
+          : [LEGACY_REGISTRY, "comp_other", "fg_hero", MIGRATION_LOCK_TABLE];
+    };
+    const { adapter, trace } = createRunWorld(world);
 
     const outcome = await runFieldGroupMigration({
       adapter,
