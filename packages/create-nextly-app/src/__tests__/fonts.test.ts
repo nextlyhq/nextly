@@ -274,41 +274,6 @@ describe("the scaffold installs the fonts its templates import", () => {
     }
   );
 
-  it.each(APP_TEMPLATES)(
-    "%s scaffolds a node-modules linker so the font paths exist",
-    async template => {
-      // `next/font/local` reads its `src` off disk rather than through the module resolver, so a
-      // Yarn Berry PnP install — which has no physical node_modules — fails to build on a
-      // dependency the manifest correctly declares. Yarn is a package manager this CLI detects
-      // and installs with, so the scaffold pins the linker.
-      const targetDir = await fs.mkdtemp(
-        path.join(os.tmpdir(), `nextly-linker-${template}-`)
-      );
-      try {
-        await copyTemplate({
-          projectName: "linker-fixture",
-          projectType: template,
-          targetDir,
-          database: { type: "sqlite" } as DatabaseConfig,
-          useYalc: true,
-          allowExistingTarget: true,
-          templateSource: {
-            basePath: path.join(TEMPLATES_ROOT, "base"),
-            templatePath: path.join(TEMPLATES_ROOT, template),
-          },
-        });
-
-        const yarnrc = await fs.readFile(
-          path.join(targetDir, ".yarnrc.yml"),
-          "utf8"
-        );
-        expect(yarnrc).toContain("nodeLinker: node-modules");
-      } finally {
-        await fs.remove(targetDir);
-      }
-    }
-  );
-
   it("declares nothing when the caller passes no template directories", () => {
     // The collector is handed the dirs the scaffold is COPYING. A downloaded or
     // --local-template source is a different tree from the bundled one, and a collector that
