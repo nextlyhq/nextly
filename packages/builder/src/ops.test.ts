@@ -1831,6 +1831,49 @@ describe("an inverse that names a parent held twice", () => {
     ).toThrow(/addresses 2 nodes/);
   });
 
+  it("refuses an oversized subtree before validating all of it", () => {
+    // A subtree holding more nodes than a whole document may is refused by the
+    // cap check either way. The point is WHEN: without an early count, this
+    // walk validates every descendant and `insertNode` then walks the subtree
+    // again to place it, so the work is proportional to what the caller sent
+    // rather than to what the document is allowed to hold.
+    const many = Array.from({ length: 400 }, (_unused, index) =>
+      node(`child-${String(index)}`)
+    );
+    const oversized = node("big", { main: many });
+    const limits = { maxDepth: 10, maxNodes: 50, maxBytes: 1_000_000 };
+
+    expect(() =>
+      applyOp(
+        doc(),
+        { kind: "insert", node: oversized, at: { index: 0 } },
+        limits
+      )
+    ).toThrow(/more than the 50 nodes a whole document may/);
+  });
+
+  it("refuses a document whose node list computes its entries", () => {
+    // An array index can be an accessor like any other property. `for...of`
+    // RUNS it, so a throwing getter escapes as a native error rather than the
+    // refusal this module promises — and the list being read this way is the
+    // one every check downstream reads from.
+    const computed = doc();
+    let reads = 0;
+    Object.defineProperty(computed.nodes, "0", {
+      get: (): BlockNode => {
+        reads += 1;
+        throw new RangeError("the getter ran");
+      },
+      enumerable: true,
+      configurable: true,
+    });
+
+    expect(() => applyOp(computed, { kind: "remove", id: "a" })).toThrow(
+      OpError
+    );
+    expect(reads, "the getter must never be invoked").toBe(0);
+  });
+
   it("refuses a remove whose subtree repeats an id", () => {
     // The removed container is unique, and two of its DESCENDANTS are not. The
     // inverse of a remove is an insert of the whole subtree, and `insertNode`

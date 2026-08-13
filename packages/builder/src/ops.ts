@@ -822,10 +822,28 @@ function assertNodeShape(
     { candidate: node, path: "the node", depth: 1 },
   ];
 
+  // Counted as it walks, and refused the moment the count alone settles it. A
+  // subtree that already holds more nodes than a whole document may is going to
+  // be refused by the cap check either way — but that check runs after this
+  // walk has validated every descendant and after `insertNode` has walked the
+  // subtree a second time to place it. Refusing at `maxNodes + 1` turns work
+  // proportional to what the caller sent into work proportional to what the
+  // document is allowed to hold.
+  let counted = 0;
+
   while (pending.length > 0) {
     const entry = pending.pop();
     if (entry === undefined) break;
     const { candidate, path, depth } = entry;
+
+    counted += 1;
+    if (counted > limits.maxNodes) {
+      throw new OpError(
+        `${verb}: this subtree holds more than the ${String(limits.maxNodes)} ` +
+          `nodes a whole document may, so no document could hold it. The edit ` +
+          `would apply and then fail to save.`
+      );
+    }
 
     // The engine's own limit, asked rather than restated. A subtree deeper than
     // a document may hold is refused here rather than after it is placed.
@@ -985,10 +1003,37 @@ function assertNodeShape(
  * Iterative, so a deep document cannot overflow the stack on the way to being
  * refused.
  */
+/**
+ * Refuses a list whose entries are computed rather than held.
+ *
+ * A forest and its slot children are ARRAYS, and an array's indexes can be
+ * accessors like any other property. Reading one runs the document's own code
+ * inside the guard deciding whether to trust it, and a throwing getter leaves
+ * this module as a native error rather than an `OpError`.
+ *
+ * The same rule the envelope and every value are already held to, applied to
+ * the containers in between — which were the only things reading their contents
+ * without checking how those contents are held.
+ */
+function assertListIsData(list: unknown, subject: string): void {
+  if (!Array.isArray(list) || !hasOnlyJsonOwnKeys(list)) {
+    throw new OpError(
+      `${subject} must be a plain list of nodes. One whose entries are ` +
+        `computed rather than stored cannot be edited: reading it runs code, ` +
+        `and what it returns is not what would be saved.`
+    );
+  }
+}
+
 function assertForestEntries(nodes: BlockNode[]): void {
   // Filled by loop rather than spread: `[...nodes]` is fine, but the pushes
   // below are not, and a forest wide enough to exceed V8's call-argument cap
   // would throw before this walk could refuse it.
+  // The ARRAY, before a single element of it is read. `for...of` on a list whose
+  // index is an accessor RUNS that accessor, so a throwing getter escapes as a
+  // native error rather than the refusal this module promises — and the same
+  // list is what every check below reads from.
+  assertListIsData(nodes, "a document's nodes");
   const pending: unknown[] = [];
   for (const entry of nodes) pending.push(entry);
   // Every node reached, so a document that holds itself is refused rather than
@@ -1032,6 +1077,8 @@ function assertForestEntries(nodes: BlockNode[]): void {
             `a list of nodes.`
         );
       }
+      // Each child list by the same rule as the root's, and before it is read.
+      assertListIsData(children, "a slot's children");
       // Pushed one at a time. `push(...children)` passes each child as a call
       // ARGUMENT, and V8 caps those around 100k — so a slot wide enough to
       // exceed it throws a native RangeError before this walk can refuse the
