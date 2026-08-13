@@ -51,9 +51,12 @@ export function TableSearch({
   return (
     <div className="relative w-full max-w-lg">
       <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-      {/* The edge uses border-input (a visible 3:1 boundary) rather than the
-          decorative border-border: an empty field has nothing else to identify
-          it. Matches Input, Textarea, Checkbox and RadioGroup. */}
+      {/* The edge uses border-input, the identifying-boundary token, rather
+          than the decorative border-border: an empty field has nothing else to
+          identify it. Matches Input, Textarea, Checkbox and RadioGroup.
+          border-input no longer meets 1.4.11's 3:1 minimum in light mode; see
+          contrast/accepted.ts. The distinction it draws is still the right one
+          to follow, but it is a statement of role, not of ratio. */}
       <input
         ref={inputRef}
         type="text"

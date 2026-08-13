@@ -56,6 +56,7 @@ import {
   finalizeRelationTargets,
   validateCrossPluginRelations,
 } from "../../plugins/schema/validate-relations";
+import { validatePluginSlugs } from "../../plugins/validate-slugs";
 
 import { bundleAndRequire } from "./config-bundler";
 
@@ -558,6 +559,14 @@ async function loadConfigInternal(
           }
         }
       }
+
+      // The transformed list, for the same reason the runtime validates its
+      // own: a `setup` transformer can add or rename plugins into a slug
+      // collision, and everything below consumes the transformed config. The
+      // CLI has to agree with boot here — otherwise `nextly build`, a
+      // migration or a db sync accepts and acts on a configuration the
+      // deployed app then refuses to start on.
+      validatePluginSlugs(transformedConfig.plugins ?? []);
 
       // Fold plugin contributions. Extend targets that aren't code/plugin
       // entities are DEFERRED (candidate Builder/UI-schema targets) rather than

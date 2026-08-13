@@ -27,6 +27,7 @@ import type {
 } from "./plugin-context";
 import { pluginAdminSlug } from "./plugin-slug";
 import { validatedClientConfig } from "./validate-client-config";
+import { validatePluginSlugs } from "./validate-slugs";
 
 /**
  * The serialized admin-meta entry for a single plugin, consumed by the admin
@@ -161,6 +162,15 @@ export function buildPluginAdminMeta(
   plugins: PluginDefinition[],
   pluginOverrides: Record<string, PluginOverride> | undefined
 ): PluginAdminMeta[] {
+  // Here, and not only at boot, because this is the one place a plugin list
+  // becomes ADDRESSES: the slug below is the admin's URL for the plugin and
+  // the key its host override is read by. Two boot paths do not reach it —
+  // `createDynamicHandlers` initializes services lazily and serves the public
+  // admin-meta endpoint before that happens, and a `setup` transformer can
+  // rewrite `config.plugins` after `resolvePlugins` has already run. Both
+  // would publish ambiguous addresses from a list nothing had checked.
+  validatePluginSlugs(plugins);
+
   return plugins.map(plugin => {
     const slug = pluginAdminSlug(plugin.name);
     const hostOverride = pluginOverrides?.[slug];

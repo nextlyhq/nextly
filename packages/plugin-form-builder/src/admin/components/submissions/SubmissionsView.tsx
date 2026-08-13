@@ -479,13 +479,11 @@ export function SubmissionsView({ collectionSlug }: SubmissionsViewProps) {
               setOpenId(null);
             }}
           >
-            <TabsList className="rounded-none">
+            {/* No corner override: square is the primitive's guarantee, not
+                this view's decision. */}
+            <TabsList>
               {STATUS_TABS.map(tab => (
-                <TabsTrigger
-                  key={tab.value}
-                  value={tab.value}
-                  className="rounded-none"
-                >
+                <TabsTrigger key={tab.value} value={tab.value}>
                   {tab.label}
                 </TabsTrigger>
               ))}

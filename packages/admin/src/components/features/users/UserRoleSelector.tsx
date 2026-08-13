@@ -254,13 +254,25 @@ export function UserRoleSelector({
                             // legible in both light and dark themes.
                             className="flex items-start gap-4 px-4 py-4 cursor-pointer w-full overflow-hidden hover-unified data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
                           >
-                            {/* Checkbox indicator */}
+                            {/* Checkbox indicator, drawn here rather than with
+                                the shared Checkbox because the Command item
+                                owns the selected state and renders this purely
+                                as decoration.
+
+                                It takes the same resting token as the shared
+                                control for the same reason: unselected, this
+                                box is empty, so its border is the only thing
+                                identifying it and 1.4.11's 3:1 applies.
+                                border-input is the field weight and sits below
+                                that minimum, which on the Command's light
+                                surface left the whole list looking like
+                                ordinary rows. */}
                             <div
                               className={cn(
-                                "flex h-4 w-4 shrink-0 items-center justify-center rounded-sm  border border-input transition-colors mt-0.5",
+                                "flex h-4 w-4 shrink-0 items-center justify-center rounded-sm  border border-control-border transition-colors mt-0.5",
                                 isSelected
                                   ? "border-primary bg-primary text-primary-foreground"
-                                  : "border-input bg-background"
+                                  : "border-control-border bg-background"
                               )}
                               aria-hidden="true"
                             >

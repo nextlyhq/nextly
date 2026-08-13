@@ -59,7 +59,10 @@
 }
 
 /* DatePicker specific styling. The trigger is a form control, so its edge takes
-   --nx-input (a visible 3:1 boundary), not the decorative --nx-border. */
+   --nx-input, the identifying-boundary token, not the decorative --nx-border.
+   --nx-input is below 1.4.11's 3:1 minimum in light mode by decision; see
+   packages/ui/src/styles/contrast/accepted.ts. The role distinction still
+   decides which token a control uses. */
 [data-slot="date-picker-trigger"] {
   background-color: var(--nx-background);
   border-color: var(--nx-input);
