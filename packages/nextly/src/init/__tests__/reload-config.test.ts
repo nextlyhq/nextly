@@ -338,8 +338,12 @@ describe("reloadNextlyConfig", () => {
     await reloadNextlyConfig({ resolver });
 
     expect(pipelineApplySpy).not.toHaveBeenCalled();
+    // 🔴 The warning's REASON is matched, not just the fact that one was logged. A marker the
+    // parser rejects abandons the reload and logs the same "schema reload skipped" prefix, so the
+    // prefix alone cannot tell an in-flight migration from an unreadable marker — and for a while
+    // this test was reporting the second while claiming the first.
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("schema reload skipped")
+      expect.stringContaining("migration is in flight")
     );
   });
 
