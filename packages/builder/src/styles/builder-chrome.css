@@ -1,0 +1,153 @@
+/**
+ * The editor chrome's stylesheet, compiled rather than copied.
+ *
+ * `@import "tailwindcss"` plus `@source` is what makes this shippable. The shell
+ * draws with utility classes — `flex`, `border-b`, `size-8` — and copying this
+ * file verbatim delivered the custom properties below while leaving those
+ * classes undefined. A consumer without our Tailwind preset then got the tokens
+ * and no layout: markup that renders, carries its class names, and stacks as
+ * full-width blocks. That reads as a layout bug rather than a missing build
+ * step, which is why it is compiled here instead of documented as a
+ * requirement.
+ *
+ * The theme is NOT imported. `--nx-*` belongs to `@nextlyhq/ui`, which the host
+ * already loads; importing it here would ship a second copy of every token and
+ * make re-theming depend on which stylesheet won. The variables below DERIVE
+ * from those tokens, so a host that re-themes the admin moves the builder with
+ * it.
+ */
+/**
+ * This sheet SUPPLEMENTS the design system rather than restating it.
+ *
+ * `@nextlyhq/ui` is already a peer dependency: the host installs it and loads
+ * its stylesheet, directly or through the admin's. That sheet owns three things
+ * this one therefore does not ship — the `--nx-*` tokens, the base reset, and
+ * the rules for the primitives the shell renders (`Tooltip`, `ResizableHandle`).
+ * Shipping a second copy of any of them would make the result depend on which
+ * stylesheet loaded last, which is the reason the theme is not imported here,
+ * and the reason applies unchanged to the other two.
+ *
+ * Concretely, this is why `@import "tailwindcss"` is NOT used. That entry bundles
+ * Preflight, which resets `html`, `*`, headings, lists, tables and form controls
+ * DOCUMENT-WIDE — so importing the builder's stylesheet restyled the host
+ * application and the caller's own slot content. Preflight belongs to the sheet
+ * that owns the page; for every consumer of this package that is the design
+ * system's, never the editor's.
+ *
+ * What is left is the part no one else can supply: the utility classes the shell
+ * itself draws with, which Tailwind only emits for source it has been pointed at.
+ */
+@layer theme, base, components, utilities;
+
+/**
+ * The theme is REFERENCED, not imported, and the difference is the whole point.
+ *
+ * `@import "tailwindcss/theme.css"` emits a global `:root, :host` block. Loaded
+ * in the documented order — the design system's sheet, then this one — that
+ * block lands AFTER theirs and wins, so this supplementary sheet silently
+ * replaced the host's theme: `--radius-md` reverted from the design system's
+ * `calc(var(--radius) - 2px)` to Tailwind's `.375rem`, and `--font-mono` from
+ * the Geist-aware stack to Tailwind's default. Controls and type elsewhere in
+ * the host changed the moment the editor's stylesheet loaded.
+ *
+ * `@reference` gives the compiler the same theme to generate utilities against
+ * and emits nothing. The variables those utilities resolve through are declared
+ * by the design system's sheet, which is already required.
+ */
+@reference "tailwindcss";
+
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* Scan this package's source so the shell's utility classes compile in. */
+@source "../";
+
+/**
+ * The shell's own box model, and deliberately nothing more.
+ *
+ * Border-box is the one part of a reset the chrome cannot be correct without:
+ * every panel bound here is a PIXEL width, and under the default content-box a
+ * border and padding are added on top of it, so the rail and the panels settle a
+ * few pixels wider than the geometry that reserved room for them.
+ *
+ * Confined to the shell's subtree, so it stays a statement about the editor
+ * rather than about the host's page.
+ */
+@layer base {
+  .nx-builder-chrome,
+  .nx-builder-chrome *,
+  .nx-builder-chrome *::before,
+  .nx-builder-chrome *::after {
+    box-sizing: border-box;
+  }
+}
+
+/**
+ * The editor chrome's own token layer.
+ *
+ * Named `--nx-builder-*` and kept separate from `--nx-*` on purpose. The admin's
+ * tokens describe a CMS reading surface; the builder's chrome sits around a
+ * canvas showing the USER'S site, and the two have opposite jobs at the same
+ * moment: the canvas must look like the finished page, so the frame around it
+ * has to recede rather than compete. Sharing one palette makes every later
+ * chrome adjustment a change to the admin as well.
+ *
+ * Values derive from the admin tokens rather than restating colours, so a host
+ * that re-themes the admin moves the builder with it. The chrome is a SHIFT of
+ * that palette, not a second one.
+ *
+ * This layer is also where the ratified template-scope tint lands when there is
+ * a template scope to signal — PB-D17's "template scope = tinted chrome". It is
+ * a second value set for these variables, not a new component, which is why the
+ * F7 primitive list was the wrong home for it.
+ */
+
+.nx-builder-chrome {
+  /* The frame behind rail, panels and bars. Deliberately not `--nx-background`:
+     the canvas uses that, and the frame must read as a layer behind it. */
+  --nx-builder-surface: var(--nx-muted);
+  --nx-builder-surface-raised: var(--nx-background);
+  --nx-builder-border: var(--nx-border);
+  --nx-builder-text: var(--nx-foreground);
+  --nx-builder-text-muted: var(--nx-muted-foreground);
+  /* The rail's selected item, and the only accent the chrome spends. */
+  --nx-builder-accent: var(--nx-primary);
+  --nx-builder-accent-text: var(--nx-primary-foreground);
+
+  background-color: var(--nx-builder-surface);
+  color: var(--nx-builder-text);
+}
+
+/**
+ * Enhanced contrast, per the PB-D17 a11y addendum.
+ *
+ * Driven by the platform preference rather than a setting, because a user who
+ * has asked their OS for more contrast has already answered this question. The
+ * border is the token that moves: chrome boundaries at rest are deliberately
+ * quiet, and quiet is exactly what fails at higher contrast needs.
+ */
+@media (prefers-contrast: more) {
+  .nx-builder-chrome {
+    --nx-builder-border: var(--nx-foreground);
+    --nx-builder-text-muted: var(--nx-foreground);
+  }
+}
+
+/**
+ * Motion is opt-in, not opt-out.
+ *
+ * Only elements this package marks with `data-builder-animates` transition, and
+ * only where the user has not asked for reduced motion. Written as a positive
+ * query so the default for an unstated preference is stillness.
+ *
+ * Deliberately NOT a universal `.nx-builder-chrome *` reset. That reaches every
+ * descendant, and the shell's regions are SLOTS filled by callers — a reset
+ * there silently disables animation in a host's own panel, inspector and
+ * top-bar content, which this package has no business deciding.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .nx-builder-chrome [data-builder-animates] {
+    transition:
+      background-color 120ms ease,
+      color 120ms ease;
+  }
+}

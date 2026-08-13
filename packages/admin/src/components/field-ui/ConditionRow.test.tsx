@@ -101,7 +101,7 @@ describe("editing one condition", () => {
     expect(screen.queryByLabelText("Condition value")).toBeNull();
   });
 
-  it("shows two inputs for a range", () => {
+  it("shows two labelled inputs for a range", () => {
     render(
       <ConditionRow
         condition={{ field: "count", operator: "between", value: { min: 1 } }}
@@ -109,8 +109,50 @@ describe("editing one condition", () => {
         onChange={vi.fn()}
       />
     );
-    expect(screen.getByLabelText("Condition value from")).toHaveValue(1);
-    expect(screen.getByLabelText("Condition value to")).toHaveValue(null);
+
+    const from = screen.getByLabelText("From");
+    const to = screen.getByLabelText("To");
+    expect(from).toHaveValue(1);
+    expect(to).toHaveValue(null);
+
+    // Bound by a real label rather than named by an `aria-label`. The pair used
+    // to be distinguished only by an accessible name and a placeholder, and a
+    // date input renders neither -- so both ends drew as the same empty
+    // `dd/mm/yyyy` box with nothing saying which was which.
+    const document = from.ownerDocument;
+    expect(document.querySelector(`label[for="${from.id}"]`)?.textContent).toBe(
+      "From"
+    );
+    expect(document.querySelector(`label[for="${to.id}"]`)?.textContent).toBe(
+      "To"
+    );
+
+    // The short labels are disambiguated by the group they sit in, which is
+    // what a screen reader announces on entry.
+    expect(
+      screen.getByRole("group", { name: "Condition value range" })
+    ).toBeTruthy();
+  });
+
+  it("labels a date range the same way, where a placeholder would not render", () => {
+    // The regression this guards is type-specific and therefore invisible in
+    // the markup: `placeholder="From"` renders on text and number inputs and is
+    // ignored outright on a date input. Asserting the number case alone would
+    // have stayed green through the whole defect.
+    render(
+      <ConditionRow
+        condition={{ field: "due", operator: "between", value: {} }}
+        sources={SOURCES}
+        onChange={vi.fn()}
+      />
+    );
+
+    const from = screen.getByLabelText("From");
+    expect(from.getAttribute("type")).toBe("date");
+    expect(from.getAttribute("placeholder")).toBeNull();
+    expect(
+      from.ownerDocument.querySelector(`label[for="${from.id}"]`)?.textContent
+    ).toBe("From");
   });
 
   it("falls back when the source no longer offers the stored operator", () => {

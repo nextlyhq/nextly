@@ -126,6 +126,7 @@ import {
   registerPluginService,
 } from "../plugins/services/plugin-services-registry";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
+import { validatePluginSlugs } from "../plugins/validate-slugs";
 import type {
   CollectionSource,
   FieldDefinition,
@@ -441,6 +442,12 @@ export async function registerServices(
   // Layer 0b: Process Plugin Config Transformers (resolved order)
   // ----------------------------------------
   const setupConfig = await applyPluginConfigTransformers(resolvedConfig);
+  // Again on the transformed list, because a `setup` transformer may add,
+  // rename or replace entries in `plugins` — and everything from here down
+  // consumes the transformed config, not the list `resolvePlugins` checked.
+  // Boot is where this should fail; without it a transformer-introduced
+  // collision would surface on the first admin-meta request instead.
+  validatePluginSlugs(setupConfig.plugins ?? []);
 
   // ----------------------------------------
   // Layer 0c: Fold declarative plugin schema contributions (D3/D12/D50)
