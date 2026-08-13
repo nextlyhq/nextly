@@ -193,6 +193,12 @@ describe("PluginDetailPage dormant disclosure", () => {
     render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
 
     expect(screen.getByText("Would serve when enabled")).toBeInTheDocument();
+    // Enabling in config is necessary and NOT sufficient: config HMR does not
+    // re-run service registration or route mounting, so an operator who stops
+    // at the flag reaches a route that still 404s.
+    expect(
+      screen.getByText(/restart the app to serve these/i)
+    ).toBeInTheDocument();
     // The RAW package name, which is the namespace the dispatcher registers —
     // not the admin slug, which is only how this UI addresses the plugin.
     expect(

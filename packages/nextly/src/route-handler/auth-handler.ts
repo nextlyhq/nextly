@@ -32,7 +32,7 @@ let _dispatcher: ServiceDispatcher | null = null;
 let _storedConfig: SanitizedNextlyConfig | null = null;
 
 /**
- * The plugin list as boot produced it, or null before any boot has run.
+ * The plugin list as boot produced it, or undefined before any boot has run.
  *
  * Held separately from `_storedConfig` rather than folded into it, because the
  * two have independent lifecycles: the route config is re-stored every time the
@@ -42,16 +42,37 @@ let _storedConfig: SanitizedNextlyConfig | null = null;
  * A boot through `getNextly()` or instrumentation runs before the route module
  * is imported, and route-module HMR re-stores the raw config without booting
  * again. Either way the raw list would silently replace the booted one.
+ *
+ * On `globalThis`, and NOT module-local, for the same reason `register.ts`
+ * keeps its registration state there: Next.js and Turbopack can evaluate this
+ * module in more than one server module graph, so instrumentation's boot may
+ * call `setHandlerPlugins` on one copy while `/admin-meta` reads another. A
+ * module-local value is `null` in the reading copy, and the endpoint falls back
+ * to disclosing the raw, pre-`setup` list — which is the defect this whole seam
+ * exists to remove, reappearing only under a bundler that duplicates modules.
+ *
+ * `_storedConfig` stays module-local deliberately: it is written by
+ * `createDynamicHandlers` in whichever copy the route module imported, and that
+ * same copy serves the request, so it has no cross-graph reader.
  */
-let _bootPlugins: PluginDefinition[] | null = null;
+const globalForBoot = globalThis as unknown as {
+  __nextly_bootPlugins?: PluginDefinition[];
+};
 
 /**
- * The read-time merge of the two, memoized. Cleared by either writer.
+ * The merged view, and the exact inputs it was built from.
  *
- * Memoized because several per-request callers read this store; recomputed
- * rather than written back, which is the point of the next paragraph.
+ * Module-local rather than global, because one of its inputs is: a merge of
+ * THIS copy's `_storedConfig` with the shared list. Keyed on the IDENTITY of
+ * both inputs rather than cleared by the writers — a write may land in a
+ * different module copy than the reader, so an invalidation call cannot be
+ * relied on to arrive, while an identity check cannot miss.
  */
 let _bootView: SanitizedNextlyConfig | null = null;
+let _bootViewInputs: {
+  config: SanitizedNextlyConfig;
+  plugins: PluginDefinition[];
+} | null = null;
 
 /**
  * The stored config as it BOOTED — the raw route config with boot's plugin list
@@ -71,8 +92,18 @@ let _bootView: SanitizedNextlyConfig | null = null;
  * three fields this store holds.
  */
 function bootView(): SanitizedNextlyConfig | null {
-  if (!_storedConfig || !_bootPlugins) return _storedConfig;
-  _bootView ??= { ..._storedConfig, plugins: _bootPlugins };
+  const config = _storedConfig;
+  const plugins = globalForBoot.__nextly_bootPlugins;
+  if (!config || !plugins) return config;
+
+  if (
+    !_bootView ||
+    _bootViewInputs?.config !== config ||
+    _bootViewInputs?.plugins !== plugins
+  ) {
+    _bootView = { ...config, plugins };
+    _bootViewInputs = { config, plugins };
+  }
   return _bootView;
 }
 
@@ -82,7 +113,6 @@ function bootView(): SanitizedNextlyConfig | null {
  */
 export function setHandlerConfig(config: SanitizedNextlyConfig): void {
   _storedConfig = config;
-  _bootView = null;
 }
 
 /**
@@ -104,8 +134,7 @@ export function setHandlerConfig(config: SanitizedNextlyConfig): void {
 export function setHandlerPlugins(
   plugins: PluginDefinition[] | undefined
 ): void {
-  _bootPlugins = plugins ?? [];
-  _bootView = null;
+  globalForBoot.__nextly_bootPlugins = plugins ?? [];
 }
 
 /**

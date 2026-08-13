@@ -528,9 +528,16 @@ function WhenEnabled({ plugin }: { plugin: PluginMetadata }) {
       <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
         Would serve when enabled
       </h2>
+      {/* Names the restart because the config edit alone does not serve these.
+          Config HMR re-evaluates the route module but does not re-run service
+          registration, plugin initialization or route mounting — see
+          `plugins/initialized-plugins.ts`, which states that a full restart is
+          what actually enables a plugin. Telling an operator to flip the flag
+          and stop there sends them to a route that still 404s. */}
       <p className="mb-3 text-xs text-muted-foreground">
-        Declared by the plugin and not mounted while it is disabled. Enabling it
-        in your Nextly config serves these.
+        Declared by the plugin and not mounted while it is disabled. Enable it
+        in your Nextly config and restart the app to serve these — editing the
+        config alone does not mount them.
       </p>
       <div className="rounded-lg border border-dashed border-border bg-card p-4">
         <div className="mb-2 flex items-center gap-2">

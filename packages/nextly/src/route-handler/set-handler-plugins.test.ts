@@ -61,6 +61,8 @@ describe("the handler config store", () => {
    */
   beforeEach(async () => {
     vi.resetModules();
+    delete (globalThis as { __nextly_bootPlugins?: unknown })
+      .__nextly_bootPlugins;
     store = await import("./auth-handler");
   });
 
@@ -154,5 +156,47 @@ describe("the handler config store", () => {
     store.setHandlerPlugins(plugins("@acme/transformed"));
 
     expect(store.getHandlerConfig()).toBeNull();
+  });
+
+  /**
+   * Next.js and Turbopack can evaluate this module in more than one server
+   * module graph, so instrumentation's boot may report its list to one copy
+   * while `/admin-meta` reads another. A module-local value is null in the
+   * reading copy and the endpoint falls back to the raw, pre-`setup` list —
+   * the exact defect this seam removes, reappearing under a bundler.
+   *
+   * Two independently imported instances stand in for the two graphs.
+   */
+  it("shares the booted list across duplicate copies of the module", async () => {
+    const booting = store;
+    booting.setHandlerPlugins(plugins("@acme/transformed"));
+
+    vi.resetModules();
+    const serving: HandlerStore = await import("./auth-handler");
+    serving.setHandlerConfig(stored);
+
+    expect(serving.getHandlerConfig()?.plugins?.map(p => p.name)).toEqual([
+      "@acme/transformed",
+    ]);
+  });
+
+  /**
+   * The memo is per-copy because one of its inputs is, so it cannot be cleared
+   * by a writer that may be running in a different copy. Identity of both
+   * inputs decides instead, and a second boot must be visible to a reader that
+   * already built a view.
+   */
+  it("re-derives the view when a later boot replaces the list", () => {
+    store.setHandlerConfig(stored);
+    store.setHandlerPlugins(plugins("@acme/first"));
+    expect(store.getHandlerConfig()?.plugins?.map(p => p.name)).toEqual([
+      "@acme/first",
+    ]);
+
+    store.setHandlerPlugins(plugins("@acme/second"));
+
+    expect(store.getHandlerConfig()?.plugins?.map(p => p.name)).toEqual([
+      "@acme/second",
+    ]);
   });
 });
