@@ -844,9 +844,20 @@ async function writeScaffoldNpmrc(
   if (!addition) return;
 
   const npmrcPath = path.join(targetDir, ".npmrc");
-  const existing = (await fs.pathExists(npmrcPath))
-    ? await fs.readFile(npmrcPath, "utf-8")
-    : "";
+
+  // A SYMLINK here is left completely alone. Reading and writing it back would follow the link
+  // and append to whatever it points at — commonly a shared or home-directory config — so a
+  // scaffold would silently edit settings belonging to every other project on the machine.
+  // `lstat` reports the link itself rather than its target, which is the only way to see this:
+  // `pathExists` and `readFile` both resolve it and report the referent as though it were here.
+  //
+  // Skipping means a pnpm 9 user with a linked `.npmrc` still meets ERR_PNPM_ADDING_TO_ROOT on
+  // their first `pnpm add`. That error names its own remedy; silently rewriting a file outside
+  // the project does not, and is not the scaffolder's to make.
+  const link = await fs.lstat(npmrcPath).catch(() => null);
+  if (link?.isSymbolicLink()) return;
+
+  const existing = link ? await fs.readFile(npmrcPath, "utf-8") : "";
 
   // Matched at the start of a line so a value mentioning the key, or a commented-out example,
   // is not read as a declaration.

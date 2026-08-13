@@ -13,7 +13,15 @@
  * install that runs moments later — and break it by reaching the wrong registry rather than by
  * failing outright.
  */
-import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+  mkdir,
+  symlink,
+  lstat,
+} from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -111,6 +119,38 @@ describe("a pnpm scaffold", () => {
     const npmrc = await scaffold("pnpm", "node-linker=hoisted");
     expect(npmrc).toContain("node-linker=hoisted\n");
     expect(npmrc).toMatch(/^ignore-workspace-root-check=true$/m);
+  }, 60_000);
+});
+
+describe("an existing .npmrc that is a symlink", () => {
+  // Left untouched, because reading and writing it back would follow the link. The realistic
+  // shape is a link to a shared or home-directory config, so appending would edit settings
+  // belonging to every other project on the machine — a scaffold has no business doing that.
+  it("is not followed, and its target keeps its contents", async () => {
+    const target = join(workspace, "app");
+    const shared = join(workspace, "shared-npmrc");
+    const original = "@acme:registry=https://npm.acme.internal/\n";
+    await writeFile(shared, original, "utf-8");
+    await mkdir(target, { recursive: true });
+    await symlink(shared, join(target, ".npmrc"));
+
+    await copyTemplate({
+      projectName: "app",
+      projectType: "blank",
+      targetDir: target,
+      database: sqlite,
+      packageManager: "pnpm",
+      templateSource: {
+        basePath: join(templates, "base"),
+        templatePath: join(templates, "blank"),
+      },
+      allowExistingTarget: true,
+    });
+
+    // The referent is what an unnoticed follow would have modified.
+    expect(await readFile(shared, "utf-8")).toBe(original);
+    // And the link is still a link, rather than having been replaced by a regular file.
+    expect((await lstat(join(target, ".npmrc"))).isSymbolicLink()).toBe(true);
   }, 60_000);
 });
 
