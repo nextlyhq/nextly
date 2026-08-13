@@ -390,11 +390,22 @@ function PaletteSurface({
 
   const choose = React.useCallback(
     (command: BuilderCommand) => {
-      // Closed BEFORE running, and FLUSHED rather than queued. A plain `setOpen(false)` only
-      // schedules the re-render, so `run()` would execute with the dialog still mounted and its
-      // focus trap still holding — and a command that opens a dialog of its own or moves focus
-      // then competes with a palette that is only just unmounting, leaving focus somewhere
-      // neither component chose.
+      // Closed BEFORE running, and FLUSHED rather than queued.
+      //
+      // What the flush buys is the FOCUS TRAP, not the unmount. Radix keeps the content mounted
+      // for the exit animation either way, so `run()` always executes with the dialog still in
+      // the DOM — but the modal content is trapped only while the dialog is open
+      // (`trapFocus: context.open`), and its close handler always prevents the scope's own
+      // restore. So a synchronous close leaves a mounted, focus-inert dialog, and anything the
+      // command focuses keeps focus.
+      //
+      // Queue the close instead and React batches it: `run()` then executes while the trap is
+      // still armed, and a command that focuses an element outside the palette has focus pulled
+      // straight back inside it.
+      //
+      // Deferring `run()` until the dialog is truly gone would also work and is worse: Radix
+      // dispatches its close-auto-focus from a `setTimeout` after the animation, so every command
+      // would wait out the 200ms `animate-out` before doing anything.
       flushSync(() => setOpen(false));
       command.run();
     },

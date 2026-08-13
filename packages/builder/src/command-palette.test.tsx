@@ -156,29 +156,66 @@ describe("the palette offers what the host gives it", () => {
 });
 
 describe("running a command", () => {
-  it("is already gone from the DOM by the time the command runs", () => {
-    // The assertion the ordering exists to earn, and the one a queued `setOpen` cannot satisfy:
-    // the palette must be UNMOUNTED inside `run()`, not merely scheduled to close. A command that
-    // opens a dialog of its own or moves focus competes with a palette still holding the focus
-    // trap, and the palette losing that race leaves focus somewhere neither component chose.
-    let mountedDuringRun: boolean | undefined;
-    mount(
-      <CommandPalette
-        commands={[
-          {
-            id: "act",
-            label: "Do the thing",
-            run: () => {
-              mountedDuringRun = screen.queryByText("Do the thing") !== null;
-            },
-          },
-        ]}
-      />
-    );
-    pressPaletteKey();
-    fireEvent.click(screen.getByText("Do the thing"));
+  it("leaves focus where the command put it, while the exit animation is still running", () => {
+    // The property that matters in a browser, and the one jsdom hides by default.
+    //
+    // Radix holds the dialog MOUNTED for its 200ms `animate-out`, so `run()` always executes with
+    // the palette still in the DOM. What must be true is narrower: the content has to be
+    // focus-INERT by then, so a command that focuses something outside the palette keeps it.
+    // That holds because the modal content is trapped only while the dialog is open, and the
+    // synchronous close in `choose` flips that before `run()` is called. Queue the close instead
+    // and the trap is still armed, so focus is pulled straight back inside the palette.
+    //
+    // jsdom reports no animation, so the content would otherwise unmount immediately and the test
+    // would pass without ever reaching the case it is named for. Presence decides by reading
+    // `animationName` off the computed style and waiting for `animationend`, so reporting one
+    // here puts the dialog into exactly the state a real close is in.
+    const realGetComputedStyle = window.getComputedStyle.bind(window);
+    const stub = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element: Element, pseudo?: string | null) => {
+        const styles = realGetComputedStyle(element, pseudo);
+        // `getAttribute`, not the reflected `element.role`: jsdom does not implement that
+        // property, so reading it returns undefined and the stub matches nothing.
+        if (element.getAttribute?.("role") !== "dialog") return styles;
+        // The name has to DIFFER between the open and closed states. Presence treats an
+        // unchanged `animationName` as "not animating" and unmounts at once, so a stub
+        // reporting one constant name suspends nothing — which is what the real stylesheet
+        // avoids by keying `animate-in` and `animate-out` off `data-state`.
+        const name =
+          element.getAttribute("data-state") === "closed" ? "exit" : "enter";
+        return new Proxy(styles, {
+          get: (target, key) =>
+            key === "animationName" ? name : Reflect.get(target, key),
+        });
+      });
 
-    expect(mountedDuringRun).toBe(false);
+    try {
+      mount(
+        <>
+          <input data-testid="outside" />
+          <CommandPalette
+            commands={[
+              {
+                id: "act",
+                label: "Do the thing",
+                run: () => screen.getByTestId("outside").focus(),
+              },
+            ]}
+          />
+        </>
+      );
+      pressPaletteKey();
+      fireEvent.click(screen.getByText("Do the thing"));
+
+      // The positive control. Without it a stub that silently stopped applying would unmount the
+      // dialog at once, and the focus assertion below would pass over the unanimated case — the
+      // exact hole this test replaced.
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      expect(document.activeElement).toBe(screen.getByTestId("outside"));
+    } finally {
+      stub.mockRestore();
+    }
   });
 
   it("reports the close to a controlling host before running", () => {
