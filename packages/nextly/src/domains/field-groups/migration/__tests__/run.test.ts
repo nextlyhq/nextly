@@ -1539,6 +1539,41 @@ describe("a preview that meets a writer mid-run", () => {
     expect(markerReads(trace)).toBe(2);
   });
 
+  // 🔴 The move-once-then-stop case. A rival that advances between the first two attempts and then
+  // CRASHES leaves the final two reads identical and its claim stranded. A flag recording whether
+  // the world ever moved still calls that live, so the preview would report contention while the
+  // operator's actual task is recovery — the stranded-run answer arriving one attempt later.
+  it("refuses a rival that moved once and then died", async () => {
+    const world: RunWorld = {
+      marker: inFlightMarker("down"),
+      tables: [LEGACY_REGISTRY, "comp_hero", MIGRATION_LOCK_TABLE],
+      registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
+      lockOwner: "field-group-migration:down#died-midway",
+    };
+    let reads = 0;
+    world.onMarkerRead = () => {
+      reads += 1;
+      // Advances once (so attempts 1 and 2 differ), then never again.
+      if (reads === 1) world.marker = { ...inFlightMarker("down"), step: 1 };
+    };
+    const { adapter, trace } = createRunWorld(world);
+
+    await expect(
+      runFieldGroupMigration({
+        adapter,
+        logger,
+        direction: "up",
+        dryRun: true,
+      })
+    ).rejects.toSatisfy(
+      error =>
+        NextlyError.is(error) &&
+        error.logContext?.reason === "a run in the other direction is in flight"
+    );
+
+    expect(markerReads(trace)).toBe(3);
+  });
+
   // 🔴 THE control for the durable-claim hole. This lock has no TTL and no auto-steal by design, so
   // a process that dies holding it leaves the row held until an operator clears it. A held row
   // therefore proves ownership was RECORDED, not that anyone is moving — and combined with a
