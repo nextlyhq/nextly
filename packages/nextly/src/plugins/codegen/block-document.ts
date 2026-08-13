@@ -520,6 +520,54 @@ function shadowedDeclaredField(fields: readonly string[]): string | undefined {
 }
 
 /**
+ * What `Object.prototype` carried when this module loaded.
+ *
+ * Captured rather than listed, so it is whatever the running engine considers
+ * standard and cannot go stale when a future runtime adds a built-in.
+ */
+const PRISTINE_PROTOTYPE_KEYS: ReadonlySet<string> = new Set(
+  Object.getOwnPropertyNames(Object.prototype)
+);
+
+/**
+ * Any name added to `Object.prototype` since this module loaded.
+ *
+ * This exists because the check below it could be DISARMED by the very thing it
+ * looks for, which is the failure that matters more than the one it was written
+ * for. {@link declaredFields} derives its list by emitting the JSON Schema, and
+ * emitting that schema while `Object.prototype` carries `id`, `type`, `version`
+ * and `props` produces **8** property names instead of 33 — the node's fields
+ * vanish from it entirely. So the field list came back without the names being
+ * attacked, found nothing to complain about, and a node inheriting every
+ * required field parsed as valid.
+ *
+ * That is a guard reading data the attacker controls. This one reads a set
+ * captured before any document was seen, so nothing a caller does afterwards
+ * can change the answer, and it needs no knowledge of the schema at all.
+ *
+ * The gap it does NOT close, stated rather than implied: pollution that
+ * predates this module's load is part of the captured baseline and is invisible
+ * here. {@link shadowedDeclaredField} still covers that case whenever schema
+ * emission is intact, which is why both run.
+ */
+function pollutedPrototypeKey(): string | undefined {
+  for (const name of Object.getOwnPropertyNames(Object.prototype)) {
+    if (!PRISTINE_PROTOTYPE_KEYS.has(name)) return name;
+  }
+  return undefined;
+}
+
+/**
+ * The fields a node must declare, as the one list this module states outright.
+ *
+ * A positive control for {@link declaredFields}: if the derived list does not
+ * contain these, the emission that produced it was perturbed and its silence
+ * means nothing. Four names, checked against a list of 33, is a cheap way to
+ * tell "found no problem" apart from "could not look".
+ */
+const NODE_REQUIRED_FIELDS = ["id", "type", "version", "props"] as const;
+
+/**
  * Every field name any object in the document declares.
  *
  * Read from the JSON Schema this module publishes, which is the one artefact
@@ -677,7 +725,33 @@ export function parseBlockDocument(value: unknown): BlockDocumentParseResult {
   // `Object.prototype`, every object in the document resolves that field
   // whether or not it holds one, so the schema would be validating values the
   // document does not contain and storage will not receive.
-  const shadowed = shadowedDeclaredField(declaredFields());
+  const added = pollutedPrototypeKey();
+  if (added !== undefined) {
+    return {
+      success: false,
+      issues: [
+        `Object.prototype has gained \`${added}\` since this module loaded, so every object in this document appears to hold fields it does not own.`,
+      ],
+    };
+  }
+
+  const fields = declaredFields();
+  // The positive control. A perturbed emission returns a SHORTER list rather
+  // than an error, so "no declared field is shadowed" has to be distinguished
+  // from "the list being searched was not the real one".
+  const derivationIntact = NODE_REQUIRED_FIELDS.every(field =>
+    fields.includes(field)
+  );
+  if (!derivationIntact) {
+    return {
+      success: false,
+      issues: [
+        "The published schema could not be derived, so this document cannot be checked against it.",
+      ],
+    };
+  }
+
+  const shadowed = shadowedDeclaredField(fields);
   if (shadowed !== undefined) {
     return {
       success: false,

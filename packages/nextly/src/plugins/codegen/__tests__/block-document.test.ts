@@ -8,7 +8,7 @@ import {
   STYLE_STATES,
   isReservedOperationName,
 } from "@nextlyhq/blocks-engine";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { blockDocumentJsonSchema, parseBlockDocument } from "../block-document";
 
@@ -482,6 +482,100 @@ describe("block document schema", () => {
         expect(parseBlockDocument(doc).success).toBe(false);
       }
     );
+  });
+
+  it("refuses once anything is added to Object.prototype at all", () => {
+    // The load-time snapshot, isolated. The name is deliberately one the format
+    // never declares, so the field-list check cannot fire and this is the only
+    // guard that can refuse — which is what makes it a test OF that guard
+    // rather than of the three-way redundancy around it.
+    //
+    // Conservative on purpose. A process that has grown a prototype property
+    // while holding untrusted documents cannot be reasoned about: the field
+    // list is derived by emitting a schema, and that emission is itself
+    // perturbed by pollution, so "nothing declared was shadowed" stops being a
+    // trustworthy answer. Refusing everything is the honest response to not
+    // being able to tell.
+    withPrototypeFields({ notAFormatFieldAtAll: "anything" }, () => {
+      const doc = {
+        ...emptyPage(),
+        nodes: [{ id: "a", type: "core/text", version: 1, props: {} }],
+      };
+      expect(parseBlockDocument(doc).success).toBe(false);
+    });
+
+    // The control, immediately after: with the property removed the identical
+    // document parses, so the refusal is of the pollution and not of the
+    // document.
+    expect(
+      parseBlockDocument({
+        ...emptyPage(),
+        nodes: [{ id: "a", type: "core/text", version: 1, props: {} }],
+      }).success
+    ).toBe(true);
+  });
+
+  it("refuses when the prototype is polluted BEFORE the module derives its fields", async () => {
+    // The ordering that disarmed the guard, and it disarmed it through the
+    // guard's own input. The field list is derived by emitting the JSON Schema
+    // and reading its `properties`; emitting it while `Object.prototype`
+    // carries `id`, `type`, `version` and `props` yields 8 names instead of 33,
+    // with every node field missing. So the search ran over a list that no
+    // longer contained the names under attack, found nothing, and a node
+    // inheriting all four required fields parsed as valid.
+    //
+    // Every other test here pollutes AFTER something has already derived the
+    // list, so they exercised a warm cache and passed either way. `resetModules`
+    // is what makes the module derive its list for the first time while the
+    // pollution is in place.
+    vi.resetModules();
+    const proto = Object.prototype as unknown as Record<string, unknown>;
+    const planted = { id: "a", type: "core/text", version: 1, props: {} };
+    for (const [key, value] of Object.entries(planted)) {
+      Object.defineProperty(Object.prototype, key, {
+        value,
+        enumerable: false,
+        writable: true,
+        configurable: true,
+      });
+    }
+    try {
+      const node = {};
+      // The precondition: all four required fields resolve without being owned.
+      expect((node as { id?: string }).id).toBe("a");
+      expect(Object.hasOwn(node, "id")).toBe(false);
+
+      // The property is that a polluted process NEVER reports such a document
+      // valid — not which mechanism refuses it. Three can, and which one fires
+      // depends on when the pollution arrived:
+      //
+      //  - the load-time prototype snapshot, for pollution added afterwards;
+      //  - the derivation control, when the emitted schema comes back short;
+      //  - zod's own registry, which throws during module initialization,
+      //    because `.meta()` reads `id` off the object it is given and an
+      //    inherited `id` makes every call look like the same registration.
+      //
+      // The last one means the import itself can fail, so the assertion has to
+      // cover a throw as well as a refusal. Asserting one specific message
+      // would pin the accident of ordering rather than the guarantee.
+      let reportedValid = false;
+      try {
+        const cold = (await import("../block-document")) as {
+          parseBlockDocument: typeof parseBlockDocument;
+        };
+        reportedValid = cold.parseBlockDocument({
+          formatVersion: DOCUMENT_FORMAT_VERSION,
+          kind: "page",
+          nodes: [node],
+        }).success;
+      } catch {
+        reportedValid = false;
+      }
+      expect(reportedValid).toBe(false);
+    } finally {
+      for (const key of Object.keys(planted)) delete proto[key];
+      vi.resetModules();
+    }
   });
 
   it("refuses a node whose OPTIONAL field is inherited", () => {
