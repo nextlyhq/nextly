@@ -457,6 +457,29 @@ describe("the host can drive it", () => {
     expect(chosen).toEqual(["second"]);
   });
 
+  it("keeps two commands separable when their ids differ only by whitespace", () => {
+    // cmdk TRIMS the value before using it as the selection identity, so `"save"` and `"save "` —
+    // distinct ids by this component's contract — collide through normalisation rather than
+    // through concatenation. Driven by the keyboard, because selection is what the value keys.
+    const chosen: string[] = [];
+    mount(
+      <CommandPalette
+        commands={[
+          { id: "save", label: "Save", run: () => chosen.push("first") },
+          { id: "save ", label: "Save", run: () => chosen.push("second") },
+        ]}
+      />
+    );
+    pressPaletteKey();
+
+    expect(screen.getAllByText("Save")).toHaveLength(2);
+    const input = screen.getByRole("combobox");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(chosen).toEqual(["second"]);
+  });
+
   it("names the search field, not just the dialog", () => {
     mount(<CommandPalette commands={[]} />);
     pressPaletteKey();

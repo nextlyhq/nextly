@@ -379,7 +379,13 @@ function PaletteSurface({
                   // and `keywords: ["page", "settings"], id: "x"` produce the same string, and
                   // cmdk then highlights both rows and activates the first whichever is chosen.
                   // What the search should MATCH goes to `keywords`, which cmdk reads separately.
-                  value={command.id}
+                  //
+                  // ENCODED because cmdk trims the value before using it as the identity, so
+                  // `"save"` and `"save "` — distinct ids by the type's contract — would collide
+                  // again through normalisation rather than through concatenation. Percent-encoding
+                  // leaves no leading or trailing whitespace for the trim to remove, so distinct
+                  // ids stay distinct.
+                  value={encodeURIComponent(command.id)}
                   keywords={[command.label, ...(command.keywords ?? [])]}
                   onSelect={() => choose(command)}
                 >
