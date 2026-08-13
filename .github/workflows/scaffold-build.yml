@@ -233,6 +233,24 @@ jobs:
           test -d node_modules || { echo "no node_modules: the install did not run"; exit 1; }
           test -f src/app/layout.tsx || { echo "no root layout: the template did not copy"; exit 1; }
 
+          # A scaffold writes a real `.env`, so without this the first `git add .` in a new
+          # project commits it. Checked on every leg because the file reaches the project by two
+          # different routes — from this checkout on the `local` legs and from the packed tarball
+          # on `bundled` — and only the second is where npm strips it out.
+          test -f .gitignore || { echo "no .gitignore: a new project would commit its .env"; exit 1; }
+
+          # `node_modules` says an install ran; it does not say WHICH installer ran. The CLI
+          # picks that from the forwarded `npm_config_user_agent`, so a regression there — or a
+          # pnpm release that stops forwarding it — would quietly run npm instead, and npm's
+          # hoisted, build-script-running tree passes everything these pnpm legs exist to check.
+          # The lockfile is the installer's own signature.
+          if [ "${{ matrix.pm }}" = "pnpm" ]; then
+            test -f pnpm-lock.yaml || {
+              echo "no pnpm-lock.yaml: this leg claims pnpm but something else installed"
+              exit 1
+            }
+          fi
+
           # Every package the layouts import must be installed. Derived from the sources
           # rather than named here: a list in this file is a second answer to a question
           # the templates already answer, and the two agree only until someone changes a
