@@ -339,7 +339,34 @@ export async function dragUntilTarget(
  * pointer has moved. Every reader that asks "which target is active" therefore
  * has to decide whether it is reading a settled answer or a permitted lag.
  */
-export const DWELL_ALLOWANCE_MS = 100;
+export const PERMITTED_DWELL_FLOOR_MS = 100;
+
+/**
+ * The longest dwell this suite will WAIT for before calling a reading settled.
+ *
+ * Separate from {@link PERMITTED_DWELL_FLOOR_MS} because the two answer
+ * opposite questions, and one number cannot serve both:
+ *
+ * - Settling asks "has the canvas committed yet?", so it must wait at least as
+ *   long as the longest dwell a compliant canvas may use. Too SMALL and a
+ *   compliant slow canvas is read while still lagging.
+ * - The jitter probe asks "was that move fast enough that a compliant timer
+ *   could NOT have committed?", so its bound must be no larger than the
+ *   SHORTEST permitted dwell. Too LARGE and it accepts a sweep during which a
+ *   compliant canvas legitimately switched, then reads that switch as missing
+ *   hysteresis.
+ *
+ * Sharing one constant meant raising it to fix the first broke the second and
+ * lowering it did the reverse.
+ *
+ * The requirement states a dwell of MORE than 100ms and gives no upper bound,
+ * so no finite wait is provably sufficient and this number is an assumption
+ * rather than a derivation. Three times the floor covers any dwell a person
+ * would perceive as immediate; a canvas that deliberately dwells longer should
+ * declare it on the driver rather than have this raised for everyone, the way
+ * the activation threshold is already declared.
+ */
+export const DWELL_CEILING_MS = 3 * PERMITTED_DWELL_FLOOR_MS;
 
 /**
  * How long a stationary pointer is given to stop producing new targets.
@@ -349,7 +376,7 @@ export const DWELL_ALLOWANCE_MS = 100;
  * changing its mind with no input to justify it, which is a defect rather than
  * permitted lag and must not be reported as a settled reading.
  */
-const SETTLE_BUDGET_MS = 4 * DWELL_ALLOWANCE_MS;
+const SETTLE_BUDGET_MS = 4 * DWELL_CEILING_MS;
 
 /** The capability these readers need, so a test can supply exactly it. */
 type TargetReader = Pick<CanvasDriver, "readActiveTarget">;
@@ -374,7 +401,7 @@ type TargetReader = Pick<CanvasDriver, "readActiveTarget">;
  * grow their own copy of this.
  */
 async function departureFrom<T>(read: () => Promise<T>, from: T): Promise<T> {
-  const deadline = Date.now() + DWELL_ALLOWANCE_MS;
+  const deadline = Date.now() + DWELL_CEILING_MS;
   let current = from;
   do {
     current = await read();
@@ -388,7 +415,7 @@ async function departureFrom<T>(read: () => Promise<T>, from: T): Promise<T> {
  *
  * A canvas whose hysteresis is a TIMER rather than a distance margin is allowed
  * to lag: the pointer is over a new zone and the old reading stays correct for
- * up to {@link DWELL_ALLOWANCE_MS}. So "settled" cannot mean "two reads agreed"
+ * up to {@link DWELL_CEILING_MS}. So "settled" cannot mean "two reads agreed"
  * — during that lag EVERY read agrees, and they all return the pre-move value.
  * Stability is only evidence once it has been observed across the whole interval
  * the canvas was permitted to lag for, which is why this waits the allowance out
@@ -628,7 +655,7 @@ export interface JitterProbe {
  */
 export async function jitterAcrossEdge(
   driver: CanvasDriver,
-  { sweeps = 3, dwellAllowanceMs = DWELL_ALLOWANCE_MS } = {}
+  { sweeps = 3, dwellAllowanceMs = PERMITTED_DWELL_FLOOR_MS } = {}
 ): Promise<JitterProbe> {
   // To P-2 first, then alternating by 4, so the samples are P-2 and P+2 —
   // genuinely opposite sides. Alternating +/-2 from P samples P+2 and P, both

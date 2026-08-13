@@ -12,7 +12,11 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { DWELL_ALLOWANCE_MS, settledValue } from "./driver";
+import {
+  DWELL_CEILING_MS,
+  PERMITTED_DWELL_FLOOR_MS,
+  settledValue,
+} from "./driver";
 
 /**
  * A reader that behaves like a canvas whose hysteresis is a dwell TIMER: it
@@ -20,7 +24,7 @@ import { DWELL_ALLOWANCE_MS, settledValue } from "./driver";
  * then commits to the new one.
  *
  * This is a COMPLIANT canvas, not a broken one. The requirement permits
- * hysteresis expressed as a dwell of up to {@link DWELL_ALLOWANCE_MS} instead of
+ * hysteresis expressed as a dwell of up to {@link DWELL_CEILING_MS} instead of
  * a distance margin, so every assertion below is about the harness reading such
  * a canvas correctly rather than about the canvas being right.
  */
@@ -38,7 +42,7 @@ test("returns the value the reader commits to, not the one it is still lagging o
   // During a permitted dwell every read agrees, and they all return the
   // PRE-move value — so the old reader returned 1 here and each caller compared
   // a stale target against where the pointer actually was.
-  expect(await settledValue(dwellingReader(1, 2, DWELL_ALLOWANCE_MS / 2))).toBe(
+  expect(await settledValue(dwellingReader(1, 2, DWELL_CEILING_MS / 2))).toBe(
     2
   );
 });
@@ -50,7 +54,7 @@ test("spends the whole allowance before calling an unchanged value settled", asy
   // passed. Any implementation that returns sooner is guessing.
   const started = Date.now();
   expect(await settledValue(async () => 3)).toBe(3);
-  expect(Date.now() - started).toBeGreaterThanOrEqual(DWELL_ALLOWANCE_MS);
+  expect(Date.now() - started).toBeGreaterThanOrEqual(DWELL_CEILING_MS);
 });
 
 test("throws rather than returning a value from a reader that never holds still", async () => {
@@ -73,7 +77,7 @@ test("tolerates a reader that settles only after changing more than once", async
   // transition would fail a compliant canvas, which is the error this suite has
   // made four times in other probes.
   const movedAt = Date.now();
-  const step = DWELL_ALLOWANCE_MS / 2;
+  const step = DWELL_CEILING_MS / 2;
   const value = await settledValue(async () => {
     const elapsed = Date.now() - movedAt;
     if (elapsed < step) return 1;
@@ -81,4 +85,18 @@ test("tolerates a reader that settles only after changing more than once", async
     return 3;
   });
   expect(value).toBe(3);
+});
+
+test("reads a canvas whose dwell sits ABOVE the permitted floor", async () => {
+  // The requirement is "a dwell of MORE than 100ms", so the floor is the
+  // smallest dwell a compliant canvas may use, not the largest. Waiting only
+  // the floor returns the pre-move value for every canvas that clears the bar
+  // it was told to clear — the more correct the implementation, the more
+  // reliably the harness misread it.
+  //
+  // This is the case that separates the two constants: with one shared value
+  // the settling wait equals the floor and this fails.
+  expect(
+    await settledValue(dwellingReader(1, 2, PERMITTED_DWELL_FLOOR_MS + 50))
+  ).toBe(2);
 });
