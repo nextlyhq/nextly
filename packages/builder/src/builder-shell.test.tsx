@@ -338,4 +338,110 @@ describe("a viewport too narrow for the shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "Exit editor" }));
     expect(onExit).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps the caller's slots mounted behind the notice", () => {
+    // Swapping the editor out for the notice unmounted every slot the host had
+    // given us, and React discards the state inside them. Narrowing a window is
+    // transient; widening it again must not hand back empty components while
+    // whatever the host was holding locally is gone, with nothing having told
+    // it the subtree was going away.
+    //
+    // Queried by test id rather than by role: the subtree is `hidden`, so a
+    // role query correctly refuses to see it and would report the unmounted
+    // case and the hidden case identically.
+    stubViewport(false);
+    render(
+      <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+        <p data-testid="canvas-slot">the caller&apos;s canvas</p>
+      </BuilderShell>
+    );
+
+    expect(screen.getByText(/needs a wider screen/i)).toBeTruthy();
+    expect(screen.queryByTestId("canvas-slot")).not.toBeNull();
+  });
+
+  it("hides that subtree from pointer, keyboard and assistive technology", () => {
+    // The positive control for the test above. Keeping the slots mounted is
+    // only correct while they are also unreachable — a tab order that runs
+    // through an editor nobody can see is worse than the unmount was.
+    stubViewport(false);
+    render(
+      <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+        <p data-testid="canvas-slot">the caller&apos;s canvas</p>
+      </BuilderShell>
+    );
+
+    const slot = screen.getByTestId("canvas-slot");
+    const hiddenWrapper = slot.closest("[hidden]");
+    expect(hiddenWrapper).not.toBeNull();
+    expect(hiddenWrapper?.hasAttribute("inert")).toBe(true);
+    // And the canvas is genuinely out of the accessibility tree.
+    expect(screen.queryByRole("main", { name: "Canvas" })).toBeNull();
+  });
+
+  it("keeps the class the caller positioned the shell with", () => {
+    // The className is how the host places the shell in its own layout — a grid
+    // area, a height, a border. Dropping it on this path let the notice escape
+    // the box the shell had been given.
+    stubViewport(false);
+    const { container } = render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={memoryStore()}
+        className="host-placed-me"
+      />
+    );
+
+    const notice = container.querySelector(".host-placed-me");
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent).toMatch(/needs a wider screen/i);
+  });
+});
+
+describe("F6 while an editing control has focus", () => {
+  it("moves between regions from inside a text field", () => {
+    // The shortcut manager's default asks whether the first chord carries a
+    // modifier or is Escape, and answers no for a bare function key — so F6 was
+    // held back by any focused field. Moving between areas is exactly what an
+    // author needs while a field has focus, because it is how they get back out
+    // without reaching for the mouse.
+    renderShell({
+      children: <input data-testid="caption" aria-label="Caption" />,
+    });
+
+    const field = screen.getByTestId("caption") as HTMLInputElement;
+    field.focus();
+    expect(document.activeElement).toBe(field);
+
+    fireEvent.keyDown(field, { key: "F6" });
+
+    // Out of the field and onto a region. Which one depends on where the field
+    // sits in the cycle; that it LEFT the field is the property under test.
+    expect(document.activeElement).not.toBe(field);
+    expect(
+      (document.activeElement as HTMLElement | null)?.getAttribute("aria-label")
+    ).toBeTruthy();
+  });
+});
+
+describe("the preference store the caller supplies", () => {
+  it("follows a store that is swapped for another", () => {
+    // Capturing the caller's store in state pinned whichever one arrived first,
+    // so a host that swaps stores — signing into a second workspace, promoting
+    // a memory store to a persisted one — went on writing to the one it had
+    // replaced.
+    stubViewport(true);
+    const first = memoryStore();
+    const second = memoryStore();
+
+    const { rerender } = render(
+      <BuilderShell onExit={vi.fn()} store={first} />
+    );
+    rerender(<BuilderShell onExit={vi.fn()} store={second} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Layers" }));
+
+    expect(second.value).toContain("layers");
+    expect(first.value).toBeNull();
+  });
 });

@@ -22,11 +22,26 @@
  * predicate would not have prevented that, because sharing a predicate does not
  * share the decision to call it; only sharing the entry point does.
  *
- * **Public surface so far**: {@link BUILDER_PACKAGE_NAME}, and the frame
- * geometry below. The editor itself is not exported yet — the package was
- * created ahead of it so its name could be claimed on npm, because trusted
- * publishing cannot perform a package's first publish and the bootstrap script
- * will not claim a name that is not already a workspace package.
+ * **Public surface**, all of it `@experimental` while the editor is being built
+ * out:
+ *
+ * - {@link BUILDER_PACKAGE_NAME}, for diagnostics that report what a host loaded.
+ * - The frame geometry — {@link pointToCanvas}, {@link pointToHost},
+ *   {@link rectToHost}, {@link frameContentOrigin}, {@link frameInsetOf} — also
+ *   published at `@nextlyhq/builder/geometry`, which carries no `"use client"`
+ *   banner and so is reachable from a server component.
+ * - {@link BuilderShell}, the editor shell, with its declared bounds and
+ *   preference port. Those are also published at
+ *   `@nextlyhq/builder/shell-state`, again free of the client banner.
+ * - `@nextlyhq/builder/styles.css`, the chrome's stylesheet. It SUPPLEMENTS the
+ *   design system's rather than restating it, so a host loads
+ *   `@nextlyhq/ui/styles.css` — or the admin's, which contains it — alongside.
+ *   The shell says so in the console, in development, when it is missing.
+ *
+ * The package was created ahead of any of this so its name could be claimed on
+ * npm, because trusted publishing cannot perform a package's first publish and
+ * the bootstrap script will not claim a name that is not already a workspace
+ * package.
  *
  * @module @nextlyhq/builder
  */

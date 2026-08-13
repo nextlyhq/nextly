@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
+import { devWarnOnce } from "./dev-warn";
 import {
   DEFAULT_PREFERENCES,
   LEFT_PANELS,
@@ -232,6 +233,64 @@ function shallowEqualPreferences(
 }
 
 /**
+ * One design-system token, read off the mounted shell.
+ *
+ * Chosen over any `--nx-builder-*` because those are declared in this package's
+ * own stylesheet and would resolve whether or not the design system's had been
+ * loaded — the check would pass in exactly the case it exists to catch. The
+ * `--nx-*` layer is declared only by `@nextlyhq/ui`, so its absence is the
+ * question being asked.
+ */
+const REQUIRED_HOST_TOKEN = "--nx-background";
+
+/**
+ * A token this package's OWN stylesheet declares, used as a positive control.
+ *
+ * Without it the check cannot tell the two ways of resolving to nothing apart:
+ * a host that never imported the design system's sheet, and an environment that
+ * applies no stylesheets whatsoever. jsdom is the second, so a bare absence test
+ * would warn on every unit test that mounts the shell — noise indistinguishable
+ * from the real defect, in the place developers read warnings most.
+ *
+ * Reading both makes the instrument observable: when this one resolves, styles
+ * ARE being applied, and the other one's absence means what it says.
+ */
+const OWN_STYLESHEET_TOKEN = "--nx-builder-surface";
+
+/**
+ * Tell a developer when the design system's stylesheet has not been loaded.
+ *
+ * The editor's own sheet supplements that one rather than restating it, so a
+ * host that imports only `@nextlyhq/builder/styles.css` gets a shell that mounts
+ * with every class name in place and renders wrong — unstyled tooltips and drag
+ * handles, and chrome colours resolving to nothing. Nothing at build time can
+ * see a missing side-effect import in someone else's application, so this is the
+ * only layer the requirement can be enforced from.
+ */
+function useDesignSystemStylesheet(
+  rootRef: React.RefObject<HTMLElement | null>
+): void {
+  React.useEffect(() => {
+    const root = rootRef.current;
+    if (!root || typeof window === "undefined") return;
+    const styles = window.getComputedStyle(root);
+    const own = styles.getPropertyValue(OWN_STYLESHEET_TOKEN).trim();
+    // Nothing resolves here, so the absence of the other token says nothing
+    // about the host. Reporting it anyway would put a warning about a missing
+    // import in front of every developer running the suite.
+    if (own === "") return;
+    devWarnOnce(
+      styles.getPropertyValue(REQUIRED_HOST_TOKEN).trim() !== "",
+      `The design system's stylesheet is not loaded, so the editor will render ` +
+        `without its colours, tooltips or drag handles. Import ` +
+        `"@nextlyhq/ui/styles.css" (or the admin's stylesheet) alongside ` +
+        `"@nextlyhq/builder/styles.css" — the editor's sheet supplements it and ` +
+        `does not replace it.`
+    );
+  }, [rootRef]);
+}
+
+/**
  * F6 region cycling, registered with the shared shortcut manager.
  *
  * Through the manager rather than a private key listener, because two
@@ -246,6 +305,14 @@ function useRegionCycling(
       {
         keys: "F6",
         description: "Move to the next area of the editor",
+        // The manager's default asks whether the FIRST chord carries a modifier
+        // or is Escape, and answers no for a bare function key — so F6 would be
+        // held back by any focused text field. That default is right for the
+        // letter keys it was written for and backwards here: moving between
+        // areas of the editor is the one thing an author needs MOST while a
+        // caption or a field has focus, because it is how they get back out
+        // without reaching for the mouse.
+        whenTyping: true,
         run: () => {
           const map = regionRefs.current;
           if (!map) return;
@@ -293,6 +360,8 @@ function ShellRegions({
     inspector: null,
   });
   useRegionCycling(regionRefs);
+  const chromeRef = React.useRef<HTMLDivElement | null>(null);
+  useDesignSystemStylesheet(chromeRef);
 
   const openPanel = preferences.leftPanel;
 
@@ -304,6 +373,7 @@ function ShellRegions({
 
   return (
     <div
+      ref={chromeRef}
       className={cn(
         "nx-builder-chrome flex h-full w-full flex-col overflow-hidden",
         className
@@ -366,7 +436,20 @@ function ShellRegions({
         <ResizablePanelGroup
           orientation="horizontal"
           defaultLayout={preferences.layout ?? undefined}
-          onLayoutChanged={layout => {
+          onLayoutChanged={(layout, meta) => {
+            // The group reports every layout it settles on, not only the ones a
+            // person asked for. Mounting, recomputing constraints and reacting
+            // to a changed default all arrive here too, and the mount pass
+            // arrives BEFORE the restored layout has taken effect — so writing
+            // unconditionally saves the freshly measured default over the
+            // layout being restored, and the panel widths reset on every
+            // reload while appearing to persist within a session.
+            //
+            // `isUserInteraction` is the library's own account of which of
+            // those it was: true only for a pointer drag or a resize key on a
+            // separator. Dragging a separator is the one event that states an
+            // intent about widths, and it is the only one worth remembering.
+            if (!meta.isUserInteraction) return;
             update(current => ({ ...current, layout: { ...layout } }));
           }}
           className="min-w-0 flex-1"
@@ -450,32 +533,17 @@ function ShellRegions({
  * @experimental
  */
 export function BuilderShell({ store, ...props }: BuilderShellProps) {
-  // Built once. A store rebuilt each render would make `usePreferences`'
-  // callback identity change on every render, and the write effect with it.
-  const [resolvedStore] = React.useState(() => store ?? browserStore());
+  // The browser store is built once: rebuilt each render it would change
+  // `usePreferences`' callback identity every render, and the write effect with
+  // it. Only the FALLBACK needs that treatment though. Capturing the caller's
+  // `store` alongside it pinned whichever one arrived first, so a host that
+  // swaps stores — signing into a second workspace, promoting a memory store to
+  // a persisted one — went on reading and writing the store it had replaced.
+  const fallbackStore = React.useRef<PreferenceStore | null>(null);
+  fallbackStore.current ??= browserStore();
+  const resolvedStore = store ?? fallbackStore.current;
   const [preferences, update] = usePreferences(resolvedStore);
   const fitsFullShell = useFitsFullShell();
-
-  if (!fitsFullShell) {
-    return (
-      <div className="nx-builder-chrome flex h-full w-full flex-col items-center justify-center gap-3 p-6 text-center">
-        <p className="text-sm font-medium">
-          The page editor needs a wider screen
-        </p>
-        <p className="text-[color:var(--nx-builder-text-muted)] max-w-sm text-sm">
-          Editing a layout needs at least {MIN_SHELL_WIDTH}px. On a smaller
-          screen you can still edit this page&apos;s content from the admin.
-        </p>
-        <button
-          type="button"
-          onClick={props.onExit}
-          className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring rounded-md border px-3 py-1.5 text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
-        >
-          Exit editor
-        </button>
-      </div>
-    );
-  }
 
   return (
     <ShortcutProvider>
@@ -484,7 +552,63 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
           them depends on this and should not make it someone else's setup step.
           Radix nests providers safely — a host with its own keeps its delay. */}
       <TooltipProvider delayDuration={300}>
-        <ShellRegions {...props} preferences={preferences} update={update} />
+        {!fitsFullShell ? (
+          <div
+            // The caller's className reaches this branch too. It is what
+            // positions the shell in the host's layout — a grid area, a height,
+            // a border — and dropping it on the narrow path made the fallback
+            // escape the box the shell had been given, in the layout least able
+            // to absorb it.
+            className={cn(
+              "nx-builder-chrome flex h-full w-full flex-col items-center justify-center gap-3 p-6 text-center",
+              props.className
+            )}
+          >
+            <p className="text-sm font-medium">
+              The page editor needs a wider screen
+            </p>
+            <p className="text-[color:var(--nx-builder-text-muted)] max-w-sm text-sm">
+              Editing a layout needs at least {MIN_SHELL_WIDTH}px. On a smaller
+              screen you can still edit this page&apos;s content from the admin.
+            </p>
+            <button
+              type="button"
+              onClick={props.onExit}
+              className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring rounded-md border px-3 py-1.5 text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
+            >
+              Exit editor
+            </button>
+          </div>
+        ) : null}
+
+        {/* The editor stays MOUNTED while the notice is up, rather than being
+            swapped out for it.
+
+            Returning the notice instead unmounted every slot the caller had
+            given us — canvas, inspector, panels — and React discards the state
+            inside them: a half-written caption, an open picker, whatever the
+            host was holding locally. Narrowing a window or rotating a tablet is
+            a transient act, and widening it again produced fresh, empty slot
+            instances with no way for the host to have saved anything, because
+            nothing told it the subtree was going away.
+
+            `hidden` takes it out of layout and paint; `inert` takes it out of
+            the tab order and the accessibility tree, so nothing behind the
+            notice is reachable by keyboard or screen reader. The cost is that
+            the editor goes on occupying memory while hidden, which is the
+            deliberate trade: an author's unsaved work is worth more than the
+            allocation. */}
+        <div
+          hidden={!fitsFullShell}
+          inert={!fitsFullShell}
+          // `display: contents` while visible, so this wrapper adds no box of
+          // its own and the shell keeps sizing against the caller's container.
+          // Omitted while hidden, where the `hidden` attribute's own
+          // `display: none` has to be the one that applies.
+          className={fitsFullShell ? "contents" : undefined}
+        >
+          <ShellRegions {...props} preferences={preferences} update={update} />
+        </div>
       </TooltipProvider>
     </ShortcutProvider>
   );

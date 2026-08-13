@@ -21,7 +21,12 @@
     // does not have. Mapped to source instead, which is what `packages/admin`
     // does for `nextly`.
     "paths": {
-      "@nextlyhq/builder": ["../packages/builder/src"]
+      "@nextlyhq/builder": ["../packages/builder/src"],
+      // The shell's declared bounds, so the browser spec asserts against the
+      // numbers the component actually ships rather than a second copy of them.
+      // Its own subpath rather than the root barrel: that entry is a client
+      // component pulling in React, and this module is plain arithmetic.
+      "@nextlyhq/builder/shell-state": ["../packages/builder/src/shell-state"]
     }
   },
   // Everything, deliberately. The two page-builder specs that rotted did so

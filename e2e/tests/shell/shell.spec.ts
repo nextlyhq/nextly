@@ -12,15 +12,27 @@
  * the stylesheet failed to ship at all — which was a real defect in this
  * package's first build.
  */
+import {
+  MIN_CANVAS_WIDTH,
+  MIN_SHELL_WIDTH,
+  PANEL_BOUNDS,
+  RAIL_WIDTH,
+} from "@nextlyhq/builder/shell-state";
 import { expect, test } from "@playwright/test";
 
 import { createShellDriver } from "./driver";
 
-const MIN_SHELL_WIDTH = 1280;
-const MIN_CANVAS_WIDTH = 480;
-const RAIL_WIDTH = 48;
-const LEFT_BOUNDS = { min: 240, max: 480 };
-const INSPECTOR_BOUNDS = { min: 280, max: 520 };
+/**
+ * The bounds come from the package, not from a second copy of the numbers.
+ *
+ * Restating them here made this file agree with the shell on the day it was
+ * written and never afterwards: widening a panel's maximum in `shell-state.ts`
+ * would leave these assertions passing against the OLD bound, so the one test
+ * that measures a real browser would go on certifying a layout the component no
+ * longer produces.
+ */
+const LEFT_BOUNDS = PANEL_BOUNDS.left;
+const INSPECTOR_BOUNDS = PANEL_BOUNDS.inspector;
 
 test.describe("the shell's regions", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
@@ -65,24 +77,41 @@ test.describe("the shell's regions", () => {
     );
   });
 
-  test("the stylesheet actually loaded", async ({ page }) => {
+  test("both stylesheets actually loaded", async ({ page }) => {
     // The control for every measurement above, and not redundant with them: a
     // shell whose CSS never shipped still renders its markup, still carries its
     // class names, and lays out as a stack of full-width blocks. Regions would
-    // have boxes; they would simply be the wrong ones. This asserts the chrome
-    // token resolved, which only happens if the stylesheet arrived.
+    // have boxes; they would simply be the wrong ones.
+    //
+    // Read as a PAINTED colour rather than as the custom property. Asking for
+    // `--nx-builder-surface` returns the declared token stream — the literal
+    // text `var(--nx-muted)` — which is a non-empty string whether or not
+    // `--nx-muted` is defined anywhere. That assertion passed while the harness
+    // was loading no design-system stylesheet at all, certifying the one thing
+    // it existed to rule out. `background-color` is resolved by the browser, so
+    // it can only be a real colour once the whole chain is present.
     const shell = createShellDriver(page);
     await shell.goto();
 
-    const surface = await page.evaluate(() => {
+    const painted = await page.evaluate(() => {
       const chrome = document.querySelector(".nx-builder-chrome");
       if (chrome === null) return null;
-      return getComputedStyle(chrome)
-        .getPropertyValue("--nx-builder-surface")
-        .trim();
+      const styles = getComputedStyle(chrome);
+      return {
+        background: styles.backgroundColor,
+        // Proves the editor's own sheet is present too: this class is emitted
+        // only by the builder's stylesheet, so the two halves of the contract
+        // are checked separately rather than inferred from one another.
+        display: styles.display,
+      };
     });
-    expect(surface).not.toBeNull();
-    expect(surface).not.toBe("");
+
+    expect(painted).not.toBeNull();
+    // An unresolvable `var()` computes to the initial value — transparent —
+    // which is exactly what a missing design system produces.
+    expect(painted?.background).not.toBe("rgba(0, 0, 0, 0)");
+    expect(painted?.background).not.toBe("transparent");
+    expect(painted?.display).toBe("flex");
   });
 });
 

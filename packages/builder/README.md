@@ -3,12 +3,16 @@
 The visual page-builder editor: the shell, the canvas, and the op store that
 everything in it either produces or reads.
 
-**The editor itself has not landed.** What ships today is the frame geometry —
-the one mapping between the canvas frame and the host page — plus the package
-name constant. See [Public surface](#public-surface). The package was created
-ahead of the editor so its name could be claimed on npm: trusted publishing
-cannot perform a package's first publish, and the bootstrap script will not
-claim a name that is not already a workspace package.
+**The editor is landing in slices, and every export is `@experimental`.** What
+ships today is the editor SHELL — the rail, the switched left panel, the canvas
+slot, the inspector and the bars around them — together with the frame geometry
+that maps between the canvas frame and the host page, and the package name
+constant. The canvas and the op store are still to come. See
+[Public surface](#public-surface).
+
+The package was created ahead of any of it so its name could be claimed on npm:
+trusted publishing cannot perform a package's first publish, and the bootstrap
+script will not claim a name that is not already a workspace package.
 
 ## What this package is not
 
@@ -79,7 +83,8 @@ bumps this package in lockstep with its siblings.
 
 ```tsx
 import { BuilderShell } from "@nextlyhq/builder";
-import "@nextlyhq/builder/styles.css"; // required — see below
+import "@nextlyhq/ui/styles.css"; // the design system's — see below
+import "@nextlyhq/builder/styles.css"; // the editor chrome's
 
 <BuilderShell
   onExit={() => router.push("/admin/pages")}
@@ -92,9 +97,27 @@ import "@nextlyhq/builder/styles.css"; // required — see below
 </BuilderShell>;
 ```
 
-`@nextlyhq/builder/styles.css` is COMPILED, not a token file: it carries the
-shell's utility rules as well as the `--nx-builder-*` custom properties, so the
-package works standalone with no Tailwind setup in the host.
+**Two stylesheets, and both are required.**
+
+`@nextlyhq/builder/styles.css` is COMPILED rather than a token file: it carries
+the shell's own utility rules as well as the `--nx-builder-*` custom properties,
+so the chrome lays out with no Tailwind setup in the host.
+
+It SUPPLEMENTS the design system's stylesheet rather than restating it, so
+`@nextlyhq/ui/styles.css` is loaded alongside — or the admin's stylesheet, which
+already contains it, when the editor is mounted inside the admin. That sheet
+owns three things this one deliberately does not ship:
+
+- the `--nx-*` tokens the chrome's own colours are derived from,
+- the base reset the components are designed against,
+- the rules for the primitives the shell renders — tooltips and drag handles.
+
+Shipping a second copy of any of them would make the result depend on which
+stylesheet loaded last, and would break re-theming: the point of deriving from
+`--nx-*` is that a host which re-themes the admin moves the editor with it.
+
+If the design system's sheet is missing, the shell says so in the console in
+development rather than leaving you to diagnose colours that resolve to nothing.
 
 If you DO use Tailwind and want to re-theme or extend the chrome, apply
 `@nextlyhq/ui/tailwind-preset` and add this package to your `@source` scan. That

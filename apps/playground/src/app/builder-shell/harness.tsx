@@ -1,6 +1,15 @@
 "use client";
 
 import { BuilderShell, type LeftPanel } from "@nextlyhq/builder";
+// The design system's sheet FIRST, then the editor's, which supplements it.
+// `@nextlyhq/builder/styles.css` deliberately ships neither the `--nx-*` tokens
+// nor the base reset, because the host already loads a sheet that owns both and
+// a second copy would make the result depend on which one won. This route is
+// that host: the playground's own `globals.css` says in as many words that it
+// must not define the design-system tokens, so without this import the shell
+// renders with its colours resolving to nothing — which is precisely what it
+// was doing here.
+import "@nextlyhq/ui/styles.css";
 import "@nextlyhq/builder/styles.css";
 
 /**
