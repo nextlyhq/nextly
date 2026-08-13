@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/plugin-seo",
-  "version": "0.0.2-alpha.56",
+  "version": "0.0.2-alpha.57",
   "description": "First-party SEO plugin for Nextly: adds an SEO meta field group to content collections",
   "license": "MIT",
   "type": "module",
@@ -29,7 +29,7 @@
   },
   "peerDependencies": {
     "@nextlyhq/plugin-sdk": "workspace:*",
-    "nextly": "0.0.2-alpha.56"
+    "nextly": "0.0.2-alpha.57"
   },
   "devDependencies": {
     "@nextlyhq/eslint-config": "workspace:*",
@@ -42,7 +42,7 @@
     "vitest": "^4.1.0"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
   },
   "keywords": [
     "nextly",

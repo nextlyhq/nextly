@@ -57,8 +57,66 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 ## Build and test (read this before running anything)
 
 - `pnpm build` builds all packages (turbo, dependency order).
-- `pnpm check-types` and `pnpm lint` do NOT need a build first. `pnpm test`
-  does (turbo handles it when run from the root).
+- `pnpm check-types` and `pnpm lint` BOTH need a build first. On a clean
+  checkout, measured with the cache forced off so the numbers are of work that
+  actually ran:
+
+  | command                                         | result on a clean tree                              |
+  | ----------------------------------------------- | --------------------------------------------------- |
+  | `pnpm turbo run check-types --continue --force` | 6 of 21 successful, 15 packages failing on `TS2307` |
+  | `pnpm turbo run lint --continue --force`        | 8 of 22 successful                                  |
+
+  `check-types` fails because a workspace import resolves through the sibling's
+  package exports to a `dist/index.d.ts` that does not exist yet. `lint` fails
+  for the same underlying reason through a different rule: `import-x/no-unresolved`
+  resolves the same specifiers, so an unbuilt sibling is an unresolved import.
+
+  Run `pnpm build` first. The failure is workspace-wide rather than local to one
+  package, so the whole-repo build is the honest default.
+
+  To check one package, build it WITH its dependencies:
+
+  ```
+  pnpm --filter <pkg>... build      # trailing ... includes <pkg> itself
+  ```
+
+  Not `<pkg>^...`. `pnpm recursive --help` defines that form as the dependencies
+  "without including the matched packages", so the package's own `dist` stays
+  absent — and `lint` then fails on its self-imports, which is the same missing
+  build wearing a different rule's error message.
+
+  **Two states distort these numbers in OPPOSITE directions, and neither is
+  visible in the summary line.** A warm cache overstates health; a missing
+  `dist` overstates breakage. Measured from both ends: with the cache warm this
+  entry first recorded 19 of 21 passing and `lint` clean, and on a freshly
+  installed tree with nothing built another lane saw `pnpm lint` fail with 361
+  `@nextlyhq/ui` resolution errors and vitest unable to collect at all. Same
+  repository, same commit.
+
+  So state the cache AND the build state when you quote a number.
+
+  **Measure with `--force`.** Turbo caches both tasks, and a cached task
+  reports `Tasks: N successful` without running anything — so a warm cache from
+  an earlier built state reports a clean tree as passing. That is not a
+  hypothetical: the first version of this entry claimed 19 of 21 passing and
+  `lint` clean at 22 of 22, and both numbers came from cache hits.
+
+  `TS2307` naming a workspace package (`nextly/...`, `@nextlyhq/...`) is USUALLY
+  a missing build, and the rebuild is what confirms it. It is not proof on its
+  own: a misspelled specifier, a removed export-map subpath, or a broken
+  tsconfig path mapping produces exactly the same error, and no amount of
+  rebuilding fixes those. If the error survives a successful build of that
+  package AND its dependencies — the `<pkg>...` form above, not `^...` — it is a
+  real resolution defect — see
+  `.claude/rules/verifying-merged-work.md`, which says to check what `main`
+  changed before calling any of this environmental.
+
+  Path mappings cover part of this and are not a general answer.
+  `packages/admin` maps the bare `nextly` specifier to `../nextly/src`, which is
+  why admin resolves it without a build while `packages/plugin-sdk`, which has
+  no such mapping, does not. Subpaths like `nextly/config` and
+  `nextly/field-catalog` are not covered by that mapping and still need `dist`.
+
 - CRITICAL: integration tests require built packages. Run them from the ROOT
   (`pnpm test:integration...`) so turbo builds first. Running
   `pnpm --filter nextly test:integration` on an unbuilt tree fails 60+ files

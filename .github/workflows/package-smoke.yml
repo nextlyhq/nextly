@@ -1,30 +1,67 @@
 name: Package smoke
 
 # Nightly proof that the published artifacts actually work: the tarballs
-# install into a clean project and import, and the scaffolder produces an app
-# that really installs and builds. publint and attw validate manifests and
+# install into a clean project and import, the scaffolder produces an app that
+# really installs and builds, and the subpaths declared server-safe survive a
+# real Next.js Server Component build. publint and attw validate manifests and
 # types statically on every PR; this covers the runtime layer they cannot —
-# missing `files` entries, broken bins, template dependency drift, and
-# native-module (better-sqlite3) prebuilds across current Node LTS lines.
+# missing `files` entries, broken bins, template dependency drift, RSC
+# compatibility, and native-module (better-sqlite3) prebuilds across the Node
+# lines the packages claim to support.
 #
-# Scheduled instead of per-PR: full installs take minutes, and this class of
-# drift moves slowly. A red night shows up as an issue, not a slower PR.
+# Mostly scheduled: full installs take minutes, and packaging drift moves
+# slowly. A red night shows up as an issue, not a slower PR.
+#
+# The RSC build is the exception and runs per PR as well, because it is the ONLY
+# control on the server-safe claim — the checks beside it read code and model
+# what Next.js would do, and a property with one control should not wait until
+# night to be checked. Path-filtered to the package that can change the answer.
 
 on:
   schedule:
     - cron: "0 3 * * *"
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "packages/ui/**"
+      # The lockfile decides what the build INLINES and which versions of the
+      # allow-listed packages the artifacts reach, so a lockfile-only change —
+      # a dependency bump, which arrives without touching a single source file —
+      # can alter the packed artifacts and introduce exactly the module-scope
+      # browser access this job exists to catch.
+      - "pnpm-lock.yaml"
+      # The root manifest carries `engines.node`, which decides the version legs
+      # below. A change there needs this job to run under the NEW range rather
+      # than only be told by a unit test that the two disagree.
+      - "package.json"
+      - ".github/workflows/package-smoke.yml"
 
+# Least privilege at the top. The one job that files an issue asks for more, so
+# a `pull_request` run — which is the event a fork can trigger — carries a token
+# that can only read.
 permissions:
   contents: read
-  # The failure reporter files an issue via `gh`.
-  issues: write
+
+# Keyed by ref for pull requests, so a new push supersedes the run under review.
+#
+# Keyed by RUN for everything else, which makes the group unique and the
+# cancellation flag inert. Keying those by SHA reads as safe and is not: a manual
+# dispatch during a nightly, or two dispatches, evaluate to the same commit and
+# the second would kill the first. There is no case where one scheduled or
+# dispatched run should cancel another, so the group is per-run rather than
+# per-commit.
+concurrency:
+  group: package-smoke-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   pack-and-consume:
     name: Install packed tarballs in a clean project
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Nightly only: this installs every tarball in the repo, and nothing about a
+    # single package's PR changes whether the SET of them resolves together.
+    if: github.event_name != 'pull_request'
 
     steps:
       - name: Checkout
@@ -91,6 +128,9 @@ jobs:
     name: Scaffold and build (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Nightly only: this scaffolds and builds a whole app from the CLI, and the
+    # per-PR scaffold smoke already covers the scaffolder itself.
+    if: github.event_name != 'pull_request'
     strategy:
       fail-fast: false
       # Current LTS lines only; the interesting failure here is a
@@ -136,13 +176,182 @@ jobs:
           cd smoke-app
           npm run build
 
-  # A red nightly must surface without anyone watching the Actions tab.
-  report-failure:
-    name: File an issue on failure
-    needs: [pack-and-consume, scaffold-and-build]
-    if: failure()
+  # The three static server-safe checks in packages/ui are all MODELS of what
+  # Next.js does with those subpaths: one looks for a `"use client"` banner, one
+  # walks the sources, one reads the built artifacts against an allow-list. A
+  # model only answers for what it was taught, and the artifact gate spent 29
+  # review rounds learning ways a simulated environment differs from a real one.
+  # This asks the real toolchain instead, and the assertion is the build passing.
+  # The version legs are COMPUTED from `engines.node` rather than written beside it, because the
+  # range's last clause is open-ended: `>=24.0.0` promises every major Node has released since, and
+  # a list naming the floor and the newest leaves the ones between them untested. Node's own release
+  # index says which exist, so nothing here needs an edit when a major ships.
+  node-matrix:
+    name: Derive the Node legs from the engines range
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      versions: ${{ steps.derive.outputs.versions }}
+      lowest: ${{ steps.derive.outputs.lowest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # The script is TypeScript, so this installs to get `tsx`. Node can strip types natively
+      # from 22.6, which would avoid the install — but `engines.node` supports 20.19, where it
+      # cannot, and a contributor whose local build works differently from CI is a worse cost than
+      # one install. Scoped to this package so it stays short.
+      - name: Install
+        run: pnpm install --frozen-lockfile --filter @nextlyhq/ui...
+
+      # The script reads the manifest and fetches the release index using built-ins only. It FAILS
+      # rather than falling back to a shorter list, since a narrower matrix passes while covering
+      # less, which is the failure this job exists to prevent one level up.
+      # A pull request runs one leg, and that leg comes from the manifest alone — so it does not
+      # fetch. Otherwise an outage at nodejs.org would fail a UI pull request that never needed the
+      # released majors, letting an outside service decide whether unrelated work can merge.
+      - name: Derive
+        id: derive
+        run: |
+          pnpm --filter @nextlyhq/ui exec tsx scripts/node-matrix.ts --github \
+            ${{ github.event_name == 'pull_request' && '--floor-only' || '' }}
+
+  server-safe-rsc-build:
+    name: Server-safe subpaths in an RSC build (Node ${{ matrix.node }})
+    needs: node-matrix
+    runs-on: ubuntu-latest
+    # A module that calls `process.exit` while it initializes leaves the build
+    # with no verdict to report rather than a failure, so the deadline is what
+    # turns that into a red job. Generous relative to the work: install plus a
+    # build of one page takes about a minute.
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      # Nightly runs every version the range asks for: the EXACT floor of each
+      # closed clause, where a global Node added later is absent — which is the
+      # failure this job exists to find, and one a floating `20` would miss by
+      # installing the newest 20.x — plus every released major above the open
+      # clause's floor.
+      #
+      # A pull request runs the LOWEST floor alone. Everything the newer lines
+      # reject, it rejects too, plus the post-floor globals they accept, so one
+      # leg buys nearly all the signal at a fraction of the minutes.
+      matrix:
+        node: ${{ fromJSON(github.event_name == 'pull_request' && needs.node-matrix.outputs.lowest || needs.node-matrix.outputs.versions) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the UI package
+        run: pnpm turbo build --filter=@nextlyhq/ui
+
+      # Packed and installed as a tarball rather than linked from the workspace,
+      # so the app resolves the subpaths through the published export map — the
+      # thing being claimed — instead of through pnpm's workspace links.
+      - name: Pack the UI package
+        run: |
+          mkdir -p /tmp/ui-pack
+          (cd packages/ui && pnpm pack --pack-destination /tmp/ui-pack)
+
+      # The app is GENERATED from the export map, so a new server-safe subpath is
+      # covered without editing this workflow. A hand-written import list would
+      # keep passing on the entries someone remembered.
+      - name: Write the Server Component app
+        run: pnpm --filter @nextlyhq/ui exec tsx scripts/write-server-safe-rsc-app.ts /tmp/rsc-app
+
+      # Majors are pinned so a Next or React release cannot turn this nightly red
+      # for a reason that has nothing to do with the package under test; moving
+      # to the next major is then a deliberate edit here. Patches and minors
+      # still flow, which is where a genuine RSC behaviour change would arrive.
+      #
+      # One React major rather than the `^18 || ^19` the package accepts as a
+      # peer, because React's version cannot decide this question: a server-safe
+      # subpath may not reach React at all, and the artifact gate enforces that
+      # against an allow-list of two string utilities. The PAGE uses React; the
+      # subpaths under test do not.
+      - name: Install Next.js and the packed UI tarball
+        run: |
+          cd /tmp/rsc-app
+          npm install next@16 react@19 react-dom@19 /tmp/ui-pack/*.tgz --no-audit --no-fund
+
+      # An App Router page is prerendered during the build, so every module the
+      # Server Component imports is evaluated in a real server render. A module
+      # body that reads `document` fails here naming the file, with nothing
+      # having to recognise the spelling of that read.
+      - name: Build the app
+        run: |
+          cd /tmp/rsc-app
+          npx next build
+
+      # The build exiting 0 is not the whole assertion. Next also exits 0 for a
+      # route it classifies as DYNAMIC, where the render is deferred to the first
+      # request and the module bodies have only been compiled. This reads the
+      # prerendered HTML the build wrote and requires every server-safe subpath
+      # to appear in it with a non-empty export count, which only a render that
+      # actually ran can produce.
+      # The page above reaches only the `import` condition, so the `.cjs` targets are published and
+      # never evaluated even though the export map promises them. This loads them the way a
+      # CommonJS consumer does: same install, same export map, same Node.
+      #
+      # Its exit status is deliberately NOT the assertion — a module ending the process during
+      # initialization exits 0 from inside the import being checked. The verify step below reads
+      # the marker it writes on completion instead.
+      - name: Evaluate the CommonJS targets the export map also publishes
+        run: |
+          cd /tmp/rsc-app
+          node require-check.cjs
+
+      # Runs LAST, because it audits both halves: that the route was rendered at build time rather
+      # than merely compiled, and that the CommonJS probe reached the end of its own run.
+      - name: Verify the render happened and both halves covered every subpath
+        run: pnpm --filter @nextlyhq/ui exec tsx scripts/write-server-safe-rsc-app.ts --verify /tmp/rsc-app
+
+  # A red nightly must surface without anyone watching the Actions tab. A red
+  # pull request does not need an issue filed: it is already red on the PR, in
+  # front of the person who caused it.
+  report-failure:
+    name: File an issue on failure
+    needs:
+      [
+        pack-and-consume,
+        scaffold-and-build,
+        node-matrix,
+        server-safe-rsc-build,
+      ]
+    if: failure() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # The only job that writes anything, so it is the only one holding the
+    # permission to.
+    permissions:
+      contents: read
+      issues: write
     steps:
       - name: Create or update the tracking issue
         env:
@@ -157,7 +366,7 @@ jobs:
           else
             # printf keeps the multi-line body inside this YAML block scalar;
             # a raw multi-line string here would dedent and break the file.
-            body=$(printf 'The nightly package-smoke workflow failed. Run: %s\n\nEither the packed tarballs no longer install/import in a clean project, or `create-nextly-app` no longer scaffolds an app that builds. See the run logs for the failing job.' "$RUN_URL")
+            body=$(printf 'The nightly package-smoke workflow failed. Run: %s\n\nOne of four things: the packed tarballs no longer install/import in a clean project, `create-nextly-app` no longer scaffolds an app that builds, a subpath declared server-safe no longer survives a real Next.js Server Component build, or the Node legs could not be derived from the engines range. The server-safe build names its Node version in the job title, and a failure on the floor leg alone means the subpath uses something newer than the oldest supported Node. See the run logs for the failing job.' "$RUN_URL")
             gh issue create --repo "${{ github.repository }}" \
               --title "Nightly package smoke is failing" \
               --label ci-nightly-failure \

@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/module-specifiers",
-  "version": "0.0.2-alpha.56",
+  "version": "0.0.2-alpha.57",
   "description": "One AST reader for the module specifiers a source file loads. Consumed only by layering guards inside this repository; exports TypeScript source and is never published or bundled.",
   "license": "MIT",
   "type": "module",
@@ -27,6 +27,6 @@
     "typescript": "^5.9.3"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
   }
 }

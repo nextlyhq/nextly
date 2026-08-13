@@ -717,7 +717,12 @@ export function Inspector() {
       node?.type === QUERY_LOOP_TYPE ? "content" : firstPopulatedTab(def);
     setTab(initial);
     setStyleState("normal");
-  }, [state.selectedId]);
+    // The block's TYPE is a dependency, not just the selection: a node whose type
+    // changes under a stable id — an undo, or a migration applied in place —
+    // populates a different set of panels, and recomputing only on selection
+    // would leave the inspector open on a tab this block does not have. `def` is
+    // the registry entry for that type and moves with it.
+  }, [state.selectedId, def, node?.type]);
 
   if (!node) {
     return (

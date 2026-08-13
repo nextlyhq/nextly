@@ -29,7 +29,14 @@
         "vitest.config.ts",
         "$TURBO_ROOT$/packages/admin/src/**",
         "$TURBO_ROOT$/packages/plugin-form-builder/src/**",
-        "$TURBO_ROOT$/packages/plugin-page-builder/src/**"
+        "$TURBO_ROOT$/packages/plugin-page-builder/src/**",
+        // The RSC-matrix suite reads the root manifest and the package-smoke
+        // workflow, comparing the job's Node legs against `engines.node`. Listed
+        // here rather than on the root task: there they become inputs to every
+        // package's tests, so a workflow edit invalidates the whole monorepo's
+        // unit-test cache and reruns suites that cannot read either file.
+        "$TURBO_ROOT$/package.json",
+        "$TURBO_ROOT$/.github/workflows/package-smoke.yml"
       ]
     },
     "test:coverage": {
@@ -47,7 +54,14 @@
         "vitest.config.ts",
         "$TURBO_ROOT$/packages/admin/src/**",
         "$TURBO_ROOT$/packages/plugin-form-builder/src/**",
-        "$TURBO_ROOT$/packages/plugin-page-builder/src/**"
+        "$TURBO_ROOT$/packages/plugin-page-builder/src/**",
+        // The RSC-matrix suite reads the root manifest and the package-smoke
+        // workflow, comparing the job's Node legs against `engines.node`. Listed
+        // here rather than on the root task: there they become inputs to every
+        // package's tests, so a workflow edit invalidates the whole monorepo's
+        // unit-test cache and reruns suites that cannot read either file.
+        "$TURBO_ROOT$/package.json",
+        "$TURBO_ROOT$/.github/workflows/package-smoke.yml"
       ]
     }
   }

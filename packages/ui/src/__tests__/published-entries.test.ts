@@ -6,10 +6,6 @@
  * JavaScript target, two subpaths sharing one artifact — and a check exercised only against the
  * real map would be asserting that today's map is acceptable, which is a different claim.
  */
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { describe, expect, it } from "vitest";
 
 import {
@@ -17,7 +13,7 @@ import {
   derivePublishedEntries,
   serverSafeBuildEntries,
   type DeclaredBarrel,
-} from "../../scripts/published-entries.mjs";
+} from "../../scripts/published-entries.js";
 
 /** The four conditions a JavaScript entry point has to name. */
 function conditions(name: string): Record<string, Record<string, string>> {
@@ -285,34 +281,5 @@ describe("the barrel declaration and the export map", () => {
     expect(() =>
       derivePublishedEntries({ "./theme.css": "./dist/theme.css" }, {})
     ).toThrow(/passing vacuously/);
-  });
-});
-
-describe("the hand-written declaration beside the module", () => {
-  // A `.d.mts` maintained alongside a `.mjs` is a second list of the same facts, which is the
-  // shape this module exists to remove everywhere else. Nothing typechecks these tests today, so
-  // a declaration naming a function that no longer exists stayed green through a rename.
-  const scripts = path.join(
-    path.dirname(fileURLToPath(import.meta.url)),
-    "..",
-    "..",
-    "scripts"
-  );
-  const names = (file: string): string[] =>
-    [
-      ...readFileSync(path.join(scripts, file), "utf8").matchAll(
-        /^export function (\w+)/gm
-      ),
-    ]
-      .map(match => match[1]!)
-      .sort();
-
-  it("declares exactly the functions the module exports", () => {
-    const runtime = names("published-entries.mjs");
-    expect(
-      runtime.length,
-      "no exported functions were found to compare"
-    ).toBeGreaterThan(0);
-    expect(names("published-entries.d.mts")).toEqual(runtime);
   });
 });

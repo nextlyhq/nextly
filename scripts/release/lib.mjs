@@ -36,8 +36,21 @@ const REQUIRED_FIELDS = [
     label: "publishConfig.access",
     equals: "public",
   },
-  { path: ["engines", "node"], label: "engines.node" },
+  { path: ["engines", "node"], label: "engines.node", equalsRootEngines: true },
 ];
+
+/**
+ * The Node range the repository itself supports, read from the root manifest.
+ *
+ * Published packages must advertise THIS range rather than one of their own. A package that
+ * advertises more says it supports versions nothing in CI ever runs — `package-smoke.yml` derives
+ * its Node legs from this same field, so the range and the tested versions are one question — and
+ * the user finds out at runtime instead of at install time. Read rather than restated for the
+ * reason `.claude/rules/derived-checks.md` gives: a second copy agrees on the day it is written.
+ */
+export function rootEnginesRange() {
+  return readJson(join(REPO_ROOT, "package.json")).engines.node;
+}
 
 /** Parses a JSON file, surfacing the path in the error so callers can report it. */
 function readJson(path) {
@@ -162,7 +175,7 @@ export function getReleaseManifest() {
 }
 
 /** Fields a package is missing, so preflight can name them all in one pass. */
-export function findMissingPublishFields(pkg) {
+export function findMissingPublishFields(pkg, rootEngines = rootEnginesRange()) {
   const missing = [];
   for (const field of REQUIRED_FIELDS) {
     const value = getPath(pkg, field.path);
@@ -170,10 +183,9 @@ export function findMissingPublishFields(pkg) {
       missing.push(field.label);
       continue;
     }
-    if (field.equals && value !== field.equals) {
-      missing.push(
-        `${field.label} (expected "${field.equals}", found "${value}")`
-      );
+    const expected = field.equalsRootEngines ? rootEngines : field.equals;
+    if (expected && value !== expected) {
+      missing.push(`${field.label} (expected "${expected}", found "${value}")`);
     }
   }
   return missing;

@@ -1,0 +1,53 @@
+/**
+ * Which rail categories own a secondary panel.
+ *
+ * Standalone plugins are not listed: their ids are generated per install, so
+ * they are recognised by prefix rather than enumerated.
+ */
+const CATEGORIES_WITH_SUB_SIDEBAR: readonly string[] = [
+  "collections",
+  "singles",
+  "media",
+  "plugins",
+  "settings",
+  "builders",
+];
+
+/**
+ * Whether a rail id is one that owns a secondary panel at all.
+ *
+ * Media only owns one while the folder tree is visible; treating it as a
+ * sub-sidebar category with the tree hidden turns the mobile Media icon into a
+ * button that opens nothing instead of a link.
+ */
+export function isSubSidebarCategory(
+  id: string,
+  isFolderTreeVisible: boolean
+): boolean {
+  return (
+    (CATEGORIES_WITH_SUB_SIDEBAR.includes(id) &&
+      (id !== "media" || isFolderTreeVisible)) ||
+    id.startsWith("standalone-")
+  );
+}
+
+/**
+ * Whether the secondary panel is open for the current selection.
+ *
+ * The panel follows the rail rather than a list of its own. A selection
+ * outlives the item it names: it is synced from the pathname and from clicks,
+ * and nothing revisits it when a pending query settles into nothing or fails.
+ * A second list of panel-owning categories answers the same question as the
+ * rail and disagrees in exactly that window, leaving a panel open with nothing
+ * to put in it, so the visible destinations decide both.
+ */
+export function isSubSidebarOpen(
+  selectedMain: string,
+  visibleMenuItemIds: readonly string[],
+  isFolderTreeVisible: boolean
+): boolean {
+  return (
+    isSubSidebarCategory(selectedMain, isFolderTreeVisible) &&
+    visibleMenuItemIds.includes(selectedMain)
+  );
+}

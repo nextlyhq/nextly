@@ -55,9 +55,6 @@ const serverEntries = [
   "src/storage/index.ts",
   // Unified error system entry points
   "src/errors/index.ts",
-  // Field-type catalog subpath: pure serializable data, browser-safe —
-  // consumed by the admin's field pickers and by plugins.
-  "src/collections/fields/catalog.ts",
   "src/observability/index.ts",
   "src/database/index.ts",
   // Bootstrap seeders subpath. Internal docs at database/index.ts:23
@@ -82,7 +79,16 @@ const serverEntries = [
 
 // Client-safe entry points that should NOT have Node.js shims
 // These are imported in browser contexts (admin UI, client components)
-const clientEntries = ["src/config.ts", "src/next.ts"];
+// Entry points a browser bundle may reach. NOTE: membership here has no build effect — every
+// entry is concatenated into one `entry` under one config with `shims: false`. Keeping the list is
+// documentation of intent; nothing currently enforces that these are free of Node built-ins.
+const clientEntries = [
+  "src/config.ts",
+  "src/next.ts",
+  "src/field-group-type.ts",
+  // Pure serializable data, consumed by the admin's field pickers and by plugins.
+  "src/collections/fields/catalog.ts",
+];
 
 // Shared config options
 const sharedConfig = {

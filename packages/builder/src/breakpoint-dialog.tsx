@@ -1,10 +1,22 @@
 "use client";
 
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  Input,
+  Label,
+} from "@nextlyhq/ui";
+import { cn } from "@nextlyhq/ui/utils";
 import { Plus, Trash2, TriangleAlert } from "lucide-react";
 import * as React from "react";
 
 import {
-  BASE_BREAKPOINT_ID,
+  BASE_BREAKPOINT,
   BREAKPOINT_AXES,
   inCascadeOrder,
   storedLimitFor,
@@ -13,20 +25,7 @@ import {
   type BreakpointDef,
   type BreakpointIssue,
   type BreakpointSet,
-} from "../lib/breakpoints";
-import { cn } from "../lib/utils";
-
-import { Button } from "./button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "./dialog";
-import { Input } from "./input";
-import { Label } from "./label";
+} from "./breakpoints";
 
 /** What each axis is called and what it responds to, in the author's terms. */
 const AXIS_COPY: Record<BreakpointAxis, { title: string; hint: string }> = {
@@ -272,7 +271,7 @@ export function BreakpointDialog({
 
                 {axis === "viewport" && (
                   <p className="text-muted-foreground border-border rounded-md border border-dashed px-3 py-2 text-xs">
-                    <span className="font-mono">{BASE_BREAKPOINT_ID}</span> is
+                    <span className="font-mono">{BASE_BREAKPOINT}</span> is
                     built in and always applies. It uses one of this
                     axis&rsquo;s {limit + 1} slots, leaving {limit}.
                   </p>

@@ -175,8 +175,19 @@
       // test files their shipping config excludes, and a config outside this
       // list does not move the hash — so narrowing what that pass checks would
       // replay a cached green rather than re-running it.
+      //
+      // `scripts/**` is listed because a package's tests config may pull that
+      // tree into the program — `packages/ui/tsconfig.tests.json` includes it,
+      // so its build scripts are compiled by this task. A tree inside the
+      // program but outside this list is the worst combination available: the
+      // task reports on the file while a change to it leaves the hash unmoved,
+      // so an edit that breaks a script replays the previous green. Listed for
+      // every package rather than the one that needs it today, because the cost
+      // of a package having no such tree is a glob that matches nothing, while
+      // the cost of omitting it is silent.
       "inputs": [
         "src/**/*.{ts,tsx,mts,cts}",
+        "scripts/**/*.{ts,tsx,mts,cts}",
         "*.{ts,tsx,mts,cts}",
         "tsconfig.json",
         "tsconfig.tests.json"
@@ -326,7 +337,7 @@
         "vitest.config.ts",
         "tsconfig.json",
         // Scripts and build configs are read BY tests, not only by builds: the ui suite derives
-        // its entry-point guards from `scripts/published-entries.mjs`, which the tsup configs
+        // its entry-point guards from `scripts/published-entries.ts`, which the tsup configs
         // also consume. Without these, retargeting a source barrel or changing an entry's
         // client/server classification leaves the cache key untouched, so CI replays the previous
         // pass precisely when the source of truth those guards read has changed.

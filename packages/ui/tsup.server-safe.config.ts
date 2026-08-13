@@ -1,6 +1,6 @@
 import { defineConfig } from "tsup";
 
-import { serverSafeBuildEntries } from "./scripts/published-entries.mjs";
+import { serverSafeBuildEntries } from "./scripts/published-entries.js";
 
 // Left to the consumer rather than bundled: React and Radix keep component
 // state and portals in module-level stores, so a second copy inside this
@@ -34,6 +34,10 @@ export default defineConfig({
   // entry left the snapshot comparing the old barrel while the new one shipped unchecked.
   entry: serverSafeBuildEntries(),
   format: ["esm", "cjs"],
+  // The build's own record of every file that went into each artifact. A specifier scan can only
+  // see what SURVIVES, and a bundled dependency leaves none — `culori` is a devDependency, so it
+  // would be inlined whole with nothing left to name. This makes the origins visible.
+  metafile: true,
   dts: true,
   clean: false,
   sourcemap: true,

@@ -12,64 +12,52 @@
  * a definition the compiler would discard, checked here so the editor can say so
  * while the author is still looking at the field.
  *
- * The types mirror the block engine's structurally rather than importing it:
- * this package publishes browser components and must not take a dependency on
- * the engine to describe a shape that is three fields wide.
+ * The types and the cap are IMPORTED from the engine, not restated. This module
+ * lived in `@nextlyhq/ui` until 2026-08-12, where it could not import the engine
+ * — that package is the block-agnostic layer — so it mirrored the engine's
+ * shapes structurally and kept its own copy of the cap. Two implementations of
+ * one rule agree the day they are written and drift silently after, which is
+ * what `.claude/rules/derived-checks.md` is about, and it is why this belongs
+ * here: `packages/builder` already depends on the engine and can ASK.
  *
- * @module lib/breakpoints
+ * What is still restated, stated plainly rather than left to be discovered: the
+ * per-rule DROP decisions below mirror `compile-page.ts` rather than calling it.
+ * The compiler makes those decisions inline while emitting, so there is no
+ * predicate to call yet. Exporting one from the engine — so the compiler and
+ * this editor ask the same function — is the remaining half of this fix, and it
+ * is an engine change, not a builder one.
+ *
+ * @module breakpoints
  */
+import {
+  BASE_BREAKPOINT,
+  BREAKPOINT_AXES,
+  MAX_BREAKPOINTS_PER_AXIS,
+  type BreakpointAxis,
+  type BreakpointDef,
+  type BreakpointSet,
+} from "@nextlyhq/blocks-engine";
 
 /**
- * The reserved id for the unconditional context.
+ * Re-exported from the engine, not restated.
  *
- * The compiler inserts this itself and claims the id before reading settings,
- * so a stored definition that reuses it contributes nothing at all.
+ * Every one of these is a value the COMPILER decides and this editor only
+ * reports on, so a local copy is a second opinion that drifts silently:
+ *
+ * - `BASE_BREAKPOINT` — the reserved id for the unconditional context. The
+ *   compiler claims it before reading settings, so a stored definition reusing
+ *   it contributes nothing. A local `"base"` literal would keep rejecting the
+ *   old id and start accepting a renamed one, admitting definitions compilation
+ *   drops.
+ * - `BREAKPOINT_AXES` — not merely a list. The engine reads it as cascade
+ *   PRECEDENCE and uses the order to decide which cross-axis duplicate wins, so
+ *   a second array that reorders marks the opposite definition as the duplicate.
+ * - `MAX_BREAKPOINTS_PER_AXIS` — the cap the compiler enforces while emitting.
  *
  * @experimental
  */
-export const BASE_BREAKPOINT_ID = "base";
-
-/**
- * Maximum breakpoints per axis, the unconditional base included.
- *
- * @experimental
- */
-export const MAX_BREAKPOINTS_PER_AXIS = 7;
-
-/**
- * The two axes a breakpoint may respond to.
- *
- * @experimental
- */
-export type BreakpointAxis = "viewport" | "container";
-
-/** @experimental */
-export const BREAKPOINT_AXES: readonly BreakpointAxis[] = [
-  "viewport",
-  "container",
-];
-
-/**
- * One breakpoint definition. Desktop-first: a bound is an upper bound.
- *
- * @experimental
- */
-export interface BreakpointDef {
-  id: string;
-  label: string;
-  /** Upper bound in CSS pixels. */
-  maxWidth?: number;
-}
-
-/**
- * The site's breakpoint definitions on both axes.
- *
- * @experimental
- */
-export interface BreakpointSet {
-  viewport: BreakpointDef[];
-  container: BreakpointDef[];
-}
+export { BASE_BREAKPOINT, BREAKPOINT_AXES, MAX_BREAKPOINTS_PER_AXIS };
+export type { BreakpointAxis, BreakpointDef, BreakpointSet };
 
 /**
  * Why a definition would not survive compilation.
@@ -141,7 +129,7 @@ export function validateBreakpoints(set: BreakpointSet): BreakpointIssue[] {
   // Seeded with the reserved id, which the compiler claims before it reads any
   // stored definition — so a definition naming it is a duplicate of something
   // the author cannot see in the list.
-  const claimedIds = new Set<string>([BASE_BREAKPOINT_ID]);
+  const claimedIds = new Set<string>([BASE_BREAKPOINT]);
 
   for (const axis of BREAKPOINT_AXES) {
     const defs = set[axis] ?? [];
@@ -180,11 +168,11 @@ export function validateBreakpoints(set: BreakpointSet): BreakpointIssue[] {
       const id = def.id;
       if (id.length === 0) {
         at("id", "id-required", "Give this breakpoint an id.");
-      } else if (id === BASE_BREAKPOINT_ID) {
+      } else if (id === BASE_BREAKPOINT) {
         at(
           "id",
           "id-reserved",
-          `"${BASE_BREAKPOINT_ID}" is the built-in unconditional breakpoint. Choose another id.`
+          `"${BASE_BREAKPOINT}" is the built-in unconditional breakpoint. Choose another id.`
         );
       } else if (claimedIds.has(id)) {
         at(

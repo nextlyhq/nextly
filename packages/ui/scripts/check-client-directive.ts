@@ -10,10 +10,7 @@
  * artifact settles it, so it is asserted here rather than assumed.
  */
 import { readFileSync } from "node:fs";
-import {
-  clientArtifacts,
-  serverSafeArtifacts,
-} from "./published-entries.mjs";
+import { clientArtifacts, serverSafeArtifacts } from "./published-entries.js";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -24,7 +21,7 @@ const DIST = join(dirname(fileURLToPath(import.meta.url)), "..", "dist");
  * null when the artifact is absent, which is itself a failure worth naming
  * rather than an exception from deep inside the check.
  */
-function readClientDirective(file) {
+function readClientDirective(file: string) {
   let source;
   try {
     source = readFileSync(join(DIST, file), "utf8");

@@ -411,24 +411,6 @@ export { ColorPicker } from "./components/color-picker";
 /** @experimental */
 export type { ColorPickerProps, ColorSwatch } from "./components/color-picker";
 
-// Components — Breakpoints. Edits the widths a site's styles may respond to.
-/** @experimental */
-export { BreakpointDialog } from "./components/breakpoint-dialog";
-/** @experimental */
-export type { BreakpointDialogProps } from "./components/breakpoint-dialog";
-// The rules and types behind it ship from the server-safe `./breakpoints`
-// subpath, not from here: a host validates settings before STORING them, which
-// is server-side, and this barrel carries the client banner.
-
-/** @experimental */
-export type {
-  BreakpointAxis,
-  BreakpointDef,
-  BreakpointIssue,
-  BreakpointIssueCode,
-  BreakpointSet,
-} from "./lib/breakpoints";
-
 /** @experimental */
 // Types: Table
 export type {

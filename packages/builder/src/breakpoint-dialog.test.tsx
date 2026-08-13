@@ -14,7 +14,7 @@ import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BreakpointDialog } from "./breakpoint-dialog";
-import type { BreakpointSet } from "../lib/breakpoints";
+import type { BreakpointSet } from "./breakpoints";
 
 function stored(): BreakpointSet {
   return {

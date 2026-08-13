@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/adapter-mysql",
-  "version": "0.0.2-alpha.56",
+  "version": "0.0.2-alpha.57",
   "description": "MySQL database adapter for Nextly - extends @nextlyhq/adapter-drizzle",
   "license": "MIT",
   "type": "module",
@@ -31,7 +31,7 @@
     "clean": "rimraf dist"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
   },
   "dependencies": {
     "@nextlyhq/adapter-drizzle": "workspace:*",
