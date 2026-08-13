@@ -26,8 +26,9 @@ import { randomUUID } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
+import { safeCode } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 
 /** Dialects the migration runs on. */
@@ -46,21 +47,45 @@ export const MIGRATION_LOCK_TABLE = "nextly_field_group_lock";
 const LOCK_ROW_ID = 1;
 
 /**
- * Read the lock row's owner inside a transaction.
+ * The single statement that reads the lock row's owner.
  *
  * Issued as a Drizzle statement rather than through the typed query builder:
  * that resolves a table through the schema registry and rejects any name the
  * ORM does not declare, and this table is created on demand by the migration
  * rather than declared in the static schema — the same shape the schema
  * pipeline's own `nextly_migrate_lock` has.
+ *
+ * Held as one function because two executors run it, and a second copy would be
+ * free to disagree about which row the owner lives in.
  */
+function ownerQuery(): SQL {
+  return sql`SELECT ${sql.identifier("owner")}
+      FROM ${sql.identifier(MIGRATION_LOCK_TABLE)}
+      WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}`;
+}
+
+/** The owner, read inside the transaction that is about to decide the claim. */
 async function readOwner(
   ctx: TransactionContext
 ): Promise<{ owner: string | null } | undefined> {
-  const rows = await ctx.queryStatement<{ owner: string | null }>(
-    sql`SELECT ${sql.identifier("owner")}
-        FROM ${sql.identifier(MIGRATION_LOCK_TABLE)}
-        WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}`
+  const rows = await ctx.queryStatement<{ owner: string | null }>(ownerQuery());
+  return rows[0];
+}
+
+/**
+ * The same read, on the adapter's own connection.
+ *
+ * Separate executor rather than a separate query — both issue `ownerQuery()`,
+ * so the two cannot drift into disagreeing about which row the owner lives in.
+ * An observing caller wants no transaction at all: opening one to read a single
+ * row asks a read-only role for more than the read needs, which is the entire
+ * failure this path exists to avoid.
+ */
+async function readOwnerOutsideTransaction(
+  adapter: DrizzleAdapter
+): Promise<{ owner: string | null } | undefined> {
+  const rows = await adapter.queryStatement<{ owner: string | null }>(
+    ownerQuery()
   );
   return rows[0];
 }
@@ -75,6 +100,95 @@ async function lockRowExists(adapter: DrizzleAdapter): Promise<boolean> {
   return rows.length > 0;
 }
 
+/**
+ * What could be learned about the lock, including "nothing".
+ *
+ * 🔴 Three states rather than `string | null`, and `unknown` is the whole reason. A role that
+ * cannot READ the lock table is not a database where nothing holds the lock, and collapsing the two
+ * reports "safe to proceed" to precisely the restricted credential most likely to be unable to
+ * look. "I could not ask" and "the answer is no" are different facts and this type refuses to merge
+ * them.
+ */
+export type LockObservation =
+  | { readonly kind: "held"; readonly owner: string }
+  | { readonly kind: "not-held" }
+  | { readonly kind: "unknown"; readonly reason: string };
+
+/**
+ * Whether a failed read means the table is not there.
+ *
+ * Classified by the driver's own code rather than by message text, and at the specificity the claim
+ * needs: absent and FORBIDDEN are different codes, so a role denied SELECT lands in `unknown`
+ * instead of being read as an empty database.
+ *
+ * SQLite is matched on message because it has no distinct code for this — and that is sound there
+ * for a reason that does not generalise: SQLite has no table privileges, so a table it cannot find
+ * is a table that does not exist. On Postgres and MySQL the same assumption is exactly the defect.
+ */
+export function isMissingTable(
+  error: unknown,
+  dialect: MigrationDialect
+): boolean {
+  // 🔴 Walked, not read off the top. Drizzle wraps a driver failure in a
+  // `DrizzleQueryError` whose own message is just `Failed query` — on SQLite the
+  // `no such table` text lives on `cause`, so reading only the outer message
+  // classifies every FRESH database as unreadable rather than as one no run has
+  // ever touched. Bounded because a cyclic `cause` is a hang, not a diagnosis.
+  let link: unknown = error;
+  for (
+    let depth = 0;
+    depth < 5 && link !== null && link !== undefined;
+    depth++
+  ) {
+    const code = safeCode(link);
+    const message = link instanceof Error ? link.message : "";
+
+    if (dialect === "postgresql" && code === "42P01") return true;
+    // Every spelling mysql2 offers, because `safeCode` prefers the SYMBOLIC
+    // `code` and a check written only against the errno or the SQLSTATE never
+    // matches the value it actually returns.
+    if (
+      dialect === "mysql" &&
+      (code === "ER_NO_SUCH_TABLE" || code === "1146" || code === "42S02")
+    ) {
+      return true;
+    }
+    // SQLite has no distinct code — `SQLITE_ERROR` covers most failures — so the
+    // message is the only discriminator. Sound here and nowhere else: SQLite has
+    // no table privileges, so a table it cannot find is a table that is absent.
+    if (dialect === "sqlite" && /no such table/i.test(message)) return true;
+
+    link = (link as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
+ * Read the lock without claiming it, and say honestly when that could not be done.
+ *
+ * Reads the row DIRECTLY rather than asking whether the table exists first. `tableExists` resolves
+ * through `information_schema`, which is filtered by privilege on Postgres and MySQL: a table the
+ * role cannot see is reported absent, and the caller would then be told nothing holds the lock
+ * while a migration was holding it.
+ */
+export async function observeMigrationLock(
+  adapter: DrizzleAdapter,
+  dialect: MigrationDialect
+): Promise<LockObservation> {
+  try {
+    const owner = (await readOwnerOutsideTransaction(adapter))?.owner ?? null;
+    return owner === null ? { kind: "not-held" } : { kind: "held", owner };
+  } catch (error) {
+    // The lock table is created by the first run that ever claims it, so its absence is a complete
+    // answer: nothing can hold a lock whose table does not exist.
+    if (isMissingTable(error, dialect)) return { kind: "not-held" };
+    return {
+      kind: "unknown",
+      reason: safeCode(error) ?? "the lock could not be read",
+    };
+  }
+}
+
 /** What a step is handed to do its work. */
 export interface MigrationSession {
   readonly dialect: MigrationDialect;
@@ -85,6 +199,18 @@ export interface MigrationSession {
    * the commit, never claims work a later rollback could undo.
    */
   inTransaction<T>(work: (ctx: TransactionContext) => Promise<T>): Promise<T>;
+  /**
+   * What this session could learn about the lock.
+   *
+   * Under `claim` it is `held` by this session's own claim, which is simply true. Under `observe`
+   * it is whatever the row said, or `unknown` when the read could not be made.
+   *
+   * Advisory in the strict sense: it describes an instant that has already passed. That is sound
+   * for the only thing it is for — telling an operator their PREVIEW may be describing a moving
+   * target — and unsound as a precondition for work. A caller that gates a write on it has
+   * reimplemented the lock badly.
+   */
+  readonly lock: LockObservation;
 }
 
 /**
@@ -138,10 +264,30 @@ export async function withMigrationSession<T>(
      * interrupted run stays held, and an operator clears it.
      */
     releaseOnInterrupt?: boolean;
+    /**
+     * Whether this session takes the lock or merely looks at it.
+     *
+     * 🔴 `observe` writes NOTHING — no DDL, no row, no claim — which is the
+     * whole point: claiming creates the table on first use, so a caller that
+     * only reads was still issuing DDL and failing outright for a role with
+     * read-only privileges. That made previewing a migration impossible with
+     * exactly the credential an operator should be previewing production with.
+     *
+     * What it gives up is real and is not a technicality: nothing excludes a
+     * concurrent run, so an `observe` session describes a snapshot that may
+     * already be stale. That is acceptable only because such a session performs
+     * no work — nothing acts on the answer, so a stale one costs an operator a
+     * re-read rather than a wrong write. `lock` reports the contention that the
+     * claim would otherwise have raised as a refusal.
+     *
+     * Never use `observe` for a session that writes. The lock is what makes two
+     * writers impossible, and this mode is precisely its absence.
+     */
+    mode?: "claim" | "observe";
   },
   fn: (session: MigrationSession) => Promise<T>
 ): Promise<T> {
-  const { adapter, dialect, label } = args;
+  const { adapter, dialect, label, mode = "claim" } = args;
 
   if (label.length === 0) {
     throw NextlyError.internal({
@@ -159,12 +305,53 @@ export async function withMigrationSession<T>(
   const session: MigrationSession = {
     dialect,
     inTransaction: work => adapter.transaction(work),
+    // Replaced below for an observing session. A claiming one holds the lock itself, and saying so
+    // is the accurate answer rather than a placeholder.
+    lock: { kind: "held", owner: claim },
   };
+
+  // Returns before anything that writes: the DDL, the seed row, the claim, the
+  // signal handlers and the release are all below, and an observing session
+  // must reach none of them. Placed above `requireExistingLock` because that
+  // option still claims when the table happens to exist, which is a write.
+  if (mode === "observe") {
+    return fn({
+      ...session,
+      lock: await observeMigrationLock(adapter, dialect),
+      // 🔴 Refused rather than documented. Handing the ordinary `inTransaction`
+      // to an observing caller would let it write without ever holding the
+      // lock, which is the one thing this whole module exists to prevent — and
+      // the promise that it does not would rest on the callback's restraint
+      // rather than on anything that could stop it. Today's caller happens not
+      // to write; a rule nothing enforces is broken by whoever adds the next
+      // one. `internal` rather than a service error because reaching here is a
+      // programming mistake, not a state an operator can be in.
+      inTransaction: () =>
+        Promise.reject(
+          NextlyError.internal({
+            logContext: {
+              reason:
+                "an observing migration session cannot open a transaction",
+              label,
+            },
+          })
+        ),
+    });
+  }
 
   if (args.requireExistingLock === true) {
     // No lock table means no run has ever been recorded here, so there is
     // nothing to exclude and nothing worth creating a table for.
-    if (!(await adapter.tableExists(MIGRATION_LOCK_TABLE))) return fn(session);
+    //
+    // 🔴 Reported as NOT HELD, not with the session's default. That default says
+    // held-by-this-claim, which is true for a session that went on to acquire
+    // and false on this path — the claim string was generated and never written
+    // anywhere. Handing it out here would advertise ownership on the one branch
+    // that deliberately takes no lock, so a caller inspecting it would see
+    // exclusion exactly where there is none.
+    if (!(await adapter.tableExists(MIGRATION_LOCK_TABLE))) {
+      return fn({ ...session, lock: { kind: "not-held" } });
+    }
     await seedLockRow(adapter);
   } else {
     await ensureLockRow(adapter, dialect);
