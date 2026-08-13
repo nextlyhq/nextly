@@ -342,28 +342,84 @@ export async function dragUntilTarget(
 export const DWELL_ALLOWANCE_MS = 100;
 
 /**
- * Wait until the active target stops changing, or the permitted dwell elapses.
+ * How long a stationary pointer is given to stop producing new targets.
  *
- * A canvas whose hysteresis is a TIMER rather than a distance margin is
- * entitled to lag: the pointer is over a new zone and the old target is still
- * correct for up to {@link DWELL_ALLOWANCE_MS}. Every instantaneous read in this
- * suite therefore asks a question the requirement does not oblige the canvas to
- * answer yet, and a compliant dwell-based implementation fails a harness that
- * insists on an immediate one.
- *
- * Returns the settled target. Polling rather than sleeping the full allowance so
- * a distance-margin canvas — which answers immediately — costs one extra read
- * rather than a fixed delay per call.
+ * Four dwells. A canvas is entitled to one, and to another if the first expiry
+ * moved the pointer's target somewhere that starts a second; past that it is
+ * changing its mind with no input to justify it, which is a defect rather than
+ * permitted lag and must not be reported as a settled reading.
  */
-export async function settledTarget(driver: CanvasDriver): Promise<number> {
-  let previous = await driver.readActiveTarget();
+const SETTLE_BUDGET_MS = 4 * DWELL_ALLOWANCE_MS;
+
+/** The capability these readers need, so a test can supply exactly it. */
+type TargetReader = Pick<CanvasDriver, "readActiveTarget">;
+
+/**
+ * Wait for `read` to return something other than `from`, or for the permitted
+ * dwell to pass.
+ *
+ * The one waiting loop in this file, because the two questions callers ask —
+ * "has it moved off X yet" and "what is it once it stops moving" — differ only
+ * in what they do with the answer, and two loops would drift.
+ *
+ * Returns the departed value, or `from` when the whole allowance passed without
+ * one. A caller can therefore distinguish the two by comparing with what it
+ * passed in, and "unchanged" now MEANS unchanged for the full permitted dwell
+ * rather than unchanged between two adjacent reads.
+ *
+ * Generic over the reading, because the dwell is a property of the CANVAS
+ * rather than of any one probe: the active target, the owning zone and anything
+ * else read straight after a move are all entitled to the same lag, and a
+ * version that only knew about target ordinals would leave the other readers to
+ * grow their own copy of this.
+ */
+async function departureFrom<T>(read: () => Promise<T>, from: T): Promise<T> {
   const deadline = Date.now() + DWELL_ALLOWANCE_MS;
+  let current = from;
+  do {
+    current = await read();
+  } while (current === from && Date.now() < deadline);
+  return current;
+}
+
+/**
+ * Read what a canvas has COMMITTED to, rather than what it is still entitled to
+ * be showing.
+ *
+ * A canvas whose hysteresis is a TIMER rather than a distance margin is allowed
+ * to lag: the pointer is over a new zone and the old reading stays correct for
+ * up to {@link DWELL_ALLOWANCE_MS}. So "settled" cannot mean "two reads agreed"
+ * — during that lag EVERY read agrees, and they all return the pre-move value.
+ * Stability is only evidence once it has been observed across the whole interval
+ * the canvas was permitted to lag for, which is why this waits the allowance out
+ * rather than stopping at the first identical pair.
+ *
+ * Throws rather than returning when the reading never holds still: a value from
+ * a canvas that is still changing its mind is one no assertion downstream can
+ * qualify, and handing it back silently would let an unstable canvas produce an
+ * ordinary-looking green.
+ */
+export async function settledValue<T>(
+  read: () => Promise<T>,
+  subject = "reading"
+): Promise<T> {
+  const deadline = Date.now() + SETTLE_BUDGET_MS;
+  let value = await read();
   while (Date.now() < deadline) {
-    const current = await driver.readActiveTarget();
-    if (current === previous) return current;
-    previous = current;
+    const next = await departureFrom(read, value);
+    if (next === value) return value;
+    value = next;
   }
-  return previous;
+  throw new Error(
+    `the ${subject} was still changing after ${SETTLE_BUDGET_MS}ms with a ` +
+      `stationary pointer (last seen ${String(value)}), so nothing read here ` +
+      `is settled`
+  );
+}
+
+/** {@link settledValue} over the active drop target. */
+export async function settledTarget(driver: TargetReader): Promise<number> {
+  return settledValue(() => driver.readActiveTarget(), "active target");
 }
 
 /**
@@ -490,13 +546,21 @@ export async function dragToZoneEdge(
   let previous = first;
   for (let step = 0; step < 120; step += 1) {
     await driver.moveBy(0, FORWARD_STEP_PX);
-    // SETTLED, not sampled. A canvas using the permitted dwell instead of a
-    // distance margin can be traversed across a narrow candidate region faster
-    // than its timer expires, so an immediate read keeps returning the previous
-    // target and the walk concludes the resolver never crosses anything. Both
-    // suites assert `crossed` before their marker, so that compliant
-    // implementation would fail the harness rather than the requirement.
-    const current = await settledTarget(driver);
+    // Given the dwell to depart, not sampled. A canvas using the permitted dwell
+    // instead of a distance margin can be traversed across a narrow candidate
+    // region faster than its timer expires, so an immediate read keeps returning
+    // the previous target and the walk concludes the resolver never crosses
+    // anything. Both suites assert `crossed` before their marker, so that
+    // compliant implementation would fail the harness rather than the
+    // requirement.
+    //
+    // Departure rather than full settling: this loop only asks whether the
+    // target left `previous`, and returning the moment it does keeps the
+    // overshoot the reverse budget below has to carry down to one step.
+    const current = await departureFrom(
+      () => driver.readActiveTarget(),
+      previous
+    );
     if (current >= 0 && current !== previous) {
       crossed = current;
       break;
@@ -515,7 +579,15 @@ export async function dragToZoneEdge(
   const reverseBudget = marginPx + FORWARD_STEP_PX - 1;
   for (let step = 0; step < reverseBudget; step += 1) {
     await driver.moveBy(0, -1);
-    if ((await driver.readActiveTarget()) !== crossed) {
+    // The dwell applies walking back too. These are one-pixel commands, so a
+    // compliant timer-based canvas can be carried through the whole reverse
+    // budget in less time than one dwell — every immediate read then still says
+    // `crossed`, the edge is never bracketed, and both hysteresis tests skip
+    // without having tested the implementation.
+    if (
+      (await departureFrom(() => driver.readActiveTarget(), crossed)) !==
+      crossed
+    ) {
       await driver.moveBy(0, 1);
       return { target: crossed, crossed: true, bracketed: true };
     }

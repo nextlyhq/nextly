@@ -17,6 +17,7 @@ import {
   dragUntilInsideZone,
   dragUntilTarget,
   jitterAcrossEdge,
+  settledTarget,
 } from "./driver";
 import type { ActiveTargetTransition, CanvasDriver } from "./driver";
 import { EXTREME_RATIO_FIXTURE, FLAT_LIST_FIXTURE, seedPage } from "./fixtures";
@@ -81,7 +82,11 @@ async function expectIndicatorAtPointer(
   const rect = await driver.readIndicatorRect();
   expect(rect, `${label}: an indicator must be visible`).not.toBeNull();
 
-  const active = await driver.readActiveTarget();
+  // Settled, because `dragUntilInsideZone` has just moved the pointer into a
+  // zone and a canvas whose hysteresis is a dwell may still be showing the
+  // previous one. Comparing that lagging reading with `containing` would make
+  // scenarios 1-3 reject correct scroll, scale and cross-frame behaviour.
+  const active = await settledTarget(driver);
   const nearest = await driver.nearestZoneToPointer();
   test.info().annotations.push({
     type: `${label}-zone`,
@@ -186,7 +191,11 @@ test("scenario 2: droppable geometry survives a host scroll mid-drag", async ({
   ).toBeGreaterThan(50);
 
   await driver.moveBy(0, 1);
-  const after = await driver.readActiveTarget();
+  // The host has just scrolled and the pointer has just moved, so this is
+  // exactly where a dwell-based canvas is permitted to report nothing yet. An
+  // immediate read can catch that gap and fail the assertion below on a canvas
+  // that resolves correctly a moment later.
+  const after = await settledTarget(driver);
 
   test.info().annotations.push({
     type: "scroll-targets",

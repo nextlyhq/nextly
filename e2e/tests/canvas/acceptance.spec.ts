@@ -46,6 +46,7 @@ import {
   jitterAcrossEdge,
   readShellState,
   settledTarget,
+  settledValue,
 } from "./driver";
 import type { CanvasChromeReader, CanvasDriver } from "./driver";
 import { createPocChromeReader, createPocDriver } from "./poc-driver";
@@ -301,7 +302,22 @@ test.describe("a canvas any Nextly editor could ship", () => {
         // missing most of its zones and activating one leaves the misses
         // invisible, and the samples that survive all agree.
         const containing = await driver.zoneContainingPointer();
-        const owner = await driver.readActiveZoneOwner();
+        // Sampled cheaply, then re-read settled ONLY where the sample would
+        // count against the canvas. A pointer that has just entered a zone may
+        // legitimately have no owner yet on a canvas whose hysteresis is a
+        // dwell, and the assertion below treats a contained sample with no
+        // owner as a zone the canvas missed — so the dwell has to be spent
+        // before that verdict, and nowhere else. Paying it on every sample
+        // would add a hundred milliseconds to each step of the descent for
+        // readings no assertion looks at.
+        const sampled = await driver.readActiveZoneOwner();
+        const owner =
+          sampled === null && containing >= 0
+            ? await settledValue(
+                () => driver.readActiveZoneOwner(),
+                "active zone owner"
+              )
+            : sampled;
         if (owner !== null) owners.push(owner);
         zoneChoices.push({
           owner,
