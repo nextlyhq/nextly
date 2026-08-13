@@ -2101,16 +2101,38 @@ function assertPosition(at: TreePosition, verb: string): void {
         `the document root.`
     );
   }
-  if (!Number.isInteger(at.index) || at.index < 0) {
+  // The position's own fields, by the rule the op envelope and every node field
+  // already answer to. `hasOnlyJsonOwnKeys` inspects this record's DESCRIPTORS
+  // and says nothing about which fields it OWNS, so with
+  // `Object.prototype.index = 0` an insert carrying `at: {}` places a node — and
+  // the persisted op contains `"at": {}`, which cannot reproduce that placement
+  // after a restart.
+  //
+  // Read through `ownValue`, not checked beside each read: the list-bound shape
+  // in this file reached nine sites because each round added a guard next to
+  // whichever instance it was shown, and this is the ownership class's fifth.
+  for (const field of ["index", "parentId", "slot"] as const) {
+    if (field in at && !Object.hasOwn(at, field)) {
+      throw new OpError(
+        `${verb}: a position whose ${field} comes from the prototype rather ` +
+          `than from the position cannot be applied: the placement would ` +
+          `happen and the stored op could not reproduce it.`
+      );
+    }
+  }
+  const index = ownValue(at, "index");
+  const parentId = ownValue(at, "parentId");
+  const slot = ownValue(at, "slot");
+  if (!Number.isInteger(index) || (index as number) < 0) {
     throw new OpError(
-      `${verb}: an index of ${describe(at.index)} names no position. ` +
+      `${verb}: an index of ${describe(index)} names no position. ` +
         `A missing or non-numeric index reaches the splice as NaN and puts the ` +
         `node at the front of its parent, which reads as a deliberate move.`
     );
   }
-  if (at.parentId !== undefined && typeof at.parentId !== "string") {
+  if (parentId !== undefined && typeof parentId !== "string") {
     throw new OpError(
-      `${verb}: a parent id of ${describe(at.parentId)} addresses nothing.`
+      `${verb}: a parent id of ${describe(parentId)} addresses nothing.`
     );
   }
   // A slot name that names an inherited member. `insertNode` reads
@@ -2131,24 +2153,24 @@ function assertPosition(at: TreePosition, verb: string): void {
   // Checked on the destination as well as on the cleanup address, because the
   // two rules have to agree: whatever a position may CREATE, a cleanup must be
   // able to name.
-  if (at.slot === "") {
+  if (slot === "") {
     throw new OpError(
       `${verb}: a position naming an empty slot creates a child region with ` +
         `no name, and the undo of that placement could not name it back. Slots ` +
         `are named.`
     );
   }
-  if (typeof at.slot === "string" && !isUsableSlotName(at.slot)) {
+  if (typeof slot === "string" && !isUsableSlotName(slot)) {
     throw new OpError(
-      `${verb}: ${describe(at.slot)} is not a usable slot name. It resolves to a ` +
+      `${verb}: ${describe(slot)} is not a usable slot name. It resolves to a ` +
         `member every object inherits, so the document's own children could ` +
         `not be told apart from it.`
     );
   }
-  if (at.parentId !== undefined && typeof at.slot !== "string") {
+  if (parentId !== undefined && typeof slot !== "string") {
     throw new OpError(
-      `${verb}: a position inside ${describe(at.parentId)} must name its slot as a ` +
-        `string; ${describe(at.slot)} would create a child region no ` +
+      `${verb}: a position inside ${describe(parentId)} must name its slot as a ` +
+        `string; ${describe(slot)} would create a child region no ` +
         `block declared.`
     );
   }

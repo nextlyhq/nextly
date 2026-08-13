@@ -2339,6 +2339,26 @@ describe("an inverse that names a parent held twice", () => {
     ).toThrow(/empty slot/);
   });
 
+  it("refuses a position whose fields are inherited", () => {
+    // `hasOnlyJsonOwnKeys` inspects the position's DESCRIPTORS and says nothing
+    // about which fields it owns, so an inherited index places a node while the
+    // persisted op carries `"at": {}` and cannot reproduce that placement after
+    // a restart.
+    const polluted = Object.prototype as unknown as Record<string, unknown>;
+    polluted.index = 0;
+    try {
+      expect(() =>
+        applyOp(doc(), {
+          kind: "insert",
+          node: node("fresh"),
+          at: {} as unknown as { index: number },
+        })
+      ).toThrow(/comes from the prototype/);
+    } finally {
+      delete polluted.index;
+    }
+  });
+
   it("refuses a cap that cannot decide anything", () => {
     // Every cap here is a `>` comparison and every comparison against `NaN` is
     // false, so one non-finite limit does not loosen a cap — it removes it, and
