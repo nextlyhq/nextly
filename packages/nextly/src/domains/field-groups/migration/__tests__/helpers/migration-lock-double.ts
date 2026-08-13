@@ -73,8 +73,10 @@ export function interpretLockStatement(
   // session issues have moved and this interpreter has not, which is a programming mistake in the
   // same sense the session's own `internal` refusals are.
   throw NextlyError.internal({
-    logMessage: `migration lock double met an unrecognised statement: ${flat}`,
-    logContext: { reason: "unrecognised migration lock statement", flat },
+    logContext: {
+      reason: "unrecognised migration lock statement",
+      statement: flat,
+    },
   });
 }
 
