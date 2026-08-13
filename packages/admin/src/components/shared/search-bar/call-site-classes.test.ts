@@ -117,15 +117,46 @@ function merge(parts: ClassValue[]): ClassValue {
 }
 
 /**
+ * Helpers that combine class strings passed as ARGUMENTS, so the arguments are
+ * the classes and the function itself contributes nothing.
+ *
+ * Matched by callee name, which is a proxy and is therefore the narrow list
+ * rather than "any call". A function whose RETURN VALUE is the classes —
+ * `getSearchClasses()` — looks identical at the call node and is the opposite
+ * case: nothing readable in the arguments, everything hidden in the body.
+ */
+const CLASS_COMBINATORS = new Set([
+  "cn",
+  "clsx",
+  "classnames",
+  "classNames",
+  "twMerge",
+  "twJoin",
+  "cva",
+]);
+
+/**
  * Classify one expression appearing in class-value position.
  *
- * Deliberately a switch over node kinds with an opaque default. The positions
- * that hold a non-class expression are recognised structurally rather than by
- * punctuation: a call's EXPRESSION (`cn` in `cn(...)`) is a callee, and a
- * conditional's CONDITION or a `&&`'s LEFT operand is a test. `??` is not in
- * that group — in `classes ?? "w-full"` the left operand IS a value.
+ * A switch over node kinds whose DEFAULT is opaque. That default is the whole
+ * design, and getting it wrong is subtle: an earlier version claimed it while
+ * three branches returned readable-and-empty instead of falling through to it,
+ * so `getSearchClasses()`, `classes || "w-full"` and `{...{ ...props }}` all
+ * reported clean. A branch that returns `EMPTY` is asserting "this renders no
+ * classes", which is a much stronger claim than "I found none here".
+ *
+ * The positions holding a non-class expression are recognised structurally: a
+ * conditional's CONDITION, and a `&&`'s LEFT operand. Note that `&&` and `||`
+ * are NOT the same shape — `a && b` evaluates to `b` when `a` is truthy, so
+ * `a` is a test; `a || b` evaluates to `a` when `a` is truthy, so `a` is a
+ * value. Grouping them cost a real hole.
  */
 function classValue(node: ts.Expression, file: ts.SourceFile): ClassValue {
+  const opaque = (): ClassValue => ({
+    literals: [],
+    opaque: [node.getText(file)],
+  });
+
   if (ts.isParenthesizedExpression(node)) {
     return classValue(node.expression, file);
   }
@@ -148,8 +179,15 @@ function classValue(node: ts.Expression, file: ts.SourceFile): ClassValue {
   }
 
   if (ts.isCallExpression(node)) {
-    // `cn("a", x)` — the callee contributes nothing, every argument is a value.
-    return merge(node.arguments.map(argument => classValue(argument, file)));
+    // Only a known combinator's ARGUMENTS are the classes. Any other call hides
+    // them in a function body this file never reads, and a zero-argument call
+    // would otherwise merge nothing and report readable-and-empty.
+    const callee = node.expression;
+    const name = ts.isIdentifier(callee) ? callee.text : undefined;
+    if (name !== undefined && CLASS_COMBINATORS.has(name)) {
+      return merge(node.arguments.map(argument => classValue(argument, file)));
+    }
+    return opaque();
   }
 
   if (ts.isConditionalExpression(node)) {
@@ -161,20 +199,20 @@ function classValue(node: ts.Expression, file: ts.SourceFile): ClassValue {
   }
 
   if (ts.isBinaryExpression(node)) {
-    const operator = node.operatorToken.kind;
-    if (
-      operator === ts.SyntaxKind.AmpersandAmpersandToken ||
-      operator === ts.SyntaxKind.BarBarToken
-    ) {
-      // `isOpen && "max-w-sm"` — the left operand is a test.
-      return classValue(node.right, file);
-    }
-    if (
-      operator === ts.SyntaxKind.QuestionQuestionToken ||
-      operator === ts.SyntaxKind.PlusToken
-    ) {
-      // `classes ?? "w-full"`, `a + b` — both sides can be what renders.
-      return merge([classValue(node.left, file), classValue(node.right, file)]);
+    switch (node.operatorToken.kind) {
+      case ts.SyntaxKind.AmpersandAmpersandToken:
+        // `isOpen && "max-w-sm"` — the left operand is a test.
+        return classValue(node.right, file);
+      case ts.SyntaxKind.BarBarToken:
+      case ts.SyntaxKind.QuestionQuestionToken:
+      case ts.SyntaxKind.PlusToken:
+        // `classes || "w"`, `classes ?? "w"`, `a + b` — either side can render.
+        return merge([
+          classValue(node.left, file),
+          classValue(node.right, file),
+        ]);
+      default:
+        return opaque();
     }
   }
 
@@ -189,7 +227,7 @@ function classValue(node: ts.Expression, file: ts.SourceFile): ClassValue {
 
   // Everything else — an identifier, a property access, anything unforeseen —
   // is a value this file cannot read.
-  return { literals: [], opaque: [node.getText(file)] };
+  return opaque();
 }
 
 /** What one `<SearchBar>` tag passes as class text, and what it hides. */
@@ -221,14 +259,27 @@ function classesOf(
       continue;
     }
     for (const member of spread.properties) {
+      // A nested spread, `{...{ ...props }}`, has no name at all, so keying on
+      // the name skipped it and the whole object reported readable-and-empty.
+      // Its contents are exactly as unknowable as the outer form.
+      if (ts.isSpreadAssignment(member)) {
+        parts.push({ literals: [], opaque: [member.getText(file)] });
+        continue;
+      }
+      // A computed key, `{ ["className"]: x }`, cannot be compared as text
+      // either. Reported rather than skipped, for the same reason.
+      if (member.name && ts.isComputedPropertyName(member.name)) {
+        parts.push({ literals: [], opaque: [member.getText(file)] });
+        continue;
+      }
       if (member.name?.getText(file) !== "className") continue;
       if (ts.isPropertyAssignment(member)) {
         parts.push(classValue(member.initializer, file));
-      } else {
-        // Shorthand: `{ className }`. The value is a variable of that name, so
-        // there is nothing in the source to read.
-        parts.push({ literals: [], opaque: [member.getText(file)] });
+        continue;
       }
+      // Shorthand `{ className }`, or a method or accessor of that name. In
+      // every case the value comes from somewhere this file cannot read.
+      parts.push({ literals: [], opaque: [member.getText(file)] });
     }
   }
 
@@ -355,6 +406,20 @@ describe("SearchBar call sites", () => {
       ["<SearchBar {...{ className }} />", "className"],
       ["<SearchBar className={`w-full ${classes}`} />", "classes"],
       ["<SearchBar className = {classes} />", "classes"],
+      // A call whose RETURN VALUE is the classes. Indistinguishable from a
+      // combinator at the call node, and the opposite case: nothing readable in
+      // the arguments, everything hidden in the body. A zero-argument call also
+      // merges nothing, so treating any call as readable reports it as empty.
+      ["<SearchBar className={getSearchClasses()} />", "getSearchClasses()"],
+      ["<SearchBar className={build(a, b)} />", "build(a, b)"],
+      // `a || b` yields `a` when truthy, so the left operand is a VALUE. `a &&
+      // b` yields `b`, so there the left operand is a test. Same punctuation
+      // family, opposite answers.
+      ['<SearchBar className={classes || "w-full"} />', "classes"],
+      // A spread nested inside an object literal has no name to key on.
+      ["<SearchBar {...{ ...props }} />", "...props"],
+      // A computed key cannot be compared as text.
+      ['<SearchBar {...{ ["className"]: layout }} />', '["className"]: layout'],
     ] as const;
 
     for (const [markup, expected] of opaque) {
