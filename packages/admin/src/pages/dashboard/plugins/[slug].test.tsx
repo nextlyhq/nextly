@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -48,6 +48,19 @@ describe("PluginDetailPage", () => {
     renderWithProviders(<PluginDetailPage params={{ slug: "acme-p" }} />);
     // Informational page: the settings UI itself does not render here.
     expect(screen.queryByText("acme settings panel")).not.toBeInTheDocument();
+
+    // And the link stays in the header rather than the metadata rail. The rail
+    // stacks to the BOTTOM of the page below `lg`, so a primary action placed
+    // in it would be the last thing on a narrow viewport.
+    const aside = screen.queryByRole("complementary");
+    if (aside) {
+      expect(
+        within(aside).queryByRole("link", { name: /open settings/i })
+      ).toBeNull();
+    }
+    expect(
+      screen.getByRole("link", { name: /open settings/i })
+    ).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Open settings/ })).toHaveAttribute(
       "href",
       "/admin/plugins/acme-p/settings"
