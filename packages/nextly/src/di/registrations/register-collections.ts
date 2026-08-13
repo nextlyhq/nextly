@@ -216,6 +216,7 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
   // CRUD permissions for newly created collections.
   container.registerSingleton<CollectionsHandler>("collectionsHandler", () => {
     const drizzleDb = adapterDrizzleDb;
+    const policiesForHandler = retentionPoliciesFrom(ctx.config);
     const handler = new CollectionsHandler(
       adapter,
       drizzleDb,
@@ -229,9 +230,18 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       // here is a table that install never prunes — which is how the delivery
       // log came to be swept only by sends, and therefore never at all once an
       // install stopped sending.
-      ctx.config.webhookRetention,
-      ctx.config.auditRetention,
-      ctx.config.emailRetention
+      // DERIVED, not the raw fields. `retentionPoliciesFrom` resolves the
+      // delivery-log default from the nested `email` block when nothing
+      // flattened it, and a direct `registerServices()` caller using a
+      // database-managed provider supplies no `email` block at all — so the raw
+      // `emailRetention` is undefined there while every other registration on
+      // the same config correctly gets the default window. Forwarding the raw
+      // field made this handler see all three as absent and build no runner,
+      // which is the tail sweep going missing on exactly the dispatcher-driven
+      // path this argument list exists to reach.
+      policiesForHandler.webhookPolicy ?? undefined,
+      policiesForHandler.auditPolicy,
+      policiesForHandler.emailPolicy
     );
 
     if (container.has("permissionSeedService")) {

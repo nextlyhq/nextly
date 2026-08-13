@@ -169,6 +169,45 @@ describe("the scheduled drain and the delivery log", () => {
     expect(tables).toContain("email_deliveries");
   });
 
+  it("returns the turn when the budget expires before the first batch", async () => {
+    // The window between the drain's own `deadlineSpent()` check and the
+    // pruner's first between-batch check. Both read the same clock, so time
+    // passing in between lets the outer one pass and the inner one refuse — the
+    // pruner returns having queried nothing, and marking the turn spent there
+    // holds the next full-budget attempt off for a whole interval.
+    //
+    // `deliveries === 0` cannot distinguish that from a healthy sweep of an
+    // empty table, which is why the pruner reports whether it started.
+    const released: string[] = [];
+    const select = vi.fn(async () => []);
+    let clock = 0;
+
+    await runDrain({
+      fanOut: { db: idleDb(), loadEndpoints: async () => [] } as never,
+      deliver: {
+        db: idleDb(),
+        // Advances on every reading, so the deadline is crossed by the passage
+        // of time rather than by a contrived jump.
+        now: () => new Date((clock += 30)),
+      } as never,
+      maxDurationMs: 100,
+      retention: {
+        emailPolicy: resolveEmailRetentionConfig({ maxAgeMs: 1000 }),
+        prune: { adapter: { select, delete: async () => 0 } } as never,
+        gate: {
+          claim: async () => true,
+          release: async (key: string) => {
+            released.push(key);
+          },
+        },
+      },
+    });
+
+    // Nothing was queried, so nothing was spent, so the turn goes back.
+    expect(select).not.toHaveBeenCalled();
+    expect(released).toContain(EMAIL_RETENTION_DRAIN_GATE_KEY);
+  });
+
   it("returns the email turn when an earlier sweep throws", async () => {
     // The email turn is claimed BEFORE the earlier sweeps run, so that the
     // webhook sweep can size its share. That ordering means an earlier sweep

@@ -99,16 +99,20 @@ async function pruneClass(
   retentionClass: EmailRetentionClass,
   cutoff: Date,
   budget: { batchesLeft: number }
-): Promise<number> {
+): Promise<{ deleted: number; started: boolean }> {
   let deleted = 0;
+  let started = false;
 
   const clock = deps.now ?? ((): Date => new Date());
 
   while (budget.batchesLeft > 0) {
     // Between batches, never inside one. A pass that stopped mid-batch would
     // leave the select's work paid for and nothing deleted.
-    if (deps.deadline !== undefined && clock() >= deps.deadline) return deleted;
+    if (deps.deadline !== undefined && clock() >= deps.deadline) {
+      return { deleted, started };
+    }
 
+    started = true;
     const candidates = await deps.adapter.select<{ id: string }>(
       DELIVERIES_TABLE,
       {
@@ -126,7 +130,7 @@ async function pruneClass(
 
     // The steady state is "nothing to prune", which costs one probe of the
     // `(retention_class, created_at)` index and takes no write lock.
-    if (candidates.length === 0) return deleted;
+    if (candidates.length === 0) return { deleted, started };
 
     budget.batchesLeft -= 1;
     deleted += await deps.adapter.delete(DELIVERIES_TABLE, {
@@ -134,15 +138,26 @@ async function pruneClass(
     });
 
     // A short read means nothing older remains; a full one may have more.
-    if (candidates.length < EMAIL_PRUNE_BATCH_SIZE) return deleted;
+    if (candidates.length < EMAIL_PRUNE_BATCH_SIZE) return { deleted, started };
   }
 
-  return deleted;
+  return { deleted, started };
 }
 
 export interface EmailPruneResult {
   /** Rows removed, summed across every class the policy governs. */
   deliveries: number;
+  /**
+   * Whether any batch was attempted at all.
+   *
+   * Distinct from `deliveries === 0`, which is also what a healthy sweep of an
+   * empty table returns. A caller holding a claimed gate needs to tell those
+   * apart: a pass that queried and found nothing has done its work and should
+   * keep the turn, while a pass that never started — because the deadline was
+   * already spent when it looked — should hand the turn back rather than
+   * consume an interval on nothing.
+   */
+  started: boolean;
 }
 
 /**
@@ -159,20 +174,23 @@ export async function pruneEmailData(
   const now = (deps.now ?? (() => new Date()))();
   const budget = { batchesLeft: maxBatches ?? policy.maxBatchesPerRun };
   let deliveries = 0;
+  let started = false;
 
   for (const retentionClass of EMAIL_RETENTION_CLASSES) {
     const window = windowForEmailClass(policy, retentionClass);
     // `false` is an operator keeping this class indefinitely.
     if (window === false) continue;
-    deliveries += await pruneClass(
+    const swept = await pruneClass(
       deps,
       retentionClass,
       new Date(now.getTime() - window),
       budget
     );
+    deliveries += swept.deleted;
+    started ||= swept.started;
   }
 
-  return { deliveries };
+  return { deliveries, started };
 }
 
 /**
@@ -196,6 +214,9 @@ export async function pruneEmailDataSafely(
     // app-supplied logger throwing here would reintroduce exactly the escape
     // this function was written to prevent.
     warnQuietly(deps.logger, "Email retention pass failed", { error });
-    return { deliveries: 0 };
+    // `started: true` because a pass that threw DID begin work; the turn was
+    // spent even though nothing was deleted, and handing it back would let the
+    // same failing query run again immediately.
+    return { deliveries: 0, started: true };
   }
 }

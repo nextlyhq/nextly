@@ -401,7 +401,14 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
             emailPolicy!
           );
           result.pruned.emailDeliveries = swept.deliveries;
-          heldTurns.delete(EMAIL_RETENTION_DRAIN_GATE_KEY);
+          // Kept only if a batch was actually attempted. The outer deadline
+          // check above can pass and the budget still expire before the
+          // pruner's own between-batch check, in which case it returns having
+          // queried nothing — and marking the turn spent there holds the next
+          // full-budget attempt off for a whole interval on a pass that did no
+          // work. `deliveries === 0` cannot distinguish the two, because that
+          // is also what a healthy sweep of an empty table returns.
+          if (swept.started) heldTurns.delete(EMAIL_RETENTION_DRAIN_GATE_KEY);
         }
       }
     } finally {

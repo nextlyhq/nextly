@@ -154,7 +154,10 @@ describe("a send survives its own housekeeping", () => {
     // apology for it. Neither may reach the caller.
     await expect(
       pruneEmailDataSafely({ adapter, logger }, resolveEmailRetentionConfig())
-    ).resolves.toEqual({ deliveries: 0 });
+      // `started: true` because the pass DID begin work before throwing — the
+      // turn was spent, and returning it would let the same failing query run
+      // again immediately.
+    ).resolves.toEqual({ deliveries: 0, started: true });
   });
 });
 

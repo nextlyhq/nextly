@@ -205,6 +205,31 @@ describe("sweeping the email delivery log", () => {
     expect(deletes).toHaveLength(3);
   });
 
+  it("reports whether it attempted a batch at all", async () => {
+    // `deliveries === 0` cannot answer this: it is what a healthy sweep of an
+    // empty table returns AND what a pass that never looked returns. A caller
+    // holding a claimed retention turn has to tell those apart, or it consumes
+    // an interval on a pass that did nothing.
+    const { adapter } = adapterWith([[]]);
+
+    const ran = await pruneEmailData(
+      { adapter, now: () => NOW },
+      resolveEmailRetentionConfig()
+    );
+    expect(ran).toEqual({ deliveries: 0, started: true });
+
+    const skipped = await pruneEmailData(
+      {
+        adapter,
+        now: () => NOW,
+        // Already spent before the first between-batch check.
+        deadline: new Date(NOW.getTime() - 1),
+      },
+      resolveEmailRetentionConfig()
+    );
+    expect(skipped).toEqual({ deliveries: 0, started: false });
+  });
+
   it("never lets housekeeping fail a send", async () => {
     const warn = vi.fn();
     const adapter: EmailPruneAdapter = {
