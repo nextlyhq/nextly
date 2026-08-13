@@ -131,6 +131,15 @@ export function measureBytes(
       // BEFORE enqueuing elements: a huge array's comma count alone can exceed
       // the cap, so millions of entries must never be pushed first.
       bytes += 2 + Math.max(0, value.length - 1);
+      // Symbol-keyed own properties on an array are dropped by JSON, the same
+      // class as on an object, and cost only the symbol list to find.
+      //
+      // NAMED own properties on an array are the same class and are NOT
+      // detected. `Object.keys(array)` allocates a string per index, which on a
+      // million-element array is precisely the allocation this walk exists to
+      // avoid — measured: adding that check took one existing bound from
+      // milliseconds to over two seconds. The gap is chosen, not missed.
+      if (Object.getOwnPropertySymbols(value).length > 0) unserializable = true;
       if (bytes > limit) return { bytes, exceeded: true, unserializable };
       for (const item of value) stack.push(item);
     } else if (
@@ -187,7 +196,19 @@ export function measureBytes(
         // is counted and not what is allocated. Measuring inline keeps one value
         // live at a time. Objects and arrays are references, so stacking those
         // allocates nothing and preserves the iterative walk.
-        const held = (value as Record<string, unknown>)[key];
+        // An enumerable accessor is caller-supplied code, and reading it can
+        // throw. This walk is a PRECONDITION for parsing untrusted input, so an
+        // exception escaping here crashes the process doing the checking —
+        // exactly the outcome the bound exists to prevent, arriving through the
+        // bound itself. A value that cannot be read cannot be stored either, so
+        // the throw is recorded as unserializable and the walk continues.
+        let held: unknown;
+        try {
+          held = (value as Record<string, unknown>)[key];
+        } catch {
+          unserializable = true;
+          continue;
+        }
         if (typeof held === "object" && held !== null) {
           stack.push(held);
         } else {

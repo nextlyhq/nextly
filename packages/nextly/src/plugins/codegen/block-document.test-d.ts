@@ -40,6 +40,7 @@ import type {
   NodeVisibility,
   StyleValues,
   TokenRef,
+  IssueCode,
   IssueSeverity,
   StyleState,
   TreePosition,
@@ -122,6 +123,16 @@ expectTypeOf<LocaleOverlay["contentMode"]>().toEqualTypeOf<
 >();
 
 expectTypeOf<keyof LocaleOverlayValue>().toEqualTypeOf<"value" | "src">();
+
+// The MAP shape, which the key set above does not reach. `props` is keyed by
+// node id and then by prop name, and flattening it to one level — or keying it
+// by anything other than the stable node id — reinterprets every stored overlay
+// while the key set stays exactly as it is.
+expectTypeOf<LocaleOverlay["props"]>().toEqualTypeOf<
+  Record<string, Record<string, LocaleOverlayValue>>
+>();
+expectTypeOf<LocaleOverlayValue["value"]>().toEqualTypeOf<unknown>();
+expectTypeOf<LocaleOverlayValue["src"]>().toEqualTypeOf<string | undefined>();
 
 // ---------------------------------------------------------------------------
 // The closed vocabularies
@@ -255,7 +266,12 @@ expectTypeOf<NodeStyles>().toEqualTypeOf<
  */
 expectTypeOf<typeof MAX_DEPTH>().toEqualTypeOf<12>();
 expectTypeOf<typeof MAX_NODES>().toEqualTypeOf<5000>();
-expectTypeOf<typeof DEFAULT_MAX_DOCUMENT_BYTES>().toEqualTypeOf<number>();
+// Pinned to its VALUE, not to `number`. The earlier reasoning — that a caller
+// may raise it through `DocumentLimits` — confused the constant with the field:
+// what a caller overrides is `limits.maxBytes`, while this constant is the
+// published default every consumer sizes against when it overrides nothing.
+// Asserted as `number` it accepted every possible cap, which is no assertion.
+expectTypeOf<typeof DEFAULT_MAX_DOCUMENT_BYTES>().toEqualTypeOf<2097152>();
 
 // The reserved vocabulary, in order. A name is only reservable before something
 // else takes it, so the list is the contract and its ORDER is how the
@@ -291,6 +307,12 @@ expectTypeOf<keyof ValidationIssue>().toEqualTypeOf<
   "path" | "code" | "message" | "severity" | "suggestion"
 >();
 expectTypeOf<ValidationIssue["path"]>().toEqualTypeOf<string>();
+
+// `code` is the field an external tool SWITCHES on, so it is the one place a
+// widening does the most damage: relaxing it to `string` lets a new code ship
+// without appearing in `ISSUE_CODES`, and every consumer's exhaustive switch
+// silently grows a default branch instead of failing to compile.
+expectTypeOf<ValidationIssue["code"]>().toEqualTypeOf<IssueCode>();
 expectTypeOf<ValidationIssue["message"]>().toEqualTypeOf<string>();
 expectTypeOf<ValidationIssue["suggestion"]>().toEqualTypeOf<
   string | undefined

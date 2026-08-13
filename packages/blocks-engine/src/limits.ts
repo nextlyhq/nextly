@@ -11,7 +11,12 @@ export const MAX_DEPTH = 12;
 export const MAX_NODES = 5000;
 
 /** Default maximum serialized document size in bytes (2 MiB). */
-export const DEFAULT_MAX_DOCUMENT_BYTES = 2 * 1024 * 1024;
+// Written as a literal rather than as `2 * 1024 * 1024`, because the literal
+// TYPE is what the freeze asserts. TypeScript does not fold the arithmetic when
+// inferring, so the computed form widens to `number` and a freeze assertion
+// over it accepts every possible cap — no assertion at all. The comment carries
+// the readability the expression used to.
+export const DEFAULT_MAX_DOCUMENT_BYTES = 2_097_152; // 2 MiB
 
 /** Fraction of a cap at which tooling should warn (80%). */
 export const LIMIT_WARNING_RATIO = 0.8;

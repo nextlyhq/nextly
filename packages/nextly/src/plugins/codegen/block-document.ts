@@ -227,7 +227,13 @@ const styleBucketsSchema = typedRecord(
 const nodeStylesSchema = closedKeyRecord(
   STYLE_STATES,
   value => styleBucketsSchema.safeParse(value).success,
-  { type: "object" }
+  // Describes BOTH remaining levels, not just the state. Stopping at
+  // `{ type: "object" }` left an external validator accepting
+  // `styles: { base: { mobile: 1 } }` — a breakpoint whose bucket is a number
+  // rather than a map of style values — which this module's own parse refuses.
+  // A published schema looser than the checker beside it sends a producer
+  // output that fails on arrival.
+  { type: "object", additionalProperties: { type: "object" } }
 );
 
 /** One entry-field predicate. */

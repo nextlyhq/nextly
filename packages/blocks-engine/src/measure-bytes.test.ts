@@ -137,6 +137,39 @@ describe("measureBytes", () => {
     expect(reads).toBeLessThan(60);
   });
 
+  it("reports a throwing accessor rather than letting it escape", () => {
+    // This walk is a precondition for parsing untrusted input, so an exception
+    // escaping it crashes the process doing the checking — the outcome the
+    // bound exists to prevent, arriving through the bound itself. A value that
+    // cannot be read cannot be stored either, so the throw is a verdict.
+    const hostile: Record<string, unknown> = { ok: 1 };
+    Object.defineProperty(hostile, "boom", {
+      enumerable: true,
+      get() {
+        throw new Error("accessor");
+      },
+    });
+
+    expect(() => measureBytes(hostile, 1024)).not.toThrow();
+    expect(measureBytes(hostile, 1024).unserializable).toBe(true);
+  });
+
+  it("reports symbol-keyed properties on objects and arrays", () => {
+    // JSON drops these without a word, the same class as `undefined`.
+    const withSymbol: Record<string, unknown> = { ok: 1 };
+    withSymbol[Symbol("s") as unknown as string] = 2;
+    expect(measureBytes(withSymbol, 1024).unserializable).toBe(true);
+
+    const array: unknown[] = [1, 2];
+    (array as unknown as Record<symbol, unknown>)[Symbol("s")] = 3;
+    expect(measureBytes(array, 1024).unserializable).toBe(true);
+
+    // The positive control: an ordinary object and array must NOT be flagged,
+    // or the check above passes for a walk that refuses everything.
+    expect(measureBytes({ ok: 1 }, 1024).unserializable).toBe(false);
+    expect(measureBytes([1, 2], 1024).unserializable).toBe(false);
+  });
+
   it("counts own properties only", () => {
     // The walk uses `for...in`, which reaches the prototype chain. An inherited
     // property is not serialized, so counting one would overstate the size and
