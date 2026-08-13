@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/ui",
-  "version": "0.0.2-alpha.56",
+  "version": "0.0.2-alpha.57",
   "description": "Nextly UI — Reusable React component library for Nextly plugins and custom admin UIs",
   "license": "MIT",
   "keywords": [
@@ -65,11 +65,12 @@
   ],
   "files": [
     "dist",
-    "docs"
+    "docs",
+    "!dist/metafile-*.json"
   ],
   "scripts": {
     "build": "pnpm build:js && node scripts/build-css.mjs",
-    "build:js": "rimraf dist && tsup && tsup --config tsup.server-safe.config.ts && node scripts/check-client-directive.mjs",
+    "build:js": "rimraf dist && tsup && tsup --config tsup.server-safe.config.ts && node scripts/check-client-directive.mjs && node scripts/check-server-safe-artifacts.mjs",
     "build:css": "node scripts/build-css.mjs",
     "dev": "tsup --watch & tsup --config tsup.server-safe.config.ts --watch & wait",
     "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",

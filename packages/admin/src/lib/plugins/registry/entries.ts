@@ -9,10 +9,16 @@ import type { RegistryPlugin } from "./types";
  * never appear in `branding.plugins`, and listing them in a plugin directory
  * would tell a user to install them the wrong way.
  *
- * Descriptions are copied from each plugin's own `definePlugin` declaration so
- * the catalogue and the installed detail page say the same thing. Where a
- * plugin declares none, the text here is the one being added to the plugin in
- * the same change rather than a second, drifting copy.
+ * Every value here describes a plugin that may not be installed, so it is a
+ * curated claim rather than an observation. Where the plugin IS installed, its
+ * own metadata wins: render through `resolveCataloguePresentation` rather than
+ * reading `description` or `icon` off an entry directly, or the same plugin
+ * will show one face on a browse card and another in the installed list.
+ *
+ * The icons and descriptions here still match what each plugin declares, so
+ * the not-installed preview is honest about what a user will get. Keep them
+ * matching when a plugin changes its own; the precedence rule stops a
+ * mismatch being VISIBLE, it does not stop the preview being wrong.
  *
  * @module lib/plugins/registry/entries
  */
@@ -24,7 +30,7 @@ export const REGISTRY_ENTRIES: RegistryPlugin[] = [
     author: "Nextly",
     category: "content",
     tags: ["blocks", "editor", "pages"],
-    icon: { lucide: "LayoutTemplate" },
+    icon: { lucide: "Layout" },
     configSnippet: "plugins: [pageBuilder()]",
     links: {
       homepage: "https://nextlyhq.com",
@@ -38,7 +44,7 @@ export const REGISTRY_ENTRIES: RegistryPlugin[] = [
     author: "Nextly",
     category: "forms",
     tags: ["forms", "submissions"],
-    icon: { lucide: "ClipboardList" },
+    icon: { lucide: "FileText" },
     // `formBuilderPlugin`, not `formBuilder()`: the factory returns a
     // FormBuilderPluginResult whose definition is at `.plugin`, and the package
     // exports the unwrapped value for exactly this use.

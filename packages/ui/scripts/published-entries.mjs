@@ -48,6 +48,20 @@ const SOURCES = {
 };
 
 /**
+ * The packages a server-safe entry point is allowed to reach.
+ *
+ * An ALLOW-list rather than a list of client packages to refuse. A deny-list has to name every way
+ * of pulling in a client runtime, and cannot name the ones that do not exist yet: a workspace
+ * package added later, or a sibling that itself imports React, is not "react" by name and would
+ * pass. Listing what is permitted fails closed instead, and makes each addition deliberate.
+ *
+ * Both entries are pure functions over strings, with no React and no DOM. It lives beside the
+ * entry-point declarations because it is the same kind of fact — what a subpath is allowed to be —
+ * and because the source-level and artifact-level guards must not each keep their own copy.
+ */
+export const SERVER_SAFE_ALLOWED_PACKAGES = new Set(["clsx", "tailwind-merge"]);
+
+/**
  * Direct string targets the guards deliberately have nothing to say about.
  *
  * An allow-list of asset extensions rather than a list of JavaScript ones, so the unrecognised

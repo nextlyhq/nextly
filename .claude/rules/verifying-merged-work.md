@@ -1,7 +1,10 @@
----
-paths:
-  - "**/*"
----
+<!--
+No `paths` frontmatter: Claude Code loads such a rule at launch,
+unconditionally, while a rule WITH the field — including `paths: ["**/*"]` — is
+conditional and triggers only when a matching file is read. Verifying a merge is
+an act rather than a file type, and the checks below are needed before any file
+of the merged work has been opened.
+-->
 
 ## A squash merge makes every ancestry check unsound
 
