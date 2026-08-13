@@ -406,8 +406,28 @@ export class SingleMetadataService {
   }
 
   private async updateSingleSchemaExcluded(
-    input: UpdateSingleSchemaInput
+    args: UpdateSingleSchemaInput
   ): Promise<UpdateSingleSchemaResult> {
+    // 0. RE-READ the record, now that the exclusion is held.
+    //
+    // 🔴 The caller read it BEFORE this lock existed, and a storage migration can complete in
+    // between. Its `data:registry-definitions` step rewrites `dynamic_singles.fields` into the new
+    // field-group vocabulary, so planning from the caller's copy would derive the change from
+    // definitions the database no longer holds — and the registry write at the end would put the
+    // legacy spelling back, under a marker that now says the migration settled.
+    //
+    // Holding a lock over the WORK is not enough when the INPUT was sampled outside it. This is the
+    // same sampled-versus-held argument the exclusion itself rests on, applied one level up.
+    //
+    // Only the record is refreshed. The `is*` / `was*` flags describe what the REQUEST asked for and
+    // what it is transitioning from, which a migration does not touch — it renames vocabulary, not
+    // toggles — so re-deriving them here would substitute this service's reading of the request for
+    // the caller's.
+    const input: UpdateSingleSchemaInput = {
+      ...args,
+      existing: await this.refreshForUpdate(args),
+    };
+
     // 1. PLAN. May reject; nothing is persisted and no statement has run.
     const plan = await this.planUpdate(input);
 
@@ -444,6 +464,39 @@ export class SingleMetadataService {
    * SQLite cannot detach — and refusing here, before the apply, is what leaves the table untouched
    * and the caller's field list unsaved.
    */
+  /**
+   * Read the Single again inside the exclusion, and re-check what the caller checked outside it.
+   *
+   * Both refusals are re-checked rather than trusted: a delete that lands while this request waited
+   * leaves nothing to update, and a Single that became `locked` in the same window is code-first
+   * now, so applying a UI edit to it would write a row the config is about to contradict.
+   */
+  private async refreshForUpdate(
+    input: UpdateSingleSchemaInput
+  ): Promise<DynamicSingleRecord> {
+    const current = await this.registry.getSingleBySlug(input.slug);
+
+    if (!current) {
+      throw NextlyError.notFound({
+        logMessage: `single "${input.slug}" was removed before its schema change could run`,
+        logContext: {
+          reason: "single disappeared while awaiting the exclusion",
+          slug: input.slug,
+        },
+      });
+    }
+    if (current.locked) {
+      throw NextlyError.forbidden({
+        logMessage: `single "${input.slug}" became locked before its schema change could run`,
+        logContext: {
+          reason: "single became locked while awaiting the exclusion",
+          slug: input.slug,
+        },
+      });
+    }
+    return current;
+  }
+
   private async planUpdate(
     input: UpdateSingleSchemaInput
   ): Promise<UpdateDdlPlan | null> {

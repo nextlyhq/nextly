@@ -65,8 +65,8 @@ const logger: Logger = {
  * CREATE has run, the companion absent — because a create that reports `failed` would leave the
  * ordering assertions describing a run that gave up rather than one that worked.
  */
-function makeAdapter() {
-  let created = false;
+function makeAdapter(options: { mainTableExists?: boolean } = {}) {
+  let created = options.mainTableExists === true;
   return {
     getCapabilities: () => ({ dialect: "postgresql" as const }),
     dialect: "postgresql" as const,
@@ -98,6 +98,15 @@ function makeAdapter() {
 
 function makeService(adapter: ReturnType<typeof makeAdapter>) {
   const registry = {
+    // Read INSIDE the exclusion, so an update plans from the record as it is once the lock is held
+    // rather than as the caller found it. Answers the same shape the caller passed in, which is the
+    // uncontended case; the contended one is covered where the lock itself is modelled.
+    getSingleBySlug: vi.fn(async (slug: string) => ({
+      slug,
+      tableName: "single_page",
+      fields: [],
+      locked: false,
+    })),
     registerSingle: vi.fn(async (row: unknown) => {
       trace.push("registry:write");
       return row;
@@ -241,6 +250,47 @@ describe("a Schema Builder change and the storage migration exclude each other",
     } as unknown as Parameters<typeof service.updateSingleSchema>[0]);
 
     expect(excludeArgs.map(a => a.mayCreateLock)).toEqual([false, true]);
+  });
+
+  it("plans from the record as it is INSIDE the exclusion, not as the caller found it", async () => {
+    // 🔴 The caller reads the Single before this lock exists, and a storage migration completing in
+    // between rewrites `dynamic_singles.fields`. Planning from the caller's copy would derive the
+    // change from definitions the database no longer holds, and the registry write would put the
+    // old spelling back under a settled marker.
+    //
+    // The two records are made to DISAGREE so the assertion can tell which one was used: the
+    // caller's copy already lists `heading`, the live one does not. Planning from the caller's copy
+    // sees no new field and emits nothing; planning from the live record has to add the column.
+    // The table has to already EXIST, or the plan is a whole-table CREATE derived from the
+    // requested fields and both records produce the same statements — a fixture that never reaches
+    // the comparison it is written to make.
+    const adapter = makeAdapter({ mainTableExists: true });
+    const { service, registry } = makeService(adapter);
+    registry.getSingleBySlug.mockResolvedValue({
+      slug: "page",
+      tableName: "single_page",
+      fields: [],
+      locked: false,
+    });
+
+    await service.updateSingleSchema({
+      slug: "page",
+      existing: {
+        slug: "page",
+        tableName: "single_page",
+        fields: [{ name: "heading", type: "text" }],
+      },
+      updateData: {},
+      fields: [{ name: "heading", type: "text" }],
+      isLocalized: false,
+      wasLocalized: false,
+      hasStatus: false,
+      wasStatus: false,
+      statusRequested: false,
+    } as unknown as Parameters<typeof service.updateSingleSchema>[0]);
+
+    const statements = adapter.executeQuery.mock.calls.map(([sql]) => sql);
+    expect(statements.join("\n")).toMatch(/ADD COLUMN[^\n]*heading/i);
   });
 
   it("keeps the claim through an interrupt, because the work is not idempotent", async () => {
