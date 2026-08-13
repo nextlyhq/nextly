@@ -31,7 +31,13 @@ const plugins: PluginMetadata[] = [
         danger: true,
       },
     ],
-    routes: [{ method: "GET", path: "/submissions/export" }],
+    routes: [
+      {
+        method: "GET",
+        path: "/submissions/export",
+        fullPath: "/plugins/@acme/forms/submissions/export",
+      },
+    ],
   },
   {
     name: "@acme/disabled",
@@ -39,6 +45,15 @@ const plugins: PluginMetadata[] = [
     enabled: false,
     placement: "plugins",
     collections: ["retained"],
+    whenEnabled: {
+      routes: [
+        {
+          method: "DELETE",
+          path: "/archive",
+          fullPath: "/plugins/@acme/disabled/archive",
+        },
+      ],
+    },
   },
 ];
 
@@ -132,7 +147,7 @@ describe("PluginDetailPage", () => {
     expect(screen.getByText("danger")).toBeInTheDocument();
     // Route summary includes the namespaced final URL.
     expect(
-      screen.getByText("GET /api/plugins/acme-forms/submissions/export")
+      screen.getByText("GET /admin/api/plugins/@acme/forms/submissions/export")
     ).toBeInTheDocument();
   });
 
@@ -165,5 +180,65 @@ describe("PluginDetailPage", () => {
       </QueryClientProvider>
     );
     expect(await screen.findByText("Plugin not found")).toBeInTheDocument();
+  });
+});
+
+/**
+ * A disabled plugin serves no routes, so what it WOULD serve is a different
+ * claim from what it serves. These pin that the two are shown as different
+ * things rather than merged into one list.
+ */
+describe("PluginDetailPage dormant disclosure", () => {
+  it("shows a disabled plugin's routes under their own heading", () => {
+    render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
+
+    expect(screen.getByText("Would serve when enabled")).toBeInTheDocument();
+    // Enabling in config is necessary and NOT sufficient: config HMR does not
+    // re-run service registration or route mounting, so an operator who stops
+    // at the flag reaches a route that still 404s.
+    expect(
+      screen.getByText(/restart the app to serve these/i)
+    ).toBeInTheDocument();
+    // The RAW package name, which is the namespace the dispatcher registers —
+    // not the admin slug, which is only how this UI addresses the plugin.
+    expect(
+      screen.getByText("DELETE /admin/api/plugins/@acme/disabled/archive")
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * The separating assertion. A merged list would render the same string and
+   * pass a presence-only check.
+   */
+  it("keeps them out of what the plugin currently adds", () => {
+    render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
+
+    const contributions = screen
+      .getByText("What this plugin adds")
+      .closest("section");
+    expect(contributions).not.toBeNull();
+    expect(within(contributions!).queryByText("API routes")).toBeNull();
+  });
+
+  it("shows no dormant section for an enabled plugin", () => {
+    render(<PluginDetailPage params={{ slug: "acme-forms" }} />);
+
+    // The enabled fixture declares a route, so this asserts the section is
+    // withheld rather than that there was nothing to show.
+    expect(screen.getByText("API routes")).toBeInTheDocument();
+    expect(screen.queryByText("Would serve when enabled")).toBeNull();
+  });
+
+  /**
+   * The active section names the same namespace. A scoped package is served at
+   * its raw name, so a slug-derived path here would be wrong for every plugin
+   * whose name has a scope — which is all three first-party ones.
+   */
+  it("names the dispatcher's namespace for an enabled plugin's routes", () => {
+    render(<PluginDetailPage params={{ slug: "acme-forms" }} />);
+
+    expect(
+      screen.getByText("GET /admin/api/plugins/@acme/forms/submissions/export")
+    ).toBeInTheDocument();
   });
 });

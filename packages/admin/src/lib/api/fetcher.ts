@@ -30,6 +30,18 @@ export const BASE_URL =
     ? `${window.location.origin}/admin/api`
     : "http://localhost:3000/admin/api"; // SSR fallback
 
+/**
+ * The path half of {@link BASE_URL} — where this admin's API answers, relative
+ * to the origin.
+ *
+ * Derived from `BASE_URL` rather than written out again, because a surface
+ * that NAMES an endpoint has to name the one the admin actually calls. Any
+ * second spelling is a path that looks authoritative and points somewhere
+ * else: the generated app mounts the handler at `/admin/api/[[...params]]`,
+ * so a plausible `/api/...` is a URL nothing serves.
+ */
+export const API_PATH_PREFIX = new URL(BASE_URL).pathname;
+
 type ApiSuccess<T> = {
   success: true;
   data: T;

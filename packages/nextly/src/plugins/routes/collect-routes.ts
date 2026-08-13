@@ -1,6 +1,7 @@
 import type { PluginDefinition } from "../plugin-context";
 
 import { routeCollisionError, routeInvalidPathError } from "./route-error";
+import { pluginRouteFullPath } from "./route-path";
 import type { PluginRoute } from "./route-types";
 
 /** A route collected from a plugin, namespaced and ready to register. */
@@ -38,7 +39,7 @@ export function collectPluginRoutes(
       if (!route.path.startsWith("/")) {
         throw routeInvalidPathError(plugin.name, route.path);
       }
-      const fullPath = `/plugins/${plugin.name}${route.path}`;
+      const fullPath = pluginRouteFullPath(plugin.name, route.path);
       const key = `${route.method} ${fullPath}`;
       const existingOwner = seen.get(key);
       if (existingOwner !== undefined) {
