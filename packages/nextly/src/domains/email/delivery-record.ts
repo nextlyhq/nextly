@@ -13,6 +13,7 @@
 import { createHmac, createHash } from "crypto";
 
 import { env } from "../../lib/env";
+import { secretGenerations } from "../../shared/lib/secret-generations";
 
 /** How a delivery ended. A drain would add `pending` and `retrying`. */
 export type EmailDeliveryStatus = "sent" | "failed";
@@ -223,6 +224,39 @@ export function mailboxOf(address: string): string {
  * erasure would quietly stop matching the rows a lookup still finds, which is
  * the failure this table cannot afford to have silently.
  */
+/**
+ * Every digest an address could have been stored under.
+ *
+ * A rotation does not move the rows already written, so reaching them means
+ * computing what each generation would have produced rather than recording
+ * which one did. That is why no key-version column exists: matching against all
+ * known generations reaches the same rows a stored version would have, without
+ * a schema change and without a backfill for the rows that predate it.
+ *
+ * The unkeyed development digest is included when no secret is configured, so a
+ * contributor's local rows are erasable too.
+ *
+ * Ordered newest first, and deduplicated: an install that lists its current
+ * secret again under the retired key would otherwise compare the same digest
+ * twice on every erasure.
+ */
+export function recipientDigests(address: string): string[] {
+  const mailbox = mailboxOf(address).trim().toLowerCase();
+  const generations = secretGenerations(
+    env.NEXTLY_SECRET,
+    env.NEXTLY_SECRET_PREVIOUS
+  );
+
+  const digests =
+    generations.length === 0
+      ? [createHash("sha256").update(mailbox).digest("hex")]
+      : generations.map(key =>
+          createHmac("sha256", key).update(mailbox).digest("hex")
+        );
+
+  return [...new Set(digests)];
+}
+
 export function recipientDigest(address: string): string {
   return hashRecipient(mailboxOf(address));
 }

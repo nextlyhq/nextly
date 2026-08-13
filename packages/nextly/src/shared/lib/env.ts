@@ -39,6 +39,19 @@ export const _envSchema = z
 
     // Nextly auth secret (required in production, min 32 chars)
     NEXTLY_SECRET: z.string().optional(),
+    // Secrets this install has RETIRED, newest first, comma-separated.
+    //
+    // Rotating `NEXTLY_SECRET` re-keys every value derived from it, which
+    // silently orphans data written under the old one: an email delivery row's
+    // recipient digest stops matching, so an erasure request computes a value
+    // none of the older rows carry and reports success having matched nothing.
+    // Listing a retired secret here keeps those rows REACHABLE for erasure
+    // without making them writable — nothing new is ever keyed with one.
+    //
+    // Empty entries are dropped rather than rejected: a trailing comma is the
+    // likeliest way to write this, and treating it as a zero-length key would
+    // hash every address under the empty string.
+    NEXTLY_SECRET_PREVIOUS: z.string().optional(),
     // Shared secret a scheduler (e.g. Vercel Cron) presents to the webhook
     // drain route. Optional: when unset, the drain route can still be triggered
     // by an authenticated admin/API-key call, but unattended cron triggering is
