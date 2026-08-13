@@ -14,7 +14,7 @@ import {
   VALIDATION_FIXTURES,
 } from "./validation.fixtures";
 import type { BlockTypeLookup } from "./validation";
-import { ISSUE_CODES, validate } from "./validation";
+import { ISSUE_CODES, measureBytes, validate } from "./validation";
 
 function lookup(types: string[]): BlockTypeLookup {
   const set = new Set(types);
@@ -1739,5 +1739,174 @@ describe("a document past the byte cap stops paying to read its values", () => {
       { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
     );
     expect(issues.map(issue => issue.code)).toContain("invalid-style-value");
+  });
+});
+
+describe("measureBytes", () => {
+  // The counter decides whether a document is too large, and `validate()` and
+  // the builder's op store both ask it. So the property that matters is not
+  // "close enough" but that it agrees with what will actually be written: a
+  // counter that reads low lets a document past a cap it exceeds, and nothing
+  // downstream re-checks.
+  //
+  // Pinned against `JSON.stringify` rather than against remembered numbers,
+  // because the numbers are what drift. Object separators were missing here:
+  // every object with more than one property counted one byte short per extra
+  // property, which compounds with nesting.
+  it.each([
+    ["one property", { a: 1 }],
+    ["two properties", { a: 1, b: 2 }],
+    ["three properties", { a: 1, b: 2, c: 3 }],
+    ["nested objects", { a: { x: 1, y: 2 }, b: { x: 1, y: 2 } }],
+    ["an array", [1, 2, 3]],
+    ["an empty object", {}],
+    ["an empty array", []],
+    ["a string", { s: "hello" }],
+    ["a multibyte string", { s: "héllo wörld ✓" }],
+    ["null and booleans", { a: null, b: true, c: false }],
+    [
+      "a document",
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [{ id: "a", type: "box", version: 1, props: { text: "hi" } }],
+      },
+    ],
+    // The members `JSON.stringify` DROPS. An update that clears a field leaves
+    // an own property holding `undefined`, so charging for one measures a
+    // document larger than the one that gets saved — and an edit that shrinks
+    // a document then reads as growing it.
+    ["an undefined member", { a: 1, b: undefined }],
+    ["only undefined members", { a: undefined }],
+    ["a function member", { a: 1, b: () => 1 }],
+    ["a symbol member", { a: 1, b: Symbol("s") }],
+    ["nested dropped members", { a: { b: undefined, c: 2 } }],
+    // In an ARRAY the same values become `null`, because length is part of an
+    // array's meaning.
+    ["an undefined element", [1, undefined, 3]],
+    // `JSON.stringify` writes `null` for a number it cannot represent, so the
+    // count must follow the written form rather than the source spelling.
+    ["NaN", { n: NaN }],
+    ["Infinity", { n: Infinity }],
+    ["negative Infinity", { n: -Infinity }],
+    ["a function element", [1, () => 1, 3]],
+  ])("counts %s exactly as it serializes", (_label, value) => {
+    expect(measureBytes(value, Number.POSITIVE_INFINITY).bytes).toBe(
+      Buffer.byteLength(JSON.stringify(value), "utf8")
+    );
+  });
+
+  it("stops once the limit is passed rather than counting the whole value", () => {
+    // The bail-out is the reason this counter exists rather than
+    // `documentBytes`: an oversized value must be refused without being
+    // materialized. A counter that reported `exceeded` only after walking
+    // everything would answer correctly and still allocate the walk.
+    const wide = { huge: "x".repeat(5_000_000) };
+    const result = measureBytes(wide, 100);
+    expect(result.exceeded).toBe(true);
+    expect(
+      result.bytes,
+      "a bounded count stops near the limit rather than at the true size"
+    ).toBeLessThan(5_000_000);
+  });
+});
+
+describe("measureBytes and the serializer agree on toJSON", () => {
+  it("counts what JSON.stringify writes for a value defining toJSON", () => {
+    // A `Date` carries no enumerable fields, so a walk over its properties
+    // counts an empty object while the writer emits a quoted timestamp. Pinned
+    // against `Buffer.byteLength(JSON.stringify(v))` rather than a remembered
+    // number, so the next divergence fails instead of needing to be noticed.
+    const value = { when: new Date("2020-01-01T00:00:00.000Z") };
+    const written = Buffer.byteLength(JSON.stringify(value), "utf8");
+
+    expect(measureBytes(value, 1_000).bytes).toBe(written);
+    expect(measureBytes(value, 20).exceeded).toBe(true);
+  });
+});
+
+describe("measureBytes passes toJSON the key the serializer does", () => {
+  it("matches the writer for a key-sensitive hook", () => {
+    // `JSON.stringify` calls `toJSON(key)` with the containing property name.
+    // Called with no argument, a hook that reads the key either throws or
+    // returns something else, and the counter stops agreeing with the writer.
+    const value = {
+      child: {
+        toJSON(key: string) {
+          return key.repeat(3);
+        },
+      },
+      list: [
+        {
+          toJSON(key: string) {
+            return `at-${key}`;
+          },
+        },
+      ],
+    };
+    const written = Buffer.byteLength(JSON.stringify(value), "utf8");
+
+    expect(measureBytes(value, 1_000).bytes).toBe(written);
+  });
+});
+
+describe("measureBytes drops what the serializer drops", () => {
+  it("charges nothing for a member whose toJSON returns undefined", () => {
+    // The hook runs BEFORE the writer decides whether the member is writable,
+    // so this object serializes to `{}`. Filtering on the member as it stands
+    // keeps it and charges key, quotes, colon and value.
+    const value = { x: { toJSON: () => undefined } };
+    const written = Buffer.byteLength(JSON.stringify(value), "utf8");
+
+    expect(measureBytes(value, 1_000).bytes).toBe(written);
+  });
+
+  it("writes null for an array element whose toJSON returns a function", () => {
+    // An array's length is part of its meaning, so a value the writer cannot
+    // represent becomes `null` rather than disappearing.
+    const value = { list: [1, { toJSON: () => () => 1 }, 3] };
+    const written = Buffer.byteLength(JSON.stringify(value), "utf8");
+
+    expect(measureBytes(value, 1_000).bytes).toBe(written);
+  });
+});
+
+describe("measureBytes agrees with the serializer on hooks and cycles", () => {
+  it("refuses a cyclic value in exact-count mode instead of hanging", () => {
+    // With no cap, nothing is ever over the limit, so the early return that
+    // stops the walk in capped mode never fires and each visit queues the same
+    // object again. `JSON.stringify` rejects this immediately.
+    const value: Record<string, unknown> = { a: 1 };
+    value.self = value;
+
+    // Reported, not thrown: callers include validators that must turn an
+    // unstorable document into an issue rather than raise. Under a finite limit
+    // this was already the answer, because each revisit added bytes until the
+    // cap stopped the walk; the cycle set is what makes the exact-count mode
+    // reach it instead of never terminating.
+    expect(measureBytes(value, Number.POSITIVE_INFINITY)).toEqual({
+      bytes: expect.any(Number) as number,
+      exceeded: true,
+    });
+  });
+
+  it("runs a nested toJSON once, as the writer does", () => {
+    // `JSON.stringify` writes what the hook returns AS-IS; it does not call
+    // `toJSON` again on the replacement. Normalising twice measures a value the
+    // writer never produces.
+    const value = { x: { toJSON: () => ({ toJSON: () => "0123456789" }) } };
+    const written = Buffer.byteLength(JSON.stringify(value), "utf8");
+
+    expect(measureBytes(value, 1_000).bytes).toBe(written);
+  });
+
+  it("still counts a value that appears twice as siblings", () => {
+    // Two references to one object is a tree, not a cycle, and JSON writes it
+    // fine — so the cycle guard must not refuse it.
+    const shared = { a: 1 };
+    const value = { left: shared, right: shared };
+    const written = Buffer.byteLength(JSON.stringify(value), "utf8");
+
+    expect(measureBytes(value, 1_000).bytes).toBe(written);
   });
 });

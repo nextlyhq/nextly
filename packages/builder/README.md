@@ -5,9 +5,9 @@ everything in it either produces or reads.
 
 **The editor is landing in slices, and every export is `@experimental`.** What
 ships today is the editor SHELL — the rail, the switched left panel, the canvas
-slot, the inspector and the bars around them — together with the frame geometry
-that maps between the canvas frame and the host page, and the package name
-constant. The canvas and the op store are still to come. See
+slot, the inspector and the bars around them — the frame geometry that maps
+between the canvas frame and the host page, the op store that every edit is
+expressed in, and the package name constant. The canvas is still to come. See
 [Public surface](#public-surface).
 
 The package was created ahead of any of it so its name could be claimed on npm:
@@ -250,18 +250,79 @@ acceptance suite adapts these rather than restating them: a browser harness
 carrying its own copy certifies its own copy, and would keep passing through
 exactly the correction it exists to catch.
 
+### The op store
+
+`applyOp(document, op, limits?)` — apply one edit to a `BlockDocument`,
+returning the new document under `AppliedOp.document` and the op that undoes it.
+Every change goes through it: the canvas, the layers panel, the inspector and an
+agent all produce ops and nothing else, which is what makes undo, autosave,
+crash restore and edit review one mechanism rather than four.
+
+It takes a DOCUMENT rather than a bare forest because the size caps are
+document-level. A forest measured on its own omits `settings` and `assets`, so a
+document already near its byte limit through those would accept an edit the
+engine then refuses to store. The document is returned whole: `settings`,
+`assets` and any field the format gains later survive an edit untouched.
+
+`limits` defaults to the engine's `DEFAULT_LIMITS` and takes the same
+`DocumentLimits` that `validate()` accepts. Pass the site's own limits if it
+renders with custom ones, or the op layer and the validator will disagree about
+what fits.
+
+`BuilderOp` — the whole edit vocabulary: `insert`, `remove`, `move`, `update`.
+Ops address nodes by id, never by path, because a path describes the tree at the
+moment it was written and any edit above it invalidates one.
+
+`OpError` — thrown when an op cannot apply. A refusal rather than a silent
+no-op: the caller is a history, so an op that quietly did nothing would still be
+recorded and its inverse would undo an edit that never happened.
+
+`AppliedOp`, `NodePatch` — the result shape and the fields an `update` may
+carry. `NodePatch` is read off the engine's own signature rather than restated.
+
 ## Development
 
-Run these from this directory (`packages/builder`), not the repository root —
-turbo swallows the summary line at the root.
+Dependencies must be built first. This package resolves
+`@nextlyhq/blocks-engine` through its published entry, which is `dist/`, so on a
+clean checkout **`test`, `check-types` and `lint` all fail** until it exists —
+`test` in the way worth knowing about, reporting a resolution error and a
+reduced test count rather than an obvious stop.
+
+```bash
+# Once, and again after changing a dependency. Builds only what this
+# package depends on, not the whole repository.
+pnpm --filter @nextlyhq/builder... build
+```
+
+Then, from this directory (`packages/builder`) rather than the repository root —
+turbo swallows the summary line at the root:
 
 ```bash
 pnpm run test          # vitest, including the layering guard
 pnpm run check-types   # tsc --noEmit; unlike some packages here, this DOES
                        # cover the test files (tsconfig has no test exclude)
 pnpm run lint          # eslint --max-warnings 0; a single warning fails
-pnpm run build         # tsup
+pnpm run build         # tsup; this package ONLY, so its dependencies must
+                       # already be built — see below
 ```
+
+`pnpm turbo test --filter=@nextlyhq/builder` builds dependencies itself, because
+the `test` task declares `dependsOn: ["^build"]`. `check-types` and `lint` do
+not. Neither is build-free on a clean checkout: a workspace import resolves
+through the sibling's package exports to a `dist` that does not exist yet, and
+`lint` fails on the same specifiers through `import-x/no-unresolved`.
+
+Build the dependencies first, and on a clean checkout that means:
+
+```bash
+pnpm --filter @nextlyhq/builder... build   # trailing ... INCLUDES this package
+```
+
+The package-local `pnpm run build` above builds this package alone, so it is
+enough only once the dependencies are built. Not `@nextlyhq/builder^...` either:
+`pnpm recursive --help` defines that form as the dependencies _without_ the
+matched package, which leaves this package's own `dist` absent — the same
+missing build wearing a different error message.
 
 ## Peer dependencies
 

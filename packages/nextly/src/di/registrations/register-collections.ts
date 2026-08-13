@@ -22,7 +22,10 @@ import type { PermissionSeedService } from "../../domains/auth/services/permissi
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../../domains/dynamic-collections";
 import { MetaRetentionGate } from "../../domains/retention/gate";
-import { buildRetentionRunner } from "../../domains/retention/passes";
+import {
+  buildRetentionRunner,
+  retentionPoliciesFrom,
+} from "../../domains/retention/passes";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
 import type { CacheRevalidator } from "../../revalidation/types";
 import { AccessControlService } from "../../services/access";
@@ -180,8 +183,7 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       // needs its own runner — the handler's is not on this path.
       buildRetentionRunner({
         adapter,
-        webhookPolicy: ctx.config.webhookRetention,
-        auditPolicy: ctx.config.auditRetention,
+        ...retentionPoliciesFrom(ctx.config),
         gate: new MetaRetentionGate(adapter),
         logger,
       }),
@@ -214,6 +216,7 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
   // CRUD permissions for newly created collections.
   container.registerSingleton<CollectionsHandler>("collectionsHandler", () => {
     const drizzleDb = adapterDrizzleDb;
+    const policiesForHandler = retentionPoliciesFrom(ctx.config);
     const handler = new CollectionsHandler(
       adapter,
       drizzleDb,
@@ -221,12 +224,24 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       basePath,
       // i18n M4: enable companion-aware reads on the dispatcher-facing handler.
       ctx.config.localization,
-      // Content writes offer a retention pass, so the event ledger stays
-      // bounded in installs that never run the drain. Both policies are passed:
-      // this handler is the seam a dispatcher-driven install writes through, so
-      // a policy missing here is a trail that install never prunes.
-      ctx.config.webhookRetention,
-      ctx.config.auditRetention
+      // Content writes offer a retention pass, so the ledgers stay bounded in
+      // installs that never run the drain. EVERY policy is passed: this handler
+      // is the seam a dispatcher-driven install writes through, so one missing
+      // here is a table that install never prunes — which is how the delivery
+      // log came to be swept only by sends, and therefore never at all once an
+      // install stopped sending.
+      // DERIVED, not the raw fields. `retentionPoliciesFrom` resolves the
+      // delivery-log default from the nested `email` block when nothing
+      // flattened it, and a direct `registerServices()` caller using a
+      // database-managed provider supplies no `email` block at all — so the raw
+      // `emailRetention` is undefined there while every other registration on
+      // the same config correctly gets the default window. Forwarding the raw
+      // field made this handler see all three as absent and build no runner,
+      // which is the tail sweep going missing on exactly the dispatcher-driven
+      // path this argument list exists to reach.
+      policiesForHandler.webhookPolicy ?? undefined,
+      policiesForHandler.auditPolicy,
+      policiesForHandler.emailPolicy
     );
 
     if (container.has("permissionSeedService")) {

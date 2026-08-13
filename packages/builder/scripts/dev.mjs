@@ -14,6 +14,14 @@
  * Node's `spawn` is the portable equivalent, and it is a dozen lines rather
  * than a dependency.
  *
+ * **Each watcher is pointed at `src` rather than left to default.** Bare
+ * `tsup --watch` watches `.`, and at that root it never notices an edit at all:
+ * no `Change detected`, no rebuild, and an artifact that is byte-identical
+ * afterwards. Measured back to back in one session on tsup 8.5.0 — `--watch .`
+ * saw nothing, `--watch src` detected the same edit and rebuilt it. Anyone who
+ * then debugs a stale artifact is debugging code that was never rebuilt, and
+ * the failure is the ABSENCE of a build line among output that scrolls.
+ *
  * Three producers, because this package publishes three kinds of artifact from
  * one `dist`: the client entry, the server-safe entries, and the compiled
  * stylesheet. Cleaning belongs to `build`, never here — a clean under `--watch`
@@ -24,10 +32,10 @@ import { spawn } from "node:child_process";
 
 /** Each long-lived producer, with a label for whose output is whose. */
 const PRODUCERS = [
-  { label: "client", args: ["tsup", "--watch"] },
+  { label: "client", args: ["tsup", "--watch", "src"] },
   {
     label: "server-safe",
-    args: ["tsup", "--config", "tsup.server-safe.config.ts", "--watch"],
+    args: ["tsup", "--config", "tsup.server-safe.config.ts", "--watch", "src"],
   },
   { label: "css", args: ["pnpm", "run", "dev:css"] },
 ];

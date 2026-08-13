@@ -35,7 +35,10 @@ const executed: string[] = [];
  * passes through `executeQuery`.
  */
 function makeAdapter(dialect: "postgresql" | "mysql" | "sqlite") {
-  return {
+  // A field-group schema change runs inside the storage migration's lock, so the double has to
+  // answer the lock's reads and writes as well as its own. Added rather than stubbed: a surface
+  // that let every claim succeed would certify an exclusion that is not there.
+  return withMigrationLockSurface({
     dialect,
     getCapabilities: () => ({ dialect }),
     // Answers the way a fresh create finds the database: the main table is there once its CREATE
@@ -48,7 +51,7 @@ function makeAdapter(dialect: "postgresql" | "mysql" | "sqlite") {
       return [];
     }),
     getDrizzle: () => ({}),
-  };
+  });
 }
 
 let adapter: ReturnType<typeof makeAdapter>;
@@ -69,6 +72,7 @@ vi.mock("../../../di/container", () => ({
   },
 }));
 
+import { withMigrationLockSurface } from "../../../domains/field-groups/migration/__tests__/helpers/migration-lock-double";
 import { FieldGroupMetadataService } from "../../../domains/field-groups/services/field-group-metadata-service";
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import type { Logger } from "../../../shared/types";

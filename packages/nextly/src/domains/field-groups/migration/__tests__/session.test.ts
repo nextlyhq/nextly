@@ -9,6 +9,7 @@ import {
   getMigrationLockDdl,
   MIGRATION_LOCK_TABLE,
   withMigrationSession,
+  type LockObservation,
   type MigrationDialect,
 } from "../session";
 
@@ -77,7 +78,14 @@ function assertLockTable(name: string | undefined): void {
  * - each `transaction()` call takes a connection, so a fake that never counts
  *   them cannot show that the lock stops holding one.
  */
-function createAdapter(options: { heldBy?: string | null } = {}) {
+function createAdapter(
+  options: {
+    heldBy?: string | null;
+    lockReadError?: unknown;
+    /** Model a database on which no migration has ever run, so the lock table is absent. */
+    lockTableMissing?: boolean;
+  } = {}
+) {
   const rows = new Map<number, { id: number; owner: string | null }>();
   if (options.heldBy !== undefined) {
     rows.set(1, { id: 1, owner: options.heldBy });
@@ -107,8 +115,13 @@ function createAdapter(options: { heldBy?: string | null } = {}) {
     }),
     // The seed read runs outside any transaction, so it goes through the
     // adapter rather than the transaction context.
-    queryStatement: vi.fn(async (statement: SQL) => interpret(statement, rows)),
-    tableExists: vi.fn(async () => true),
+    queryStatement: vi.fn(async (statement: SQL) => {
+      // Models a role that may read the marker and registry but not the lock
+      // table -- the case `tableExists` cannot distinguish from absence.
+      if (options.lockReadError !== undefined) throw options.lockReadError;
+      return interpret(statement, rows);
+    }),
+    tableExists: vi.fn(async () => options.lockTableMissing !== true),
     transaction: vi.fn(async (work: (c: unknown) => Promise<unknown>) => {
       open += 1;
       peakOpen = Math.max(peakOpen, open);
@@ -407,6 +420,188 @@ describe("field-group migration session", () => {
     } finally {
       kill.mockRestore();
     }
+  });
+
+  // The promise `observe` makes is that nothing can write without the lock. A
+  // comment cannot hold that: the callback is handed a session, and whoever adds
+  // the next observing caller reads the type, not the prose.
+  it("refuses to open a transaction in observe mode", async () => {
+    const h = createAdapter({ heldBy: null });
+    let refusal: unknown;
+
+    await withMigrationSession(
+      {
+        adapter: h.adapter,
+        dialect: "postgresql",
+        label: "preview-1",
+        mode: "observe",
+      },
+      async session => {
+        refusal = await session
+          .inTransaction(async () => undefined)
+          .catch((error: unknown) => error);
+      }
+    );
+
+    expect(NextlyError.is(refusal)).toBe(true);
+    // The lock is untouched by the attempt: refusing must not be a path that
+    // half-claims and then fails.
+    expect(h.owner()).toBeNull();
+  });
+
+  it("claims nothing and reports the holder in observe mode", async () => {
+    const h = createAdapter({ heldBy: "someone-else" });
+    let observed: LockObservation | undefined;
+
+    await withMigrationSession(
+      {
+        adapter: h.adapter,
+        dialect: "postgresql",
+        label: "preview-2",
+        mode: "observe",
+      },
+      async session => {
+        observed = session.lock;
+      }
+    );
+
+    // A claiming session refuses here; observing reports and leaves the row as
+    // it found it.
+    expect(observed).toEqual({ kind: "held", owner: "someone-else" });
+    expect(h.owner()).toBe("someone-else");
+  });
+
+  // 🔴 THE separating case for the three-state observation. A role that cannot
+  // READ the lock table is not a database where nothing holds the lock, and the
+  // two were previously indistinguishable: `tableExists` resolves through
+  // privilege-filtered `information_schema`, so an invisible table came back
+  // absent and the preview reported "nothing holds it" while a run held it.
+  it("reports unknown when the lock cannot be read", async () => {
+    const denied = Object.assign(new Error("permission denied for table"), {
+      code: "42501",
+    });
+    const h = createAdapter({ heldBy: "someone-else", lockReadError: denied });
+    let observed: LockObservation | undefined;
+
+    await withMigrationSession(
+      {
+        adapter: h.adapter,
+        dialect: "postgresql",
+        label: "preview-3",
+        mode: "observe",
+      },
+      async session => {
+        observed = session.lock;
+      }
+    );
+
+    expect(observed).toEqual({ kind: "unknown", reason: "42501" });
+    // And emphatically NOT the answer a caller would act on.
+    expect(observed).not.toEqual({ kind: "not-held" });
+  });
+
+  // The counterpart, and the reason `unknown` is not simply "any failure": an
+  // absent table IS a complete answer, because the lock is created by the first
+  // run that ever claims it.
+  it("reports not-held when the lock table does not exist", async () => {
+    const missing = Object.assign(new Error('relation "x" does not exist'), {
+      code: "42P01",
+    });
+    const h = createAdapter({ heldBy: null, lockReadError: missing });
+    let observed: LockObservation | undefined;
+
+    await withMigrationSession(
+      {
+        adapter: h.adapter,
+        dialect: "postgresql",
+        label: "preview-4",
+        mode: "observe",
+      },
+      async session => {
+        observed = session.lock;
+      }
+    );
+
+    expect(observed).toEqual({ kind: "not-held" });
+  });
+
+  // The shape a FRESH database actually produces. Drizzle wraps the driver
+  // failure, so the discriminating text is on `cause` while the outer message is
+  // only `Failed query` — reading the top level classifies every untouched
+  // database as unreadable, which is the opposite of the truth.
+  it("sees through Drizzle's wrapper on a fresh sqlite database", async () => {
+    const wrapped = Object.assign(new Error("Failed query"), {
+      code: "SQLITE_ERROR",
+      cause: new Error("SQLITE_ERROR: no such table: nextly_field_group_lock"),
+    });
+    const h = createAdapter({ heldBy: null, lockReadError: wrapped });
+    let observed: LockObservation | undefined;
+
+    await withMigrationSession(
+      {
+        adapter: h.adapter,
+        dialect: "sqlite",
+        label: "preview-5",
+        mode: "observe",
+      },
+      async session => {
+        observed = session.lock;
+      }
+    );
+
+    expect(observed).toEqual({ kind: "not-held" });
+  });
+
+  // mysql2 supplies the SYMBOLIC code alongside the errno, and `safeCode`
+  // prefers the symbolic one — so a check written only against 1146 or 42S02
+  // never matches the value it is actually handed.
+  it("accepts mysql's symbolic missing-table code", async () => {
+    const missing = Object.assign(new Error("Failed query"), {
+      cause: Object.assign(new Error("Table does not exist"), {
+        code: "ER_NO_SUCH_TABLE",
+        errno: 1146,
+        sqlState: "42S02",
+      }),
+    });
+    const h = createAdapter({ heldBy: null, lockReadError: missing });
+    let observed: LockObservation | undefined;
+
+    await withMigrationSession(
+      {
+        adapter: h.adapter,
+        dialect: "mysql",
+        label: "preview-6",
+        mode: "observe",
+      },
+      async session => {
+        observed = session.lock;
+      }
+    );
+
+    expect(observed).toEqual({ kind: "not-held" });
+  });
+
+  // 🔴 `requireExistingLock` deliberately runs the work WITHOUT a lock when no migration has ever
+  // touched this database, so there is nothing to be excluded from. The session it hands over must
+  // say so: the default observation names a claim string this branch generated and never wrote
+  // anywhere, so advertising it would report exclusion on the one path that takes none.
+  it("reports not-held when it deliberately skips the lock", async () => {
+    const h = createAdapter({ lockTableMissing: true });
+    let observed: LockObservation | undefined;
+
+    await withMigrationSession(
+      {
+        adapter: h.adapter,
+        dialect: "postgresql",
+        label: "optional-lock",
+        requireExistingLock: true,
+      },
+      async session => {
+        observed = session.lock;
+      }
+    );
+
+    expect(observed).toEqual({ kind: "not-held" });
   });
 
   it("uses a lock table distinct from the schema pipeline's", () => {

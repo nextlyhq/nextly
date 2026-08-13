@@ -25,6 +25,7 @@ vi.mock("fs-extra", () => ({
     readFile: vi.fn(),
     readdir: vi.fn(),
     remove: vi.fn(),
+    move: vi.fn(),
     ensureDir: vi.fn(),
   },
 }));
@@ -153,9 +154,11 @@ describe("generatePackageJson", () => {
   it("should include Next.js scripts", async () => {
     const result = JSON.parse(await generatePackageJson("test", pgDatabase));
     expect(result.scripts.dev).toBe("next dev --turbopack");
-    expect(result.scripts.build).toBe(
-      "nextly migrate && next build && (test -f scripts/build-search-index.mjs && node scripts/build-search-index.mjs || true)"
-    );
+    // No search-index step, and no `search:index`, because no template directory was passed —
+    // so the generator saw a scaffold that does not receive the Pagefind builder. A template
+    // that does ship it is covered in template-search-index.test.ts, against a real tree.
+    expect(result.scripts.build).toBe("nextly migrate && next build");
+    expect(result.scripts["search:index"]).toBeUndefined();
     expect(result.scripts.start).toBe("next start");
     expect(result.scripts.lint).toBe("next lint");
   });
@@ -216,6 +219,30 @@ describe("generatePnpmWorkspaceYaml", () => {
   // a postgres/mysql yalc scaffold still pulls (and must build) better-sqlite3.
   it("always includes better-sqlite3 in the allowlist", () => {
     expect(NATIVE_BUILD_DEPENDENCIES).toContain("better-sqlite3");
+  });
+
+  // pnpm 9 treats the presence of this file as declaring a workspace and
+  // refuses to install without a `packages` key
+  // (ERR_PNPM_INVALID_WORKSPACE_CONFIGURATION). A scaffold that ships the
+  // allowlist alone cannot be installed at all on that line, so the key is
+  // what makes the file safe to emit unconditionally.
+  it("declares packages, so pnpm 9 can install the scaffold", () => {
+    const yaml = generatePnpmWorkspaceYaml();
+    expect(yaml).toMatch(/^packages: \[\]$/m);
+  });
+
+  // A scaffolded app is a single package. Naming any member would claim a
+  // repository layout the scaffold does not create, and pnpm would then look
+  // for manifests that are not there.
+  it("declares no workspace members", () => {
+    const yaml = generatePnpmWorkspaceYaml();
+    const packagesLine = yaml
+      .split("\n")
+      .findIndex(line => line.startsWith("packages:"));
+    expect(packagesLine).toBeGreaterThanOrEqual(0);
+    // A YAML list continues on indented lines; the next top-level key ends it.
+    const next = yaml.split("\n")[packagesLine + 1] ?? "";
+    expect(next).not.toMatch(/^\s+-/);
   });
 });
 

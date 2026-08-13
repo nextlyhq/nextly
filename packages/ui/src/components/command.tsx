@@ -1,7 +1,7 @@
 "use client";
 
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { Command as CommandPrimitive } from "cmdk";
+import { Command as CommandPrimitive, defaultFilter } from "cmdk";
 import { Search } from "lucide-react";
 import type {
   ElementRef,
@@ -73,7 +73,33 @@ const Command = forwardRef<ElementRef<typeof CommandPrimitive>, CommandProps>(
 Command.displayName = "Command";
 
 /** @experimental */
-export type CommandDialogProps = DialogPrimitive.DialogProps;
+export interface CommandDialogProps extends DialogPrimitive.DialogProps {
+  /**
+   * Passed to the command root this dialog renders internally.
+   *
+   * A seam rather than a list of forwarded props, because the settings a caller needs from the
+   * root are the ones this component happens not to have thought of: `label`, which supplies the
+   * search input's accessible name (cmdk renders an EMPTY hidden label without it, and an empty
+   * `aria-labelledby` reference is worse than none — it stops the placeholder naming the field);
+   * `filter` and `shouldFilter`, which decide match order; and `vimBindings`, which claims Ctrl+K
+   * and Ctrl+N inside the list.
+   *
+   * `children` is excluded because this component owns the dialog's contents.
+   */
+  commandProps?: Omit<ComponentPropsWithoutRef<typeof Command>, "children">;
+  /**
+   * Passed to the dialog content this component renders internally.
+   *
+   * The seam that matters here is `onCloseAutoFocus`: this dialog has no trigger, so Radix has
+   * nothing to hand focus back to, and it fires this at the point focus is actually being
+   * returned — after the exit animation, which a timer set at close time cannot know the length
+   * of. `className` is excluded because this component owns the dialog's own layout.
+   */
+  contentProps?: Omit<
+    ComponentPropsWithoutRef<typeof DialogPrimitive.Content>,
+    "children" | "className"
+  >;
+}
 
 /**
  * CommandDialogOverlay - Custom overlay for CommandDialog with proper z-index.
@@ -130,7 +156,12 @@ CommandDialogOverlay.displayName = "CommandDialogOverlay";
  * ```
  * @experimental
  */
-const CommandDialog = ({ children, ...props }: CommandDialogProps) => {
+const CommandDialog = ({
+  children,
+  commandProps,
+  contentProps,
+  ...props
+}: CommandDialogProps) => {
   const portalContainer = usePortalContainer();
 
   return (
@@ -138,6 +169,7 @@ const CommandDialog = ({ children, ...props }: CommandDialogProps) => {
       <DialogPrimitive.Portal container={portalContainer}>
         <CommandDialogOverlay />
         <DialogPrimitive.Content
+          {...contentProps}
           data-slot="command-content"
           className={cn(
             // Position
@@ -160,7 +192,15 @@ const CommandDialog = ({ children, ...props }: CommandDialogProps) => {
             "data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-top-[48%]"
           )}
         >
-          <Command className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wide [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-group]]:mb-2 [&_[cmdk-input-wrapper]_svg]:h-5 [&_[cmdk-input-wrapper]_svg]:w-5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-3 [&_[cmdk-item]]:py-2 [&_[cmdk-item]_svg]:h-4 [&_[cmdk-item]_svg]:w-4">
+          <Command
+            {...commandProps}
+            className={cn(
+              "[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wide [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-group]]:mb-2 [&_[cmdk-input-wrapper]_svg]:h-5 [&_[cmdk-input-wrapper]_svg]:w-5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-3 [&_[cmdk-item]]:py-2 [&_[cmdk-item]_svg]:h-4 [&_[cmdk-item]_svg]:w-4",
+              // Merged rather than overridden: a caller passing `className` for its own reason
+              // would otherwise silently drop every layout rule this dialog depends on.
+              commandProps?.className
+            )}
+          >
             {children}
           </Command>
         </DialogPrimitive.Content>
@@ -399,3 +439,18 @@ export {
   CommandSeparator,
   CommandShortcut,
 };
+
+/**
+ * The command palette's default match scorer, re-exported.
+ *
+ * A caller that overrides `filter` — to keep an opaque item value out of the scoring, say — still
+ * wants the ranking that comes for free, and reaching for `cmdk` directly is not open to every
+ * package here.
+ *
+ * Bound to a declaration rather than re-exported with `export { x as y }`: the bundler keeps a doc
+ * comment attached to a declaration and drops one attached to an export statement, so the release
+ * tag would not reach the published types.
+ *
+ * @experimental
+ */
+export const commandDefaultFilter = defaultFilter;

@@ -130,7 +130,15 @@ export function toDbError(
 // 👉 This function digs around the error object and tries every possible place (error.code, error.sqlState, error.errno, etc) to find the DB error code.
 // ✅ Good defensive coding.
 // ⚠️ Could get messy with weird drivers, but you covered most cases. Nice.
-function safeCode(error: unknown): string | undefined {
+/**
+ * The driver's own code for an error, wherever that driver puts it.
+ *
+ * Exported so callers that must distinguish one failure from another classify
+ * by the SAME extraction this module's mapping uses. A second reader would go
+ * looking in a different set of properties and disagree on exactly the drivers
+ * whose codes are hardest to find.
+ */
+export function safeCode(error: unknown): string | undefined {
   if (!error || typeof error !== "object") return undefined;
   // Cast to Record to defensively probe common DB driver error properties.
   // DB drivers expose non-standard properties (code, sqlState, errno, etc.)

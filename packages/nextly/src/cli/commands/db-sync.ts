@@ -322,6 +322,9 @@ export async function runDbSync(
         logger,
         label: "db:sync",
         mayCreateLock: options.autoSync !== false,
+        // A sync is idempotent and was never mutually exclusive with another sync, so dropping the
+        // claim on an interrupt costs nothing a rerun does not fix.
+        releaseOnInterrupt: true,
       },
       async () =>
         await runWithFieldTypes(configResult.fieldTypes, async () => {
