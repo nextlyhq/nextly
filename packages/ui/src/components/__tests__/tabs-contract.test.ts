@@ -1448,7 +1448,7 @@ function isDefinitelyNothing(initializer: ts.Expression): boolean {
 function declaredProperties(
   object: ts.ObjectLiteralExpression,
   resolver: ReturnType<typeof styleResolver>,
-  expanded = new Set<ts.Node>()
+  onPath = new Set<ts.Node>()
 ): Array<Map<string, boolean>> {
   // A LIST of possible results, not one. A spread whose source is chosen at
   // runtime — `active ? { borderBottomColor: c } : {}` — produces different
@@ -1457,8 +1457,14 @@ function declaredProperties(
   // and reversing the two invented a violation instead. Each branch is a shape
   // the element can render, so each is carried separately and any one of them
   // declaring an owned property is a violation.
-  if (expanded.has(object)) return [new Map()];
-  expanded.add(object);
+  //
+  // `onPath` is the ACTIVE recursion path rather than everything ever visited,
+  // which is the difference between refusing a cycle and refusing a repeat.
+  // `{ ...inherited, borderBottomColor: undefined, ...inherited }` spreads one
+  // source twice and ends with its value; a set that remembered the first
+  // occurrence answered the second with nothing and cleared the declaration.
+  if (onPath.has(object)) return [new Map()];
+  onPath.add(object);
 
   let variants: Array<Map<string, boolean>> = [new Map()];
   const setOnEach = (name: string, emits: boolean): void => {
@@ -1469,7 +1475,7 @@ function declaredProperties(
     if (ts.isSpreadAssignment(property)) {
       const branches = resolver
         .objectsFrom(property.expression)
-        .flatMap(source => declaredProperties(source, resolver, expanded));
+        .flatMap(source => declaredProperties(source, resolver, onPath));
       if (branches.length === 0) continue;
       variants = variants.flatMap(base =>
         branches.map(branch => new Map([...base, ...branch]))
@@ -1478,21 +1484,56 @@ function declaredProperties(
     }
     if (ts.isPropertyAssignment(property)) {
       const name = propertyNameOf(property.name);
-      if (name) setOnEach(name, !isDefinitelyNothing(property.initializer));
+      if (name) setOnEach(name, emitsValue(property.initializer, resolver));
       continue;
     }
     // A shorthand entry is a different node kind with the same effect:
     // `{ borderBottomColor }` sets the property just as `{ borderBottomColor: c }`
-    // does, and a visitor keyed on `PropertyAssignment` alone walks past it.
-    // Its VALUE lives in the binding, so the same definitely-nothing test has to
-    // follow the name to what it was initialised with — otherwise a shorthand
-    // holding `undefined` reads as a declaration React never emits.
+    // does, and a visitor keyed on `PropertyAssignment` alone walks past it. Its
+    // value lives in the binding, which `emitsValue` follows.
     if (ts.isShorthandPropertyAssignment(property)) {
-      const bound = resolver.valueOf(property.name.text);
-      setOnEach(property.name.text, !(bound && isDefinitelyNothing(bound)));
+      setOnEach(property.name.text, emitsValue(property.name, resolver));
+      continue;
+    }
+    // A getter is a third spelling again: React reads the property and emits
+    // whatever it returns, so the declaration is real even though no value is
+    // written at the key. What it returns is not decidable here, so it counts
+    // as emitting.
+    if (ts.isGetAccessorDeclaration(property)) {
+      const name = propertyNameOf(property.name);
+      if (name) setOnEach(name, true);
     }
   }
+  onPath.delete(object);
   return variants;
+}
+
+/**
+ * Whether React emits a declaration for this value.
+ *
+ * Follows an identifier to what it was initialised with, so the same test
+ * covers `{ borderBottomColor: empty }` and `{ borderBottomColor }` — one
+ * resolving the value at the property, the other at the binding. Treating those
+ * two spellings differently is what left an optional style constant reported at
+ * one and cleared at the other.
+ *
+ * Still deliberately narrow: it answers "is this written as nothing", not
+ * "could this be nullish at runtime". A binding whose value is not statically
+ * decidable keeps counting as a declaration, because the same variable holds a
+ * colour on the next render.
+ */
+function emitsValue(
+  value: ts.Expression,
+  resolver: ReturnType<typeof styleResolver>,
+  seen = new Set<string>()
+): boolean {
+  if (isDefinitelyNothing(value)) return false;
+  if (ts.isIdentifier(value) && !seen.has(value.text)) {
+    seen.add(value.text);
+    const bound = resolver.valueOf(value.text);
+    if (bound) return emitsValue(bound, resolver, seen);
+  }
+  return true;
 }
 
 /** An owned inline property this object still declares once it is complete. */
@@ -1932,6 +1973,16 @@ describe("the tab indicator contract", () => {
     ],
     // Equal specificity, emitted later, and a shorthand that replaces the
     // longhand the primitive sets.
+    // One source spread twice, with a clear between: the last occurrence wins.
+    [
+      "a repeated spread source whose second occurrence restores the value",
+      'const inherited = { borderBottomColor: "red" };\n<TabsTrigger style={{ ...inherited, borderBottomColor: undefined, ...inherited }} />',
+    ],
+    // React reads the property and emits whatever the getter returns.
+    [
+      "an owned property declared through a getter",
+      '<TabsTrigger style={{ get borderBottomColor() { return "red"; } }} />',
+    ],
     [
       "a shorthand that replaces an owned longhand",
       '<TabsTrigger className="aria-[controls]:[outline:2px_solid_red]" />',
@@ -2112,6 +2163,10 @@ describe("the tab indicator contract", () => {
       '<TabsTrigger className="focus-visible:[&:not(:focus-visible)]:ring-0" />',
     ],
     // React emits nothing for a shorthand whose binding holds nothing.
+    [
+      "an identifier bound to undefined in a property assignment",
+      "const empty = undefined;\n<TabsTrigger style={{ borderBottomColor: empty }} />",
+    ],
     [
       "a shorthand bound to undefined",
       "const borderBottomColor = undefined;\n<TabsTrigger style={{ borderBottomColor }} />",
