@@ -270,11 +270,25 @@ describe("dispatchComponents, mutations (respondMutation)", () => {
     });
     wireRegistry(registry);
 
+    // 🔴 Asserted on the REASON, not the code. Reading the raw body instead makes `"false"` truthy,
+    // which takes the enable branch and is refused by the localization-config gate — also a
+    // VALIDATION_ERROR. A code-only assertion passes on both the fixed and the broken code and
+    // certifies nothing; the path is what separates them.
     await expect(
       dispatchComponents("updateComponent", { slug: "hero" }, {
         localized: "false",
       } as unknown as Record<string, unknown>)
-    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    ).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "localized",
+            code: "invalid_type",
+          }),
+        ],
+      },
+    });
 
     // Nothing was written: the refusal has to happen before the row moves, not after.
     expect(registry.updateComponent).not.toHaveBeenCalled();
