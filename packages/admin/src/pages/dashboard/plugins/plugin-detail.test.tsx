@@ -166,12 +166,12 @@ describe("PluginDetailPage", () => {
     expect(screen.getByText("@acme/core ^1.0.0")).toBeInTheDocument();
   });
 
-  it("marks a disabled plugin and explains that its behavior does not load", () => {
+  it("marks a disabled plugin and names the surfaces that stop", () => {
     render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
     expect(screen.getByText("Disabled")).toBeInTheDocument();
     expect(
       screen.getByText(
-        /its behavior, including its API routes, does not\s+run/i
+        /API routes, admin\s+pages, menu items and settings panel are not registered/i
       )
     ).toBeInTheDocument();
   });
@@ -291,5 +291,21 @@ describe("PluginDetailPage disabled plugin permissions", () => {
     render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
 
     expect(screen.getByText(/permissions stay granted/i)).toBeInTheDocument();
+  });
+
+  /**
+   * A permission is a global slug that any component may test through the
+   * SDK's `useCan`, and a disabled plugin keeps its field editors mounted, so
+   * a grant is not inert just because the plugin is off. The retained-editor
+   * sentence is the positive half: it makes the narrower claim observable, so
+   * this cannot pass by the whole paragraph having gone missing.
+   */
+  it("does not claim everything the permissions protect is unloaded", () => {
+    render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
+
+    expect(
+      screen.getByText(/field editors it contributes stay available/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/what they protect is not loaded/i)).toBeNull();
   });
 });
