@@ -2209,6 +2209,23 @@ describe("an inverse that names a parent held twice", () => {
     ).toThrow(OpError);
   }, 60_000);
 
+  it("refuses a slot cleanup that names somewhere the node did not sit", () => {
+    // `dropSlotIfEmpty` exists to undo the container a placement created, so
+    // the only slot it may remove is the one the node has just left. Accepting
+    // any empty slot makes it a second, unlogged deletion riding on an
+    // unrelated edit: this remove would delete the node AND the untouched
+    // parent's empty `extra` slot, while the inverse reinserts only the node.
+    const document = doc([node("a"), node("keeper", { extra: [] })]);
+
+    expect(() =>
+      applyOp(document, {
+        kind: "remove",
+        id: "a",
+        dropSlotIfEmpty: { parentId: "keeper", slot: "extra" },
+      })
+    ).toThrow(/not where this node sat/);
+  });
+
   it("refuses a cap that cannot decide anything", () => {
     // Every cap here is a `>` comparison and every comparison against `NaN` is
     // false, so one non-finite limit does not loosen a cap — it removes it, and

@@ -248,6 +248,25 @@ describe("an op and its inverse are a round trip", () => {
         continue;
       }
 
+      // The forward op must have CHANGED something. Without this, an
+      // implementation that returned its input for every op satisfies the whole
+      // property — apply does nothing, undo does nothing, and the documents
+      // match perfectly. `applyOp` promises the opposite: it refuses an edit
+      // that writes what is already there, precisely so history never holds an
+      // entry whose undo has no visible effect.
+      //
+      // So an ACCEPTED op that changed nothing is a defect of the same kind the
+      // round trip is looking for, and this is the assertion that separates
+      // "restored it" from "never touched it".
+      if (JSON.stringify(applied.document) === JSON.stringify(before)) {
+        failures.push(
+          `seed ${String(seed)}: ${op.kind} was accepted and changed nothing, ` +
+            `so its history entry undoes to no visible effect\n` +
+            `  document: ${JSON.stringify(before)}`
+        );
+        continue;
+      }
+
       let undone;
       try {
         undone = applyOp(applied.document, applied.inverse);

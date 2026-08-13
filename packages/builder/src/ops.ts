@@ -1427,8 +1427,12 @@ function assertForestEntries(nodes: BlockNode[]): void {
   // where every individual length passes. The total is what the caller
   // declared, so the total is what the walk is bounded by.
   let enqueued = 0;
-  const enqueue = (list: readonly unknown[], subject: string): void => {
-    if (enqueued + list.length > MAX_VALUE_PARTS) {
+  // CHARGING and COPYING are separate, because not everything the walk pays for
+  // ends up in the queue. A node's slot MAP costs one visit per entry whether or
+  // not those slots hold children, so it must be charged without being enqueued
+  // — folding the two together queues slot names as though they were nodes.
+  const charge = (count: number, subject: string): void => {
+    if (enqueued + count > MAX_VALUE_PARTS) {
       throw new OpError(
         `${subject} would put this document past the ` +
           `${String(MAX_VALUE_PARTS)} entries an edit may walk. No document ` +
@@ -1436,7 +1440,10 @@ function assertForestEntries(nodes: BlockNode[]): void {
           `alone.`
       );
     }
-    enqueued += list.length;
+    enqueued += count;
+  };
+  const enqueue = (list: readonly unknown[], subject: string): void => {
+    charge(list.length, subject);
     // An INDEX loop, never `for...of`. Iteration runs `Symbol.iterator`, and
     // that method is INHERITED — `hasOnlyJsonOwnKeys` checks own keys, so an
     // array subclass or a prototype supplying a custom iterator passes it and
@@ -1528,6 +1535,13 @@ function assertForestEntries(nodes: BlockNode[]): void {
           `would be saved.`
       );
     }
+    // The slot MAP's own size, charged before its entries are walked. An empty
+    // slot list adds nothing to the enqueued total, so a document whose nodes
+    // each carry a wide map of empty slots stays under the node ceiling forever
+    // while this loop materialises and visits every entry — and pays a fresh
+    // descriptor walk per node. The work the budget exists to bound is the
+    // number of entries VISITED, not only the children queued from them.
+    charge(Object.keys(slots).length, "a node's slots");
     for (const [name, children] of Object.entries(slots)) {
       // The slot NAME, by the same rule an incoming position is held to. A
       // document already holding a slot called `__proto__` is accepted by a
