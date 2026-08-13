@@ -128,6 +128,34 @@ export function buildRetentionPasses(
 }
 
 /**
+ * Every domain's resolved policy, taken from one service configuration.
+ *
+ * Each site that builds a runner used to name the policies it wanted, so a
+ * domain gaining retention had to be added to all of them — and a site left out
+ * silently offers that domain no pass at all. The delivery log shipped in
+ * exactly that state: reachable only from the send path, which meant an install
+ * that stopped sending never aged out its last recipients.
+ *
+ * Spreading this instead makes the list one thing. A caller that has the
+ * configuration gets every domain, including ones added later.
+ */
+export function retentionPoliciesFrom(
+  config:
+    | {
+        webhookRetention?: ResolvedWebhookRetentionConfig | null;
+        auditRetention?: ResolvedAuditRetentionConfig;
+        emailRetention?: ResolvedEmailRetentionConfig;
+      }
+    | undefined
+): Pick<RetentionPassInput, "webhookPolicy" | "auditPolicy" | "emailPolicy"> {
+  return {
+    webhookPolicy: config?.webhookRetention,
+    auditPolicy: config?.auditRetention,
+    emailPolicy: config?.emailRetention,
+  };
+}
+
+/**
  * The runner for this install, or undefined when nothing is configured to
  * prune — so a caller holding an optional runner keeps meaning "no retention"
  * rather than "a runner with nothing to do".

@@ -13,7 +13,10 @@
  */
 
 import { MetaRetentionGate } from "../../domains/retention/gate";
-import { buildRetentionRunner } from "../../domains/retention/passes";
+import {
+  buildRetentionRunner,
+  retentionPoliciesFrom,
+} from "../../domains/retention/passes";
 import { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
 import type {
   RunWebhookDrainOptions,
@@ -118,8 +121,7 @@ export function registerWebhookServices(ctx: RegistrationContext): void {
   container.registerSingleton("retentionRunner", () =>
     buildRetentionRunner({
       adapter,
-      webhookPolicy: ctx.config.webhookRetention,
-      auditPolicy: ctx.config.auditRetention,
+      ...retentionPoliciesFrom(ctx.config),
       gate: new MetaRetentionGate(adapter),
       logger,
     })

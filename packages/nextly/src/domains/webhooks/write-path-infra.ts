@@ -27,7 +27,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { container } from "../../di/container";
 import type { NextlyServiceConfig } from "../../di/register";
 import { MetaRetentionGate } from "../../domains/retention/gate";
-import { buildRetentionRunner } from "../../domains/retention/passes";
+import {
+  buildRetentionRunner,
+  retentionPoliciesFrom,
+} from "../../domains/retention/passes";
 import type { RetentionRunner } from "../../domains/retention/runner";
 import type { Logger } from "../../shared/types";
 
@@ -61,8 +64,7 @@ export function resolveWebhookWritePathInfra(
 
   const retentionRunner = buildRetentionRunner({
     adapter: adapter,
-    webhookPolicy: config?.webhookRetention,
-    auditPolicy: config?.auditRetention,
+    ...retentionPoliciesFrom(config),
     gate: new MetaRetentionGate(adapter),
     logger,
   });
