@@ -55,7 +55,21 @@ not a property a mutable ref can answer.
 
 So use it as a SCREEN and take the verdict from CONTENT. Any commit it names is
 worth confirming against the merge commit; an empty result means only that this
-cheap look found nothing, never that nothing was lost. When it matters — a
+cheap look found nothing, never that nothing was lost.
+
+**Settle a named candidate against the CANDIDATE, not against the PR head.** The
+numbered steps below are written for the PR as a whole, and step 3's PR side
+ends at `<headRefOid>` — which excludes a stranded commit by definition, so its
+two deltas come out identical whether or not that commit's change landed. When
+the candidate has a unique marker, grep for it as in step 2. When it does not —
+a binary, a rename, a mode change — compare its own patch:
+
+```sh
+git diff "$CAND^..$CAND" -- "$PATHS"          # what the stranded commit did
+git diff "$MERGE^..$MERGE" -- "$PATHS"        # what the squash contains
+```
+
+Its hunks appearing in the second is the evidence. Their absence is the loss. When it matters — a
 release, an incident, a PR whose tail you have reason to doubt — verify the
 commits you intended to land by content, per the numbered steps below, and do
 not let an empty range stand in for that.
@@ -208,8 +222,10 @@ They are easy to run together and none substitutes for another:
 
 - **Did my code land?** — content, from the final commit. What the numbered
   steps below answer.
-- **Did EVERY commit land?** — the `ls-remote` comparison above. Content from a
-  commit that merged cannot reach a commit that did not.
+- **Did EVERY commit land?** — no single command answers this. The `ls-remote`
+  screen above NAMES candidates and cannot certify their absence; each candidate
+  is then settled by content. Content taken from a commit that merged can never
+  reach a commit that did not, so the screen is what supplies the list to check.
 - **Was the job green?** — the merge commit's own check-runs, asserted as
   `success`. A PR merged here with two `Integration` jobs failing and left
   `main` red for hours; its author had verified the content correctly and that
@@ -309,12 +325,24 @@ missing its last commit, reading as complete with every thread resolved.
 after something has already shipped. Merge with the head you verified as a
 PRECONDITION, so the merge itself refuses when the branch has moved:
 
+This runs BEFORE a merge exists, so it cannot borrow `$GH` from the block above:
+that one reads `mergeCommit` and exits when there is none, which is every open
+PR. Acquire the head on its own:
+
 ```sh
+set -euo pipefail
+PR=<number>
+GH=$(gh pr view "$PR" --json headRefOid --jq .headRefOid) || {
+  echo "PR#$PR: head query failed — do not merge" >&2
+  exit 2
+}
+[ -n "$GH" ] || { echo "PR#$PR: empty head — do not merge" >&2; exit 2; }
 gh pr merge "$PR" --squash --match-head-commit "$GH"
 ```
 
-`$GH` is `headRefOid` from the block above — the revision the green checks and
-the clean review belong to. Bind it to that variable rather than retyping a SHA:
+`$GH` must be the revision the green checks and the clean review belong to, so
+read it in the SAME step that merges — a value carried from an earlier step is
+the stale head this flag exists to reject. Bind it to that variable rather than retyping a SHA:
 a merge precondition naming the wrong revision either refuses a correct merge or,
 worse, permits the one it was added to stop.
 
