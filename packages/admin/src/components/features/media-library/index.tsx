@@ -785,6 +785,7 @@ export function MediaLibrary({
                   showPageSizeSelector
                   onPageChange={handlePageChange}
                   onPageSizeChange={handlePageSizeChange}
+                  ariaLabel="Media grid pagination"
                 />
               )}
             </>
@@ -816,6 +817,7 @@ export function MediaLibrary({
                       showPageSizeSelector
                       onPageChange={handlePageChange}
                       onPageSizeChange={handlePageSizeChange}
+                      ariaLabel="Media list pagination"
                     />
                   ) : undefined
                 }

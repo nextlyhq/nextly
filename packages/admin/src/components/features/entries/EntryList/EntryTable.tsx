@@ -549,11 +549,11 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
                   ? "No entries found. Try adjusting your search or filters."
                   : "No entries found."
               }
-              // Inside the table rather than beside it. The wrapper below draws
-              // the card and `bordered={false}` stops the table drawing a second
-              // one, so this renders in the same place it always did -- what
-              // changes is that the pager is now mounted once, by the component
-              // that knows whether the table or the mobile card view is showing.
+              // Inside the table rather than beside it, so the component that
+              // knows whether the row table or the mobile card view is showing
+              // is the one that places the pager. The wrapper below draws the
+              // card and `bordered={false}` stops the table drawing a second
+              // one, so this renders in the same place it always did.
               footer={
                 <Pagination
                   currentPage={pagination.page}

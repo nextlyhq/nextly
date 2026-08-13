@@ -532,10 +532,11 @@ function EmailTemplateTable() {
             registryKey="email-templates"
             ariaLabel="Email templates table"
             emptyMessage="No email templates found. Create a template to get started."
-            // The table owns the pager, so it is mounted once and placed for
-            // whichever view is showing. Ungated here because the totals come
-            // from the server on every response, so the pager can render its
-            // own single-page state rather than needing to be hidden.
+            // The table owns the pager, so it is placed for whichever view is
+            // showing. Ungated because this list paginates in memory:
+            // `totalPages` is derived from the filtered rows and floored at one
+            // below, so the pager renders its own single-page state instead of
+            // needing to be hidden.
             footer={
               <Pagination
                 currentPage={page}

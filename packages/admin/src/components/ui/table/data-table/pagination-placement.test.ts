@@ -2,16 +2,17 @@
  * A list's pager belongs to its table, not beside it.
  *
  * `DataTableView` takes a `footer` for exactly this. Rendering the pager there
- * mounts it ONCE, so a stateful control keeps stable ids, and places it
- * correctly for whichever of the two views is showing — inside the card on
+ * places it for whichever of the two views is showing — inside the card on
  * desktop, in the column's gap on mobile. `DataTableView` is the only component
  * that knows which view that is: a wrapper would have to ask a second container
  * query, and its box is wider by the card's border, so the two disagree across
  * a two-pixel band.
  *
  * Rendered as a SIBLING instead, the pager sits outside that decision entirely.
- * It looked fine because on desktop the difference is a few pixels of padding,
- * which is why eight surfaces drifted into it while four used `footer`.
+ * The rule is about PLACEMENT and only placement: a sibling pager is a single
+ * element too, so moving it into `footer` changes where it lands, not how many
+ * times it mounts. It looked fine because on desktop the difference is a few
+ * pixels of padding, which is how surfaces drifted into it.
  *
  * A comment could not hold this. The correct call and the wrong one are the
  * same two components in the same file, a few lines apart, and the wrong one is
@@ -54,10 +55,35 @@ function parse(path: string, source: string): ts.SourceFile {
   );
 }
 
+/**
+ * The tag a JSX node names, whichever of the three node kinds it is.
+ *
+ * One extractor for one question. An element reached by walking DOWN the tree
+ * is a `JsxElement` or a self-closing one; an element reached UP from an
+ * attribute is the `JsxOpeningElement` inside it. Answering those with two
+ * functions means a future change to aliases or qualified names can teach one
+ * of them and not the other, and equivalent syntax then classifies differently
+ * depending on which direction the walk arrived from.
+ */
 function tagNameOf(node: ts.Node, file: ts.SourceFile): string | undefined {
-  if (ts.isJsxSelfClosingElement(node)) return node.tagName.getText(file);
+  if (ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) {
+    return node.tagName.getText(file);
+  }
   if (ts.isJsxElement(node)) return node.openingElement.tagName.getText(file);
   return undefined;
+}
+
+/**
+ * Whether this node is one ELEMENT OCCURRENCE, for a walk going down the tree.
+ *
+ * Separate from `tagNameOf` because it answers a different question, and the
+ * difference is load-bearing: `<Pagination></Pagination>` is a `JsxElement`
+ * that CONTAINS a `JsxOpeningElement`, so a downward walk that counted every
+ * node with a tag would count that pager twice, and an exemption naming it
+ * once would then report a surplus that is not there.
+ */
+function isElementOccurrence(node: ts.Node): boolean {
+  return ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node);
 }
 
 /**
@@ -132,16 +158,49 @@ function insideTableFooter(node: ts.Node, file: ts.SourceFile): boolean {
     // JsxAttribute -> JsxAttributes -> the opening or self-closing element.
     const owner = current.parent?.parent;
     if (!owner) return false;
-    const tag = tagNameOf(owner, file) ?? ownerTagName(owner, file);
+    const tag = tagNameOf(owner, file);
     return tag === TABLE || (tag !== undefined && FORWARDS_FOOTER.has(tag));
   }
   return false;
 }
 
-/** The tag of an opening/self-closing element node reached from an attribute. */
-function ownerTagName(node: ts.Node, file: ts.SourceFile): string | undefined {
-  if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
-    return node.tagName.getText(file);
+/**
+ * The `ariaLabel` a pager element carries, when it is a literal.
+ *
+ * This is how an exempt pager is IDENTIFIED. A position in a count is not an
+ * identity: two pagers on one page can be prop-identical, so "the first
+ * detached one is allowed" excuses whichever pager happens to come first, and
+ * a change that deletes the exempt pager and detaches a different one leaves
+ * the count unmoved and every assertion green.
+ *
+ * A label is not merely a convenient key either — a pager announces itself to
+ * a screen reader with it, so two on one page need distinct ones regardless of
+ * this check.
+ */
+function ariaLabelOf(node: ts.Node, file: ts.SourceFile): string | undefined {
+  const attributes = ts.isJsxSelfClosingElement(node)
+    ? node.attributes
+    : ts.isJsxElement(node)
+      ? node.openingElement.attributes
+      : undefined;
+  if (!attributes) return undefined;
+  for (const property of attributes.properties) {
+    if (!ts.isJsxAttribute(property)) continue;
+    if (property.name.getText(file) !== "ariaLabel") continue;
+    const initializer = property.initializer;
+    if (initializer === undefined) return undefined;
+    if (ts.isStringLiteral(initializer)) return initializer.text;
+    // `ariaLabel={"..."}` is the same value with different punctuation, and a
+    // reader that accepted only one spelling would report the other as
+    // unlabelled -- which reads as a finding rather than as a missed one.
+    if (
+      ts.isJsxExpression(initializer) &&
+      initializer.expression !== undefined &&
+      ts.isStringLiteralLike(initializer.expression)
+    ) {
+      return initializer.expression.text;
+    }
+    return undefined;
   }
   return undefined;
 }
@@ -151,7 +210,7 @@ function detachedPagers(file: ts.SourceFile): ts.Node[] {
   const names = localPagerNames(file);
   const found: ts.Node[] = [];
   const visit = (node: ts.Node): void => {
-    const tag = tagNameOf(node, file);
+    const tag = isElementOccurrence(node) ? tagNameOf(node, file) : undefined;
     if (tag !== undefined && names.has(tag) && !insideTableFooter(node, file)) {
       found.push(node);
     }
@@ -164,7 +223,9 @@ function detachedPagers(file: ts.SourceFile): ts.Node[] {
 function rendersTable(file: ts.SourceFile): boolean {
   let found = false;
   const visit = (node: ts.Node): void => {
-    if (tagNameOf(node, file) === TABLE) found = true;
+    if (isElementOccurrence(node) && tagNameOf(node, file) === TABLE) {
+      found = true;
+    }
     ts.forEachChild(node, visit);
   };
   visit(file);
@@ -192,34 +253,40 @@ const sources = walk(adminSrc).filter(
  * precisely it.
  *
  * So every pager outside this list is checked, whether or not a table is
- * visible beside it. Each entry states what it paginates instead.
+ * visible beside it. Each entry NAMES the pagers it excuses, by their
+ * `ariaLabel`, and states what they paginate instead.
  */
-const NOT_A_TABLE_PAGER = new Map<string, { allowed: number; reason: string }>([
+const NOT_A_TABLE_PAGER = new Map<string, { pagers: string[]; reason: string }>(
   [
-    "packages/admin/src/components/shared/pagination/index.tsx",
-    {
-      allowed: 0,
-      // Listed at zero rather than omitted: this file is in the scan because it
-      // mentions Pagination, and saying it renders none is what stops a future
-      // reader adding a permission it never needed.
-      reason: "the Pagination component's own definition, which renders none",
-    },
-  ],
-  [
-    "packages/admin/src/components/features/media-library/index.tsx",
-    {
-      allowed: 1,
-      reason:
-        "the GRID view's pager; a grid has no row-versus-card view to place " +
-        "one for. The list view's pager goes into MediaListView as the table " +
-        "footer, and is NOT covered by this entry",
-    },
-  ],
-  [
-    "packages/admin/src/pages/dashboard/users/fields/index.tsx",
-    { allowed: 1, reason: "a card list of user fields, with no table" },
-  ],
-]);
+    [
+      "packages/admin/src/components/shared/pagination/index.tsx",
+      {
+        // Listed as empty rather than omitted: this file is in the scan because
+        // it mentions Pagination, and saying it renders none is what stops a
+        // future reader adding a permission it never needed.
+        pagers: [],
+        reason: "the Pagination component's own definition, which renders none",
+      },
+    ],
+    [
+      "packages/admin/src/components/features/media-library/index.tsx",
+      {
+        pagers: ["Media grid pagination"],
+        reason:
+          "the GRID view's pager; a grid has no row-versus-card view to place " +
+          "one for. The list view's pager goes into MediaListView as the table " +
+          "footer, and is NOT covered by this entry",
+      },
+    ],
+    [
+      "packages/admin/src/pages/dashboard/users/fields/index.tsx",
+      {
+        pagers: ["User fields pagination"],
+        reason: "a card list of user fields, with no table",
+      },
+    ],
+  ]
+);
 
 describe("list pagination", () => {
   it("finds the surfaces at all", () => {
@@ -292,48 +359,91 @@ describe("list pagination", () => {
         "const x = (<><DataTableView columns={c} rows={r} /><Shared.Pagination page={1} /></>);"
     );
     expect(detachedPagers(namespaced), "namespaced pager").toHaveLength(1);
+
+    // One pager written with a closing tag is ONE pager. The node carrying the
+    // tag and the element containing it are different nodes, and counting both
+    // would report a surplus over any exemption naming it once.
+    const withChildren = parse(
+      "control.tsx",
+      "const x = (<><DataTableView columns={c} rows={r} /><Pagination page={1}>{null}</Pagination></>);"
+    );
+    expect(detachedPagers(withChildren), "paired tags").toHaveLength(1);
+  });
+
+  it("reads a pager's label, and reports when there is none", () => {
+    // The exemption list matches on this value, so a reader that returned
+    // undefined for a spelling in use would report a labelled pager as
+    // unlabelled -- a finding against correct code, which is the failure mode
+    // that gets a guard deleted rather than fixed.
+    const bare = parse(
+      "c.tsx",
+      '<Pagination ariaLabel="Media grid pagination" />'
+    );
+    const braced = parse(
+      "c.tsx",
+      '<Pagination ariaLabel={"Media grid pagination"} />'
+    );
+    const none = parse("c.tsx", "<Pagination page={1} />");
+
+    for (const [file, expected] of [
+      [bare, "Media grid pagination"],
+      [braced, "Media grid pagination"],
+      [none, undefined],
+    ] as const) {
+      const [pager] = detachedPagers(file);
+      expect(pager).toBeDefined();
+      expect(pager && ariaLabelOf(pager, file)).toBe(expected);
+    }
+
+    // A computed label cannot be matched against the list, so it reads as
+    // absent rather than as some string that might accidentally match.
+    const computed = parse("c.tsx", "<Pagination ariaLabel={label} />");
+    const [dynamic] = detachedPagers(computed);
+    expect(dynamic && ariaLabelOf(dynamic, computed)).toBeUndefined();
   });
 
   it("renders every list pager inside its table", () => {
     // No table-presence gate. A pager whose table lives in a child component
     // is exactly the case worth catching, and it is indistinguishable from a
-    // page that legitimately paginates something else -- which is why the
-    // exemption list names those four rather than inferring them.
+    // page that legitimately paginates something else, so NOT_A_TABLE_PAGER
+    // names each exempt surface instead of inferring it.
     const detached: string[] = [];
     for (const path of sources) {
       const relativePath = relative(repo, path);
       const file = parse(path, readFileSync(path, "utf8"));
-      const pagers = detachedPagers(file);
-      // An exemption covers a COUNT, not a file. The media library holds two
-      // pagers -- a grid's, which is exempt, and a list's, which belongs in the
-      // table's footer -- so skipping the whole file would excuse the second
-      // along with the first, and moving the list pager back out would leave
-      // every assertion green. That is the regression this test exists for.
-      const exempt = NOT_A_TABLE_PAGER.get(relativePath)?.allowed ?? 0;
-      for (const pager of pagers.slice(exempt)) {
-        detached.push(`${relativePath}:${lineOf(pager, file)}`);
+      // An exemption names PAGERS, not a file and not a count. The media
+      // library holds two -- a grid's, which is exempt, and a list's, which
+      // belongs in the table's footer -- so excusing the file would excuse the
+      // second along with the first, and excusing "one of them" would excuse
+      // whichever came first even after the exempt one was deleted.
+      const exempt = new Set(NOT_A_TABLE_PAGER.get(relativePath)?.pagers ?? []);
+      for (const pager of detachedPagers(file)) {
+        const label = ariaLabelOf(pager, file);
+        if (label !== undefined && exempt.has(label)) continue;
+        detached.push(
+          `${relativePath}:${lineOf(pager, file)} (${label ?? "no ariaLabel"})`
+        );
       }
     }
 
     expect(
       detached.sort(),
-      `These render <Pagination> outside a \`footer\`. A detached pager is ` +
-        `mounted per view rather than once, and sits outside the responsive ` +
-        `decision only DataTableView can make, so it lands in the wrong place ` +
-        `on one of the two layouts. Pass it as DataTableView's \`footer\`; if ` +
-        `this page paginates something that is not a table, add it to ` +
+      `These render <Pagination> outside a \`footer\`. A detached pager sits ` +
+        `outside the responsive decision only DataTableView can make, so it ` +
+        `lands in the wrong place on one of the two layouts. Pass it as ` +
+        `DataTableView's \`footer\`; if this page paginates something that is ` +
+        `not a table, give the pager an ariaLabel and add it to ` +
         `NOT_A_TABLE_PAGER with what it paginates:\n${detached.join("\n")}`
     ).toEqual([]);
   });
 
   it("keeps the exemption list honest", () => {
     // An entry that no longer exists is a standing permission for the thing
-    // this check exists to prevent. Two of the original four entries carried
-    // reasons that were simply untrue -- one claimed a component passed its
-    // pager to `footer` when it rendered it as a sibling -- and a per-entry
-    // escape hatch in this loop is what stopped that being caught here. There
-    // is no escape hatch now: every exempt path is checked the same way.
-    for (const [path, { allowed, reason }] of NOT_A_TABLE_PAGER) {
+    // this check exists to prevent, and a stated reason can stop being true.
+    // Every exempt path is therefore checked the same way: it must still
+    // render a pager, must not render a DataTableView, and its detached pagers
+    // must be EXACTLY the ones the entry names.
+    for (const [path, { pagers, reason }] of NOT_A_TABLE_PAGER) {
       const full = resolve(repo, path);
       expect(
         sources.includes(full),
@@ -344,14 +454,17 @@ describe("list pagination", () => {
         rendersTable(file),
         `${path} now renders a DataTableView, so "${reason}" no longer holds`
       ).toBe(false);
-      // The count is asserted EXACTLY, not as a ceiling. A file that drops one
-      // of its exempt pagers has an entry claiming more than exists, which is
-      // spare permission for the next one somebody adds.
+      // Matched by name and asserted as a SET, not counted. A file that drops
+      // its exempt pager and detaches a different one holds the count still,
+      // so a count would go on excusing the replacement; the names do not.
+      const found = detachedPagers(file)
+        .map(pager => ariaLabelOf(pager, file) ?? "no ariaLabel")
+        .sort();
       expect(
-        detachedPagers(file).length,
-        `${path} has ${detachedPagers(file).length} detached pagers but is ` +
-          `exempted for ${allowed} (${reason})`
-      ).toBe(allowed);
+        found,
+        `${path} renders detached pagers [${found.join(", ")}] but is ` +
+          `exempted for [${pagers.join(", ")}] (${reason})`
+      ).toEqual([...pagers].sort());
     }
   });
 

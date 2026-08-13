@@ -134,6 +134,16 @@ function ImageSizesContent({
     setPage(0);
   }, [search]);
 
+  // A larger page size makes the current page number point further into the
+  // list than the list reaches, and the slice below then returns nothing --
+  // leaving the empty message on a list that has rows. The row the user was
+  // looking at is on the first page under any page size, so that is where
+  // resizing lands them.
+  const handlePageSizeChange = React.useCallback((size: number) => {
+    setPageSize(size);
+    setPage(0);
+  }, []);
+
   // Filtered sizes based on search
   const filteredSizes = React.useMemo(() => {
     if (!search.trim()) return sizes;
@@ -320,7 +330,7 @@ function ImageSizesContent({
               totalItems={filteredSizes.length}
               pageSize={pageSize}
               onPageChange={setPage}
-              onPageSizeChange={setPageSize}
+              onPageSizeChange={handlePageSizeChange}
               isLoading={isLoading}
             />
           ) : undefined

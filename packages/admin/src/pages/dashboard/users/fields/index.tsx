@@ -815,6 +815,7 @@ function UserFieldsTable() {
             onPageChange={setPage}
             onPageSizeChange={handlePageSizeChange}
             totalItems={totalItems + filteredStaticFields.length}
+            ariaLabel="User fields pagination"
           />
           {/* </div> */}
         </div>
