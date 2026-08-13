@@ -695,6 +695,32 @@ export function generatePnpmWorkspaceYaml(): string {
   );
 }
 
+/**
+ * Generate the `.yarnrc.yml` for a scaffolded project.
+ *
+ * Yarn Berry defaults to its Plug'n'Play linker, under which there is no
+ * physical `node_modules` directory at all. The root layout loads its fonts
+ * with `next/font/local` from a path INTO `node_modules`, and `next/font/local`
+ * reads that path off disk rather than through the module resolver — so under
+ * PnP the file is simply not there and `next build` fails on a dependency the
+ * manifest correctly declares.
+ *
+ * Yarn 1 already uses a node-modules layout and ignores this key; npm, pnpm and
+ * bun ignore the file entirely, so it ships in every scaffold for the same
+ * reason `pnpm-workspace.yaml` does.
+ */
+export function generateYarnRcYml(): string {
+  return (
+    "# Yarn Berry defaults to Plug'n'Play, which has no physical node_modules.\n" +
+    "# The root layout loads its fonts with `next/font/local` from a path inside\n" +
+    "# node_modules, and that path is read off disk rather than resolved, so a\n" +
+    "# PnP install has nothing for it to open.\n" +
+    "#\n" +
+    "# Ignored by npm, pnpm, bun, and Yarn 1.\n" +
+    "nodeLinker: node-modules\n"
+  );
+}
+
 // ============================================================
 // Copy Template (Main Orchestrator)
 // ============================================================
@@ -904,6 +930,11 @@ export async function copyTemplate(
     generatePnpmWorkspaceYaml(),
     "utf-8"
   );
+  await fs.writeFile(
+    path.join(targetDir, ".yarnrc.yml"),
+    generateYarnRcYml(),
+    "utf-8"
+  );
 
   // Step 7: Create SQLite data directory if needed
   // SQLite stores its database file at ./data/nextly.db and the parent
@@ -978,6 +1009,11 @@ async function copyPluginTemplate(opts: {
   await fs.writeFile(
     path.join(targetDir, "pnpm-workspace.yaml"),
     generatePnpmWorkspaceYaml(),
+    "utf-8"
+  );
+  await fs.writeFile(
+    path.join(targetDir, ".yarnrc.yml"),
+    generateYarnRcYml(),
     "utf-8"
   );
 
