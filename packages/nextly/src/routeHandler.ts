@@ -1276,7 +1276,14 @@ async function handleAdminMetaRequest(): Promise<Response> {
   // Collect plugin metadata from registered plugins with host override
   // resolution + contributes.admin menu/pages/settings folding (D20/D21/D49).
   const pluginOverrides = config?.admin?.pluginOverrides;
-  const plugins = buildPluginAdminMeta(config?.plugins ?? [], pluginOverrides);
+  // The config is forwarded because the permission fold reads it: whether a
+  // `publish` declaration is the plugin's own or one the seeder owns depends on
+  // whether its resource names a configured collection or single.
+  const plugins = buildPluginAdminMeta(
+    config?.plugins ?? [],
+    pluginOverrides,
+    config ?? {}
+  );
   if (plugins.length > 0) {
     payload.plugins = plugins;
   }

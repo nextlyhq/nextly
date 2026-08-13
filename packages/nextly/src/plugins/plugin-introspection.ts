@@ -84,7 +84,10 @@ export function collectPluginInfo(
   // Admin menu/page/settings (host overrides only affect placement/appearance,
   // not these counts, so we fold with no overrides).
   const adminMetaByName = new Map(
-    buildPluginAdminMeta(resolved, undefined).map(meta => [meta.name, meta])
+    buildPluginAdminMeta(resolved, undefined, config).map(meta => [
+      meta.name,
+      meta,
+    ])
   );
 
   return resolved.map(plugin => {

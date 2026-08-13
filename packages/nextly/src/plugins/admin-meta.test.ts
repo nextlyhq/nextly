@@ -35,7 +35,8 @@ describe("buildPluginAdminMeta", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      {}
     );
     expect(meta[0].fieldTypes?.[0]).toMatchObject({
       type: "page-builder",
@@ -65,7 +66,8 @@ describe("buildPluginAdminMeta", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      {}
     );
     expect(meta[0].fieldTypes?.[0]).toEqual({
       type: "rating",
@@ -91,7 +93,8 @@ describe("buildPluginAdminMeta", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      {}
     );
     expect(meta[0].fieldTypes?.[0]).toEqual({
       type: "rating",
@@ -110,7 +113,8 @@ describe("buildPluginAdminMeta", () => {
           contributes: { admin: { schemaBuilderSlot: "@acme/p/admin#Toggle" } },
         },
       ]),
-      undefined
+      undefined,
+      {}
     );
     expect(enabled[0].schemaBuilderSlot).toBe("@acme/p/admin#Toggle");
 
@@ -122,7 +126,8 @@ describe("buildPluginAdminMeta", () => {
           contributes: { admin: { schemaBuilderSlot: "@acme/p/admin#Toggle" } },
         },
       ]),
-      undefined
+      undefined,
+      {}
     );
     expect(disabled[0].schemaBuilderSlot).toBeUndefined();
   });
@@ -135,7 +140,8 @@ describe("buildPluginAdminMeta", () => {
           contributes: { admin: { entryFormToolbarSlot: "@acme/p/admin#Bar" } },
         },
       ]),
-      undefined
+      undefined,
+      {}
     );
     expect(enabled[0].entryFormToolbarSlot).toBe("@acme/p/admin#Bar");
 
@@ -147,7 +153,8 @@ describe("buildPluginAdminMeta", () => {
           contributes: { admin: { entryFormToolbarSlot: "@acme/p/admin#Bar" } },
         },
       ]),
-      undefined
+      undefined,
+      {}
     );
     expect(disabled[0].entryFormToolbarSlot).toBeUndefined();
   });
@@ -179,7 +186,8 @@ describe("buildPluginAdminMeta", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      {}
     );
 
     expect(meta[0].menu).toEqual([
@@ -218,7 +226,8 @@ describe("buildPluginAdminMeta", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      {}
     );
     expect(meta[0].headerSlot).toBe("@acme/p/admin#HeaderBadge");
     expect(meta[0].widgets?.[0]).toMatchObject({
@@ -245,7 +254,8 @@ describe("buildPluginAdminMeta", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      {}
     );
     expect(meta[0].header).toEqual({
       slot: "@acme/p/admin#Publish",
@@ -264,7 +274,8 @@ describe("buildPluginAdminMeta", () => {
           contributes: { admin: { headerSlot: "@acme/p/admin#Badge" } },
         },
       ]),
-      undefined
+      undefined,
+      {}
     );
     expect(meta[0].header?.slot).toBe("@acme/p/admin#Badge");
     expect(meta[0].headerSlot).toBe("@acme/p/admin#Badge");
@@ -283,7 +294,8 @@ describe("buildPluginAdminMeta", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      {}
     );
     expect(meta[0].header).toBeUndefined();
     expect(meta[0].headerSlot).toBeUndefined();
@@ -303,7 +315,8 @@ describe("buildPluginAdminMeta", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      {}
     );
     expect(meta[0].headerSlot).toBeUndefined();
     expect(meta[0].widgets).toBeUndefined();
@@ -315,7 +328,8 @@ describe("buildPluginAdminMeta", () => {
     ];
     const enabled = buildPluginAdminMeta(
       asPlugins([{ ...base, contributes: { fieldTypes } }]),
-      undefined
+      undefined,
+      {}
     );
     expect(enabled[0].fieldTypes).toEqual([
       { type: "rating", component: "@acme/p/admin#Rating", storage: "number" },
@@ -325,7 +339,8 @@ describe("buildPluginAdminMeta", () => {
     // can still render fields of retained collections.
     const disabled = buildPluginAdminMeta(
       asPlugins([{ ...base, enabled: false, contributes: { fieldTypes } }]),
-      undefined
+      undefined,
+      {}
     );
     expect(disabled[0].fieldTypes).toEqual([
       { type: "rating", component: "@acme/p/admin#Rating", storage: "number" },
@@ -343,7 +358,8 @@ describe("buildPluginAdminMeta", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      {}
     );
     // The plugin entry still exists (its schema still applies), but its
     // behavioral admin UI (menu/pages/settings) is skipped per D49.
@@ -366,7 +382,8 @@ describe("buildPluginAdminMeta", () => {
           contributes: { collections: [{ slug: "forms" }] },
         },
       ]),
-      { "acme-p": { order: 5, appearance: { badge: "Beta" } } }
+      { "acme-p": { order: 5, appearance: { badge: "Beta" } } },
+      {}
     );
 
     expect(meta[0].placement).toBe("users");
@@ -380,7 +397,7 @@ describe("buildPluginAdminMeta", () => {
   });
 
   it("defaults placement to 'plugins' and has no admin keys when none declared", () => {
-    const meta = buildPluginAdminMeta(asPlugins([{ ...base }]), undefined);
+    const meta = buildPluginAdminMeta(asPlugins([{ ...base }]), undefined, {});
     expect(meta[0].placement).toBe("plugins");
     expect(meta[0].menu).toBeUndefined();
     expect(meta[0].pages).toBeUndefined();
@@ -401,7 +418,8 @@ describe("buildPluginAdminMeta", () => {
           tags: ["forms", "email"],
         },
       ]),
-      undefined
+      undefined,
+      {}
     );
     expect(meta[0]).toMatchObject({
       author: "Acme Inc.",
@@ -419,19 +437,21 @@ describe("buildPluginAdminMeta", () => {
       asPlugins([
         { ...base, enabled: false, author: "Acme Inc.", license: "MIT" },
       ]),
-      undefined
+      undefined,
+      {}
     );
     expect(meta[0].author).toBe("Acme Inc.");
     expect(meta[0].license).toBe("MIT");
   });
 
   it("serializes the enabled state explicitly", () => {
-    const on = buildPluginAdminMeta(asPlugins([{ ...base }]), undefined);
+    const on = buildPluginAdminMeta(asPlugins([{ ...base }]), undefined, {});
     expect(on[0].enabled).toBe(true);
 
     const off = buildPluginAdminMeta(
       asPlugins([{ ...base, enabled: false }]),
-      undefined
+      undefined,
+      {}
     );
     expect(off[0].enabled).toBe(false);
   });
@@ -439,7 +459,8 @@ describe("buildPluginAdminMeta", () => {
   it("serializes dependsOn ranges for the detail page", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([{ ...base, dependsOn: { "@acme/core": "^1.2.0" } }]),
-      undefined
+      undefined,
+      {}
     );
     expect(meta[0].dependsOn).toEqual({ "@acme/core": "^1.2.0" });
   });
@@ -463,7 +484,8 @@ describe("buildPluginAdminMeta", () => {
     };
     const enabled = buildPluginAdminMeta(
       asPlugins([{ ...base, contributes }]),
-      undefined
+      undefined,
+      {}
     );
     expect(enabled[0].permissions).toEqual([
       {
@@ -476,13 +498,53 @@ describe("buildPluginAdminMeta", () => {
 
     const disabled = buildPluginAdminMeta(
       asPlugins([{ ...base, enabled: false, contributes }]),
-      undefined
+      undefined,
+      {}
     );
     // Identical to the enabled case. The separating assertion for the split is
     // below: routes DO disappear when disabled, so this is not simply "the
     // enabled flag changes nothing".
     expect(disabled[0].permissions).toEqual(enabled[0].permissions);
     expect(disabled[0].permissions).toHaveLength(1);
+  });
+
+  /**
+   * A `publish` declaration whose resource is a configured collection is one
+   * the seeder now owns: the permission fold drops it and the row it creates
+   * carries no owner. Reading the declaration instead would put this plugin's
+   * label and danger flag on a permission the roles data does not attribute to
+   * it, and the page would explain a grant that is not the plugin's to explain.
+   *
+   * The positive control is in the same call. `export` is a genuine custom
+   * permission and survives, so the assertion cannot pass by the whole list
+   * having been dropped.
+   */
+  it("omits a declaration the seeder owns, keeping the plugin's own", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: {
+            permissions: [
+              { action: "publish", resource: "posts", label: "Publish posts" },
+              { action: "export", resource: "submissions" },
+            ],
+          },
+        },
+      ]),
+      undefined,
+      { collections: [{ slug: "posts" }] }
+    );
+
+    expect(meta[0].permissions).toEqual([
+      // Named from the action and resource, because this declaration carried no
+      // label — the same name the seeded row gets.
+      {
+        action: "export",
+        resource: "submissions",
+        label: "Export Submissions",
+      },
+    ]);
   });
 
   it("summarizes declared routes (method + path only) for enabled plugins only", () => {
@@ -498,7 +560,8 @@ describe("buildPluginAdminMeta", () => {
     };
     const enabled = buildPluginAdminMeta(
       asPlugins([{ ...base, contributes }]),
-      undefined
+      undefined,
+      {}
     );
     // `fullPath` travels too: it is the namespace the dispatcher mounts the
     // route at, derived from the raw package name, and the admin renders it
@@ -513,7 +576,8 @@ describe("buildPluginAdminMeta", () => {
 
     const disabled = buildPluginAdminMeta(
       asPlugins([{ ...base, enabled: false, contributes }]),
-      undefined
+      undefined,
+      {}
     );
     expect(disabled[0].routes).toBeUndefined();
   });
@@ -530,7 +594,8 @@ describe("buildPluginAdminMeta", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      {}
     );
     expect(meta[0].collections).toEqual(["forms"]);
     expect(meta[0].singles).toEqual(["form-settings"]);
@@ -550,7 +615,8 @@ describe("buildPluginAdminMeta — clientConfig", () => {
       withConfig({
         remotePatterns: [{ protocol: "https", hostname: "a.example" }],
       }),
-      undefined
+      undefined,
+      {}
     );
     expect(meta[0]?.clientConfig).toEqual({
       remotePatterns: [{ protocol: "https", hostname: "a.example" }],
@@ -573,7 +639,8 @@ describe("buildPluginAdminMeta — clientConfig", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      {}
     );
     expect(meta[0]?.enabled).toBe(false);
     expect(meta[0]?.clientConfig).toEqual({ a: 1 });
@@ -598,7 +665,7 @@ describe("buildPluginAdminMeta — clientConfig", () => {
       // live in the log context, which is where a boot failure is read.
       let thrown: unknown;
       try {
-        buildPluginAdminMeta(withConfig(bad), undefined);
+        buildPluginAdminMeta(withConfig(bad), undefined, {});
       } catch (error) {
         thrown = error;
       }
@@ -619,7 +686,7 @@ describe("buildPluginAdminMeta — clientConfig", () => {
     // client receives is missing a key the plugin wrote. That is a silent
     // shape change, not a harmless omission.
     expect(() =>
-      buildPluginAdminMeta(withConfig({ a: 1, gone: undefined }), undefined)
+      buildPluginAdminMeta(withConfig({ a: 1, gone: undefined }), undefined, {})
     ).toThrow(NextlyError);
   });
 
@@ -632,16 +699,16 @@ describe("buildPluginAdminMeta — clientConfig", () => {
       arr: [1, "two", { three: 3 }],
       nested: { deep: { deeper: [true] } },
     };
-    const meta = buildPluginAdminMeta(withConfig(config), undefined);
+    const meta = buildPluginAdminMeta(withConfig(config), undefined, {});
     expect(meta[0]?.clientConfig).toEqual(config);
   });
 
   it("survives a cycle by refusing rather than by hanging", () => {
     const cyclic: Record<string, unknown> = { a: 1 };
     cyclic.self = cyclic;
-    expect(() => buildPluginAdminMeta(withConfig(cyclic), undefined)).toThrow(
-      NextlyError
-    );
+    expect(() =>
+      buildPluginAdminMeta(withConfig(cyclic), undefined, {})
+    ).toThrow(NextlyError);
   });
 });
 
@@ -657,7 +724,7 @@ describe("buildPluginAdminMeta — clientConfig runtime shapes", () => {
     // it — and every reader downstream assumes an object it can destructure.
     for (const bad of [null, [1, 2], "a string", 42, true]) {
       expect(
-        () => buildPluginAdminMeta(withConfig(bad), undefined),
+        () => buildPluginAdminMeta(withConfig(bad), undefined, {}),
         JSON.stringify(bad)
       ).toThrow(NextlyError);
     }
@@ -667,7 +734,7 @@ describe("buildPluginAdminMeta — clientConfig runtime shapes", () => {
     // Observable in the browser as `1 / value`, so it is a mangled copy like
     // any other rather than a rounding detail.
     expect(() =>
-      buildPluginAdminMeta(withConfig({ n: -0 }), undefined)
+      buildPluginAdminMeta(withConfig({ n: -0 }), undefined, {})
     ).toThrow(NextlyError);
   });
 
@@ -683,7 +750,7 @@ describe("buildPluginAdminMeta — clientConfig runtime shapes", () => {
     };
     let thrown: unknown;
     try {
-      buildPluginAdminMeta(withConfig(config), undefined);
+      buildPluginAdminMeta(withConfig(config), undefined, {});
     } catch (error) {
       thrown = error;
     }
@@ -696,7 +763,7 @@ describe("buildPluginAdminMeta — clientConfig runtime shapes", () => {
   it("resolves its status from the canonical table, not an inline literal", () => {
     let thrown: unknown;
     try {
-      buildPluginAdminMeta(withConfig({ when: new Date() }), undefined);
+      buildPluginAdminMeta(withConfig({ when: new Date() }), undefined, {});
     } catch (error) {
       thrown = error;
     }
@@ -728,7 +795,8 @@ describe("dormant routes", () => {
   it("reports a disabled plugin's routes as dormant, not active", () => {
     const [meta] = buildPluginAdminMeta(
       [{ ...declaring, enabled: false } as PluginDefinition],
-      undefined
+      undefined,
+      {}
     );
 
     expect(meta.whenEnabled?.routes).toEqual([
@@ -746,7 +814,8 @@ describe("dormant routes", () => {
   it("never presents permissions as pending on being enabled", () => {
     const [meta] = buildPluginAdminMeta(
       [{ ...declaring, enabled: false } as PluginDefinition],
-      undefined
+      undefined,
+      {}
     );
 
     expect(Object.keys(meta.whenEnabled ?? {})).toEqual(["routes"]);
@@ -755,7 +824,8 @@ describe("dormant routes", () => {
   it("reports an enabled plugin's routes as active, not dormant", () => {
     const [meta] = buildPluginAdminMeta(
       [{ ...declaring, enabled: true } as PluginDefinition],
-      undefined
+      undefined,
+      {}
     );
 
     expect(meta.routes).toEqual([
@@ -769,7 +839,8 @@ describe("dormant routes", () => {
     enabled => {
       const [meta] = buildPluginAdminMeta(
         [{ ...declaring, enabled } as PluginDefinition],
-        undefined
+        undefined,
+        {}
       );
 
       const active = Boolean(meta.routes);
@@ -795,7 +866,8 @@ describe("dormant routes", () => {
           contributes: { routes: [{ method: "GET", path: "export" }] },
         } as unknown as PluginDefinition,
       ],
-      undefined
+      undefined,
+      {}
     );
 
     expect(meta.whenEnabled).toBeUndefined();
@@ -822,7 +894,8 @@ describe("dormant routes", () => {
           },
         } as unknown as PluginDefinition,
       ],
-      undefined
+      undefined,
+      {}
     );
 
     expect(meta.whenEnabled).toBeUndefined();
@@ -837,7 +910,8 @@ describe("dormant routes", () => {
           enabled: false,
         } as PluginDefinition,
       ],
-      undefined
+      undefined,
+      {}
     );
 
     expect(meta.whenEnabled).toBeUndefined();

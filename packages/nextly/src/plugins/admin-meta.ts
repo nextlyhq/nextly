@@ -19,6 +19,11 @@ import type {
   PluginMenuItem,
 } from "./admin-contributions";
 import type { FieldSurface } from "./contributions";
+import {
+  type CollectedPermission,
+  collectCustomPermissions,
+  type PermissionConfigSource,
+} from "./permissions/collect-permissions";
 import { pluginCollectionSlugs } from "./plugin-admin-meta";
 import type {
   PluginAdminAppearance,
@@ -248,8 +253,24 @@ function mountableRoutes(
 
 export function buildPluginAdminMeta(
   plugins: PluginDefinition[],
-  pluginOverrides: Record<string, PluginOverride> | undefined
+  pluginOverrides: Record<string, PluginOverride> | undefined,
+  config: PermissionConfigSource
 ): PluginAdminMeta[] {
+  // The permissions that actually become rows, indexed by the plugin that owns
+  // them. Folded once for the whole list rather than read off each plugin's own
+  // declaration, because a declaration and a seeded permission are not the same
+  // set: `collectCustomPermissions` drops a `publish`/`unpublish` declaration
+  // whose resource is a collection or single, since the seeder emits that slug
+  // itself and keeps the row ownerless. Reading the declaration instead would
+  // put the plugin's label and danger flag on a permission no plugin owns, and
+  // the page would describe a grant the roles data does not have.
+  const ownedPermissions = new Map<string, CollectedPermission[]>();
+  for (const permission of collectCustomPermissions(config, plugins)) {
+    const owned = ownedPermissions.get(permission.owner);
+    if (owned) owned.push(permission);
+    else ownedPermissions.set(permission.owner, [permission]);
+  }
+
   // Here, and not only at boot, because this is the one place a plugin list
   // becomes ADDRESSES: the slug below is the admin's URL for the plugin and
   // the key its host override is read by. Two boot paths do not reach it —
@@ -360,12 +381,16 @@ export function buildPluginAdminMeta(
     // disabled plugins, so a disabled plugin serves none. Those move to
     // `whenEnabled`, and the `if/else` is what stops a route being reported as
     // both served and pending.
-    const permissions = plugin.contributes?.permissions;
+    const permissions = ownedPermissions.get(plugin.name);
     if (permissions && permissions.length > 0) {
       meta.permissions = permissions.map(p => ({
         action: p.action,
         resource: p.resource,
-        ...(p.label ? { label: p.label } : {}),
+        // The name the row carries, which the collector already resolved from
+        // the declared label or composed from the action and resource. Sending
+        // it under `label` keeps this page and the roles UI naming the same
+        // permission the same way.
+        label: p.name,
         ...(p.description ? { description: p.description } : {}),
         ...(p.danger ? { danger: p.danger } : {}),
       }));
