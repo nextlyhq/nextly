@@ -1307,6 +1307,37 @@ describe("a preview that meets a writer mid-run", () => {
     });
   });
 
+  // 🔴 The ROLLBACK mirror, and the direction where getting it wrong costs most. During a `down`
+  // run the registry row still says `fg_hero` while MySQL may already have committed the companion
+  // back to `comp_hero_locales`. `retargetName` only maps legacy names FORWARD, so it answers
+  // `null` here — the reverse cannot be derived at all, because a prefix rule going down would
+  // rename an author's own `fg_hero` to `comp_hero`. Only the recorded plan distinguishes a name
+  // this migration made from one that was always there.
+  it("finds a companion reverted ahead of its registry row", async () => {
+    const { adapter } = createRunWorld({
+      // Row still migrated, companion already back — the MySQL window during a rollback.
+      tables: [TARGET_REGISTRY, "fg_hero", "comp_hero_locales"],
+      registryRows: [
+        { id: "1", slug: "hero", table_name: "fg_hero", localized: true },
+      ],
+    });
+
+    const rows = await readRegistryRows(adapter, "postgresql", PRESERVING, [
+      { kind: "table", from: "comp_hero", to: "fg_hero" },
+    ]);
+
+    expect(rows).toEqual([
+      {
+        id: "1",
+        slug: "hero",
+        tableName: "fg_hero",
+        // Derived forward only, this is `false`: the plan then drops the companion and the
+        // recorded-hash check strands the rollback.
+        hasCompanion: true,
+      },
+    ]);
+  });
+
   // 🔴 The retry decision and the reported lock must come from ONE observation. Reducing the
   // recheck to a boolean was enough to decide and not enough to report: the outcome carried the
   // session's opening `not-held` beside a `basis` saying contention, so the single field an
