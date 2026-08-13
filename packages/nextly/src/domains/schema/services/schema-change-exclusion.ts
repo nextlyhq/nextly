@@ -10,14 +10,27 @@
  *
  * ## Why the SERVICE is the right depth
  *
- * Each entity is reachable through three transports — the REST dispatcher, the route handlers and
- * the Direct API — and they all converge on the same service method. An exclusion taken at the
- * request layer would have to be repeated per transport and would miss any transport added later;
- * taken here it covers all of them at once.
- *
- * The depth also has to be where the DDL and the registry row are written TOGETHER. A lock acquired
+ * The depth has to be where the DDL and the registry row are written TOGETHER. A lock acquired
  * inside the registry service would be taken after the tables had already changed, which samples
- * the state rather than holding it.
+ * the state rather than holding it. Taken at the request layer it would have to be restated for
+ * every transport that reaches the same operation.
+ *
+ * ## What this depth does NOT cover, and why that is not a reason to move it
+ *
+ * The transports do not all converge here yet, so wrapping a service method does not protect every
+ * way of invoking it. `shared/builder-access.ts` enumerates the schema-changing operations in
+ * `BUILDER_METHODS`; the exclusion reaches the ones whose transports already route through a
+ * metadata service, and not the rest. Two shapes are open today:
+ *
+ * - a dispatcher handler that does the schema work itself instead of calling a service, which is
+ *   how the Admin's confirmed apply saves both singles and field groups;
+ * - a standalone route that writes the registry row directly, which changes what describes storage
+ *   without touching storage, so nothing about it is visible in DDL.
+ *
+ * Convergence is its own work, and until it lands an exclusion here is incomplete rather than
+ * wrong: it is taken at the only depth where the two halves of a schema change are written
+ * together, and the uncovered paths need to REACH that depth rather than to grow a second lock
+ * site each. Counting what is covered means reading `BUILDER_METHODS`, not this comment.
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
