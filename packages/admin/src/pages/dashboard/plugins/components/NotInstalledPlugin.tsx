@@ -6,6 +6,7 @@ import { useState } from "react";
 
 import { Check, Copy } from "@admin/components/icons";
 import { PluginIcon } from "@admin/components/shared/plugin-icon";
+import { adminVersion } from "@admin/lib/admin-version";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
 import {
   PACKAGE_MANAGERS,
@@ -146,7 +147,7 @@ export function NotInstalledPlugin({
             nobody can paste anywhere. */}
         <CopyLine
           label="Install command"
-          value={installCommand(plugin.id, manager)}
+          value={installCommand(plugin.id, manager, adminVersion())}
         />
         <CopyLine label="Import statement" value={importStatement(plugin)} />
         <CopyLine

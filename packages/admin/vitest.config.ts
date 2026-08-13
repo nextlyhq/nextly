@@ -1,9 +1,20 @@
+import { createRequire } from "module";
+
 import react from "@vitejs/plugin-react";
 import tsconfigPaths from "vite-tsconfig-paths";
 import { defineConfig } from "vitest/config";
 
+// Mirror the tsup `define` so `adminVersion()` resolves under test.
+const require = createRequire(import.meta.url);
+const { version: adminVersion } = require("./package.json") as {
+  version: string;
+};
+
 export default defineConfig({
   plugins: [react(), tsconfigPaths()],
+  define: {
+    __NEXTLY_ADMIN_VERSION__: JSON.stringify(adminVersion),
+  },
   test: {
     name: "admin",
     globals: true,

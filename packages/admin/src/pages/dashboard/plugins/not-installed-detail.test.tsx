@@ -10,6 +10,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AdminBranding } from "@admin/types/branding";
 
+/**
+ * The install line, as a pattern shared by the assertions that require it and
+ * the ones that require its absence.
+ *
+ * A literal `"pnpm add @nextlyhq/plugin-seo"` would match nothing now that the
+ * command is pinned, so every `queryByText(...).toBeNull()` below would pass
+ * on a page that rendered the install block in full. Matching the version
+ * loosely keeps the absence assertions answering the question they ask, while
+ * `install-command.test.ts` pins the exact strings.
+ */
+const INSTALL_COMMAND = /^pnpm add @nextlyhq\/plugin-seo@\d/;
+
 let mockBranding: AdminBranding = { plugins: [] } as unknown as AdminBranding;
 let mockBrandingStatus = { isPending: false, isError: false };
 
@@ -60,9 +72,7 @@ describe("plugin detail, not installed", () => {
   it("offers the install command, the import, and the array entry", async () => {
     renderDetail("nextlyhq-plugin-seo");
 
-    expect(
-      await screen.findByText("pnpm add @nextlyhq/plugin-seo")
-    ).toBeInTheDocument();
+    expect(await screen.findByText(INSTALL_COMMAND)).toBeInTheDocument();
     expect(
       screen.getByText('import { seoPlugin } from "@nextlyhq/plugin-seo";')
     ).toBeInTheDocument();
@@ -81,7 +91,7 @@ describe("plugin detail, not installed", () => {
     renderDetail("nextlyhq-plugin-seo");
 
     expect(await screen.findByRole("status")).toBeInTheDocument();
-    expect(screen.queryByText("pnpm add @nextlyhq/plugin-seo")).toBeNull();
+    expect(screen.queryByText(INSTALL_COMMAND)).toBeNull();
     expect(screen.queryByText("Plugin not found")).toBeNull();
   });
 
@@ -94,7 +104,7 @@ describe("plugin detail, not installed", () => {
     expect(
       await screen.findByText("Could not load your installed plugins")
     ).toBeInTheDocument();
-    expect(screen.queryByText("pnpm add @nextlyhq/plugin-seo")).toBeNull();
+    expect(screen.queryByText(INSTALL_COMMAND)).toBeNull();
   });
 
   /**
@@ -129,6 +139,6 @@ describe("plugin detail, not installed", () => {
     renderDetail("nextlyhq-plugin-seo");
 
     expect(await screen.findByText("v1.0.0")).toBeInTheDocument();
-    expect(screen.queryByText("pnpm add @nextlyhq/plugin-seo")).toBeNull();
+    expect(screen.queryByText(INSTALL_COMMAND)).toBeNull();
   });
 });

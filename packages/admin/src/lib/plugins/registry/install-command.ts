@@ -30,17 +30,35 @@ const ADD_SUBCOMMAND: Record<PackageManager, string> = {
 };
 
 /**
- * `installCommand("@acme/p")` → `"pnpm add @acme/p"`.
+ * `installCommand("@acme/p", "pnpm", "1.2.3")` → `"pnpm add @acme/p@1.2.3"`.
  *
- * Defaults to pnpm, which is what Nextly's own docs and scaffolder use, while
- * staying answerable for the other three so a reader on npm is not handed a
- * command their project cannot run.
+ * Answerable for all four managers, so a reader on npm is not handed a command
+ * their project cannot run.
+ *
+ * Pinned to the running admin's release, and that is not a nicety. Every
+ * first-party plugin declares an EXACT `nextly` peer for its own release, so
+ * an unpinned install on a project that is not on the newest one resolves a
+ * plugin whose peer names a core the project does not have: npm rejects it,
+ * and a manager that installs it anyway produces a plugin core refuses to load
+ * at startup. Admin's own version is the release the project is on, since the
+ * whole train publishes in lockstep and this bundle came from that install.
+ *
+ * Unpinned when `version` is undefined — a build that did not inject the
+ * constant. Naming a version that may not exist would be a worse answer than
+ * declining to name one.
+ *
+ * `version` is required rather than defaulted to `adminVersion()`, so a caller
+ * has to answer the question instead of inheriting an answer. A default would
+ * also make the unpinned branch unreachable from a test, since passing
+ * `undefined` re-triggers the default.
  */
 export function installCommand(
   packageName: string,
-  manager: PackageManager = "pnpm"
+  manager: PackageManager,
+  version: string | undefined
 ): string {
-  return `${manager} ${ADD_SUBCOMMAND[manager]} ${packageName}`;
+  const specifier = version ? `${packageName}@${version}` : packageName;
+  return `${manager} ${ADD_SUBCOMMAND[manager]} ${specifier}`;
 }
 
 /**
