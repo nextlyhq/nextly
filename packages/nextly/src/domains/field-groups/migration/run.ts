@@ -71,6 +71,7 @@ import {
 } from "./refusal-kind";
 import { runMigrationSteps } from "./runner";
 import {
+  isMissingTable,
   withMigrationSession,
   type LockObservation,
   type MigrationDialect,
@@ -286,6 +287,39 @@ export async function runFieldGroupMigration(
   // read of one.
   const attempts = dryRun ? DRY_RUN_RECONCILE_ATTEMPTS : 1;
 
+  /**
+   * What the last attempt could learn about the lock, for the retry decision.
+   *
+   * 🔴 Recorded here because the decision needs two facts that live apart: the refusal escapes to
+   * the loop below, while the lock was observed inside the session. Written first thing on every
+   * attempt, so it always describes the attempt whose refusal is being judged.
+   */
+  let observedLock: LockObservation = {
+    kind: "unknown",
+    reason: "no attempt has read the lock yet",
+  };
+
+  /**
+   * Whether a writer is demonstrably present.
+   *
+   * 🔴 The retry requires this, and a torn-SHAPED refusal is not enough on its own. Several of
+   * these refusals cannot tell a torn read from a permanent one by reading: "an object using the
+   * migrated storage name exists but no recorded progress accounts for it" is raised both by a
+   * writer caught mid-rename AND by a table belonging to someone else that happens to sit on the
+   * name this migration wants. Retrying the second and then reporting it as contention would
+   * describe a database that is standing still as one that is moving, and bury a real storage
+   * conflict — the failure this whole path exists to remove, reintroduced one level up.
+   *
+   * `unknown` does not qualify. A lock that could not be read is not evidence of a writer, and
+   * claiming contention from it would be a guess in the one direction that loses information.
+   */
+  // 🔴 `dryRun` is part of the question, not a second guard. A CLAIMING session reports the lock as
+  // held by its own claim, which is true and useless here: it would read as contention on every
+  // writing run. Today `attempts` is 1 for those, so the loop exits before this is consulted —
+  // making the correctness incidental rather than stated. Saying it here means a later change to
+  // the attempt count cannot quietly turn a writing run's own claim into evidence of a rival.
+  const contended = (): boolean => dryRun && observedLock.kind === "held";
+
   const runOnce = (finalAttempt: boolean): Promise<MigrationOutcome> =>
     withMigrationSession(
       {
@@ -299,6 +333,8 @@ export async function runFieldGroupMigration(
         mode: dryRun ? "observe" : "claim",
       },
       async session => {
+        // First, so it describes this attempt whatever this attempt goes on to raise.
+        observedLock = session.lock;
         const state = await readMigrationState(meta);
         const rows = await readRegistryRows(adapter, dialect, identifierCase);
 
@@ -462,10 +498,17 @@ export async function runFieldGroupMigration(
             identifierCase,
           });
         } catch (error) {
-          // Only a preview re-reads, and only for a refusal a concurrent writer can manufacture.
-          // Everything else — a run that writes, a refusal about the database's actual shape — leaves
-          // by the same door it always did.
-          if (!dryRun || !isTornReadRefusal(error)) throw error;
+          // Only a preview re-reads, only for a refusal a concurrent writer can manufacture, and
+          // only when a writer is demonstrably there. Everything else — a run that writes, a
+          // refusal about the database's actual shape, a torn-SHAPED refusal on a database nobody
+          // is writing to — leaves by the same door it always did.
+          if (
+            !dryRun ||
+            !isTornReadRefusal(error) ||
+            session.lock.kind !== "held"
+          ) {
+            throw error;
+          }
           // Not the final attempt: let it out so the whole session runs again, marker included.
           if (!finalAttempt) throw error;
 
@@ -622,10 +665,18 @@ export async function runFieldGroupMigration(
     try {
       return await runOnce(finalAttempt);
     } catch (error) {
-      // Re-read only what re-reading can fix. A PERMANENT refusal retried here would exhaust its
-      // attempts and then be reported as contention, turning a correct and loud refusal about the
-      // operator's data into a soft wrong answer — strictly worse than the defect being fixed.
-      if (finalAttempt || !isTornReadRefusal(error)) throw error;
+      // Re-read only what re-reading can fix, and only while something is actually moving. A
+      // refusal retried without an observed writer would exhaust its attempts and then be reported
+      // as contention, turning a correct and loud refusal about the operator's storage into a soft
+      // wrong answer — strictly worse than the defect being fixed.
+      // Contention does not always arrive as a refusal. The registry read resolves a table name and
+      // then selects from it, and the catalog is a table list followed by introspection of that
+      // list; a rename landing inside either gap surfaces as the driver's own missing-table error,
+      // which no refusal ever classified. Recognised by the same code-based classifier the lock
+      // observation uses, so the two cannot disagree about what "not there" looks like.
+      const retryable =
+        isTornReadRefusal(error) || (dryRun && isMissingTable(error, dialect));
+      if (finalAttempt || !retryable || !contended()) throw error;
     }
   }
 }

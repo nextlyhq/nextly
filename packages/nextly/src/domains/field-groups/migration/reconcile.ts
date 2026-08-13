@@ -503,6 +503,11 @@ function reconcileColumn(
       logContext: {
         reason: "reconciliation was given no columns for a table that exists",
         table: current,
+        // The catalog is read as two queries — the table list, then the columns of those tables —
+        // so a rename landing between them leaves a name in the list that introspection no longer
+        // finds. For an unlocked reader that is a torn read rather than an impossible state, and
+        // re-reading resolves it.
+        [REFUSAL_KIND_KEY]: "torn-read",
       },
     });
   }

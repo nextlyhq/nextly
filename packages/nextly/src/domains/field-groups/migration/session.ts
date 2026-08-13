@@ -125,7 +125,10 @@ export type LockObservation =
  * for a reason that does not generalise: SQLite has no table privileges, so a table it cannot find
  * is a table that does not exist. On Postgres and MySQL the same assumption is exactly the defect.
  */
-function isMissingTable(error: unknown, dialect: MigrationDialect): boolean {
+export function isMissingTable(
+  error: unknown,
+  dialect: MigrationDialect
+): boolean {
   // 🔴 Walked, not read off the top. Drizzle wraps a driver failure in a
   // `DrizzleQueryError` whose own message is just `Failed query` — on SQLite the
   // `no such table` text lives on `cause`, so reading only the outer message

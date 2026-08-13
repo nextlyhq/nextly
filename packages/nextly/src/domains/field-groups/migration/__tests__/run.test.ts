@@ -939,7 +939,21 @@ describe("a preview that meets a writer mid-run", () => {
    */
   function tornWorld(): RunWorld {
     return {
-      tables: [LEGACY_REGISTRY, "fg_hero"],
+      // 🔴 The lock table AND a holder, because the catalog alone cannot tell these two apart. A
+      // data table under its migrated name with nothing recorded is raised by a writer caught
+      // mid-rename and equally by a table belonging to someone else that happens to occupy the
+      // name this migration wants. An observed holder is the only evidence separating them, so a
+      // world modelling contention has to carry one.
+      tables: [LEGACY_REGISTRY, "fg_hero", MIGRATION_LOCK_TABLE],
+      registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
+      lockOwner: "field-group-migration:up#someone-else",
+    };
+  }
+
+  /** The same catalog with nobody writing: a storage conflict, not a torn read. */
+  function quietWorld(): RunWorld {
+    return {
+      tables: [LEGACY_REGISTRY, "fg_hero", MIGRATION_LOCK_TABLE],
       registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
     };
   }
@@ -1002,6 +1016,34 @@ describe("a preview that meets a writer mid-run", () => {
     expect(markerReads(trace)).toBe(1);
   });
 
+  // 🔴 THE control for gating the retry on observed contention. This catalog is identical to
+  // `tornWorld()` — source gone, target present, nothing recorded — and differs only in that
+  // nobody holds the lock. That makes it the storage conflict the branch's own comment describes:
+  // a table belonging to someone else sitting on the name this migration wants. Reporting it as an
+  // unreconciled plan would describe a database standing still as one that is moving, and bury a
+  // real conflict under the word "contention".
+  it("refuses a storage conflict rather than calling it contention", async () => {
+    const { adapter, trace } = createRunWorld(quietWorld());
+
+    await expect(
+      runFieldGroupMigration({
+        adapter,
+        logger,
+        direction: "up",
+        dryRun: true,
+      })
+    ).rejects.toSatisfy(
+      error =>
+        NextlyError.is(error) &&
+        error.logContext?.reason ===
+          "an object using the migrated storage name exists but no recorded progress accounts for it"
+    );
+
+    // Raised on the first look. Spending three reads to arrive at the same refusal would be the
+    // cheaper half of the bug; reporting it as movement is the expensive half.
+    expect(markerReads(trace)).toBe(1);
+  });
+
   // The plan is reported rather than withheld, and labelled rather than passed off as scored. An
   // empty list would read as "nothing to do", which is the silent wrong answer this whole path
   // exists to remove.
@@ -1058,8 +1100,12 @@ describe("a preview that meets a writer mid-run", () => {
   // left the column pair escaping as a 503 during exactly the contention the retry exists for.
   it("re-reads a torn discriminator column, not only a torn table", async () => {
     const world: RunWorld = {
-      tables: [LEGACY_REGISTRY, "comp_hero"],
+      tables: [LEGACY_REGISTRY, "comp_hero", MIGRATION_LOCK_TABLE],
       registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
+      // A holder, because the retry requires an observed writer and not merely a torn-shaped
+      // refusal. Without one this same catalog is a permanent mismatch, which is the point of the
+      // conflict control above.
+      lockOwner: "field-group-migration:down#someone-else",
       // The column already carries its migrated name while nothing recorded says a run got there:
       // a rollback in flight, caught between reverting the column and settling its marker.
       columns: {
@@ -1135,9 +1181,12 @@ describe("a preview that meets a writer mid-run", () => {
   it("re-reads a settled marker the catalog is moving away from", async () => {
     const world: RunWorld = {
       marker: settledRun(),
-      // Storage a concurrent rollback has already returned to its legacy names.
-      tables: [LEGACY_REGISTRY, "comp_hero"],
+      // Storage a concurrent rollback has already returned to its legacy names, and the rollback
+      // still holding the lock — which is what makes this a torn read rather than a database
+      // someone restored inconsistently.
+      tables: [LEGACY_REGISTRY, "comp_hero", MIGRATION_LOCK_TABLE],
       registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
+      lockOwner: "field-group-migration:down#someone-else",
     };
     let reads = 0;
     world.onMarkerRead = () => {
@@ -1189,8 +1238,11 @@ describe("a preview that meets a writer mid-run", () => {
           "marker reports a completed migration but the migrated registry is absent"
     );
 
-    // Retried, then raised — the attempts are spent before the refusal stands.
-    expect(markerReads(trace)).toBe(3);
+    // Raised on the first look, because nothing holds the lock: with no writer observable this is
+    // a database that genuinely disagrees with its marker — restored from a backup taken before
+    // the run — rather than one being read mid-flight. Spending three reads to reach the same
+    // answer would only delay it.
+    expect(markerReads(trace)).toBe(1);
   });
 
   // 🔴 A run that WRITES holds the lock, which excludes the very writer a retry exists to survive.
@@ -1207,8 +1259,16 @@ describe("a preview that meets a writer mid-run", () => {
         direction: "up",
         backupConfirmed: true,
       })
-    ).rejects.toSatisfy(error => NextlyError.is(error));
+    ).rejects.toSatisfy(
+      error =>
+        NextlyError.is(error) &&
+        error.logContext?.reason === "migration lock is held elsewhere"
+    );
 
-    expect(markerReads(trace)).toBe(1);
+    // 🔴 Zero, and that is the assertion. Against the very world a preview re-reads, a run that
+    // writes never gets as far as the marker: the lock refuses it outright. That is why the retry
+    // belongs to the preview alone — the writing path is excluded by the mechanism a retry exists
+    // to survive, so it can never be reading a state someone else is moving.
+    expect(markerReads(trace)).toBe(0);
   });
 });
