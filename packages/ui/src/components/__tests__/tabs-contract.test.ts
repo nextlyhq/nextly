@@ -274,6 +274,13 @@ function normaliseVariant(variant: string): string {
 function wins(owned: Utility, caller: Utility): boolean {
   if (caller.variants.some(retargets)) return false;
   if (caller.important && !owned.important) return true;
+  // The mirror of the clause above, and it has to be stated rather than left to
+  // the variant test: an important owned declaration beats an unimportant caller
+  // whatever the caller's variants say. tailwind-merge keeps both — it groups by
+  // importance — so without this the specificity comparison decides a question
+  // CSS has already settled, and a call site that cannot repaint the indicator
+  // is reported for trying.
+  if (owned.important && !caller.important) return false;
   const callerVariants = new Set(caller.variants.map(normaliseVariant));
   return owned.variants
     .map(normaliseVariant)
@@ -465,19 +472,45 @@ function ownedCssProperties(): Record<string, Set<string>> {
  * stay a caller's to set. Corners all expand to the radius, because the
  * primitive squares all four.
  */
-const BOTTOM_EDGE =
-  /^border(-(bottom|block-end|block|y))?(-(width|style|color))?$/;
+/**
+ * A border property, split into the edge it names and the aspect it sets.
+ *
+ * Both parts are optional, and which are present is what decides whether the
+ * property is a shorthand: `border` names neither and sets all twelve
+ * longhands, `border-color` names an aspect and sets it on four edges,
+ * `border-bottom` names an edge and sets three aspects on it, and
+ * `border-bottom-color` names both and is already a longhand.
+ */
+const BORDER_PROPERTY =
+  /^border(?:-(bottom|block-end|block|y|top|block-start|left|right|x|inline-start|inline-end))?(?:-(width|style|color))?$/;
+
+/** The edges that include the bottom, plus the absent edge, which means all. */
+const REACHES_BOTTOM = new Set([
+  undefined,
+  "bottom",
+  "block-end",
+  "block",
+  "y",
+]);
+
+const BORDER_ASPECTS = ["width", "style", "color"];
 const ANY_CORNER = /^border(-[a-z]+)*-radius$/;
 const BOTTOM_OFFSET = /^margin(-(bottom|block-end|block|y))?$/;
 
 function expandsTo(property: string): string[] {
   const kebab = property.replace(/([A-Z])/g, "-$1").toLowerCase();
-  if (BOTTOM_EDGE.test(kebab)) {
-    return [
-      "border-bottom-width",
-      "border-bottom-style",
-      "border-bottom-color",
-    ];
+  const border = BORDER_PROPERTY.exec(kebab);
+  if (border) {
+    const [, edge, aspect] = border;
+    // An edge the primitive does not draw is the caller's to set, and naming it
+    // explicitly is what keeps `border-t-2` out of the underline's business.
+    if (!REACHES_BOTTOM.has(edge)) return [kebab];
+    // Only the aspects the property actually sets. Expanding a longhand into
+    // all three recorded `border-b-2` — a WIDTH utility — as owning the colour
+    // too, and an unqualified `border-b-destructive` then read as displacing a
+    // width it never touches.
+    const aspects = aspect === undefined ? BORDER_ASPECTS : [aspect];
+    return aspects.map(each => `border-bottom-${each}`);
   }
   if (ANY_CORNER.test(kebab)) return ["border-radius"];
   if (BOTTOM_OFFSET.test(kebab)) return ["margin-bottom"];
@@ -790,6 +823,22 @@ function styleObjectsFor(
   return objects;
 }
 
+/**
+ * Whether an initializer can only ever be absent.
+ *
+ * Deliberately narrow: it answers "is this written as nothing", not "could this
+ * be nullish at runtime". A variable that happens to hold `undefined` is not
+ * decidable here and must keep being reported, because the same variable holds a
+ * colour on the next render — which is exactly how the violation that motivated
+ * the inline half was written.
+ */
+function isDefinitelyNothing(initializer: ts.Expression): boolean {
+  if (ts.isIdentifier(initializer)) return initializer.text === "undefined";
+  if (initializer.kind === ts.SyntaxKind.NullKeyword) return true;
+  // `void 0` is the other spelling of the same intent.
+  return ts.isVoidExpression(initializer);
+}
+
 /** An owned inline property declared anywhere inside an object literal. */
 function ownedStyleProperty(
   slot: string,
@@ -810,7 +859,13 @@ function ownedStyleProperty(
       : ts.isShorthandPropertyAssignment(node)
         ? node.name.text
         : undefined;
-    if (name && ownsStyleProperty(slot, name)) found ??= name;
+    // A property React cannot emit is not a declaration. `{ borderBottomColor:
+    // undefined }` is what a typed style object looks like when it deliberately
+    // leaves an owned property alone, and reporting it rejects the very shape a
+    // call site should be using to opt out.
+    const emitted =
+      !ts.isPropertyAssignment(node) || !isDefinitelyNothing(node.initializer);
+    if (name && emitted && ownsStyleProperty(slot, name)) found ??= name;
     ts.forEachChild(node, visit);
   };
   visit(object);
@@ -1125,6 +1180,21 @@ describe("the tab indicator contract", () => {
       "an inline declaration behind a logical guard",
       "<TabsTrigger style={active && { borderBottomColor: c }} />",
     ],
+    // The controls for the three exclusions above. Each is one property away
+    // from a case that must stay clean, so together they pin a boundary rather
+    // than a blanket "borders and inline styles are ignored now".
+    [
+      "an IMPORTANT caller against an important owned colour",
+      '<TabsTrigger className="data-[state=active]:!border-b-destructive" />',
+    ],
+    [
+      "a bottom-border WIDTH, which the primitive does draw",
+      '<TabsTrigger className="border-b-4" />',
+    ],
+    [
+      "an inline property whose value is a variable rather than nothing",
+      "<TabsTrigger style={{ borderBottomColor: c }} />",
+    ],
   ])("catches %s", (_label, body) => {
     // The positive controls. Each is a shape an earlier version returned clean
     // on, or a category it never read. Without these, a check that can never
@@ -1245,6 +1315,28 @@ describe("the tab indicator contract", () => {
     ],
     ["a type size on hover", '<TabsTrigger className="hover:text-sm" />'],
     ["text alignment", '<TabsTrigger className="text-center" />'],
+    // An important owned declaration wins in CSS whatever the caller qualifies
+    // on, so a caller that cannot repaint the indicator must not be reported.
+    [
+      "an unimportant caller against an important owned colour",
+      '<TabsTrigger className="data-[state=active]:border-b-destructive" />',
+    ],
+    // `border-b-2` is a WIDTH utility. Expanding it into every bottom longhand
+    // made it claim the colour too, and an unqualified colour then read as
+    // displacing a width it never touches.
+    [
+      "a bottom-border colour against the width the primitive draws",
+      '<TabsTrigger className="border-b-destructive" />',
+    ],
+    // React emits nothing for these, so there is no declaration to beat a class.
+    [
+      "an inline property explicitly left unset",
+      "<TabsTrigger style={{ borderBottomColor: undefined }} />",
+    ],
+    [
+      "an inline property set to null",
+      "<TabsTrigger style={{ borderBottomColor: null }} />",
+    ],
   ])("does not report %s", (_label, body) => {
     // The complement, and the reason this is a contract rather than a ban. A
     // check that flags a documented example or a legitimate layout class gets

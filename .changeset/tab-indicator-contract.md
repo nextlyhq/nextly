@@ -40,7 +40,14 @@ was the same component wearing a different appearance depending on the screen.
 
 Those screens now pass layout only and let the component draw the indicator, so
 the page builder's inspector, the form builder, its field editor, its preview
-and its submissions list all match the rest of the admin. A test pins the
-boundary at every call site, so a future screen cannot quietly fork the look
-again — layout overrides stay allowed, because a tab strip in a dialog is a
-different shape from one in a sheet.
+and its submissions list all match the rest of the admin. Layout overrides stay
+allowed, because a tab strip in a dialog is a different shape from one in a
+sheet.
+
+A test reads every first-party call site and reports one that repaints the
+indicator, so the next screen to do it is caught in review rather than noticed
+later. It reads what a call site is written as, which is not the same as
+guaranteeing the appearance cannot be forked: a class arriving from another
+module, through a prop spread, or through a slotted child is not something it
+can see. The component stays deliberately overridable so a theme can move these
+values, and that is the same door a call site can walk through.
