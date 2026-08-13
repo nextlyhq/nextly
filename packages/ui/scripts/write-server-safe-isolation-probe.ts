@@ -409,6 +409,18 @@ function verify(target: string): void {
 const MODES = new Set(["--arm", "--verify"]);
 const flag = process.argv[2];
 const mode = MODES.has(flag) ? flag : undefined;
+
+// A mistyped mode must not fall through to the target. `--verfy` is not in MODES, so it would be
+// taken as a directory name, written as one, and exited 0 from — the verification never runs and
+// the caller is told it succeeded. Anything that looks like a flag is therefore refused rather
+// than reinterpreted, which is the same rule the rest of this file applies to its subject.
+if (mode === undefined && flag !== undefined && flag.startsWith("-")) {
+  console.error(
+    `${flag} is not a mode. Use --arm, --verify, or no flag at all to write the project.`
+  );
+  process.exit(1);
+}
+
 const target = mode === undefined ? process.argv[2] : process.argv[3];
 
 if (target === undefined) {
