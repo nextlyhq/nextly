@@ -445,9 +445,14 @@ describe("the host can drive it", () => {
     );
     pressPaletteKey();
 
-    const rows = screen.getAllByText("Open settings");
-    expect(rows).toHaveLength(2);
-    fireEvent.click(rows[1] as HTMLElement);
+    expect(screen.getAllByText("Open settings")).toHaveLength(2);
+
+    // Driven by the KEYBOARD, which is where the collision bites. A click dispatches that row's
+    // own React handler and reaches the right command whatever cmdk thinks; selection is what
+    // cmdk keys on the value, so only arrowing and activating can tell the two apart.
+    const input = screen.getByRole("combobox");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
 
     expect(chosen).toEqual(["second"]);
   });
