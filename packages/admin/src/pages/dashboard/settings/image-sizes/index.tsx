@@ -305,18 +305,23 @@ function ImageSizesContent({
             ? "No image sizes found matching your search."
             : "No image sizes configured."
         }
+        footer={
+          filteredSizes.length > 0 ? (
+            <Pagination
+              currentPage={page}
+              totalPages={Math.max(
+                1,
+                Math.ceil(filteredSizes.length / pageSize)
+              )}
+              totalItems={filteredSizes.length}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+              isLoading={isLoading}
+            />
+          ) : undefined
+        }
       />
-      {filteredSizes.length > 0 && (
-        <Pagination
-          currentPage={page}
-          totalPages={Math.max(1, Math.ceil(filteredSizes.length / pageSize))}
-          totalItems={filteredSizes.length}
-          pageSize={pageSize}
-          onPageChange={setPage}
-          onPageSizeChange={setPageSize}
-          isLoading={isLoading}
-        />
-      )}
 
       {/* Info note about code-defined sizes */}
       {!isLoading && sizes.some(s => s.isDefault) && (

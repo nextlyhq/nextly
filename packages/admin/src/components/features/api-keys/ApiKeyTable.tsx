@@ -351,17 +351,23 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
             registryKey="api-keys"
             ariaLabel="API keys table"
             emptyMessage="No API keys yet. Create your first key to authenticate programmatic access."
-          />
-
-          <Pagination
-            currentPage={page}
-            totalPages={Math.max(1, totalPages)}
-            pageSize={pageSize}
-            pageSizeOptions={[10, 25, 50]}
-            onPageChange={setPage}
-            onPageSizeChange={handlePageSizeChange}
-            totalItems={totalItems}
-            isLoading={isLoading}
+            // The pager belongs to the table, not beside it. Rendered here it
+            // is mounted once, so its controls keep stable ids, and it lands
+            // inside the card on desktop and in the column's gap on mobile --
+            // a decision only this component can make, because only it knows
+            // which of the two views is showing.
+            footer={
+              <Pagination
+                currentPage={page}
+                totalPages={Math.max(1, totalPages)}
+                pageSize={pageSize}
+                pageSizeOptions={[10, 25, 50]}
+                onPageChange={setPage}
+                onPageSizeChange={handlePageSizeChange}
+                totalItems={totalItems}
+                isLoading={isLoading}
+              />
+            }
           />
         </>
       )}

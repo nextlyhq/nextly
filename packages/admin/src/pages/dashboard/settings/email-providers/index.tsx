@@ -816,20 +816,21 @@ function EmailProviderTable() {
             registryKey="email-providers"
             ariaLabel="Email providers table"
             emptyMessage="No email providers configured. Add a provider to start sending emails."
+            footer={
+              data && data.meta.totalPages > 0 ? (
+                <Pagination
+                  currentPage={page}
+                  totalPages={data.meta.totalPages}
+                  pageSize={pageSize}
+                  pageSizeOptions={[10, 25, 50]}
+                  onPageChange={setPage}
+                  onPageSizeChange={handlePageSizeChange}
+                  isLoading={isLoading}
+                  totalItems={totalItems}
+                />
+              ) : undefined
+            }
           />
-
-          {data && data.meta.totalPages > 0 && (
-            <Pagination
-              currentPage={page}
-              totalPages={data.meta.totalPages}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 25, 50]}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              isLoading={isLoading}
-              totalItems={totalItems}
-            />
-          )}
         </>
       )}
 

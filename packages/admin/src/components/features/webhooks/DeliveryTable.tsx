@@ -200,18 +200,19 @@ export const DeliveryTable: React.FC<DeliveryTableProps> = ({
         registryKey="webhook-deliveries"
         ariaLabel="Webhook deliveries table"
         emptyMessage="No deliveries match these filters yet."
-      />
-
-      <Pagination
-        currentPage={page}
-        totalPages={Math.max(1, totalPages)}
-        pageSize={pageSize}
-        pageSizeOptions={[20, 50, 100]}
-        onPageChange={onPageChange}
-        onPageSizeChange={onPageSizeChange}
-        totalItems={totalItems}
-        itemLabel="deliveries"
-        isLoading={isLoading}
+        footer={
+          <Pagination
+            currentPage={page}
+            totalPages={Math.max(1, totalPages)}
+            pageSize={pageSize}
+            pageSizeOptions={[20, 50, 100]}
+            onPageChange={onPageChange}
+            onPageSizeChange={onPageSizeChange}
+            totalItems={totalItems}
+            itemLabel="deliveries"
+            isLoading={isLoading}
+          />
+        }
       />
     </div>
   );

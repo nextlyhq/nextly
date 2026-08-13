@@ -604,19 +604,23 @@ export default function FieldGroupTable() {
             registryKey="components"
             ariaLabel="Field Groups table"
             emptyMessage="No field groups found. Try adjusting your search or filters."
+            footer={
+              data ? (
+                <Pagination
+                  currentPage={page}
+                  totalPages={
+                    data.meta.totalPages > 0 ? data.meta.totalPages : 1
+                  }
+                  pageSize={pageSize}
+                  pageSizeOptions={[10, 25, 50]}
+                  onPageChange={setPage}
+                  onPageSizeChange={handlePageSizeChange}
+                  isLoading={isFetching}
+                  totalItems={data.meta.total}
+                />
+              ) : undefined
+            }
           />
-          {data && (
-            <Pagination
-              currentPage={page}
-              totalPages={data.meta.totalPages > 0 ? data.meta.totalPages : 1}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 25, 50]}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              isLoading={isFetching}
-              totalItems={data.meta.total}
-            />
-          )}
         </>
       )}
 

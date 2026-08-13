@@ -644,19 +644,21 @@ export default function CollectionTable() {
             registryKey="collections"
             ariaLabel="Collections table"
             emptyMessage="No collections found. Try adjusting your search or filters."
+            footer={
+              data && data.meta.totalPages > 0 ? (
+                <Pagination
+                  currentPage={page}
+                  totalPages={data.meta.totalPages}
+                  pageSize={pageSize}
+                  pageSizeOptions={[10, 25, 50]}
+                  onPageChange={setPage}
+                  onPageSizeChange={handlePageSizeChange}
+                  isLoading={isFetching}
+                  totalItems={data.meta.total}
+                />
+              ) : undefined
+            }
           />
-          {data && data.meta.totalPages > 0 && (
-            <Pagination
-              currentPage={page}
-              totalPages={data.meta.totalPages}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 25, 50]}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              isLoading={isFetching}
-              totalItems={data.meta.total}
-            />
-          )}
         </>
       )}
 

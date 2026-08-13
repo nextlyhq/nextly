@@ -532,17 +532,18 @@ function EmailTemplateTable() {
             registryKey="email-templates"
             ariaLabel="Email templates table"
             emptyMessage="No email templates found. Create a template to get started."
-          />
-
-          <Pagination
-            currentPage={page}
-            totalPages={Math.max(1, totalPages)}
-            pageSize={pageSize}
-            pageSizeOptions={[10, 25, 50]}
-            onPageChange={setPage}
-            onPageSizeChange={handlePageSizeChange}
-            totalItems={totalItems}
-            isLoading={isLoading}
+            footer={
+              <Pagination
+                currentPage={page}
+                totalPages={Math.max(1, totalPages)}
+                pageSize={pageSize}
+                pageSizeOptions={[10, 25, 50]}
+                onPageChange={setPage}
+                onPageSizeChange={handlePageSizeChange}
+                totalItems={totalItems}
+                isLoading={isLoading}
+              />
+            }
           />
         </>
       )}
