@@ -996,11 +996,30 @@ const REACHES_BOTTOM = new Set([
 ]);
 
 const BORDER_ASPECTS = ["width", "style", "color"];
+
+/**
+ * The border-image shorthand and its longhands.
+ *
+ * Every one of them changes what the border renders rather than an aspect of
+ * it, so none names an edge or an aspect and none is reachable through the
+ * shorthand split above. `border-image-source` alone replaces the drawn border
+ * wherever the image covers it, which on a tab is the underline the primitive
+ * owns.
+ */
+const BORDER_IMAGE = /^border-image(?:-(source|slice|width|outset|repeat))?$/;
 const ANY_CORNER = /^border(-[a-z]+)*-radius$/;
 const BOTTOM_OFFSET = /^margin(-(bottom|block-end|block|y))?$/;
 
 function expandsTo(property: string): string[] {
   const kebab = property.replace(/([A-Z])/g, "-$1").toLowerCase();
+  // A border IMAGE replaces what the border draws, on every edge it covers.
+  // Checked before the shorthand split because it is not one: `border-image`
+  // names no edge and no aspect, so the pattern below does not match it and it
+  // stood for itself — a name that intersects nothing the primitive owns, while
+  // a gradient painted straight over the underline on every tab.
+  if (BORDER_IMAGE.test(kebab)) {
+    return BORDER_ASPECTS.map(aspect => `border-bottom-${aspect}`);
+  }
   const border = BORDER_PROPERTY.exec(kebab);
   if (border) {
     const [, edge, aspect] = border;
@@ -2232,6 +2251,21 @@ describe("the tab indicator contract", () => {
     [
       "a shorthand that replaces an owned longhand",
       '<TabsTrigger className="aria-[controls]:[outline:2px_solid_red]" />',
+    ],
+    // A border image paints over the border the primitive draws, on every tab
+    // including the inactive ones whose colour it owns. It names no edge and no
+    // aspect, so it reaches the underline without mentioning it.
+    [
+      "a border image painted over the underline",
+      '<TabsTrigger className="[border-image:linear-gradient(red,red)_1]" />',
+    ],
+    [
+      "the same border image set inline",
+      '<TabsTrigger style={{ borderImage: "linear-gradient(red,red) 1" }} />',
+    ],
+    [
+      "a border-image longhand on its own",
+      '<TabsTrigger style={{ borderImageSource: "linear-gradient(red,red)" }} />',
     ],
     [
       "a destructured namespace member",
