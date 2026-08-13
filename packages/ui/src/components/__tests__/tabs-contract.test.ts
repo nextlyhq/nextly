@@ -228,12 +228,40 @@ function utilityOf(cls: string): Utility {
  * host and must keep counting, which is why the test is for what FOLLOWS the
  * `&` rather than for punctuation anywhere in the selector.
  */
+/**
+ * The last compound in a selector: the element the declarations land on.
+ *
+ * Split at TOP-LEVEL combinators only, so a combinator inside `:is(...)`,
+ * `:where(...)` or `:not(...)` does not cut the selector it belongs to.
+ */
+function subjectOf(selector: string): string {
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < selector.length; index += 1) {
+    const character = selector[index] ?? "";
+    if (character === "(" || character === "[") depth += 1;
+    else if (character === ")" || character === "]") depth -= 1;
+    else if (depth === 0 && /[>+~\s]/.test(character)) start = index + 1;
+  }
+  return selector.slice(start);
+}
+
 function retargets(selector: string): boolean {
-  return (
-    /&\s*[>+~]/.test(selector) ||
-    /&\s+\S/.test(selector) ||
-    /&::/.test(selector)
-  );
+  const subject = subjectOf(selector.trim());
+  // A pseudo-element is a box the host generates, not the host.
+  if (subject.includes("::")) return true;
+  // A functional pseudo-class matches whatever is inside it, so the subject is
+  // one level down. `:is(& > *)` selects the children, not the tab.
+  const inner = /^:(?:is|where|not|has)\((.*)\)$/.exec(subject)?.[1];
+  if (inner !== undefined) {
+    return inner.split(",").every(branch => retargets(branch.trim()));
+  }
+  // The host is the subject when the last compound is the `&` itself. This is
+  // what keeps `[&+&]:border-b-0` reported: `&+&` puts a combinator after an
+  // `&`, but the element receiving the declarations is the RIGHT-hand one,
+  // which is the tab. Testing for "any combinator after an `&`" read that as
+  // aimed elsewhere and let a sibling rule remove the underline unseen.
+  return !subject.includes("&");
 }
 
 /**
@@ -292,9 +320,14 @@ function partition(block: string): {
  */
 function hostCss(block: string): string {
   const { declarations, rules } = partition(block);
-  return rules
-    .filter(rule => !retargets(rule.selector))
-    .reduce((text, rule) => text + hostCss(rule.body), declarations);
+  return (
+    rules
+      // A selector that never mentions `&` is not a refinement of the host: it is
+      // the utility's own class rule at the top, or an at-rule wrapping it. Only
+      // selectors that reposition `&` can move the declarations off the element.
+      .filter(rule => !rule.selector.includes("&") || !retargets(rule.selector))
+      .reduce((text, rule) => text + hostCss(rule.body), declarations)
+  );
 }
 
 /**
@@ -348,9 +381,140 @@ function wins(owned: Utility, caller: Utility): boolean {
   // is reported for trying.
   if (owned.important && !caller.important) return false;
   const callerVariants = new Set(caller.variants.map(normaliseVariant));
-  return owned.variants
+  const asQualified = owned.variants
     .map(normaliseVariant)
     .every(variant => callerVariants.has(variant));
+  // Carrying every variant the owned class carries is SUFFICIENT, not
+  // necessary, which is why the cascade is asked as well rather than instead.
+  return asQualified || outranks(owned, caller);
+}
+
+/**
+ * A selector's specificity, as the three counts the cascade compares.
+ *
+ * `&` stands for the utility's own class, so it counts as one class. Ids are
+ * counted for completeness; Tailwind emits none.
+ */
+function specificityOf(selector: string): [number, number, number] {
+  const ids = selector.match(/#[\w-]+/g)?.length ?? 0;
+  const classes =
+    (selector.match(/&/g)?.length ?? 0) +
+    (selector.match(/\.[\w-]+/g)?.length ?? 0) +
+    (selector.match(/\[[^\]]*\]/g)?.length ?? 0) +
+    (selector.match(/(?<!:):[\w-]+/g)?.length ?? 0);
+  const elements = selector.match(/::[\w-]+/g)?.length ?? 0;
+  return [ids, classes, elements];
+}
+
+function compare(
+  a: [number, number, number],
+  b: [number, number, number]
+): number {
+  for (let index = 0; index < 3; index += 1) {
+    const difference = (a[index] ?? 0) - (b[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+/** The selector of a compiled utility's host rule, as Tailwind wrote it. */
+function hostSelectorOf(cls: string): string {
+  const css = compiled(cls);
+  if (css == null) return "";
+  const nested = (block: string): string[] => {
+    const { rules } = partition(block);
+    return rules.flatMap(rule =>
+      rule.selector.includes("&")
+        ? [rule.selector, ...nested(rule.body)]
+        : nested(rule.body)
+    );
+  };
+  return nested(css.replace(AT_PROPERTY, "")).join("");
+}
+
+/** Every declaration a utility makes on the host, as property to value. */
+function declarationsOf(cls: string): Map<string, string> {
+  const css = compiled(cls);
+  if (css == null) return new Map();
+  const body = `;${hostCss(css.replace(AT_PROPERTY, ""))}`;
+  const found = new Map<string, string>();
+  for (const match of body.matchAll(
+    /[{;]\s*(--[a-zA-Z0-9-]+|[a-z-]+)\s*:([^;}]*)/g
+  )) {
+    found.set((match[1] ?? "").trim(), (match[2] ?? "").trim());
+  }
+  return found;
+}
+
+/**
+ * Whether two utilities actually declare anything differently.
+ *
+ * Tailwind composes several appearances into ONE property whose value is a list
+ * of variables — `box-shadow` reads the ring, the inset ring and the plain
+ * shadow together — so two utilities can both write `box-shadow` with a
+ * byte-identical value and contribute through different variables. `shadow-sm`
+ * beside `focus-visible:ring-2` is exactly that: whichever rule the cascade
+ * picks, the declaration is the same text and the ring survives inside it.
+ *
+ * So a cascade win means nothing unless the two disagree about SOMETHING. Asked
+ * only of the cascade path; a merge displacement removes the owned class
+ * outright and needs no such test.
+ */
+function disagree(owned: string, caller: string): boolean {
+  const ownedDeclarations = declarationsOf(owned);
+  const callerDeclarations = declarationsOf(caller);
+  for (const [property, value] of callerDeclarations) {
+    const existing = ownedDeclarations.get(property);
+    if (existing !== undefined && existing !== value) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether Tailwind writes the caller's rule after the owned one.
+ *
+ * Asked of the design system rather than inferred, because the order is
+ * Tailwind's own and depends on how it sorts variants and utilities. A class it
+ * cannot place answers `null`, and an unplaceable rule is not evidence that the
+ * caller wins.
+ */
+function emittedAfter(owned: string, caller: string): boolean {
+  const order = new Map(
+    designSystem.getClassOrder([owned, caller]).map(([cls, at]) => [cls, at])
+  );
+  const ownedAt = order.get(owned);
+  const callerAt = order.get(caller);
+  if (ownedAt == null || callerAt == null) return false;
+  return callerAt > ownedAt;
+}
+
+/**
+ * Whether a caller's rule beats an owned one through the cascade alone.
+ *
+ * The variant comparison above answers the common case — a caller qualified the
+ * same way, or more — but it is not the only way to win, and reading it as one
+ * missed a whole class of override. `aria-[controls]:ring-0` shares no variant
+ * with `focus-visible:ring-2`, yet every Radix trigger carries `aria-controls`,
+ * both selectors are one class plus one qualifier, and Tailwind emits the aria
+ * rule LAST. Equal specificity, later in the sheet: it removes the focus ring.
+ *
+ * Asked only as an ADDITIONAL way to win. A caller that loses here may still
+ * have displaced the owned class in the merge, which is a different mechanism
+ * and one the source order cannot see — `border-b-0` is emitted BEFORE
+ * `border-b-2` and still wins, because tailwind-merge removes the loser from
+ * the class list before the browser ever sees it.
+ */
+function outranks(owned: Utility, caller: Utility): boolean {
+  const ownedSelector = hostSelectorOf(owned.full);
+  const callerSelector = hostSelectorOf(caller.full);
+  if (!ownedSelector || !callerSelector) return false;
+  if (!disagree(owned.full, caller.full)) return false;
+  const ranking = compare(
+    specificityOf(callerSelector),
+    specificityOf(ownedSelector)
+  );
+  if (ranking !== 0) return ranking > 0;
+  return emittedAfter(owned.full, caller.full);
 }
 
 function takesOver(owned: Utility, caller: Utility): boolean {
@@ -410,7 +574,10 @@ function displacedBy(exported: string, classes: string): string[] {
  * properties. The resolution guard in the suite turns that into a red run
  * rather than a quiet loss of coverage.
  */
-let designSystem: { candidatesToCss(list: string[]): (string | null)[] };
+let designSystem: {
+  candidatesToCss(list: string[]): (string | null)[];
+  getClassOrder(list: string[]): Array<[string, bigint | null]>;
+};
 
 async function loadDesignSystem(): Promise<typeof designSystem> {
   const entry = resolve(REPO, "packages/ui/src/styles/index.css");
@@ -894,6 +1061,30 @@ function styleObjectsFor(
 }
 
 /**
+ * The property a key names, when it is written as a constant.
+ *
+ * `.text` rather than `getText()`: the latter includes the quotes of a
+ * `{ "borderBottomColor": c }` key, so a quoted property would compare unequal
+ * to every owned name and pass.
+ *
+ * A computed key is read too when its expression is a literal string.
+ * `{ ["borderBottomColor"]: c }` is a different node kind with identical
+ * meaning, and a visitor keyed on identifiers and string literals alone walks
+ * past it — the same shape as the shorthand entry beside it. A computed key
+ * built from a variable is not decidable here and is left alone.
+ */
+function propertyNameOf(name: ts.PropertyName): string | undefined {
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name)) return name.text;
+  if (ts.isComputedPropertyName(name)) {
+    const key = name.expression;
+    if (ts.isStringLiteral(key) || ts.isNoSubstitutionTemplateLiteral(key)) {
+      return key.text;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Whether an initializer can only ever be absent.
  *
  * Deliberately narrow: it answers "is this written as nothing", not "could this
@@ -920,12 +1111,7 @@ function ownedStyleProperty(
     // `{ borderBottomColor }` sets the property just as `{ borderBottomColor: c }`
     // does, and a visitor keyed on `PropertyAssignment` alone walks past it.
     const name = ts.isPropertyAssignment(node)
-      ? // `.text` rather than `getText()`: the latter includes the quotes of a
-        // `{ "borderBottomColor": c }` key, so a quoted property compares
-        // unequal to every name in the list and passes.
-        ts.isIdentifier(node.name) || ts.isStringLiteral(node.name)
-        ? node.name.text
-        : undefined
+      ? propertyNameOf(node.name)
       : ts.isShorthandPropertyAssignment(node)
         ? node.name.text
         : undefined;
@@ -1275,6 +1461,24 @@ describe("the tab indicator contract", () => {
     [
       "the same corner utility aimed at the tab rather than its descendants",
       '<TabsTrigger className="rounded-md" />',
+    ],
+    // A computed key is a different node kind with identical meaning.
+    [
+      "an inline property written as a computed constant key",
+      'const c = "red";\n<TabsTrigger style={{ ["borderBottomColor"]: c }} />',
+    ],
+    // `&+&` puts a combinator after an `&`, but the element receiving the
+    // declarations is the RIGHT-hand one, which is the tab itself.
+    [
+      "a sibling rule whose subject is the tab",
+      '<TabsTrigger className="[&+&]:border-b-0" />',
+    ],
+    // Shares no variant with the focus ring, and beats it anyway: every Radix
+    // trigger carries `aria-controls`, the selectors are equally specific, and
+    // Tailwind emits this one last.
+    [
+      "an equally specific variant emitted after the focus ring",
+      '<TabsTrigger className="aria-[controls]:ring-0" />',
     ],
   ])("catches %s", (_label, body) => {
     // The positive controls. Each is a shape an earlier version returned clean
