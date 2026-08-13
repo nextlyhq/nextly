@@ -105,6 +105,13 @@ const POST_045_TABLES = [
   // indexes and (on PostgreSQL) its foreign key, and this list is what marks
   // those statements legitimate rather than phantom diffs.
   "email_deliveries",
+  // The field-group migration's lock. It was created on demand by the migration
+  // and invisible to the pipeline until it was declared in the core schema and
+  // the dialect bundles; from that point an existing install legitimately gains
+  // it on upgrade, exactly like the tables above. Listing it here is not a
+  // waiver — the pass-2 assertion below is what proves the declaration then
+  // round-trips to silence instead of being re-proposed on every reconcile.
+  "nextly_field_group_lock",
 ];
 
 // The post-045 names are static identifiers, but escape defensively so the
