@@ -157,7 +157,20 @@ test.describe("a canvas any Nextly editor could ship", () => {
       bottom.y - top.y,
       "the nested region must be tall enough to sample inside its edges"
     ).toBeGreaterThan(0);
-    await dragPointerTo(driver, top);
+
+    // The descent starts ABOVE the region and enters it under its own steps.
+    // Carrying the pointer straight to the first position to be asserted on
+    // makes that reading the one taken immediately after a long jump, before
+    // the canvas has necessarily resolved the arrival — and the outer container,
+    // which owned the target throughout the approach, is then recorded as
+    // owning a position inside the nested one. Observed once in five runs, at
+    // the first sample and nowhere else.
+    const approach = mapFramePointToHost(
+      { x: centreX, y: inner!.top - EDGE_MARGIN_PX },
+      origin,
+      scale
+    );
+    await dragPointerTo(driver, approach);
 
     // EVERY sample taken while the pointer is inside the nested region, not the
     // first one that agrees. Exiting on the first `nx-inner` would pass an
@@ -184,27 +197,63 @@ test.describe("a canvas any Nextly editor could ship", () => {
       1,
       Math.floor((Math.min(...zoneHeights) * scale) / 2)
     );
-    // A runaway guard, derived from the span so it cannot become the reason the
-    // loop stops. A fixed count silently bounds how far down a tall container
-    // the descent reaches, and every assertion below then describes a partial
-    // descent while reading as though it covered the region. What the descent
-    // completed is asserted separately, from the exit position.
-    const maxSteps = Math.ceil((bottom.y - top.y) / STEP_PX) + 2;
-    const owners: (string | null)[] = [];
+    // A runaway guard, and it is bounded by the WHOLE document rather than by
+    // the nested span: the span grows under the descent as gap zones expand, so
+    // a cap sized to the span measured beforehand runs out partway down and the
+    // descent stops for the one reason this guard exists to rule out. Nothing
+    // legitimate needs more steps than the document is tall. What the descent
+    // completed is asserted separately, from the exit condition.
+    const root = boxes[0];
+    expect(root, "the document root must be measurable").toBeTruthy();
+    const maxSteps = Math.ceil((root!.height * scale) / STEP_PX) + 4;
+    const owners: string[] = [];
     const zoneChoices: Array<{
+      owner: string;
       active: number;
       nearest: number;
       containing: number;
     }> = [];
     let step = 0;
-    for (; step < maxSteps && driver.pointer().y <= bottom.y; step += 1) {
-      const owner = await driver.readActiveZoneOwner();
+    let exitedBelow = false;
+    for (; step < maxSteps; step += 1) {
+      // The region is re-measured every sample, not computed once above. Gap
+      // zones expand when the drag activates and the canvas reflows as they do,
+      // so a span taken before the descent describes a layout that has since
+      // moved — and the pointer then sits outside the nested container while
+      // an assertion written against the stale span still calls it inside.
+      // Measured: two runs in six recorded the outer container owning a zone
+      // that contained the pointer, at positions the stale span called inside.
+      const live = (await driver.readBlockBoxes()).find(
+        box => box.id === "nx-inner"
+      );
+      if (!live) break;
+      const liveTop = mapFramePointToHost(
+        { x: centreX, y: live.top + EDGE_MARGIN_PX },
+        origin,
+        scale
+      ).y;
+      const liveBottom = mapFramePointToHost(
+        { x: centreX, y: live.top + live.height - EDGE_MARGIN_PX },
+        origin,
+        scale
+      ).y;
+      if (driver.pointer().y > liveBottom) {
+        exitedBelow = true;
+        break;
+      }
+
+      // Recorded by POSITION, never by loop index. The descent begins above the
+      // region, so nothing measured on the way in is attributed to a position
+      // inside it.
+      const inside = driver.pointer().y >= liveTop;
+      const owner = inside ? await driver.readActiveZoneOwner() : null;
       if (owner !== null) {
         owners.push(owner);
-        // At every sample, not just the first. A nearest-zone check taken once
-        // proves the mapping at one depth, which is the same weakness the owner
-        // check above exists to close.
+        // At every sample, not just the first. A check taken once proves the
+        // mapping at one depth, which is the same weakness the owner check
+        // exists to close.
         zoneChoices.push({
+          owner,
           active: await driver.readActiveTarget(),
           nearest: await driver.nearestZoneToPointer(),
           containing: await driver.zoneContainingPointer(),
@@ -212,7 +261,6 @@ test.describe("a canvas any Nextly editor could ship", () => {
       }
       await driver.moveBy(0, STEP_PX);
     }
-    const exitedBelow = driver.pointer().y > bottom.y;
     await driver.cancel();
 
     // The descent left the region because it crossed the far edge, not because
@@ -227,28 +275,40 @@ test.describe("a canvas any Nextly editor could ship", () => {
       "the descent must find at least one active zone inside the region"
     ).toBeGreaterThan(0);
 
-    // The separating property: a zone owned by the INNERMOST container under
-    // the pointer. A canvas that always lets the outer container win never
-    // produces this owner however far the descent goes.
-    // Every one of them, so a canvas that resolves depth at one sample and not
-    // the next cannot pass.
+    // Ownership is asserted where the collision rule is UNAMBIGUOUS, which is
+    // where the pointer is inside a zone: `@dnd-kit/collision` tries pointer
+    // intersection first and only falls back to the dragged shape's overlap when
+    // the pointer is inside none. Under that fallback the ancestor's insertion
+    // gap immediately before the nested container is a legitimate candidate,
+    // because the dragged shape overlaps it too — so an ancestor winning there
+    // is not a fault, and asserting over every sample makes the test fail on
+    // correct behaviour. Measured: over five runs the root owned the target on
+    // two of them, at the topmost samples of the region and nowhere else.
+    //
+    // What this does NOT establish is depth priority, and the distinction
+    // matters because the title claims it. This canvas registers no collision
+    // priority at all — the term appears nowhere in `plugin-page-builder`, while
+    // `@dnd-kit/collision` uses it throughout — so the nested container wins
+    // these samples by being the zone under the pointer, not by being the
+    // deeper one. A canvas with no notion of depth passes this, which is why
+    // the boundary case is recorded as an acceptance shortfall rather than
+    // silently widened away.
+    const contained = zoneChoices.filter(choice => choice.containing >= 0);
     expect(
-      [...new Set(owners)],
-      "every zone inside the nested region must be owned by it"
+      [...new Set(contained.map(choice => choice.owner))],
+      "a zone containing the pointer inside the nested region must be its own"
     ).toEqual(["nx-inner"]);
+
     // Which zone won, which catches a different fault: a stale rect or an
     // unscaled transform resolves the pointer to a zone far from where it is.
     //
     // Two assertions rather than one, because the canvas answers by two rules.
-    // `@dnd-kit/collision` tries pointer intersection FIRST and falls back to
-    // the dragged shape's overlap only when the pointer is inside no zone, so
-    // "the nearest zone wins" is not a rule this canvas follows and asserting it
+    // "The nearest zone wins" is not one this canvas follows, so asserting it
     // outright fails on a legitimate boundary tie. Measured: one sample of 28
     // resolved to the zone one ordinal away from the nearest, with the pointer
     // inside neither.
     //
     // Inside a zone, the answer is exact and has no tie to lose.
-    const contained = zoneChoices.filter(choice => choice.containing >= 0);
     expect(
       contained.length,
       "the descent must sample the pointer inside a drop zone at least once"
@@ -260,10 +320,15 @@ test.describe("a canvas any Nextly editor could ship", () => {
 
     // Outside every zone, the fallback may legitimately choose either side of a
     // boundary, so the bound is one ordinal — the resolution limit of the rule
-    // itself, not a pixel tolerance. It still separates what this guards: at the
-    // measured ~34px zone spacing a #1705 stale rect after a 200px scroll lands
-    // about six zones away, and a #1706 unscaled 0.75 transform drifts further
-    // with every step of the descent.
+    // itself, not a pixel tolerance.
+    //
+    // It is the WEAKER of the two, deliberately, and the exact assertion above
+    // is what carries the guarantee. Zone spacing here is not uniform (measured
+    // 9, 10, 92, 92, 132 and 133 frame px between centres), so one ordinal is
+    // ten pixels of slack in the tight places and over a hundred in the loose
+    // ones. A bound stated in ordinals cannot be tight everywhere, which is
+    // exactly why the containing-zone case is asserted exactly rather than
+    // folded in here.
     expect(
       zoneChoices.filter(
         choice => Math.abs(choice.active - choice.nearest) > 1
@@ -385,7 +450,13 @@ test.describe("a canvas any Nextly editor could ship", () => {
       "this canvas draws its indicator inside the iframe with CSS"
     );
     await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
-    await dragFromPanel(driver);
+    // Onto a zone, not merely over the canvas. The refusal asserted below is
+    // contingent on an indicator EXISTING: the reader raises only when it finds
+    // one it cannot model, and answers `{count: 0}` when the canvas is drawing
+    // none. Stopping wherever the panel drag lands leaves that to chance —
+    // measured, the reader resolved with a count of zero and the assertion read
+    // the missing indicator as a canvas that had gained the capability.
+    await dragOntoZone(driver);
 
     // The canvas cannot answer this at all, and that refusal IS the
     // shortfall. Asserted as the reader's OWN error type BEFORE the
@@ -418,25 +489,41 @@ test.describe("a canvas any Nextly editor could ship", () => {
   test("puts the indicator in the gap the pointer is over", async ({
     request,
   }) => {
-    note(
-      PLAN_POINT.indicatorLeadsIntoGap,
-      "B-7",
-      "the indicator is not a host element, so its rect is not comparable"
-    );
+    note(PLAN_POINT.indicatorLeadsIntoGap, "B-7");
     await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
-    await dragFromPanel(driver);
+    // Onto a zone, not merely over the canvas: with no zone active the canvas
+    // draws no indicator and the rect is null, so the assertions below would be
+    // recorded against an absent indicator rather than against the one they are
+    // about.
+    await dragOntoZone(driver);
 
     const rect = await driver.readIndicatorRect();
     const pointer = driver.pointer();
-    await driver.cancel();
-
-    // Marked HERE, not on the declaration. The declaration form makes
-    // EVERY error in the body expected, so a failed seed or a broken
-    // reader goes green exactly like the shortfall.
-    test.fail(
-      true,
-      "the indicator is not a host element, so its rect is not comparable"
+    // The bound comes from the tree being dragged over, not from a constant.
+    // The fault this names is an indicator trailing the pointer by a whole
+    // block, so the shortest block is what "a whole block" means here; a fixed
+    // number encodes whatever the fixture's spacing happened to be the day it
+    // was written. Measured, the indicator sits 31px from the pointer while the
+    // blocks are ~92px apart, so the previous constant of 24 rejected an
+    // indicator that was in the correct gap.
+    const blocks = await driver.readBlockBoxes();
+    const scale = await driver.frameScale();
+    const shortestBlock = Math.min(
+      ...blocks.slice(1).map(box => box.height * scale)
     );
+    await driver.cancel();
+    expect(
+      shortestBlock,
+      "the fixture must have blocks to measure the bound against"
+    ).toBeGreaterThan(0);
+
+    // No expected-failure marking. This property is MET, and the marking it
+    // used to carry named a reason that is not true: the driver maps the
+    // indicator's frame rect into host coordinates, so it is comparable with the
+    // pointer. What kept the test red was the pairing of an unestablished
+    // precondition with a bound tighter than the fault it describes — with no
+    // zone active the rect was null, and where a rect existed a correct
+    // indicator 31px away was rejected by a 24px constant.
     expect(rect, "a drag in progress must show an indicator").not.toBeNull();
     // In the gap, not merely somewhere on screen. What this catches is an
     // indicator trailing the pointer by a whole block.
@@ -444,7 +531,7 @@ test.describe("a canvas any Nextly editor could ship", () => {
     expect(
       Math.abs(centre - pointer.y),
       "the indicator must lead the pointer into the gap it names"
-    ).toBeLessThanOrEqual(24);
+    ).toBeLessThan(shortestBlock);
   });
 
   test("shows an explicit state over an invalid target", async ({
