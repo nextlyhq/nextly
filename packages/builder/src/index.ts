@@ -40,6 +40,9 @@
  *   `@nextlyhq/ui/styles.css` — or the admin's, which contains it — alongside.
  *   The shell says so in the console, in development, when it is missing.
  *
+ * - The op store — {@link applyOp}, {@link OpError} and the op vocabulary —
+ *   which every edit is expressed in and which derives each edit's inverse.
+ *
  * The package was created ahead of any of this so its name could be claimed on
  * npm, because trusted publishing cannot perform a package's first publish and
  * the bootstrap script will not claim a name that is not already a workspace
@@ -88,6 +91,28 @@ export {
  * `clientLeft`/`clientTop` left three call sites short by the padding.
  */
 export { frameInsetOf } from "./geometry-dom";
+
+/**
+ * @experimental The op store: the vocabulary every edit is expressed in, and
+ * how one applies.
+ *
+ * Exported from the package entry because the entry is what `tsup` builds. A
+ * module the entry does not reference is absent from `dist` however thoroughly
+ * it is tested — the tests import it by relative path and pass, while a consumer
+ * installing the package finds nothing.
+ *
+ * `OpPosition` travels with the vocabulary because `BuilderOp` is written in
+ * terms of it: a consumer that can name an op but not the position inside one
+ * cannot construct an insert or a move.
+ */
+export {
+  applyOp,
+  OpError,
+  type AppliedOp,
+  type BuilderOp,
+  type NodePatch,
+  type OpPosition,
+} from "./ops";
 
 /**
  * @experimental The editor shell's props.
