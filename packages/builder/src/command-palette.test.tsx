@@ -420,22 +420,23 @@ describe("the host can drive it", () => {
   });
 
   it("keeps two commands separable when their fields concatenate alike", () => {
-    // `id`, `label` and `keywords` are free-form, so joining them is not injective. cmdk keys
-    // SELECTION on the value: a collision marks both rows selected and activates the first
-    // whichever the user chose.
+    // The labels must MATCH for the collision to exist: joining label, keywords and id gives both
+    // of these "Open settings page settings advanced", differing only in where the split falls.
+    // cmdk keys SELECTION on that value, so a collision marks both rows selected and activates
+    // the first whichever the user chose.
     const chosen: string[] = [];
     mount(
       <CommandPalette
         commands={[
           {
             id: "settings advanced",
-            label: "First",
+            label: "Open settings",
             keywords: ["page"],
             run: () => chosen.push("first"),
           },
           {
             id: "advanced",
-            label: "Second",
+            label: "Open settings",
             keywords: ["page", "settings"],
             run: () => chosen.push("second"),
           },
@@ -444,7 +445,10 @@ describe("the host can drive it", () => {
     );
     pressPaletteKey();
 
-    fireEvent.click(screen.getByText("Second"));
+    const rows = screen.getAllByText("Open settings");
+    expect(rows).toHaveLength(2);
+    fireEvent.click(rows[1] as HTMLElement);
+
     expect(chosen).toEqual(["second"]);
   });
 

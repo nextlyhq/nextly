@@ -222,8 +222,6 @@ function PaletteSurface({
   // the dialog's TRIGGER, and a palette opened by a keystroke has none — so without this, closing
   // drops focus onto `<body>` and a keyboard user starts again from the top of the document.
   const openedFrom = React.useRef<HTMLElement | null>(null);
-  // A command that deliberately moves focus must win over that restore.
-  const commandMovedFocus = React.useRef(false);
 
   const setOpen = React.useCallback(
     (next: boolean) => {
@@ -250,18 +248,20 @@ function PaletteSurface({
     if (opening) {
       const active = document.activeElement;
       openedFrom.current = active instanceof HTMLElement ? active : null;
-      commandMovedFocus.current = false;
       return;
     }
     if (!closing) return;
 
     const target = openedFrom.current;
     openedFrom.current = null;
-    if (commandMovedFocus.current || !target) return;
+    if (!target) return;
 
-    // Deferred by a task rather than run here. Radix is still unwinding its focus trap at this
-    // point — the search input is measurably still focused and still connected — so restoring now
-    // would be overwritten a moment later by the trap's own final move.
+    // Deferred by a task rather than run here, for two reasons. Radix is still unwinding its
+    // focus trap at this point — the search input is measurably still focused and still connected
+    // — so restoring now would be overwritten a moment later by the trap's own final move. And a
+    // chosen command runs after the close, so by the time this fires the DOM already answers
+    // whether the command established focus: if it did, `strayed` is false and nothing is taken
+    // back from it. That is the whole suppression rule, so no separate flag records the intent.
     const restore = setTimeout(() => {
       const active = document.activeElement;
       const strayed =
@@ -333,14 +333,7 @@ function PaletteSurface({
       // then competes with a palette that is only just unmounting, leaving focus somewhere
       // neither component chose.
       flushSync(() => setOpen(false));
-      const before = document.activeElement;
       command.run();
-      // OBSERVED rather than assumed. Claiming for every command suppressed the restore for
-      // ordinary ones — a toggle that never touches focus left it on `<body>`. The restore is
-      // deferred, so this is read after `run()` has settled.
-      const after = document.activeElement;
-      commandMovedFocus.current =
-        after !== before && after instanceof HTMLElement && after.isConnected;
     },
     [setOpen]
   );
