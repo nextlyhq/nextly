@@ -1992,3 +1992,42 @@ describe("measureBytes says WHY a value cannot be stored", () => {
     });
   });
 });
+
+describe("measureBytes stays cheap on ordinary objects", () => {
+  it("does not throw once per record while looking for boxed BigInts", () => {
+    // The unspoofable brand check costs a thrown exception for every value that
+    // is not a BigInt, so running it on every record would pay that across the
+    // whole document. `props` is not covered by the node cap, so an ordinary
+    // request can carry hundreds of thousands of small objects.
+    //
+    // Asserted as a RATIO against the same walk over primitives rather than as
+    // a wall-clock bound, because an absolute millisecond figure measures the
+    // machine. A throw per record is a ~100x cost and shows up either way.
+    const records = Array.from({ length: 20_000 }, () => ({}));
+    const numbers = Array.from({ length: 20_000 }, () => 0);
+
+    const startRecords = performance.now();
+    measureBytes({ v: records }, Number.POSITIVE_INFINITY);
+    const recordsMs = performance.now() - startRecords;
+
+    const startNumbers = performance.now();
+    measureBytes({ v: numbers }, Number.POSITIVE_INFINITY);
+    const numbersMs = performance.now() - startNumbers;
+
+    expect(
+      recordsMs / Math.max(numbersMs, 0.01),
+      `walking ${String(records.length)} records took ${recordsMs.toFixed(1)}ms ` +
+        `against ${numbersMs.toFixed(1)}ms for the same count of numbers`
+    ).toBeLessThan(20);
+  });
+
+  it("still refuses a boxed BigInt and still writes a tag that only claims to be one", () => {
+    // The positive control for the pre-filter: it must not have bought its
+    // speed by giving up either answer.
+    expect(measureBytes({ x: Object(1n) }, 100).exceeded).toBe(true);
+    expect(
+      measureBytes({ v: { [Symbol.toStringTag]: "BigInt", x: 1 } }, 1_000)
+        .exceeded
+    ).toBe(false);
+  });
+});
