@@ -658,6 +658,24 @@ const exclusiveDeclarationsOf = perClass(exclusiveDeclarationsUncached);
  * the primitive draws.
  */
 function restates(owned: Utility, caller: Utility): boolean {
+  // An UNQUALIFIED caller declaration against a STATE-QUALIFIED owned one is
+  // not a second copy of anything, and this is the one pairing where the
+  // restatement route was wrong.
+  //
+  // `disabled:opacity-50` styles a state; a caller's plain `opacity-50`
+  // states the base. They name the same declaration in different
+  // circumstances: the variant rule is more specific and still wins while
+  // disabled, and if the primitive later fades to `opacity-40` the owned rule
+  // keeps winning there, so nothing the caller wrote suppresses the change.
+  // Reporting it asked whether two declarations look alike rather than
+  // whether one takes the other over.
+  //
+  // A caller carrying its OWN variant is the case this route exists for, and
+  // it stays: `aria-[controls]:outline-none` beside an owned
+  // `focus-visible:outline-none` is one appearance written twice for two
+  // states, and the copies drift the moment either changes. A caller carrying
+  // the owned variants exactly is already decided by `asQualified` above.
+  if (owned.variants.length > 0 && caller.variants.length === 0) return false;
   const ownedDeclarations = expandDeclarations(
     exclusiveDeclarationsOf(owned.full)
   );
@@ -962,9 +980,8 @@ function spreadAttributes(
   alternatives: Array<Array<{ name: string; value: ts.Expression }>>;
   readable: boolean;
 } {
-  const { objects, readable } = styleResolver(checker).objectsFrom(
-    attribute.expression
-  );
+  const resolver = styleResolver(checker);
+  const { objects, readable } = resolver.objectsFrom(attribute.expression);
   if (!readable) return { alternatives: [], readable: false };
   const alternatives: Array<Array<{ name: string; value: ts.Expression }>> = [];
   for (const object of objects) {
@@ -984,11 +1001,14 @@ function spreadAttributes(
         // props it carries are unknown rather than absent.
         return { alternatives: [], readable: false };
       }
-      const name = property.name;
-      if (!ts.isIdentifier(name) && !ts.isStringLiteral(name)) {
+      // Same reader again: a computed key that is statically a string names
+      // its prop as plainly as an identifier does, and treating it as unknown
+      // rejected `{...{ ["value"]: "a" }}` on syntax that decides it.
+      const named = propertyNameOf(property.name, resolver);
+      if (named === undefined) {
         return { alternatives: [], readable: false };
       }
-      attributes.push({ name: name.text, value: property.initializer });
+      attributes.push({ name: named, value: property.initializer });
     }
     alternatives.push(attributes);
   }
@@ -1267,10 +1287,17 @@ function expandsTo(property: string, value?: string): string[] {
   // stood for itself — a name that intersects nothing the primitive owns, while
   // a gradient painted straight over the underline on every tab.
   if (BORDER_IMAGE.test(kebab)) {
-    // `none` is the initial value: it supplies no image, so the primitive's
-    // ordinary border renders exactly as it did. Owning the property whatever
-    // it holds reported the spelling that explicitly draws NOTHING.
-    if (value !== undefined && value.trim().toLowerCase() === "none") {
+    // `none` is the initial value of `border-image-source`, so it supplies no
+    // image and the primitive's ordinary border renders exactly as it did.
+    // Owning the property whatever it holds reported the spelling that draws
+    // NOTHING.
+    //
+    // `initial` is the same state named a different way: CSS defines it as
+    // "reset to the initial value", which for this property IS `none`. Matching
+    // the one spelling asked how the value was written rather than what it
+    // does, and reported a call site that covers nothing.
+    const drawn = value?.trim().toLowerCase();
+    if (drawn === "none" || drawn === "initial") {
       return [kebab];
     }
     return BORDER_ASPECTS.map(aspect => `border-bottom-${aspect}`);
@@ -1645,6 +1672,7 @@ function ownershipIn(
         node.initializer,
         namespaces,
         owning,
+        owningNamespaces,
         exportedNameOf,
         checker
       );
@@ -1732,6 +1760,7 @@ function exportedFrom(
   initializer: ts.Expression,
   namespaces: Set<string>,
   owning: Map<ts.Node, string>,
+  owningNamespaces: Set<ts.Declaration>,
   exportedNameOf: Map<string, string>,
   checker: ts.TypeChecker
 ): string | undefined {
@@ -1754,10 +1783,25 @@ function exportedFrom(
   if (
     ts.isPropertyAccessExpression(initializer) &&
     ts.isIdentifier(initializer.expression) &&
-    namespaces.has(initializer.expression.text) &&
     OWNED_EXPORTS.includes(initializer.name.text)
   ) {
-    return initializer.name.text;
+    // The namespace half resolves by BINDING too, for the same reason the
+    // alias half above does: a local `const UI = { TabsTrigger: Other }` that
+    // shadows `import * as UI` is a different object, and matching the text
+    // held its member to the primitive's contract. `owningNamespaces` holds
+    // the DECLARATIONS the namespace imports introduced, so membership in it
+    // is the question, not membership in a set of spellings.
+    const declaration = declarationOf(initializer.expression, checker);
+    if (declaration) {
+      return owningNamespaces.has(declaration)
+        ? initializer.name.text
+        : undefined;
+    }
+    // Nothing resolved: the module was never loaded, and the text is all
+    // there is — the same fallback, in the same order, as the alias half.
+    if (namespaces.has(initializer.expression.text)) {
+      return initializer.name.text;
+    }
   }
   return undefined;
 }
@@ -1901,9 +1945,13 @@ function literalStrings(node: ts.Node, found: string[] = []): string[] {
       }
       if (!ts.isPropertyAssignment(property)) continue;
       if (staticTruthiness(property.initializer) === false) continue;
-      const name = property.name;
-      if (ts.isStringLiteral(name) || ts.isIdentifier(name))
-        found.push(name.text);
+      // Asked through the one reader that answers "what property is this",
+      // rather than restating two of the node kinds it knows about. Restating
+      // them meant `cn({ ["border-b-0"]: true })` named no class here while
+      // the style half read the identical form — one question with two
+      // implementations, and they had already drifted.
+      const named = propertyNameOf(property.name);
+      if (named !== undefined) found.push(named);
     }
     return found;
   }
@@ -1961,6 +2009,14 @@ function styleResolver(checker: ts.TypeChecker): {
     objects: ts.ObjectLiteralExpression[];
     /** False when the expression has to be traced to know what it holds. */
     readable: boolean;
+    /**
+     * True when one alternative supplies NO object at all.
+     *
+     * Distinct from an empty object list, which says every alternative
+     * supplies nothing. This says SOME branch does, and the caller has to
+     * keep whatever preceded the spread reachable on that branch.
+     */
+    absent: boolean;
   };
   valueOf(identifier: ts.Identifier): ts.Expression | undefined;
   declarationOf(identifier: ts.Identifier): ts.Declaration | undefined;
@@ -1990,14 +2046,23 @@ function styleResolver(checker: ts.TypeChecker): {
 
   const objectsFrom = (
     root: ts.Expression | undefined
-  ): { objects: ts.ObjectLiteralExpression[]; readable: boolean } => {
+  ): {
+    objects: ts.ObjectLiteralExpression[];
+    readable: boolean;
+    absent: boolean;
+  } => {
     const objects: ts.ObjectLiteralExpression[] = [];
     const seen = new Set<ts.Node>();
     let readable = true;
+    let absent = false;
     const walk = (node: ts.Expression | undefined): void => {
       // `style={}` carries no expression, and React receives no style. There
-      // is nothing here to trace, so it is read rather than reported.
-      if (!node) return;
+      // is nothing here to trace, so it is read rather than reported — but it
+      // IS a branch that supplies nothing, which the caller has to know.
+      if (!node) {
+        absent = true;
+        return;
+      }
       if (seen.has(node)) return;
       seen.add(node);
       // Parentheses, `as`, `satisfies` and `!` are erased before the code runs,
@@ -2021,6 +2086,12 @@ function styleResolver(checker: ts.TypeChecker): {
         walk(node.whenFalse);
         return;
       }
+      // A branch that contributes NOTHING is still a branch the element can
+      // take, and it leaves whatever came before it standing. Spreading
+      // `...(flag ? { x: undefined } : undefined)` was read as the clearing
+      // branch alone, so a property the other branch preserves looked cleared
+      // on every render. Recorded as an empty alternative rather than as no
+      // alternative at all, which is what made the difference invisible.
       if (
         ts.isBinaryExpression(node) &&
         (node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
@@ -2038,7 +2109,10 @@ function styleResolver(checker: ts.TypeChecker): {
       // unreadable when it is the whole prop — which rejected both
       // `style={undefined}` and the branch of a literal condition that
       // resolves to it.
-      if (isDefinitelyNothing(node, declarations)) return;
+      if (isDefinitelyNothing(node, declarations)) {
+        absent = true;
+        return;
+      }
       // A name, a call, a member access, a spread of one: knowing what this
       // holds means tracing it, which is the analysis this deliberately does
       // not do. Reported as unreadable rather than assumed empty — an empty
@@ -2046,7 +2120,7 @@ function styleResolver(checker: ts.TypeChecker): {
       readable = false;
     };
     walk(root);
-    return { objects, readable };
+    return { objects, readable, absent };
   };
 
   return { objectsFrom, valueOf, ...declarations };
@@ -2095,7 +2169,10 @@ function styleObjectsFor(
  */
 function propertyNameOf(
   name: ts.PropertyName,
-  resolver: ReturnType<typeof styleResolver>
+  // Optional, because two callers ask this question without one in hand. A
+  // literal computed key is decidable regardless; only following a key through
+  // a `const` binding needs the resolver.
+  resolver?: ReturnType<typeof styleResolver>
 ): string | undefined {
   if (ts.isIdentifier(name) || ts.isStringLiteral(name)) return name.text;
   if (ts.isComputedPropertyName(name)) {
@@ -2138,7 +2215,7 @@ function propertyNameOf(
  */
 function staticKeyOf(
   expression: ts.Expression,
-  resolver: ReturnType<typeof styleResolver>,
+  resolver: ReturnType<typeof styleResolver> | undefined,
   seen = new Set<ts.Declaration>()
 ): string | undefined {
   const value = withoutTypeWrappers(expression);
@@ -2146,6 +2223,7 @@ function staticKeyOf(
     return value.text;
   }
   if (ts.isIdentifier(value)) {
+    if (!resolver) return undefined;
     const declaration = resolver.declarationOf(value);
     if (!declaration || seen.has(declaration)) return undefined;
     seen.add(declaration);
@@ -2382,6 +2460,12 @@ function declaredProperties(
       const branches = spread.objects.flatMap(source =>
         declaredProperties(source, resolver, onPath, unreadable)
       );
+      // The branch that supplies nothing is an alternative like any other, and
+      // on it every property set before this spread survives untouched.
+      // Dropping it meant `...(flag ? { x: undefined } : undefined)` was read
+      // as though the clearing branch always ran, so a value the other branch
+      // preserves looked cleared on every render.
+      if (spread.absent) branches.push(new Map());
       if (branches.length === 0) continue;
       variants = variants.flatMap(base =>
         branches.map(branch => new Map([...base, ...branch]))
@@ -2791,7 +2875,8 @@ describe("the tab indicator contract", () => {
   });
 
   /** Every probe imports the way a real call site does, so tags resolve. */
-  const IMPORT = `import { TabsList, TabsTrigger } from "@nextlyhq/ui";\n`;
+  const IMPORT = `import * as UI from "@nextlyhq/ui";
+import { TabsList, TabsTrigger } from "@nextlyhq/ui";\n`;
 
   it.each([
     // The shapes a pattern-based scan returned clean on. Each removes the
@@ -3226,6 +3311,18 @@ describe("the tab indicator contract", () => {
       "an owned class written as a concatenation",
       '<TabsTrigger className={"border-b-" + "0"} />',
     ],
+    // clsx reads a computed literal key as the class it spells, exactly as the
+    // written-out key beside it.
+    [
+      "an owned class named by a computed key in a class map",
+      '<TabsTrigger className={cn({ ["border-b-0"]: true })} />',
+    ],
+    // The branch that supplies no object still renders, and on it the value
+    // set before the spread survives.
+    [
+      "an owned property a conditional spread clears in only one branch",
+      '<TabsTrigger style={{ borderBottomColor: "red", ...(flag ? { borderBottomColor: undefined } : undefined) }} />',
+    ],
   ])("catches %s", (_label, body) => {
     // The positive controls. Each is a shape an earlier version returned clean
     // on, or a category it never read. Without these, a check that can never
@@ -3570,6 +3667,29 @@ describe("the tab indicator contract", () => {
       "an alias of a name that shadows the import",
       'function Row() {\n  const TabsTrigger = Other;\n  const Local = TabsTrigger;\n  return <Local className="border-b-0" />;\n}',
     ],
+    // Ownership follows the BINDING for a namespace exactly as it does for a
+    // plain alias: a local object that shadows `import * as UI` is not it.
+    [
+      "a member of an object that shadows a namespace import",
+      'function Row() {\n  const UI = { TabsTrigger: Other };\n  const Trigger = UI.TabsTrigger;\n  return <Trigger className="border-b-0" />;\n}',
+    ],
+    // A computed key that is statically a string names its prop as plainly as
+    // an identifier does.
+    [
+      "a spread carrying an unrelated prop under a computed key",
+      '<TabsTrigger {...{ ["value"]: "a" }} />',
+    ],
+    // The base state, not a copy of the disabled treatment: the owned variant
+    // rule is more specific and keeps winning while disabled.
+    [
+      "an unqualified class restating a state-qualified owned rule",
+      '<TabsTrigger className="opacity-50" />',
+    ],
+    // CSS defines `initial` for this property AS `none`, so it draws nothing.
+    [
+      "a border image source reset to initial",
+      '<TabsTrigger style={{ borderImageSource: "initial" }} />',
+    ],
   ])("does not report %s", (_label, body) => {
     // The complement, and the reason this is a contract rather than a ban. A
     // check that flags a documented example or a legitimate layout class gets
@@ -3797,16 +3917,25 @@ describe("which files the call-site scan reads", () => {
     // least one child directory covers both and misses a file sitting directly
     // in the root — which `sourceFiles` reaches, since it recurses from the
     // root itself rather than from the packages inside it.
+    // Forward slashes, because that is the string the matcher is handed at
+    // runtime: Vitest normalises a watcher path with `slash(id)` before
+    // testing it, and picomatch reads a backslash as an ESCAPE rather than a
+    // separator. Handing it a native Windows path would put every probe in
+    // `unwatchedProbes` and fail this suite on a correctly configured watch.
+    const forwardSlashes = (path: string): string => path.replace(/\\/g, "/");
+    const repoRoot = forwardSlashes(REPO);
     const probes = SCAN_ROOT_NAMES.flatMap(root =>
-      CALL_SITE_EXTENSIONS.flatMap(extension => [
-        resolve(REPO, root, `probe-package/src/nested/probe${extension}`),
-        resolve(REPO, root, `probe-package/probe${extension}`),
-        resolve(REPO, root, `probe${extension}`),
-      ])
+      CALL_SITE_EXTENSIONS.flatMap(extension =>
+        [
+          `probe-package/src/nested/probe${extension}`,
+          `probe-package/probe${extension}`,
+          `probe${extension}`,
+        ].map(leaf => forwardSlashes(resolve(REPO, root, leaf)))
+      )
     );
     const unwatchedProbes = probes
       .filter(path => !isMatch(path, triggers))
-      .map(path => path.replace(`${REPO}/`, ""));
+      .map(path => path.replace(`${repoRoot}/`, ""));
     expect(unwatchedProbes).toEqual([]);
 
     // Matching is only HALF the mechanism, and the half that was never checked
