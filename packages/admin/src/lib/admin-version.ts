@@ -6,6 +6,13 @@
  * `package.json` read as core has: this bundle targets the browser, where
  * there is no module resolver to fall back to.
  *
+ * A consumer that bundles this package from SOURCE gets `undefined`, because
+ * neither `define` runs. That is the contributor playground, which aliases
+ * `@nextlyhq/admin` to `src/index.ts` — so the install command it renders is
+ * unpinned, and that is correct rather than broken: a dev checkout has no
+ * published release to name. An installed project resolves the built `dist`,
+ * where the constant is a literal.
+ *
  * @module lib/admin-version
  */
 
