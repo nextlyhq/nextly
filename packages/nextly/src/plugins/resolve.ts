@@ -1,6 +1,7 @@
 import type { PluginDefinition } from "./plugin-context";
 import { topoSortPlugins } from "./topo-sort";
 import { assertClientConfigs } from "./validate-client-config";
+import { validatePluginSlugs } from "./validate-slugs";
 import { validatePluginVersions } from "./validate-versions";
 
 export interface ResolvePluginsOptions {
@@ -28,5 +29,10 @@ export function resolvePlugins(
   // other fail-fast checks rather than surfacing when the admin first asks for
   // its metadata and losing the whole branding response with it.
   assertClientConfigs(plugins);
+  // Two plugins sharing an admin slug share an address, and nothing downstream
+  // can detect it: every lookup along that address returns a plugin, which is
+  // what a correct lookup returns. Registration is where the ambiguity is still
+  // observable.
+  validatePluginSlugs(plugins);
   return topoSortPlugins(plugins);
 }
