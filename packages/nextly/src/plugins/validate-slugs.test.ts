@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { buildPluginAdminMeta } from "./admin-meta";
 import type { PluginDefinition } from "./plugin-context";
 import { validatePluginSlugs } from "./validate-slugs";
 
@@ -95,5 +96,45 @@ describe("validatePluginSlugs", () => {
     expect(collisionReason(["@acme/one", "@acme/one"])).toBe(
       "duplicate-admin-slug"
     );
+  });
+});
+
+/**
+ * The seam, as distinct from the boot check.
+ *
+ * `buildPluginAdminMeta` is the one place in core that turns a plugin list
+ * into addresses — the slug it derives is the admin's URL for that plugin and
+ * the key its host override is read by. Two paths reach it without the boot
+ * check having run on the list it receives: `createDynamicHandlers`
+ * initializes services lazily and serves the public admin-meta endpoint first,
+ * and a `setup` transformer can rewrite `config.plugins` after
+ * `resolvePlugins` has already validated the original.
+ */
+describe("buildPluginAdminMeta", () => {
+  it("addresses plugins whose slugs differ", () => {
+    const meta = buildPluginAdminMeta(
+      [plugin("@acme/one"), plugin("@acme/two")],
+      undefined
+    );
+
+    // The positive control: it really does produce metadata for both, so the
+    // rejection below is about the collision rather than about a function that
+    // refuses everything.
+    expect(meta.map(m => m.name)).toEqual(["@acme/one", "@acme/two"]);
+  });
+
+  it("refuses to address two plugins that share a slug", () => {
+    let reason: string | undefined;
+    try {
+      buildPluginAdminMeta(
+        [plugin("@acme/plugin-seo"), plugin("acme_plugin_seo")],
+        undefined
+      );
+    } catch (error) {
+      reason = (error as { logContext?: { reason?: string } }).logContext
+        ?.reason;
+    }
+
+    expect(reason).toBe("duplicate-admin-slug");
   });
 });
