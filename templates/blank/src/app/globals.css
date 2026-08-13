@@ -48,6 +48,18 @@
   --color-foreground: #f9fafb;
 }
 
+/* `@theme inline` on purpose, and it is the whole point of this block. An inline theme
+   SUBSTITUTES the value where the utility is used; a plain `@theme` emits the variable into
+   `:root`, which is where `@nextlyhq/admin` declares its own `--font-mono` — redefining it there
+   would replace the admin's entire fallback chain with this one family.
+   
+   Needed because the frontend routes do not load the admin stylesheet, so nothing else binds the
+   `font-mono` utility this template uses on its badge and file-path text; without it they fall
+   back to Tailwind's default mono rather than the face the template loads. */
+@theme inline {
+  --font-mono: var(--font-geist-mono, ui-monospace), monospace;
+}
+
 @theme {
   --color-background: var(--color-background);
   --color-foreground: var(--color-foreground);

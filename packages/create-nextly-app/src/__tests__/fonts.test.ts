@@ -171,6 +171,30 @@ describe("every template feeds the admin theme", () => {
   );
 });
 
+describe("a template's own utilities reach the face it loads", () => {
+  it.each(APP_TEMPLATES)("%s binds font-mono if its pages use it", template => {
+    const dir = path.join(TEMPLATES_ROOT, template);
+    const usesMonoUtility = sourceFiles(dir).some(
+      file =>
+        file.endsWith(".tsx") &&
+        /\bfont-mono\b/.test(fs.readFileSync(file, "utf8"))
+    );
+    if (!usesMonoUtility) return;
+
+    // Frontend routes do not load the admin stylesheet, so nothing else binds this utility. It
+    // has to be bound in an `@theme inline` block: a plain `@theme` emits the variable into
+    // `:root`, where the admin declares its own, and would replace that fallback chain instead of
+    // feeding it.
+    const css = fs.readFileSync(path.join(dir, "src/app/globals.css"), "utf8");
+    const inlineBlocks = [
+      ...css.matchAll(/@theme\s+inline\s*\{([^}]*)\}/g),
+    ].map(m => m[1] ?? "");
+    expect(inlineBlocks.some(block => /--font-mono\s*:/.test(block))).toBe(
+      true
+    );
+  });
+});
+
 describe("the scaffold installs the fonts its templates import", () => {
   /** The faces each scaffold's FINAL layout references, after the type overlays base. */
   const EXPECTED: Record<(typeof APP_TEMPLATES)[number], string[]> = {
