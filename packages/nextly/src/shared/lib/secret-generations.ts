@@ -34,24 +34,39 @@
 export function secretGenerations(
   current: string | undefined,
   retiredList: string | undefined
-): string[] {
+): SecretGeneration[] {
   const retired = retiredSecrets(retiredList);
   return current === undefined ? retired : [current, ...retired];
 }
 
 /**
- * A JSON array of strings, or null for anything else.
+ * One generation this install can read with.
+ *
+ * `undefined` is the UNKEYED generation, not a missing value. A development
+ * install with no `NEXTLY_SECRET` hashes without a key, and rows written then
+ * carry a plain SHA-256 digest that no HMAC reproduces — so enabling a secret
+ * later strands them unless that generation can still be named.
+ */
+export type SecretGeneration = string | undefined;
+
+/**
+ * A JSON array of secrets, or null for anything else.
+ *
+ * `null` inside the array is the UNKEYED generation, which is the only way to
+ * express it: it is the absence of a key, and no string denotes that.
  *
  * Anything else includes values that parse as JSON but are not a list of
  * secrets — a bare number, a quoted string, an object. Those fall through to
  * the comma form rather than being coerced, because a secret that happens to
  * look like JSON is still a secret.
  */
-function jsonStringArray(raw: string): string[] | null {
+function jsonSecretArray(raw: string): SecretGeneration[] | null {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return null;
-    return parsed.every(entry => typeof entry === "string") ? parsed : null;
+    return parsed.every(entry => typeof entry === "string" || entry === null)
+      ? parsed.map(entry => (entry === null ? undefined : (entry as string)))
+      : null;
   } catch {
     return null;
   }
@@ -77,17 +92,32 @@ function jsonStringArray(raw: string): string[] | null {
  * the value parses as a JSON array, which leaves one ambiguity worth naming: a
  * retired secret that is itself literally an array literal is read as the JSON
  * form. Such a value must use the JSON form, quoted inside it.
+ *
+ * The two forms also differ deliberately on EMPTY entries, and that difference
+ * is the point rather than an inconsistency:
+ *
+ * - In the comma form an empty entry is dropped, because it is almost always a
+ *   trailing comma. Nothing about `older,` says the author meant a second key.
+ * - In the JSON form `""` is KEPT, because writing it is an explicit act. An
+ *   install that ran with `NEXTLY_SECRET=""` really did key its digests with
+ *   the empty string — `digestWith` only takes the unkeyed branch for
+ *   `undefined` — so dropping it would strand every row that install wrote.
+ *
+ * (An earlier version of this comment justified dropping empty entries by
+ * claiming an empty HMAC key hashes every address alike. That is false, and
+ * measured: HMAC pads a short key with zeros and remains a PRF, so two
+ * addresses under `""` give different digests. The reason to drop it in the
+ * comma form is the trailing comma, and nothing more.)
  */
-function retiredSecrets(raw: string | undefined): string[] {
+function retiredSecrets(raw: string | undefined): SecretGeneration[] {
   const value = raw ?? "";
   if (value.trim().length === 0) return [];
 
-  const entries =
-    jsonStringArray(value.trim()) ?? value.split(",").map(part => part.trim());
+  const asJson = jsonSecretArray(value.trim());
+  if (asJson) return asJson;
 
-  // An empty entry is dropped in BOTH forms. A trailing comma is the likeliest
-  // way to write the list, and `""` is a valid HMAC key that hashes every
-  // address to one value — every recipient colliding with every other, with
-  // nothing to show for it until an erasure deletes the wrong rows.
-  return entries.filter(entry => entry.length > 0);
+  return value
+    .split(",")
+    .map(part => part.trim())
+    .filter(entry => entry.length > 0);
 }

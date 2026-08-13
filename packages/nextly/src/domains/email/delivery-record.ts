@@ -13,7 +13,10 @@
 import { createHmac, createHash } from "crypto";
 
 import { env } from "../../lib/env";
-import { secretGenerations } from "../../shared/lib/secret-generations";
+import {
+  secretGenerations,
+  type SecretGeneration,
+} from "../../shared/lib/secret-generations";
 
 /** How a delivery ended. A drain would add `pending` and `retrying`. */
 export type EmailDeliveryStatus = "sent" | "failed";
@@ -94,11 +97,17 @@ function digestWith(key: string | undefined, mailbox: string): string {
  * HMACs would miss every row written today — the newest ones, and the ones an
  * erasure request is most likely to be about.
  */
-function readableKeys(): [string | undefined, ...string[]] {
+function readableKeys(): [SecretGeneration, ...SecretGeneration[]] {
   return [
     env.NEXTLY_SECRET,
     // Asked for the RETIRED list alone: the current key is already the head of
     // this tuple, and passing it again would only be deduplicated later.
+    //
+    // Retired entries may themselves be `undefined`, spelled `null` in the JSON
+    // form. That is how an install names the generation it wrote BEFORE it had
+    // a secret at all: those rows carry a plain SHA-256 digest, and no HMAC
+    // under any string reproduces it, so without a way to say "unkeyed" they
+    // would be permanently unreachable the moment a secret was enabled.
     ...secretGenerations(undefined, env.NEXTLY_SECRET_PREVIOUS),
   ];
 }

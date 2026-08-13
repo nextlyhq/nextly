@@ -9,7 +9,7 @@
  * exists to make impossible.
  */
 
-import { createHmac } from "node:crypto";
+import { createHmac, createHash } from "node:crypto";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -120,6 +120,40 @@ describe("reaching delivery rows across a secret rotation", () => {
         hashRecipient("person@example.com")
       );
     }
+  });
+
+  it("reaches rows written before the install had any secret", async () => {
+    // The generation no string can name. A development database that recorded
+    // deliveries with no `NEXTLY_SECRET` holds plain SHA-256 digests; enabling
+    // a secret later makes every one of them unreachable, because no HMAC under
+    // any key reproduces an unkeyed hash. `null` in the JSON list says so.
+    envMock.NEXTLY_SECRET = CURRENT;
+    envMock.NEXTLY_SECRET_PREVIOUS = "[null]";
+    vi.resetModules();
+    const { recipientDigests } = await import("../delivery-record");
+
+    const unkeyed = createHash("sha256")
+      .update("person@example.com")
+      .digest("hex");
+
+    expect(recipientDigests("person@example.com")).toContain(unkeyed);
+  });
+
+  it("reaches rows keyed with an empty-string secret", async () => {
+    // `NEXTLY_SECRET=""` is used as an HMAC key by the writer, which takes the
+    // unkeyed branch only for `undefined`. So `""` is a real generation and is
+    // distinct from the unkeyed one -- measured: their digests differ.
+    envMock.NEXTLY_SECRET = CURRENT;
+    envMock.NEXTLY_SECRET_PREVIOUS = '[""]';
+    vi.resetModules();
+    const { recipientDigests } = await import("../delivery-record");
+
+    const digests = recipientDigests("person@example.com");
+
+    expect(digests).toContain(digestUnder("", "person@example.com"));
+    expect(digestUnder("", "person@example.com")).not.toBe(
+      createHash("sha256").update("person@example.com").digest("hex")
+    );
   });
 
   it("does not compare the same digest twice", async () => {

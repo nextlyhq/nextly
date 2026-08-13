@@ -221,30 +221,59 @@ export interface RegisteredProviderConfig {
  * });
  * ```
  */
-export interface EmailConfig {
-  /**
-   * Provider configuration. This is the code-first fallback — database-managed
-   * providers take precedence when configured via the admin UI.
-   *
-   * The three built-in shapes are named so they keep full checking and
-   * autocomplete. `RegisteredProviderConfig` admits any type a plugin
-   * registered: the resolver builds every provider through the registry, so
-   * restricting this to the built-ins would have made a contributed provider
-   * usable from the database and rejected by the compiler in `defineConfig` —
-   * the same provider working or not depending on where it was configured.
-   */
-  providerConfig:
-    | SmtpConfig
-    | ResendConfig
-    | SendLayerConfig
-    | RegisteredProviderConfig;
+/**
+ * The code-first provider, and the address it sends from.
+ *
+ * Declared as a pair because the resolver treats them as one: `from` is read
+ * ONLY inside the branch that builds an adapter from `providerConfig`, and a
+ * database-managed provider carries its own `fromEmail`. So the two states that
+ * exist are "a code-first provider, with its address" and "no code-first
+ * provider at all" — and an install that manages providers in the admin UI is
+ * squarely the second.
+ *
+ * Previously both were required, which made that second state unrepresentable:
+ * such an install could not write `defineConfig({ email: { retention } })` to
+ * bound or disable its delivery log without inventing a provider it never uses.
+ * A configuration block whose only valid spelling includes a fiction is a
+ * defect in the type, not a discipline for the user.
+ *
+ * A union rather than two optional fields, so `providerConfig` without `from`
+ * still fails: that pair really is required together, and the resolver would
+ * otherwise send from `undefined`.
+ */
+export type EmailProviderBlock =
+  | {
+      /**
+       * Provider configuration. This is the code-first fallback —
+       * database-managed providers take precedence when configured via the
+       * admin UI.
+       *
+       * The three built-in shapes are named so they keep full checking and
+       * autocomplete. `RegisteredProviderConfig` admits any type a plugin
+       * registered: the resolver builds every provider through the registry, so
+       * restricting this to the built-ins would have made a contributed
+       * provider usable from the database and rejected by the compiler in
+       * `defineConfig` — the same provider working or not depending on where it
+       * was configured.
+       */
+      providerConfig:
+        | SmtpConfig
+        | ResendConfig
+        | SendLayerConfig
+        | RegisteredProviderConfig;
 
-  /**
-   * Default "from" address for all emails.
-   * @example 'Nextly <noreply@example.com>'
-   */
-  from: string;
+      /**
+       * Default "from" address for all emails.
+       * @example 'Nextly <noreply@example.com>'
+       */
+      from: string;
+    }
+  | { providerConfig?: undefined; from?: undefined };
 
+export type EmailConfig = EmailProviderBlock & EmailSettings;
+
+/** Everything in `email` that does not depend on where the provider comes from. */
+export interface EmailSettings {
   /**
    * How long the delivery log keeps its rows.
    *

@@ -60,9 +60,20 @@ export const _envSchema = z
     //
     //   NEXTLY_SECRET_PREVIOUS=["old,with,commas","  spaced  "]
     //
-    // Empty entries are dropped in both, rather than rejected: a trailing
-    // comma is the likeliest way to write the list, and `""` is a VALID HMAC
-    // key under which every address hashes to the same value.
+    // The JSON form also expresses two generations the comma form cannot name
+    // at all, and both are reachable:
+    //
+    //   NEXTLY_SECRET_PREVIOUS=[null,""]
+    //
+    // `null` is the UNKEYED generation — what a development install writes
+    // before it has a secret. Those rows carry a plain SHA-256 digest that no
+    // HMAC reproduces, so enabling a secret later strands them unless that
+    // generation can still be named. `""` is a secret that really was the
+    // empty string, which the writer uses as an HMAC key like any other.
+    //
+    // An empty entry in the COMMA form is dropped, because there it is a
+    // trailing comma rather than a declaration. In the JSON form it is kept:
+    // writing it is deliberate.
     NEXTLY_SECRET_PREVIOUS: z.string().optional(),
     // Shared secret a scheduler (e.g. Vercel Cron) presents to the webhook
     // drain route. Optional: when unset, the drain route can still be triggered

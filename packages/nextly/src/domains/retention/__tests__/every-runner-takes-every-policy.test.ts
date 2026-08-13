@@ -167,6 +167,42 @@ describe("the derived policy list", () => {
     ]);
   });
 
+  it("resolves the NESTED email block when nothing flattened it", () => {
+    // `registerServices()` is public. A caller using it directly supplies
+    // `email: { retention }` -- the flattened `emailRetention` field is
+    // produced only by `sanitizeConfig` + `buildServiceConfig`. Reading just
+    // the flat field left those installs with no pass while their
+    // configuration plainly asked for one.
+    const policies = retentionPoliciesFrom({
+      email: { retention: { maxAgeMs: 1234 } },
+    });
+
+    expect(policies.emailPolicy?.maxAgeMs).toBe(1234);
+  });
+
+  it("prefers an already-flattened policy over the nested block", () => {
+    // The sanitized path is authoritative: it has already applied defaults and
+    // bounds, and re-resolving from the raw block could disagree with what the
+    // rest of initialization is using.
+    const flattened = resolveEmailRetentionConfig({ maxAgeMs: 999 });
+
+    const policies = retentionPoliciesFrom({
+      emailRetention: flattened,
+      email: { retention: { maxAgeMs: 1234 } },
+    });
+
+    expect(policies.emailPolicy).toBe(flattened);
+  });
+
+  it("gives an install with no email block the default window", () => {
+    // Matches `sanitizeConfig`, which resolves the same defaults whether or not
+    // an `email` block exists -- a delivery log written by an admin-managed
+    // provider is bounded by default rather than growing until someone notices.
+    expect(retentionPoliciesFrom({}).emailPolicy?.maxAgeMs).toBe(
+      resolveEmailRetentionConfig().maxAgeMs
+    );
+  });
+
   it("builds no pass for a config that configured none", () => {
     // The control against the case above passing because the builder always
     // emits three.

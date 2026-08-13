@@ -155,3 +155,32 @@ describe("the reloaded policy", () => {
     expect(activeEmailRetention(built)).toBe(built);
   });
 });
+
+/**
+ * Compile-time coverage for the public shape.
+ *
+ * An install that manages its providers in the admin UI has no code-first
+ * provider and no default `from` — those live on the stored provider row. It
+ * must still be able to bound or disable its delivery log. While `EmailConfig`
+ * required `providerConfig` and `from`, the only way to write this was to
+ * invent a provider the install never used, so the honest configuration did not
+ * typecheck. `check-types` is what enforces this; the runtime assertion below
+ * just keeps the value referenced.
+ */
+describe("configuring retention without a code-first provider", () => {
+  it("is a valid email block on its own", () => {
+    const retentionOnly: EmailConfig = { retention: { maxAgeMs: 1000 } };
+    expect(retentionOnly.providerConfig).toBeUndefined();
+
+    const disabled: EmailConfig = { retention: false };
+    expect(disabled.retention).toBe(false);
+
+    // And a code-first provider still carries its address, because those two
+    // are required together rather than each being optional.
+    const codeFirst: EmailConfig = {
+      providerConfig: { provider: "resend", apiKey: "k" },
+      from: "Nextly <no-reply@example.com>",
+    };
+    expect(codeFirst.from).toContain("@");
+  });
+});

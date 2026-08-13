@@ -4,8 +4,8 @@
  * The list exists because rotating a secret does not move the values already
  * derived from it. Its failure modes are quiet rather than loud, so the cases
  * below are chosen for what they would silently produce rather than for
- * coverage: an empty entry becomes a zero-length key that hashes every input to
- * one value, and a duplicated secret does the same comparison twice on every
+ * coverage: an entry lost to splitting or trimming yields a key that was
+ * never used, and a duplicated secret does the same comparison twice on every
  * erasure.
  */
 
@@ -30,11 +30,12 @@ describe("the secrets an install can read with", () => {
   });
 
   it("drops empty entries rather than treating them as a key", () => {
-    // The case that matters. A trailing comma is the likeliest way to write
-    // this list, and a zero-length key is a VALID HMAC key — every address
-    // would hash to the same value under it, colliding every recipient in the
-    // table with every other. Silent, and catastrophic for a predicate that
-    // decides whose rows get erased.
+    // A trailing comma is the likeliest way to write this list, and nothing
+    // about `older,` says the author meant a second key. Dropping it here is
+    // about INTENT, not about the key being dangerous: an empty HMAC key is
+    // perfectly well defined and does NOT collide addresses — measured, two
+    // addresses under `""` give different digests. The JSON form keeps `""`
+    // for exactly that reason.
     expect(secretGenerations("current", "older,")).toEqual([
       "current",
       "older",
@@ -86,13 +87,40 @@ describe("the secrets an install can read with", () => {
       ]);
     });
 
-    it("still drops empty entries in the JSON form", () => {
-      // The zero-length-key hazard is not about spelling: `""` is a valid HMAC
-      // key under which every address hashes alike, whichever form declared it.
-      expect(secretGenerations("current", '["older","",""]')).toEqual([
+    it("keeps an empty entry in the JSON form, and only there", () => {
+      // The two forms differ on `""` deliberately. In the comma form it is
+      // almost always a trailing comma, so it goes. Writing it inside a JSON
+      // array is an explicit act, and it names a real generation: an install
+      // that ran with `NEXTLY_SECRET=""` keyed its digests with the empty
+      // string, because the writer takes the unkeyed branch only for
+      // `undefined`. Dropping it strands every row that install wrote.
+      expect(secretGenerations("current", '["older",""]')).toEqual([
+        "current",
+        "older",
+        "",
+      ]);
+      expect(secretGenerations("current", "older,")).toEqual([
         "current",
         "older",
       ]);
+    });
+
+    it("names the unkeyed generation with null", () => {
+      // The generation no string can denote: rows written before the install
+      // had any secret carry a plain SHA-256 digest, which no HMAC under any
+      // key reproduces. Without a spelling for it, enabling a secret makes
+      // those rows permanently unreachable by a lookup or an erasure.
+      expect(secretGenerations("current", '[null,"older"]')).toEqual([
+        "current",
+        undefined,
+        "older",
+      ]);
+    });
+
+    it("rejects a JSON array holding anything but secrets", () => {
+      // Numbers are not keys, and coercing them would invent generations. The
+      // value falls through to the comma form intact instead.
+      expect(secretGenerations(undefined, "[1,2]")).toEqual(["[1", "2]"]);
     });
 
     it("treats a secret that merely looks like JSON as one secret", () => {
@@ -102,12 +130,6 @@ describe("the secrets an install can read with", () => {
       expect(secretGenerations(undefined, "12345")).toEqual(["12345"]);
       expect(secretGenerations(undefined, '"quoted"')).toEqual(['"quoted"']);
       expect(secretGenerations(undefined, '{"a":1}')).toEqual(['{"a":1}']);
-    });
-
-    it("falls back to the comma form when the JSON is not string entries", () => {
-      // An array of non-strings is not a secret list either. Coercing it would
-      // invent keys; falling through keeps the value intact for a human to see.
-      expect(secretGenerations(undefined, "[1,2]")).toEqual(["[1", "2]"]);
     });
   });
 });

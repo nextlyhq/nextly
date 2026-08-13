@@ -20,8 +20,10 @@ import {
 import { pruneEmailDataSafely, type EmailPruneAdapter } from "../email/prune";
 import {
   activeEmailRetention,
+  resolveEmailRetentionConfig,
   type ResolvedEmailRetentionConfig,
 } from "../email/retention-config";
+import type { EmailConfig } from "../email/types";
 import { pruneWebhookDataSafely, type PruneDeps } from "../webhooks/prune";
 import type { ResolvedWebhookRetentionConfig } from "../webhooks/retention-config";
 
@@ -58,7 +60,7 @@ export function buildRetentionPasses(
     const policy = input.webhookPolicy;
     passes.push({
       key: WEBHOOK_RETENTION_GATE_KEY,
-      intervalMs: policy.intervalMs,
+      intervalMs: () => policy.intervalMs,
       run: async maxBatches => {
         await pruneWebhookDataSafely(
           { adapter: input.adapter, now: input.now, logger: input.logger },
@@ -81,10 +83,11 @@ export function buildRetentionPasses(
   if (audit) {
     passes.push({
       key: AUDIT_RETENTION_GATE_KEY,
-      // The one field read at construction. It decides how often a pass is
-      // OFFERED, not what it deletes, so a stale value costs a differently
-      // timed pass rather than a wrong outcome.
-      intervalMs: audit.intervalMs,
+      // Re-read per offer, like the windows below. It decides how often a pass
+      // is offered, and a value captured at boot survives every hot reload —
+      // so a developer shortening the interval would wait the old one out.
+      intervalMs: () =>
+        activeAuditRetention(input.auditPolicy)?.intervalMs ?? audit.intervalMs,
       run: async maxBatches => {
         const policy = activeAuditRetention(input.auditPolicy);
         if (
@@ -111,7 +114,8 @@ export function buildRetentionPasses(
   if (email) {
     passes.push({
       key: EMAIL_RETENTION_GATE_KEY,
-      intervalMs: email.intervalMs,
+      intervalMs: () =>
+        activeEmailRetention(input.emailPolicy)?.intervalMs ?? email.intervalMs,
       run: async maxBatches => {
         const policy = activeEmailRetention(input.emailPolicy);
         if (!policy || policy.maxAgeMs === false) return;
@@ -145,13 +149,27 @@ export function retentionPoliciesFrom(
         webhookRetention?: ResolvedWebhookRetentionConfig | null;
         auditRetention?: ResolvedAuditRetentionConfig;
         emailRetention?: ResolvedEmailRetentionConfig;
+        email?: { retention?: EmailConfig["retention"] };
       }
     | undefined
 ): Pick<RetentionPassInput, "webhookPolicy" | "auditPolicy" | "emailPolicy"> {
+  // `undefined` is "no configuration reached this call site", which is not the
+  // same as "a configuration that asked for nothing" and must not gain passes.
+  if (!config) return {};
+
   return {
-    webhookPolicy: config?.webhookRetention,
-    auditPolicy: config?.auditRetention,
-    emailPolicy: config?.emailRetention,
+    webhookPolicy: config.webhookRetention,
+    auditPolicy: config.auditRetention,
+    // Flattened `emailRetention` when initialization produced one, and
+    // otherwise resolved from the NESTED block by the same call the sanitizer
+    // makes. `registerServices()` is public, and a caller using it directly
+    // supplies `email: { retention }` rather than the flattened field — which
+    // only `sanitizeConfig` + `buildServiceConfig` produce. Reading just the
+    // flat field left those installs with no pass at all while their
+    // configuration plainly asked for one.
+    emailPolicy:
+      config.emailRetention ??
+      resolveEmailRetentionConfig(config.email?.retention),
   };
 }
 
