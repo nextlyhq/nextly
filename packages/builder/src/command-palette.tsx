@@ -221,7 +221,7 @@ function PaletteSurface({
   // What had focus when the palette opened, so closing can hand it back. Radix restores focus to
   // the dialog's TRIGGER, and a palette opened by a keystroke has none — so without this, closing
   // drops focus onto `<body>` and a keyboard user starts again from the top of the document.
-  const openedFrom = React.useRef<HTMLElement | null>(null);
+  const openedFrom = React.useRef<Element | null>(null);
 
   const setOpen = React.useCallback(
     (next: boolean) => {
@@ -246,8 +246,10 @@ function PaletteSurface({
     wasOpen.current = open;
 
     if (opening) {
-      const active = document.activeElement;
-      openedFrom.current = active instanceof HTMLElement ? active : null;
+      // Any focusable ELEMENT. An `<svg tabindex="0">` becomes `activeElement` and is not an
+      // `HTMLElement`, so narrowing to one here silently discarded a legitimate origin and left
+      // focus on `<body>`. Whether it can be focused is asked at restore time.
+      openedFrom.current = document.activeElement;
       return;
     }
     if (!closing) return;
@@ -266,7 +268,12 @@ function PaletteSurface({
       const active = document.activeElement;
       const strayed =
         !active || active === document.body || !active.isConnected;
-      if (target.isConnected && strayed) target.focus();
+      // `focus` is on the `HTMLOrSVGElement` mixin rather than on `Element`, so it is asked for
+      // rather than assumed — a focusable element that cannot be re-focused is left alone.
+      const refocus = (target as Partial<HTMLOrSVGElement>).focus;
+      if (target.isConnected && strayed && typeof refocus === "function") {
+        refocus.call(target);
+      }
     }, 0);
     return () => clearTimeout(restore);
   }, [open]);
@@ -316,14 +323,14 @@ function PaletteSurface({
   // otherwise sit below a weaker one. Headings are what the groups are for, and they say nothing
   // useful about a set of search results.
   const searching = search.trim().length > 0;
+  // Grouped FIRST, then flattened. Filtering `commands` again along a second path would be a
+  // second answer to "is this command available", and the two would agree only until someone
+  // changed one — silently offering a different set while the user is searching, which is the
+  // half nobody looks at.
+  const available = groupAvailable(commands);
   const groups = searching
-    ? [
-        {
-          group: undefined,
-          commands: commands.filter(c => !c.when || c.when()),
-        },
-      ]
-    : groupAvailable(commands);
+    ? [{ group: undefined, commands: available.flatMap(g => g.commands) }]
+    : available;
 
   const choose = React.useCallback(
     (command: BuilderCommand) => {
@@ -382,10 +389,15 @@ function PaletteSurface({
                   //
                   // ENCODED because cmdk trims the value before using it as the identity, so
                   // `"save"` and `"save "` — distinct ids by the type's contract — would collide
-                  // again through normalisation rather than through concatenation. Percent-encoding
-                  // leaves no leading or trailing whitespace for the trim to remove, so distinct
-                  // ids stay distinct.
-                  value={encodeURIComponent(command.id)}
+                  // again through normalisation rather than through concatenation. The quotes
+                  // `JSON.stringify` adds sit at both ends, so there is no edge whitespace for the
+                  // trim to reach.
+                  //
+                  // `JSON.stringify` rather than `encodeURIComponent`, which is not TOTAL over the
+                  // strings `id: string` admits: a lone UTF-16 surrogate — `"\ud800"`, which
+                  // survives a JSON round trip — raises `URIError` and takes the whole palette
+                  // down during render. Well-formed stringify escapes it instead.
+                  value={JSON.stringify(command.id)}
                   keywords={[command.label, ...(command.keywords ?? [])]}
                   onSelect={() => choose(command)}
                 >

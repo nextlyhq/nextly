@@ -480,6 +480,43 @@ describe("the host can drive it", () => {
     expect(chosen).toEqual(["second"]);
   });
 
+  it("hands focus back to a focusable element that is not an HTMLElement", async () => {
+    render(
+      <ShortcutProvider>
+        {/* Focusable and NOT an HTMLElement — narrowing the origin to one discards it. */}
+        <svg tabIndex={0} data-testid="svg-origin" />
+        <CommandPalette
+          commands={[{ id: "a", label: "Anything", run: noop }]}
+        />
+      </ShortcutProvider>
+    );
+
+    const origin = screen.getByTestId("svg-origin");
+    (origin as unknown as { focus: () => void }).focus();
+    expect(document.activeElement).toBe(origin);
+
+    pressPaletteKey();
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    await waitFor(() => expect(document.activeElement).toBe(origin));
+  });
+
+  it("renders an id that cannot be percent-encoded", () => {
+    // `id: string` admits a lone UTF-16 surrogate, which survives a JSON round trip.
+    // `encodeURIComponent` raises `URIError` on it, and a throw here takes the whole palette down
+    // during render rather than degrading.
+    expect(() =>
+      mount(
+        <CommandPalette
+          commands={[{ id: "\ud800", label: "Lone surrogate", run: noop }]}
+        />
+      )
+    ).not.toThrow();
+
+    pressPaletteKey();
+    expect(screen.getByText("Lone surrogate")).toBeTruthy();
+  });
+
   it("names the search field, not just the dialog", () => {
     mount(<CommandPalette commands={[]} />);
     pressPaletteKey();
