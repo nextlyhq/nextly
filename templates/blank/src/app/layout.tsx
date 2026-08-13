@@ -1,19 +1,32 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import "@fontsource-variable/inter";
+import "@fontsource-variable/jetbrains-mono";
 
 import "./globals.css";
 
-const display = Inter({
-  variable: "--font-display",
-  subsets: ["latin"],
-  display: "swap",
-});
-
-const mono = JetBrains_Mono({
-  variable: "--font-mono",
-  subsets: ["latin"],
-  display: "swap",
-});
+/**
+ * The faces are imported as STYLESHEETS from packages in `node_modules`, rather
+ * than fetched from fonts.googleapis.com by `next/font/google` while
+ * `next build` runs — which made every build depend on reaching a third party
+ * and fail behind a proxy, on a locked-down runner, or offline.
+ *
+ * A bare package import rather than `next/font/local` pointing INTO
+ * `node_modules`: a literal path asserts where the package physically lives,
+ * and that assertion is false under Yarn's Plug'n'Play linker (no
+ * `node_modules` at all), under npm/Yarn workspace hoisting (the package moves
+ * to the workspace root), and under pnpm's own symlinked store. An import asks
+ * the resolver instead, which is correct under every layout.
+ *
+ * The trade is `next/font`'s metric-adjusted fallback, so text can shift
+ * slightly as the face arrives. The families are bound to this app's `--font-*`
+ * variables in `globals.css`, which is what every rule downstream reads. *
+ * Importing the package root ships every subset the face offers — Latin, Latin
+ * Extended, Cyrillic, Vietnamese — but each `@font-face` carries a
+ * `unicode-range`, so a browser downloads only the subsets the page actually
+ * uses. The deployed bundle is larger than a single hand-picked file; what a
+ * reader fetches is not, and a page in Cyrillic now gets its face instead of a
+ * fallback.
+ */
 
 /**
  * Blank-template root layout.
@@ -38,9 +51,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${display.variable} ${mono.variable} antialiased`}>
-        {children}
-      </body>
+      <body className="antialiased">{children}</body>
     </html>
   );
 }
