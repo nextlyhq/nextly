@@ -102,7 +102,7 @@ test.describe("the shell's regions", () => {
     // text `var(--nx-muted)` — which is non-empty whether or not anything
     // defines it. That assertion passed while the harness loaded no
     // design-system stylesheet at all.
-    expect(isUnpainted(measurement.background)).toBe(false);
+    expect(isUnpainted(measurement)).toBe(false);
     // Emitted only by this package's stylesheet, so the two halves of the
     // contract are checked separately rather than inferred from one another.
     expect(measurement.display).toBe("flex");
@@ -292,22 +292,57 @@ test.describe("the readiness diagnostic itself", () => {
 });
 
 test.describe("the unpainted predicate", () => {
-  test("classifies every zero-alpha colour as unpainted", async () => {
-    // A pure unit assertion, deliberately in the browser suite: it guards the
-    // predicate the browser-only checks depend on, and belongs beside them.
-    //
-    // The non-black case is the one the first version got wrong. It compared
-    // against two literal spellings, which named a claim about VISIBILITY and
-    // implemented a claim about how the browser happened to write the colour.
-    expect(isUnpainted("rgba(0, 0, 0, 0)")).toBe(true);
-    expect(isUnpainted("rgba(255, 0, 0, 0)")).toBe(true);
-    expect(isUnpainted("rgba(12, 34, 56, 0.0)")).toBe(true);
-    expect(isUnpainted("transparent")).toBe(true);
-    expect(isUnpainted(null)).toBe(true);
+  test.use({ viewport: { width: 1440, height: 900 } });
 
-    // Painted, including a partly transparent colour: something is drawn.
-    expect(isUnpainted("rgb(255, 255, 255)")).toBe(false);
-    expect(isUnpainted("rgba(255, 0, 0, 0.01)")).toBe(false);
-    expect(isUnpainted("rgba(0, 0, 0, 1)")).toBe(false);
+  // Driven through a REAL browser, because the thing under test is how a
+  // browser serializes a computed colour — which is precisely what a
+  // hand-written string case cannot speak for. The previous version asserted
+  // against literals invented in Node, and would have gone on passing while the
+  // predicate was blind to every modern colour function.
+  const chromeWith = (background: string) =>
+    `<html><body><div class="nx-builder-chrome"
+       style="background-color:${background};width:100px;height:100px"></div></body></html>`;
+
+  test("sees a zero-alpha MODERN colour as unpainted", async ({ page }) => {
+    // `oklch` is not incidental: this repository authors its tokens in it —
+    // `packages/ui/src/styles/theme.css` carries 121 `oklch` declarations — so
+    // a chrome whose token chain resolves to a transparent `oklch` is the
+    // realistic shape of the failure, not a synthetic one.
+    await page.setContent(chromeWith("oklch(0.7 0.1 200 / 0)"));
+
+    const measurement = await measureShellRender(page);
+
+    expect(measurement.present).toBe(true);
+    expect(isUnpainted(measurement)).toBe(true);
+  });
+
+  test("sees a zero-alpha non-black legacy colour as unpainted", async ({
+    page,
+  }) => {
+    // The case the two-spelling comparison got wrong.
+    await page.setContent(chromeWith("rgba(255, 0, 0, 0)"));
+
+    expect(isUnpainted(await measureShellRender(page))).toBe(true);
+  });
+
+  test("counts a barely-visible colour as painted", async ({ page }) => {
+    // Something IS drawn. A readiness check that rejected this would fail on a
+    // legitimately near-transparent chrome, which is a false diagnosis in the
+    // opposite direction.
+    await page.setContent(chromeWith("rgba(255, 0, 0, 0.01)"));
+
+    expect(isUnpainted(await measureShellRender(page))).toBe(false);
+  });
+
+  test("counts an opaque modern colour as painted", async ({ page }) => {
+    await page.setContent(chromeWith("oklch(0.7 0.1 200)"));
+
+    const measurement = await measureShellRender(page);
+
+    // The positive control for the two above: if the browser could not parse
+    // the colour at all, `backgroundAlpha` would be null and every case here
+    // would report "painted" for the wrong reason.
+    expect(measurement.backgroundAlpha).toBe(1);
+    expect(isUnpainted(measurement)).toBe(false);
   });
 });
