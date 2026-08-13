@@ -572,12 +572,19 @@ export function measureBytes(
       if (bytes > limit) return { bytes, exceeded: true };
       for (const item of value) stack.push(item);
     } else if (typeof value === "object") {
-      bytes += 2; // braces
+      const entries = Object.entries(value as Record<string, unknown>);
+      // Braces AND the separators between entries, for the same reason the
+      // array branch counts its commas: `{"a":1,"b":2}` carries one comma that
+      // belongs to the object rather than to either entry, so charging it per
+      // entry would over-count the last one and omitting it under-counts every
+      // object with more than one property. Under-counting is the direction
+      // that matters — it lets a document past a cap it actually exceeds, and
+      // the validator, which decides the same question with this counter, then
+      // does not catch it either.
+      bytes += 2 + Math.max(0, entries.length - 1);
       if (bytes > limit) return { bytes, exceeded: true };
-      for (const [key, val] of Object.entries(
-        value as Record<string, unknown>
-      )) {
-        bytes += utf8ByteLength(key, limit) + 3; // quotes + colon + comma
+      for (const [key, val] of entries) {
+        bytes += utf8ByteLength(key, limit) + 3; // quotes + colon
         if (bytes > limit) return { bytes, exceeded: true };
         stack.push(val);
       }

@@ -14,7 +14,7 @@ import {
   VALIDATION_FIXTURES,
 } from "./validation.fixtures";
 import type { BlockTypeLookup } from "./validation";
-import { ISSUE_CODES, validate } from "./validation";
+import { ISSUE_CODES, measureBytes, validate } from "./validation";
 
 function lookup(types: string[]): BlockTypeLookup {
   const set = new Set(types);
@@ -1739,5 +1739,56 @@ describe("a document past the byte cap stops paying to read its values", () => {
       { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
     );
     expect(issues.map(issue => issue.code)).toContain("invalid-style-value");
+  });
+});
+
+describe("measureBytes", () => {
+  // The counter decides whether a document is too large, and `validate()` and
+  // the builder's op store both ask it. So the property that matters is not
+  // "close enough" but that it agrees with what will actually be written: a
+  // counter that reads low lets a document past a cap it exceeds, and nothing
+  // downstream re-checks.
+  //
+  // Pinned against `JSON.stringify` rather than against remembered numbers,
+  // because the numbers are what drift. Object separators were missing here:
+  // every object with more than one property counted one byte short per extra
+  // property, which compounds with nesting.
+  it.each([
+    ["one property", { a: 1 }],
+    ["two properties", { a: 1, b: 2 }],
+    ["three properties", { a: 1, b: 2, c: 3 }],
+    ["nested objects", { a: { x: 1, y: 2 }, b: { x: 1, y: 2 } }],
+    ["an array", [1, 2, 3]],
+    ["an empty object", {}],
+    ["an empty array", []],
+    ["a string", { s: "hello" }],
+    ["a multibyte string", { s: "héllo wörld ✓" }],
+    ["null and booleans", { a: null, b: true, c: false }],
+    [
+      "a document",
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [{ id: "a", type: "box", version: 1, props: { text: "hi" } }],
+      },
+    ],
+  ])("counts %s exactly as it serializes", (_label, value) => {
+    expect(measureBytes(value, Number.POSITIVE_INFINITY).bytes).toBe(
+      Buffer.byteLength(JSON.stringify(value), "utf8")
+    );
+  });
+
+  it("stops once the limit is passed rather than counting the whole value", () => {
+    // The bail-out is the reason this counter exists rather than
+    // `documentBytes`: an oversized value must be refused without being
+    // materialized. A counter that reported `exceeded` only after walking
+    // everything would answer correctly and still allocate the walk.
+    const wide = { huge: "x".repeat(5_000_000) };
+    const result = measureBytes(wide, 100);
+    expect(result.exceeded).toBe(true);
+    expect(
+      result.bytes,
+      "a bounded count stops near the limit rather than at the true size"
+    ).toBeLessThan(5_000_000);
   });
 });
