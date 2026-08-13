@@ -57,13 +57,15 @@
  */
 
 import { readFileSync, readdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { __unstable__loadDesignSystem } from "tailwindcss";
 import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import { Tabs, TabsList, TabsTrigger } from "../tabs";
 
@@ -193,29 +195,6 @@ function utilityOf(cls: string): Utility {
 }
 
 /**
- * Whether a caller's utility takes an owned one over.
- *
- * Two questions, and only the first is tailwind-merge's. It answers whether the
- * two touch the same property, which it does correctly for shorthands and
- * arbitrary values — `border-0` displaces `border-b-2`, and no list of forbidden
- * spellings has to be maintained to know that.
- *
- * It cannot answer the second, because it groups by variant AND by importance:
- * `data-[state=active]:border-b-0` and an unconditional `border-b-2` are
- * different keys, both survive, and CSS then decides. So the comparison is made
- * on the BARE utilities, and which one wins is settled the way the browser
- * settles it:
- *
- * - an important caller utility beats an unimportant owned one outright;
- * - otherwise a caller utility wins only if it is at least as qualified —
- *   its variants must include every variant the owned class carries.
- *
- * That second clause is what keeps a plain `opacity-100` legitimate: the
- * primitive's `disabled:opacity-50` is more specific, so the disabled tab still
- * fades, and reporting it would be a false positive. `!opacity-100` is not
- * legitimate, and the first clause catches it.
- */
-/**
  * Whether a variant aims the rule at something other than this element.
  *
  * `[&>span]:border-b-0` styles a CHILD of the trigger and `before:border-b-0`
@@ -302,7 +281,7 @@ function wins(owned: Utility, caller: Utility): boolean {
 }
 
 function takesOver(owned: Utility, caller: Utility): boolean {
-  const ownedProperties = new Set(propertiesOf(owned.bare));
+  const ownedProperties = new Set(reachedBy(owned.bare));
   if (ownedProperties.size === 0) return false;
   const callerProperties = propertiesOf(caller.bare);
   if (!callerProperties.some(property => ownedProperties.has(property))) {
@@ -334,87 +313,123 @@ function displacedBy(exported: string, classes: string): string[] {
  * bottom-edge longhands that `border: "none"` walked past. It is DERIVED now:
  * every owned class is mapped to the properties its utility sets, so the inline
  * side covers exactly what the class side protects and moves when the primitive
- * does. Without that, the geometry was covered and the focus ring, the ink and
- * the disabled treatment were not, though the contract claims all five.
+ * does.
  *
- * `UTILITY_PROPERTIES` is the one place a Tailwind utility is related to CSS by
- * hand, and an owned class matching nothing in it fails the suite rather than
- * quietly reducing coverage.
+ * WHICH PROPERTIES A UTILITY SETS IS NOT DECIDED HERE. Tailwind compiles the
+ * candidate and the declarations it emits are read back, for the same reason
+ * tailwind-merge decides the override question: a hand-written table is a second
+ * implementation of something Tailwind already owns, and it was wrong three
+ * times running. `text-*` was recorded as `color`, so a caller's `text-xs` —
+ * font-size and line-height, no ink at all — read as repainting the active tab;
+ * `ring-*` named two custom properties and omitted a third, so a caller could
+ * move the focus ring inside the trigger unseen. Neither was a gap in the table
+ * so much as evidence that the table cannot be finished, because Tailwind
+ * decides what a utility means and keeps adding utilities.
  */
-/** The three longhands that draw one edge. */
-const EDGE_PROPERTIES = (side: string): string[] => [
-  `border-${side}-width`,
-  `border-${side}-style`,
-  `border-${side}-color`,
-];
 
 /**
- * Which edge a `border-*` utility paints.
+ * The compiled design system, loaded once.
  *
- * Side-aware because the primitive owns one edge, not four: `border-t-2` must
- * not read as touching the underline. The segment after `border` is a side only
- * when it spells one — `border-dashed` and `border-transparent` name a value
- * and therefore apply to every edge, the bottom included.
- *
- * Which of the three longhands a utility sets is deliberately not decided.
- * Doing so means knowing Tailwind's scales, and the over-approximation is
- * confined to a single edge the primitive owns entirely — it draws the width,
- * the colour, and by omission the style — so widening within that edge cannot
- * report a caller who left the underline alone.
+ * Built from this package's real stylesheet rather than a bare
+ * `@import "tailwindcss"`, because the primitive's appearance is written in
+ * theme tokens: against stock Tailwind, `text-primary` and `border-b-primary`
+ * compile to nothing at all and every owned colour would silently claim no
+ * properties. The resolution guard in the suite turns that into a red run
+ * rather than a quiet loss of coverage.
  */
-const SIDES: Record<string, string[]> = {
-  t: ["top"],
-  r: ["right"],
-  b: ["bottom"],
-  l: ["left"],
-  x: ["left", "right"],
-  y: ["top", "bottom"],
-  s: ["inline-start"],
-  e: ["inline-end"],
-};
+let designSystem: { candidatesToCss(list: string[]): (string | null)[] };
 
-function borderProperties(bare: string): string[] {
-  const rest = bare.slice("border".length).replace(/^-/, "");
-  const side = SIDES[rest.split("-")[0] ?? ""];
-  // No side named: the utility is a value, and a value applies to all edges.
-  return (side ?? ["top", "right", "bottom", "left"]).flatMap(EDGE_PROPERTIES);
+async function loadDesignSystem(): Promise<typeof designSystem> {
+  const entry = resolve(REPO, "packages/ui/src/styles/index.css");
+  return __unstable__loadDesignSystem(readFileSync(entry, "utf8"), {
+    base: dirname(entry),
+    loadStylesheet: async (id: string, base: string) => {
+      const path = id.startsWith(".")
+        ? resolve(base, id)
+        : createRequire(`${base}/`).resolve(
+            id === "tailwindcss" ? "tailwindcss/index.css" : id
+          );
+      return { base: dirname(path), path, content: readFileSync(path, "utf8") };
+    },
+  });
 }
 
-const UTILITY_PROPERTIES: Array<{ utility: RegExp; properties: string[] }> = [
-  { utility: /^rounded(-|$)/, properties: ["border-radius"] },
-  { utility: /^-?mb-/, properties: ["margin-bottom"] },
-  { utility: /^text-/, properties: ["color"] },
-  // The ring is drawn through custom properties that `box-shadow` then reads,
-  // so an arbitrary assignment to one of them repaints it without ever naming
-  // `box-shadow`. Offset first: `ring-offset-2` also matches the ring pattern.
-  {
-    utility: /^ring-offset(-|$)/,
-    properties: [
-      "box-shadow",
-      "--tw-ring-offset-width",
-      "--tw-ring-offset-color",
-      "--tw-ring-offset-shadow",
-    ],
-  },
-  {
-    utility: /^ring(-|$)/,
-    properties: ["box-shadow", "--tw-ring-color", "--tw-ring-shadow"],
-  },
-  { utility: /^outline(-|$)/, properties: ["outline"] },
-  { utility: /^opacity-/, properties: ["opacity"] },
-  { utility: /^cursor-/, properties: ["cursor"] },
-  { utility: /^pointer-events-/, properties: ["pointer-events"] },
-];
+/**
+ * `@property` blocks declare a custom property's type; they paint nothing.
+ *
+ * Tailwind emits one beside any utility that uses a registered custom property,
+ * and its body is `syntax`, `inherits` and `initial-value` — declarations by
+ * grammar and appearance by no reading at all. Left in, every utility touching
+ * a `--tw-*` variable would collide with every other one through `syntax`.
+ */
+const AT_PROPERTY = /@property[^{]*\{[^}]*\}/g;
 
-function propertiesOf(bare: string): string[] {
-  // `border-*` is parsed rather than matched, because the side decides whether
-  // it reaches the underline at all.
-  if (/^border(-|$)/.test(bare)) return borderProperties(bare);
-  const arbitrary = /^\[([a-zA-Z-]+):[^\]]*\]$/.exec(bare)?.[1];
-  if (arbitrary) return expandsTo(arbitrary);
-  return (
-    UTILITY_PROPERTIES.find(entry => entry.utility.test(bare))?.properties ?? []
+/**
+ * The properties a compiled utility SETS.
+ *
+ * The caller's side of the comparison: what a class actually writes.
+ */
+function setBy(css: string): string[] {
+  const body = css.replace(AT_PROPERTY, "");
+  return [...body.matchAll(/[{;]\s*(--[a-zA-Z0-9-]+|[a-z-]+)\s*:/g)].map(
+    match => match[1] ?? ""
   );
+}
+
+/**
+ * The `--tw-*` variables a compiled utility READS.
+ *
+ * Tailwind builds several appearances out of variables rather than out of the
+ * property directly: `ring-2` sets `box-shadow` through `var(--tw-ring-inset,)`,
+ * so a caller assigning `--tw-ring-inset` moves the focus ring inside the
+ * trigger while never naming `box-shadow`.
+ *
+ * Only Tailwind's own namespace is read. A theme variable such as
+ * `--nx-primary` is read by every utility drawing in that colour, so counting it
+ * would make `border-b-primary` collide with `text-primary` for sharing a token
+ * rather than a property.
+ */
+function readBy(css: string): string[] {
+  const body = css.replace(AT_PROPERTY, "");
+  return [...body.matchAll(/var\(\s*(--tw-[a-zA-Z0-9-]+)/g)].map(
+    match => match[1] ?? ""
+  );
+}
+
+function compiled(bare: string): string | null {
+  return designSystem.candidatesToCss([bare])[0] ?? null;
+}
+
+/**
+ * What a caller's utility writes, shorthands expanded.
+ *
+ * Routed through the same `expandsTo` the inline-style side uses, so both halves
+ * of the contract answer one question with one implementation. That is what
+ * keeps `border-dashed` — which Tailwind emits as the `border-style` shorthand —
+ * comparable with the primitive's `border-bottom-style`.
+ */
+function propertiesOf(bare: string): string[] {
+  const css = compiled(bare);
+  if (css == null) return [];
+  return [...new Set(setBy(css).flatMap(expandsTo))];
+}
+
+/**
+ * What an OWNED utility's appearance depends on: what it writes, plus the
+ * variables it reads.
+ *
+ * The asymmetry against {@link propertiesOf} is the point, and it is what stops
+ * the reads over-reporting. Writing a variable another rule reads changes that
+ * rule's output; reading the same variable does not. `border-t-2` and
+ * `border-b-2` both read `--tw-border-style`, and treating a shared read as a
+ * collision reported an edge the indicator does not use — while a caller's
+ * `border-dashed`, which writes that variable AND the `border-style` shorthand,
+ * is still caught through the properties it sets.
+ */
+function reachedBy(bare: string): string[] {
+  const css = compiled(bare);
+  if (css == null) return [];
+  return [...new Set([...setBy(css), ...readBy(css)].flatMap(expandsTo))];
 }
 
 /**
@@ -425,13 +440,21 @@ function propertiesOf(bare: string): string[] {
  * the LIST, which is a different DOM element and cannot replace that ring. The
  * class side was already per slot; this is the same question and gets the same
  * answer.
+ *
+ * Computed on first use rather than at module load: the properties come from a
+ * design system that has to be compiled, and compiling it is asynchronous.
  */
-const OWNED_CSS_PROPERTIES: Record<string, Set<string>> = Object.fromEntries(
-  Object.entries(OWNED_BY_SLOT).map(([slot, classes]) => [
-    slot,
-    new Set(classes.flatMap(cls => propertiesOf(utilityOf(cls).bare))),
-  ])
-);
+let ownedProperties: Record<string, Set<string>> | undefined;
+
+function ownedCssProperties(): Record<string, Set<string>> {
+  ownedProperties ??= Object.fromEntries(
+    Object.entries(OWNED_BY_SLOT).map(([slot, classes]) => [
+      slot,
+      new Set(classes.flatMap(cls => reachedBy(utilityOf(cls).bare))),
+    ])
+  );
+  return ownedProperties;
+}
 
 /**
  * Which CSS longhands an inline style property sets.
@@ -458,13 +481,20 @@ function expandsTo(property: string): string[] {
   }
   if (ANY_CORNER.test(kebab)) return ["border-radius"];
   if (BOTTOM_OFFSET.test(kebab)) return ["margin-bottom"];
+  // `outline` is a shorthand like `border`, and the primitive suppresses the
+  // focus outline through the longhand Tailwind emits (`outline-style`). Without
+  // this an inline `outline: "1px solid red"` names a property the owned set
+  // never holds, and restoring the outline the primitive removed reads as clean.
+  if (kebab === "outline") {
+    return ["outline-width", "outline-style", "outline-color"];
+  }
   // Everything else stands for itself. `box-shadow` and `outline` are the two
   // that matter beyond geometry, and the owned set names both directly.
   return [kebab];
 }
 
 function ownsStyleProperty(slot: string, property: string): boolean {
-  const owned = OWNED_CSS_PROPERTIES[slot];
+  const owned = ownedCssProperties()[slot];
   if (!owned) return false;
   return expandsTo(property).some(p => owned.has(p));
 }
@@ -517,13 +547,24 @@ function parse(file: string, source: string): ts.SourceFile {
   );
 }
 
-/** A specifier that reaches this primitive: the owning packages, or `./tabs`. */
-function reachesThePrimitive(specifier: string): boolean {
+/**
+ * Whether an import specifier reaches THIS primitive.
+ *
+ * A bare specifier is matched against the packages that re-export it. A relative
+ * one is RESOLVED against the importing file and compared with the primitive's
+ * path, rather than tested for ending in `tabs`: the repository already holds a
+ * second `tabs.tsx` (`plugin-page-builder/src/render/blocks`), and a sibling
+ * importing `./tabs` there renders a different component entirely. Matched by
+ * spelling, its own legitimate appearance classes failed this contract — a file
+ * this primitive has nothing to do with, held to it because the last segment
+ * agreed.
+ */
+function reachesThePrimitive(specifier: string, importer: string): boolean {
   if (OWNING_MODULES.includes(specifier)) return true;
-  // Relative only. `some-other-library/tabs` also ends in `tabs` and is a
-  // different component entirely, so a bare suffix test claims files this
-  // primitive has nothing to do with.
-  return specifier.startsWith(".") && /(^|\/)tabs$/.test(specifier);
+  if (!specifier.startsWith(".")) return false;
+  const target = resolve(dirname(resolve(REPO, importer)), specifier);
+  // A module specifier carries no extension; the primitive is a `.tsx` file.
+  return `${target}.tsx` === PRIMITIVE || target === PRIMITIVE;
 }
 
 interface Ownership {
@@ -555,7 +596,7 @@ function ownershipIn(sourceFile: ts.SourceFile): {
     if (
       ts.isImportDeclaration(node) &&
       ts.isStringLiteral(node.moduleSpecifier) &&
-      reachesThePrimitive(node.moduleSpecifier.text)
+      reachesThePrimitive(node.moduleSpecifier.text, sourceFile.fileName)
     ) {
       const bindings = node.importClause?.namedBindings;
       if (bindings && ts.isNamedImports(bindings)) {
@@ -639,23 +680,28 @@ function literalStrings(node: ts.Node, found: string[] = []): string[] {
 }
 
 /**
- * The object an element's `style` prop resolves to, if it can be read here.
+ * Every object an element's `style` prop can resolve to here.
  *
- * Followed to a variable declared in the same file, because the real violation
- * built its value away from the element. Scanning every property assignment in
- * the file instead would fail a surface for an unrelated
+ * A LIST rather than one object, because a style prop routinely selects between
+ * shapes: `style={active ? { borderBottomColor: c } : undefined}` sets the
+ * declaration whenever the condition holds, and a resolver that accepted only a
+ * top-level object literal or identifier read neither branch and returned clean.
+ * Every branch a conditional can take is a shape the element can render, so each
+ * one is checked.
+ *
+ * An identifier is followed to a variable declared in the same file, because the
+ * real violation built its value away from the element. Scanning every property
+ * assignment in the file instead would fail a surface for an unrelated
  * `const dividerStyle = { borderBottomColor }` that never reaches a tab.
  */
-function styleObjectFor(
+function styleObjectsFor(
   attribute: ts.JsxAttribute,
   sourceFile: ts.SourceFile
-): ts.ObjectLiteralExpression | undefined {
+): ts.ObjectLiteralExpression[] {
   const initializer = attribute.initializer;
-  if (!initializer || !ts.isJsxExpression(initializer)) return undefined;
-  const expression = initializer.expression;
-  if (!expression) return undefined;
-  if (ts.isObjectLiteralExpression(expression)) return expression;
-  if (!ts.isIdentifier(expression)) return undefined;
+  if (!initializer || !ts.isJsxExpression(initializer)) return [];
+  const root = initializer.expression;
+  if (!root) return [];
 
   // Resolved by walking OUT from the element, innermost scope first, rather
   // than by searching the file for the name. A whole-file search takes whichever
@@ -663,37 +709,85 @@ function styleObjectFor(
   // function both hides a real violation and, in the other order, invents one.
   // Which declaration a name refers to is a lexical question, and the answer is
   // the nearest enclosing one.
-  const declared = (scope: ts.Node): ts.ObjectLiteralExpression | undefined => {
-    let found: ts.ObjectLiteralExpression | undefined;
-    // Only the scope's OWN statements, so a declaration nested inside a
-    // sibling function is not mistaken for one in this scope.
-    ts.forEachChild(scope, statement => {
-      if (!ts.isVariableStatement(statement)) return;
-      for (const declaration of statement.declarationList.declarations) {
-        if (
-          ts.isIdentifier(declaration.name) &&
-          declaration.name.text === expression.text &&
-          declaration.initializer &&
-          ts.isObjectLiteralExpression(declaration.initializer)
-        ) {
-          found = declaration.initializer;
+  const initializerOf = (name: string): ts.Expression | undefined => {
+    const declared = (scope: ts.Node): ts.Expression | undefined => {
+      let found: ts.Expression | undefined;
+      // Only the scope's OWN statements, so a declaration nested inside a
+      // sibling function is not mistaken for one in this scope.
+      ts.forEachChild(scope, statement => {
+        if (!ts.isVariableStatement(statement)) return;
+        for (const declaration of statement.declarationList.declarations) {
+          if (
+            ts.isIdentifier(declaration.name) &&
+            declaration.name.text === name &&
+            declaration.initializer
+          ) {
+            found = declaration.initializer;
+          }
         }
+      });
+      return found;
+    };
+    for (
+      let scope: ts.Node | undefined = attribute;
+      scope;
+      scope = scope.parent
+    ) {
+      if (
+        ts.isBlock(scope) ||
+        ts.isSourceFile(scope) ||
+        ts.isCaseClause(scope)
+      ) {
+        const found = declared(scope);
+        if (found) return found;
       }
-    });
-    return found;
+    }
+    return undefined;
   };
 
-  for (
-    let scope: ts.Node | undefined = attribute;
-    scope;
-    scope = scope.parent
-  ) {
-    if (ts.isBlock(scope) || ts.isSourceFile(scope) || ts.isCaseClause(scope)) {
-      const found = declared(scope);
-      if (found) return found;
+  const objects: ts.ObjectLiteralExpression[] = [];
+  // Bounded so a `const a = b, b = a` cycle cannot loop forever, and so one
+  // identifier is not expanded twice through two paths.
+  const seen = new Set<ts.Node>();
+
+  const walk = (node: ts.Expression | undefined): void => {
+    if (!node || seen.has(node)) return;
+    seen.add(node);
+    if (ts.isObjectLiteralExpression(node)) {
+      objects.push(node);
+      // A spread inside the object can carry a declaration of its own.
+      for (const property of node.properties) {
+        if (ts.isSpreadAssignment(property)) walk(property.expression);
+      }
+      return;
     }
-  }
-  return undefined;
+    if (ts.isParenthesizedExpression(node)) return walk(node.expression);
+    // `as CSSProperties` and `satisfies` wrap the value without changing it.
+    if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node)) {
+      return walk(node.expression);
+    }
+    if (ts.isConditionalExpression(node)) {
+      walk(node.whenTrue);
+      walk(node.whenFalse);
+      return;
+    }
+    // `&&`, `||` and `??` each choose between their operands at runtime, so both
+    // sides are shapes the element can render.
+    if (
+      ts.isBinaryExpression(node) &&
+      (node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+        node.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+        node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken)
+    ) {
+      walk(node.left);
+      walk(node.right);
+      return;
+    }
+    if (ts.isIdentifier(node)) walk(initializerOf(node.text));
+  };
+
+  walk(root);
+  return objects;
 }
 
 /** An owned inline property declared anywhere inside an object literal. */
@@ -745,8 +839,9 @@ function violationsIn(file: string, source: string): Violation[] {
           if (!ts.isJsxAttribute(attribute)) continue;
           const name = attribute.name.getText(sourceFile);
           if (name === "style") {
-            const object = styleObjectFor(attribute, sourceFile);
-            const property = object && ownedStyleProperty(exported, object);
+            const property = styleObjectsFor(attribute, sourceFile)
+              .map(object => ownedStyleProperty(exported, object))
+              .find(Boolean);
             if (property) {
               found.push({
                 file,
@@ -791,6 +886,10 @@ function violations(): Violation[] {
 }
 
 describe("the tab indicator contract", () => {
+  beforeAll(async () => {
+    designSystem = await loadDesignSystem();
+  });
+
   it("still has an indicator to protect", () => {
     // The structural witness. This check exists only because the primitive
     // draws an indicator; if it stops, the check is not merely unscoped, it is
@@ -815,17 +914,46 @@ describe("the tab indicator contract", () => {
     // treatment were not, though the contract claims all five.
     const unmapped = Object.values(OWNED_BY_SLOT)
       .flat()
-      .filter(cls => propertiesOf(utilityOf(cls).bare).length === 0);
+      .filter(cls => reachedBy(utilityOf(cls).bare).length === 0);
     expect(unmapped).toEqual([]);
     // ...and the derived set is not empty, which an over-eager filter would
     // also produce while every assertion above stayed green.
-    for (const [slot, properties] of Object.entries(OWNED_CSS_PROPERTIES)) {
+    const owned = ownedCssProperties();
+    for (const [slot, properties] of Object.entries(owned)) {
       expect(properties.size, slot).toBeGreaterThan(0);
     }
     // The trigger draws more than the strip does, and a union would hide that
     // the two are kept apart at all.
-    expect(OWNED_CSS_PROPERTIES.TabsTrigger.size).toBeGreaterThan(
-      OWNED_CSS_PROPERTIES.TabsList.size
+    expect(owned.TabsTrigger.size).toBeGreaterThan(owned.TabsList.size);
+  });
+
+  it("decides ownership by where a relative import resolves, not by its spelling", () => {
+    // The repository holds a second `tabs.tsx`, in
+    // `plugin-page-builder/src/render/blocks`. A sibling importing `./tabs`
+    // there renders a different component, and matching the specifier's last
+    // segment held it to this primitive's contract: its own legitimate
+    // appearance classes failed the repository-wide suite.
+    const body = '<TabsTrigger className="data-[state=active]:text-primary" />';
+
+    const unrelated = `import { TabsTrigger } from "./tabs";\n${body}`;
+    expect(
+      violationsIn(
+        "packages/plugin-page-builder/src/render/blocks/probe.tsx",
+        unrelated
+      )
+    ).toEqual([]);
+
+    // The positive control, and it is what makes the assertion above mean
+    // "resolved elsewhere" rather than "relative imports are ignored now". Same
+    // specifier in both, and only the importer's directory differs: from
+    // `components/probe/` it resolves onto the primitive, from `components/` it
+    // lands on a path that holds no tabs at all.
+    const real = `import { TabsTrigger } from "../tabs";\n${body}`;
+    expect(
+      violationsIn("packages/ui/src/components/probe/probe.tsx", real)
+    ).not.toEqual([]);
+    expect(violationsIn("packages/ui/src/components/probe.tsx", real)).toEqual(
+      []
     );
   });
 
@@ -977,6 +1105,26 @@ describe("the tab indicator contract", () => {
       "a violation on a locally aliased tag",
       'const Trigger = TabsTrigger;\n<Trigger className="border-b-0" />',
     ],
+    // Variables the primitive's own appearance is built out of. Tailwind draws
+    // the focus ring through `var(--tw-ring-inset,)`, so assigning that variable
+    // moves the ring inside the trigger without ever naming `box-shadow`.
+    [
+      "an arbitrary assignment to a ring variable the primitive reads",
+      '<TabsTrigger className="focus-visible:![--tw-ring-inset:inset]" />',
+    ],
+    // A style prop that picks between shapes still renders the shape it picks.
+    [
+      "an inline declaration in the true branch of a conditional",
+      "<TabsTrigger style={active ? { borderBottomColor: c } : undefined} />",
+    ],
+    [
+      "an inline declaration in the false branch of a conditional",
+      "<TabsTrigger style={active ? undefined : { borderBottomColor: c }} />",
+    ],
+    [
+      "an inline declaration behind a logical guard",
+      "<TabsTrigger style={active && { borderBottomColor: c }} />",
+    ],
   ])("catches %s", (_label, body) => {
     // The positive controls. Each is a shape an earlier version returned clean
     // on, or a category it never read. Without these, a check that can never
@@ -1089,6 +1237,14 @@ describe("the tab indicator contract", () => {
       "an unrelated element carrying a corner",
       '<div className="rounded-md" />\n<TabsList />',
     ],
+    // Typography is not ink. `text-*` covers font-size, alignment and wrapping
+    // as well as colour, and only the colour half is the primitive's.
+    [
+      "a state-qualified type size, which sets no colour",
+      '<TabsTrigger className="data-[state=active]:text-xs" />',
+    ],
+    ["a type size on hover", '<TabsTrigger className="hover:text-sm" />'],
+    ["text alignment", '<TabsTrigger className="text-center" />'],
   ])("does not report %s", (_label, body) => {
     // The complement, and the reason this is a contract rather than a ban. A
     // check that flags a documented example or a legitimate layout class gets
