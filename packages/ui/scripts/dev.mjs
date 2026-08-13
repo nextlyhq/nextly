@@ -11,25 +11,54 @@
  * server-safe artifacts beside it. The thing they would check — is the dev script running? —
  * answered yes. Nothing observable at the point of use distinguished it from working.
  *
+ * ## No shell, so the child IS the watcher
+ *
+ * `spawn("tsup", …, { shell: true })` is the obvious way to find the binary, and it makes the
+ * spawned process the SHELL rather than tsup. Killing it then kills `/bin/sh` or `cmd.exe` and can
+ * leave the watcher underneath running — so a failure in one watcher would tear down its sibling's
+ * shell while the sibling kept writing into `dist`, and Ctrl-C would leave processes behind.
+ *
+ * Resolving tsup's own entry and running it under this same Node removes the intermediary: the
+ * process this file holds a handle to is the one doing the work, `kill()` reaches it directly, and
+ * nothing depends on how a platform's shell resolves a name or forwards a signal.
+ *
  * ## Any exit is a failure, including a clean one
  *
  * These are watchers. They are meant to run until the developer stops them, so a watcher that
  * returns 0 has still stopped rebuilding artifacts, and forwarding that 0 would report SUCCESS to
  * the surrounding pnpm and turbo pipeline while every output silently went stale. That is the same
- * half-working state this file exists to expose, reintroduced one layer up. A child exiting is
- * therefore always reported and always non-zero, whatever code it used.
+ * half-working state this file exists to expose, reintroduced one layer up.
  *
  * The logging is unconditional for the same reason. Logging only on a non-zero code leaves the
  * clean exit — the case hardest to notice and easiest to misread as intentional — silent.
- *
- * ## Why this is a runtime invariant rather than a startup check
- *
- * Both children are spawned explicitly, so "the second one never started" cannot recur in the
- * original form. What the exit handler adds is broader: at no point during the session may either
- * watcher be absent. A future edit that breaks one of them fails loudly at the moment it happens
- * rather than producing artifacts nobody rebuilt.
  */
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(join(packageRoot, "package.json"));
+
+/**
+ * The file tsup's `tsup` command actually runs.
+ *
+ * Read from the package's own manifest rather than assumed, because the path is tsup's to change
+ * between versions and a hard-coded one would break on an upgrade with a `MODULE_NOT_FOUND` that
+ * names this file instead of the cause.
+ */
+function tsupEntry() {
+  const manifestPath = require.resolve("tsup/package.json");
+  const { bin } = require(manifestPath);
+  const relative = typeof bin === "string" ? bin : bin?.tsup;
+  if (typeof relative !== "string") {
+    throw new Error(
+      "tsup's manifest declares no `tsup` binary, so there is nothing to run. Its `bin` field is " +
+        `${JSON.stringify(bin)}.`
+    );
+  }
+  return join(dirname(manifestPath), relative);
+}
 
 /**
  * The watchers, and what each one produces.
@@ -45,6 +74,7 @@ const WATCHERS = [
   },
 ];
 
+const entry = tsupEntry();
 const children = [];
 let stopping = false;
 
@@ -63,9 +93,10 @@ function stopAll() {
 }
 
 for (const { label, args } of WATCHERS) {
-  // `shell: true` so `tsup` resolves through the platform's own lookup, which on Windows means the
-  // `.cmd` shim npm installs rather than an extensionless file that `spawn` alone cannot execute.
-  const child = spawn("tsup", args, { stdio: "inherit", shell: true });
+  const child = spawn(process.execPath, [entry, ...args], {
+    cwd: packageRoot,
+    stdio: "inherit",
+  });
   children.push(child);
 
   child.on("error", error => {

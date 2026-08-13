@@ -550,15 +550,24 @@ jobs:
             sleep 1
           done
 
+          # Checked BEFORE the kill. Producing both artifacts is not the whole claim: a pair of
+          # one-shot builds — `--watch` dropped by a later edit — writes exactly these files and
+          # then exits, and the loop above would break on the files and report success for a dev
+          # script that no longer watches anything. Still running is what makes them watchers.
+          alive=yes
+          kill -0 "$dev_pid" 2>/dev/null || alive=no
+
           kill "$dev_pid" 2>/dev/null || true
 
           missing=""
           [ -f dist/index.mjs ] || missing="$missing client(dist/index.mjs)"
           [ -f dist/color.mjs ] || missing="$missing server-safe(dist/color.mjs)"
-          if [ -n "$missing" ]; then
-            echo "The dev script did not produce output for:$missing"
+
+          if [ -n "$missing" ] || [ "$alive" = "no" ]; then
+            [ -n "$missing" ] && echo "The dev script did not produce output for:$missing"
+            [ "$alive" = "no" ] && echo "The dev script exited instead of continuing to watch."
             echo "--- dev script output ---"
             cat /tmp/dev.log
             exit 1
           fi
-          echo "Both watchers produced output."
+          echo "Both watchers produced output and the script was still watching."
