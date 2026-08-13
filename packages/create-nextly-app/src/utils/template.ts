@@ -153,6 +153,38 @@ const TEXT_EXTENSIONS = new Set([
  */
 const SKIP_FILES = new Set([".DS_Store", "Thumbs.db", ".gitkeep"]);
 
+/**
+ * The template's ignore file, and the name it has to be SHIPPED under.
+ *
+ * npm removes `.gitignore` from every tarball it packs — always, and with no way to opt out; a
+ * `files` entry does not bring it back. So a template that stores the file under its real name
+ * loses it the moment the CLI is published, and only there: scaffolding from a checkout with
+ * `--local-template` keeps it, which is exactly the arrangement that hides the fault from
+ * everyone working on the repository.
+ *
+ * The consequence is not cosmetic. A scaffold writes a real `.env`, so the first `git add .` in a
+ * new project commits it.
+ *
+ * Storing it dotless and restoring the name on copy is what `create-next-app` and `create-vite`
+ * do, for this reason.
+ */
+const IGNORE_FILE_IN_TEMPLATE = "gitignore";
+const IGNORE_FILE_IN_PROJECT = ".gitignore";
+
+/**
+ * Restore `.gitignore` from the dotless name the template ships it under.
+ *
+ * A no-op when the template carries no ignore file, so a template without one is not given an
+ * empty file it never asked for.
+ */
+async function restoreIgnoreFile(targetDir: string): Promise<void> {
+  const shipped = path.join(targetDir, IGNORE_FILE_IN_TEMPLATE);
+  if (!(await fs.pathExists(shipped))) return;
+  await fs.move(shipped, path.join(targetDir, IGNORE_FILE_IN_PROJECT), {
+    overwrite: true,
+  });
+}
+
 // ============================================================
 // Template Path Resolution
 // ============================================================
@@ -943,6 +975,9 @@ export async function copyTemplate(
     "utf-8"
   );
 
+  // Step 6c: Give the project back the ignore file npm strips out of the tarball.
+  await restoreIgnoreFile(targetDir);
+
   // Step 7: Create SQLite data directory if needed
   // SQLite stores its database file at ./data/nextly.db and the parent
   // directory must exist before the adapter can create the file.
@@ -1018,6 +1053,9 @@ async function copyPluginTemplate(opts: {
     generatePnpmWorkspaceYaml(),
     "utf-8"
   );
+
+  // The plugin scaffold is a git repository too, and npm strips its ignore file the same way.
+  await restoreIgnoreFile(targetDir);
 
   // Fill plugin placeholders across the copied tree (src/ + dev/).
   const nextlyRange = await resolvePluginNextlyRange(useYalc);
