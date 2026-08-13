@@ -46,16 +46,34 @@ let _storedConfig: SanitizedNextlyConfig | null = null;
 let _bootPlugins: PluginDefinition[] | null = null;
 
 /**
- * Fold the booted plugin list into the stored config.
+ * The read-time merge of the two, memoized. Cleared by either writer.
  *
- * The single place the two inputs meet, called from both writers so the result
- * cannot depend on the order they arrive in. Only the plugins are taken from
- * boot: the transformed config carries no `typescript`, `db` or `storage`, so
- * adopting it wholesale would silently drop three fields this store holds.
+ * Memoized because several per-request callers read this store; recomputed
+ * rather than written back, which is the point of the next paragraph.
  */
-function foldBootPluginsIntoStore(): void {
-  if (!_storedConfig || !_bootPlugins) return;
-  _storedConfig = { ..._storedConfig, plugins: _bootPlugins };
+let _bootView: SanitizedNextlyConfig | null = null;
+
+/**
+ * The stored config as it BOOTED — the raw route config with boot's plugin list
+ * in place of the declared one.
+ *
+ * Derived at read time, never written back into `_storedConfig`, because the
+ * two answer different questions and only one of them is a registration input.
+ * `_storedConfig` is what `requestPathServiceConfig` hands to
+ * `registerServices`, and boot runs every plugin's `setup` transformer over it.
+ * Folding the transformed list back in would make the next registration
+ * transform boot's OWN OUTPUT: the dev recovery path re-registers when no
+ * localization baseline exists, and an append-style transformer would then
+ * duplicate its plugins and fail slug or route validation.
+ *
+ * Only the plugins are taken from boot: the transformed config carries no
+ * `typescript`, `db` or `storage`, so adopting it wholesale would silently drop
+ * three fields this store holds.
+ */
+function bootView(): SanitizedNextlyConfig | null {
+  if (!_storedConfig || !_bootPlugins) return _storedConfig;
+  _bootView ??= { ..._storedConfig, plugins: _bootPlugins };
+  return _bootView;
 }
 
 /**
@@ -64,7 +82,7 @@ function foldBootPluginsIntoStore(): void {
  */
 export function setHandlerConfig(config: SanitizedNextlyConfig): void {
   _storedConfig = config;
-  foldBootPluginsIntoStore();
+  _bootView = null;
 }
 
 /**
@@ -87,16 +105,18 @@ export function setHandlerPlugins(
   plugins: PluginDefinition[] | undefined
 ): void {
   _bootPlugins = plugins ?? [];
-  foldBootPluginsIntoStore();
+  _bootView = null;
 }
 
 /**
- * Retrieve the stored nextly config.
+ * Retrieve the stored nextly config, as it BOOTED.
+ *
  * Used by the admin-meta endpoint to read branding config without going
- * through the service dispatcher.
+ * through the service dispatcher. Readers of this see boot's plugin list;
+ * service registration reads `_storedConfig` directly and sees the raw one.
  */
 export function getHandlerConfig(): SanitizedNextlyConfig | null {
-  return _storedConfig;
+  return bootView();
 }
 
 /**

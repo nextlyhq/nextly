@@ -10,6 +10,26 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import type { PluginDefinition } from "../plugins/plugin-context";
 
+// The store is module state and nothing here reaches the service layer, so the
+// module's heavier imports are stubbed. Each test re-imports the module to get
+// a fresh store, and without this that re-import pulls the whole dependency
+// graph six times — measured at 10.07s against vitest's 10s default, which is
+// a timeout waiting for a loaded CI machine rather than a real failure.
+vi.mock("../di", () => ({
+  registerServices: vi.fn(),
+  isServicesRegistered: () => true,
+  shutdownServices: vi.fn(),
+  getService: () => undefined,
+}));
+vi.mock("../auth/handlers/deps-bridge", () => ({
+  buildAuthRouterDeps: vi.fn(),
+}));
+vi.mock("../auth/handlers/router", () => ({ routeAuthRequest: vi.fn() }));
+vi.mock("../runtime/hmr-listener", () => ({ ensureHmrListener: vi.fn() }));
+vi.mock("../storage/image-processor", () => ({
+  getImageProcessor: () => undefined,
+}));
+
 type HandlerStore = typeof import("./auth-handler");
 
 const stored = {
