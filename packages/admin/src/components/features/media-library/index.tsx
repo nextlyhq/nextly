@@ -803,20 +803,23 @@ export function MediaLibrary({
                 onRetry={() => {
                   void refetch();
                 }}
+                // The list view is a table, so its pager goes to the table
+                // rather than beside it. The grid branch above keeps its own,
+                // because a grid has no row-versus-card view to place it for.
+                footer={
+                  !isLoading && !error && data && data.data.length > 0 ? (
+                    <Pagination
+                      currentPage={page}
+                      totalPages={totalPages}
+                      pageSize={pageSize}
+                      pageSizeOptions={[12, 24, 48, 96]}
+                      showPageSizeSelector
+                      onPageChange={handlePageChange}
+                      onPageSizeChange={handlePageSizeChange}
+                    />
+                  ) : undefined
+                }
               />
-
-              {/* Pagination for List View */}
-              {!isLoading && !error && data && data.data.length > 0 && (
-                <Pagination
-                  currentPage={page}
-                  totalPages={totalPages}
-                  pageSize={pageSize}
-                  pageSizeOptions={[12, 24, 48, 96]}
-                  showPageSizeSelector
-                  onPageChange={handlePageChange}
-                  onPageSizeChange={handlePageSizeChange}
-                />
-              )}
             </>
           )}
         </div>

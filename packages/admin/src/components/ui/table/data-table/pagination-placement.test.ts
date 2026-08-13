@@ -61,26 +61,59 @@ function tagNameOf(node: ts.Node, file: ts.SourceFile): string | undefined {
 }
 
 /**
- * Whether this element sits inside a `footer={...}` attribute.
+ * Components that take a `footer` and hand it straight to a `DataTableView`.
+ *
+ * A short list rather than an open rule, because "some component has a prop
+ * called footer" says nothing about where that prop lands. Each entry is
+ * verified against its own source by the test below, so an entry that stops
+ * forwarding fails rather than quietly continuing to excuse its callers.
+ */
+const FORWARDS_FOOTER = new Map<string, string>([
+  [
+    "MediaListView",
+    "packages/admin/src/components/features/media-library/MediaListView/index.tsx",
+  ],
+]);
+
+/**
+ * Whether this element sits inside the `footer` of something that is, or feeds,
+ * a `DataTableView`.
+ *
+ * The attribute NAME alone is not enough. `<Panel footer={<Pagination />}>` has
+ * a footer attribute and puts the pager exactly where this check exists to
+ * prevent — outside the table's responsive surface — so the owning ELEMENT is
+ * what decides, and the name is only how the attribute is found.
  *
  * Walked up the parent chain rather than inferred from position, because a
  * pager inside `footer` and a pager rendered next to the table are siblings in
- * the source text and differ only in which attribute encloses them.
+ * the source text and differ only in what encloses them.
  */
-function insideFooterAttribute(node: ts.Node, file: ts.SourceFile): boolean {
+function insideTableFooter(node: ts.Node, file: ts.SourceFile): boolean {
   for (let current = node.parent; current; current = current.parent) {
-    if (ts.isJsxAttribute(current) && current.name.getText(file) === "footer") {
-      return true;
-    }
+    if (!ts.isJsxAttribute(current)) continue;
+    if (current.name.getText(file) !== "footer") continue;
+    // JsxAttribute -> JsxAttributes -> the opening or self-closing element.
+    const owner = current.parent?.parent;
+    if (!owner) return false;
+    const tag = tagNameOf(owner, file) ?? ownerTagName(owner, file);
+    return tag === TABLE || (tag !== undefined && FORWARDS_FOOTER.has(tag));
   }
   return false;
+}
+
+/** The tag of an opening/self-closing element node reached from an attribute. */
+function ownerTagName(node: ts.Node, file: ts.SourceFile): string | undefined {
+  if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+    return node.tagName.getText(file);
+  }
+  return undefined;
 }
 
 /** Every `<Pagination>` in a file that is NOT inside a `footer` attribute. */
 function detachedPagers(file: ts.SourceFile): ts.Node[] {
   const found: ts.Node[] = [];
   const visit = (node: ts.Node): void => {
-    if (tagNameOf(node, file) === PAGER && !insideFooterAttribute(node, file)) {
+    if (tagNameOf(node, file) === PAGER && !insideTableFooter(node, file)) {
       found.push(node);
     }
     ts.forEachChild(node, visit);
@@ -128,12 +161,9 @@ const NOT_A_TABLE_PAGER = new Map<string, string>([
     "the Pagination component itself",
   ],
   [
-    "packages/admin/src/components/ui/table/data-table/DataTable.tsx",
-    "the shared DataTable, which passes its own pager to DataTableView's footer",
-  ],
-  [
     "packages/admin/src/components/features/media-library/index.tsx",
-    "the media library's grid AND list views, which share one pager above both",
+    "the GRID view's pager; a grid has no row-versus-card view to place one " +
+      "for. The list view's pager goes into MediaListView as the table footer",
   ],
   [
     "packages/admin/src/pages/dashboard/users/fields/index.tsx",
@@ -177,6 +207,24 @@ describe("list pagination", () => {
       "const x = <DataTableView columns={c} rows={r} footer={data ? <Pagination page={1} /> : undefined} />;"
     );
     expect(detachedPagers(gated)).toHaveLength(0);
+
+    // A `footer` on something that is NOT the table puts the pager exactly
+    // where this check exists to prevent, so the attribute name alone must not
+    // satisfy it.
+    const wrongOwner = parse(
+      "control.tsx",
+      "const x = <Panel footer={<Pagination page={1} />}><DataTableView columns={c} rows={r} /></Panel>;"
+    );
+    expect(detachedPagers(wrongOwner)).toHaveLength(1);
+
+    // A component that forwards `footer` straight to the table does satisfy it,
+    // and the forwarding is verified against its own source below rather than
+    // taken on the strength of the prop's name.
+    const forwarded = parse(
+      "control.tsx",
+      "const x = <MediaListView media={m} footer={<Pagination page={1} />} />;"
+    );
+    expect(detachedPagers(forwarded)).toHaveLength(0);
   });
 
   it("renders every list pager inside its table", () => {
@@ -206,20 +254,64 @@ describe("list pagination", () => {
   });
 
   it("keeps the exemption list honest", () => {
-    // An entry that no longer exists, or that has since grown a table, is a
-    // standing permission for the thing this check exists to prevent.
+    // An entry that no longer exists is a standing permission for the thing
+    // this check exists to prevent. Two of the original four entries carried
+    // reasons that were simply untrue -- one claimed a component passed its
+    // pager to `footer` when it rendered it as a sibling -- and a per-entry
+    // escape hatch in this loop is what stopped that being caught here. There
+    // is no escape hatch now: every exempt path is checked the same way.
     for (const [path, reason] of NOT_A_TABLE_PAGER) {
       const full = resolve(repo, path);
-      const exists = sources.includes(full);
-      expect(exists, `exempt path no longer renders a pager: ${path}`).toBe(
-        true
-      );
-      if (path.endsWith("DataTable.tsx")) continue;
+      expect(
+        sources.includes(full),
+        `exempt path no longer renders a pager: ${path}`
+      ).toBe(true);
       const file = parse(full, readFileSync(full, "utf8"));
       expect(
         rendersTable(file),
         `${path} now renders a DataTableView, so "${reason}" no longer holds`
       ).toBe(false);
+    }
+  });
+
+  it("verifies every forwarding component actually forwards", () => {
+    // `FORWARDS_FOOTER` excuses a pager placed on something other than the
+    // table, so an entry that stops forwarding would silently keep excusing
+    // its callers. Checked against the component's own source: it must both
+    // render a DataTableView and pass `footer` to it.
+    for (const [component, path] of FORWARDS_FOOTER) {
+      const file = parse(
+        resolve(repo, path),
+        readFileSync(resolve(repo, path), "utf8")
+      );
+      expect(
+        rendersTable(file),
+        `${component} no longer renders a DataTableView`
+      ).toBe(true);
+
+      let forwards = false;
+      const visit = (node: ts.Node): void => {
+        if (
+          tagNameOf(node, file) === TABLE &&
+          (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node))
+        ) {
+          for (const property of node.attributes.properties) {
+            if (
+              ts.isJsxAttribute(property) &&
+              property.name.getText(file) === "footer"
+            ) {
+              forwards = true;
+            }
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(file);
+
+      expect(
+        forwards,
+        `${component} takes a footer but no longer passes one to DataTableView`
+      ).toBe(true);
     }
   });
 });

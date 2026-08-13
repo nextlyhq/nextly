@@ -59,6 +59,15 @@ interface MediaListViewProps {
   hiddenColumns?: Set<string>;
   className?: string;
   emptyStateMessage?: string;
+  /**
+   * The pager for this list, forwarded to the table's own `footer`.
+   *
+   * Taken as a prop rather than rendered here because the page owns the
+   * pagination state, and passed down rather than placed beside this component
+   * because the table is the only thing that knows whether the row or the card
+   * view is showing.
+   */
+  footer?: React.ReactNode;
 }
 
 // Get the right icon for a media type
@@ -119,6 +128,7 @@ export function MediaListView({
   onRetry,
   className = "",
   emptyStateMessage,
+  footer,
 }: MediaListViewProps) {
   const columns = useMemo<NextlyColumn<Media>[]>(() => {
     const allColumns: NextlyColumn<Media>[] = [
@@ -346,6 +356,7 @@ export function MediaListView({
       ariaLabel="Media files table"
       emptyMessage={emptyStateMessage}
       className={className}
+      footer={footer}
     />
   );
 }
