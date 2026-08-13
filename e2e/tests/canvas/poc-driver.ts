@@ -204,7 +204,21 @@ export function createPocDriver(page: Page): CanvasDriver {
       // dnd-kit flips aria-grabbed on the source while a drag is active, so the
       // signal is the library's own accessibility state rather than a class the
       // canvas happens to add.
-      return page.evaluate(
+      //
+      // BOTH documents, because the source can live in either. A panel drag's
+      // source is host chrome; a drag of a block already in the canvas has its
+      // source inside the iframe. Searching only the host reports `false` for a
+      // fully active canvas drag — and since that half of the engine-parity
+      // case runs under an expected-failure marker, the capability arriving
+      // would still look exactly like the capability missing.
+      if (
+        await page.evaluate(
+          () => !!document.querySelector('[aria-grabbed="true"]')
+        )
+      ) {
+        return true;
+      }
+      return canvasFrame().evaluate(
         () => !!document.querySelector('[aria-grabbed="true"]')
       );
     },

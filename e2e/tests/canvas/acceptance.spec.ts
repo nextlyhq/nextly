@@ -44,6 +44,7 @@ import {
   dragUntilInsideZone,
   dragUntilTarget,
   jitterAcrossEdge,
+  readShellState,
 } from "./driver";
 import type { CanvasChromeReader, CanvasDriver } from "./driver";
 import { createPocChromeReader, createPocDriver } from "./poc-driver";
@@ -873,27 +874,42 @@ test.describe("a canvas any Nextly editor could ship", () => {
       CanvasCapabilityError
     );
 
-    // Marked only now. Everything above ran unprotected.
-    test.fail(true, "this canvas keeps no undo history to count");
-
-    const before = await chrome.undoDepth();
+    // THE CONTROL, with its own drop, entirely before the marker. A drop that
+    // changed nothing would make `after - before === 1` a statement about a
+    // gesture that did not happen — an editor logging an undo step for a no-op
+    // is worse than one logging none, because the author presses undo and
+    // watches nothing.
+    //
+    // It cannot share the measured drop below, because the count needs a
+    // reading BEFORE its own drop and `undoDepth` throws today. Under an active
+    // marker that throw would be recorded as the expected missing-undo failure
+    // and the control would never run at all.
     const treeBefore = await driver.readTreeShape();
     // Onto a live zone, not merely over the canvas. `dragFromPanel` stops at
     // the centre, which the file's own comment says is dead space as often as
     // not — and a drop there inserts nothing.
     await dragOntoZone(driver);
     await driver.drop();
+    // POLLED, because the insert is asynchronous: the canvas re-renders after
+    // the drop resolves, so a single read taken immediately sees the tree the
+    // drag started from. Read once, this control reported that a working drop
+    // had changed nothing — and it only became visible at all once the control
+    // moved out from behind the expected-failure marker.
+    await expect
+      .poll(async () => (await driver.readTreeShape()).length, {
+        message:
+          "a drop must change the document before any undo entry for it means anything",
+      })
+      .toBe(treeBefore.length + 1);
+
+    // Marked only now. Everything above ran unprotected.
+    test.fail(true, "this canvas keeps no undo history to count");
+
+    const before = await chrome.undoDepth();
+    await dragOntoZone(driver);
+    await driver.drop();
     const after = await chrome.undoDepth();
 
-    // The drop has to have DONE something. `after - before === 1` is satisfied
-    // by a missed drop that recorded one entry, which is the same green as the
-    // property and the opposite meaning: an editor that logs an undo step for a
-    // gesture that changed nothing is worse than one that logs none, because
-    // the author presses undo and watches nothing happen.
-    expect(
-      await driver.readTreeShape(),
-      "the drop must change the document before its undo entry means anything"
-    ).not.toEqual(treeBefore);
     // Exactly one. A drop recorded as several makes undo feel broken: the
     // author presses it once and the block half-moves.
     expect(after - before, "one drop is one undoable edit").toBe(1);
@@ -999,7 +1015,13 @@ test.describe("a canvas any Nextly editor could ship", () => {
     await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
 
     const before = await driver.readTreeShape();
-    const url = page.url();
+    // Read through the SHARED probe. `checklist.spec.ts` asserts the same named
+    // property for the same fixture and driver, and two hand-written copies of
+    // one invariant drift: a correction applied to the richer probe never
+    // reaches this one, and the two disagree while both claiming point 12.
+    // Task 157 holds `checklist.spec.ts` closed, so this side adopts the shared
+    // reader now and that one follows when the file reopens.
+    const shellBefore = await readShellState(page, driver);
     await dragFromPanel(driver);
     await driver.cancel();
 
@@ -1010,17 +1032,14 @@ test.describe("a canvas any Nextly editor could ship", () => {
     expect(await driver.readTreeShape(), "Escape changes nothing").toEqual(
       before
     );
-    // The LOCATION, not only the DOM. A shell that treats Escape as go-back
-    // changes the location synchronously and the outgoing document stays
-    // mounted for a tick afterwards, so a presence check reads the editor that
-    // is on its way out and reports no navigation. The two readings disagree
-    // for exactly the window this is meant to catch, which is why both are
-    // here rather than the cheaper one alone.
-    expect(page.url(), "and does not navigate away").toBe(url);
+    // The LOCATION and the DOM together. A shell that treats Escape as go-back
+    // changes the location synchronously while the outgoing document stays
+    // mounted for a tick, so a presence check alone reads the editor on its way
+    // out and reports no navigation.
     expect(
-      await driver.isEditorPresent(),
-      "and the shell does not treat it as go-back"
-    ).toBe(true);
+      await readShellState(page, driver),
+      "Escape must not navigate away or unmount the editor"
+    ).toEqual({ url: shellBefore.url, hasEditor: true });
   });
 
   test("ends the drag when Escape cancels", async ({ request }) => {

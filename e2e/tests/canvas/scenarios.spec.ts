@@ -55,10 +55,10 @@ async function startPanelDrag(driver: CanvasDriver) {
  * produces. Comparing the indicator's live rect against the live pointer is
  * what makes the #1705 and #1706 guards real.
  */
-async function expectIndicatorAtPointer(driver: CanvasDriver, label: string) {
-  const rect = await driver.readIndicatorRect();
-  expect(rect, `${label}: an indicator must be visible`).not.toBeNull();
-
+async function expectIndicatorAtPointer(
+  driver: CanvasDriver,
+  label: string
+): Promise<number> {
   // Driven INTO a zone before the comparison, so the exact reading is always
   // the one used. `@dnd-kit/collision` resolves to a zone containing the
   // pointer first and only ranks by the dragged shape's overlap when none does,
@@ -72,6 +72,14 @@ async function expectIndicatorAtPointer(driver: CanvasDriver, label: string) {
   // containment is exact and needs no tolerance at all, and every geometry
   // scenario can reach such a position.
   const containing = await dragUntilInsideZone(driver);
+
+  // The indicator is read AFTER the containment walk, not before it. Reading
+  // first certifies a rectangle from a position the pointer has since left: if
+  // the target change during the walk hides or collapses the indicator while
+  // leaving the active marker set, every scenario passes on a stale rect for a
+  // position where nothing is drawn.
+  const rect = await driver.readIndicatorRect();
+  expect(rect, `${label}: an indicator must be visible`).not.toBeNull();
 
   const active = await driver.readActiveTarget();
   const nearest = await driver.nearestZoneToPointer();
@@ -91,6 +99,13 @@ async function expectIndicatorAtPointer(driver: CanvasDriver, label: string) {
     active,
     `${label}: the zone containing the pointer must be the active one`
   ).toBe(containing);
+
+  // Handed back so a caller asserting on POSITION uses the target the pointer
+  // ended on. The containment walk can activate a different zone than the one
+  // the caller reached, and a drop then lands at the new target while an
+  // assertion written against the cached ordinal reports a failure the canvas
+  // did not cause.
+  return active;
 }
 
 test("scenario 1: a library block drags across the iframe boundary", async ({
@@ -109,12 +124,17 @@ test("scenario 1: a library block drags across the iframe boundary", async ({
   // A drop target here is the whole cross-frame question: it means dnd-kit
   // resolved a droppable registered inside the iframe from a pointer event in
   // the host document.
-  const active = await dragUntilTarget(driver);
+  const reached = await dragUntilTarget(driver);
   test
     .info()
-    .annotations.push({ type: "active-target", description: String(active) });
-  expect(active).toBeGreaterThanOrEqual(0);
-  await expectIndicatorAtPointer(driver, "cross-frame");
+    .annotations.push({ type: "active-target", description: String(reached) });
+  expect(reached).toBeGreaterThanOrEqual(0);
+  // The target the pointer ENDED on, which is what the drop will use. The
+  // containment walk inside this helper can activate a different zone than the
+  // one `dragUntilTarget` stopped at — the first may have come from the overlap
+  // fallback — and a position assertion written against the earlier ordinal
+  // then reports a failure for a drop that landed exactly where it was shown.
+  const active = await expectIndicatorAtPointer(driver, "cross-frame");
 
   await driver.drop();
   await expect

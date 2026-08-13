@@ -361,6 +361,32 @@ export async function dragUntilInsideZone(
   return containing;
 }
 
+/** The two readings that together say "the shell survived the gesture". */
+export interface ShellState {
+  readonly url: string;
+  readonly hasEditor: boolean;
+}
+
+/**
+ * Read the shell state a cancelled gesture must not have changed.
+ *
+ * Both readings, because either alone passes while the other has already gone
+ * wrong: the editor can still be in the DOM one tick after navigation began,
+ * and a stable URL says nothing about the canvas having unmounted for some
+ * other reason.
+ *
+ * Shared so the acceptance suite and the checklist suite cannot drift into
+ * asserting the same named property two different ways — a fix applied to one
+ * probe would otherwise never reach the other, and the two would disagree while
+ * both claiming to cover point 12.
+ */
+export async function readShellState(
+  page: { url: () => string },
+  driver: CanvasDriver
+): Promise<ShellState> {
+  return { url: page.url(), hasEditor: await driver.isEditorPresent() };
+}
+
 /** Where a boundary search left the pointer. */
 export interface ZoneEdge {
   /** Active target the pointer rests on, or -1 when no zone was reached. */
@@ -500,29 +526,35 @@ export async function jitterAcrossEdge(
   let slowestMoveMs = Number.POSITIVE_INFINITY;
   for (let sweep = 0; sweep < sweeps; sweep += 1) {
     const readTransitions = await driver.recordActiveTargetTransitions();
-    const durations: number[] = [];
+    // CONTINUOUS marks, not per-command durations. A stopwatch around each
+    // `moveBy` measures only the time inside the command and misses the gap
+    // between them — and if the test process is descheduled in that gap, two
+    // fast commands still leave their browser events far apart.
+    //
+    // Marking the clock at every boundary makes the elapsed time cover the gaps
+    // too: `marks[i]` is the instant before move `i`, and the last mark is
+    // after the final one, so no wall-clock time between the first and last
+    // move is unaccounted for.
+    const marks: number[] = [Date.now()];
     for (let step = 0; step < 20; step += 1) {
-      const startedAt = Date.now();
       await driver.moveBy(0, step % 2 === 0 ? 4 : -4);
-      durations.push(Date.now() - startedAt);
+      marks.push(Date.now());
     }
     const log = await readTransitions();
-    // CONSECUTIVE PAIRS, not each command alone. The dwell that matters is the
-    // one between browser pointer EVENTS, and an event fires somewhere inside
-    // its command — so the gap spans the tail of one command plus the head of
-    // the next. Two 60ms commands each satisfy a `< 100` check while their
-    // events can be 120ms apart, which is long enough for a permitted dwell
-    // implementation to commit and be misread as having no hysteresis.
+    // The widest window that can hold two consecutive pointer EVENTS. Each
+    // event fires somewhere inside its own command, so the pair from move `i`
+    // and move `i+1` is contained by the span from BEFORE move `i` to AFTER
+    // move `i+1` — `marks[i+2] - marks[i]`. Because the marks are continuous,
+    // that span includes any time the process spent descheduled between the
+    // two commands, which a per-command stopwatch cannot see.
     //
-    // The sum of an adjacent pair is the conservative bound available without
-    // instrumenting the page: the true inter-event gap cannot exceed it. That
-    // over-estimates, so it skips some runs it could have measured — the safe
-    // direction, since the alternative is classifying a compliant canvas as
-    // broken.
+    // It over-estimates, so some runs are skipped that could have been
+    // measured. That is the safe direction: the alternative is classifying a
+    // canvas with a permitted dwell as having no hysteresis at all.
     slowestMoveMs = 0;
-    for (let index = 0; index + 1 < durations.length; index += 1) {
-      const pair = (durations[index] ?? 0) + (durations[index + 1] ?? 0);
-      if (pair > slowestMoveMs) slowestMoveMs = pair;
+    for (let index = 0; index + 2 < marks.length; index += 1) {
+      const window = (marks[index + 2] ?? 0) - (marks[index] ?? 0);
+      if (window > slowestMoveMs) slowestMoveMs = window;
     }
     if (slowestMoveMs < dwellAllowanceMs) {
       return {
