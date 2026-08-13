@@ -194,6 +194,40 @@ const STATUS_TEXT: Pairing[] = STATUSES.flatMap((s): Pairing[] => [
     kind: "text",
     label: `${s} text on popover`,
   },
+  // Status ink also lands on the muted and sidebar surfaces -- dashboard
+  // widgets, stat tiles and quick-link rows paint it there. Neither is covered
+  // by page, card or popover: muted is the darkest of the light surfaces and
+  // the tightest of the set, and the sidebar carries its own background token
+  // that a palette change can move independently.
+  //
+  // Both were found by the scan over real component source rather than by
+  // enumerating surfaces here, which is the usual direction. The utility scan
+  // sees what is PAINTED, this list says what is ASSERTED, and the gap between
+  // them is the thing worth closing -- three surfaces were listed while five
+  // were rendered.
+  {
+    fg: `--color-${s}`,
+    bg: "--nx-muted",
+    kind: "text",
+    label: `${s} text on muted`,
+  },
+  {
+    fg: `--color-${s}`,
+    bg: "--nx-sidebar-background",
+    kind: "text",
+    label: `${s} text on sidebar`,
+  },
+  // The page CONTAINER, which is what `.admin-page-container` actually paints
+  // and is a separate token from `--nx-background`. The boundary list already
+  // treats it as independently movable -- a control measured only against
+  // `background` read 3.80:1 while the screen rendered 3.05:1 -- and status ink
+  // rendered directly in a page has the same exposure.
+  {
+    fg: `--color-${s}`,
+    bg: "--nx-page-background",
+    kind: "text",
+    label: `${s} text on page container`,
+  },
 ]);
 const STATUS_ON_SOLID: Pairing[] = ["destructive", "success"].map(
   (s): Pairing => ({
@@ -202,6 +236,25 @@ const STATUS_ON_SOLID: Pairing[] = ["destructive", "success"].map(
     kind: "text",
     label: `${s} on-color (solid fill)`,
   })
+);
+
+// The 600 shade is also painted directly on the muted surface, in the entry
+// meta strip, rather than only on its own tint. It is a `color-mix()` step
+// rather than the base token, so the base pairing above does not cover it: it
+// is darker, and passing or failing at a different ratio.
+const STATUS_SHADE_ON_SURFACE: Pairing[] = STATUSES.flatMap((s): Pairing[] =>
+  (
+    [
+      ["--nx-muted", "muted"],
+      ["--nx-background", "page"],
+    ] as const
+  ).map(([bg, name]) => ({
+    fg: `--color-${s}-600`,
+    bg,
+    kind: "text" as const,
+    mode: "light" as const,
+    label: `${s} 600 on ${name} (light)`,
+  }))
 );
 
 // Tinted status surfaces (badges, alerts, chips). These are `color-mix()`
@@ -316,6 +369,11 @@ const INFO_ALERT: Pairing[] = ["--color-background", "--color-card"].map(
 // or row divider is excluded below with the normative reasoning, so the tokens
 // listed here can be held to 3:1 without that floor leaking onto the whole
 // border scale.
+//
+// Listed here means ASSERTED, not necessarily passing: some of these are
+// recorded in accepted.ts as knowingly below the minimum. That is the point of
+// keeping them in this list rather than moving them to EXCLUSIONS — an excluded
+// pairing is out of scope, an accepted one is in scope and measured every run.
 const BOUNDARIES: Pairing[] = [
   {
     fg: "--nx-border-strong",
@@ -359,6 +417,50 @@ const BOUNDARIES: Pairing[] = [
     kind: "ui",
     label: "input border on muted",
   },
+  // The unchecked switch, asserted as it RENDERS rather than as a token in
+  // isolation. Its track against the page is already covered by the control
+  // boundary pairings below -- same role pair, and the uniqueness check rejects
+  // stating it twice. What those do NOT cover is the thumb against the track,
+  // and the thumb's position is the entire on/off signal: a thumb that merges
+  // into its track leaves a control with no readable state.
+  {
+    fg: "--nx-background",
+    bg: "--nx-control-border",
+    kind: "ui",
+    mode: "light",
+    label: "switch thumb on its unchecked track (light)",
+  },
+  // The dark thumb is a different token -- `bg-foreground`, not `bg-background`
+  // -- so the light pairing above says nothing about it, and a mode-blind
+  // reading of "the thumb is covered" was how the dark track went unmeasured.
+  {
+    fg: "--nx-foreground",
+    bg: "--nx-control-border",
+    kind: "ui",
+    mode: "dark",
+    label: "switch thumb on its unchecked track (dark)",
+  },
+  // The checkbox and radio boundary, held to 3:1 on every surface with no
+  // acceptance. `--nx-input` is knowingly below the minimum; this token exists
+  // precisely because those two controls cannot follow it there. A field is
+  // identifiable without its edge -- label, placeholder, value, focus ring --
+  // and an unchecked box is not, so the same weight cannot serve both.
+  ...(
+    [
+      ["--nx-background", "page"],
+      ["--nx-card", "card"],
+      ["--nx-popover", "popover"],
+      ["--nx-page-background", "page container"],
+      ["--nx-muted", "muted"],
+    ] as const
+  ).map(
+    ([bg, name]): Pairing => ({
+      fg: "--nx-control-border",
+      bg,
+      kind: "ui",
+      label: `control border on ${name}`,
+    })
+  ),
   {
     fg: "--nx-border-strong",
     bg: "--nx-page-background",
@@ -396,6 +498,7 @@ export const PAIRINGS: Pairing[] = [
   ...CODE_TEXT,
   ...STATUS_TEXT,
   ...STATUS_ON_SOLID,
+  ...STATUS_SHADE_ON_SURFACE,
   ...STATUS_SHADES,
   ...ALERT_ACCENT,
   ...PRIMARY_BADGE,

@@ -1,6 +1,8 @@
 "use client";
 
 import { Badge } from "@nextlyhq/ui";
+import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { Suspense } from "react";
 
 import {
   BookOpen,
@@ -18,16 +20,25 @@ import {
 } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
-import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
+import {
+  PageErrorFallback,
+  SectionErrorFallback,
+} from "@admin/components/shared/error-fallbacks";
 import { PluginIcon } from "@admin/components/shared/plugin-icon";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
+import {
+  useBranding,
+  useBrandingStatus,
+} from "@admin/context/providers/BrandingProvider";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
+import { staticRegistrySource } from "@admin/lib/plugins/registry/static-source";
 import type { PluginMetadata } from "@admin/types/branding";
 
+import { NotInstalledPlugin } from "./components/NotInstalledPlugin";
+import { PluginPageLoading } from "./components/PluginPageLoading";
 import { PluginStatusPill } from "./components/PluginsTable";
 
 const PLACEMENT_LABELS: Record<string, string> = {
@@ -66,35 +77,116 @@ export default function PluginDetailPage({
   );
 }
 
-function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
-  const branding = useBranding();
-  const plugins = branding?.plugins ?? [];
-  const plugin = activeSlug
-    ? plugins.find(p => pluginSlug(p.name) === activeSlug)
+/**
+ * A slug the project has no plugin for.
+ *
+ * Two outcomes, and they are different facts: the catalogue knows this package
+ * and the reader has simply not installed it, or nothing knows it at all. The
+ * first is the ordinary path from the directory, where most entries are not
+ * installed, so it must not be reported as an error.
+ *
+ * Its own component because it queries the catalogue. Held inside
+ * `PluginDetailContent` the query would run for every installed plugin too,
+ * making a `QueryClientProvider` a requirement of rendering a page that has no
+ * need of one.
+ */
+function UninstalledOrMissing({ activeSlug }: { activeSlug?: string }) {
+  const { data: entries } = useSuspenseQuery({
+    queryKey: ["plugin-registry"],
+    queryFn: () => staticRegistrySource.list(),
+  });
+  const entry = activeSlug
+    ? entries.find(e => pluginSlug(e.id) === activeSlug)
     : undefined;
 
-  if (!plugin) {
+  if (entry) {
     return (
       <div>
         <Breadcrumbs
           items={[
             { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
             { label: "Plugins", href: ROUTES.PLUGINS },
-            { label: "Not found" },
+            { label: "Browse", href: ROUTES.PLUGIN_BROWSE },
+            { label: entry.name },
           ]}
           className="mb-6"
         />
-        <div className="rounded-lg border border-dashed border-border bg-card p-12 text-center">
-          <Package className="h-10 w-10 text-muted-foreground mx-auto mb-4" />
-          <h3 className="text-sm font-medium text-foreground mb-1">
-            Plugin not found
-          </h3>
-          <p className="text-sm text-muted-foreground">
-            No installed plugin matches this address. It may have been removed
-            from your Nextly config.
-          </p>
-        </div>
+        <NotInstalledPlugin plugin={entry} />
       </div>
+    );
+  }
+
+  return (
+    <div>
+      <Breadcrumbs
+        items={[
+          { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+          { label: "Plugins", href: ROUTES.PLUGINS },
+          { label: "Not found" },
+        ]}
+        className="mb-6"
+      />
+      <div className="rounded-lg border border-dashed border-border bg-card p-12 text-center">
+        <Package className="h-10 w-10 text-muted-foreground mx-auto mb-4" />
+        <h3 className="text-sm font-medium text-foreground mb-1">
+          Plugin not found
+        </h3>
+        <p className="text-sm text-muted-foreground">
+          No installed plugin matches this address, and it is not in the plugin
+          directory either. It may have been removed from your Nextly config.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Shown when admin-meta failed, so whether this plugin is installed is
+ * unknown.
+ *
+ * Not the catalogue view: that one states the plugin is absent, which is a
+ * claim this page cannot make when the request that would have told it failed.
+ */
+function InstalledPluginsUnavailable() {
+  const queryClient = useQueryClient();
+
+  return (
+    <SectionErrorFallback
+      title="Could not load your installed plugins"
+      description="This page cannot tell whether the plugin is installed until the admin metadata loads."
+      reset={() => {
+        void queryClient.invalidateQueries({ queryKey: ["admin-meta"] });
+      }}
+    />
+  );
+}
+
+function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
+  const branding = useBranding();
+  const { isPending, isUnavailable } = useBrandingStatus();
+  const plugins = branding?.plugins ?? [];
+  const plugin = activeSlug
+    ? plugins.find(p => pluginSlug(p.name) === activeSlug)
+    : undefined;
+
+  // Installed metadata is observed; the catalogue is a claim, so the observed
+  // one decides. Only when the project has no such plugin is the catalogue
+  // consulted, and that lookup lives inside `UninstalledOrMissing` so its query
+  // is not a dependency of rendering an installed plugin.
+  //
+  // Absence is only a fact once admin-meta has answered. Until then the list is
+  // empty for a reason that says nothing about the project, and reading it as
+  // "not installed" tells someone who HAS this plugin to go and install it.
+  if (!plugin) {
+    if (isPending) return <PluginPageLoading label="Loading plugin…" />;
+    if (isUnavailable) return <InstalledPluginsUnavailable />;
+    // Its own Suspense boundary: `UninstalledOrMissing` suspends on the
+    // catalogue, and the nearest boundary above is RootLayout's
+    // `fallback={null}`, which would blank the page for the duration.
+    return (
+      <Suspense fallback={<PluginPageLoading label="Loading plugin…" />}>
+        <UninstalledOrMissing activeSlug={activeSlug} />
+      </Suspense>
     );
   }
 

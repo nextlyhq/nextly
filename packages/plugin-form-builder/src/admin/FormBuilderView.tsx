@@ -504,23 +504,32 @@ function FormBuilderViewInner({
                 value={activeTab}
                 onValueChange={v => setActiveTab(v as typeof activeTab)}
               >
-                <TabsList className="bg-transparent justify-start gap-0 -mb-px border-b-0 max-w-full overflow-x-auto">
+                {/* Layout only. The underline, the active and hover colours, the
+                    focus ring and the disabled state all come from the shared
+                    primitive; restating them here is how two copies of one
+                    appearance start drifting. `gap-0` and the scroll behaviour
+                    are genuinely local: this strip can overflow its container.
+                    `-mb-px` is too: the header above draws its own 1px bottom
+                    divider, and pulling the strip down over it lets the active
+                    tab's underline REPLACE that divider rather than stack a
+                    2px mark on top of a 1px one. */}
+                <TabsList className="bg-transparent justify-start gap-0 -mb-px max-w-full overflow-x-auto">
                   {mainTabs.map(tab => (
                     <TabsTrigger
                       key={tab.value}
                       value={tab.value}
-                      style={{
-                        borderBottomColor:
-                          activeTab === tab.value
-                            ? "var(--nx-primary)"
-                            : "transparent",
-                      }}
-                      className="shrink-0 whitespace-nowrap border-b-2 relative -mb-0.5 data-[state=active]:text-primary data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                      className="shrink-0 whitespace-nowrap"
                     >
                       {tab.label}
+                      {/* `rounded-sm`, the adornment step, matching the shared
+                          Badge and the identically sized notification count.
+                          Square is the TAB's corner and it exists so the
+                          underline runs flush to the trigger's edges; a chip
+                          inside the label inherits none of that reasoning, and
+                          carrying it made the count read as a second tab. */}
                       {tab.count !== null && (
                         <span
-                          className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-semibold rounded-none ml-2 transition-colors ${
+                          className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-semibold rounded-sm ml-2 transition-colors ${
                             activeTab === tab.value
                               ? "bg-primary/5 text-primary"
                               : "bg-primary/5 text-muted-foreground"

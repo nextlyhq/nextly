@@ -11,6 +11,12 @@
  * @since 1.0.0
  */
 
+import {
+  CALENDAR_COLUMN_MAX_OFFSET_MS,
+  EPOCH_COLUMN_MAX_OFFSET_MS,
+  resolveRetentionWindow,
+} from "../retention/window";
+
 /** `false` means keep forever and accept the growth. */
 type MaxAge = number | false;
 
@@ -69,48 +75,41 @@ export interface ResolvedAuditRetentionConfig {
 }
 
 /**
- * The largest offset whose resulting date every supported column can store.
+ * A window, resolved by the rule every trail shares.
  *
- * A window is subtracted from now to form a cutoff, and an interval likewise,
- * so both are bounded by the narrowest column that receives one. That is not
- * `Date` (±8.64e15 ms) and not MySQL `DATETIME` (from year 1000): it is MySQL
- * `TIMESTAMP`, which `activity_log.created_at` uses and which **starts at
- * 1970**. A cutoff before then is rejected under strict mode, so the pass fails
- * on every run and is swallowed — the trail unpruned while its configuration
- * reads as accepted.
+ * The direction of each rejection lives in `domains/retention/window`, so this
+ * trail cannot drift from the others on a question none of them owns alone.
+ * Zero is `malformed` here rather than "keep nothing": an audit trail set to
+ * zero is far more likely to be a typo than a decision, and erasing the record
+ * of who did what is not recoverable.
  *
- * Fifty years is the conservative form: any clock later than 2020 minus this
- * offset lands after 1970, so it holds without consulting the current time. It
- * is also past the point of meaning — a window longer than the epoch itself can
- * select nothing, because no row can be older than the time it measures from.
+ * The bound is the caller's, because the two trails write to different column
+ * types: `maxOffsetMs` names which one governs at each call site below.
  */
-const MAX_STORABLE_OFFSET_MS = 50 * 365 * DAY_MS;
-
-function maxAge(value: MaxAge | undefined, fallback: number): MaxAge {
-  if (value === false) return false;
-  // A non-positive window would delete rows the moment they are written, and a
-  // non-finite one is worse than either: `Infinity` is a positive number, so it
-  // passes a naive check and then produces an Invalid Date cutoff, which the
-  // pass swallows as a failure — retention that looks configured and silently
-  // never runs. `false` is how "keep forever" is expressed.
-  const window = value as number;
-  if (!Number.isFinite(window) || window <= 0) return fallback;
-  // Beyond what a cutoff can express, the request is to keep essentially
-  // everything — so it is honoured as `false` rather than replaced by the
-  // default. The default is SHORTER, and substituting it would delete what the
-  // configuration asked to retain: rejecting a value must never be more
-  // destructive than honouring it.
-  return window <= MAX_STORABLE_OFFSET_MS ? window : false;
+function maxAge(
+  value: MaxAge | undefined,
+  fallback: number,
+  maxOffsetMs: number
+): MaxAge {
+  return resolveRetentionWindow(value, {
+    fallback,
+    zero: "malformed",
+    maxOffsetMs,
+  });
 }
 
+/**
+ * An interval is subtracted from now to decide whether a pass is due, so it has
+ * to stay a real date; a value outside the `Date` range makes that comparison
+ * unanswerable and no pass ever runs again. Unlike a window it is never stored
+ * or compared against a column, so no column sets this ceiling — any finite
+ * bound past the point where an interval means anything will do.
+ */
+const MAX_INTERVAL_MS = 50 * 365 * DAY_MS;
+
 function positive(value: number | undefined, fallback: number): number {
-  // Bounded for the same reason a window is: the gate subtracts the interval
-  // from now to decide whether a pass is due, so a value that leaves the Date
-  // range makes that comparison unanswerable and no pass ever runs again.
   const ms = value as number;
-  return Number.isFinite(ms) && ms > 0 && ms <= MAX_STORABLE_OFFSET_MS
-    ? ms
-    : fallback;
+  return Number.isFinite(ms) && ms > 0 && ms <= MAX_INTERVAL_MS ? ms : fallback;
 }
 
 /** A batch count, which must be a whole number of batches. */
@@ -141,11 +140,21 @@ export function resolveAuditRetentionConfig(
   }
 
   return {
+    // `activity_log.created_at` is a MySQL TIMESTAMP, so its cutoff cannot
+    // predate 1970 — the narrowest column in the schema, and the only one on
+    // this bound.
     activityMaxAgeMs: maxAge(
       input?.activityMaxAgeMs,
-      DEFAULT_ACTIVITY_MAX_AGE_MS
+      DEFAULT_ACTIVITY_MAX_AGE_MS,
+      EPOCH_COLUMN_MAX_OFFSET_MS
     ),
-    authMaxAgeMs: maxAge(input?.authMaxAgeMs, DEFAULT_AUTH_MAX_AGE_MS),
+    // `audit_log.created_at` is a MySQL DATETIME, which reaches back to year
+    // 1000, so this trail accepts windows the one above cannot express.
+    authMaxAgeMs: maxAge(
+      input?.authMaxAgeMs,
+      DEFAULT_AUTH_MAX_AGE_MS,
+      CALENDAR_COLUMN_MAX_OFFSET_MS
+    ),
     intervalMs: positive(
       input?.intervalMs,
       DEFAULT_AUDIT_RETENTION_INTERVAL_MS

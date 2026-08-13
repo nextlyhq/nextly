@@ -25,6 +25,7 @@
     "@nextlyhq/adapter-sqlite": "workspace:^",
     "@nextlyhq/admin": "workspace:^",
     "@nextlyhq/blocks-react": "workspace:^",
+    "@nextlyhq/builder": "workspace:*",
     "@nextlyhq/plugin-form-builder": "workspace:^",
     "@nextlyhq/plugin-page-builder": "workspace:^",
     "@nextlyhq/plugin-sdk": "workspace:^",
