@@ -40,7 +40,9 @@ import { mapFramePointToHost } from "./coordinate-mapping";
 import {
   CanvasCapabilityError,
   dragPointerTo,
+  dragToZoneEdge,
   dragUntilTarget,
+  jitterAcrossEdge,
 } from "./driver";
 import type { CanvasChromeReader, CanvasDriver } from "./driver";
 import { createPocChromeReader, createPocDriver } from "./poc-driver";
@@ -101,6 +103,30 @@ async function dragOntoZone(driver: CanvasDriver): Promise<number> {
     "the drag must reach a drop zone before any target is read"
   ).toBeGreaterThanOrEqual(0);
   return active;
+}
+
+/**
+ * What a running drag looks like from outside, whichever engine is driving it.
+ *
+ * Deliberately reads only what BOTH a panel drag and a canvas drag can answer,
+ * so the two are comparable rather than merely both measured. Anything one side
+ * cannot report would make the comparison a statement about the harness.
+ *
+ * Containment rather than proximity for the target reading. `@dnd-kit/collision`
+ * resolves to a zone CONTAINING the pointer first and only ranks by overlap when
+ * none does, so a nearest-zone equality holds most of the time and fails next to
+ * a boundary — a flake that reads as an engine disagreement.
+ */
+async function engineSignature(driver: CanvasDriver): Promise<{
+  dragging: boolean;
+  resolvesToContainingZone: boolean;
+}> {
+  const containing = await driver.zoneContainingPointer();
+  const active = await driver.readActiveTarget();
+  return {
+    dragging: await driver.isDragging(),
+    resolvesToContainingZone: containing >= 0 && active === containing,
+  };
 }
 
 test.describe("a canvas any Nextly editor could ship", () => {
@@ -361,14 +387,28 @@ test.describe("a canvas any Nextly editor could ship", () => {
 
     // `pressAt`, not `startDragAt`: the latter passes the drag threshold by
     // contract, so the drag would already have begun before the move below.
-    await driver.pressAt(await driver.dragSourceCentre());
+    const source = await driver.dragSourceCentre();
+    await driver.pressAt(source);
     // Below any sane activation distance. A canvas that begins dragging here
     // makes every click on a block a possible accidental move.
     await driver.moveBy(2, 2);
-    const dragging = await driver.isDragging();
+    const subThreshold = await driver.isDragging();
+    // The SAME press, carried past the threshold. Without this the assertion
+    // below is satisfied by absence: a press that never landed — a moved
+    // handle, a changed selector, an overlay swallowing the pointerdown —
+    // reports "not dragging" exactly as a correct hysteresis does, and the
+    // target then passes on a gesture that never happened. Continuing the same
+    // gesture rather than starting a second one is what makes it a control:
+    // it proves the press this test made was live.
+    await driver.moveBy(40, 40);
+    const pastThreshold = await driver.isDragging();
     await driver.cancel();
 
-    expect(dragging, "a 2px movement must not begin a drag").toBe(false);
+    expect(
+      pastThreshold,
+      "the press must be live, or 'not dragging' proves nothing"
+    ).toBe(true);
+    expect(subThreshold, "a 2px movement must not begin a drag").toBe(false);
   });
 
   test("reaches a drop zone on the fixture the hysteresis probe uses", async ({
@@ -394,25 +434,58 @@ test.describe("a canvas any Nextly editor could ship", () => {
   test("holds its target through a jitter at a zone boundary", async ({
     request,
   }) => {
-    note(PLAN_POINT.targetSwitchHysteresis, "B-7");
+    note(
+      PLAN_POINT.targetSwitchHysteresis,
+      "B-7",
+      "this canvas has no switch margin: bracketed at an edge, the target " +
+        "flips on every 2px crossing"
+    );
     await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
-    // Jittering from dead space counts the indicator appearing and vanishing
-    // as target changes, which looks exactly like the missing hysteresis this
-    // is meant to detect. The property is only observable from a live zone,
-    // and without this the run reported nine changes that were mostly the
-    // indicator blinking rather than moving.
-    await dragOntoZone(driver);
+    // Onto a zone, then to that zone's EDGE. Both halves are preconditions with
+    // teeth. Jittering from dead space counts the indicator appearing and
+    // vanishing as target changes, which looks exactly like the missing
+    // hysteresis this is meant to detect; jittering from the middle of a zone's
+    // catchment reports a stable target on a canvas with NO hysteresis, because
+    // nothing there was ever close to switching. The second is the weaker
+    // failure and the harder to see: it passes, and it passes for a reason that
+    // has nothing to do with the property.
+    await dragFromPanel(driver);
+    const edge = await dragToZoneEdge(driver);
+    expect(
+      edge.target,
+      "the drag must reach a zone before a boundary can be sought"
+    ).toBeGreaterThanOrEqual(0);
+    // ASSERTED, not merely recorded, because of which way this target now
+    // points. An unbracketed jitter cannot flip, so it would satisfy the
+    // expected failure below by measuring nothing — the harness failing to find
+    // an edge and the canvas holding its target are the same green. Where the
+    // property is expected to HOLD, a failed bracket is weak evidence and
+    // acceptable; where the shortfall is expected, it is the shortfall's alibi.
+    expect(
+      edge.bracketed,
+      "the edge must be bracketed, or a stable target proves only that nothing was near a boundary"
+    ).toBe(true);
 
     const reader = await driver.recordActiveTargetTransitions();
-    // A 2px oscillation across a boundary. With no switch margin the target
-    // flips on every crossing and the indicator stutters under a hand that is
-    // not perfectly still.
-    for (let cycle = 0; cycle < 6; cycle += 1) {
-      await driver.moveBy(0, 2);
-      await driver.moveBy(0, -2);
-    }
+    // A 2px oscillation ACROSS the bracketed edge. With no switch margin the
+    // target flips on every crossing and the indicator stutters under a hand
+    // that is not perfectly still.
+    await jitterAcrossEdge(driver);
     const transitions = await reader();
     await driver.cancel();
+
+    // The indicator has to have been visible throughout: a log holding only a
+    // baseline of -1 reports no movement because nothing was ever shown. A
+    // precondition, so it runs BEFORE the expectation is marked.
+    expect(
+      transitions[0]?.index,
+      "the indicator must be visible to measure whether it moves"
+    ).toBeGreaterThanOrEqual(0);
+
+    // Marked only now. Everything above ran unprotected, so a failed seed, a
+    // drag that never reached a zone, or a bracket that never found an edge
+    // stays a real failure instead of becoming another expected one.
+    test.fail(true, "the target flips on every 2px crossing of a zone edge");
 
     // The log's FIRST entry is the state when recording began, not a change, so
     // anything after it is motion the jitter caused. Comparing the whole log
@@ -422,12 +495,6 @@ test.describe("a canvas any Nextly editor could ship", () => {
       transitions.slice(1).map(entry => entry.index),
       "a 2px jitter must not move the drop target"
     ).toEqual([]);
-    // And the indicator has to have been visible throughout: a log holding only
-    // a baseline of -1 reports no movement because nothing was ever shown.
-    expect(
-      transitions[0]?.index,
-      "the indicator must be visible to measure whether it moves"
-    ).toBeGreaterThanOrEqual(0);
   });
 
   test("shifts no existing block when its drop zones appear", async ({
@@ -583,6 +650,19 @@ test.describe("a canvas any Nextly editor could ship", () => {
     // Marked only now. Everything above ran unprotected.
     test.fail(true, "nothing is shown over an illegal target");
 
+    // NOT SEPARATING YET, and the reason is in the product rather than here.
+    // `canDrop` refuses a drop for four reasons, and the only one a panel drag
+    // can reach is `not-allowed-in-slot`, which needs a slot declaring
+    // `allowedBlocks`. Measured against the shipped registry: no block declares
+    // one, so every slot accepts every child and there is no illegal target for
+    // this drag to enter. The pointer therefore rests somewhere legal, and a
+    // canvas that answered `false` here forever would satisfy the assertion the
+    // day the reader starts working.
+    //
+    // Closing this needs a block whose slot restricts its children — a product
+    // decision, not a harness one. Until then the expected failure records a
+    // capability the canvas lacks and NOT a judgement about what it draws over
+    // an illegal target, because it is never over one.
     const explicit = await chrome.readsInvalidTarget();
     await driver.cancel();
 
@@ -757,10 +837,23 @@ test.describe("a canvas any Nextly editor could ship", () => {
     test.fail(true, "this canvas keeps no undo history to count");
 
     const before = await chrome.undoDepth();
-    await dragFromPanel(driver);
+    const treeBefore = await driver.readTreeShape();
+    // Onto a live zone, not merely over the canvas. `dragFromPanel` stops at
+    // the centre, which the file's own comment says is dead space as often as
+    // not — and a drop there inserts nothing.
+    await dragOntoZone(driver);
     await driver.drop();
     const after = await chrome.undoDepth();
 
+    // The drop has to have DONE something. `after - before === 1` is satisfied
+    // by a missed drop that recorded one entry, which is the same green as the
+    // property and the opposite meaning: an editor that logs an undo step for a
+    // gesture that changed nothing is worse than one that logs none, because
+    // the author presses undo and watches nothing happen.
+    expect(
+      await driver.readTreeShape(),
+      "the drop must change the document before its undo entry means anything"
+    ).not.toEqual(treeBefore);
     // Exactly one. A drop recorded as several makes undo feel broken: the
     // author presses it once and the block half-moves.
     expect(after - before, "one drop is one undoable edit").toBe(1);
@@ -797,27 +890,44 @@ test.describe("a canvas any Nextly editor could ship", () => {
       "dragging a block already in the canvas is not offered here"
     );
 
-    await chrome.startDragOfBlock(fixture.blockIds[1] ?? "");
-    // The same observable state a panel drag produces. Two engines drift:
-    // one gains a hysteresis fix or an autoscroll tune and the other does
-    // not, and the canvas then behaves differently depending on where the
-    // block came from.
-    const dragging = await driver.isDragging();
-    const active = await driver.readActiveTarget();
-    const nearest = await driver.nearestZoneToPointer();
+    // BOTH drags, measured the same way, and compared against each other.
+    // Reading only the canvas drag asks whether it works, not whether it is the
+    // same engine — two independent implementations satisfy that whenever the
+    // canvas one happens to report dragging, which is the green this case was
+    // returning. The property is AGREEMENT, so neither side may be a constant
+    // written into this file.
+    await dragOntoZone(driver);
+    const panel = await engineSignature(driver);
     await driver.cancel();
 
-    expect(dragging, "a canvas drag reports the same drag state").toBe(true);
-    expect(active, "and resolves targets by the same rule").toBe(nearest);
+    // The panel side is the reference, so it has to be a live drag resting
+    // inside a zone. Two dead readings compare equal, and `toEqual` below would
+    // report two engines agreeing when neither was running.
+    expect(
+      panel,
+      "the panel drag is the reference and must be live and on a zone"
+    ).toEqual({ dragging: true, resolvesToContainingZone: true });
+
+    await chrome.startDragOfBlock(fixture.blockIds[1] ?? "");
+    await dragUntilTarget(driver);
+    const canvas = await engineSignature(driver);
+    await driver.cancel();
+
+    // Two engines drift: one gains a hysteresis fix or an autoscroll tune and
+    // the other does not, and the canvas then behaves differently depending on
+    // where the block came from.
+    expect(canvas, "a canvas drag behaves as a panel drag does").toEqual(panel);
   });
 
   test("leaves the document and the editor intact when Escape cancels", async ({
+    page,
     request,
   }) => {
     note(PLAN_POINT.escapeCancelsWithoutNavigating, "B-11");
     await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
 
     const before = await driver.readTreeShape();
+    const url = page.url();
     await dragFromPanel(driver);
     await driver.cancel();
 
@@ -828,6 +938,13 @@ test.describe("a canvas any Nextly editor could ship", () => {
     expect(await driver.readTreeShape(), "Escape changes nothing").toEqual(
       before
     );
+    // The LOCATION, not only the DOM. A shell that treats Escape as go-back
+    // changes the location synchronously and the outgoing document stays
+    // mounted for a tick afterwards, so a presence check reads the editor that
+    // is on its way out and reports no navigation. The two readings disagree
+    // for exactly the window this is meant to catch, which is why both are
+    // here rather than the cheaper one alone.
+    expect(page.url(), "and does not navigate away").toBe(url);
     expect(
       await driver.isEditorPresent(),
       "and the shell does not treat it as go-back"

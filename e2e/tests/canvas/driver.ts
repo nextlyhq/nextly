@@ -199,10 +199,17 @@ export interface CanvasDriver {
   /**
    * Ordinal of the drop zone geometrically nearest the current pointer.
    *
-   * The exact form of "the indicator is where the pointer is": comparing the
-   * ACTIVE ordinal against this one needs no tolerance, and both the stale-rect
-   * (#1705) and unscaled-transform (#1706) failures select a zone that is not
-   * the nearest, so it catches them without a magic number.
+   * The APPROXIMATE reading, and the weaker of the two. Proximity is not a rule
+   * this canvas follows: `@dnd-kit/collision` resolves to a zone CONTAINING the
+   * pointer first and only ranks by the dragged shape's overlap when none does,
+   * so next to a boundary the nearest zone by centre distance and the resolved
+   * zone legitimately differ. Measured, one sample of 28 resolved one ordinal
+   * away with the pointer inside neither.
+   *
+   * So an equality assertion against this is a latent flake wherever the pointer
+   * may sit outside every zone. Use {@link zoneContainingPointer} for the exact
+   * claim, and bound this one to a single ordinal where only an approximation is
+   * available.
    */
   nearestZoneToPointer(): Promise<number>;
 
@@ -307,6 +314,97 @@ export async function dragUntilTarget(
     if (active >= 0) return active;
   }
   return -1;
+}
+
+/** Where a boundary search left the pointer. */
+export interface ZoneEdge {
+  /** Active target the pointer rests on, or -1 when no boundary was reached. */
+  readonly target: number;
+  /**
+   * Whether an edge was found and the pointer stepped back just inside it.
+   *
+   * `false` is not a failure. The search runs a bounded distance, and a target
+   * that does not change within it is a STICKY one — which is the behaviour the
+   * jitter requirement asks for. A caller may still jitter from there and
+   * observe no flip; it simply has weaker evidence, because the pointer is not
+   * known to straddle an edge.
+   */
+  readonly bracketed: boolean;
+}
+
+/**
+ * Carries the drag to a zone BOUNDARY and leaves the pointer one pixel inside it.
+ *
+ * A jitter is only a test of hysteresis when it straddles an edge. Oscillating
+ * in the middle of a zone's catchment reports a stable target on a canvas with
+ * no hysteresis at all, because nothing there was ever close to switching — the
+ * assertion is satisfied by the pointer being far from any decision.
+ *
+ * Three steps, and each one is load-bearing:
+ *
+ * 1. Reach a zone, so the walk starts from a live target rather than dead
+ *    space, where the indicator appearing and vanishing counts as a change.
+ * 2. Walk until the target CHANGES, which is the only way to know an edge was
+ *    passed rather than assumed.
+ * 3. Step back a pixel at a time until it changes again, then one step in. The
+ *    pointer is now within a pixel of the edge, so +/-2px lands on opposite
+ *    sides of it.
+ *
+ * The search distance is deliberately past the largest margin the requirement
+ * allows, so failing to find the edge means the target is sticky rather than
+ * that the search was too short.
+ *
+ * Shared rather than repeated because the acceptance suite and the scenario
+ * suite ask the same question, and a per-suite copy is invisible when it is
+ * wrong: the drag still runs and still reports a number.
+ */
+export async function dragToZoneEdge(
+  driver: CanvasDriver,
+  searchPx = 24
+): Promise<ZoneEdge> {
+  const first = await dragUntilTarget(driver);
+  if (first < 0) return { target: -1, bracketed: false };
+
+  let crossed = -1;
+  let previous = first;
+  for (let step = 0; step < 120; step += 1) {
+    await driver.moveBy(0, 4);
+    const current = await driver.readActiveTarget();
+    if (current >= 0 && current !== previous) {
+      crossed = current;
+      break;
+    }
+    if (current >= 0) previous = current;
+  }
+  if (crossed < 0) return { target: previous, bracketed: false };
+
+  for (let step = 0; step < searchPx; step += 1) {
+    await driver.moveBy(0, -1);
+    if ((await driver.readActiveTarget()) !== crossed) {
+      await driver.moveBy(0, 1);
+      return { target: crossed, bracketed: true };
+    }
+  }
+  return { target: crossed, bracketed: false };
+}
+
+/**
+ * Oscillate the pointer across the edge the caller has just bracketed.
+ *
+ * Steps to P-2 FIRST and then alternates by 4, so the samples are P-2 and P+2 —
+ * genuinely opposite sides. Alternating +/-2 from P samples P+2 and P, both on
+ * the same side, and a canvas that switches the instant the pointer crosses
+ * passes that.
+ */
+export async function jitterAcrossEdge(
+  driver: CanvasDriver,
+  cycles = 6
+): Promise<void> {
+  await driver.moveBy(0, -2);
+  for (let cycle = 0; cycle < cycles; cycle += 1) {
+    await driver.moveBy(0, 4);
+    await driver.moveBy(0, -4);
+  }
 }
 
 /**

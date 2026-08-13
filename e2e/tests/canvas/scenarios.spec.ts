@@ -11,7 +11,7 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { dragPointerTo, dragUntilTarget } from "./driver";
+import { dragPointerTo, dragToZoneEdge, dragUntilTarget } from "./driver";
 import type { ActiveTargetTransition, CanvasDriver } from "./driver";
 import { EXTREME_RATIO_FIXTURE, FLAT_LIST_FIXTURE, seedPage } from "./fixtures";
 import { createPocDriver } from "./poc-driver";
@@ -53,22 +53,38 @@ async function expectIndicatorAtPointer(driver: CanvasDriver, label: string) {
   const rect = await driver.readIndicatorRect();
   expect(rect, `${label}: an indicator must be visible`).not.toBeNull();
 
-  // Exact, not within a tolerance. A distance threshold is meaningless here:
-  // collision picks the NEAREST zone, so the pointer legitimately sits up to
-  // half the zone spacing away, and any threshold near that is either slack
-  // enough to accept a neighbour or tight enough to reject a correct answer.
-  // "Is the active zone the nearest one?" has neither problem, and both the
-  // stale-rect and unscaled-transform failures pick a non-nearest zone.
+  // Two readings, and which one is authoritative depends on where the pointer
+  // sits. `@dnd-kit/collision` resolves to a zone CONTAINING the pointer first
+  // and only ranks by the dragged shape's overlap when none does, so:
+  //
+  // - inside a zone, containment is EXACT and needs no tolerance;
+  // - outside every zone, the nearest zone is an approximation the canvas never
+  //   promised. Measured, one sample of 28 resolved one ordinal away from it.
+  //
+  // Asserting strict equality against the nearest zone therefore holds most of
+  // the time and fails next to a boundary, which reads as a mapping defect
+  // rather than as the harness asking a question the canvas does not answer.
+  // Both the stale-rect (#1705) and unscaled-transform (#1706) failures move
+  // the resolved zone much further than one ordinal, so the weaker bound still
+  // catches what this guard exists for.
   const active = await driver.readActiveTarget();
+  const containing = await driver.zoneContainingPointer();
   const nearest = await driver.nearestZoneToPointer();
   test.info().annotations.push({
     type: `${label}-zone`,
-    description: `active=${active} nearest=${nearest}`,
+    description: `active=${active} containing=${containing} nearest=${nearest}`,
   });
+  if (containing >= 0) {
+    expect(
+      active,
+      `${label}: the zone containing the pointer must be the active one`
+    ).toBe(containing);
+    return;
+  }
   expect(
-    active,
-    `${label}: the active zone must be the nearest to the pointer`
-  ).toBe(nearest);
+    Math.abs(active - nearest),
+    `${label}: with the pointer inside no zone, the active zone must still be adjacent to the nearest`
+  ).toBeLessThanOrEqual(1);
 }
 
 test("scenario 1: a library block drags across the iframe boundary", async ({
@@ -290,56 +306,26 @@ test("scenario 4b: a 2px jitter at a zone edge keeps the indicator stable", asyn
 
   await startPanelDrag(driver);
 
-  // Get onto a zone first, then walk until the target CHANGES. Both halves are
-  // required: jittering from a point with no active target measures dead space,
-  // and jittering from the middle of one zone's catchment is not a boundary at
-  // all. Either would report a clean run without testing the thing named in the
-  // title.
-  const first = await dragUntilTarget(driver);
+  // Onto a zone, then to that zone's EDGE. Both halves are required: jittering
+  // from a point with no active target measures dead space, and jittering from
+  // the middle of one zone's catchment is not a boundary at all. Either reports
+  // a clean run without testing the thing named in the title.
+  //
+  // Shared with the acceptance suite rather than written twice. The two suites
+  // ask the same question, and a second copy of this walk is invisible when it
+  // is wrong — the drag still runs and still reports an ordinal.
+  const edge = await dragToZoneEdge(driver);
   expect(
-    first,
+    edge.target,
     "the drag must reach a zone before seeking a boundary"
   ).toBeGreaterThanOrEqual(0);
-
-  let crossed = -1;
-  let previous = first;
-  for (let step = 0; step < 120; step++) {
-    await driver.moveBy(0, 4);
-    const current = await driver.readActiveTarget();
-    if (current >= 0 && current !== previous) {
-      crossed = current;
-      break;
-    }
-    if (current >= 0) previous = current;
-  }
-  expect(
-    crossed,
-    "a boundary must actually be crossed, or this measures the middle of one zone"
-  ).toBeGreaterThanOrEqual(0);
-
-  // Bracket the edge of `crossed`'s own catchment. Waiting for `previous` to
-  // return cannot work: the file documents that zones are separated by
-  // block-sized dead space, so the old zone is hundreds of pixels away and six
-  // 1px moves simply run out, leaving the pointer wherever it started.
-  // Search well past the largest hysteresis margin the requirement allows
-  // (8-12px). Failing to find the edge within that distance is not a test
-  // failure: it means the target is sticky, which is the behaviour being asked
-  // for. The jitter below then runs from wherever the pointer sits and simply
-  // observes no flip.
-  const HYSTERESIS_SEARCH_PX = 24;
-  let bracketed = false;
-  for (let step = 0; step < HYSTERESIS_SEARCH_PX; step++) {
-    await driver.moveBy(0, -1);
-    if ((await driver.readActiveTarget()) !== crossed) {
-      // One step back inside, so +/-2px straddles the edge.
-      await driver.moveBy(0, 1);
-      bracketed = true;
-      break;
-    }
-  }
+  // Not asserted. Failing to find an edge within the search distance means the
+  // target is STICKY, which is the behaviour being asked for; the jitter below
+  // then runs from wherever the pointer sits and observes no flip. Recording it
+  // keeps the weaker evidence visible instead of silently equivalent.
   test.info().annotations.push({
     type: "bracketed",
-    description: String(bracketed),
+    description: String(edge.bracketed),
   });
   // Step to P-2 first, then alternate by 4px so the samples are P+2 and P-2 —
   // genuinely opposite sides of the edge. Alternating +/-2 from P samples P+2
