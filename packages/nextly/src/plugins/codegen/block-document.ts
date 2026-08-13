@@ -57,7 +57,6 @@ import type {
   BindingFormatType,
   BindingSource,
   DocumentKind,
-  StyleState,
 } from "@nextlyhq/blocks-engine/format";
 import { z } from "zod";
 
@@ -82,11 +81,6 @@ const documentKinds = DOCUMENT_KINDS as unknown as readonly [
   DocumentKind,
   ...DocumentKind[],
 ];
-const styleStates = STYLE_STATES as unknown as readonly [
-  StyleState,
-  ...StyleState[],
-];
-
 /**
  * The binding vocabulary, read from the engine for the same reason as the two
  * above.
@@ -160,6 +154,43 @@ function typedRecord(
 }
 
 /**
+ * A record whose KEYS are a closed vocabulary, checked without rebuilding it.
+ *
+ * `z.partialRecord` keyed by an enum has the same rebuild problem as the open
+ * records above, with the opposite consequence. An own `__proto__` key is not a
+ * valid style state, so it should be REFUSED; instead it is silently omitted
+ * from the parsed copy, the parse succeeds, and the caller gets back its own
+ * object with the invalid key still on it. Dropping a key the format forbids is
+ * worse than dropping one it merely does not know about: the document is
+ * reported valid while carrying something the engine rejects.
+ *
+ * So the keys are checked in place against the closed set. `propertyNames`
+ * carries the vocabulary into the published schema, which is what a consumer
+ * reads to learn the axis is closed.
+ */
+function closedKeyRecord(
+  allowed: readonly string[],
+  valueCheck: (value: unknown) => boolean,
+  valuesFragment: Record<string, unknown>
+) {
+  const permitted = new Set(allowed);
+  return z
+    .unknown()
+    .refine(
+      (value): value is Record<string, unknown> =>
+        isPlainRecord(value) &&
+        Object.keys(value).every(key => permitted.has(key)) &&
+        Object.values(value).every(valueCheck),
+      { message: `Expected an object keyed by: ${allowed.join(", ")}` }
+    )
+    .meta({
+      type: "object",
+      propertyNames: { type: "string", enum: [...allowed] },
+      additionalProperties: valuesFragment,
+    });
+}
+
+/**
  * One state × breakpoint bucket of style values.
  *
  * Values are unconstrained, and the token reference is described in prose
@@ -187,13 +218,16 @@ const styleValuesSchema = openRecord();
  * state — which is nearly every node. The stored type is a `Partial` for the
  * same reason.
  */
-const nodeStylesSchema = z.partialRecord(
-  z.enum(styleStates),
-  typedRecord(
-    value => styleValuesSchema.safeParse(value).success,
-    { type: "object" },
-    "Expected an object of style buckets"
-  )
+const styleBucketsSchema = typedRecord(
+  value => styleValuesSchema.safeParse(value).success,
+  { type: "object" },
+  "Expected an object of style buckets"
+);
+
+const nodeStylesSchema = closedKeyRecord(
+  STYLE_STATES,
+  value => styleBucketsSchema.safeParse(value).success,
+  { type: "object" }
 );
 
 /** One entry-field predicate. */
@@ -513,51 +547,27 @@ function exceedsLimits(
 }
 
 /**
- * Whether a value serializes to more bytes than the format allows, measured
- * without building the string.
+ * The two verdicts the size walk produces, and why parsing waits for both.
  *
- * The third bound, and the one the other two cannot express. Depth and node
- * count both measure the TREE, and a document can be shallow, hold a single
- * node, and still be enormous: one node whose `props` carry a few hundred
- * thousand keys passes both walks and is then cloned in full by the parser.
- * Size is the property that bounds that, and it is the same cap the engine's
- * own `validate()` applies, so the two agree on what is too large.
+ * **Size.** The third bound, and the one the tree walks cannot express. Depth
+ * and node count both measure the TREE, so a document that is shallow and holds
+ * a single node can still be enormous — one `props` object with a few hundred
+ * thousand keys passes both and is then cloned in full by the parser. The cap
+ * is the engine's, so this and `validate()` agree on what is too large.
  *
- * Measured LAST of the three because it is the only one that must read
- * everything. The tree walks stop at their first breach, so a hostile document
- * that is deep or wide never reaches this line.
+ * **Serializability.** The record predicates decide what a props object IS;
+ * they say nothing about what it CONTAINS. `props: { n: 1n }` is a plain record
+ * holding a `BigInt`, so it satisfies every structural check and then throws on
+ * the way to storage. A nested `Date` or `Map` is worse than a throw: it
+ * becomes a string or `{}` silently, so the document read back is not the one
+ * that was validated.
  *
- * The measurement is the engine's, and it counts rather than serializes: a
- * document hiding one enormous string would otherwise force an allocation
- * proportional to the whole hostile input before anything could reject it,
- * which is the cost this bound exists to avoid paying. It also terminates on a
- * cycle, where building the string would throw.
+ * Both come from ONE traversal. They are different questions, but each is about
+ * every value in the document, and a walk that has already visited a value can
+ * answer both without visiting it again.
  *
- * Sharing it with the canonical validator is not tidiness. Two measurements of
- * "how large is this document" disagree about which documents are refused, and
- * they disagree only on the inputs near the cap — the ones that matter.
- */
-function exceedsBytes(value: unknown, maxBytes: number): boolean {
-  return measureBytes(value, maxBytes).exceeded;
-}
-
-/**
- * Check a value against the block document format.
- *
- * This is the entry point to use on a document you did not write. It applies
- * the structural bounds first, so a hostile or merely broken input is REPORTED
- * as invalid rather than exhausting the stack or being cloned in full, and only
- * then runs the schema.
- *
- * The raw schema is deliberately not exported. Depth is a precondition of
- * parsing safely, and an exported schema alongside a guarded function is an
- * invitation to use the unguarded one — a rule with nothing enforcing it. A
- * caller that needs the format as data has `blockDocumentJsonSchema()`, which
- * carries no such hazard.
- *
- * Structural validity only. A legal document for a PARTICULAR app — registered
- * block types, configured breakpoints — is what the engine's `validate()`
- * answers, and this makes no claim about it.
+ * Run LAST of the three bounds, because this is the only one that must read
+ * everything: a document that is too deep or too wide never reaches it.
  */
 export function parseBlockDocument(value: unknown): BlockDocumentParseResult {
   const breach = exceedsLimits(value, MAX_DEPTH, MAX_NODES);
@@ -575,11 +585,20 @@ export function parseBlockDocument(value: unknown): BlockDocumentParseResult {
       ],
     };
   }
-  if (exceedsBytes(value, DEFAULT_MAX_DOCUMENT_BYTES)) {
+  const size = measureBytes(value, DEFAULT_MAX_DOCUMENT_BYTES);
+  if (size.exceeded) {
     return {
       success: false,
       issues: [
         `Document serializes to more than the format allows (${DEFAULT_MAX_DOCUMENT_BYTES} bytes).`,
+      ],
+    };
+  }
+  if (size.unserializable) {
+    return {
+      success: false,
+      issues: [
+        "Document holds a value JSON cannot represent (a BigInt, a function, a symbol, or an object that is not a plain record).",
       ],
     };
   }

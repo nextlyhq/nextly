@@ -1,3 +1,5 @@
+import { isPlainRecord } from "./plain-record";
+
 /**
  * Bounded serialized-size measurement.
  *
@@ -65,14 +67,17 @@ export function utf8ByteLength(s: string, budget: number): number {
  * passed and WITHOUT materializing the full JSON string — so a document that
  * stays under the node/depth caps but hides a huge string cannot force a giant
  * allocation before being rejected. Iterative, so deep nesting cannot overflow.
- * When the walk completes under the limit, `bytes` is an exact-enough estimate;
- * when `exceeded` is true it stopped early.
+ * When the walk completes under the limit, `bytes` counts every byte JSON would
+ * emit — braces, brackets, quotes, colons and separating commas — so a document
+ * measured under the cap really is under it. When `exceeded` is true it stopped
+ * early and `bytes` is a lower bound.
  */
 export function measureBytes(
   root: unknown,
   limit: number
-): { bytes: number; exceeded: boolean } {
+): { bytes: number; exceeded: boolean; unserializable: boolean } {
   let bytes = 0;
+  let unserializable = false;
   const stack: unknown[] = [root];
   while (stack.length > 0) {
     const value = stack.pop();
@@ -87,20 +92,49 @@ export function measureBytes(
       // BEFORE enqueuing elements: a huge array's comma count alone can exceed
       // the cap, so millions of entries must never be pushed first.
       bytes += 2 + Math.max(0, value.length - 1);
-      if (bytes > limit) return { bytes, exceeded: true };
+      if (bytes > limit) return { bytes, exceeded: true, unserializable };
       for (const item of value) stack.push(item);
+    } else if (
+      typeof value === "bigint" ||
+      typeof value === "function" ||
+      typeof value === "symbol"
+    ) {
+      // Not JSON. A document holding one of these cannot be stored — the
+      // serializer throws on a BigInt and silently drops the other two — so the
+      // walk records it rather than skipping past a value it cannot count.
+      unserializable = true;
     } else if (typeof value === "object") {
+      // Counting and judging are separate questions, and merging them was
+      // wrong: an object whose prototype is another plain object serializes
+      // exactly like a record, so treating "not a plain record" as "do not
+      // count this" reported 2 bytes where JSON emits 9. The count below walks
+      // own enumerable properties, which is what JSON does; the FLAG records
+      // that the value is not a plain record, which is a question about whether
+      // it belongs in a document at all.
+      if (!isPlainRecord(value)) unserializable = true;
       bytes += 2; // braces
-      if (bytes > limit) return { bytes, exceeded: true };
-      for (const [key, val] of Object.entries(
-        value as Record<string, unknown>
-      )) {
-        bytes += utf8ByteLength(key, limit) + 3; // quotes + colon + comma
-        if (bytes > limit) return { bytes, exceeded: true };
-        stack.push(val);
+      if (bytes > limit) return { bytes, exceeded: true, unserializable };
+      // `for...in` rather than `Object.entries`: the latter builds the complete
+      // array of key/value pairs before the loop can compare even the first key
+      // against the limit, so a props object with hundreds of thousands of keys
+      // forces exactly the allocation this counter exists to avoid. The own
+      // check is what makes `for...in` safe — it walks the prototype chain.
+      let properties = 0;
+      for (const key in value) {
+        if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+        // Quotes around the key, the colon, and — for every property after the
+        // first — the comma separating it from the previous one. Omitting the
+        // comma undercounts by one byte per property, which sounds negligible
+        // and is not: a document of 170,000 empty props measured 1,928,973
+        // bytes against a real 2,098,977, so an over-cap document was accepted
+        // by the bound that exists to refuse it.
+        bytes += utf8ByteLength(key, limit) + 3 + (properties > 0 ? 1 : 0);
+        properties += 1;
+        if (bytes > limit) return { bytes, exceeded: true, unserializable };
+        stack.push((value as Record<string, unknown>)[key]);
       }
     }
-    if (bytes > limit) return { bytes, exceeded: true };
+    if (bytes > limit) return { bytes, exceeded: true, unserializable };
   }
-  return { bytes, exceeded: false };
+  return { bytes, exceeded: false, unserializable };
 }

@@ -241,7 +241,15 @@ The frozen surface is:
    additive-open and is not frozen.
 3. **The validation API** — `validate(doc, ctx) → ValidationIssue[]`, where an
    issue is `{ path, code, message, suggestion?, severity }` and `path` is an
-   RFC 6901 JSON Pointer. Custom-CSS validation emits the same issue shape.
+   RFC 6901 JSON Pointer.
+
+   > **`customCss` is stored, and nothing reads it yet.** The field is part of
+   > the frozen shape on both a node and the document settings, and no validator
+   > inspects it and no compiler emits it. Custom CSS has to be sanitized before
+   > it can be written into a page at all, and that sanitizer does not exist, so
+   > the value round-trips through storage and reaches no stylesheet. Do not
+   > rely on it to style anything yet.
+
 4. **The tree primitives and the reserved operation vocabulary.** The primitives
    are pure, id-addressed functions over a forest: insert, remove, move, reid,
    update.

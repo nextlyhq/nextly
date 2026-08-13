@@ -39,7 +39,14 @@ import type {
   TreePosition,
   ValidationContext,
   ValidationIssue,
+  AnyBlockDefinition,
+  SupportDefinition,
+  allBlocks,
+  allSupports,
   duplicateNode,
+  getBlock,
+  getBlockSource,
+  getSupport,
   insertNode,
   moveNode,
   reidSubtree,
@@ -49,7 +56,10 @@ import type {
 } from "@nextlyhq/blocks-engine";
 import { expectTypeOf } from "vitest";
 
-import type { isBindablePropType } from "../../collections/fields/catalog";
+import type {
+  BindingEndpoint,
+  isBindablePropType,
+} from "../../collections/fields/catalog";
 
 import type { BlockDocumentShape } from "./block-document";
 
@@ -237,6 +247,13 @@ expectTypeOf<typeof reidSubtree>().returns.toEqualTypeOf<BlockNode>();
 
 expectTypeOf<typeof duplicateNode>().returns.toEqualTypeOf<BlockNode[]>();
 
+// The patch type is part of the contract, not an implementation detail: it is
+// what states that `id`, `type` and `slots` are NOT patchable — an id change
+// would orphan every overlay keyed on it, and slots move through the dedicated
+// primitives so a patch cannot reparent a subtree silently.
+expectTypeOf<typeof updateNode>().parameters.toEqualTypeOf<
+  [BlockNode[], string, Partial<Omit<BlockNode, "id" | "type" | "slots">>]
+>();
 expectTypeOf<typeof updateNode>().returns.toEqualTypeOf<BlockNode[]>();
 
 // A slot position addresses a parent and a named region, never an index into a
@@ -249,7 +266,48 @@ expectTypeOf<keyof TreePosition>().toEqualTypeOf<
 // Bindability is DERIVED from a prop's field type and is never opted into per
 // block. A signature taking anything other than the type name would let a block
 // declare its own answer, which is the design this rule exists to forbid.
+// The INPUT is the half that carries the rule. A signature taking a
+// block-supplied flag instead of the endpoint would let a block declare its own
+// answer, which is exactly the per-block opt-in the specification forbids, and
+// a return-type assertion alone would stay green through that change.
+expectTypeOf<typeof isBindablePropType>().parameters.toEqualTypeOf<
+  [BindingEndpoint]
+>();
 expectTypeOf<typeof isBindablePropType>().returns.toEqualTypeOf<boolean>();
+
+// ---------------------------------------------------------------------------
+// The frozen registry read API
+// ---------------------------------------------------------------------------
+
+/**
+ * The read side of the registry is what a plugin and the manifest generator
+ * consume. Behaviour tests exercise these at their current call shapes, which
+ * leaves a parameter or return-type change free to move with them.
+ *
+ * `undefined` rather than a throw on a miss is part of the contract for the
+ * two lookups: a caller branches on absence, and a version that threw would
+ * break every one of them without any name changing.
+ */
+expectTypeOf<typeof getBlock>().parameters.toEqualTypeOf<[string]>();
+expectTypeOf<typeof getBlock>().returns.toEqualTypeOf<
+  AnyBlockDefinition | undefined
+>();
+
+expectTypeOf<typeof allBlocks>().parameters.toEqualTypeOf<[]>();
+expectTypeOf<typeof allBlocks>().returns.toEqualTypeOf<AnyBlockDefinition[]>();
+
+expectTypeOf<typeof getBlockSource>().parameters.toEqualTypeOf<[string]>();
+expectTypeOf<typeof getBlockSource>().returns.toEqualTypeOf<
+  string | undefined
+>();
+
+expectTypeOf<typeof getSupport>().parameters.toEqualTypeOf<[string]>();
+expectTypeOf<typeof getSupport>().returns.toEqualTypeOf<
+  SupportDefinition | undefined
+>();
+
+expectTypeOf<typeof allSupports>().parameters.toEqualTypeOf<[]>();
+expectTypeOf<typeof allSupports>().returns.toEqualTypeOf<SupportDefinition[]>();
 
 // ---------------------------------------------------------------------------
 // The published schema describes the frozen envelope

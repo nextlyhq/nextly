@@ -26,10 +26,7 @@
             "enum": ["base", "hover", "focus", "active"]
           },
           "additionalProperties": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "object"
-            }
+            "type": "object"
           }
         },
         "customCss": {
@@ -298,10 +295,7 @@
             "enum": ["base", "hover", "focus", "active"]
           },
           "additionalProperties": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "object"
-            }
+            "type": "object"
           }
         },
         "classes": {

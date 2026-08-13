@@ -386,6 +386,68 @@ describe("block document schema", () => {
     expect(parseBlockDocument(doc).success).toBe(false);
   });
 
+  it("refuses a value JSON cannot represent, however deeply nested", () => {
+    // A plain record holding a BigInt satisfies every structural check and then
+    // throws on the way to storage. A nested Date or Map is worse than a throw:
+    // it becomes a string or `{}` silently, so the document read back is not
+    // the one that was validated.
+    const cases: Array<[string, unknown]> = [
+      ["a BigInt", 1n],
+      ["a function", () => undefined],
+      ["a symbol", Symbol("s")],
+      ["a Date", new Date()],
+      ["a Map", new Map()],
+    ];
+
+    for (const [label, offending] of cases) {
+      const doc = {
+        ...emptyPage(),
+        nodes: [
+          {
+            id: "a",
+            type: "core/text",
+            version: 1,
+            props: { nested: { deeper: offending } },
+          },
+        ],
+      };
+      const result = parseBlockDocument(doc);
+      expect(result.success, `${label} should be refused`).toBe(false);
+    }
+  });
+
+  it("refuses a prototype-named key on the closed style-state axis", () => {
+    // The opposite consequence to an unknown key on an OPEN record. A style
+    // state axis is closed, so `__proto__` is not a state the format permits —
+    // dropping it silently reports the document valid while it still carries a
+    // key the engine rejects.
+    const doc = JSON.parse(
+      '{"formatVersion":1,"kind":"page","nodes":[{"id":"a","type":"core/text","version":1,"props":{},"styles":{"__proto__":{"base":{"color":"red"}}}}]}'
+    ) as unknown;
+
+    expect(parseBlockDocument(doc).success).toBe(false);
+  });
+
+  it("still accepts every state the engine declares", () => {
+    // The positive control for the check above: a closed-key check that refused
+    // everything would pass that test while breaking every real document.
+    for (const state of STYLE_STATES) {
+      const doc = {
+        ...emptyPage(),
+        nodes: [
+          {
+            id: "a",
+            type: "core/text",
+            version: 1,
+            props: {},
+            styles: { [state]: { base: { color: "red" } } },
+          },
+        ],
+      };
+      expect(parseBlockDocument(doc).success, state).toBe(true);
+    }
+  });
+
   it("accepts a node version above the definition registration cap", () => {
     // That cap bounds what a block DEFINITION may declare at registration. A
     // stored node written by a newer definition is a case the engine handles
