@@ -688,3 +688,86 @@ describe("buildPluginAdminMeta — clientConfig runtime shapes", () => {
     );
   });
 });
+
+/**
+ * A disabled plugin has no permissions and no mounted routes, so the active
+ * fields must stay empty — but a reader deciding whether to enable it needs to
+ * see what enabling would add. These pin that the two answers travel under
+ * different names and are never both present.
+ */
+describe("dormant declarations", () => {
+  const declaring = {
+    name: "@acme/p",
+    version: "1.0.0",
+    contributes: {
+      permissions: [
+        { action: "export", resource: "submissions", danger: true },
+      ],
+      routes: [{ method: "GET", path: "/export", handler: () => undefined }],
+    },
+  } as unknown as PluginDefinition;
+
+  it("reports a disabled plugin's declarations as dormant, not active", () => {
+    const [meta] = buildPluginAdminMeta(
+      [{ ...declaring, enabled: false } as PluginDefinition],
+      undefined
+    );
+
+    // The separating pair: present under `whenEnabled`, absent from the
+    // fields that mean the plugin currently has them.
+    expect(meta.whenEnabled?.permissions).toHaveLength(1);
+    expect(meta.whenEnabled?.routes).toEqual([
+      { method: "GET", path: "/export" },
+    ]);
+    expect(meta.permissions).toBeUndefined();
+    expect(meta.routes).toBeUndefined();
+  });
+
+  it("reports an enabled plugin's declarations as active, not dormant", () => {
+    const [meta] = buildPluginAdminMeta(
+      [{ ...declaring, enabled: true } as PluginDefinition],
+      undefined
+    );
+
+    expect(meta.permissions).toHaveLength(1);
+    expect(meta.routes).toEqual([{ method: "GET", path: "/export" }]);
+    expect(meta.whenEnabled).toBeUndefined();
+  });
+
+  /**
+   * The invariant a caller relies on: it may render one set or the other and
+   * never has to reconcile them. Asserted on both states, because "never both"
+   * is a claim about every plugin rather than about one.
+   */
+  it.each([true, false])(
+    "never carries the active and dormant sets together (enabled=%s)",
+    enabled => {
+      const [meta] = buildPluginAdminMeta(
+        [{ ...declaring, enabled } as PluginDefinition],
+        undefined
+      );
+
+      const active = Boolean(meta.permissions || meta.routes);
+      const dormant = Boolean(meta.whenEnabled);
+      expect(active && dormant).toBe(false);
+      // And exactly one of them, so this cannot pass on a plugin that
+      // serialized neither.
+      expect(active || dormant).toBe(true);
+    }
+  );
+
+  it("omits the dormant branch for a plugin that declares nothing", () => {
+    const [meta] = buildPluginAdminMeta(
+      [
+        {
+          name: "@acme/bare",
+          version: "1.0.0",
+          enabled: false,
+        } as PluginDefinition,
+      ],
+      undefined
+    );
+
+    expect(meta.whenEnabled).toBeUndefined();
+  });
+});

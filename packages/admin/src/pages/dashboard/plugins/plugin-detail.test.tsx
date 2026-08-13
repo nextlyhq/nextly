@@ -39,6 +39,12 @@ const plugins: PluginMetadata[] = [
     enabled: false,
     placement: "plugins",
     collections: ["retained"],
+    whenEnabled: {
+      permissions: [
+        { action: "purge", resource: "archive", label: "Purge Archive" },
+      ],
+      routes: [{ method: "DELETE", path: "/archive" }],
+    },
   },
 ];
 
@@ -165,5 +171,46 @@ describe("PluginDetailPage", () => {
       </QueryClientProvider>
     );
     expect(await screen.findByText("Plugin not found")).toBeInTheDocument();
+  });
+});
+
+/**
+ * A disabled plugin grants nothing and mounts nothing, so what it WOULD add is
+ * a different claim from what it adds. These pin that the two are shown as
+ * different things rather than merged into one list.
+ */
+describe("PluginDetailPage dormant disclosure", () => {
+  it("shows a disabled plugin's declarations under their own heading", () => {
+    render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
+
+    expect(screen.getByText("Would add when enabled")).toBeInTheDocument();
+    expect(screen.getByText("Purge Archive")).toBeInTheDocument();
+    expect(
+      screen.getByText("DELETE /api/plugins/acme-disabled/archive")
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * The separating assertion. The active section must NOT claim them — a
+   * merged list would render the same strings and pass the test above.
+   */
+  it("keeps them out of what the plugin currently adds", () => {
+    render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
+
+    const contributions = screen
+      .getByText("What this plugin adds")
+      .closest("section");
+    expect(contributions).not.toBeNull();
+    expect(within(contributions!).queryByText("Purge Archive")).toBeNull();
+    expect(within(contributions!).queryByText("Permissions")).toBeNull();
+  });
+
+  it("shows no dormant section for an enabled plugin", () => {
+    render(<PluginDetailPage params={{ slug: "acme-forms" }} />);
+
+    // The enabled fixture declares permissions and routes, so this asserts the
+    // section is withheld rather than that there was nothing to show.
+    expect(screen.getByText("Permissions")).toBeInTheDocument();
+    expect(screen.queryByText("Would add when enabled")).toBeNull();
   });
 });

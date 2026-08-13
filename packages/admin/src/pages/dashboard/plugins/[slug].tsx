@@ -282,6 +282,8 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
 
           {/* What this plugin adds — computed from the plugin's registrations */}
           <Contributions plugin={plugin} />
+
+          <WhenEnabled plugin={plugin} />
         </div>
 
         {/* `self-start` is what makes `sticky` work here: a grid item stretches
@@ -498,6 +500,89 @@ function Contributions({ plugin }: { plugin: PluginMetadata }) {
             </ul>
           </div>
         ))}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * What a disabled plugin would grant if it were enabled.
+ *
+ * A separate section from "What this plugin adds", reading from a separate
+ * field, because it answers a different question. The section above says what
+ * the plugin HAS; a disabled plugin has no mounted routes and grants no
+ * permissions, so listing these there would overstate the install. Someone
+ * deciding whether to enable it needs exactly this, and needs it not to look
+ * like the other thing.
+ *
+ * Renders nothing when the server sent no dormant set, which is every enabled
+ * plugin and every disabled one that declares neither.
+ */
+function WhenEnabled({ plugin }: { plugin: PluginMetadata }) {
+  const permissions = plugin.whenEnabled?.permissions ?? [];
+  const routes = plugin.whenEnabled?.routes ?? [];
+  if (permissions.length === 0 && routes.length === 0) return null;
+
+  return (
+    <section className="mb-8">
+      <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+        Would add when enabled
+      </h2>
+      <p className="mb-3 text-xs text-muted-foreground">
+        Declared by the plugin and not in effect while it is disabled. Enabling
+        it in your Nextly config grants these.
+      </p>
+      <div className="rounded-lg border border-dashed border-border bg-card p-4">
+        {permissions.length > 0 && (
+          <div className="mb-4 last:mb-0">
+            <div className="mb-2 flex items-center gap-2">
+              <Shield className="h-4 w-4 text-muted-foreground" />
+              <h3 className="text-sm font-medium text-foreground">
+                Permissions
+              </h3>
+              <span className="ml-auto text-xs text-muted-foreground">
+                {permissions.length}
+              </span>
+            </div>
+            <ul className="space-y-1.5">
+              {permissions.map(p => (
+                <li key={`${p.action}-${p.resource}`}>
+                  <span className="text-sm text-foreground">
+                    {p.label ?? `${p.action}-${p.resource}`}
+                  </span>
+                  {p.danger && (
+                    <span className="ml-2 text-xs text-destructive">
+                      danger
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {routes.length > 0 && (
+          <div>
+            <div className="mb-2 flex items-center gap-2">
+              <Route className="h-4 w-4 text-muted-foreground" />
+              <h3 className="text-sm font-medium text-foreground">
+                API routes
+              </h3>
+              <span className="ml-auto text-xs text-muted-foreground">
+                {routes.length}
+              </span>
+            </div>
+            <ul className="space-y-1.5">
+              {routes.map(r => (
+                <li
+                  key={`${r.method}-${r.path}`}
+                  className="break-words font-mono text-sm text-foreground"
+                >
+                  {`${r.method} /api/plugins/${pluginSlug(plugin.name)}${r.path}`}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
     </section>
   );

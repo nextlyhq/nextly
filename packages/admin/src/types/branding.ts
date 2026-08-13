@@ -93,6 +93,19 @@ export interface PluginMetadata {
   }>;
   /** Declared HTTP routes as method + path (enabled plugins only). */
   routes?: Array<{ method: string; path: string }>;
+  /**
+   * What a DISABLED plugin declares but does not currently have. Mirrors the
+   * server's `PluginAdminMeta.whenEnabled`.
+   *
+   * Never present alongside `permissions`/`routes`: those mean the plugin has
+   * them now, and a disabled plugin has neither — its routes are not mounted
+   * and its permissions grant nothing. Render one set or the other; combining
+   * them would state that a disabled plugin grants access it does not.
+   */
+  whenEnabled?: {
+    permissions?: PluginMetadata["permissions"];
+    routes?: PluginMetadata["routes"];
+  };
   /** Sidebar appearance customization from plugin config. */
   appearance?: {
     /** A lucide icon name. The common case; always theme-aware. */
