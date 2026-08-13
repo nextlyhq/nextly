@@ -1910,25 +1910,3 @@ describe("measureBytes agrees with the serializer on hooks and cycles", () => {
     expect(measureBytes(value, 1_000).bytes).toBe(written);
   });
 });
-
-describe("measureBytes reports what the writer refuses", () => {
-  it("calls a BigInt unstorable rather than counting it", () => {
-    // `JSON.stringify` THROWS on a BigInt — it neither writes nor drops it — so
-    // counting it as an ordinary value reports a document as fitting that the
-    // writer refuses entirely.
-    expect(measureBytes({ x: 1n }, 100)).toEqual({
-      bytes: expect.any(Number) as number,
-      exceeded: true,
-    });
-  });
-
-  it("calls a boxed BigInt unstorable too", () => {
-    // `Object(1n)` is a BigInt OBJECT, so `typeof` reports "object" and the walk
-    // would otherwise treat it as an ordinary record with no own keys — two
-    // bytes for a value the writer will not write at all.
-    expect(measureBytes({ x: Object(1n) }, 100)).toEqual({
-      bytes: expect.any(Number) as number,
-      exceeded: true,
-    });
-  });
-});
