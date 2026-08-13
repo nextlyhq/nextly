@@ -1348,12 +1348,20 @@ describe("a preview that meets a writer mid-run", () => {
   // was the one that still refused. REPORTED rather than retried: unlike a torn read this is an
   // accurate observation that stays true for as long as the other run takes.
   it("reports rather than refuses when a run goes the other way", async () => {
-    const { adapter, trace } = createRunWorld({
+    const world: RunWorld = {
       marker: inFlightMarker("down"),
       tables: [LEGACY_REGISTRY, "comp_hero", MIGRATION_LOCK_TABLE],
       registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
       lockOwner: "field-group-migration:down#someone-else",
-    });
+    };
+    // 🔴 The step ADVANCES between attempts, which is what a live run does and a crashed one cannot.
+    // Without it this fixture is the stranded-migration case below and must refuse.
+    let reads = 0;
+    world.onMarkerRead = () => {
+      reads += 1;
+      world.marker = { ...inFlightMarker("down"), step: reads };
+    };
+    const { adapter, trace } = createRunWorld(world);
 
     const outcome = await runFieldGroupMigration({
       adapter,
@@ -1371,9 +1379,35 @@ describe("a preview that meets a writer mid-run", () => {
     });
     expect(outcome.renames.length).toBeGreaterThan(0);
     expect(outcome.lock).toMatchObject({ kind: "held" });
-    // Answered on the first look. Re-reading an accurate observation three times would spend the
-    // attempts to reach the same true answer more slowly.
-    expect(markerReads(trace)).toBe(1);
+    expect(markerReads(trace)).toBe(3);
+  });
+
+  // 🔴 The stranded-migration control. This lock survives process death, so a CRASHED `down` run
+  // leaves its migrating marker AND its held row behind. Read once, that is indistinguishable from
+  // a live run — and reporting it as contention would tell the operator who must act to wait
+  // instead. Nothing advances here, and an unchanged world is what exposes the difference.
+  it("refuses a stranded run in the other direction", async () => {
+    const { adapter, trace } = createRunWorld({
+      marker: inFlightMarker("down"),
+      tables: [LEGACY_REGISTRY, "comp_hero", MIGRATION_LOCK_TABLE],
+      registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
+      lockOwner: "field-group-migration:down#crashed",
+    });
+
+    await expect(
+      runFieldGroupMigration({
+        adapter,
+        logger,
+        direction: "up",
+        dryRun: true,
+      })
+    ).rejects.toSatisfy(
+      error =>
+        NextlyError.is(error) &&
+        error.logContext?.reason === "a run in the other direction is in flight"
+    );
+
+    expect(markerReads(trace)).toBe(3);
   });
 
   // The writing counterpart, which must NOT be softened: two runs travelling opposite ways over the

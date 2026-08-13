@@ -399,7 +399,12 @@ export async function runFieldGroupMigration(
         // First, so it describes this attempt whatever this attempt goes on to raise.
         observedLock = session.lock;
         const state = await readMigrationState(meta);
-        const rows = await readRegistryRows(adapter, dialect, identifierCase);
+        const rows = await readRegistryRows(
+          adapter,
+          dialect,
+          identifierCase,
+          state.appliedManifest ?? []
+        );
 
         // Settled at the generation this run would produce: the work is done.
         // Confirmed against the catalog rather than taken from the marker alone,
@@ -501,85 +506,6 @@ export async function runFieldGroupMigration(
         const registryHash = hashRegistryIdentity(rows);
         const manifestHash = hashManifest(entries);
 
-        if (state.status === "migrating") {
-          if (state.plan.registryHash !== registryHash) {
-            throw NextlyError.serviceUnavailable({
-              logMessage:
-                "field-group migration cannot resume: the set of field groups changed since the interrupted run",
-              logContext: {
-                phase: FIELD_GROUP_MIGRATION_PHASE,
-                reason:
-                  "the set of field groups changed since the interrupted run",
-                recorded: state.plan.registryHash,
-                current: registryHash,
-              },
-            });
-          }
-          if (state.direction !== direction) {
-            // 🔴 A preview REPORTS this; only a run that writes refuses it. The marker says a run
-            // in the other direction is under way, and for something about to execute that is a
-            // hard stop — two runs travelling opposite ways over the same storage is the collision
-            // the lock exists to prevent. A preview executes nothing, and answering "no" to an
-            // operator asking what a migration would do, at the exact moment another one is
-            // running, withholds the answer they most need.
-            //
-            // Reported rather than retried, because unlike a torn read this is not a disagreement
-            // between two reads: it is an accurate observation that stays true for as long as the
-            // other run takes. Re-reading it three times would spend the attempts to arrive at the
-            // same true answer more slowly.
-            //
-            // Gated on an observed holder for the same reason everything else here is: a marker
-            // claiming an in-flight run with nothing holding the lock is a run that died, which an
-            // operator has to see rather than have described to them as traffic.
-            const lock = await observeContention();
-            if (dryRun && lock.kind === "held") {
-              const renames = directedRenameEntries(direction, entries).flatMap(
-                tableRenamesOf
-              );
-              logger.warn?.(
-                "field-group migration dry run met a run going the other way",
-                {
-                  phase: FIELD_GROUP_MIGRATION_PHASE,
-                  direction,
-                  recorded: state.direction,
-                  renames: renames.length,
-                }
-              );
-              return {
-                ran: false,
-                reason: "dry-run",
-                direction,
-                lock,
-                renames,
-                basis: {
-                  kind: "unreconciled",
-                  reason: "a run in the other direction is in flight",
-                },
-              };
-            }
-            throw NextlyError.serviceUnavailable({
-              logMessage: `field-group migration cannot run ${direction}: a ${state.direction} run is in flight`,
-              logContext: {
-                phase: FIELD_GROUP_MIGRATION_PHASE,
-                reason: "a run in the other direction is in flight",
-                recorded: state.direction,
-                requested: direction,
-              },
-            });
-          }
-        }
-
-        // 🔴 The try opens HERE, before the catalog is read, so every retryable failure in the
-        // plan-scoring window leaves by one path. A torn catalog read surfaces as the driver's
-        // missing-table error rather than as a refusal, and handling that only in the outer loop
-        // meant it was retried but never reported: exhaustion rethrew the database error instead of
-        // the documented unreconciled outcome, so an operator met a raw driver failure in exactly
-        // the contended case this path exists to describe.
-        //
-        // It does NOT open earlier. Before this point the registry rows have not been read, and
-        // without them no manifest exists to name the renames — reporting a plan there would mean
-        // reporting an empty one, which reads as "nothing to do". A preview that cannot read the
-        // registry has nothing honest to say and refuses.
         let tables: string[];
         let columns: TableColumns[];
         let reconciled: ReconciledEntry[];
@@ -596,6 +522,63 @@ export async function runFieldGroupMigration(
         const dataSteps = dataStepCount({ meta, migrationId });
         const offset = renamePositionOffset(direction, dataSteps);
         try {
+          if (state.status === "migrating") {
+            if (state.plan.registryHash !== registryHash) {
+              throw NextlyError.serviceUnavailable({
+                logMessage:
+                  "field-group migration cannot resume: the set of field groups changed since the interrupted run",
+                logContext: {
+                  phase: FIELD_GROUP_MIGRATION_PHASE,
+                  reason:
+                    "the set of field groups changed since the interrupted run",
+                  recorded: state.plan.registryHash,
+                  current: registryHash,
+                },
+              });
+            }
+            if (state.direction !== direction) {
+              // 🔴 A preview REPORTS this, a run that writes refuses it — but reporting it requires
+              // the same evidence every other contended answer does: that something MOVED.
+              //
+              // Answering on the first look was wrong. This lock has no TTL and survives process
+              // death, so a CRASHED `down` run leaves both its migrating marker and its held row
+              // behind. Read once, that is indistinguishable from a live one, and a preview would
+              // describe a stranded migration awaiting recovery as ordinary traffic — the operator
+              // most needing to act being told to wait.
+              //
+              // So it is classified and thrown like any other retryable failure, and the shared
+              // machinery decides: a live run advances its step between attempts and is reported as
+              // contention, while a crashed one presents the identical world every time and is
+              // raised. The recorded step travels in the refusal precisely so that movement is
+              // visible to the comparison.
+              throw NextlyError.serviceUnavailable({
+                logMessage: `field-group migration cannot run ${direction}: a ${state.direction} run is in flight`,
+                logContext: {
+                  phase: FIELD_GROUP_MIGRATION_PHASE,
+                  reason: "a run in the other direction is in flight",
+                  [REFUSAL_KIND_KEY]: "torn-read",
+                  recorded: state.direction,
+                  recordedStep: state.step,
+                  requested: direction,
+                },
+              });
+            }
+          }
+
+          // 🔴 The try opens HERE — before the marker's own consistency checks, not merely before the
+          // catalog read — so every retryable failure in the plan-scoring window leaves by one path.
+          // The recorded-hash comparison and the opposite-direction check are both raised from inside
+          // it: each is a judgement about a world a writer may be moving, and each was previously
+          // thrown past the only place that builds the documented fallback. A torn catalog read surfaces as the driver's
+          // missing-table error rather than as a refusal, and handling that only in the outer loop
+          // meant it was retried but never reported: exhaustion rethrew the database error instead of
+          // the documented unreconciled outcome, so an operator met a raw driver failure in exactly
+          // the contended case this path exists to describe.
+          //
+          // It does NOT open earlier. Before this point the registry rows have not been read, and
+          // without them no manifest exists to name the renames — reporting a plan there would mean
+          // reporting an empty one, which reads as "nothing to do". A preview that cannot read the
+          // registry has nothing honest to say and refuses.
           ({ tables, columns } = await readCatalog(adapter, dialect));
 
           // Reconciled in the direction that will execute. A rollback scored
@@ -1079,7 +1062,16 @@ function assertProbeMatchesGeneration(args: {
 export async function readRegistryRows(
   adapter: DrizzleAdapter,
   dialect: MigrationDialect,
-  identifierCase: IdentifierCaseRules
+  identifierCase: IdentifierCaseRules,
+  /**
+   * The plan a run in flight recorded, when there is one.
+   *
+   * Supplies the REVERSE of every rename it applied. Nothing else can: a field group whose author
+   * named its table `fg_hero` before this migration existed is left untouched going up, so a prefix
+   * rule going down would rename it to `comp_hero` and destroy an identifier this migration never
+   * created. Only the record distinguishes a name we made from one that was always there.
+   */
+  recordedRenames: readonly ManifestEntry[] = []
 ): Promise<RegistryRow[]> {
   // 🔴 Both names resolved from ONE catalog listing, not two existence checks. The registry is
   // renamed by this very migration, so a rollback moving the migrated name back to the legacy one
@@ -1133,16 +1125,17 @@ export async function readRegistryRows(
     //
     // Reading both is not a widening: the two names denote the same table on either side of a
     // rename this migration itself performs, so finding either one is finding the companion.
-    const migratedTable = retargetName({
-      slug: String(row.slug),
-      tableName: String(row.table_name),
-    });
+    const counterpart = counterpartTableName(
+      String(row.slug),
+      String(row.table_name),
+      recordedRenames
+    );
     const hasCompanion =
       isLocalized(row.localized) &&
       (resolveCatalogName(catalog, `${row.table_name}${suffix}`) !==
         undefined ||
-        (migratedTable !== null &&
-          resolveCatalogName(catalog, `${migratedTable}${suffix}`) !==
+        (counterpart !== null &&
+          resolveCatalogName(catalog, `${counterpart}${suffix}`) !==
             undefined));
     out.push({
       id: String(row.id),
@@ -1152,6 +1145,37 @@ export async function readRegistryRows(
     });
   }
   return out;
+}
+
+/**
+ * The other name this migration knows a field-group table by, in EITHER direction.
+ *
+ * 🔴 Both sides, because a companion and its registry row move in separate commits and either can
+ * be ahead. Going up the row still says `comp_hero` while the companion may already be
+ * `fg_hero_locales`; going DOWN the row still says `fg_hero` while the companion may already be
+ * back at `comp_hero_locales`. Reading one side only answers "no companion" in the other case,
+ * which changes the registry hash and strands an in-flight run on the recorded-hash check.
+ *
+ * The two directions come from different sources, and that asymmetry is not an oversight.
+ * Forward is DERIVED, safely: `retargetName` compares against the canonical name for the slug, so a
+ * table an author happened to call `comp_archive` is not adopted. Backward is READ FROM THE RECORD,
+ * because it cannot be derived at all — a prefix rule going down would rename an author's own
+ * `fg_hero` to `comp_hero`, and nothing in the database distinguishes a name this migration made
+ * from one that was always there.
+ */
+function counterpartTableName(
+  slug: string,
+  tableName: string,
+  recorded: readonly ManifestEntry[]
+): string | null {
+  const forward = retargetName({ slug, tableName });
+  if (forward !== null) return forward;
+  for (const entry of recorded) {
+    if (entry.kind === "column") continue;
+    if (entry.to === tableName) return entry.from;
+    if (entry.from === tableName) return entry.to;
+  }
+  return null;
 }
 
 /** One registry row, as far as reading it here is concerned. */
