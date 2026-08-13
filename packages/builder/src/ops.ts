@@ -314,6 +314,63 @@ function assertWalkable(depth: number, subject: string): void {
   }
 }
 
+/**
+ * How many values a structural comparison may visit before the answer is moot.
+ *
+ * Derived from the byte cap rather than chosen. The smallest thing a value can
+ * contribute to serialized JSON is one byte, so a value with more parts than the
+ * cap has bytes cannot fit under it whatever the comparison would have said —
+ * and the cap check that follows is the one entitled to refuse it.
+ */
+function comparisonBudget(limits: DocumentLimits): number {
+  return limits.maxBytes + 1;
+}
+
+/**
+ * Structural equality, bounded, and never through a serializer.
+ *
+ * Returns `false` when the budget runs out. That direction is the safe one: a
+ * pair reported different is treated as a real change, which sends the op on to
+ * the cap check rather than refusing it here as a no-op. Reporting them equal
+ * would refuse an edit that might have changed something, which is the answer
+ * with no recovery.
+ *
+ * Iterative, for the reason every other walk in this module is: a deep value
+ * would otherwise exhaust the call stack and leave a native RangeError where
+ * this module promises an `OpError`.
+ */
+function equalWithin(a: unknown, b: unknown, budget: number): boolean {
+  const pending: [unknown, unknown][] = [[a, b]];
+  let steps = 0;
+  while (pending.length > 0) {
+    if (steps++ > budget) return false;
+    const pair = pending.pop();
+    if (pair === undefined) break;
+    const [left, right] = pair;
+    if (left === right) continue;
+    if (Array.isArray(left) || Array.isArray(right)) {
+      if (!Array.isArray(left) || !Array.isArray(right)) return false;
+      if (left.length !== right.length) return false;
+      for (let i = 0; i < left.length; i += 1)
+        pending.push([left[i], right[i]]);
+      continue;
+    }
+    if (isPlainRecord(left) && isPlainRecord(right)) {
+      const leftKeys = Object.keys(left);
+      const rightKeys = Object.keys(right);
+      if (leftKeys.length !== rightKeys.length) return false;
+      for (const key of leftKeys) {
+        if (!Object.hasOwn(right, key)) return false;
+        pending.push([left[key], right[key]]);
+      }
+      continue;
+    }
+    // Primitives that were not `===`, or one record against one primitive.
+    return false;
+  }
+  return true;
+}
+
 function isJsonValue(value: unknown): boolean {
   // ITERATIVE, with an explicit stack. The recursive form exhausted the JS
   // stack on a deeply nested but otherwise legal value and leaked a native
@@ -1593,10 +1650,14 @@ export function applyOp(
       // freshly parsed, so `{ props: {} }` is never the same object as the
       // node's `{}` and a reference test calls every replayed op a change —
       // which is the invisible history entry this guard exists to refuse.
-      // Safe to serialize: `assertPatchNames` has already refused any value
-      // outside the JSON domain, so neither side can make `stringify` throw.
+      //
+      // COMPARED rather than serialized. Producing a JSON string of each side
+      // materialises the whole value here, before the byte cap has had a chance
+      // to refuse it — so an update carrying a string far past the cap allocates
+      // it in full to answer a question whose answer cannot matter, and the
+      // bounded counter downstream never gets to run.
       const same = (a: unknown, b: unknown): boolean =>
-        a === b || JSON.stringify(a) === JSON.stringify(b);
+        equalWithin(a, b, comparisonBudget(limits));
       // A name set rather than `includes` on the typed list: the names being
       // compared are the patch's own keys, which are strings, and widening the
       // list to match them would give up the very narrowing that stops a caller

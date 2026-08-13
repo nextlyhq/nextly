@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { applyOp, OpError, type BuilderOp, type NodePatch } from "./ops";
 
@@ -357,18 +357,11 @@ describe("an op that cannot apply", () => {
   });
 
   it("refuses an oversized edit without serializing it first", () => {
-    // The refusal has to be reachable WITHOUT building the thing being refused.
-    // Answering "is this too big" by producing a JSON string of the result, and
-    // then a UTF-8 buffer of that string, allocates two copies of the value on
-    // the way to calling it too large.
-    //
-    // Measured against serializing the same value in the same run, so the
-    // comparison is of two operations on one machine rather than against a
-    // constant that means something different on CI. Serializing is a LOWER
-    // bound on the cost being avoided — the buffer comes after it — and the
-    // refusal must come in under it. Measured, the gap is around 27x, so this
-    // has room to spare and still fails outright if the refusal starts
-    // serializing.
+    // OBSERVED, not timed. A duration comparison answers "was it fast", which a
+    // serializing implementation can satisfy on a lucky machine and which says
+    // nothing about the property under test — that the value is never
+    // materialized at all. The serializer is watched instead, so this fails
+    // whenever the refusal reaches it, however quickly it got there.
     const huge = "x".repeat(12_000_000);
     const limits = { maxDepth: 10, maxNodes: 100, maxBytes: 1_000 };
     const op: BuilderOp = {
@@ -377,22 +370,26 @@ describe("an op that cannot apply", () => {
       patch: { customCss: huge },
     };
 
-    const serializeStart = performance.now();
-    JSON.stringify({ ...doc(), extra: huge });
-    const serializeMs = performance.now() - serializeStart;
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      expect(() => applyOp(doc(), op, limits)).toThrow(OpError);
 
-    const refuseStart = performance.now();
-    expect(() => applyOp(doc(), op, limits)).toThrow(OpError);
-    const refuseMs = performance.now() - refuseStart;
+      // By identity, and only one level down: the oversized value is the
+      // patch's own property, so a serializer that was handed the patch, the op
+      // or the resulting document is a serializer that was handed this string.
+      const held = (value: unknown): boolean =>
+        value === huge ||
+        (typeof value === "object" &&
+          value !== null &&
+          Object.values(value).some(inner => held(inner)));
 
-    expect(
-      serializeMs,
-      "the control must take measurable time, or the comparison is noise"
-    ).toBeGreaterThan(0);
-    expect(
-      refuseMs,
-      "the byte cap must refuse an oversized edit without serializing it"
-    ).toBeLessThan(serializeMs);
+      expect(
+        stringify.mock.calls.filter(([value]) => held(value)),
+        "the byte cap must refuse an oversized edit without serializing it"
+      ).toEqual([]);
+    } finally {
+      stringify.mockRestore();
+    }
   });
 });
 
