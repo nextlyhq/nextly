@@ -1,33 +1,26 @@
 import type { Metadata } from "next";
-import localFont from "next/font/local";
+import "@fontsource-variable/inter";
+import "@fontsource-variable/geist-mono";
 
 import "./globals.css";
 
 /**
- * The faces come from packages in `node_modules` rather than from
- * `next/font/google`, which fetches them from fonts.googleapis.com at BUILD
- * time — so a build behind a proxy, on a locked-down CI runner, or simply
- * offline fails at a step that has nothing to do with the app's code.
+ * The faces are imported as STYLESHEETS from packages in `node_modules`, rather
+ * than fetched from fonts.googleapis.com by `next/font/google` while
+ * `next build` runs — which made every build depend on reaching a third party
+ * and fail behind a proxy, on a locked-down runner, or offline.
  *
- * `next/font/local` rather than the packages' own stylesheets, so the faces
- * keep the CSS variables the styles already reference, and keep the
- * metric-adjusted fallback that stops text reflowing once the face arrives.
+ * A bare package import rather than `next/font/local` pointing INTO
+ * `node_modules`: a literal path asserts where the package physically lives,
+ * and that assertion is false under Yarn's Plug'n'Play linker (no
+ * `node_modules` at all), under npm/Yarn workspace hoisting (the package moves
+ * to the workspace root), and under pnpm's own symlinked store. An import asks
+ * the resolver instead, which is correct under every layout.
+ *
+ * The trade is `next/font`'s metric-adjusted fallback, so text can shift
+ * slightly as the face arrives. The families are bound to this app's `--font-*`
+ * variables in `globals.css`, which is what every rule downstream reads.
  */
-const inter = localFont({
-  src: "../../node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2",
-  variable: "--font-inter",
-  display: "swap",
-  // One file spanning the whole weight axis; the filename carries no weight
-  // for Next to infer, so the range is declared.
-  weight: "100 900",
-});
-
-const geistMono = localFont({
-  src: "../../node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2",
-  variable: "--font-geist-mono",
-  display: "swap",
-  weight: "100 900",
-});
 
 /**
  * `metadataBase` tells Next.js how to resolve relative URLs in
@@ -83,10 +76,7 @@ export default function RootLayout({
         element; React still flags hydration mismatches in the rest of
         the tree.
       */}
-      <body
-        className={`${inter.variable} ${geistMono.variable} antialiased`}
-        suppressHydrationWarning
-      >
+      <body className="antialiased" suppressHydrationWarning>
         {children}
       </body>
     </html>

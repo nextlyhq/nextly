@@ -6,35 +6,27 @@ import {
   QueryProvider,
   ThemeProvider,
 } from "@nextlyhq/admin";
-import localFont from "next/font/local";
+import "@fontsource-variable/geist";
+import "@fontsource-variable/geist-mono";
 import "./globals.css";
 
-// The face ships in `node_modules` rather than being fetched from
-// fonts.googleapis.com at BUILD time, which made every build -- and the browser
-// suite's global setup, which builds first -- depend on reaching a third party.
-// It is still self-hosted from the app's own origin at runtime, and still
-// exposed only as a CSS variable; the admin theme names that variable first for
-// exactly this reason.
-//
-// One variable file covers the whole weight axis, which replaces the four
-// static cuts the design system declares. That is fewer requests rather than
-// more bytes: the discarded weights were separate files.
-const geistSans = localFont({
-  src: "../../node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2",
-  variable: "--font-geist",
-  display: "swap",
-  weight: "100 900",
-});
-
-// The mono face the admin reaches for on code surfaces: the API playground
-// editor, ids, and inline code.
-const geistMono = localFont({
-  src: "../../node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2",
-  variable: "--font-geist-mono",
-  display: "swap",
-  weight: "100 900",
-});
-
+/**
+ * The faces are imported as STYLESHEETS from packages in `node_modules`, rather
+ * than fetched from fonts.googleapis.com by `next/font/google` while
+ * `next build` runs — which made every build depend on reaching a third party
+ * and fail behind a proxy, on a locked-down runner, or offline.
+ *
+ * A bare package import rather than `next/font/local` pointing INTO
+ * `node_modules`: a literal path asserts where the package physically lives,
+ * and that assertion is false under Yarn's Plug'n'Play linker (no
+ * `node_modules` at all), under npm/Yarn workspace hoisting (the package moves
+ * to the workspace root), and under pnpm's own symlinked store. An import asks
+ * the resolver instead, which is correct under every layout.
+ *
+ * The trade is `next/font`'s metric-adjusted fallback, so text can shift
+ * slightly as the face arrives. The families are bound to this app's `--font-*`
+ * variables in `globals.css`, which is what every rule downstream reads.
+ */
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -43,7 +35,6 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable}`}
       /**
        * suppressHydrationWarning is needed to prevent hydration errors caused by
        * browser extensions (e.g., Bitwarden, password managers) that inject

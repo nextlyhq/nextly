@@ -1,33 +1,26 @@
 import type { Metadata } from "next";
-import localFont from "next/font/local";
+import "@fontsource-variable/inter";
+import "@fontsource-variable/jetbrains-mono";
 
 import "./globals.css";
 
 /**
- * The faces come from packages in `node_modules` rather than from
- * `next/font/google`, which fetches them from fonts.googleapis.com at BUILD
- * time — so a build behind a proxy, on a locked-down CI runner, or simply
- * offline fails at a step that has nothing to do with the app's code.
+ * The faces are imported as STYLESHEETS from packages in `node_modules`, rather
+ * than fetched from fonts.googleapis.com by `next/font/google` while
+ * `next build` runs — which made every build depend on reaching a third party
+ * and fail behind a proxy, on a locked-down runner, or offline.
  *
- * `next/font/local` rather than the packages' own stylesheets, so the fonts
- * keep the same CSS variables the styles already reference, and keep the
- * metric-adjusted fallback that stops text reflowing once the face arrives.
+ * A bare package import rather than `next/font/local` pointing INTO
+ * `node_modules`: a literal path asserts where the package physically lives,
+ * and that assertion is false under Yarn's Plug'n'Play linker (no
+ * `node_modules` at all), under npm/Yarn workspace hoisting (the package moves
+ * to the workspace root), and under pnpm's own symlinked store. An import asks
+ * the resolver instead, which is correct under every layout.
+ *
+ * The trade is `next/font`'s metric-adjusted fallback, so text can shift
+ * slightly as the face arrives. The families are bound to this app's `--font-*`
+ * variables in `globals.css`, which is what every rule downstream reads.
  */
-const display = localFont({
-  src: "../../node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2",
-  variable: "--font-display",
-  display: "swap",
-  // A variable font covering the whole axis in one file. Declared because the
-  // filename is not something Next can infer a weight range from.
-  weight: "100 900",
-});
-
-const mono = localFont({
-  src: "../../node_modules/@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2",
-  variable: "--font-mono",
-  display: "swap",
-  weight: "100 800",
-});
 
 /**
  * Blank-template root layout.
@@ -52,9 +45,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${display.variable} ${mono.variable} antialiased`}>
-        {children}
-      </body>
+      <body className="antialiased">{children}</body>
     </html>
   );
 }
