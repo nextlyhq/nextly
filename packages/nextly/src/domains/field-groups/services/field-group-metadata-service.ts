@@ -108,20 +108,25 @@ export class FieldGroupMetadataService {
   async createFieldGroup(
     input: CreateFieldGroupInput
   ): Promise<CreateFieldGroupResult> {
-    // 1. PLAN, and refuse a request the input itself makes impossible, BEFORE any exclusion is
-    // taken. Both steps are derived from the input and this connection's dialect — neither reads
-    // anything a storage migration could move — so running them under the lock would buy nothing
-    // and cost something real: taking the exclusion may CREATE the lock table, and a create
-    // rejected for a malformed field would then have written to a database it was about to tell
-    // the caller it had left untouched.
-    const migrationSQL = await this.planCreate(input);
-    await this.assertIdentifiersFit(input, migrationSQL);
-
-    // 🔴 The exclusion wraps the ownership check too, not only the DDL. That check reads which
-    // table names are taken, and a storage migration renaming tables is exactly what makes such a
-    // read stale — a name that looked free can be claimed by the rename a moment later. That is
-    // also why it stays INSIDE while the planning above moved out: one asks about the input, the
-    // other asks about the database.
+    // 🔴 Everything is inside, including the planning, and the reason planning is inside is not the
+    // storage migration.
+    //
+    // Rendering DDL consults the PROCESS-GLOBAL field-type registry for plugin fields
+    // (`pluginEmptyColumnDefault` -> `getFieldType`), and an HMR reload replaces that registry
+    // wholesale — `clearFieldTypes()` then re-registration — from inside this same exclusion. Plan
+    // outside it and a create can render its columns against one mapping while the binding below
+    // uses another, leaving a registered schema that disagrees with the column that was created.
+    // Worse, the swap has a window where the registry is EMPTY, so a plan running through it can
+    // refuse a field type that is perfectly valid.
+    //
+    // The ownership check is inside for its own reason: it reads which table names are taken, and a
+    // migration renaming tables is what makes such a read stale.
+    //
+    // What that costs, stated rather than glossed: taking the exclusion may CREATE and seed the
+    // lock table, so a create refused for a malformed field can leave that table behind. It is
+    // empty, it holds no user data, its creation is idempotent, and the next valid request would
+    // have made it anyway — a far smaller price than a column whose type disagrees with the schema
+    // bound to it.
     return withSchemaChangeExcluded(
       {
         adapter: this.adapter,
@@ -129,16 +134,22 @@ export class FieldGroupMetadataService {
         label: `create field group "${input.slug}"`,
         issuesDdl: true,
       },
-      () => this.createFieldGroupExcluded(input, migrationSQL)
+      () => this.createFieldGroupExcluded(input)
     );
   }
 
   private async createFieldGroupExcluded(
-    input: CreateFieldGroupInput,
-    migrationSQL: string
+    input: CreateFieldGroupInput
   ): Promise<CreateFieldGroupResult> {
     // 0. REFUSE a table another field group owns, before anything is executed.
     await this.assertTableUnowned(input);
+
+    // 1. PLAN. The generator validates as well as renders, so a request it refuses leaves no table
+    // and no row behind.
+    const migrationSQL = await this.planCreate(input);
+
+    // 1a. REFUSE names the database would not store, read from the statements themselves.
+    await this.assertIdentifiersFit(input, migrationSQL);
 
     // 2. APPLY. Never throws; a failure is reported as a status so the row can still record it.
     const migrationStatus = await this.applyCreateDdl(input, migrationSQL);

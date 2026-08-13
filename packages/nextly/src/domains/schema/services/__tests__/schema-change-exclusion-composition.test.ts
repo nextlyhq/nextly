@@ -243,13 +243,11 @@ describe("a field-group create contends for the same row", () => {
     expect(registry.registerComponent).not.toHaveBeenCalled();
   });
 
-  it("writes nothing at all when the input itself is impossible", async () => {
-    // Taking the exclusion may CREATE and seed the lock table, so a request rejected on its own
-    // contents must be rejected BEFORE that. Otherwise a create refused for a name the database
-    // could never store has still written to the database it is about to report leaving untouched.
-    //
-    // Asserted over EVERY statement rather than only the entity's: here the lock's own DDL is the
-    // thing that must not have run, so filtering it out would remove the evidence.
+  it("builds no table and writes no row when the input itself is impossible", async () => {
+    // What an impossible input must not leave behind is a TABLE and a ROW. The lock's own table is
+    // a deliberate exception and is asserted separately below, because planning has to happen
+    // inside the exclusion: rendering DDL reads the process-global field-type registry, which an
+    // HMR reload replaces from inside this same lock.
     const adapter = makeAdapter({ lockTableExists: false });
     const { service, registry } = makeFieldGroupService(adapter);
 
@@ -260,7 +258,25 @@ describe("a field-group create contends for the same row", () => {
       } as unknown as Parameters<typeof service.createFieldGroup>[0])
     ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
 
-    expect(executed).toEqual([]);
+    expect(executed.filter(sql => !isMigrationLockStatement(sql))).toEqual([]);
     expect(registry.registerComponent).not.toHaveBeenCalled();
+  });
+
+  it("leaves behind only the lock's own table when it refuses an impossible input", async () => {
+    // The cost of planning inside the exclusion, pinned rather than described. If this ever starts
+    // failing because NOTHING was written, planning has moved back outside the lock and the plugin
+    // field-type race is open again.
+    const adapter = makeAdapter({ lockTableExists: false });
+    const { service } = makeFieldGroupService(adapter);
+
+    await expect(
+      service.createFieldGroup({
+        ...FIELD_GROUP_INPUT,
+        tableName: `comp_${"x".repeat(80)}`,
+      } as unknown as Parameters<typeof service.createFieldGroup>[0])
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    expect(executed.every(isMigrationLockStatement)).toBe(true);
+    expect(executed.length).toBeGreaterThan(0);
   });
 });
