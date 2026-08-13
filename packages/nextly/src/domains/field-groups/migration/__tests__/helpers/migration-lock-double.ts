@@ -128,6 +128,45 @@ const RELEASE = new RegExp(
 
 type Groups = Record<string, string | undefined> | undefined;
 
+/** The statements this module issues, named. */
+export type LockStatementKind =
+  | "exists"
+  | "state"
+  | "claim"
+  | "renew"
+  | "release";
+
+/**
+ * What a statement IS, separately from what it DOES.
+ *
+ * One matcher for both questions. A suite that needs to observe a particular statement — count the
+ * reads, fail only the renewal — asks this rather than carrying a regex of its own, so there is
+ * exactly one place that can be wrong about which statement is which.
+ */
+function matchLockStatement(
+  flat: string
+): { kind: LockStatementKind; groups: Groups } | undefined {
+  for (const [kind, pattern] of [
+    ["exists", ROW_EXISTS],
+    ["state", LOCK_STATE],
+    ["claim", CLAIM],
+    ["renew", RENEW],
+    ["release", RELEASE],
+  ] as const) {
+    const match = pattern.exec(flat);
+    if (match) return { kind, groups: match.groups };
+  }
+  return undefined;
+}
+
+/** Compile a statement and say which of the lock's statements it is, if any. */
+export function classifyLockStatement(
+  statement: SQL
+): LockStatementKind | undefined {
+  const { sql: text } = new PgDialect().sqlToQuery(statement);
+  return matchLockStatement(text.replace(/\s+/g, " ").trim())?.kind;
+}
+
 /** The value a captured `$n` placeholder was bound to. */
 function bound(
   groups: Groups,
@@ -169,10 +208,13 @@ export function interpretLockStatement(
   const { sql: text, params } = new PgDialect().sqlToQuery(statement);
   const flat = text.replace(/\s+/g, " ").trim();
 
-  if (ROW_EXISTS.test(flat)) {
+  const matched = matchLockStatement(flat);
+  const groups = matched?.groups;
+
+  if (matched?.kind === "exists") {
     return lock.seeded ? [{ id: 1 }] : [];
   }
-  if (LOCK_STATE.test(flat)) {
+  if (matched?.kind === "state") {
     // Liveness is answered here because the real query answers it in the database, and the owner is
     // reported whether or not the claim has lapsed — the row still holds the name of whoever wrote
     // it last, and it is the flag rather than the absence of a name that says the claim is dead.
@@ -180,30 +222,24 @@ export function interpretLockStatement(
       ? [{ owner: lock.owner, live: isClaimLive(lock) ? 1 : 0 }]
       : [];
   }
-
-  const claim = CLAIM.exec(flat);
-  if (claim) {
+  if (matched?.kind === "claim") {
     // 🔴 Unconditional, because the real statement is: `acquire` decides under a row lock and then
     // writes without naming an owner, so a takeover of a lapsed claim overwrites an occupied row.
     // A model that refused an occupied row would agree with the real one on the day it was written
     // and would then quietly certify that no takeover is possible.
     if (!lock.seeded) return [];
-    lock.owner = bound(claim.groups, params, "claim") as string | null;
-    lock.expiresAt = lock.clock.now() + boundTtl(claim.groups, params);
+    lock.owner = bound(groups, params, "claim") as string | null;
+    lock.expiresAt = lock.clock.now() + boundTtl(groups, params);
     return [];
   }
-
-  const renew = RENEW.exec(flat);
-  if (renew) {
-    if (lock.seeded && lock.owner === bound(renew.groups, params, "owner")) {
-      lock.expiresAt = lock.clock.now() + boundTtl(renew.groups, params);
+  if (matched?.kind === "renew") {
+    if (lock.seeded && lock.owner === bound(groups, params, "owner")) {
+      lock.expiresAt = lock.clock.now() + boundTtl(groups, params);
     }
     return [];
   }
-
-  const release = RELEASE.exec(flat);
-  if (release) {
-    if (lock.owner === bound(release.groups, params, "owner")) {
+  if (matched?.kind === "release") {
+    if (lock.owner === bound(groups, params, "owner")) {
       lock.owner = null;
       lock.expiresAt = null;
     }
@@ -229,8 +265,7 @@ export function interpretLockStatement(
  * that has nothing to do with renewal.
  */
 export function isRenewalStatement(statement: SQL): boolean {
-  const { sql: text } = new PgDialect().sqlToQuery(statement);
-  return RENEW.test(text.replace(/\s+/g, " ").trim());
+  return classifyLockStatement(statement) === "renew";
 }
 
 /**
