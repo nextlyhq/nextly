@@ -36,7 +36,10 @@ function sourceFiles(root: string): string[] {
     if (entry.isDirectory()) {
       if (entry.name === "node_modules" || entry.name === ".next") continue;
       out.push(...sourceFiles(full));
-    } else if (/\.(?:tsx?|jsx?|mjs|cjs)$/.test(entry.name)) {
+      // `.css` included, because the production collector treats CSS as import-bearing and a
+      // template can name a path from `@import` or `url()`. A traversal narrower than the code it
+      // guards reports clean over exactly the files it never opened.
+    } else if (/\.(?:tsx?|jsx?|mjs|cjs|css)$/.test(entry.name)) {
       out.push(full);
     }
   }
