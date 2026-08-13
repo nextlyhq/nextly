@@ -143,8 +143,30 @@ export async function measureShellRender(
       context.fillStyle = background;
       normalised = context.fillStyle;
       if (normalised !== SENTINEL || background === SENTINEL) {
-        const parsed = /^rgba?\([^)]*,\s*([\d.]+)\s*\)$/.exec(normalised);
-        alpha = parsed === null ? 1 : Number(parsed[1]);
+        // CSS serializes alpha in exactly two shapes, and which one appears
+        // depends on the colour space rather than on the function name — so
+        // this keys on the SEPARATOR instead of enumerating `rgba`, `oklch`,
+        // `color`, and whatever arrives next.
+        //
+        //   legacy   rgba(r, g, b, A)        — a fourth comma-separated value
+        //   modern   oklch(l c h / A)        — a value after a slash
+        //            color(srgb r g b / A)
+        //
+        // A colour with neither is opaque. Chromium returns the modern form for
+        // anything it keeps outside sRGB, which is why matching `rgba(...)`
+        // alone reported a fully transparent `oklch` as painted.
+        const slash = /\/\s*([\d.]+%?)\s*\)\s*$/.exec(normalised);
+        const legacy =
+          /^rgba\(\s*[^,]+,\s*[^,]+,\s*[^,]+,\s*([\d.]+%?)\s*\)$/.exec(
+            normalised
+          );
+        const raw = slash?.[1] ?? legacy?.[1] ?? null;
+        alpha =
+          raw === null
+            ? 1
+            : raw.endsWith("%")
+              ? Number(raw.slice(0, -1)) / 100
+              : Number(raw);
       }
     }
     return {
