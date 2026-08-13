@@ -45,6 +45,7 @@
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -175,14 +176,19 @@ function write(target: string): void {
   const sentinel = forbiddenSentinel();
   const specifiers = consumerSpecifiers();
 
-  // Only a missing module says the sentinel was unreachable. Any other failure — an incompatible
-  // release, a package that throws while initialising, one that cannot be loaded through this
-  // module system — means it WAS present, and swallowing it records the project as isolated while
-  // every forbidden package sits installed beside it. That is the one error this file must not
-  // treat as good news, so everything else is rethrown and fails the probe.
-  const sentinelProbe = (load: string) => `let sentinelReached = false;
+  // RESOLVED, never loaded. Loading answers a wider question than this asks: it runs the module,
+  // so a package that IS present reports itself absent whenever its own initialiser fails — an
+  // incompatible release, a broken optional dependency of its own, anything that throws. Several
+  // of those failures carry the very error code that means "not installed", so no amount of
+  // narrowing the catch separates them; the two cases are indistinguishable once evaluation is
+  // allowed to happen at all.
+  //
+  // Resolution decides presence without executing anything, so the only module whose absence can
+  // be reported is the one named here. Each probe uses its own system's resolver, and neither can
+  // be confused by what the package would have done had it run.
+  const sentinelProbe = (resolve: string) => `let sentinelReached = false;
 try {
-  ${load};
+  ${resolve};
   sentinelReached = true;
 } catch (error) {
   const code = error && typeof error === "object" ? error.code : undefined;
@@ -200,7 +206,7 @@ for (const specifier of ${JSON.stringify(specifiers)}) {
   const module = await import(specifier);
   loaded[specifier] = Object.keys(module).length;
 }
-${sentinelProbe(`await import(${JSON.stringify(sentinel)})`)}
+${sentinelProbe(`import.meta.resolve(${JSON.stringify(sentinel)})`)}
 writeFileSync(${JSON.stringify(MARKERS.esm)}, JSON.stringify({ loaded, sentinelReached }));
 `
   );
@@ -213,7 +219,7 @@ for (const specifier of ${JSON.stringify(specifiers)}) {
   const module = require(specifier);
   loaded[specifier] = Object.keys(module).length;
 }
-${sentinelProbe(`require(${JSON.stringify(sentinel)})`)}
+${sentinelProbe(`require.resolve(${JSON.stringify(sentinel)})`)}
 writeFileSync(${JSON.stringify(MARKERS.cjs)}, JSON.stringify({ loaded, sentinelReached }));
 `
   );
@@ -261,6 +267,54 @@ function prune(target: string): void {
 }
 
 /**
+ * Every package name present at the top level of the probe project.
+ *
+ * A scope directory is not a package — `@radix-ui` holds them — so it is descended into and its
+ * children reported as scoped names.
+ */
+function installedPackages(target: string): string[] {
+  const root = join(target, "node_modules");
+  if (!existsSync(root)) return [];
+  const names: string[] = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (entry.name.startsWith(".")) continue;
+    if (entry.name.startsWith("@")) {
+      for (const scoped of readdirSync(join(root, entry.name))) {
+        if (!scoped.startsWith(".")) names.push(`${entry.name}/${scoped}`);
+      }
+      continue;
+    }
+    names.push(entry.name);
+  }
+  return names;
+}
+
+/**
+ * Packages the probe project holds that a server-safe entry point may not reach.
+ *
+ * The sentinel answers a question about ONE name, and npm's default layout can add others without
+ * touching it: a hoisted install lifts every non-duplicated transitive dependency to the top level,
+ * so the day an allowed package gains a dependency of its own, that dependency becomes directly
+ * resolvable by the package under test while the sentinel stays missing and both probes still pass.
+ *
+ * This enumerates what is actually there instead, so a package arriving by any route — hoisting, a
+ * lockfile change, a hand-placed directory — is reported by name rather than having to have been
+ * predicted. `@nextlyhq/ui` is expected because it is the subject, placed deliberately.
+ */
+function unexpectedlyInstalled(target: string): string[] {
+  const permitted = new Set([...SERVER_SAFE_ALLOWED_PACKAGES, "@nextlyhq/ui"]);
+  const unexpected = installedPackages(target)
+    .filter(name => !permitted.has(name))
+    .sort();
+  if (unexpected.length === 0) return [];
+  return [
+    `The probe project holds ${unexpected.length} package(s) outside the allow-list: ` +
+      `${unexpected.join(", ")}. Each is resolvable by the package under test, so the boundary ` +
+      "these probes report on is wider than the allow-list they are checking against.",
+  ];
+}
+
+/**
  * Read what the probes recorded, rather than trusting that they exited 0.
  *
  * A module that ends the process while it initialises exits 0 from inside the import being
@@ -269,7 +323,7 @@ function prune(target: string): void {
  */
 function verify(target: string): void {
   const expected = consumerSpecifiers();
-  const problems: string[] = [];
+  const problems: string[] = [...unexpectedlyInstalled(target)];
 
   for (const [system, marker] of Object.entries(MARKERS)) {
     const path = join(target, marker);
