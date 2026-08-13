@@ -693,12 +693,18 @@ export const NATIVE_BUILD_DEPENDENCIES = [
  *   ERR_PNPM_INVALID_WORKSPACE_CONFIGURATION  packages field missing or empty
  *
  * so a scaffold shipping the allowlist alone could not be installed at all on
- * that line. Measured across the versions a user is plausibly on: 9.0.0 refuses
- * the file without this key; 10.5.2, 10.6.1, 10.18.3 and 11.0.0 all accept it
- * either way. The empty list is the honest value — a scaffolded app has no
- * workspace members — and it leaves `pnpm add` behaving normally, which
- * declaring the project's own root as a member would also have done but with a
- * claim about the layout that is not true.
+ * those versions.
+ *
+ * Measured, installing the file exactly as generated: 8.15.9, 9.0.0, 9.0.6,
+ * 9.1.0, 9.2.0 and 9.3.0 all refuse it; 9.4.0, 9.7.0, 9.15.9, 10.5.2, 10.6.1,
+ * 10.18.3 and 11.0.0 all accept it with or without the key. So the affected
+ * range is pnpm 8 through 9.3 — which includes the 9.0.0 this repository pins,
+ * and therefore the pnpm a contributor following the setup instructions has.
+ *
+ * The empty list is the honest value — a scaffolded app has no workspace
+ * members — and it leaves `pnpm add` behaving normally, which declaring the
+ * project's own root as a member would also have done but with a claim about
+ * the layout that is not true.
  */
 export function generatePnpmWorkspaceYaml(): string {
   const allowBuilds = NATIVE_BUILD_DEPENDENCIES.map(
@@ -718,8 +724,8 @@ export function generatePnpmWorkspaceYaml(): string {
     "# build scripts by default.\n" +
     "#\n" +
     "# It does still READ the file, which is what the empty `packages` list is\n" +
-    "# for: on pnpm 9 the presence of this file declares a workspace, and a\n" +
-    "# missing `packages` key fails the install outright. This app has no\n" +
+    "# for: through pnpm 9.3 the presence of this file declares a workspace, and\n" +
+    "# a missing `packages` key fails the install outright. This app has no\n" +
     "# workspace members.\n" +
     "packages: []\n" +
     `allowBuilds:\n${allowBuilds}\n` +
