@@ -226,6 +226,18 @@ function requestsSchemaWork(input: UpdateSingleSchemaInput): boolean {
   );
 }
 
+/**
+ * One comparable spelling of a stored field list.
+ *
+ * Compared as JSON rather than deeply walked because both sides are the SAME stored value read
+ * twice: if nothing rewrote it, the two are identical, so there is no normalisation to get wrong.
+ * `undefined` and an empty list are deliberately the same answer — a row that has never held field
+ * definitions and one holding none describe the same schema.
+ */
+function stableFieldDefinitions(fields: unknown): string {
+  return JSON.stringify(fields ?? []);
+}
+
 export class SingleMetadataService {
   constructor(
     private readonly registry: SingleRegistryService,
@@ -328,8 +340,28 @@ export class SingleMetadataService {
 
   private async deleteSingleExcluded(
     slug: string,
-    tableName: string | undefined
+    callerTableName: string | undefined
   ): Promise<void> {
+    // 🔴 Re-read before dropping anything. The caller checked `locked` outside this exclusion, and
+    // an HMR reload can turn an unlocked UI Single into a locked code-first one in between — after
+    // which this would drop the table and call `deleteSingle(..., { force: true })`, walking past
+    // the registry's own protection for code-owned records. The table name is taken from the fresh
+    // record for the same reason: the caller's copy describes storage as it was.
+    //
+    // A record that has already gone is NOT an error here. Delete is idempotent by intent, and
+    // refusing a second delete would turn a retry into a failure; the teardown below still runs
+    // against the caller's table name so a half-finished delete can be completed.
+    const current = await this.registry.getSingleBySlug(slug);
+    if (current?.locked === true) {
+      throw NextlyError.forbidden({
+        logContext: {
+          reason: "single became locked while awaiting the exclusion",
+          slug,
+        },
+      });
+    }
+    const tableName = current?.tableName ?? callerTableName;
+
     const adapter = this.adapter;
     if (tableName && adapter) {
       // Embedded field-group instances point back at this table by a plain string with no foreign
@@ -493,30 +525,27 @@ export class SingleMetadataService {
       });
     }
 
-    // 🔴 Refreshing the record fixes what this request PLANS from. It does not fix what the request
-    // WRITES: the caller composed `updateData.fields` against the definitions it read, and those are
-    // written back verbatim at the end. A storage migration that renamed the field-group vocabulary
-    // in between would be undone by this save, under a marker that now says it settled.
+    // 🔴 Refreshing the record fixes what this request PLANS from. It does not fix what it WRITES:
+    // the caller composed `updateData.fields` against the definitions it read, and those are written
+    // back verbatim at the end. A storage migration that renamed the field-group vocabulary in
+    // between would be undone by this save, under a marker that now says it settled.
     //
-    // Answered as a lost update rather than as a vocabulary problem, deliberately. Comparing the
-    // stored schema hash the caller saw against the one that is there now catches the migration AND
-    // the ordinary case of two people editing the same Single, in one check that cannot disagree
-    // with the vocabulary it is meant to police. Translating the payload instead would mean this
-    // service silently rewriting a user's submitted definitions, which is a guess about intent.
+    // The DEFINITIONS are compared, not a hash of them. `schema_hash` looks like the cheaper
+    // question and cannot answer this one: the migration's registry step projects only
+    // `["id", fields, config_path]` and rewrites `fields` without recomputing the hash, so the
+    // pre- and post-migration hashes are equal precisely when the vocabulary changed. Comparing the
+    // thing itself needs nothing to be maintained alongside it.
     //
-    // Compared only when BOTH hashes are present: a record stored before the hash existed cannot be
-    // checked, and refusing those would break every update to them. That gap is real and is the
-    // reason this is a check rather than a guarantee.
-    const seenHash = input.existing.schemaHash;
-    const liveHash = current.schemaHash;
-    if (seenHash && liveHash && seenHash !== liveHash) {
+    // This also catches the case nobody had named: two people editing one Single, where the second
+    // save silently discarded the first.
+    const seen = stableFieldDefinitions(input.existing.fields);
+    const live = stableFieldDefinitions(current.fields);
+    if (seen !== live) {
       throw NextlyError.conflict({
         logContext: {
           reason:
-            "single's stored schema changed while this request awaited the exclusion",
+            "single's stored field definitions changed while this request awaited the exclusion",
           slug: input.slug,
-          seenSchemaHash: seenHash,
-          currentSchemaHash: liveHash,
         },
       });
     }

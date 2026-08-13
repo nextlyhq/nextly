@@ -126,7 +126,13 @@ describe("the metadata service tolerates one failure and no others", () => {
   };
 
   function serviceOver(deleteSingle: () => Promise<void>) {
-    const registry = { deleteSingle: vi.fn(deleteSingle) };
+    const registry = {
+      // Read INSIDE the exclusion before anything is dropped, so a Single that became code-first
+      // while the request waited is refused rather than force-deleted. Answers `null` here: these
+      // cases are about a row that is already gone, which delete tolerates by intent.
+      getSingleBySlug: vi.fn().mockResolvedValue(null),
+      deleteSingle: vi.fn(deleteSingle),
+    };
     return {
       registry,
       service: new SingleMetadataService(

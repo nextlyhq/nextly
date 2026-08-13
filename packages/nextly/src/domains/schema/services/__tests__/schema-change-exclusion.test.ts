@@ -255,48 +255,66 @@ describe("a Schema Builder change and the storage migration exclude each other",
     expect(excludeArgs.map(a => a.mayCreateLock)).toEqual([false, true]);
   });
 
-  it("plans from the record as it is INSIDE the exclusion, not as the caller found it", async () => {
-    // 🔴 The caller reads the Single before this lock exists, and a storage migration completing in
-    // between rewrites `dynamic_singles.fields`. Planning from the caller's copy would derive the
-    // change from definitions the database no longer holds, and the registry write would put the
-    // old spelling back under a settled marker.
-    //
-    // The two records are made to DISAGREE so the assertion can tell which one was used: the
-    // caller's copy already lists `heading`, the live one does not. Planning from the caller's copy
-    // sees no new field and emits nothing; planning from the live record has to add the column.
-    // The table has to already EXIST, or the plan is a whole-table CREATE derived from the
-    // requested fields and both records produce the same statements — a fixture that never reaches
-    // the comparison it is written to make.
+  it("refuses when the Single became locked while it waited", async () => {
+    // Replaces an earlier test that asserted planning uses the refreshed record. That property can
+    // no longer be OBSERVED: a refreshed record whose definitions differ is now refused outright,
+    // and one whose definitions match plans identically either way, so nothing distinguishes the
+    // two. What the refresh still decides on its own is this — a Single that became code-first
+    // while the request waited must not receive a UI edit, because the config is about to
+    // contradict the row.
     const adapter = makeAdapter({ mainTableExists: true });
     const { service, registry } = makeService(adapter);
     registry.getSingleBySlug.mockResolvedValue({
       slug: "page",
       tableName: "single_page",
       fields: [],
-      locked: false,
-      // Matches what the caller saw, so the lost-update check passes and this test is left asserting
-      // the property it is named for rather than a conflict.
+      locked: true,
       schemaHash: "unchanged",
     });
 
-    await service.updateSingleSchema({
-      slug: "page",
-      existing: {
+    await expect(
+      service.updateSingleSchema({
         slug: "page",
-        tableName: "single_page",
-        fields: [{ name: "heading", type: "text" }],
-      },
-      updateData: {},
-      fields: [{ name: "heading", type: "text" }],
-      isLocalized: false,
-      wasLocalized: false,
-      hasStatus: false,
-      wasStatus: false,
-      statusRequested: false,
-    } as unknown as Parameters<typeof service.updateSingleSchema>[0]);
+        existing: {
+          slug: "page",
+          tableName: "single_page",
+          fields: [],
+          locked: false,
+          schemaHash: "unchanged",
+        },
+        updateData: { label: "Page renamed" },
+        isLocalized: false,
+        wasLocalized: false,
+        hasStatus: false,
+        wasStatus: false,
+        statusRequested: false,
+      } as unknown as Parameters<typeof service.updateSingleSchema>[0])
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
 
-    const statements = adapter.executeQuery.mock.calls.map(([sql]) => sql);
-    expect(statements.join("\n")).toMatch(/ADD COLUMN[^\n]*heading/i);
+    expect(registry.updateSingle).not.toHaveBeenCalled();
+  });
+
+  it("refuses to DELETE a Single that became code-first while it waited", async () => {
+    // 🔴 The most dangerous of the stale-input cases, because the delete path calls
+    // `deleteSingle(..., { force: true })` — which walks past the registry's own protection for
+    // code-owned records. An HMR reload turning an unlocked UI Single into a locked code-first one
+    // between the caller's check and this claim would otherwise drop a table the config owns.
+    const adapter = makeAdapter();
+    const { service, registry } = makeService(adapter);
+    registry.getSingleBySlug.mockResolvedValue({
+      slug: "page",
+      tableName: "single_page",
+      fields: [],
+      locked: true,
+      schemaHash: "unchanged",
+    });
+
+    await expect(
+      service.deleteSingle("page", "single_page")
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    expect(registry.deleteSingle).not.toHaveBeenCalled();
+    expect(adapter.dropTable).not.toHaveBeenCalled();
   });
 
   it("refuses the WRITE when the stored schema moved while it waited", async () => {
@@ -307,12 +325,16 @@ describe("a Schema Builder change and the storage migration exclude each other",
     // {}` and therefore never touches the writeback path this guards.
     const adapter = makeAdapter({ mainTableExists: true });
     const { service, registry } = makeService(adapter);
+    // Models what a storage migration ACTUALLY does: it rewrites the stored field definitions into
+    // the new vocabulary and leaves `schema_hash` untouched, because its registry step projects only
+    // id / fields / config_path. A fixture that moved the hash instead would be testing a state the
+    // migration never produces — which is what the first version of this test did.
     registry.getSingleBySlug.mockResolvedValue({
       slug: "page",
       tableName: "single_page",
-      fields: [],
+      fields: [{ name: "hero", type: "fieldGroup" }],
       locked: false,
-      schemaHash: "after-the-migration",
+      schemaHash: "unchanged",
     });
 
     await expect(
@@ -321,8 +343,9 @@ describe("a Schema Builder change and the storage migration exclude each other",
         existing: {
           slug: "page",
           tableName: "single_page",
-          fields: [],
-          schemaHash: "before-the-migration",
+          // The caller's copy still carries the pre-migration spelling.
+          fields: [{ name: "hero", type: "component" }],
+          schemaHash: "unchanged",
         },
         updateData: { fields: [{ name: "hero", type: "component" }] },
         fields: [{ name: "hero", type: "component" }],
