@@ -107,8 +107,7 @@ function resolveSpecifier(specifier: string, fromFile: string): string | null {
 
 function fromExportingModule(
   statement: ts.ImportDeclaration,
-  fromFile: string,
-  file: ts.SourceFile
+  fromFile: string
 ): boolean {
   const specifier = statement.moduleSpecifier;
   if (!ts.isStringLiteral(specifier)) return false;
@@ -135,7 +134,7 @@ function localTagNames(file: ts.SourceFile, fromFile: string): Set<string> {
     if (!ts.isImportDeclaration(statement)) continue;
     const bindings = statement.importClause?.namedBindings;
     if (!bindings) continue;
-    const isOurs = fromExportingModule(statement, fromFile, file);
+    const isOurs = fromExportingModule(statement, fromFile);
     if (ts.isNamespaceImport(bindings)) {
       if (isOurs) names.add(`${bindings.name.text}.${COMPONENT}`);
       continue;
