@@ -18,6 +18,22 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { createLockingAdapter } from "../../domains/field-groups/migration/__tests__/helpers/locking-adapter";
 import {
+  hashManifest,
+  MIGRATION_TARGET,
+  type ManifestEntry,
+} from "../../domains/field-groups/migration/manifest";
+import { MIGRATION_MARKER_VERSION } from "../../domains/field-groups/migration/state";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
+
+/** The registry rename every run performs, spelled from the catalog so it stays a valid plan. */
+const IN_FLIGHT_PLAN: ManifestEntry[] = [
+  {
+    kind: "registry",
+    from: STORAGE_FORMAT.registryTable,
+    to: MIGRATION_TARGET.registryTable,
+  },
+];
+import {
   HookRegistry,
   getHookRegistry,
   setActiveHookRegistry,
@@ -303,21 +319,18 @@ describe("reloadNextlyConfig", () => {
       },
     });
     const resolver = buildResolver({
+      // 🔴 `version` and `manifestHash` are DERIVED. Written out by hand, the marker is rejected as
+      // unreadable before its status is read — and an unreadable marker abandons the reload too, so
+      // this test passed while never reaching the in-flight check it is named for.
       migrationMarker: {
-        version: 2,
+        version: MIGRATION_MARKER_VERSION,
         status: "migrating",
         direction: "up",
         migrationId: "run-1",
         step: 1,
         registryHash: "r",
-        manifestHash: "m",
-        appliedManifest: [
-          {
-            kind: "registry",
-            from: "dynamic_components",
-            to: "dynamic_field_groups",
-          },
-        ],
+        manifestHash: hashManifest(IN_FLIGHT_PLAN),
+        appliedManifest: IN_FLIGHT_PLAN,
       },
     });
 

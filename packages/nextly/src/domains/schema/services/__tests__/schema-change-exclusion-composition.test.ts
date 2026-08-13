@@ -15,7 +15,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import type { Logger } from "../../../../shared/types";
+import {
+  hashManifest,
+  MIGRATION_TARGET,
+  type ManifestEntry,
+} from "../../../field-groups/migration/manifest";
+import { MIGRATION_MARKER_VERSION } from "../../../field-groups/migration/state";
 import {
   isMigrationLockStatement,
   withMigrationLockSurface,
@@ -68,6 +75,22 @@ function makeAdapter(options: MigrationLockSurfaceOptions = {}) {
     options
   );
 }
+
+/**
+ * The smallest plan a marker can carry: the registry rename every run performs.
+ *
+ * Spelled from the catalog and the target rather than written out, so it stays a VALID plan if
+ * either name moves. A marker whose manifest does not rename the registry exactly once is rejected
+ * before its status is read, and that rejection carries the same error code as the refusal this
+ * fixture exists to reach.
+ */
+const IN_FLIGHT_PLAN: ManifestEntry[] = [
+  {
+    kind: "registry",
+    from: STORAGE_FORMAT.registryTable,
+    to: MIGRATION_TARGET.registryTable,
+  },
+];
 
 const INPUT = {
   slug: "page",
@@ -151,23 +174,38 @@ describe("a schema change and the storage migration contend for one row", () => 
   it("refuses, and builds nothing, while a migration marker is in flight", async () => {
     // A free lock is not sufficient. A run that died mid-migration leaves the marker behind and the
     // row unclaimed, and the storage it half-renamed is exactly what this change must not touch.
+    //
+    // 🔴 `version` and `manifestHash` are DERIVED, not written out. A hand-written marker is
+    // rejected as unreadable before its status is ever consulted, and the refusal that produces is
+    // a different one wearing the same error code — so the test passes while exercising nothing it
+    // claims to. Deriving both means a future marker-format change moves this fixture with it
+    // instead of silently turning the test back into a version check.
     const adapter = makeAdapter({
       heldBy: null,
       marker: {
-        version: 2,
+        version: MIGRATION_MARKER_VERSION,
         status: "migrating",
         direction: "up",
         migrationId: "run-1",
         step: 1,
         registryHash: "r",
-        manifestHash: "m",
-        appliedManifest: [],
+        manifestHash: hashManifest(IN_FLIGHT_PLAN),
+        appliedManifest: IN_FLIGHT_PLAN,
       },
     });
     const { service, registry } = makeService(adapter);
 
-    await expect(createSingle(service)).rejects.toMatchObject({
+    const error = await createSingle(service).catch(
+      (caught: unknown) => caught
+    );
+
+    // 🔴 The REASON is asserted, not just the code. An unreadable marker refuses with the same
+    // `SERVICE_UNAVAILABLE`, so a fixture the parser rejects would satisfy a code-only assertion
+    // while never reaching the in-flight check this test exists for — which is exactly what it did
+    // before the fixture was derived above.
+    expect(error).toMatchObject({
       code: "SERVICE_UNAVAILABLE",
+      logContext: { reason: "field group storage migration is in flight" },
     });
 
     expect(executed.filter(sql => !isMigrationLockStatement(sql))).toEqual([]);
