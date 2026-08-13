@@ -282,7 +282,21 @@ function createRunWorld(world: RunWorld) {
     })
   );
 
-  return { adapter, trace, writes };
+  return {
+    adapter,
+    trace,
+    writes,
+    /**
+     * Hand the lock to somebody mid-test, the way a writer claiming it does.
+     *
+     * The double reads its owner at query time, so this is visible to every
+     * later observation — which is what lets a test place a writer's arrival
+     * AFTER the observation taken at the top of a session.
+     */
+    claimLock: (owner: string | null) => {
+      lock.owner = owner;
+    },
+  };
 }
 
 /** A table's columns, honouring a world that predates the i18n column. */
@@ -1042,6 +1056,40 @@ describe("a preview that meets a writer mid-run", () => {
     // Raised on the first look. Spending three reads to arrive at the same refusal would be the
     // cheaper half of the bug; reporting it as movement is the expensive half.
     expect(markerReads(trace)).toBe(1);
+  });
+
+  // 🔴 The lock observation is taken once, at the top of the session, and answers "was anyone
+  // writing when this attempt STARTED". The question that decides a retry is "was anyone writing
+  // DURING it" — a writer claiming immediately after the observation still moves storage between
+  // the marker and catalog reads, producing a genuinely torn refusal that a stale `not-held` would
+  // dismiss as a permanent conflict. Deciding on the snapshot alone loses exactly the race the
+  // retry exists for.
+  it("re-reads the lock before dismissing a torn preview", async () => {
+    const world = quietWorld();
+    let reads = 0;
+    const built = createRunWorld(world);
+    world.onMarkerRead = () => {
+      reads += 1;
+      // A writer claims AFTER this attempt observed the lock as free.
+      if (reads === 1) built.claimLock("field-group-migration:down#latecomer");
+      // ...and finishes, leaving storage consistent for the retry to score.
+      if (reads === 2)
+        world.tables = [LEGACY_REGISTRY, "comp_hero", MIGRATION_LOCK_TABLE];
+    };
+
+    const outcome = await runFieldGroupMigration({
+      adapter: built.adapter,
+      logger,
+      direction: "up",
+      dryRun: true,
+    });
+
+    // Judged on the snapshot alone this is the storage-conflict case above and refuses at once.
+    if (outcome.ran !== false || outcome.reason !== "dry-run") {
+      expect.fail("expected a dry-run outcome, not a refusal");
+    }
+    expect(outcome.basis).toEqual({ kind: "reconciled" });
+    expect(markerReads(built.trace)).toBe(2);
   });
 
   // The plan is reported rather than withheld, and labelled rather than passed off as scored. An

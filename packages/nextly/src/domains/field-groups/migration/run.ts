@@ -72,6 +72,7 @@ import {
 import { runMigrationSteps } from "./runner";
 import {
   isMissingTable,
+  observeMigrationLock,
   withMigrationSession,
   type LockObservation,
   type MigrationDialect,
@@ -318,7 +319,22 @@ export async function runFieldGroupMigration(
   // writing run. Today `attempts` is 1 for those, so the loop exits before this is consulted —
   // making the correctness incidental rather than stated. Saying it here means a later change to
   // the attempt count cannot quietly turn a writing run's own claim into evidence of a rival.
-  const contended = (): boolean => dryRun && observedLock.kind === "held";
+  // 🔴 Asks the lock AGAIN rather than trusting the observation taken at the top of the attempt.
+  // The snapshot answers "was anyone writing when this attempt started", and the question that
+  // decides a retry is "was anyone writing DURING it" — a writer that claims the lock immediately
+  // after the observation can still move storage between the marker and catalog reads, producing a
+  // genuinely torn refusal that a stale `not-held` would dismiss. Contention counts if it is seen
+  // at EITHER end, which is the union rather than a replacement: a writer that finished and
+  // released before the re-read is still the explanation for what this attempt saw.
+  //
+  // `dryRun` is part of the expression, not a second guard. A CLAIMING session reports the lock as
+  // held by its own claim — true and useless, and it would read as contention on every writing run.
+  const contended = async (): Promise<boolean> => {
+    if (!dryRun) return false;
+    if (observedLock.kind === "held") return true;
+    const now = await observeMigrationLock(adapter, dialect);
+    return now.kind === "held";
+  };
 
   const runOnce = (finalAttempt: boolean): Promise<MigrationOutcome> =>
     withMigrationSession(
@@ -502,11 +518,7 @@ export async function runFieldGroupMigration(
           // only when a writer is demonstrably there. Everything else — a run that writes, a
           // refusal about the database's actual shape, a torn-SHAPED refusal on a database nobody
           // is writing to — leaves by the same door it always did.
-          if (
-            !dryRun ||
-            !isTornReadRefusal(error) ||
-            session.lock.kind !== "held"
-          ) {
+          if (!dryRun || !isTornReadRefusal(error) || !(await contended())) {
             throw error;
           }
           // Not the final attempt: let it out so the whole session runs again, marker included.
@@ -676,7 +688,7 @@ export async function runFieldGroupMigration(
       // observation uses, so the two cannot disagree about what "not there" looks like.
       const retryable =
         isTornReadRefusal(error) || (dryRun && isMissingTable(error, dialect));
-      if (finalAttempt || !retryable || !contended()) throw error;
+      if (finalAttempt || !retryable || !(await contended())) throw error;
     }
   }
 }
@@ -794,6 +806,10 @@ async function assertStorageAtGeneration(args: {
     owned: args.owned,
     staleNames: args.renamedAway,
     maxParams: args.adapter.getCapabilities().maxParamsPerQuery,
+    // Classified alongside the probe below rather than left to the default, because it runs FIRST
+    // and would otherwise be the refusal an unlocked preview actually meets — a rollback rewriting
+    // `_parent_table` back to its legacy spelling trips this before the probe is ever consulted.
+    kind: "torn-read",
   });
   assertProbeMatchesGeneration({
     rows: args.rows,
@@ -900,11 +916,22 @@ export async function readRegistryRows(
   dialect: MigrationDialect,
   identifierCase: IdentifierCaseRules
 ): Promise<RegistryRow[]> {
-  const table = (await adapter.tableExists(STORAGE_FORMAT.registryTable))
-    ? STORAGE_FORMAT.registryTable
-    : (await adapter.tableExists(MIGRATION_TARGET.registryTable))
-      ? MIGRATION_TARGET.registryTable
-      : undefined;
+  // 🔴 Both names resolved from ONE catalog listing, not two existence checks. The registry is
+  // renamed by this very migration, so a rollback moving the migrated name back to the legacy one
+  // between two separate checks is observed by neither: the first sees the legacy name absent
+  // because the rename has not landed, the second sees the migrated name absent because it has.
+  // The result is "no registry at all" — a state the database was never in — and it does not
+  // announce itself as a failure. It returns an empty row set, which reads downstream as a database
+  // with no field groups and refuses on a registry-hash mismatch instead of on the tear that caused
+  // it. One snapshot cannot disagree with itself, which removes the window rather than
+  // compensating for it afterwards.
+  const catalog = indexCatalog(
+    await adapter.listTables(),
+    identifierCase.tables
+  );
+  const table =
+    resolveCatalogName(catalog, STORAGE_FORMAT.registryTable) ??
+    resolveCatalogName(catalog, MIGRATION_TARGET.registryTable);
   if (table === undefined) return [];
 
   const rows = await readRegistryTable(adapter, dialect, identifierCase, table);

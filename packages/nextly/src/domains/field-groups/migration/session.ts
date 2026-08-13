@@ -171,7 +171,7 @@ export function isMissingTable(
  * role cannot see is reported absent, and the caller would then be told nothing holds the lock
  * while a migration was holding it.
  */
-async function observeLock(
+export async function observeMigrationLock(
   adapter: DrizzleAdapter,
   dialect: MigrationDialect
 ): Promise<LockObservation> {
@@ -317,7 +317,7 @@ export async function withMigrationSession<T>(
   if (mode === "observe") {
     return fn({
       ...session,
-      lock: await observeLock(adapter, dialect),
+      lock: await observeMigrationLock(adapter, dialect),
       // 🔴 Refused rather than documented. Handing the ordinary `inTransaction`
       // to an observing caller would let it write without ever holding the
       // lock, which is the one thing this whole module exists to prevent — and
