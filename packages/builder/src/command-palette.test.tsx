@@ -601,6 +601,56 @@ describe("the host can drive it", () => {
       <CommandPalette
         commands={[
           { id: "1", label: "Only entry", group: "Panels", run: noop },
+          { id: "2", label: "Other entry", group: "View", run: noop },
+        ]}
+      />
+    );
+    pressPaletteKey();
+
+    const separators = () =>
+      document.querySelectorAll("[cmdk-separator]").length;
+    expect(separators()).toBeGreaterThan(0);
+
+    // The mode decision and cmdk's own search state have to agree. cmdk's separator reads its RAW
+    // search and unmounts while that is nonempty, so spaces stripped every divider out of a list
+    // that was still grouped and still showing everything.
+    fireEvent.change(screen.getByRole("combobox"), {
+      target: { value: "   " },
+    });
+
+    expect(screen.getByText("Only entry")).toBeTruthy();
+    expect(screen.getByText("Panels")).toBeTruthy();
+    expect(separators()).toBeGreaterThan(0);
+  });
+
+  it("lets a space be typed in the middle of a query", () => {
+    mount(
+      <CommandPalette
+        commands={[
+          { id: "1", label: "Open settings", run: noop },
+          { id: "2", label: "Opensettings decoy", run: noop },
+        ]}
+      />
+    );
+    pressPaletteKey();
+
+    // Typed one character at a time, which is the whole point: injecting the finished string in a
+    // single change event never exercises the moment the value is `"open "` and a trimming
+    // controlled value hands back `"open"`, so the next key produces `"opensettings"`.
+    const input = screen.getByRole("combobox") as HTMLInputElement;
+    for (const ch of "open settings") {
+      fireEvent.change(input, { target: { value: input.value + ch } });
+    }
+
+    expect(input.value).toBe("open settings");
+    expect(screen.getByText("Open settings")).toBeTruthy();
+  });
+
+  it("treats a whitespace-only query as no search at all", () => {
+    mount(
+      <CommandPalette
+        commands={[
+          { id: "1", label: "Only entry", group: "Panels", run: noop },
         ]}
       />
     );
@@ -730,7 +780,13 @@ describe("the host can drive it", () => {
         <CommandPalette
           commands={[{ id: "a", label: "Anything", run: noop }]}
         />
-        <Host />
+        {/* SCOPED, and rendered last: the host's own binding is both deeper than ambient and
+            registered after the palette, which is the arrangement depth alone cannot outrank. */}
+        <ShortcutScope>
+          <ShortcutScope>
+            <Host />
+          </ShortcutScope>
+        </ShortcutScope>
       </>
     );
 

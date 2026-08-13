@@ -197,6 +197,11 @@ function ModalKeyboardHold({ active }: { active: boolean }): null {
   useShortcuts([], {
     name: "command-palette-modal",
     enabled: active,
+    // Above DEPTH, not merely deep. A host chooses how deeply it scopes its own shortcuts, so any
+    // depth this picked could be tied by a host scope at the same level or beaten by one nested
+    // further — and the manager runs a matching binding before consulting a lower blocker, so
+    // that host shortcut would fire behind the open modal.
+    priority: 1,
     // The manager already exempts text insertion and Tab, so the search field and the dialog's
     // focus trap keep working underneath this.
     blocking: true,
@@ -263,7 +268,14 @@ function PaletteSurface({
     if (!opening) return;
     // Any focusable ELEMENT. An `<svg tabindex="0">` becomes `activeElement` and is not an
     // `HTMLElement`, so narrowing here discards a legitimate origin.
-    openedFrom.current = document.activeElement;
+    //
+    // Only when no origin is outstanding. Reopening before the 200ms exit animation finishes
+    // leaves focus inside the dialog that is still unmounting, so capturing then would record the
+    // palette's OWN search input — and by the final close that element is gone, so there is
+    // nothing to restore and focus lands on `<body>`. A completed close clears this, so an
+    // ordinary second opening still records a fresh origin.
+    if (openedFrom.current === null)
+      openedFrom.current = document.activeElement;
   }, [open]);
 
   // Radix fires this when it is actually returning focus, which is AFTER the exit animation. A
@@ -426,7 +438,13 @@ function PaletteSurface({
             <React.Fragment
               key={group === undefined ? "ungrouped" : `group:${group}`}
             >
-              {index > 0 && <CommandSeparator />}
+              {index > 0 && (
+                // cmdk's separator reads its own RAW search state and unmounts while that is
+                // nonempty. A whitespace-only query is nonempty to cmdk and no search to this
+                // component, so without this the separators vanish from a list that is still
+                // grouped and still showing every command.
+                <CommandSeparator alwaysRender={!searching} />
+              )}
               <CommandGroup heading={group}>
                 {groupCommands.map(command => (
                   <CommandItem

@@ -109,6 +109,15 @@ export interface ShortcutLayerOptions {
    * is set, so no other context can act on a keystroke aimed at this one.
    */
   blocking?: boolean;
+  /**
+   * Sorted ABOVE depth, so a layer can outrank one nested deeper than itself.
+   *
+   * Depth alone cannot express a modal. A modal wants to sit above every ordinary layer, but the
+   * host chooses how deeply its own shortcuts are scoped, so any depth a modal picks can be tied
+   * or beaten by a scope the host nests one level further. Priority is the axis the host does not
+   * control: ordinary layers leave it at 0 and a modal raises it.
+   */
+  priority?: number;
   /** Whether the layer participates at all. A disabled layer neither matches nor blocks. */
   enabled?: boolean;
 }
@@ -427,7 +436,7 @@ export function createShortcutManager(
     options: ShortcutLayerOptions
   ): string {
     const keys = bindings.map(b => b.binding.keys).join("\u0000");
-    return `${keys}\u0001${options.depth}\u0001${options.blocking === true}\u0001${options.enabled !== false}`;
+    return `${keys}\u0001${options.depth}\u0001${options.priority ?? 0}\u0001${options.blocking === true}\u0001${options.enabled !== false}`;
   }
 
   /** Whether any enabled layer is currently holding the keyboard. */
@@ -464,7 +473,10 @@ export function createShortcutManager(
     return [...layers]
       .filter(layer => layer.options.enabled !== false)
       .sort(
-        (a, b) => b.options.depth - a.options.depth || b.sequence - a.sequence
+        (a, b) =>
+          (b.options.priority ?? 0) - (a.options.priority ?? 0) ||
+          b.options.depth - a.options.depth ||
+          b.sequence - a.sequence
       );
   }
 
