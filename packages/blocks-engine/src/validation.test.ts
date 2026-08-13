@@ -1994,36 +1994,39 @@ describe("measureBytes says WHY a value cannot be stored", () => {
 });
 
 describe("measureBytes stays cheap on ordinary objects", () => {
-  it("does not throw once per record while looking for boxed BigInts", () => {
-    // The unspoofable brand check costs a thrown exception for every value that
-    // is not a BigInt, so running it on every record would pay that across the
-    // whole document. `props` is not covered by the node cap, so an ordinary
-    // request can carry hundreds of thousands of small objects.
+  it("never reaches the slot check for a value that is not tagged a BigInt", () => {
+    // The mechanism, counted, rather than the wall clock. The slot check costs
+    // a thrown exception per call, so the defect is "it runs on every record" —
+    // and that is a count, not a duration. Measured as a timing ratio the same
+    // code produced 3.3x and 58x on one machine minutes apart, so a threshold
+    // between them is noise either way; a count separates exactly.
     //
-    // Asserted as a RATIO against the same walk over primitives rather than as
-    // a wall-clock bound, because an absolute millisecond figure measures the
-    // machine. A throw per record is a ~100x cost and shows up either way.
+    // `props` is not covered by the node cap, so an ordinary request can carry
+    // hundreds of thousands of small records through here.
     const records = Array.from({ length: 20_000 }, () => ({}));
-    const numbers = Array.from({ length: 20_000 }, () => 0);
+    const original = BigInt.prototype.valueOf;
+    let calls = 0;
+    BigInt.prototype.valueOf = function countingValueOf(this: unknown): bigint {
+      calls += 1;
+      return original.call(this);
+    };
 
-    const startRecords = performance.now();
-    measureBytes({ v: records }, Number.POSITIVE_INFINITY);
-    const recordsMs = performance.now() - startRecords;
-
-    const startNumbers = performance.now();
-    measureBytes({ v: numbers }, Number.POSITIVE_INFINITY);
-    const numbersMs = performance.now() - startNumbers;
+    try {
+      measureBytes({ v: records }, Number.POSITIVE_INFINITY);
+    } finally {
+      BigInt.prototype.valueOf = original;
+    }
 
     expect(
-      recordsMs / Math.max(numbersMs, 0.01),
-      `walking ${String(records.length)} records took ${recordsMs.toFixed(1)}ms ` +
-        `against ${numbersMs.toFixed(1)}ms for the same count of numbers`
-    ).toBeLessThan(20);
+      calls,
+      `the slot check ran ${String(calls)} times for ${String(records.length)} ` +
+        `ordinary records, each one a thrown exception`
+    ).toBe(0);
   });
 
   it("still refuses a boxed BigInt and still writes a tag that only claims to be one", () => {
     // The positive control for the pre-filter: it must not have bought its
-    // speed by giving up either answer.
+    // cheapness by giving up either answer.
     expect(measureBytes({ x: Object(1n) }, 100).exceeded).toBe(true);
     expect(
       measureBytes({ v: { [Symbol.toStringTag]: "BigInt", x: 1 } }, 1_000)
