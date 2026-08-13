@@ -520,6 +520,62 @@ describe("field-group migration session", () => {
     expect(observed).toEqual({ kind: "not-held" });
   });
 
+  // The shape a FRESH database actually produces. Drizzle wraps the driver
+  // failure, so the discriminating text is on `cause` while the outer message is
+  // only `Failed query` — reading the top level classifies every untouched
+  // database as unreadable, which is the opposite of the truth.
+  it("sees through Drizzle's wrapper on a fresh sqlite database", async () => {
+    const wrapped = Object.assign(new Error("Failed query"), {
+      code: "SQLITE_ERROR",
+      cause: new Error("SQLITE_ERROR: no such table: nextly_field_group_lock"),
+    });
+    const h = createAdapter({ heldBy: null, lockReadError: wrapped });
+    let observed: LockObservation | undefined;
+
+    await withMigrationSession(
+      {
+        adapter: h.adapter,
+        dialect: "sqlite",
+        label: "preview-5",
+        mode: "observe",
+      },
+      async session => {
+        observed = session.lock;
+      }
+    );
+
+    expect(observed).toEqual({ kind: "not-held" });
+  });
+
+  // mysql2 supplies the SYMBOLIC code alongside the errno, and `safeCode`
+  // prefers the symbolic one — so a check written only against 1146 or 42S02
+  // never matches the value it is actually handed.
+  it("accepts mysql's symbolic missing-table code", async () => {
+    const missing = Object.assign(new Error("Failed query"), {
+      cause: Object.assign(new Error("Table does not exist"), {
+        code: "ER_NO_SUCH_TABLE",
+        errno: 1146,
+        sqlState: "42S02",
+      }),
+    });
+    const h = createAdapter({ heldBy: null, lockReadError: missing });
+    let observed: LockObservation | undefined;
+
+    await withMigrationSession(
+      {
+        adapter: h.adapter,
+        dialect: "mysql",
+        label: "preview-6",
+        mode: "observe",
+      },
+      async session => {
+        observed = session.lock;
+      }
+    );
+
+    expect(observed).toEqual({ kind: "not-held" });
+  });
+
   it("uses a lock table distinct from the schema pipeline's", () => {
     expect(MIGRATION_LOCK_TABLE).toBe("nextly_field_group_lock");
     expect(MIGRATION_LOCK_TABLE).not.toBe("nextly_migrate_lock");

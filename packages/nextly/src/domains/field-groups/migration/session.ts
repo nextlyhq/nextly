@@ -126,11 +126,38 @@ export type LockObservation =
  * is a table that does not exist. On Postgres and MySQL the same assumption is exactly the defect.
  */
 function isMissingTable(error: unknown, dialect: MigrationDialect): boolean {
-  const code = safeCode(error);
-  if (dialect === "postgresql") return code === "42P01";
-  if (dialect === "mysql") return code === "1146" || code === "42S02";
-  const message = error instanceof Error ? error.message : String(error);
-  return /no such table/i.test(message);
+  // 🔴 Walked, not read off the top. Drizzle wraps a driver failure in a
+  // `DrizzleQueryError` whose own message is just `Failed query` — on SQLite the
+  // `no such table` text lives on `cause`, so reading only the outer message
+  // classifies every FRESH database as unreadable rather than as one no run has
+  // ever touched. Bounded because a cyclic `cause` is a hang, not a diagnosis.
+  let link: unknown = error;
+  for (
+    let depth = 0;
+    depth < 5 && link !== null && link !== undefined;
+    depth++
+  ) {
+    const code = safeCode(link);
+    const message = link instanceof Error ? link.message : "";
+
+    if (dialect === "postgresql" && code === "42P01") return true;
+    // Every spelling mysql2 offers, because `safeCode` prefers the SYMBOLIC
+    // `code` and a check written only against the errno or the SQLSTATE never
+    // matches the value it actually returns.
+    if (
+      dialect === "mysql" &&
+      (code === "ER_NO_SUCH_TABLE" || code === "1146" || code === "42S02")
+    ) {
+      return true;
+    }
+    // SQLite has no distinct code — `SQLITE_ERROR` covers most failures — so the
+    // message is the only discriminator. Sound here and nowhere else: SQLite has
+    // no table privileges, so a table it cannot find is a table that is absent.
+    if (dialect === "sqlite" && /no such table/i.test(message)) return true;
+
+    link = (link as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 /**
