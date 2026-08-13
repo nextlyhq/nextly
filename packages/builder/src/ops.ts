@@ -1133,6 +1133,67 @@ function assertFitsCaps(
  * holding two is already broken, and the honest response is to say so rather
  * than to edit it further.
  */
+/**
+ * Every id inside a subtree, root included.
+ *
+ * Iterative, like every other walk here: a deep subtree would otherwise
+ * exhaust the stack and leave a native RangeError where this module promises
+ * an `OpError`.
+ */
+function assertSubtreeIdsAreUnique(
+  nodes: BlockNode[],
+  root: BlockNode,
+  verb: string
+): void {
+  // The document counted ONCE, then every id of the subtree looked up in it.
+  // Asking `assertIdIsUnique` per id would rescan the whole document for each
+  // one, which is quadratic in the document size — and the subtree that most
+  // needs this check is the large one.
+  const counts = new Map<string, number>();
+  const pending: BlockNode[] = [];
+  for (const entry of nodes) pending.push(entry);
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) break;
+    if (typeof current.id === "string") {
+      counts.set(current.id, (counts.get(current.id) ?? 0) + 1);
+    }
+    for (const children of Object.values(current.slots ?? {})) {
+      if (!Array.isArray(children)) continue;
+      for (const child of children) {
+        if (isPlainRecord(child)) pending.push(child);
+      }
+    }
+  }
+  for (const held of subtreeIds(root)) {
+    if ((counts.get(held) ?? 0) > 1) {
+      throw new OpError(
+        `${verb}: "${held}" addresses ${String(counts.get(held))} nodes and ` +
+          `sits inside what this would remove. The inverse restores the whole ` +
+          `subtree by insert, and an insert repeating an id is refused — so ` +
+          `this edit would apply and could never be undone.`
+      );
+    }
+  }
+}
+
+function subtreeIds(root: BlockNode): string[] {
+  const ids: string[] = [];
+  const pending: BlockNode[] = [root];
+  while (pending.length > 0) {
+    const entry = pending.pop();
+    if (entry === undefined) break;
+    if (typeof entry.id === "string") ids.push(entry.id);
+    for (const children of Object.values(entry.slots ?? {})) {
+      if (!Array.isArray(children)) continue;
+      for (const child of children) {
+        if (isPlainRecord(child)) pending.push(child);
+      }
+    }
+  }
+  return ids;
+}
+
 function assertIdIsUnique(nodes: BlockNode[], id: string, verb: string): void {
   // Counted with an explicit stack rather than through the engine's recursive
   // `walkNodes`. A document deep enough to need repairing is exactly the one
@@ -1566,6 +1627,14 @@ export function applyOp(
       }
 
       assertIdIsUnique(nodes, op.id, "remove");
+      // EVERY id the inverse would carry, not only the root's. The inverse of a
+      // remove is an insert of the whole subtree, and `insertNode` refuses a
+      // subtree that repeats an id — within itself or against the document. So
+      // a container whose descendants collide is removable and then cannot be
+      // put back: the edit applies, the history entry records an inverse, and
+      // undo is refused. Checked before the removal for the same reason the
+      // root is: an inverse that cannot run is worse than an edit that cannot.
+      assertSubtreeIdsAreUnique(nodes, node, "remove");
       // The ORIGINAL parent too. The removed node may be unique while the
       // parent it sat under is not, and the inverse restores by naming that
       // parent — so an undo would place it under whichever match is found

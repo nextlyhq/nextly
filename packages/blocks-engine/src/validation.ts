@@ -569,7 +569,13 @@ export function measureBytes(
     const value = stack.pop();
     if (typeof value === "string") {
       bytes += 2 + utf8ByteLength(value, limit - bytes);
-    } else if (typeof value === "number" || typeof value === "boolean") {
+    } else if (typeof value === "number") {
+      // `JSON.stringify` writes `null` for a number it cannot represent, so
+      // `NaN` and the infinities cost four bytes rather than the three or eight
+      // their `String()` form suggests. Counting the source spelling reads low
+      // for NaN, which admits a value whose serialized form is over the cap.
+      bytes += Number.isFinite(value) ? String(value).length : 4;
+    } else if (typeof value === "boolean") {
       bytes += String(value).length;
     } else if (value === null || value === undefined) {
       bytes += 4;

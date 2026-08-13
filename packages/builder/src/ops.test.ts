@@ -1831,6 +1831,22 @@ describe("an inverse that names a parent held twice", () => {
     ).toThrow(/addresses 2 nodes/);
   });
 
+  it("refuses a remove whose subtree repeats an id", () => {
+    // The removed container is unique, and two of its DESCENDANTS are not. The
+    // inverse of a remove is an insert of the whole subtree, and `insertNode`
+    // refuses a subtree repeating an id — so without this guard the removal
+    // applies, records an inverse, and undo is refused. The edit has already
+    // happened by then, which is why an inapplicable inverse is worse than a
+    // refused edit.
+    const container = node("holder", {
+      main: [node("dup"), node("dup")],
+    });
+
+    expect(() =>
+      applyOp(doc([container]), { kind: "remove", id: "holder" })
+    ).toThrow(/could never be undone/);
+  });
+
   it("refuses an insert whose subtree is deeper than the helpers can walk", () => {
     // The machine cap covered the existing document but not the INCOMING
     // subtree, so a caller raising limits.maxDepth could hand in a tree the

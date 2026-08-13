@@ -1784,6 +1784,11 @@ describe("measureBytes", () => {
     // In an ARRAY the same values become `null`, because length is part of an
     // array's meaning.
     ["an undefined element", [1, undefined, 3]],
+    // `JSON.stringify` writes `null` for a number it cannot represent, so the
+    // count must follow the written form rather than the source spelling.
+    ["NaN", { n: NaN }],
+    ["Infinity", { n: Infinity }],
+    ["negative Infinity", { n: -Infinity }],
     ["a function element", [1, () => 1, 3]],
   ])("counts %s exactly as it serializes", (_label, value) => {
     expect(measureBytes(value, Number.POSITIVE_INFINITY).bytes).toBe(
