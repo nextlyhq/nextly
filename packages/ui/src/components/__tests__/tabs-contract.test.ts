@@ -1496,6 +1496,7 @@ function ownershipIn(sourceFile: ts.SourceFile): {
   ownership: Ownership;
   exportedNameOf: Map<string, string>;
   owning: Map<ts.Node, string>;
+  owningNamespaces: Set<ts.Declaration>;
 } {
   const names = new Set<string>();
   const namespaces = new Set<string>();
@@ -1505,6 +1506,11 @@ function ownershipIn(sourceFile: ts.SourceFile): {
   // spelled. A local component may legitimately reuse an imported name, and
   // holding it to this contract failed a component entitled to its own classes.
   const owning = new Map<ts.Node, string>();
+  // The DECLARATIONS that bind an owned namespace, in either spelling. A name
+  // set cannot answer this: `import * as UI` and `const UI = require(...)`
+  // resolve to different node kinds, and testing for one of them silently
+  // dropped the other.
+  const owningNamespaces = new Set<ts.Declaration>();
 
   const visit = (node: ts.Node): void => {
     if (
@@ -1527,6 +1533,7 @@ function ownershipIn(sourceFile: ts.SourceFile): {
       }
       if (bindings && ts.isNamespaceImport(bindings)) {
         namespaces.add(bindings.name.text);
+        owningNamespaces.add(bindings);
       }
     }
     // `require` is the same two imports in JavaScript's other spelling, and
@@ -1538,7 +1545,10 @@ function ownershipIn(sourceFile: ts.SourceFile): {
         required !== undefined &&
         reachesThePrimitive(required, sourceFile.fileName)
       ) {
-        if (ts.isIdentifier(node.name)) namespaces.add(node.name.text);
+        if (ts.isIdentifier(node.name)) {
+          namespaces.add(node.name.text);
+          owningNamespaces.add(node);
+        }
         if (ts.isObjectBindingPattern(node.name)) {
           for (const element of node.name.elements) {
             const source = element.propertyName ?? element.name;
@@ -1594,7 +1604,12 @@ function ownershipIn(sourceFile: ts.SourceFile): {
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
-  return { ownership: { names, namespaces }, exportedNameOf, owning };
+  return {
+    ownership: { names, namespaces },
+    exportedNameOf,
+    owning,
+    owningNamespaces,
+  };
 }
 
 /**
@@ -1651,6 +1666,7 @@ function exportedTagOf(
   ownership: Ownership,
   exportedNameOf: Map<string, string>,
   owning: Map<ts.Node, string>,
+  owningNamespaces: Set<ts.Declaration>,
   checker: ts.TypeChecker
 ): string | undefined {
   if (ts.isIdentifier(tag)) {
@@ -1677,7 +1693,7 @@ function exportedTagOf(
     // file-wide set of names.
     const declaration = declarationOf(tag.expression, checker);
     if (declaration) {
-      return ts.isNamespaceImport(declaration) ? tag.name.text : undefined;
+      return owningNamespaces.has(declaration) ? tag.name.text : undefined;
     }
     if (ownership.namespaces.has(tag.expression.text)) return tag.name.text;
   }
@@ -1716,7 +1732,7 @@ function selectedByLiteralCondition(
   const operator = node.operatorToken.kind;
   // `??` chooses on presence rather than on truth, so it is asked separately.
   if (operator === ts.SyntaxKind.QuestionQuestionToken) {
-    return isDefinitelyPresent(node.left) ? node.left : undefined;
+    return isDefinitelyPresent(node.left, resolver) ? node.left : undefined;
   }
   if (
     operator !== ts.SyntaxKind.AmpersandAmpersandToken &&
@@ -2215,7 +2231,10 @@ function styleResolver(
       name: string;
       emits: boolean;
       value: string | undefined;
+      at: number;
     }> = [];
+    const targets = new Set<ts.Node>(objectsFrom(identifier));
+    if (targets.size === 0) return [];
     const unit = executionUnitOf(identifier);
     const visit = (node: ts.Node): void => {
       if (
@@ -2224,7 +2243,10 @@ function styleResolver(
         (ts.isPropertyAccessExpression(node.left) ||
           ts.isElementAccessExpression(node.left)) &&
         ts.isIdentifier(node.left.expression) &&
-        declarationOf(node.left.expression, checker) === declaration
+        // Any binding holding the SAME object, not only the one the element
+        // names. `const saved = style; saved.x = ...` mutates one object
+        // through two names, and React receives it either way.
+        objectsFrom(node.left.expression).some(object => targets.has(object))
       ) {
         // The mutation belongs to whatever object the binding held at the
         // moment of the write. A later write REPLACES that object, so a
@@ -2247,13 +2269,21 @@ function styleResolver(
             name,
             emits: emitsValue(node.right, api),
             value: staticStringOf(node.right, api),
+            at: node.getStart(),
           });
         }
       }
       ts.forEachChild(node, visit);
     };
     visit(declaration.getSourceFile());
-    return found;
+    // Only the LAST write to each property survives: `style.x = "red"` followed
+    // by `style.x = undefined` hands React the second one, and keeping both
+    // reported a colour the element never receives.
+    const last = new Map<string, (typeof found)[number]>();
+    for (const write of found.sort((a, b) => a.at - b.at)) {
+      last.set(write.name, write);
+    }
+    return [...last.values()];
   };
 
   // Named so the resolver can ask ITSELF: deciding a branch or a logical
@@ -2453,7 +2483,7 @@ function cannotFire(
   resolver: ReturnType<typeof styleResolver>
 ): boolean {
   if (operator === ts.SyntaxKind.QuestionQuestionEqualsToken) {
-    return held.every(isDefinitelyPresent);
+    return held.every(value => isDefinitelyPresent(value, resolver));
   }
   if (operator === ts.SyntaxKind.BarBarEqualsToken) {
     return held.every(value => staticTruthiness(value, resolver) === true);
@@ -2471,8 +2501,22 @@ function cannotFire(
  * removes a value from consideration. Only forms that cannot be nullish however
  * they are read qualify, so anything unfamiliar keeps the write in play.
  */
-function isDefinitelyPresent(value: ts.Expression): boolean {
+function isDefinitelyPresent(
+  value: ts.Expression,
+  resolver?: ReturnType<typeof styleResolver>
+): boolean {
   const inner = withoutTypeWrappers(value);
+  // A name holding a present value is present. Reading only the syntax meant
+  // `style ?? { ...owned }` kept a fallback that cannot run, exactly as the
+  // assignment form did before it was resolved.
+  if (resolver && ts.isIdentifier(inner)) {
+    const reaching = resolver.reachingValues(inner);
+    return (
+      reaching.exhaustive &&
+      reaching.values.length > 0 &&
+      reaching.values.every(each => isDefinitelyPresent(each, resolver))
+    );
+  }
   return (
     ts.isObjectLiteralExpression(inner) ||
     ts.isArrayLiteralExpression(inner) ||
@@ -2721,7 +2765,8 @@ interface Violation {
 
 function violationsIn(file: string, source: string): Violation[] {
   const { sourceFile, checker } = parse(file, source);
-  const { ownership, exportedNameOf, owning } = ownershipIn(sourceFile);
+  const { ownership, exportedNameOf, owning, owningNamespaces } =
+    ownershipIn(sourceFile);
   const found: Violation[] = [];
   const at = (node: ts.Node): number =>
     sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line +
@@ -2734,6 +2779,7 @@ function violationsIn(file: string, source: string): Violation[] {
         ownership,
         exportedNameOf,
         owning,
+        owningNamespaces,
         checker
       );
       if (exported) {
@@ -3364,6 +3410,17 @@ describe("the tab indicator contract", () => {
       "an owned property a do-body reset behind a break does not clear",
       'let style: Record<string, string> = { borderBottomColor: "red" };\ndo {\n  if (Math.random() > 0) break;\n  style = {};\n} while (false);\n<TabsTrigger style={style} />',
     ],
+    // Two names for one object. The mutation reaches React whichever name it
+    // was written through.
+    [
+      "an owned property written through an alias of the style object",
+      'const style: Record<string, string> = {};\nconst saved = style;\nsaved.borderBottomColor = "red";\n<TabsTrigger style={style} />',
+    ],
+    // The CommonJS spelling of a namespace import.
+    [
+      "a class on a namespace member behind a CommonJS require",
+      'const UI = require("@nextlyhq/ui");\n<UI.TabsTrigger className="border-b-0" />',
+    ],
   ])("catches %s", (_label, body) => {
     // The positive controls. Each is a shape an earlier version returned clean
     // on, or a category it never read. Without these, a check that can never
@@ -3754,6 +3811,16 @@ describe("the tab indicator contract", () => {
     [
       "an attribute value that merely contains a hash",
       '<TabsTrigger className="not-data-[foo=#bar]:opacity-100" />',
+    ],
+    // The last write to a property is what React receives.
+    [
+      "an owned property a later in-place write clears",
+      'const style: Record<string, string | undefined> = {};\nstyle.borderBottomColor = "red";\nstyle.borderBottomColor = undefined;\n<TabsTrigger style={style} />',
+    ],
+    // A constant object is definitely present, so the fallback cannot run.
+    [
+      "an owned property in a nullish fallback that cannot run",
+      'const style = {};\n<TabsTrigger style={style ?? { borderBottomColor: "red" }} />',
     ],
   ])("does not report %s", (_label, body) => {
     // The complement, and the reason this is a contract rather than a ban. A
