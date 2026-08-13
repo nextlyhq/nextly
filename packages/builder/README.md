@@ -302,16 +302,27 @@ pnpm run test          # vitest, including the layering guard
 pnpm run check-types   # tsc --noEmit; unlike some packages here, this DOES
                        # cover the test files (tsconfig has no test exclude)
 pnpm run lint          # eslint --max-warnings 0; a single warning fails
-pnpm run build         # tsup
+pnpm run build         # tsup; this package ONLY, so its dependencies must
+                       # already be built — see below
 ```
 
 `pnpm turbo test --filter=@nextlyhq/builder` builds dependencies itself, because
 the `test` task declares `dependsOn: ["^build"]`. `check-types` and `lint` do
 not. Neither is build-free on a clean checkout: a workspace import resolves
 through the sibling's package exports to a `dist` that does not exist yet, and
-`lint` fails on the same specifiers through `import-x/no-unresolved`. Build
-first — `pnpm build`, or `pnpm --filter @nextlyhq/builder... build` for this
-package and its dependencies.
+`lint` fails on the same specifiers through `import-x/no-unresolved`.
+
+Build the dependencies first, and on a clean checkout that means:
+
+```bash
+pnpm --filter @nextlyhq/builder... build   # trailing ... INCLUDES this package
+```
+
+The package-local `pnpm run build` above builds this package alone, so it is
+enough only once the dependencies are built. Not `@nextlyhq/builder^...` either:
+`pnpm recursive --help` defines that form as the dependencies _without_ the
+matched package, which leaves this package's own `dist` absent — the same
+missing build wearing a different error message.
 
 ## Peer dependencies
 

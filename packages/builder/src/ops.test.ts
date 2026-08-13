@@ -1874,6 +1874,88 @@ describe("an inverse that names a parent held twice", () => {
     expect(reads, "the getter must never be invoked").toBe(0);
   });
 
+  it("does not quote a whole oversized value back in its refusal", () => {
+    // The values named in these messages come from storage or from an agent, so
+    // they are attacker-controlled. Interpolating one whole doubles the memory
+    // and then carries it into every log and telemetry sink that records the
+    // refusal. Naming which value was wrong does not require repeating all of
+    // it.
+    const huge = "x".repeat(5_000_000);
+
+    let thrown: unknown;
+    try {
+      applyOp(doc(), { kind: "remove", id: huge });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(OpError);
+    // Measured against the INPUT rather than against a constant. The property
+    // is that the message does not grow with the value it refuses; pinning the
+    // exact ceiling here would restate a number the module owns, and the test
+    // would then need editing every time that number moved.
+    expect(
+      String((thrown as OpError).message).length,
+      "a refusal must not grow with the value it refused"
+    ).toBeLessThan(huge.length / 100);
+  });
+
+  it("refuses an update that both writes and removes one field", () => {
+    // The spread that applies an update puts removals last, so the removal wins
+    // silently and the supplied value is discarded — an op recorded as accepted
+    // that did something other than what it said. Two intentions in one op, and
+    // guessing which was meant is worse than refusing.
+    expect(() =>
+      applyOp(doc(), {
+        kind: "update",
+        id: "a",
+        patch: { name: "new" },
+        unset: ["name"],
+      })
+    ).toThrow(/cannot do both/);
+  });
+
+  it("refuses a node carrying an extra field JSON cannot write", () => {
+    // A node may legitimately carry fields this version does not know — a
+    // document from a newer editor is data to move, not an instruction to obey.
+    // What it may not carry is a value that cannot be saved: the node enters
+    // the document and the next save is refused.
+    const carrying = {
+      id: "odd",
+      type: "core/box",
+      version: 1,
+      props: {},
+      future: 1n,
+    } as unknown as BlockNode;
+
+    expect(() =>
+      applyOp(doc(), { kind: "insert", node: carrying, at: { index: 0 } })
+    ).toThrow(/JSON cannot write/);
+  });
+
+  it("keeps an extra field JSON can write", () => {
+    // The control, and the half that matters for forward compatibility:
+    // refusing an unknown field would make a document from a newer editor
+    // uneditable by this one, which costs an author their work rather than an
+    // edit.
+    const carrying = {
+      id: "odd",
+      type: "core/box",
+      version: 1,
+      props: {},
+      future: { added: "by a later version" },
+    } as unknown as BlockNode;
+
+    const applied = applyOp(doc(), {
+      kind: "insert",
+      node: carrying,
+      at: { index: 0 },
+    });
+    expect(
+      applied.document.nodes.find(entry => entry.id === "odd"),
+      "an unknown field must survive the edit untouched"
+    ).toMatchObject({ future: { added: "by a later version" } });
+  });
+
   it("undoes a placement that created a slot, slot and all", () => {
     // Placing into a region the parent does not have makes the engine create
     // it. Undo removes the node; without the created slot recorded on the

@@ -247,9 +247,42 @@ function isStringArray(value: unknown): boolean {
  * message about a bad value would itself fail, and the caller would meet a
  * `TypeError` in place of the refusal this module promises.
  */
+/**
+ * How much of an untrusted value a diagnostic may quote.
+ *
+ * An op arrives from storage or from an agent, so the values named in these
+ * messages are attacker-controlled. Interpolating one whole turns a 5 MB
+ * malformed id into a 5 MB `OpError.message` — the memory doubled, and then
+ * carried into every log and telemetry sink that records the refusal. The
+ * message exists to tell an author which value was wrong, and a hundred
+ * characters does that as well as five million.
+ */
+const MAX_QUOTED_LENGTH = 100;
+
+/**
+ * How long a refusal may be, whatever it names.
+ *
+ * A ceiling on the whole message rather than on each value it quotes. Generous
+ * enough that no message this module writes is ever truncated by it — the
+ * longest run well under a thousand characters — and low enough that an
+ * untrusted value cannot ride out through a site that interpolated it directly.
+ */
+const MAX_MESSAGE_LENGTH = 2_000;
+
 function describe(value: unknown): string {
-  if (typeof value === "string") return `"${value}"`;
-  if (typeof value === "bigint") return `${String(value)}n`;
+  if (typeof value === "string") {
+    return value.length > MAX_QUOTED_LENGTH
+      ? `"${value.slice(0, MAX_QUOTED_LENGTH)}…"`
+      : `"${value}"`;
+  }
+  // Numbers included: `BigInt` has no length bound either, and a literal with
+  // millions of digits is as long a string as any.
+  if (typeof value === "bigint") {
+    const digits = String(value);
+    return digits.length > MAX_QUOTED_LENGTH
+      ? `${digits.slice(0, MAX_QUOTED_LENGTH)}…n`
+      : `${digits}n`;
+  }
   if (typeof value === "object" && value !== null) {
     return Array.isArray(value) ? "an array" : "an object";
   }
@@ -328,6 +361,24 @@ const MAX_VALUE_PARTS = 4 * 1024 * 1024;
  * setting would have allowed.
  */
 const MAX_WALKABLE_DEPTH = 1_000;
+
+/**
+ * Limits that constrain SHAPE and nothing else.
+ *
+ * `assertNodeShape` answers two questions at once — is this a well-formed node,
+ * and does it fit what a document may hold — and the second is wrong when the
+ * subtree is one being REMOVED. It is already in the document; asking whether
+ * it would fit today refuses the edit that repairs a lowered cap.
+ *
+ * Depth stays at the machine bound rather than going away, because that one is
+ * not a product rule: past it the engine's recursive helpers cannot walk the
+ * subtree at all, so an inverse carrying it could not be applied by anything.
+ */
+const SHAPE_ONLY_LIMITS: DocumentLimits = {
+  maxDepth: MAX_WALKABLE_DEPTH,
+  maxNodes: Number.MAX_SAFE_INTEGER,
+  maxBytes: Number.MAX_SAFE_INTEGER,
+};
 
 /** Refuses a tree the engine's recursive helpers cannot walk. */
 function assertWalkable(depth: number, subject: string): void {
@@ -675,7 +726,21 @@ export type BuilderOp =
  */
 export class OpError extends Error {
   constructor(message: string) {
-    super(message);
+    // Bounded HERE rather than at each of the sites that build a message, which
+    // is the only version that stays true. The values these messages name come
+    // from storage or from an agent, so they are attacker-controlled: a 5 MB
+    // malformed id produced a 5 MB `message`, doubling the memory and then
+    // carrying it into every log and telemetry sink that records the refusal.
+    //
+    // Every message passes through this constructor, so a site added later
+    // cannot reintroduce it by interpolating a value directly — which is what
+    // happened to the first fix, applied to the value formatter while the ids
+    // were being interpolated straight into the string.
+    super(
+      message.length > MAX_MESSAGE_LENGTH
+        ? `${message.slice(0, MAX_MESSAGE_LENGTH)}…`
+        : message
+    );
     this.name = "OpError";
   }
 }
@@ -810,6 +875,20 @@ function assertPatchNames(op: Extract<BuilderOp, { kind: "update" }>): void {
   // type would make both checks below look statically unreachable and leave
   // persisted input unguarded.
   const names: readonly string[] = op.unset ?? [];
+  // A field cannot be both written and removed by one op. The spread that
+  // applies the edit puts removals last, so the removal silently wins and the
+  // value the caller supplied is discarded — an op recorded as accepted that
+  // did something other than what it said. An agent producing both is stating
+  // two intentions, and guessing which one it meant is worse than refusing.
+  for (const key of names) {
+    if (isPlainRecord(op.patch) && Object.hasOwn(op.patch, key)) {
+      throw new OpError(
+        `update: "${key}" is named both as a value to write and as a field to ` +
+          `remove. One op cannot do both, and applying it would keep neither ` +
+          `the value nor a record of which was meant.`
+      );
+    }
+  }
   for (const key of names) {
     if (!isPatchField(key)) {
       throw new OpError(`update: "${key}" is not a field this op may remove.`);
@@ -915,6 +994,28 @@ function assertNodeShape(
         `${verb}: ${path} carries keys JSON cannot write, so the stored node ` +
           `would differ from the one in the document.`
       );
+    }
+
+    // Every OTHER own key's value. The loop below reads the fields this module
+    // knows; a node may legitimately carry more, because a document written by
+    // a newer version is data to be moved rather than an instruction to follow.
+    // What it may not carry is a value JSON cannot write: the node would enter
+    // the document and the next save would fail on it. Worse, a field pointing
+    // back at its own node makes the byte counter walk forever, so this has to
+    // run before anything measures the subtree.
+    //
+    // Preserved rather than rejected, deliberately. Refusing an unknown field
+    // would make a document from a newer editor uneditable by this one, which
+    // is the failure that costs an author their work rather than an edit.
+    for (const [key, extra] of Object.entries(candidate)) {
+      if (Object.hasOwn(NODE_FIELDS, key)) continue;
+      if (!isJsonValue(extra)) {
+        throw new OpError(
+          `${verb}: ${path} carries "${key}", which holds ${describe(extra)} — ` +
+            `a value JSON cannot write. The node would enter the document and ` +
+            `the next save would be refused.`
+        );
+      }
     }
 
     for (const [field, contract] of Object.entries(NODE_FIELDS)) {
@@ -1115,6 +1216,17 @@ function assertForestEntries(nodes: BlockNode[]): void {
       throw new OpError(
         `a node whose slots are ${describe(slots)} is malformed. Slots name ` +
           `child regions and each holds a list.`
+      );
+    }
+    // The slot MAP itself, before it is enumerated. The node's own descriptors
+    // were checked above, which establishes that `slots` is held rather than
+    // computed — and says nothing about the properties INSIDE it. A `slots.main`
+    // defined as a getter runs on the next line.
+    if (!hasOnlyJsonOwnKeys(slots)) {
+      throw new OpError(
+        `a node whose child regions are computed rather than stored cannot be ` +
+          `edited. Reading one runs code, and what it returns is not what ` +
+          `would be saved.`
       );
     }
     for (const [name, children] of Object.entries(slots)) {
@@ -1888,7 +2000,16 @@ export function applyOp(
       // other field the shape check requires — removes cleanly and then cannot
       // be put back. Uniqueness was only half of what makes an inverse
       // applicable; this is the other half.
-      assertNodeShape(node, "remove", limits);
+      //
+      // SHAPE only, and the product caps deliberately left out. A site that
+      // lowers `maxNodes` below an existing container's subtree would otherwise
+      // find that container unremovable: the check would judge the captured
+      // subtree as though it were arriving new, and refuse the edit most likely
+      // to bring the document back under the cap. Whether the RESULT fits is
+      // `assertFitsCaps`' question, and it already answers it with the repair
+      // policy — refuse an edit that crosses a cap or worsens an overage, allow
+      // one that shrinks.
+      assertNodeShape(node, "remove", SHAPE_ONLY_LIMITS);
       // The ORIGINAL parent too. The removed node may be unique while the
       // parent it sat under is not, and the inverse restores by naming that
       // parent — so an undo would place it under whichever match is found
