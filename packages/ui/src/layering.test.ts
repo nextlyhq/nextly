@@ -447,11 +447,16 @@ describe("this package takes no direct dependency on the block engine", () => {
  *
  * A boundary that does not depend on recognising anything is to BUILD the package into a project
  * containing only the dependencies it is allowed to use, and run it: a load of anything else fails
- * at that moment, whatever spelling produced it. That is complete in the dimension this is weak
- * in, and blind where this is strong — it only sees code that actually executes, so a resolver
- * behind a branch never taken is invisible to it, and visible here. Neither replaces the other,
- * and neither belongs inside the other: one reads syntax without running anything, the other runs
- * everything without reading it.
+ * at that moment, whatever spelling produced it. That boundary EXISTS — it is
+ * `scripts/write-server-safe-isolation-probe.ts`, run by the server-safe job in
+ * `.github/workflows/package-smoke.yml`, and it refuses a computed specifier and an `eval`ed
+ * require without knowing what either one is.
+ *
+ * **It does not supersede this file, and this file must not be deleted because it exists.** It is
+ * complete in the dimension this is weak in, and blind where this is strong: it only sees code
+ * that actually EXECUTES, so a resolver behind a branch import-time evaluation never takes is
+ * invisible to it, and visible here. Neither belongs inside the other — one reads syntax without
+ * running anything, the other runs everything without reading it.
  */
 /**
  * The names that re-expose the global object, so `X.process` is the `process` binding itself.

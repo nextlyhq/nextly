@@ -203,71 +203,100 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
         className="mb-6"
       />
 
-      {/* Identity header */}
-      <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="flex items-start gap-4">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-primary/5">
-            {/* Package, not Database: this page presents a plugin as the
+      {/* A CONTAINER query, not a viewport one. The two sidebars take a
+          variable share of the window — around 630px with both open — so a
+          `lg:` breakpoint would split a 1024px viewport into a 320px rail and
+          a main column narrower than the rail. `@container/content` is
+          declared on the dashboard's `<main>`, so this measures the space the
+          page actually has and gains the second column when a sidebar
+          collapses rather than when the window happens to grow.
+
+          The rail is a fixed 20rem so the main column absorbs the rest;
+          `minmax(0,1fr)` rather than `1fr` because a grid item's default
+          `min-width: auto` lets a long unbroken string — a package name, an
+          API route — push the column wider than its track instead of
+          scrolling inside it. */}
+      <div className="grid grid-cols-1 gap-8 @3xl/content:grid-cols-[minmax(0,1fr)_20rem]">
+        <div className="min-w-0">
+          {/* Identity header */}
+          <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-start gap-4">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-primary/5">
+                {/* Package, not Database: this page presents a plugin as the
                 package you installed rather than as its collections. */}
-            <PluginIcon
-              plugin={plugin}
-              fallback="Package"
-              className="h-6 w-6 text-primary"
-            />
-          </div>
-          <div className="space-y-1">
-            <div className="flex flex-wrap items-center gap-3">
-              <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
-              {plugin.version && (
-                <span className="inline-flex items-center rounded-sm bg-primary/5 px-2.5 py-0.5 font-mono text-xs text-muted-foreground">
-                  v{plugin.version}
-                </span>
-              )}
-              <PluginStatusPill enabled={plugin.enabled !== false} />
-              {plugin.category && (
-                <Badge
-                  variant="default"
-                  className="text-xs font-normal text-muted-foreground"
+                <PluginIcon
+                  plugin={plugin}
+                  fallback="Package"
+                  className="h-6 w-6 text-primary"
+                />
+              </div>
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-3">
+                  <h1 className="text-xl font-semibold tracking-tight">
+                    {title}
+                  </h1>
+                  {plugin.version && (
+                    <span className="inline-flex items-center rounded-sm bg-primary/5 px-2.5 py-0.5 font-mono text-xs text-muted-foreground">
+                      v{plugin.version}
+                    </span>
+                  )}
+                  <PluginStatusPill enabled={plugin.enabled !== false} />
+                  {plugin.category && (
+                    <Badge
+                      variant="default"
+                      className="text-xs font-normal text-muted-foreground"
+                    >
+                      {categoryLabel(plugin.category)}
+                    </Badge>
+                  )}
+                </div>
+                {plugin.description && (
+                  // Muted foreground so this secondary description meets contrast (a faint primary alpha did not).
+                  <p className="text-sm font-normal text-muted-foreground">
+                    {plugin.description}
+                  </p>
+                )}
+                {plugin.author && (
+                  <p className="text-xs text-muted-foreground">
+                    by {plugin.author}
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
+              {/* The settings UI gets its own page; the detail page stays
+              informational and links to it. */}
+              {plugin.enabled !== false && plugin.settings?.component && (
+                <Link
+                  href={buildRoute(ROUTES.PLUGIN_SETTINGS, {
+                    slug: pluginSlug(plugin.name),
+                  })}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
                 >
-                  {categoryLabel(plugin.category)}
-                </Badge>
+                  <SettingsIcon className="h-3.5 w-3.5" />
+                  Open settings
+                </Link>
               )}
             </div>
-            {plugin.description && (
-              // Muted foreground so this secondary description meets contrast (a faint primary alpha did not).
-              <p className="text-sm font-normal text-muted-foreground">
-                {plugin.description}
-              </p>
-            )}
-            {plugin.author && (
-              <p className="text-xs text-muted-foreground">
-                by {plugin.author}
-              </p>
-            )}
           </div>
+
+          {/* What this plugin adds — computed from the plugin's registrations */}
+          <Contributions plugin={plugin} />
         </div>
-        <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
-          {/* The settings UI gets its own page; the detail page stays
-              informational and links to it. */}
-          {plugin.enabled !== false && plugin.settings?.component && (
-            <Link
-              href={buildRoute(ROUTES.PLUGIN_SETTINGS, {
-                slug: pluginSlug(plugin.name),
-              })}
-              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
-            >
-              <SettingsIcon className="h-3.5 w-3.5" />
-              Open settings
-            </Link>
-          )}
-          <ExternalLinks plugin={plugin} />
-        </div>
+
+        {/* `self-start` is what makes `sticky` work here: a grid item stretches
+            to the row height by default, so the rail would be exactly as tall
+            as the content it is meant to stay beside and never have anywhere
+            to stick to. Sticky only once the columns exist — in the stacked
+            layout the rail is the last thing on the page, and pinning it there
+            would cover the content the reader scrolled to. */}
+        <aside
+          aria-label={`About ${title}`}
+          className="@3xl/content:sticky @3xl/content:top-6 @3xl/content:self-start"
+        >
+          <About plugin={plugin} />
+        </aside>
       </div>
-
-      {/* What this plugin adds — computed from the plugin's registrations */}
-      <Contributions plugin={plugin} />
-
-      <About plugin={plugin} />
     </div>
   );
 }
@@ -299,7 +328,7 @@ function ExternalLinks({ plugin }: { plugin: PluginMetadata }) {
   if (links.length === 0) return null;
 
   return (
-    <div className="flex shrink-0 items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       {links.map(link => (
         <a
           key={link.label}
@@ -422,7 +451,14 @@ function Contributions({ plugin }: { plugin: PluginMetadata }) {
           its behavior does not load.
         </p>
       )}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+      {/* Auto-fitting tracks rather than a breakpoint. These cards sit inside
+          the main column, whose width depends on whether the metadata rail is
+          beside them — so no viewport breakpoint describes the space they
+          have. At the width where the rail first appears the column is around
+          22rem, and a viewport-based two-column rule would split that into
+          ~10.5rem cards that wrap every route and permission label. A 16rem
+          minimum track fits one card until there is genuinely room for two. */}
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(16rem,1fr))] gap-4">
         {groups.map(group => (
           <div
             key={group.key}
@@ -492,29 +528,30 @@ function About({ plugin }: { plugin: PluginMetadata }) {
   ].filter(Boolean) as Array<{ label: string; value: string; mono?: boolean }>;
 
   return (
-    <section className="mb-8">
+    <section>
       <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
         About
       </h2>
       <div className="rounded-lg border border-border bg-card">
         <dl className="divide-y divide-border">
           {rows.map(row => (
-            <div
-              key={row.label}
-              className="flex items-baseline justify-between gap-4 px-4 py-2.5"
-            >
-              <dt className="text-sm text-muted-foreground">{row.label}</dt>
+            // Label above value, not a justify-between row. In a 20rem rail a
+            // package name or a dependency range has no room left beside its
+            // label, and right-aligning what then wraps ragged is harder to
+            // scan than a plain stack.
+            <div key={row.label} className="px-4 py-2.5">
+              <dt className="text-xs text-muted-foreground">{row.label}</dt>
               <dd
-                className={`text-right text-sm text-foreground ${row.mono ? "font-mono" : ""}`}
+                className={`mt-0.5 break-words text-sm text-foreground ${row.mono ? "font-mono" : ""}`}
               >
                 {row.value}
               </dd>
             </div>
           ))}
           {plugin.tags && plugin.tags.length > 0 && (
-            <div className="flex items-baseline justify-between gap-4 px-4 py-2.5">
-              <dt className="text-sm text-muted-foreground">Tags</dt>
-              <dd className="flex flex-wrap justify-end gap-1.5">
+            <div className="px-4 py-2.5">
+              <dt className="text-xs text-muted-foreground">Tags</dt>
+              <dd className="mt-1 flex flex-wrap gap-1.5">
                 {plugin.tags.map(tag => (
                   <Badge
                     key={tag}
@@ -529,6 +566,10 @@ function About({ plugin }: { plugin: PluginMetadata }) {
           )}
         </dl>
       </div>
+      <div className="mt-3">
+        <ExternalLinks plugin={plugin} />
+      </div>
+
       <p className="mt-3 text-xs text-muted-foreground">
         Plugins are installed and updated with your package manager and wired in
         your Nextly config; there is nothing to install or update from this
