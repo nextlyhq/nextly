@@ -866,9 +866,9 @@ describe("a dry run", () => {
     // Still a real plan: a run that refused early would also write nothing, and would be
     // indistinguishable from this without asserting the preview it was asked for.
     expect(outcome.renames.length).toBeGreaterThan(0);
-    // Nothing holds a lock whose table does not exist, so the honest answer is `null` rather than
-    // a refusal about a missing table.
-    expect(outcome.lockedBy).toBeNull();
+    // Nothing can hold a lock whose table does not exist, so `not-held` is a complete answer here
+    // rather than an absence of one. `unknown` would be the answer if the table were unreadable.
+    expect(outcome.lock).toEqual({ kind: "not-held" });
     expect(trace).not.toContain("lock");
     expect(writes.marker).toBe(0);
   });
@@ -892,6 +892,9 @@ describe("a dry run", () => {
     if (outcome.ran !== false || outcome.reason !== "dry-run") {
       expect.fail("expected a dry-run outcome, not a refusal");
     }
-    expect(outcome.lockedBy).toBe("field-group-migration:up#someone-else");
+    expect(outcome.lock).toEqual({
+      kind: "held",
+      owner: "field-group-migration:up#someone-else",
+    });
   });
 });

@@ -59,7 +59,11 @@ import {
 } from "./plan";
 import { probeStorage, reconcilePlan, type TableColumns } from "./reconcile";
 import { runMigrationSteps } from "./runner";
-import { withMigrationSession, type MigrationDialect } from "./session";
+import {
+  withMigrationSession,
+  type LockObservation,
+  type MigrationDialect,
+} from "./session";
 import {
   beginMigration,
   MIGRATION_MARKER_VERSION,
@@ -81,7 +85,19 @@ export const FIELD_GROUP_MIGRATION_PHASE = "field-group-storage-migration";
 
 /** What a run did, for the caller to report. */
 export type MigrationOutcome =
-  | { ran: false; reason: "already-migrated" | "nothing-to-migrate" }
+  | {
+      ran: false;
+      reason: "already-migrated" | "nothing-to-migrate";
+      /**
+       * Present on a DRY RUN only, and that asymmetry is deliberate.
+       *
+       * A dry run can reach this exit while another migration is mid-flight — an `up` preview meets
+       * a settled v2 marker that a claimed `down` run has not yet replaced — and reporting a bare
+       * "already migrated" there describes a database that is at this moment moving. A run that
+       * WRITES holds the lock, so it has nothing to report.
+       */
+      lock?: LockObservation;
+    }
   | {
       ran: false;
       reason: "dry-run";
@@ -108,7 +124,7 @@ export type MigrationOutcome =
        * is acted on, so it can no more gate a write than any other stale read. The lock itself is
        * what makes a run exclusive.
        */
-      lockedBy: string | null;
+      lock: LockObservation;
     }
   | { ran: true; direction: MigrationDirection; steps: number };
 
@@ -285,7 +301,13 @@ export async function runFieldGroupMigration(
             entries: state.appliedManifest ?? [],
           }),
         });
-        return { ran: false, reason: "already-migrated" };
+        return {
+          ran: false,
+          reason: "already-migrated",
+          // Carried on this exit too. Contention is exactly what a preview
+          // returning "nothing to do" would otherwise conceal.
+          ...(dryRun ? { lock: session.lock } : {}),
+        };
       }
 
       // A rollback needs the plan that was applied; nothing else can supply it,
@@ -411,7 +433,7 @@ export async function runFieldGroupMigration(
           reason: "dry-run",
           direction,
           renames,
-          lockedBy: session.observedLockOwner,
+          lock: session.lock,
         };
       }
 

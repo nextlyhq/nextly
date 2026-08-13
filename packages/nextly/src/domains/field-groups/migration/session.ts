@@ -28,6 +28,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { sql, type SQL } from "drizzle-orm";
 
+import { safeCode } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 
 /** Dialects the migration runs on. */
@@ -99,6 +100,65 @@ async function lockRowExists(adapter: DrizzleAdapter): Promise<boolean> {
   return rows.length > 0;
 }
 
+/**
+ * What could be learned about the lock, including "nothing".
+ *
+ * 🔴 Three states rather than `string | null`, and `unknown` is the whole reason. A role that
+ * cannot READ the lock table is not a database where nothing holds the lock, and collapsing the two
+ * reports "safe to proceed" to precisely the restricted credential most likely to be unable to
+ * look. "I could not ask" and "the answer is no" are different facts and this type refuses to merge
+ * them.
+ */
+export type LockObservation =
+  | { readonly kind: "held"; readonly owner: string }
+  | { readonly kind: "not-held" }
+  | { readonly kind: "unknown"; readonly reason: string };
+
+/**
+ * Whether a failed read means the table is not there.
+ *
+ * Classified by the driver's own code rather than by message text, and at the specificity the claim
+ * needs: absent and FORBIDDEN are different codes, so a role denied SELECT lands in `unknown`
+ * instead of being read as an empty database.
+ *
+ * SQLite is matched on message because it has no distinct code for this — and that is sound there
+ * for a reason that does not generalise: SQLite has no table privileges, so a table it cannot find
+ * is a table that does not exist. On Postgres and MySQL the same assumption is exactly the defect.
+ */
+function isMissingTable(error: unknown, dialect: MigrationDialect): boolean {
+  const code = safeCode(error);
+  if (dialect === "postgresql") return code === "42P01";
+  if (dialect === "mysql") return code === "1146" || code === "42S02";
+  const message = error instanceof Error ? error.message : String(error);
+  return /no such table/i.test(message);
+}
+
+/**
+ * Read the lock without claiming it, and say honestly when that could not be done.
+ *
+ * Reads the row DIRECTLY rather than asking whether the table exists first. `tableExists` resolves
+ * through `information_schema`, which is filtered by privilege on Postgres and MySQL: a table the
+ * role cannot see is reported absent, and the caller would then be told nothing holds the lock
+ * while a migration was holding it.
+ */
+async function observeLock(
+  adapter: DrizzleAdapter,
+  dialect: MigrationDialect
+): Promise<LockObservation> {
+  try {
+    const owner = (await readOwnerOutsideTransaction(adapter))?.owner ?? null;
+    return owner === null ? { kind: "not-held" } : { kind: "held", owner };
+  } catch (error) {
+    // The lock table is created by the first run that ever claims it, so its absence is a complete
+    // answer: nothing can hold a lock whose table does not exist.
+    if (isMissingTable(error, dialect)) return { kind: "not-held" };
+    return {
+      kind: "unknown",
+      reason: safeCode(error) ?? "the lock could not be read",
+    };
+  }
+}
+
 /** What a step is handed to do its work. */
 export interface MigrationSession {
   readonly dialect: MigrationDialect;
@@ -110,20 +170,17 @@ export interface MigrationSession {
    */
   inTransaction<T>(work: (ctx: TransactionContext) => Promise<T>): Promise<T>;
   /**
-   * Who holds the lock, for a session that deliberately did not take it.
+   * What this session could learn about the lock.
    *
-   * `null` under `claim`, where the answer is this session itself and saying so
-   * would invite a caller to report its own claim as contention. Under
-   * `observe` it is the owner read from the row, or `null` when the row or the
-   * table is absent — no run has ever been recorded, so nothing holds it.
+   * Under `claim` it is `held` by this session's own claim, which is simply true. Under `observe`
+   * it is whatever the row said, or `unknown` when the read could not be made.
    *
-   * Advisory in the strict sense: it describes an instant that has already
-   * passed by the time a caller reads it. That is sound for the only thing it
-   * is for, which is telling an operator their PREVIEW may be describing a
-   * moving target. It is not sound as a precondition for doing work, and a
-   * caller that treats it as one has reimplemented the lock badly.
+   * Advisory in the strict sense: it describes an instant that has already passed. That is sound
+   * for the only thing it is for — telling an operator their PREVIEW may be describing a moving
+   * target — and unsound as a precondition for work. A caller that gates a write on it has
+   * reimplemented the lock badly.
    */
-  readonly observedLockOwner: string | null;
+  readonly lock: LockObservation;
 }
 
 /**
@@ -218,7 +275,9 @@ export async function withMigrationSession<T>(
   const session: MigrationSession = {
     dialect,
     inTransaction: work => adapter.transaction(work),
-    observedLockOwner: null,
+    // Replaced below for an observing session. A claiming one holds the lock itself, and saying so
+    // is the accurate answer rather than a placeholder.
+    lock: { kind: "held", owner: claim },
   };
 
   // Returns before anything that writes: the DDL, the seed row, the claim, the
@@ -232,11 +291,9 @@ export async function withMigrationSession<T>(
     // SELECTing a missing table raises a dialect-specific error that would have
     // to be recognised to be told apart from a permission failure — the guess
     // this mode exists to avoid.
-    const row = (await adapter.tableExists(MIGRATION_LOCK_TABLE))
-      ? await readOwnerOutsideTransaction(adapter)
-      : undefined;
     return fn({
       ...session,
+      lock: await observeLock(adapter, dialect),
       // 🔴 Refused rather than documented. Handing the ordinary `inTransaction`
       // to an observing caller would let it write without ever holding the
       // lock, which is the one thing this whole module exists to prevent — and
@@ -255,7 +312,6 @@ export async function withMigrationSession<T>(
             },
           })
         ),
-      observedLockOwner: row?.owner ?? null,
     });
   }
 
