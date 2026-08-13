@@ -34,6 +34,7 @@ import {
   type RegistryRow,
   type TableRename,
 } from "./manifest";
+import { REFUSAL_KIND_KEY, type RefusalKind } from "./refusal-kind";
 import type { MigrationDirection, StorageGeneration } from "./state";
 
 /**
@@ -519,15 +520,11 @@ function reconcileColumn(
 
   if (hasFrom) {
     if (recordedAsDone(position, run)) {
-      throw refuse(
+      throw refuseProgressMismatch(
         "a column rename the marker records as verified has not been applied",
-        {
-          table: current,
-          from: entry.from,
-          to: entry.to,
-          position,
-          recordedStep: run.recorded ? run.step : null,
-        }
+        position,
+        run,
+        { table: current, from: entry.from, to: entry.to }
       );
     }
     return entry;
@@ -535,15 +532,11 @@ function reconcileColumn(
 
   if (hasTo) {
     if (!acceptsApplied(position, run)) {
-      throw refuse(
+      throw refuseProgressMismatch(
         "a column carries the migrated name but no recorded progress accounts for it",
-        {
-          table: current,
-          from: entry.from,
-          to: entry.to,
-          position,
-          recordedStep: run.recorded ? run.step : null,
-        }
+        position,
+        run,
+        { table: current, from: entry.from, to: entry.to }
       );
     }
     return { ...entry, satisfied: true };
@@ -591,19 +584,11 @@ function reconcileRename(
 
     if (source !== undefined) {
       if (recordedAsDone(position, run)) {
-        throw refuse(
+        throw refuseProgressMismatch(
           "a rename the marker records as verified has not been applied",
-          {
-            from: rename.from,
-            to: rename.to,
-            position,
-            recordedStep: run.recorded ? run.step : null,
-          },
-          // A marker ahead of the catalog is what a reader sees between a
-          // writer's rename committing and its progress being recorded, so an
-          // unlocked observer can meet this pair without the database ever
-          // having been in that state.
-          "torn-read"
+          position,
+          run,
+          { from: rename.from, to: rename.to }
         );
       }
       pendingTableRenames.push(rename);
@@ -617,20 +602,11 @@ function reconcileRename(
       // something else, sitting on the name this migration wants, and adopting
       // it would treat a stranger's table as migrated field-group storage.
       if (!acceptsApplied(position, run)) {
-        throw refuse(
+        throw refuseProgressMismatch(
           "an object using the migrated storage name exists but no recorded progress accounts for it",
-          {
-            from: rename.from,
-            to: rename.to,
-            occupiedBy: target,
-            position,
-            recordedStep: run.recorded ? run.step : null,
-          },
-          // The mirror of the case above: a catalog ahead of the marker. A
-          // writer's rename has committed and the progress accounting for it
-          // has not landed yet, which an unlocked observer can read as a
-          // stranger's table sitting on the migrated name.
-          "torn-read"
+          position,
+          run,
+          { from: rename.from, to: rename.to, occupiedBy: target }
         );
       }
       continue;
@@ -646,22 +622,6 @@ function reconcileRename(
     ? { ...entry, satisfied: true, pendingTableRenames }
     : { ...entry, pendingTableRenames };
 }
-
-/**
- * Whether re-reading could change a refusal's answer.
- *
- * `torn-read` means the refusal describes a DISAGREEMENT between two reads
- * rather than a fact about the database: an unlocked observer reads the marker
- * and the catalog as separate queries, and a writer advancing between them
- * produces a pair no single instant ever held. Reading again can resolve it.
- *
- * `permanent` means the database is genuinely in a shape a human has to look
- * at, and every re-read returns the same thing.
- */
-type RefusalKind = "permanent" | "torn-read";
-
-/** The key `logContext` carries the classification under. */
-const REFUSAL_KIND_KEY = "refusalKind";
 
 /**
  * Refusals are 503: the database is in a shape a human has to look at, and the
@@ -687,17 +647,39 @@ function refuse(
 }
 
 /**
- * Whether this refusal is one a concurrent writer can manufacture.
+ * The marker and the catalog disagree about how far a rename has progressed.
  *
- * Exported so a caller can decide to re-read, and answered from the marker the
- * refusal itself carries rather than by matching its `reason` text. A caller
- * holding its own list of retryable messages is a second implementation of this
- * classification: rewording a refusal here would silently move it between the
- * two categories, and nothing would fail.
+ * 🔴 One helper for every such refusal, rather than the kind stamped at each
+ * site. Tables and columns are reconciled by different functions and each raises
+ * the same PAIR — a source still present at a position the marker vouches for,
+ * and a target present that no recorded progress accounts for — so the
+ * classification was applied to one pair and missed on the other, which is
+ * exactly the divergence a second implementation of one question produces.
+ *
+ * Routing all four through here also makes the tag unavoidable: a fifth
+ * progress-mismatch refusal cannot be added untagged without deliberately
+ * bypassing the only function that takes a `position` and a `run`.
+ *
+ * Every one of these is a torn read BY CONSTRUCTION. The disagreement is
+ * between the recorded position and the catalog, and those are separate reads
+ * for an unlocked observer; a writer advancing between them produces a pair no
+ * instant ever held. Refusals that do NOT compare the two — a target name
+ * occupied, both discriminators present, storage missing entirely — describe the
+ * database itself and stay permanent.
  */
-export function isTornReadRefusal(error: unknown): boolean {
-  return (
-    NextlyError.is(error) &&
-    error.logContext?.[REFUSAL_KIND_KEY] === "torn-read"
+function refuseProgressMismatch(
+  reason: string,
+  position: number,
+  run: RunRecord,
+  context: Record<string, unknown>
+): NextlyError {
+  return refuse(
+    reason,
+    {
+      ...context,
+      position,
+      recordedStep: run.recorded ? run.step : null,
+    },
+    "torn-read"
   );
 }

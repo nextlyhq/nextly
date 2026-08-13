@@ -1053,6 +1053,146 @@ describe("a preview that meets a writer mid-run", () => {
     expect(outcome.basis).toEqual({ kind: "reconciled" });
   });
 
+  // A discriminator column is renamed by the same run, scored by a different function, and raises
+  // the same PAIR of marker-vs-catalog refusals as a table does. Classifying only the table pair
+  // left the column pair escaping as a 503 during exactly the contention the retry exists for.
+  it("re-reads a torn discriminator column, not only a torn table", async () => {
+    const world: RunWorld = {
+      tables: [LEGACY_REGISTRY, "comp_hero"],
+      registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
+      // The column already carries its migrated name while nothing recorded says a run got there:
+      // a rollback in flight, caught between reverting the column and settling its marker.
+      columns: {
+        comp_hero: ["id", "_parent_id", "_parent_table", "_field_group_type"],
+      },
+    };
+    let reads = 0;
+    world.onMarkerRead = () => {
+      reads += 1;
+      // Applied on the SECOND read, not the first. The hook fires between this
+      // attempt's marker read and its catalog read, so changing the world at
+      // read 1 would clear the tear before attempt 1 ever saw it — and the test
+      // would pass without a retry ever happening.
+      if (reads !== 2) return;
+      // The rollback finished reverting the column.
+      world.columns = {
+        comp_hero: ["id", "_parent_id", "_parent_table", "_component_type"],
+      };
+    };
+    const { adapter, trace } = createRunWorld(world);
+
+    const outcome = await runFieldGroupMigration({
+      adapter,
+      logger,
+      direction: "up",
+      dryRun: true,
+    });
+
+    if (outcome.ran !== false || outcome.reason !== "dry-run") {
+      expect.fail("expected a dry-run outcome, not a refusal");
+    }
+    expect(outcome.basis).toEqual({ kind: "reconciled" });
+    expect(markerReads(trace)).toBe(2);
+  });
+
+  // The column-side control. A table carrying BOTH spellings is not a torn read of one state, it is
+  // a database holding two, and re-reading returns it every time.
+  it("does not retry a column refusal that describes the database itself", async () => {
+    const { adapter, trace } = createRunWorld({
+      tables: [LEGACY_REGISTRY, "comp_hero"],
+      registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
+      columns: {
+        comp_hero: [
+          "id",
+          "_parent_id",
+          "_parent_table",
+          "_component_type",
+          "_field_group_type",
+        ],
+      },
+    });
+
+    await expect(
+      runFieldGroupMigration({
+        adapter,
+        logger,
+        direction: "up",
+        dryRun: true,
+      })
+    ).rejects.toSatisfy(
+      error =>
+        NextlyError.is(error) &&
+        error.logContext?.reason ===
+          "both discriminator columns exist on one table"
+    );
+
+    expect(markerReads(trace)).toBe(1);
+  });
+
+  // The settled-marker check runs BEFORE the plan is ever reconciled, so it sits outside the block
+  // that classifies torn reads. An `up` preview reading a settled v2 marker while a `down` run moves
+  // storage back to legacy meets a mismatch the database was never in.
+  it("re-reads a settled marker the catalog is moving away from", async () => {
+    const world: RunWorld = {
+      marker: settledRun(),
+      // Storage a concurrent rollback has already returned to its legacy names.
+      tables: [LEGACY_REGISTRY, "comp_hero"],
+      registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
+    };
+    let reads = 0;
+    world.onMarkerRead = () => {
+      reads += 1;
+      if (reads > 1) return;
+      // The rollback settled, and its marker now agrees with the storage.
+      world.marker = {
+        version: MIGRATION_MARKER_VERSION,
+        status: "settled",
+        generation: "legacy",
+      };
+    };
+    const { adapter, trace } = createRunWorld(world);
+
+    const outcome = await runFieldGroupMigration({
+      adapter,
+      logger,
+      direction: "up",
+      dryRun: true,
+    });
+
+    if (outcome.ran !== false || outcome.reason !== "dry-run") {
+      expect.fail("expected a dry-run outcome, not a refusal");
+    }
+    expect(markerReads(trace)).toBe(2);
+  });
+
+  // 🔴 The mismatch that does NOT clear must still refuse. This same check is what catches storage
+  // restored from a backup taken before the run, and reporting that as a preview would describe a
+  // database the read path cannot serve as though it were merely contended.
+  it("still refuses a settled marker the catalog permanently contradicts", async () => {
+    const { adapter, trace } = createRunWorld({
+      marker: settledRun(),
+      tables: [LEGACY_REGISTRY, "comp_hero"],
+      registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
+    });
+
+    await expect(
+      runFieldGroupMigration({
+        adapter,
+        logger,
+        direction: "up",
+        dryRun: true,
+      })
+    ).rejects.toSatisfy(
+      error =>
+        NextlyError.is(error) &&
+        error.logContext?.reason ===
+          "marker reports a completed migration but the migrated registry is absent"
+    );
+
+    // Retried, then raised — the attempts are spent before the refusal stands.
+    expect(markerReads(trace)).toBe(3);
+  });
+
   // 🔴 A run that WRITES holds the lock, which excludes the very writer a retry exists to survive.
   // A refusal there is a fact about the database rather than a torn read of one, and re-reading it
   // would spend three sets of reads to arrive at the same refusal -- while a second run that

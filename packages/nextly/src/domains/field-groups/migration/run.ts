@@ -59,12 +59,16 @@ import {
   renameRunRecord,
 } from "./plan";
 import {
-  isTornReadRefusal,
   probeStorage,
   reconcilePlan,
   type ReconciledEntry,
   type TableColumns,
 } from "./reconcile";
+import {
+  isTornReadRefusal,
+  REFUSAL_KIND_KEY,
+  type RefusalKind,
+} from "./refusal-kind";
 import { runMigrationSteps } from "./runner";
 import {
   withMigrationSession,
@@ -686,6 +690,10 @@ async function assertStorageComplete(args: {
     identifierCase: args.identifierCase,
     generation: args.generation,
     reason: "structural verification failed after the steps ran",
+    // This run holds the lock and just performed the work being checked, so a
+    // mismatch is a fact about what the steps produced rather than a read torn
+    // by someone else. Re-reading would return the same thing.
+    kind: "permanent",
   });
 }
 
@@ -742,6 +750,15 @@ async function assertStorageAtGeneration(args: {
     columns,
     identifierCase: args.identifierCase,
     generation: args.generation,
+    // 🔴 Retryable for an unlocked preview, because the marker and the catalog are separate reads
+    // here and nothing holds them together. A rollback renames the registry back before its own
+    // marker settles, so a preview that captured the v2 marker first sees a catalog already moving
+    // past it — a pair the database was never in.
+    //
+    // Reaching THIS refusal at all is rare: `resolveStorageVerdict` classifies the same tears
+    // first and more precisely, and most mismatches leave by one of its refusals rather than this
+    // one. It is classified alike so the two cannot disagree about the same situation.
+    kind: "torn-read",
     reason: "a settled marker does not match the storage it describes",
   });
 }
@@ -761,6 +778,18 @@ function assertProbeMatchesGeneration(args: {
   identifierCase: IdentifierCaseRules;
   generation: StorageGeneration;
   reason: string;
+  /**
+   * Whether re-reading could change this verdict, which depends entirely on
+   * which caller is asking.
+   *
+   * Verifying a SETTLED marker compares a marker read at one instant against a
+   * catalog read at a later one, and a rollback running concurrently moves
+   * storage between them — so an unlocked preview meets a mismatch the database
+   * was never actually in. Verifying after this run's OWN steps compares the
+   * storage those steps just produced, under a lock that excludes anyone else;
+   * a mismatch there is real and must stay loud.
+   */
+  kind: RefusalKind;
 }): void {
   const probe = probeStorage({
     rows: args.rows,
@@ -795,6 +824,7 @@ function assertProbeMatchesGeneration(args: {
     logContext: {
       phase: FIELD_GROUP_MIGRATION_PHASE,
       reason: args.reason,
+      [REFUSAL_KIND_KEY]: args.kind,
       generation: args.generation,
       expected,
       actual: verdict.action,
