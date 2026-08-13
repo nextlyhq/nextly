@@ -22,6 +22,15 @@ const excludeArgs: {
   releaseOnInterrupt?: boolean;
 }[] = [];
 
+/** The flags the companion is built from, captured where the service actually passes them. */
+const companionCalls: Record<string, unknown>[] = [];
+
+vi.mock("../../../singles/services/reconcile-single-companion", () => ({
+  reconcileSingleCompanion: vi.fn(async (args: Record<string, unknown>) => {
+    companionCalls.push(args);
+  }),
+}));
+
 vi.mock("../../../field-groups/migration/sync-guard", () => ({
   withMigrationExcluded: vi.fn(
     async (
@@ -134,6 +143,7 @@ function makeService(adapter: ReturnType<typeof makeAdapter>) {
 
 beforeEach(() => {
   trace.length = 0;
+  companionCalls.length = 0;
   excludeArgs.length = 0;
   refusal.error = undefined;
 });
@@ -300,15 +310,15 @@ describe("a Schema Builder change and the storage migration exclude each other",
   });
 
   it("takes the PRIOR flags from the refreshed record, keeping only what the request set", async () => {
-    // 🔴 Two overlapping Builder saves. The first enabled Draft/Published and committed. The second
-    // was composed before that, so it carries `wasStatus: false`, and it DOES ask for status — so
-    // the plan compares "off" against "on" and emits an ADD COLUMN for `_status` on a table that
-    // already has one.
+    // 🔴 Codex's scenario exactly. One save enabled Draft/Published and committed. This save was
+    // composed before that, so it carries `wasStatus: false` and a `hasStatus: false` the CALLER
+    // filled in because the request said nothing about status — it asks only for localization.
+    // Planning from those builds the companion WITHOUT `_status` while the row says it has one.
     //
-    // The first version of this test used a scenario whose difference showed up only in the
-    // COMPANION table, which this harness reaches through Drizzle rather than `executeQuery` — so
-    // the break-control passed and the test proved nothing. This scenario lands on the MAIN table,
-    // which is observable here.
+    // Observed at the seam the service actually passes the flags to, rather than through emitted
+    // SQL: two earlier attempts asserted on `executeQuery`, and this path issues none at all, so
+    // the break-control passed and the tests proved nothing. The companion is where these flags
+    // are consumed, so that is where they are read.
     const adapter = makeAdapter({ mainTableExists: true });
     const { service, registry } = makeService(adapter);
     registry.getSingleBySlug.mockResolvedValue({
@@ -331,19 +341,24 @@ describe("a Schema Builder change and the storage migration exclude each other",
         status: false,
         localized: false,
       },
-      updateData: { status: true },
-      isLocalized: false,
+      updateData: { localized: true },
+      isLocalized: true,
       wasLocalized: false,
-      localizedRequested: false,
-      hasStatus: true,
+      localizedRequested: true,
+      hasStatus: false,
       wasStatus: false,
-      statusRequested: true,
+      statusRequested: false,
+      fields: [{ name: "heading", type: "text" }],
     } as unknown as Parameters<typeof service.updateSingleSchema>[0]);
 
-    const statements = adapter.executeQuery.mock.calls
-      .map(([sql]) => sql)
-      .join("\n");
-    expect(statements).not.toMatch(/ADD COLUMN[^\n]*_status/i);
+    expect(companionCalls).toHaveLength(1);
+    expect(companionCalls[0]).toMatchObject({
+      // From the refreshed record: this Single HAS status, whatever the caller last saw.
+      status: true,
+      wasStatus: true,
+      // From the request, which did ask for this one.
+      localized: true,
+    });
   });
 
   it("refuses to CREATE onto a table claimed while it waited", async () => {
