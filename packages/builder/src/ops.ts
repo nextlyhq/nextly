@@ -307,6 +307,14 @@ const MAX_VALUE_DEPTH = 512;
  * refusing it unexamined agrees with the answer a full walk would have reached.
  * A site that raises `maxBytes` past this is choosing a document larger than the
  * editor will edit, which the machine caps already say elsewhere.
+ *
+ * What this bounds, precisely: the descriptor lookups, the nested traversal and
+ * the value reads, which are the costs that grow with what the value CONTAINS.
+ * It does not bound `Reflect.ownKeys` itself, which materialises the key list in
+ * one call before any loop can stop — and it cannot, because there is no way to
+ * enumerate own keys including non-enumerable and symbol ones without building
+ * that list. The op is already in memory by then, so this doubles a cost the
+ * caller has paid rather than admitting an unbounded new one.
  */
 const MAX_VALUE_PARTS = 4 * 1024 * 1024;
 

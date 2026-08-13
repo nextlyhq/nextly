@@ -1772,6 +1772,19 @@ describe("measureBytes", () => {
         nodes: [{ id: "a", type: "box", version: 1, props: { text: "hi" } }],
       },
     ],
+    // The members `JSON.stringify` DROPS. An update that clears a field leaves
+    // an own property holding `undefined`, so charging for one measures a
+    // document larger than the one that gets saved — and an edit that shrinks
+    // a document then reads as growing it.
+    ["an undefined member", { a: 1, b: undefined }],
+    ["only undefined members", { a: undefined }],
+    ["a function member", { a: 1, b: () => 1 }],
+    ["a symbol member", { a: 1, b: Symbol("s") }],
+    ["nested dropped members", { a: { b: undefined, c: 2 } }],
+    // In an ARRAY the same values become `null`, because length is part of an
+    // array's meaning.
+    ["an undefined element", [1, undefined, 3]],
+    ["a function element", [1, () => 1, 3]],
   ])("counts %s exactly as it serializes", (_label, value) => {
     expect(measureBytes(value, Number.POSITIVE_INFINITY).bytes).toBe(
       Buffer.byteLength(JSON.stringify(value), "utf8")

@@ -550,6 +550,15 @@ function utf8ByteLength(s: string, budget: number): number {
  * Pass `Number.POSITIVE_INFINITY` for an exact count with no early exit; any
  * finite limit makes `bytes` a lower bound once `exceeded` is true.
  */
+/** Whether `JSON.stringify` writes this value rather than dropping it. */
+function serializesAs(value: unknown): boolean {
+  return (
+    typeof value !== "undefined" &&
+    typeof value !== "function" &&
+    typeof value !== "symbol"
+  );
+}
+
 export function measureBytes(
   root: unknown,
   limit: number
@@ -570,9 +579,24 @@ export function measureBytes(
       // the cap, so millions of entries must never be pushed first.
       bytes += 2 + Math.max(0, value.length - 1);
       if (bytes > limit) return { bytes, exceeded: true };
-      for (const item of value) stack.push(item);
+      // An element JSON cannot represent becomes `null` IN AN ARRAY, because an
+      // array's length is part of its meaning. The same value inside an object
+      // is dropped instead — see below. Normalised here so the walk never has
+      // to remember which container a value came from.
+      for (const item of value) stack.push(serializesAs(item) ? item : null);
     } else if (typeof value === "object") {
-      const entries = Object.entries(value as Record<string, unknown>);
+      // Only the members that will actually be written. `JSON.stringify` DROPS
+      // an object member whose value is `undefined`, a function or a symbol —
+      // key, colon, value and separator all — so charging for one measures a
+      // document larger than the one that gets saved.
+      //
+      // This is not a rounding error in practice. An update that clears a field
+      // leaves an own property holding `undefined`, so an edit that SHRINKS a
+      // document was measured as growing it, and the cap refused the very edit
+      // that would have brought an over-cap document back under.
+      const entries = Object.entries(value as Record<string, unknown>).filter(
+        ([, member]) => serializesAs(member)
+      );
       // Braces AND the separators between entries, for the same reason the
       // array branch counts its commas: `{"a":1,"b":2}` carries one comma that
       // belongs to the object rather than to either entry, so charging it per
