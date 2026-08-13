@@ -554,9 +554,19 @@ const declarationsOf = perClass(declarationsOfUncached);
  * outright and needs no such test.
  */
 function disagree(owned: string, caller: string): boolean {
-  const ownedDeclarations = declarationsOf(owned);
-  const callerDeclarations = declarationsOf(caller);
-  for (const [property, value] of callerDeclarations) {
+  // Expanded on both sides, for the same reason the intersection is: a caller's
+  // `outline` shorthand and the primitive's `outline-style` are the same
+  // declaration seen at two granularities, and compared as raw names they never
+  // met — so a rule that replaces the owned outline read as agreeing with it.
+  const expand = (declarations: Map<string, string>): Map<string, string> => {
+    const flat = new Map<string, string>();
+    for (const [property, value] of declarations) {
+      for (const longhand of expandsTo(property)) flat.set(longhand, value);
+    }
+    return flat;
+  };
+  const ownedDeclarations = expand(declarationsOf(owned));
+  for (const [property, value] of expand(declarationsOf(caller))) {
     const existing = ownedDeclarations.get(property);
     if (existing !== undefined && existing !== value) return true;
   }
@@ -629,7 +639,6 @@ function outranks(owned: Utility, caller: Utility): boolean {
   const ownedSelector = hostSelectorOf(owned.full);
   const callerSelector = hostSelectorOf(caller.full);
   if (!ownedSelector || !callerSelector) return false;
-  if (excludeEachOther(ownedSelector, callerSelector)) return false;
   if (!disagree(owned.full, caller.full)) return false;
   const ranking = compare(
     specificityOf(callerSelector),
@@ -640,6 +649,16 @@ function outranks(owned: Utility, caller: Utility): boolean {
 }
 
 function takesOver(owned: Utility, caller: Utility): boolean {
+  // Asked before anything else, because a rule that can never apply alongside
+  // the owned one cannot displace it by ANY route — not by ranking, and not by
+  // writing a variable the owned rule reads. Gating only the cascade left
+  // `focus-visible:[&:not(:focus-visible)]:ring-0` reported through variant
+  // inclusion, on a selector that contradicts itself.
+  const ownedWhere = hostSelectorOf(owned.full);
+  const callerWhere = hostSelectorOf(caller.full);
+  if (ownedWhere && callerWhere && excludeEachOther(ownedWhere, callerWhere)) {
+    return false;
+  }
   const ownedProperties = new Set(reachedBy(owned.full));
   if (ownedProperties.size === 0) return false;
   const callerProperties = propertiesOf(caller.full);
@@ -1215,6 +1234,34 @@ function literalStrings(node: ts.Node, found: string[] = []): string[] {
     }
     return found;
   }
+  // A branch that can never be taken contributes no class. `cn("w-full", false &&
+  // "border-b-0")` is the ordinary conditional-class form, and `cn` never
+  // receives the second string — collecting it reported a call site for a class
+  // it does not apply. Only literal conditions are decided here; anything whose
+  // value depends on state stays collected, because it can be taken.
+  if (
+    ts.isBinaryExpression(node) &&
+    node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken &&
+    node.left.kind === ts.SyntaxKind.FalseKeyword
+  ) {
+    return found;
+  }
+  if (
+    ts.isBinaryExpression(node) &&
+    node.operatorToken.kind === ts.SyntaxKind.BarBarToken &&
+    node.left.kind === ts.SyntaxKind.TrueKeyword
+  ) {
+    literalStrings(node.left, found);
+    return found;
+  }
+  if (ts.isConditionalExpression(node)) {
+    if (node.condition.kind === ts.SyntaxKind.TrueKeyword) {
+      return literalStrings(node.whenTrue, found);
+    }
+    if (node.condition.kind === ts.SyntaxKind.FalseKeyword) {
+      return literalStrings(node.whenFalse, found);
+    }
+  }
   // The braces matter. `ts.forEachChild` stops at the first callback that
   // returns something truthy, so a concise arrow returning the accumulator
   // visits one child and reports the rest as absent.
@@ -1241,6 +1288,7 @@ function styleResolver(attribute: ts.JsxAttribute): {
     expression: ts.Expression | undefined,
     seen?: Set<ts.Node>
   ): ts.ObjectLiteralExpression[];
+  valueOf(name: string): ts.Expression | undefined;
 } {
   const initializerOf = (name: string): ts.Expression | undefined => {
     const declared = (scope: ts.Node): ts.Expression | undefined => {
@@ -1330,7 +1378,7 @@ function styleResolver(attribute: ts.JsxAttribute): {
     return objects;
   };
 
-  return { objectsFrom };
+  return { objectsFrom, valueOf: initializerOf };
 }
 
 /** The objects an element's `style` prop can resolve to here. */
@@ -1401,44 +1449,50 @@ function declaredProperties(
   object: ts.ObjectLiteralExpression,
   resolver: ReturnType<typeof styleResolver>,
   expanded = new Set<ts.Node>()
-): Map<string, boolean> {
-  const entries = new Map<string, boolean>();
-  // Its OWN record of which objects have been merged, kept apart from the one
-  // the resolver uses to walk expressions. Sharing them meant every object the
-  // resolver returned was already marked, so this returned empty for it and a
-  // spread's contents were never read at all — while the probe for clearing a
-  // spread stayed green, because nothing was found either way.
-  if (expanded.has(object)) return entries;
+): Array<Map<string, boolean>> {
+  // A LIST of possible results, not one. A spread whose source is chosen at
+  // runtime — `active ? { borderBottomColor: c } : {}` — produces different
+  // objects on different renders, and merging them into a single map let the
+  // later branch overwrite the earlier one: the emitting branch disappeared,
+  // and reversing the two invented a violation instead. Each branch is a shape
+  // the element can render, so each is carried separately and any one of them
+  // declaring an owned property is a violation.
+  if (expanded.has(object)) return [new Map()];
   expanded.add(object);
+
+  let variants: Array<Map<string, boolean>> = [new Map()];
+  const setOnEach = (name: string, emits: boolean): void => {
+    for (const variant of variants) variant.set(name, emits);
+  };
 
   for (const property of object.properties) {
     if (ts.isSpreadAssignment(property)) {
-      // Every object the spread can be gets merged, because any of them may be
-      // the one present at runtime; a later key still overwrites all of them.
-      for (const source of resolver.objectsFrom(property.expression)) {
-        for (const [name, emits] of declaredProperties(
-          source,
-          resolver,
-          expanded
-        )) {
-          entries.set(name, emits);
-        }
-      }
+      const branches = resolver
+        .objectsFrom(property.expression)
+        .flatMap(source => declaredProperties(source, resolver, expanded));
+      if (branches.length === 0) continue;
+      variants = variants.flatMap(base =>
+        branches.map(branch => new Map([...base, ...branch]))
+      );
       continue;
     }
     if (ts.isPropertyAssignment(property)) {
       const name = propertyNameOf(property.name);
-      if (name) entries.set(name, !isDefinitelyNothing(property.initializer));
+      if (name) setOnEach(name, !isDefinitelyNothing(property.initializer));
       continue;
     }
     // A shorthand entry is a different node kind with the same effect:
     // `{ borderBottomColor }` sets the property just as `{ borderBottomColor: c }`
     // does, and a visitor keyed on `PropertyAssignment` alone walks past it.
+    // Its VALUE lives in the binding, so the same definitely-nothing test has to
+    // follow the name to what it was initialised with — otherwise a shorthand
+    // holding `undefined` reads as a declaration React never emits.
     if (ts.isShorthandPropertyAssignment(property)) {
-      entries.set(property.name.text, true);
+      const bound = resolver.valueOf(property.name.text);
+      setOnEach(property.name.text, !(bound && isDefinitelyNothing(bound)));
     }
   }
-  return entries;
+  return variants;
 }
 
 /** An owned inline property this object still declares once it is complete. */
@@ -1447,8 +1501,10 @@ function ownedStyleProperty(
   object: ts.ObjectLiteralExpression,
   resolver: ReturnType<typeof styleResolver>
 ): string | undefined {
-  for (const [name, emits] of declaredProperties(object, resolver)) {
-    if (emits && ownsStyleProperty(slot, name)) return name;
+  for (const variant of declaredProperties(object, resolver)) {
+    for (const [name, emits] of variant) {
+      if (emits && ownsStyleProperty(slot, name)) return name;
+    }
   }
   return undefined;
 }
@@ -1562,6 +1618,27 @@ describe("the tab indicator contract", () => {
     // The trigger draws more than the strip does, and a union would hide that
     // the two are kept apart at all.
     expect(owned.TabsTrigger.size).toBeGreaterThan(owned.TabsList.size);
+  });
+
+  it("leaves an important owned declaration alone, and still reports the rest", () => {
+    // An important owned declaration wins in CSS whatever the caller qualifies
+    // on, so `data-[state=active]:border-b-primary!` must never appear as
+    // displaced by an unimportant caller.
+    //
+    // The class as a whole IS still reported, and that is not a contradiction.
+    // Measured: `hover:border-primary` is a SEPARATE owned declaration, not
+    // important, equally specific (`&:hover` against `&[data-state="active"]`,
+    // one class plus one qualifier each), and emitted FIRST — Tailwind orders it
+    // 0 against 1. Hovering an active tab satisfies both, so the caller does
+    // repaint the underline's hover colour. An earlier version of this case
+    // asserted nothing was reported at all, which was broader than what the
+    // important rule establishes and hid a real displacement.
+    const source = `${IMPORT}<TabsTrigger className="data-[state=active]:border-b-destructive" />`;
+    const reported = violationsIn("probe.tsx", source);
+    expect(reported).not.toEqual([]);
+    for (const violation of reported) {
+      expect(violation.why).not.toContain("border-b-primary!");
+    }
   });
 
   it("decides ownership by where a relative import resolves, not by its spelling", () => {
@@ -1843,6 +1920,22 @@ describe("the tab indicator contract", () => {
       "an alias of a namespace member",
       'import * as UI from "@nextlyhq/ui";\nconst Trigger = UI.TabsTrigger;\n<Trigger className="border-b-0" />',
     ],
+    // A shorthand's value lives in its binding, and a spread branch that emits
+    // is a violation even when a sibling branch clears the same property.
+    [
+      "an owned property emitted by one branch of a conditional spread",
+      'const inherited = active ? { borderBottomColor: "red" } : { borderBottomColor: undefined };\n<TabsTrigger style={{ ...inherited }} />',
+    ],
+    [
+      "the same conditional spread with its branches reversed",
+      'const inherited = active ? { borderBottomColor: undefined } : { borderBottomColor: "red" };\n<TabsTrigger style={{ ...inherited }} />',
+    ],
+    // Equal specificity, emitted later, and a shorthand that replaces the
+    // longhand the primitive sets.
+    [
+      "a shorthand that replaces an owned longhand",
+      '<TabsTrigger className="aria-[controls]:[outline:2px_solid_red]" />',
+    ],
     [
       "a destructured namespace member",
       'import * as UI from "@nextlyhq/ui";\nconst { TabsTrigger: Trigger } = UI;\n<Trigger className="border-b-0" />',
@@ -1967,12 +2060,6 @@ describe("the tab indicator contract", () => {
     ],
     ["a type size on hover", '<TabsTrigger className="hover:text-sm" />'],
     ["text alignment", '<TabsTrigger className="text-center" />'],
-    // An important owned declaration wins in CSS whatever the caller qualifies
-    // on, so a caller that cannot repaint the indicator must not be reported.
-    [
-      "an unimportant caller against an important owned colour",
-      '<TabsTrigger className="data-[state=active]:border-b-destructive" />',
-    ],
     // `border-b-2` is a WIDTH utility. Expanding it into every bottom longhand
     // made it claim the colour too, and an unqualified colour then read as
     // displacing a width it never touches.
@@ -2017,6 +2104,22 @@ describe("the tab indicator contract", () => {
     [
       "a variant that cannot apply at the same time as the owned rule",
       '<TabsTrigger className="[&:not(:focus-visible)]:ring-0" />',
+    ],
+    // A selector that contradicts itself can never apply, so it cannot displace
+    // anything however its variants compare.
+    [
+      "a variant contradicted by one it includes",
+      '<TabsTrigger className="focus-visible:[&:not(:focus-visible)]:ring-0" />',
+    ],
+    // React emits nothing for a shorthand whose binding holds nothing.
+    [
+      "a shorthand bound to undefined",
+      "const borderBottomColor = undefined;\n<TabsTrigger style={{ borderBottomColor }} />",
+    ],
+    // `cn` never receives the second string.
+    [
+      "a class literal behind a statically false guard",
+      '<TabsTrigger className={cn("w-full", false && "border-b-0")} />',
     ],
     [
       "a spread whose owned property the object then clears",
