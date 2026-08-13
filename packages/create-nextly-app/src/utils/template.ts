@@ -682,9 +682,29 @@ export const NATIVE_BUILD_DEPENDENCIES = [
  *     reads the `pnpm` field from package.json at all.
  *   - pnpm 10.6+ reads `onlyBuiltDependencies` (an array; deprecated in 11).
  *
- * Both keys are emitted so native deps compile on any pnpm 10.6+/11. pnpm 9
- * runs build scripts by default and ignores this file; npm/yarn ignore it too,
- * so it is safe to ship in every scaffold regardless of package manager.
+ * Both keys are emitted so native deps compile on any pnpm 10.6+/11. npm and
+ * yarn ignore the file entirely, and pnpm 9 runs build scripts by default, so
+ * it is safe to ship in every scaffold regardless of package manager.
+ *
+ * `packages` is emitted for pnpm 9 specifically. Before pnpm repurposed this
+ * file as the general settings home, its mere presence declared a workspace
+ * and a missing `packages` key was fatal:
+ *
+ *   ERR_PNPM_INVALID_WORKSPACE_CONFIGURATION  packages field missing or empty
+ *
+ * so a scaffold shipping the allowlist alone could not be installed at all on
+ * those versions.
+ *
+ * Measured, installing the file exactly as generated: 8.15.9, 9.0.0, 9.0.6,
+ * 9.1.0, 9.2.0 and 9.3.0 all refuse it; 9.4.0, 9.7.0, 9.15.9, 10.5.2, 10.6.1,
+ * 10.18.3 and 11.0.0 all accept it with or without the key. So the affected
+ * range is pnpm 8 through 9.3 — which includes the 9.0.0 this repository pins,
+ * and therefore the pnpm a contributor following the setup instructions has.
+ *
+ * The empty list is the honest value — a scaffolded app has no workspace
+ * members — and it leaves `pnpm add` behaving normally, which declaring the
+ * project's own root as a member would also have done but with a claim about
+ * the layout that is not true.
  */
 export function generatePnpmWorkspaceYaml(): string {
   const allowBuilds = NATIVE_BUILD_DEPENDENCIES.map(
@@ -700,7 +720,14 @@ export function generatePnpmWorkspaceYaml(): string {
     "# compiled binding (sqlite apps crash at boot) and sharp/esbuild degrade.\n" +
     "#\n" +
     "# pnpm 11+ reads `allowBuilds`; pnpm 10.6+ reads `onlyBuiltDependencies`.\n" +
-    "# npm, yarn, and pnpm 9 ignore this file (they run build scripts by default).\n" +
+    "# npm and yarn ignore this file; pnpm 9 needs neither key, because it runs\n" +
+    "# build scripts by default.\n" +
+    "#\n" +
+    "# It does still READ the file, which is what the empty `packages` list is\n" +
+    "# for: through pnpm 9.3 the presence of this file declares a workspace, and\n" +
+    "# a missing `packages` key fails the install outright. This app has no\n" +
+    "# workspace members.\n" +
+    "packages: []\n" +
     `allowBuilds:\n${allowBuilds}\n` +
     `onlyBuiltDependencies:\n${onlyBuilt}\n`
   );
