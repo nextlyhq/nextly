@@ -57,6 +57,7 @@
  */
 
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -588,7 +589,11 @@ function expandDeclarations(
 ): Map<string, string> {
   const flat = new Map<string, string>();
   for (const [property, value] of declarations) {
-    for (const longhand of expandsTo(property)) flat.set(longhand, value);
+    // The value decides ownership for some properties, so it is passed rather
+    // than only recorded — a `border-image-source: none` names the property
+    // while supplying no image at all.
+    for (const longhand of expandsTo(property, value))
+      flat.set(longhand, value);
   }
   return flat;
 }
@@ -742,7 +747,39 @@ function excludeEachOther(whole: string, other: string): boolean {
   ) {
     return true;
   }
-  return attributesConflict(a, b);
+  if (attributesConflict(a, b)) return true;
+  return complementaryStates(a, b);
+}
+
+/**
+ * Pseudo-classes that describe the two sides of one state.
+ *
+ * An element is on exactly one side of each, so a rule qualified by one can
+ * never apply beside a rule qualified by the other. Written positively, which
+ * is why neither the negation test nor the attribute test above sees them:
+ * `enabled:` and `disabled:` contradict each other without a `:not()` or an
+ * attribute value anywhere in either selector.
+ */
+const COMPLEMENTARY_STATES = [
+  [":enabled", ":disabled"],
+  [":read-only", ":read-write"],
+  [":required", ":optional"],
+  [":valid", ":invalid"],
+  [":in-range", ":out-of-range"],
+];
+
+function complementaryStates(a: string, b: string): boolean {
+  // Matched on a boundary so `:enabled` is not found inside a longer name, and
+  // read outside any negation, which the test above already compares.
+  const has = (selector: string, state: string): boolean =>
+    new RegExp(`${state}(?![a-z-])`).test(
+      selector.replace(/:not\([^)]*\)/g, "")
+    );
+  return COMPLEMENTARY_STATES.some(
+    ([one, other]) =>
+      (has(a, one ?? "") && has(b, other ?? "")) ||
+      (has(a, other ?? "") && has(b, one ?? ""))
+  );
 }
 
 /**
@@ -1058,7 +1095,7 @@ function compiled(bare: string): string | null {
 function propertiesOfUncached(cls: string): string[] {
   const css = compiled(cls);
   if (css == null) return [];
-  return [...new Set(setBy(css).flatMap(expandsTo))];
+  return [...new Set(setBy(css).flatMap(property => expandsTo(property)))];
 }
 
 const propertiesOf = perClass(propertiesOfUncached);
@@ -1078,7 +1115,11 @@ const propertiesOf = perClass(propertiesOfUncached);
 function reachedByUncached(cls: string): string[] {
   const css = compiled(cls);
   if (css == null) return [];
-  return [...new Set([...setBy(css), ...readBy(css)].flatMap(expandsTo))];
+  return [
+    ...new Set(
+      [...setBy(css), ...readBy(css)].flatMap(property => expandsTo(property))
+    ),
+  ];
 }
 
 const reachedBy = perClass(reachedByUncached);
@@ -1153,7 +1194,7 @@ const BORDER_IMAGE = /^border-image(?:-source)?$/;
 const ANY_CORNER = /^border(-[a-z]+)*-radius$/;
 const BOTTOM_OFFSET = /^margin(-(bottom|block-end|block|y))?$/;
 
-function expandsTo(property: string): string[] {
+function expandsTo(property: string, value?: string): string[] {
   const kebab = property.replace(/([A-Z])/g, "-$1").toLowerCase();
   // A border IMAGE replaces what the border draws, on every edge it covers.
   // Checked before the shorthand split because it is not one: `border-image`
@@ -1161,6 +1202,12 @@ function expandsTo(property: string): string[] {
   // stood for itself — a name that intersects nothing the primitive owns, while
   // a gradient painted straight over the underline on every tab.
   if (BORDER_IMAGE.test(kebab)) {
+    // `none` is the initial value: it supplies no image, so the primitive's
+    // ordinary border renders exactly as it did. Owning the property whatever
+    // it holds reported the spelling that explicitly draws NOTHING.
+    if (value !== undefined && value.trim().toLowerCase() === "none") {
+      return [kebab];
+    }
     return BORDER_ASPECTS.map(aspect => `border-bottom-${aspect}`);
   }
   const border = BORDER_PROPERTY.exec(kebab);
@@ -1200,12 +1247,16 @@ function expandsTo(property: string): string[] {
  */
 const RESETS_EVERYTHING = "all";
 
-function ownsStyleProperty(slot: string, property: string): boolean {
+function ownsStyleProperty(
+  slot: string,
+  property: string,
+  value?: string
+): boolean {
   const owned = ownedCssProperties()[slot];
   if (!owned) return false;
   const kebab = property.replace(/([A-Z])/g, "-$1").toLowerCase();
   if (kebab === RESETS_EVERYTHING) return owned.size > 0;
-  return expandsTo(property).some(p => owned.has(p));
+  return expandsTo(property, value).some(p => owned.has(p));
 }
 
 /**
@@ -1251,12 +1302,23 @@ const CALL_SITE_EXTENSIONS = [".tsx", ".jsx", ".js"] as const;
  * tree would drop it before the extension check ran — a false green produced by
  * the very list meant to keep the scan honest.
  */
-const GENERATED_DIRECTORIES = new Set([
-  "node_modules",
-  "dist",
-  ".turbo",
-  ".next",
-]);
+const GENERATED_DIRECTORIES = new Set(["node_modules", ".turbo", ".next"]);
+
+/**
+ * `dist` is pruned only where it is a package's build output.
+ *
+ * It does not belong in the list above, by that list's own rule: `dist` is an
+ * output convention at a particular location AND an ordinary Next.js route
+ * segment, so `app/dist/page.js` is a real call site and pruning by basename
+ * dropped it before the extension check ever ran — the same failure the list
+ * documents for `app/build/page.js`.
+ *
+ * What separates the two is not the name but the position: a build directory
+ * sits beside the `package.json` of the package it was built from.
+ */
+function isBuildOutput(directory: string, parent: string): boolean {
+  return directory === "dist" && existsSync(join(parent, "package.json"));
+}
 
 function isCallSite(name: string): boolean {
   return CALL_SITE_EXTENSIONS.some(extension => name.endsWith(extension));
@@ -1265,7 +1327,7 @@ function isCallSite(name: string): boolean {
 function sourceFiles(dir: string, found: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const name = entry.name;
-    if (GENERATED_DIRECTORIES.has(name)) continue;
+    if (GENERATED_DIRECTORIES.has(name) || isBuildOutput(name, dir)) continue;
     const full = join(dir, name);
     if (entry.isDirectory()) {
       // `__tests__` is skipped deliberately: a test may construct violating
@@ -1708,6 +1770,9 @@ function styleResolver(
    */
   const alwaysRuns = (node: ts.Node, unit: ts.Node | undefined): boolean => {
     for (let at = node.parent; at && at !== unit; at = at.parent) {
+      // A `do` BODY runs before its condition is ever asked, so it executes at
+      // least once however the condition later answers.
+      if (ts.isDoStatement(at)) continue;
       // A `for` INITIALIZER runs once before the condition is ever asked, so it
       // is unconditional even though the body beside it is not.
       if (
@@ -1866,23 +1931,28 @@ function styleResolver(
       .filter(write => !write.sameUnit)
       .map(write => write.value);
     const initializer = bindingOf(identifier)?.initializer;
-    let held: ts.Expression[] = initializer ? [initializer] : [];
+    // A `var` is hoisted but its INITIALIZER runs where it is written, so an
+    // element evaluated above it receives `undefined`. Treated as a write at
+    // its own position, which for `let` and `const` changes nothing: reading
+    // either before its declaration is a temporal-dead-zone error, so the case
+    // cannot arise in code that runs.
+    const initializerReaches =
+      !initializer ||
+      executionUnitOf(initializer) !== executionUnitOf(identifier) ||
+      initializer.getStart() < identifier.getStart();
+    let held: ts.Expression[] =
+      initializer && initializerReaches ? [initializer] : [];
     for (const write of writes.filter(write => write.sameUnit)) {
       if (write.straightLine) {
         // Everything before is a value the binding has stopped holding.
         held = [write.value];
         continue;
       }
-      // A `??=` whose current value is already there cannot fire, so its right
-      // side is not a value the binding can hold — the ordinary way to fill a
-      // style object only when nothing filled it yet.
-      if (
-        write.operator === ts.SyntaxKind.QuestionQuestionEqualsToken &&
-        held.length > 0 &&
-        held.every(isDefinitelyPresent)
-      ) {
-        continue;
-      }
+      // A logical assignment whose test the current value already settles
+      // cannot fire, so its right side is not a value the binding can hold —
+      // filling a style object only when nothing filled it yet is the ordinary
+      // reason to write one.
+      if (held.length > 0 && cannotFire(write.operator, held)) continue;
       held = [...held, write.value];
     }
     return { values: [...held, ...elsewhere], exhaustive: true };
@@ -2076,6 +2146,67 @@ function staticKeyOf(
 }
 
 /**
+ * The string a value is written as, when it is written as one.
+ *
+ * Some properties are owned or not depending on what they hold, so the value
+ * travels with the name rather than being discarded at the key.
+ */
+function staticStringOf(expression: ts.Expression): string | undefined {
+  const inner = withoutTypeWrappers(expression);
+  if (ts.isStringLiteral(inner) || ts.isNoSubstitutionTemplateLiteral(inner)) {
+    return inner.text;
+  }
+  return undefined;
+}
+
+/**
+ * What a value is worth in a boolean test, when that is decidable.
+ *
+ * `undefined` for anything whose truthiness depends on what it holds at
+ * runtime, which keeps the write it guards in play.
+ */
+function staticTruthiness(value: ts.Expression): boolean | undefined {
+  const inner = withoutTypeWrappers(value);
+  if (
+    ts.isObjectLiteralExpression(inner) ||
+    ts.isArrayLiteralExpression(inner)
+  ) {
+    return true;
+  }
+  if (ts.isStringLiteral(inner) || ts.isNoSubstitutionTemplateLiteral(inner)) {
+    return inner.text.length > 0;
+  }
+  if (ts.isNumericLiteral(inner)) return Number(inner.text) !== 0;
+  if (inner.kind === ts.SyntaxKind.TrueKeyword) return true;
+  if (inner.kind === ts.SyntaxKind.FalseKeyword) return false;
+  if (inner.kind === ts.SyntaxKind.NullKeyword) return false;
+  if (ts.isIdentifier(inner) && inner.text === "undefined") return false;
+  return undefined;
+}
+
+/**
+ * Whether a logical assignment's test is already settled by what is held.
+ *
+ * Each operator writes only when its own test passes, so a value that settles
+ * that test the other way makes the write unreachable: `??=` writes when the
+ * current value is nullish, `||=` when it is falsy, `&&=` when it is truthy.
+ * Every held value has to agree, since any one of them reaching the write is
+ * enough for it to run.
+ */
+function cannotFire(operator: ts.SyntaxKind, held: ts.Expression[]): boolean {
+  if (operator === ts.SyntaxKind.QuestionQuestionEqualsToken) {
+    return held.every(isDefinitelyPresent);
+  }
+  if (operator === ts.SyntaxKind.BarBarEqualsToken) {
+    return held.every(value => staticTruthiness(value) === true);
+  }
+  if (operator === ts.SyntaxKind.AmpersandAmpersandEqualsToken) {
+    return held.every(value => staticTruthiness(value) === false);
+  }
+  return false;
+}
+
+/**
  * Whether a value is certainly neither `null` nor `undefined`.
  *
  * Narrow on purpose: it decides whether a `??=` can fire, and answering "yes"
@@ -2126,6 +2257,15 @@ function isDefinitelyNothing(
   if (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) {
     return value.text === "";
   }
+  // React emits no declaration for a boolean either, verified the same way:
+  // `{ borderBottomColor: false }` and `true` both render an element with no
+  // `style` attribute at all.
+  if (
+    value.kind === ts.SyntaxKind.TrueKeyword ||
+    value.kind === ts.SyntaxKind.FalseKeyword
+  ) {
+    return true;
+  }
   if (value.kind === ts.SyntaxKind.NullKeyword) return true;
   // `void 0` is the other spelling of the same intent.
   return ts.isVoidExpression(value);
@@ -2162,6 +2302,19 @@ function withoutTypeWrappers(expression: ts.Expression): ts.Expression {
 }
 
 /**
+ * One property an object declares: whether React emits it, and what it holds.
+ *
+ * The value travels with the name because ownership is not always decided by
+ * the property alone — `border-image-source` replaces the border when it names
+ * an image and leaves it alone when it names `none`.
+ */
+interface DeclaredProperty {
+  emits: boolean;
+  /** The value when it is written as a literal string, else undefined. */
+  value: string | undefined;
+}
+
+/**
  * What an object literal actually declares, after spreads and overwrites.
  *
  * An object is built in source order and a later key replaces an earlier one,
@@ -2176,7 +2329,7 @@ function declaredProperties(
   object: ts.ObjectLiteralExpression,
   resolver: ReturnType<typeof styleResolver>,
   onPath = new Set<ts.Node>()
-): Array<Map<string, boolean>> {
+): Array<Map<string, DeclaredProperty>> {
   // A LIST of possible results, not one. A spread whose source is chosen at
   // runtime — `active ? { borderBottomColor: c } : {}` — produces different
   // objects on different renders, and merging them into a single map let the
@@ -2193,9 +2346,9 @@ function declaredProperties(
   if (onPath.has(object)) return [new Map()];
   onPath.add(object);
 
-  let variants: Array<Map<string, boolean>> = [new Map()];
-  const setOnEach = (name: string, emits: boolean): void => {
-    for (const variant of variants) variant.set(name, emits);
+  let variants: Array<Map<string, DeclaredProperty>> = [new Map()];
+  const setOnEach = (name: string, state: DeclaredProperty): void => {
+    for (const variant of variants) variant.set(name, state);
   };
 
   for (const property of object.properties) {
@@ -2211,7 +2364,12 @@ function declaredProperties(
     }
     if (ts.isPropertyAssignment(property)) {
       const name = propertyNameOf(property.name, resolver);
-      if (name) setOnEach(name, emitsValue(property.initializer, resolver));
+      if (name) {
+        setOnEach(name, {
+          emits: emitsValue(property.initializer, resolver),
+          value: staticStringOf(property.initializer),
+        });
+      }
       continue;
     }
     // A shorthand entry is a different node kind with the same effect:
@@ -2219,7 +2377,10 @@ function declaredProperties(
     // does, and a visitor keyed on `PropertyAssignment` alone walks past it. Its
     // value lives in the binding, which `emitsValue` follows.
     if (ts.isShorthandPropertyAssignment(property)) {
-      setOnEach(property.name.text, emitsValue(property.name, resolver));
+      setOnEach(property.name.text, {
+        emits: emitsValue(property.name, resolver),
+        value: undefined,
+      });
       continue;
     }
     // A getter is a third spelling again: React reads the property and emits
@@ -2228,7 +2389,7 @@ function declaredProperties(
     // as emitting.
     if (ts.isGetAccessorDeclaration(property)) {
       const name = propertyNameOf(property.name, resolver);
-      if (name) setOnEach(name, true);
+      if (name) setOnEach(name, { emits: true, value: undefined });
     }
   }
   onPath.delete(object);
@@ -2286,8 +2447,9 @@ function ownedStyleProperty(
   resolver: ReturnType<typeof styleResolver>
 ): string | undefined {
   for (const variant of declaredProperties(object, resolver)) {
-    for (const [name, emits] of variant) {
-      if (emits && ownsStyleProperty(slot, name)) return name;
+    for (const [name, state] of variant) {
+      if (state.emits && ownsStyleProperty(slot, name, state.value))
+        return name;
     }
   }
   return undefined;
@@ -3179,6 +3341,46 @@ describe("the tab indicator contract", () => {
       "an owned property reset in a loop initializer",
       'let style: Record<string, string> = { borderBottomColor: "red" };\nfor (style = {}; false; ) {\n  break;\n}\n<TabsTrigger style={style} />',
     ],
+    // A logical assignment whose test the current value already settles never
+    // runs, so its right side is not what the element receives.
+    [
+      "an owned property behind an or-assignment that cannot fire",
+      'let style = {};\nstyle ||= { borderBottomColor: "red" };\n<TabsTrigger style={style} />',
+    ],
+    [
+      "an owned property behind an and-assignment that cannot fire",
+      'let style = null;\nstyle &&= { borderBottomColor: "red" };\n<TabsTrigger style={style} />',
+    ],
+    // React emits no declaration for a boolean, the same as for an empty
+    // string: both render an element carrying no `style` attribute at all.
+    [
+      "an owned property set to a boolean",
+      "<TabsTrigger style={{ borderBottomColor: false }} />",
+    ],
+    // One element cannot be both enabled and disabled, so these rules never
+    // apply together however the cascade ranks them.
+    [
+      "a rule qualified by the complement of an owned state",
+      '<TabsTrigger className="enabled:opacity-50" />',
+    ],
+    // `none` is the initial value of `border-image-source`: it supplies no
+    // image, so the primitive's ordinary bottom border renders unchanged.
+    [
+      "a border image explicitly set to none",
+      '<TabsTrigger style={{ borderImageSource: "none" }} />',
+    ],
+    // A `do` body runs before its condition is ever asked, so this reset
+    // certainly happened and the earlier value is gone.
+    [
+      "an owned property reset in a do-while body",
+      'let style: Record<string, string> = { borderBottomColor: "red" };\ndo {\n  style = {};\n} while (false);\n<TabsTrigger style={style} />',
+    ],
+    // A `var` is hoisted but its INITIALIZER runs where it is written, so an
+    // element evaluated above it receives `undefined`.
+    [
+      "an owned property in a var initializer written below the element",
+      '<TabsTrigger style={style} />;\nvar style = { borderBottomColor: "red" };',
+    ],
   ])("does not report %s", (_label, body) => {
     // The complement, and the reason this is a contract rather than a ban. A
     // check that flags a documented example or a legitimate layout class gets
@@ -3277,10 +3479,30 @@ describe("which files the call-site scan reads", () => {
       mkdirSync(join(dir, "build"));
       writeFileSync(join(dir, "build", "page.js"), "");
 
+      // `dist` is the same shape and was pruned by name anyway. Both spellings
+      // are here because they fail apart: this one has no `package.json`
+      // beside it, so it is a route rather than build output.
+      mkdirSync(join(dir, "dist"));
+      writeFileSync(join(dir, "dist", "page.js"), "");
+
+      // The same name WITH a manifest beside it is a package's build output,
+      // and stays pruned. Without this the fix reads as "never prune dist",
+      // which would walk every built package in the repository.
+      mkdirSync(join(dir, "pkg"));
+      writeFileSync(join(dir, "pkg", "package.json"), "{}");
+      mkdirSync(join(dir, "pkg", "dist"));
+      writeFileSync(join(dir, "pkg", "dist", "bundle.js"), "");
+
       const found = sourceFiles(dir).map(path => path.slice(dir.length + 1));
 
       expect(found.sort()).toEqual(
-        ["a.tsx", "b.jsx", "d.js", join("build", "page.js")].sort()
+        [
+          "a.tsx",
+          "b.jsx",
+          "d.js",
+          join("build", "page.js"),
+          join("dist", "page.js"),
+        ].sort()
       );
     } finally {
       rmSync(dir, { recursive: true, force: true });
