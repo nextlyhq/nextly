@@ -292,6 +292,25 @@ function describe(value: unknown): string {
 const MAX_VALUE_DEPTH = 512;
 
 /**
+ * How many parts a value may have before it is refused unexamined.
+ *
+ * A machine limit like {@link MAX_WALKABLE_DEPTH}, not a product one. The domain
+ * walks below visit every key and every element, so a shallow object with
+ * millions of enumerable properties costs a full traversal — and an in-process
+ * or agent-written op can carry one. The byte cap would refuse such a value, but
+ * only after these walks have already paid for it, which is the wrong order for
+ * a guard whose job is to reject.
+ *
+ * Set well above `DEFAULT_LIMITS.maxBytes`, which is 2 MiB: every part
+ * contributes at least one byte to serialized JSON, so a value with more parts
+ * than this has more bytes than any default-configured document may hold, and
+ * refusing it unexamined agrees with the answer a full walk would have reached.
+ * A site that raises `maxBytes` past this is choosing a document larger than the
+ * editor will edit, which the machine caps already say elsewhere.
+ */
+const MAX_VALUE_PARTS = 4 * 1024 * 1024;
+
+/**
  * How deep a node TREE may nest before the engine's helpers cannot walk it.
  *
  * A machine limit, not a product one: `limits.maxDepth` is a rule a site may
@@ -387,7 +406,12 @@ function isJsonValue(value: unknown): boolean {
     { value, depth: 1 },
   ];
 
+  // Bounded as well as iterative. Depth is not the only way a value gets too
+  // big to examine: a SHALLOW object with millions of properties costs a full
+  // traversal here, before any cap has had the chance to refuse it.
+  let parts = 0;
   while (pending.length > 0) {
+    if (parts++ > MAX_VALUE_PARTS) return false;
     const entry = pending.pop();
     if (entry === undefined) break;
     if (entry.exiting !== undefined) {
@@ -456,8 +480,13 @@ function isArrayIndex(key: string): boolean {
 }
 
 function hasOnlyJsonOwnKeys(value: object): boolean {
+  // Counted while enumerating, for the reason {@link MAX_VALUE_PARTS} exists:
+  // `Reflect.ownKeys` on an object with millions of properties materialises
+  // them all, and the byte cap that would refuse such a value has not run yet.
+  let parts = 0;
   if (Array.isArray(value)) {
     for (const key of Reflect.ownKeys(value)) {
+      if (parts++ > MAX_VALUE_PARTS) return false;
       // `length` is an own property of every array and is never serialized as
       // a member, so it is the one key that is expected rather than lost.
       if (key === "length") continue;
@@ -474,6 +503,7 @@ function hasOnlyJsonOwnKeys(value: object): boolean {
     return true;
   }
   for (const key of Reflect.ownKeys(value)) {
+    if (parts++ > MAX_VALUE_PARTS) return false;
     if (typeof key !== "string") return false;
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (descriptor === undefined || !descriptor.enumerable) return false;

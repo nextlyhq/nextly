@@ -356,6 +356,24 @@ describe("an op that cannot apply", () => {
     );
   });
 
+  it("refuses a value with more parts than any cap allows, unexamined", () => {
+    // Depth is not the only way a value gets too big to examine. A SHALLOW
+    // object with millions of enumerable properties costs a full traversal in
+    // the domain walks, and the byte cap that would refuse it has not run yet —
+    // so the guard pays for the value before deciding to reject it.
+    //
+    // Five million keys is past `MAX_VALUE_PARTS`, and every part contributes at
+    // least one byte to serialized JSON, so this value exceeds any default
+    // document cap too. Refusing it unexamined agrees with the answer a full
+    // walk would have reached.
+    const wide: Record<string, number> = {};
+    for (let i = 0; i < 5_000_000; i += 1) wide[`k${String(i)}`] = 1;
+
+    expect(() =>
+      applyOp(doc(), { kind: "update", id: "a", patch: { props: wide } })
+    ).toThrow(OpError);
+  });
+
   it("refuses an oversized edit without serializing it first", () => {
     // OBSERVED, not timed. A duration comparison answers "was it fast", which a
     // serializing implementation can satisfy on a lucky machine and which says
