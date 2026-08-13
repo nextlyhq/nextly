@@ -2170,6 +2170,38 @@ describe("an inverse that names a parent held twice", () => {
     ).not.toThrow();
   }, 60_000);
 
+  it("judges the envelope's fields on one shared budget", () => {
+    // Two envelope fields, each under the parts ceiling and together over it.
+    // A fresh budget per field accepts them and pays the full walk for each —
+    // the cost the ceiling exists to bound — and leaves the envelope answering
+    // a different question from the forest, which has shared its budget since
+    // the aggregate check was introduced.
+    const half = 2_500_000;
+    const document = {
+      ...doc(),
+      settings: Array.from({ length: half }, () => 1),
+      assets: Array.from({ length: half }, () => 1),
+    } as unknown as BlockDocument;
+
+    // NOT SEPARATING, and said so rather than left to read as proof. Measured:
+    // this document is refused with per-field budgets restored too, both at the
+    // default caps and with `maxBytes` raised, so something earlier in the walk
+    // rejects it and the budget is never the deciding check. I did not find a
+    // fixture where the two answers differ.
+    //
+    // Kept because the assertion is true and cheap, and because the shared
+    // budget is what makes the envelope answer the same question as the forest.
+    // The change is argued from the code — one boundary shared a budget, the
+    // other did not — not from this green.
+    expect(() =>
+      applyOp(
+        document,
+        { kind: "remove", id: "a" },
+        { maxDepth: 10, maxNodes: 100, maxBytes: Number.MAX_SAFE_INTEGER }
+      )
+    ).toThrow(OpError);
+  }, 60_000);
+
   it("refuses a cap that cannot decide anything", () => {
     // Every cap here is a `>` comparison and every comparison against `NaN` is
     // false, so one non-finite limit does not loosen a cap — it removes it, and
