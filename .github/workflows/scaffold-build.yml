@@ -275,3 +275,24 @@ jobs:
             echo "the build ran the Google font loader, which needs the network"
             exit 1
           fi
+
+      # Installing once is not the whole of a package manager's job. Shipping
+      # `pnpm-workspace.yaml` for the build allowlist makes the project a workspace ROOT on
+      # pnpm 9, and pnpm refuses `pnpm add` into a workspace root without `-w`
+      # (ERR_PNPM_ADDING_TO_ROOT) — so a scaffold can install cleanly and still refuse the
+      # first thing a user does with it. Text assertions over the generated config cannot
+      # see that; only running the command can.
+      - name: Check the scaffold accepts a new dependency
+        if: matrix.pm == 'pnpm'
+        shell: bash
+        run: |
+          cd /tmp/scaffold-build/scaffolded-app
+          pnpm add is-odd --ignore-scripts
+          # `pnpm add` exiting 0 is the assertion; this is the control that it did the work.
+          # A version that resolved to nothing, or an add that no-opped, would otherwise pass
+          # on the exit code alone.
+          node -e '
+            const deps = require("./package.json").dependencies || {};
+            if (!deps["is-odd"]) { console.error("pnpm add exited 0 but added nothing"); process.exit(1); }
+            console.log("added is-odd", deps["is-odd"]);
+          '
