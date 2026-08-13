@@ -129,13 +129,22 @@ export async function measureShellRender(
     //
     // A colour carrying neither separator is opaque. `alpha` stays null only
     // when there is no colour to read at all, which callers treat as unknown.
+    //
+    // `none` is an alpha too, and a transparent one. A modern colour may carry
+    // a MISSING component, which Chromium preserves through the computed value
+    // as the keyword — `oklch(0.7 0.1 200 / none)`. Outside interpolation a
+    // missing component behaves as zero, and it draws nothing: composited over
+    // white it measures `rgb(255, 255, 255)`, identical to `/ 0`. A
+    // numbers-only pattern leaves it unmatched, which this function would
+    // otherwise read as "no alpha present" and therefore as fully opaque.
     const parseAlpha = (colour: string): number | null => {
       const raw =
-        /\/\s*([\d.]+%?)\s*\)\s*$/.exec(colour)?.[1] ??
+        /\/\s*(none|[\d.]+%?)\s*\)\s*$/.exec(colour)?.[1] ??
         /^rgba\(\s*[^,]+,\s*[^,]+,\s*[^,]+,\s*([\d.]+%?)\s*\)$/.exec(
           colour
         )?.[1];
       if (raw === undefined) return 1;
+      if (raw === "none") return 0;
       return raw.endsWith("%") ? Number(raw.slice(0, -1)) / 100 : Number(raw);
     };
     const alpha = background === "" ? null : parseAlpha(background);

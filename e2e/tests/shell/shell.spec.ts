@@ -325,7 +325,34 @@ test.describe("the unpainted predicate", () => {
     // separates "handles the slash form" from "handles oklch".
     await page.setContent(chromeWith("color(srgb 1 0 0 / 0)"));
 
-    expect(isUnpainted(await measureShellRender(page))).toBe(true);
+    const measurement = await measureShellRender(page);
+
+    // The fixture has to REACH the mechanism. A browser that rejected this
+    // declaration would leave the initial background — `rgba(0, 0, 0, 0)` —
+    // which is also unpainted, so the verdict below would be identical while
+    // no `color()` value was ever parsed. Asserting the serialization survived
+    // is what separates the two.
+    expect(measurement.background).toContain("color(");
+    expect(isUnpainted(measurement)).toBe(true);
+  });
+
+  test("reads a MISSING alpha as transparent, not as absent", async ({
+    page,
+  }) => {
+    // `none` is a valid alpha and it draws nothing: outside interpolation a
+    // missing component behaves as zero, and this composites over white to
+    // `rgb(255, 255, 255)` exactly as `/ 0` does. It is the case a
+    // numbers-only pattern silently reclassifies, because an unmatched alpha
+    // is indistinguishable from a colour that carries no alpha at all.
+    await page.setContent(chromeWith("oklch(0.7 0.1 200 / none)"));
+
+    const measurement = await measureShellRender(page);
+
+    // Same reasoning as above: without this the test passes on a browser that
+    // dropped the declaration entirely.
+    expect(measurement.background).toContain("none");
+    expect(measurement.backgroundAlpha).toBe(0);
+    expect(isUnpainted(measurement)).toBe(true);
   });
 
   test("sees a zero-alpha non-black legacy colour as unpainted", async ({
