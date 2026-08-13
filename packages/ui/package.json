@@ -65,11 +65,12 @@
   ],
   "files": [
     "dist",
-    "docs"
+    "docs",
+    "!dist/metafile-*.json"
   ],
   "scripts": {
     "build": "pnpm build:js && node scripts/build-css.mjs",
-    "build:js": "rimraf dist && tsup && tsup --config tsup.server-safe.config.ts && node scripts/check-client-directive.mjs",
+    "build:js": "rimraf dist && tsup && tsup --config tsup.server-safe.config.ts && node scripts/check-client-directive.mjs && node scripts/check-server-safe-artifacts.mjs",
     "build:css": "node scripts/build-css.mjs",
     "dev": "tsup --watch & tsup --config tsup.server-safe.config.ts --watch & wait",
     "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
@@ -82,7 +83,7 @@
     "clean": "rimraf dist"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
   },
   "peerDependencies": {
     "lucide-react": ">=0.400.0",

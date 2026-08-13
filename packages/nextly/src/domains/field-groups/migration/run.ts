@@ -42,7 +42,6 @@ import {
   hashManifest,
   hashRegistryIdentity,
   MIGRATION_TARGET,
-  tableRenamesOf,
   type ManifestEntry,
   type RegistryRow,
 } from "./manifest";
@@ -145,7 +144,8 @@ export interface RunMigrationArgs {
    * direction that matters: a staging database restored from production carries the same content
    * as production.
    *
-   * A dry run does not require it, because a dry run writes nothing.
+   * A dry run does not require it, because a dry run writes no content and records no marker.
+   * It is not read-only — see `dryRun` — but nothing it touches is a thing a backup would restore.
    */
   backupConfirmed?: boolean;
 }
@@ -173,7 +173,8 @@ export async function runFieldGroupMigration(
   // resumed run, already read a marker; a caller who forgot the acknowledgement would be told so
   // only after this had interfered with whatever else was trying to change schema.
   //
-  // A dry run is exempt because it writes nothing, and exempting it is what makes the gate usable:
+  // A dry run is exempt because it writes no content and records no marker, and exempting it is
+  // what makes the gate usable:
   // the operator's first action is to see the plan, and demanding they assert a backup before they
   // are allowed to look at what would happen teaches them to assert it without meaning it.
   if (!dryRun && !backupConfirmed) {
@@ -370,11 +371,17 @@ export async function runFieldGroupMigration(
       // reports a plan the database has already been scored against rather than one the manifest
       // merely proposes.
       if (dryRun) {
-        // Expanded through the same helper the executable steps use. A localized field group
-        // carries its companion `_locales` rename on the SAME manifest entry, so reading `from`
-        // and `to` off the entry reports one rename where two will happen -- and the one it omits
-        // is the one an operator is least likely to predict.
-        const renames = reconciled.flatMap(entry => tableRenamesOf(entry));
+        // Read from reconciliation rather than re-derived here, and that is the whole of it. The
+        // question "which renames remain" is one catalog resolution per physical table, and
+        // reconciliation has just done exactly that; asking it a second time in a second place is
+        // how the two came to disagree.
+        //
+        // What they disagreed about: a localized field group carries its `_locales` companion on
+        // the SAME entry, so an entry is unsatisfied while EITHER table remains. Filtering on that
+        // reported both when a run torn between the two had already moved the base — during a
+        // resume, which is precisely when an operator is judging whether the remaining work is
+        // safe to continue.
+        const renames = reconciled.flatMap(entry => entry.pendingTableRenames);
         logger.info?.("field-group migration dry run", {
           phase: FIELD_GROUP_MIGRATION_PHASE,
           direction,

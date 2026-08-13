@@ -32,8 +32,27 @@ import {
   tableRenamesOf,
   type ManifestEntry,
   type RegistryRow,
+  type TableRename,
 } from "./manifest";
 import type { MigrationDirection, StorageGeneration } from "./state";
+
+/**
+ * An entry, plus the physical table moves reconciliation found still outstanding.
+ *
+ * 🔴 Carried out of reconciliation rather than recomputed by whoever needs it, and that is the
+ * point of the type. Deciding which renames remain means resolving each source in the catalog, and
+ * reconciliation does exactly that, per physical rename, before collapsing the result into
+ * `satisfied`. Anything that re-derives the question from `satisfied` is asking a COARSER one: an
+ * entry moving a table and its `_locales` companion is unsatisfied while either remains, so a run
+ * torn between the two reports the already-moved table as still to move.
+ *
+ * Required rather than optional, so the answer cannot be reached through a fallback that quietly
+ * reintroduces the coarser derivation. A column entry moves no table and carries an empty list,
+ * which is a real answer rather than a missing one.
+ */
+export type ReconciledEntry = ManifestEntry & {
+  readonly pendingTableRenames: readonly TableRename[];
+};
 
 /** The columns one table carries, as the database reported them. */
 export interface TableColumns {
@@ -80,7 +99,7 @@ export function reconcilePlan(args: {
   run: RunRecord;
   direction: MigrationDirection;
   identifierCase: IdentifierCaseRules;
-}): ManifestEntry[] {
+}): ReconciledEntry[] {
   const { entries, rows, run, direction, identifierCase } = args;
 
   if (run.recorded && run.direction !== direction) {
@@ -126,13 +145,18 @@ export function reconcilePlan(args: {
   return entries.map((entry, index) => {
     const position = index + 1;
     if (entry.kind === "column") {
-      return reconcileColumn(entry, {
-        catalog,
-        columns,
-        otherNames,
-        position,
-        run,
-      });
+      // Attached here rather than threaded through `reconcileColumn`'s four return paths, which
+      // all describe a column and would each have to restate the same empty list.
+      return {
+        ...reconcileColumn(entry, {
+          catalog,
+          columns,
+          otherNames,
+          position,
+          run,
+        }),
+        pendingTableRenames: [],
+      };
     }
     return reconcileRename(entry, catalog, position, run);
   });
@@ -540,7 +564,7 @@ function reconcileRename(
   catalog: CatalogIndex,
   position: number,
   run: RunRecord
-): ManifestEntry {
+): ReconciledEntry {
   // A table entry moves its companion as well as itself, and the two are not
   // always in the same state: MySQL commits each rename separately, so a crash
   // between them leaves the base migrated and the companion still under its old
@@ -548,6 +572,10 @@ function reconcileRename(
   // marking it satisfied on the base alone would let the step skip a companion
   // that is still sitting there.
   let allApplied = true;
+  // Collected from the same resolution that decides `allApplied`, so the two answers come from one
+  // pass over one catalog. The step executes exactly these: it re-resolves each source against a
+  // catalog read at its own turn, and skips the ones already gone.
+  const pendingTableRenames: TableRename[] = [];
 
   for (const rename of tableRenamesOf(entry)) {
     const source = resolveCatalogName(catalog, rename.from);
@@ -573,6 +601,7 @@ function reconcileRename(
           }
         );
       }
+      pendingTableRenames.push(rename);
       allApplied = false;
       continue;
     }
@@ -603,7 +632,9 @@ function reconcileRename(
     });
   }
 
-  return allApplied ? { ...entry, satisfied: true } : entry;
+  return allApplied
+    ? { ...entry, satisfied: true, pendingTableRenames }
+    : { ...entry, pendingTableRenames };
 }
 
 /**

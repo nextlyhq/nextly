@@ -35,6 +35,10 @@
       "types": "./dist/errors/index.d.ts",
       "import": "./dist/errors/index.mjs"
     },
+    "./field-group-type": {
+      "types": "./dist/field-group-type.d.ts",
+      "import": "./dist/field-group-type.mjs"
+    },
     "./field-catalog": {
       "types": "./dist/field-catalog.d.ts",
       "import": "./dist/collections/fields/catalog.mjs"
@@ -195,7 +199,7 @@
     "db:seed:all": "tsx scripts/seed-all.ts"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
   },
   "devDependencies": {
     "@nextlyhq/adapter-mysql": "workspace:*",

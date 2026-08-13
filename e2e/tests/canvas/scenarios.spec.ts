@@ -11,6 +11,7 @@
  */
 import { expect, test } from "@playwright/test";
 
+import { dragUntilTarget } from "./driver";
 import type { ActiveTargetTransition, CanvasDriver } from "./driver";
 import { EXTREME_RATIO_FIXTURE, FLAT_LIST_FIXTURE, seedPage } from "./fixtures";
 import { createPocDriver } from "./poc-driver";
@@ -45,18 +46,6 @@ test.use({ viewport: { width: 2560, height: 1400 } });
  */
 
 /** Step the pointer down until a drop zone becomes active, and report where. */
-async function dragUntilTarget(
-  driver: CanvasDriver,
-  maxSteps = 90
-): Promise<number> {
-  for (let step = 0; step < maxSteps; step++) {
-    await driver.moveBy(0, 8);
-    const active = await driver.readActiveTarget();
-    if (active >= 0) return active;
-  }
-  return -1;
-}
-
 /** Begin a drag from the insert panel and carry the pointer over the canvas. */
 async function startPanelDrag(driver: CanvasDriver) {
   const source = await driver.dragSourceCentre();

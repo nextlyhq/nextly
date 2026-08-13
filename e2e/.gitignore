@@ -1,0 +1,6 @@
+
+# Playwright writes here when the runner is started from a directory
+# other than `e2e/`, which produces results outside the configured
+# `.playwright/results` output dir. Ignored so a mis-invoked run cannot
+# commit its artifacts.
+test-results/

@@ -29,7 +29,7 @@
  */
 
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
-import { MIGRATION_TARGET } from "../migration/manifest";
+import { MIGRATION_TARGET } from "../migration/target";
 
 /**
  * Spellings this key has carried in a RELEASED version, pinned as literals.
@@ -64,12 +64,14 @@ const HISTORICAL_WIRE_TYPE_KEYS = ["_componentType"] as const;
  * most current one. Callers wanting a single spelling want `currentFieldGroupTypeKey`, which says
  * so; indexing this is the same bug as hardcoding.
  */
+const FIELD_GROUP_TYPE_KEY_NAMES = [
+  STORAGE_FORMAT.wireTypeKey,
+  MIGRATION_TARGET.wireTypeKey,
+  ...HISTORICAL_WIRE_TYPE_KEYS,
+] as const;
+
 export const fieldGroupTypeKeys: readonly string[] = Array.from(
-  new Set([
-    STORAGE_FORMAT.wireTypeKey,
-    MIGRATION_TARGET.wireTypeKey,
-    ...HISTORICAL_WIRE_TYPE_KEYS,
-  ])
+  new Set(FIELD_GROUP_TYPE_KEY_NAMES)
 );
 
 /** The spelling new documents are written under. */
@@ -128,9 +130,137 @@ export function clearFieldGroupType(instance: Record<string, unknown>): void {
  * default values, or a row being assembled. A copy would be the safer default in general; here it
  * would silently drop the assignment for every caller that does not use the return value.
  */
-export function writeFieldGroupType(
-  instance: Record<string, unknown>,
-  type: string
+/**
+ * The type a given instance is allowed to be told it is.
+ *
+ * 🔴 A generated field group declares its discriminator as a LITERAL — the generator emits
+ * `_componentType: "hero"` — so a signature taking any `string` lets `writeFieldGroupType(hero,
+ * "cta")` compile, mutate the value at runtime, and leave TypeScript still narrowing it as a hero.
+ * Every discriminated-union branch downstream then routes cta data through hero-only code, and the
+ * compiler agrees with the wrong answer.
+ *
+ * So a declared discriminator constrains the argument to itself, and anything else — a plain
+ * record, a deserialised payload — keeps the unconstrained `string` it needs.
+ */
+type UnionToIntersection<U> = (
+  U extends unknown ? (x: U) => void : never
+) extends (x: infer I) => void
+  ? I
+  : never;
+
+/**
+ * Every spelling a declared discriminator may use, as TYPES.
+ *
+ * 🔴 Derived from the SAME list the runtime read order is built from, and that is the whole point.
+ * Restating the two catalogs here reproduces, in the type system, the convergence bug the comment
+ * on `HISTORICAL_WIRE_TYPE_KEYS` describes: once the current catalog is flipped to the target
+ * spelling the two names coincide, the historical one is absent from the restated union, and a
+ * legacy-generated interface falls through to `string` — re-admitting exactly the retagging these
+ * helpers exist to reject, in the release where nearly every stored document is still legacy.
+ * Deriving makes the two answer for one world rather than two that drift apart on a flip.
+ */
+type FieldGroupTypeKeyName = (typeof FIELD_GROUP_TYPE_KEY_NAMES)[number];
+
+/** The literal a value declares its type as, under whichever spelling it uses. */
+type DeclaredFieldGroupType<T> = T[Extract<keyof T, FieldGroupTypeKeyName>];
+
+/** Whether `T` is a union of more than one member. */
+type IsUnion<T> = [T] extends [UnionToIntersection<T>] ? false : true;
+
+type WritableFieldGroupType<T> = [DeclaredFieldGroupType<T>] extends [never]
+  ? string
+  : [DeclaredFieldGroupType<T>] extends [string]
+    ? // 🔴 A union of tagged instances is REJECTED rather than offered every member's tag. A
+      // dynamic zone is generated as `Hero | Cta`, and a distributive conditional would produce
+      // `"hero" | "cta"` — so retagging a hero as a cta would compile, change only the
+      // discriminator, and leave hero-shaped data sitting behind a cta type. Narrow the value
+      // first; there is no correct tag to write onto a value whose type is still undecided.
+      IsUnion<T> extends true
+      ? never
+      : DeclaredFieldGroupType<T>
+    : string;
+
+/**
+ * Whether an instance is of a given field group, narrowing it when it is.
+ *
+ * The reader alone cannot narrow: it returns `string | undefined`, which has no relationship to
+ * the value, so `switch (readFieldGroupType(block))` leaves a generated `Hero | Cta` union exactly
+ * as wide as it was and every member-specific property inaccessible inside the matching branch.
+ * That pushes callers back to reading the raw key, which is the one thing this module exists to
+ * stop.
+ *
+ * `Extract` falls back to `T` when it matches nothing, so a caller holding a single concrete type,
+ * or a plain record, keeps what it had instead of being narrowed to `never`.
+ */
+export function isFieldGroupType<T, K extends string>(
+  instance: T,
+  type: K
+): instance is NarrowedFieldGroup<T, K> {
+  return readFieldGroupType(instance) === type;
+}
+
+type NarrowedFieldGroup<T, K extends string> = [
+  Extract<T, Record<Extract<keyof T, FieldGroupTypeKeyName>, K>>,
+] extends [never]
+  ? T
+  : Extract<T, Record<Extract<keyof T, FieldGroupTypeKeyName>, K>>;
+
+/** The spellings this version no longer writes, but still reads. */
+type SupersededFieldGroupTypeKey = Exclude<
+  FieldGroupTypeKeyName,
+  typeof currentFieldGroupTypeKey
+>;
+
+/** The literal a value declares under a spelling this version has moved past. */
+type DeclaredUnderSupersededKey<T> = T[Extract<
+  keyof T,
+  SupersededFieldGroupTypeKey
+>];
+
+/**
+ * Marks a value this function would leave describing itself incorrectly.
+ *
+ * 🔴 The refusal is the honest answer rather than a conservative one. Canonicalising DELETES every
+ * other spelling, so a value whose declared type requires a superseded key emerges without a
+ * property its own type still promises: reading it back type-checks as the literal and is
+ * `undefined` at runtime, and no narrowing downstream can catch that because the compiler agrees
+ * with the stale shape. Neither alternative works — writing the superseded spelling instead grows
+ * the legacy set behind a migration that has reported success, and mutating in place cannot be
+ * reflected back to the caller's binding.
+ *
+ * What this rejects is a value typed by a GENERATOR that ran against a different storage format,
+ * which is a stale artefact rather than a legitimate shape, and the fix is to regenerate. Reading
+ * such a value is untouched: `readFieldGroupType` and `isFieldGroupType` handle every spelling,
+ * which is where compatibility with an unmigrated database actually has to live.
+ *
+ * A property carries the explanation because a bare `never` parameter renders as "type 'string' is
+ * not assignable to type 'never'", which names neither the cause nor the remedy.
+ */
+type SupersededSpellingRefusal = {
+  readonly __nextlyRegenerateTypes: "this value declares its field-group type under a superseded key, which writing would delete; regenerate the types for this version";
+};
+
+/**
+ * Nothing, or the refusal, depending on what the value declares.
+ *
+ * The `never` arm is checked first: `Extract` yields `never` for a value declaring no superseded
+ * key, `T[never]` is `never`, and `never extends string` is TRUE — so testing assignability alone
+ * would refuse every well-formed value.
+ *
+ * Applied as `T & SupersededRefusal<T>` rather than as a conditional in the parameter's own
+ * position, because `T` is not inferable from a conditional type and would silently fall back to
+ * its constraint, taking the retagging check down with it. Intersecting keeps `T` inferable from
+ * the argument, and `T & unknown` is `T`, so the permitted case is unchanged.
+ */
+type SupersededRefusal<T> = [DeclaredUnderSupersededKey<T>] extends [never]
+  ? unknown
+  : [DeclaredUnderSupersededKey<T>] extends [string]
+    ? SupersededSpellingRefusal
+    : unknown;
+
+export function writeFieldGroupType<T extends object>(
+  instance: T & SupersededRefusal<T>,
+  type: WritableFieldGroupType<T>
 ): void {
   // Every other spelling goes first, so an instance that arrived carrying the old key leaves
   // carrying only the new one. Assigning without clearing emits BOTH on any instance read back
@@ -138,6 +268,11 @@ export function writeFieldGroupType(
   // one a later reader must disambiguate, and the legacy set stops shrinking as writes happen.
   // Canonicalising on write is what makes the migration finish by ordinary use rather than only by
   // the rewrite pass.
-  clearFieldGroupType(instance);
-  instance[currentFieldGroupTypeKey] = type;
+  // Widened to a record for the mutation only. The parameter is `T extends object` because the
+  // generated field-group interfaces are interfaces without an index signature, so requiring
+  // `Record<string, unknown>` made the published writer reject Nextly's own generated types and
+  // forced every caller into a cast — the cast belongs here once, not at every call site.
+  const record = instance as Record<string, unknown>;
+  clearFieldGroupType(record);
+  record[currentFieldGroupTypeKey] = type;
 }

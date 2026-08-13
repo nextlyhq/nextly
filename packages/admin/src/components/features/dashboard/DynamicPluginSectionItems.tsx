@@ -16,19 +16,10 @@ import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useCollections } from "@admin/hooks/queries";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { filterCollectionItems } from "@admin/lib/permissions/authorization";
+import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
+import { resolvePluginIcon } from "@admin/lib/plugins/resolve-plugin-icon";
 import type { PluginMetadata } from "@admin/types/branding";
 import type { ApiCollection } from "@admin/types/entities";
-
-/**
- * Derive a URL-friendly slug from a name.
- * e.g. "Form Builder" -> "form-builder"
- */
-function toSlug(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
 
 interface PluginGroup {
   meta: PluginMetadata;
@@ -90,7 +81,7 @@ export function DynamicPluginSectionItems({
     // Group collections by their plugin (match by collections list)
     const groups: PluginGroup[] = [];
     for (const meta of matchingPlugins) {
-      const slug = toSlug(meta.name);
+      const slug = pluginSlug(meta.name);
       const pluginCollectionSlugs = new Set(meta.collections ?? []);
       const collections = permittedCollections
         .filter(c => pluginCollectionSlugs.has(c.name))
@@ -168,11 +159,19 @@ export function DynamicPluginSectionItems({
                     collection.label ||
                     collection.name;
 
-                  // Resolve icon: collection icon > plugin appearance icon > Database default
-                  const iconName =
-                    collection.admin?.icon ||
-                    group.meta.appearance?.icon ||
-                    "Database";
+                  // A collection's own icon wins: this row IS the collection,
+                  // and the plugin's icon is only a stand-in for one that
+                  // declares none. Below that the shared chain decides, so
+                  // asset-over-lucide precedence lives in one place.
+                  //
+                  // Cannot render an image, for the same reason as the
+                  // sidebar rail, so it declares that and keeps whatever lucide
+                  // name the plugin supplied beside its asset.
+                  const resolved = resolvePluginIcon(group.meta, {
+                    fallback: "Database",
+                    allowAsset: false,
+                  });
+                  const iconName = collection.admin?.icon || resolved.name;
                   const IconComponent =
                     (Icons as Record<string, React.ElementType>)[iconName] ||
                     Database;

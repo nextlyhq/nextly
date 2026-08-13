@@ -43,6 +43,10 @@ import {
   SelectValue,
 } from "@nextlyhq/ui";
 import type { FieldConfig } from "nextly/config";
+import {
+  readFieldGroupType,
+  writeFieldGroupType,
+} from "nextly/field-group-type";
 import { useCallback, useMemo, useState } from "react";
 import {
   useFieldArray,
@@ -197,9 +201,11 @@ function createDefaultComponentValues(
 ): Record<string, unknown> {
   const defaultValues: Record<string, unknown> = {};
 
-  // Add _componentType for multi-component mode
+  // Multi-component mode records which field group the row is. Written through the accessor so
+  // the row carries whichever spelling this version of the core writes, rather than pinning one
+  // here that a storage rename would leave unreadable.
   if (componentType) {
-    defaultValues._componentType = componentType;
+    writeFieldGroupType(defaultValues, componentType);
   }
 
   if (!fields) return defaultValues;
@@ -429,7 +435,7 @@ function MultiComponentNonRepeatable({
 
   // Watch the current component type
   const currentData = watch(name) as Record<string, unknown> | null;
-  const currentType = currentData?._componentType as string | undefined;
+  const currentType = readFieldGroupType(currentData);
 
   // Get the schema for the current type
   const currentSchema = currentType ? componentSchemas[currentType] : null;
@@ -665,9 +671,7 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
           <div className="space-y-3">
             {items.map((item, index) => {
               const itemData = item as Record<string, unknown>;
-              const itemComponentType = itemData._componentType as
-                | string
-                | undefined;
+              const itemComponentType = readFieldGroupType(itemData);
 
               // Get fields for this row
               let rowFields: FieldConfig[];

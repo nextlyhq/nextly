@@ -95,7 +95,15 @@ export interface PluginMetadata {
   routes?: Array<{ method: string; path: string }>;
   /** Sidebar appearance customization from plugin config. */
   appearance?: {
+    /** A lucide icon name. The common case; always theme-aware. */
     icon?: string;
+    /**
+     * A URL to an image the plugin ships, for a plugin that wants its own
+     * branding rather than a generic glyph. Takes precedence over `icon` when
+     * both are present. Resolve through `resolvePluginIcon` rather than
+     * reading either field directly.
+     */
+    iconAsset?: string;
     label?: string;
     badge?: string;
     badgeVariant?: "default" | "secondary" | "destructive" | "outline";

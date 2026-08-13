@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  PLACEHOLDER_VERSION,
   classifyPreflight,
+  findMissingPublishFields,
   getExpectedDistTag,
   isBootstrapPlaceholderOnly,
-  PLACEHOLDER_VERSION,
+  rootEnginesRange,
 } from "./lib.mjs";
 
 const VERSION = "0.0.2-alpha.52";
@@ -22,7 +24,7 @@ function entry(name, version = VERSION) {
       license: "MIT",
       repository: { directory: `packages/${name}` },
       publishConfig: { access: "public" },
-      engines: { node: ">=20.0.0" },
+      engines: { node: rootEnginesRange() },
     },
   };
 }
@@ -250,5 +252,43 @@ describe("which dist-tag a package publishes to", () => {
     expect(
       getExpectedDistTag({ versions: ["0.0.2-beta.1"], distTags: {} }, PRE)
     ).toBe("alpha");
+  });
+});
+
+describe("engines.node is checked against the repository's own range", () => {
+  it("accepts the range the root manifest declares", () => {
+    expect(findMissingPublishFields(entry("nextly").pkg)).toEqual([]);
+  });
+
+  it("rejects a WIDER range, which is the direction that misleads users", () => {
+    // `>=20.0.0` is the value every package carried before this check existed. It claims support
+    // for versions nothing runs — `package-smoke.yml` derives its Node legs from the same root
+    // field — so a user on 20.10 installs without a warning and fails at runtime instead.
+    const pkg = entry("nextly").pkg;
+    pkg.engines.node = ">=20.0.0";
+    expect(findMissingPublishFields(pkg)).toEqual([
+      `engines.node (expected "${rootEnginesRange()}", found ">=20.0.0")`,
+    ]);
+  });
+
+  it("rejects a narrower one too, since the question is agreement and not generosity", () => {
+    const pkg = entry("nextly").pkg;
+    pkg.engines.node = "^22.12.0";
+    expect(findMissingPublishFields(pkg)).toHaveLength(1);
+  });
+
+  it("still reports a MISSING engines.node rather than comparing undefined", () => {
+    const pkg = entry("nextly").pkg;
+    delete pkg.engines;
+    expect(findMissingPublishFields(pkg)).toEqual(["engines.node"]);
+  });
+
+  it("reads the range from the root manifest rather than restating it", () => {
+    // The separating property: a hard-coded expectation passes this suite and still lets the two
+    // drift. Passing a different range must change the verdict for the SAME package.
+    const pkg = entry("nextly").pkg;
+    expect(findMissingPublishFields(pkg, ">=18")).toEqual([
+      `engines.node (expected ">=18", found "${rootEnginesRange()}")`,
+    ]);
   });
 });
