@@ -18,6 +18,7 @@ export {
   STYLE_STATES,
   MAX_BREAKPOINTS_PER_AXIS,
   isTokenRef,
+  isBindingSource,
   isComponentInstance,
 } from "./document";
 export type {

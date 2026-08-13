@@ -27,6 +27,7 @@ export {
   COMPONENT_INSTANCE_TYPE,
   type ComponentInstanceProps,
   DEFAULT_BINDING_SOURCE,
+  isBindingSource,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
   type DocumentFormatVersion,
@@ -35,7 +36,12 @@ export {
   type StyleState,
 } from "./document";
 
-export { MAX_DEPTH, MAX_NODES } from "./limits";
+export {
+  DEFAULT_MAX_DOCUMENT_BYTES,
+  MAX_DEPTH,
+  MAX_NODES,
+  documentBytes,
+} from "./limits";
 
 export {
   RESERVED_OPERATION_NAMES,

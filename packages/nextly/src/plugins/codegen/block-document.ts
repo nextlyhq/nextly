@@ -44,11 +44,13 @@ import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import {
   BINDING_FORMAT_TYPES,
   BINDING_SOURCES,
+  DEFAULT_MAX_DOCUMENT_BYTES,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
   MAX_DEPTH,
   MAX_NODES,
   STYLE_STATES,
+  documentBytes,
 } from "@nextlyhq/blocks-engine/format";
 import type {
   BindingFormatType,
@@ -104,21 +106,70 @@ const bindingSourcesWithoutSingle = BINDING_SOURCES.filter(
 ) as unknown as readonly [BindingSource, ...BindingSource[]];
 
 /**
+ * A record whose KEYS are arbitrary strings, checked without rebuilding it.
+ *
+ * `z.record` is wrong for every field here whose keys come from a document
+ * rather than from this codebase, and it is wrong in both directions:
+ *
+ * - a own key named `constructor` makes it reject the whole record, so a block
+ *   with a prop of that name is refused although the engine accepts it;
+ * - a own key named `__proto__` — which `JSON.parse` produces as an ordinary
+ *   own property — is silently DROPPED from the rebuilt object.
+ *
+ * Prop names, style property names and HTML attribute names are all arbitrary
+ * strings, so both cases describe legitimate stored data.
+ *
+ * The cause is the rebuild: zod copies the entries into a fresh object, and
+ * assigning `__proto__` by key sets a prototype instead of creating a property.
+ * So this validates in place and hands back the value it was given. `refine`
+ * over `z.unknown()` never constructs anything, which is also the literal form
+ * of this module's returns-unchanged guarantee rather than an approximation of
+ * it.
+ *
+ * `meta` carries the JSON Schema fragment, because `z.unknown()` alone would
+ * publish `{}` and describe a field that accepts anything.
+ */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function openRecord(valuesFragment: Record<string, unknown> = {}) {
+  return z
+    .unknown()
+    .refine(isPlainObject, { message: "Expected an object" })
+    .meta({ type: "object", additionalProperties: valuesFragment });
+}
+
+function typedRecord(
+  check: (value: unknown) => boolean,
+  valuesFragment: Record<string, unknown>,
+  message: string
+) {
+  return z
+    .unknown()
+    .refine(
+      (value): value is Record<string, unknown> =>
+        isPlainObject(value) && Object.values(value).every(check),
+      { message }
+    )
+    .meta({ type: "object", additionalProperties: valuesFragment });
+}
+
+/**
  * One state × breakpoint bucket of style values.
  *
  * Values are unconstrained, and the token reference is described in prose
- * rather than modelled here. An earlier version accepted
- * `union([tokenRef, unknown])` to carry the token shape into the published
- * schema; because an object schema strips what it does not declare, a value
- * like `{ $token: "brand.primary", extra: true }` matched the token branch,
- * came back as a clean token reference, and hid the extra key the engine
- * rejects. The union bought documentation and paid for it by silently
- * repairing invalid input, which is the worse half of that trade.
+ * rather than modelled here. Modelling it as `union([tokenRef, unknown])`
+ * would carry the token shape into the published schema and pay for it by
+ * repairing input: a closed token branch strips what it does not declare, so
+ * `{ $token: "brand.primary", extra: true }` would match, come back as a clean
+ * token reference, and hide the extra key the engine rejects. Documentation is
+ * not worth a checker that silently alters what it accepts.
  *
  * The catalog is additive-open besides, so enumerating today's properties
  * would start refusing documents the moment it grew.
  */
-const styleValuesSchema = z.record(z.string(), z.unknown());
+const styleValuesSchema = openRecord();
 
 /**
  * The typed-style envelope: states on one axis, breakpoints on the other.
@@ -134,7 +185,11 @@ const styleValuesSchema = z.record(z.string(), z.unknown());
  */
 const nodeStylesSchema = z.partialRecord(
   z.enum(styleStates),
-  z.record(z.string(), styleValuesSchema)
+  typedRecord(
+    value => styleValuesSchema.safeParse(value).success,
+    { type: "object" },
+    "Expected an object of style buckets"
+  )
 );
 
 /** One entry-field predicate. */
@@ -154,7 +209,11 @@ const conditionSchema = z.looseObject({
  */
 const nodeVisibilitySchema = z.looseObject({
   conditions: z.array(z.array(conditionSchema)).optional(),
-  devices: z.record(z.string(), z.boolean()).optional(),
+  devices: typedRecord(
+    value => typeof value === "boolean",
+    { type: "boolean" },
+    "Expected an object of booleans"
+  ).optional(),
 });
 
 /**
@@ -169,7 +228,7 @@ const nodeVisibilitySchema = z.looseObject({
  * {@link blockNodeSchema} for why passing an unknown key through is the whole
  * point of an additive-open format.
  */
-const formatOptionsSchema = z.record(z.string(), z.unknown()).optional();
+const formatOptionsSchema = openRecord().optional();
 
 const bindingFormatVariants = bindingFormatTypes.map(type =>
   type === "currency"
@@ -197,6 +256,23 @@ const bindingFormatSchema = z.union(
     ...BindingFormatVariant[],
   ]
 );
+
+/**
+ * The published description of a binding, taken from the schema that enforces
+ * it rather than written out beside it.
+ *
+ * `bindings` is checked in place like the other document-keyed records, which
+ * means its value schema is no longer part of the emitted tree and would
+ * otherwise vanish from the published contract. Deriving the fragment keeps the
+ * two the same statement. `$schema` is dropped because this is embedded rather
+ * than served as a document of its own.
+ */
+function bindingFragment(): Record<string, unknown> {
+  const { $schema: _ignored, ...fragment } = z.toJSONSchema(bindingSchema, {
+    io: "input",
+  }) as Record<string, unknown>;
+  return fragment;
+}
 
 /**
  * A binding: a typed field path, never an expression.
@@ -250,8 +326,12 @@ const blockNodeSchema = z.looseObject({
   id: z.string(),
   type: z.string(),
   version: z.number().int().positive(),
-  props: z.record(z.string(), z.unknown()),
-  bindings: z.record(z.string(), bindingSchema).optional(),
+  props: openRecord(),
+  bindings: typedRecord(
+    value => bindingSchema.safeParse(value).success,
+    bindingFragment(),
+    "Expected an object of bindings"
+  ).optional(),
   get slots() {
     return z.record(z.string(), z.array(blockNodeSchema)).optional();
   },
@@ -262,7 +342,11 @@ const blockNodeSchema = z.looseObject({
   name: z.string().optional(),
   customCss: z.string().optional(),
   cssId: z.string().optional(),
-  attributes: z.record(z.string(), z.string()).optional(),
+  attributes: typedRecord(
+    value => typeof value === "string",
+    { type: "string" },
+    "Expected an object of strings"
+  ).optional(),
   migrationFailed: z.boolean().optional(),
 });
 
@@ -412,6 +496,35 @@ function exceedsLimits(
 }
 
 /**
+ * Whether a value serializes to more bytes than the format allows.
+ *
+ * The third bound, and the one the other two cannot express. Depth and node
+ * count both measure the TREE, and a document can be shallow, hold a single
+ * node, and still be enormous: one node whose `props` carry a few hundred
+ * thousand keys passes both walks and is then cloned in full by the parser.
+ * Size is the property that bounds that, and it is the same cap the engine's
+ * own `validate()` applies, so the two agree on what is too large.
+ *
+ * Measured LAST of the three because it is the only one that must read
+ * everything. The tree walks stop at their first breach, so a hostile document
+ * that is deep or wide never reaches this line.
+ *
+ * A value that cannot be serialized is reported as oversized rather than
+ * allowed through. `JSON.stringify` throws on a cycle and on a `BigInt`, and
+ * neither can occur in a stored document — both are cases of a caller passing
+ * something that was never JSON, which is precisely what this entry point is
+ * for. Letting the throw escape would turn "invalid input" into a crash in the
+ * process doing the checking.
+ */
+function exceedsBytes(value: unknown, maxBytes: number): boolean {
+  try {
+    return documentBytes(value as BlockDocument) > maxBytes;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Check a value against the block document format.
  *
  * This is the entry point to use on a document you did not write. It applies
@@ -445,6 +558,14 @@ export function parseBlockDocument(value: unknown): BlockDocumentParseResult {
       ],
     };
   }
+  if (exceedsBytes(value, DEFAULT_MAX_DOCUMENT_BYTES)) {
+    return {
+      success: false,
+      issues: [
+        `Document serializes to more than the format allows (${DEFAULT_MAX_DOCUMENT_BYTES} bytes).`,
+      ],
+    };
+  }
 
   const result = blockDocumentSchema.safeParse(value);
   if (!result.success) {
@@ -456,5 +577,12 @@ export function parseBlockDocument(value: unknown): BlockDocumentParseResult {
     };
   }
 
-  return { success: true, data: result.data as BlockDocument };
+  // The CALLER's value, not the parser's output. Every object schema here is
+  // open and every document-keyed record is checked in place, so the two are
+  // already equal in content — returning the input makes that a property of the
+  // function rather than of each schema staying open, and no future field can
+  // reintroduce a silent rewrite. It is also the only form under which the
+  // returns-unchanged guarantee is literally true: a rebuild cannot represent an
+  // own key named `__proto__`, whatever it is assembled from.
+  return { success: true, data: value as BlockDocument };
 }

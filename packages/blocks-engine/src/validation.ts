@@ -11,11 +11,13 @@
  */
 import type { BlockDocument, BlockNode, BreakpointSet } from "./document";
 import {
+  BINDING_SOURCES,
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
   MAX_CLASSES_PER_NODE,
   STYLE_STATES,
+  isBindingSource,
 } from "./document";
 import { describeValue, pointer } from "./issue-text";
 import { DEFAULT_LIMITS, LIMIT_WARNING_RATIO } from "./limits";
@@ -1229,8 +1231,6 @@ function isConditionsShapeValid(conditions: unknown): boolean {
   return true;
 }
 
-const BINDING_SOURCES = ["entry", "item", "single", "site"];
-
 /**
  * A binding path is a dot-joined chain of field identifiers, e.g. "title" or
  * "author.name". This rejects expression-like or otherwise malformed strings so
@@ -1289,7 +1289,7 @@ function validateBindings(
     const source: unknown = binding.source;
     if (
       source !== undefined &&
-      (typeof source !== "string" || !BINDING_SOURCES.includes(source))
+      (typeof source !== "string" || !isBindingSource(source))
     ) {
       issues.push({
         path: pointer(bPath, "source"),

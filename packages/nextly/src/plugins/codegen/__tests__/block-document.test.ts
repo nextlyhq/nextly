@@ -220,11 +220,11 @@ describe("block document schema", () => {
   });
 
   it("preserves later-release fields inside a binding and its format", () => {
-    // The same additive-open guarantee, one and two levels deeper. These were
-    // the LAST closed objects in the module: the node and the envelope were
-    // opened first, then `settings` and `assets`, and each round of that fix
-    // was checked only where the previous one had looked. Nesting is what the
-    // earlier passes kept missing, so the assertion goes to the bottom.
+    // The same additive-open guarantee, asserted at the deepest point the
+    // format nests rather than at the top. A field added to a later release can
+    // arrive anywhere, and an object that strips it two levels down loses it as
+    // completely as one that strips it at the root — while a test that only
+    // looks at the node would report the guarantee intact.
     const doc = {
       ...emptyPage(),
       nodes: [
@@ -327,6 +327,65 @@ describe("block document schema", () => {
     expect(result.issues.join(" ")).toContain("more nodes");
   });
 
+  it("keeps prototype-named prop keys exactly as JSON produced them", () => {
+    // `JSON.parse` creates `__proto__` and `constructor` as ordinary own
+    // properties, and a block may legitimately name a prop either. Rebuilding a
+    // record cannot represent the first — assigning that key sets a prototype
+    // instead of creating a property — and rejects the second, so both are
+    // checked in place and handed back untouched.
+    const doc = JSON.parse(
+      '{"formatVersion":1,"kind":"page","nodes":[{"id":"a","type":"core/text","version":1,"props":{"__proto__":{"polluted":true},"constructor":"c","ok":1}}]}'
+    ) as unknown;
+
+    const result = parseBlockDocument(doc);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const props = result.data.nodes[0]!.props;
+    expect(Object.getOwnPropertyNames(props).sort()).toEqual([
+      "__proto__",
+      "constructor",
+      "ok",
+    ]);
+    // The own key is data, not a prototype assignment: nothing leaked onto
+    // Object.prototype on the way through.
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  it("rejects a document that serializes past the byte cap", () => {
+    // Neither tree bound sees this: one node, no nesting, and a props record
+    // large enough that parsing it is the expensive act. Size is the only
+    // property that separates it from a legal document.
+    const props: Record<string, string> = {};
+    for (let index = 0; index < 60_000; index += 1) {
+      props[`k${index}`] = "x".repeat(40);
+    }
+    const doc = {
+      ...emptyPage(),
+      nodes: [{ id: "a", type: "core/text", version: 1, props }],
+    };
+
+    const result = parseBlockDocument(doc);
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.issues.join(" ")).toContain("serializes to more");
+  });
+
+  it("reports a value it cannot serialize rather than throwing", () => {
+    // A cycle is not JSON and cannot have come from a stored document, so the
+    // caller has passed something this entry point exists to refuse. Letting
+    // the serializer throw would crash the process doing the checking.
+    const cyclic: Record<string, unknown> = { id: "a" };
+    cyclic.self = cyclic;
+    const doc = {
+      ...emptyPage(),
+      nodes: [{ id: "a", type: "core/text", version: 1, props: cyclic }],
+    };
+
+    expect(() => parseBlockDocument(doc)).not.toThrow();
+    expect(parseBlockDocument(doc).success).toBe(false);
+  });
+
   it("accepts a node version above the definition registration cap", () => {
     // That cap bounds what a block DEFINITION may declare at registration. A
     // stored node written by a newer definition is a case the engine handles
@@ -395,8 +454,9 @@ describe("the frozen contract", () => {
     //
     // The committed schema is the outside reference that cannot move with
     // them. It is a file rather than an inline snapshot on purpose: a format
-    // change then appears in the PR diff, where a reviewer decides whether it
-    // needs a `formatVersion` bump and a migration.
+    // change then appears in the diff as an explicit edit to the format,
+    // where the decision about a `formatVersion` bump and a migration has to be
+    // made rather than assumed.
     //
     // If this fails, the format changed. Regenerate the fixture ONLY after
     // deciding that the change is compatible, or that it comes with a version

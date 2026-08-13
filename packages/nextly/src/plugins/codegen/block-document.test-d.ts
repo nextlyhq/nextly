@@ -34,7 +34,11 @@ import type {
   DocumentKind,
   LocaleOverlay,
   LocaleOverlayValue,
+  IssueSeverity,
   StyleState,
+  ValidationContext,
+  ValidationIssue,
+  validate,
 } from "@nextlyhq/blocks-engine";
 import { expectTypeOf } from "vitest";
 
@@ -75,10 +79,10 @@ expectTypeOf<keyof BlockNode>().toEqualTypeOf<
 // ---------------------------------------------------------------------------
 
 // Overlays are stored SEPARATELY from the document, so `blockDocumentSchema`
-// never sees one and the golden schema cannot describe it. Without these, the
-// freeze would claim a shape that no check on this PR can reach: `contentMode`
-// could gain a member, or the overlay maps change, and every other assertion
-// here would stay green while stored localized content was reinterpreted.
+// never sees one and the golden schema cannot describe it. These assertions are
+// the only reach the freeze has into that shape: without them `contentMode`
+// could gain a member, or the overlay maps change, while every runtime check
+// stayed green and stored localized content was reinterpreted.
 expectTypeOf<keyof LocaleOverlay>().toEqualTypeOf<"contentMode" | "props">();
 
 // Closed for the same reason a document kind is: a third mode needs a merge
@@ -148,6 +152,42 @@ expectTypeOf<ComponentInstanceProps["componentId"]>().toEqualTypeOf<string>();
 expectTypeOf<ComponentInstanceProps["variant"]>().toEqualTypeOf<
   string | undefined
 >();
+
+// ---------------------------------------------------------------------------
+// The frozen validation API
+// ---------------------------------------------------------------------------
+
+/**
+ * `validate` and the issue it returns are a published contract: an external
+ * tool locates and repairs problems by reading `path` and switching on `code`.
+ *
+ * Nothing else here reaches them. The document assertions describe stored data,
+ * and the golden schema describes the same, so the signature and the issue
+ * shape could both change with their implementation and their tests together
+ * while every other check stayed green — and an external validator would break
+ * with no migration decision ever having been made.
+ *
+ * Pinned as a whole shape rather than a key set, because an issue is consumed
+ * field by field: `severity` losing a member, or `suggestion` becoming
+ * required, changes how a consumer branches without changing any name.
+ */
+expectTypeOf<keyof ValidationIssue>().toEqualTypeOf<
+  "path" | "code" | "message" | "severity" | "suggestion"
+>();
+expectTypeOf<ValidationIssue["path"]>().toEqualTypeOf<string>();
+expectTypeOf<ValidationIssue["message"]>().toEqualTypeOf<string>();
+expectTypeOf<ValidationIssue["suggestion"]>().toEqualTypeOf<
+  string | undefined
+>();
+expectTypeOf<IssueSeverity>().toEqualTypeOf<"error" | "warning">();
+
+// The call shape: a document and a context in, an array of issues out. A third
+// required parameter, or a return that stopped being an array, is a breaking
+// change to every caller and is what this line refuses.
+expectTypeOf<typeof validate>().parameters.toEqualTypeOf<
+  [BlockDocument, ValidationContext]
+>();
+expectTypeOf<typeof validate>().returns.toEqualTypeOf<ValidationIssue[]>();
 
 // ---------------------------------------------------------------------------
 // The published schema describes the frozen envelope

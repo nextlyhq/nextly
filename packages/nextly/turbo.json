@@ -20,8 +20,15 @@
       // does not accept inputs outside it, so the entry would either error or
       // match nothing — and matching nothing is the failure this exists to
       // prevent, reinstated in the fix for it.
+      // Both files the codegen tests READ, not only the prose one. The golden
+      // schema is compared byte for byte by the same suite, so leaving it out
+      // meant a fixture-only edit left the hash unmoved and replayed the
+      // previous pass — the format-freeze control reporting green over a
+      // fixture it never opened. A JSON file under `src` is not covered by the
+      // inherited `src/**/*.ts` globs.
       "inputs": [
         "$TURBO_EXTENDS$",
+        "src/**/__fixtures__/**/*.json",
         "$TURBO_ROOT$/docs/api-reference/block-document-format.mdx"
       ]
     }

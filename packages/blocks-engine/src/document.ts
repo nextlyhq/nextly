@@ -192,6 +192,19 @@ export const BINDING_SOURCES = ["entry", "item", "single", "site"] as const;
 export type BindingSource = (typeof BINDING_SOURCES)[number];
 
 /**
+ * Whether a string names a binding source.
+ *
+ * Takes `string` rather than the union: every caller is holding a value off a
+ * stored document, so a signature demanding the answer as its argument would be
+ * unusable at the only call sites that matter. The widening cast is confined
+ * here so no caller has to write one, which is what keeps the list from being
+ * copied for want of a predicate.
+ */
+export function isBindingSource(value: string): value is BindingSource {
+  return (BINDING_SOURCES as readonly string[]).includes(value);
+}
+
+/**
  * The source that applies when a binding names none.
  *
  * Stated as a value for the same reason as the list: the schema and the
