@@ -507,7 +507,7 @@ function compare(
 }
 
 /** The selector of a compiled utility's host rule, as Tailwind wrote it. */
-function hostSelectorOf(cls: string): string {
+function hostSelectorOfUncached(cls: string): string {
   const css = compiled(cls);
   if (css == null) return "";
   const nested = (block: string): string[] => {
@@ -521,8 +521,10 @@ function hostSelectorOf(cls: string): string {
   return nested(css.replace(AT_PROPERTY, "")).join("");
 }
 
+const hostSelectorOf = perClass(hostSelectorOfUncached);
+
 /** Every declaration a utility makes on the host, as property to value. */
-function declarationsOf(cls: string): Map<string, string> {
+function declarationsOfUncached(cls: string): Map<string, string> {
   const css = compiled(cls);
   if (css == null) return new Map();
   const body = `;${hostCss(css.replace(AT_PROPERTY, ""))}`;
@@ -534,6 +536,8 @@ function declarationsOf(cls: string): Map<string, string> {
   }
   return found;
 }
+
+const declarationsOf = perClass(declarationsOfUncached);
 
 /**
  * Whether two utilities actually declare anything differently.
@@ -557,6 +561,34 @@ function disagree(owned: string, caller: string): boolean {
     if (existing !== undefined && existing !== value) return true;
   }
   return false;
+}
+
+/**
+ * Whether two selectors can never match the tab at the same moment.
+ *
+ * Ranking them is only meaningful if both can apply at once. `:not(:focus-visible)`
+ * and `:focus-visible` select disjoint states, so the caller's rule is never in
+ * the cascade alongside the owned one and cannot displace it however it ranks —
+ * reported as removing the focus ring purely on specificity and source order.
+ *
+ * Deliberately narrow: it recognises a qualifier NEGATED by one side and
+ * required by the other, which is the form Tailwind emits for a `not-*` variant
+ * and for an arbitrary `[&:not(...)]`. Selectors can be disjoint in ways this
+ * does not see, and the consequence of missing one is a report rather than a
+ * silence, which is the safer direction for a check whose findings are read.
+ */
+function excludeEachOther(a: string, b: string): boolean {
+  const negatedIn = (selector: string): string[] =>
+    [...selector.matchAll(/:not\(([^)]*)\)/g)].map(match =>
+      (match[1] ?? "").trim()
+    );
+  const requires = (selector: string, qualifier: string): boolean =>
+    qualifier.length > 0 &&
+    selector.replace(/:not\([^)]*\)/g, "").includes(qualifier);
+  return (
+    negatedIn(a).some(qualifier => requires(b, qualifier)) ||
+    negatedIn(b).some(qualifier => requires(a, qualifier))
+  );
 }
 
 /**
@@ -597,6 +629,7 @@ function outranks(owned: Utility, caller: Utility): boolean {
   const ownedSelector = hostSelectorOf(owned.full);
   const callerSelector = hostSelectorOf(caller.full);
   if (!ownedSelector || !callerSelector) return false;
+  if (excludeEachOther(ownedSelector, callerSelector)) return false;
   if (!disagree(owned.full, caller.full)) return false;
   const ranking = compare(
     specificityOf(callerSelector),
@@ -610,8 +643,12 @@ function takesOver(owned: Utility, caller: Utility): boolean {
   const ownedProperties = new Set(reachedBy(owned.full));
   if (ownedProperties.size === 0) return false;
   const callerProperties = propertiesOf(caller.full);
-  if (!callerProperties.some(property => ownedProperties.has(property))) {
-    return false;
+  // `all` names no property and reaches all of them, so it cannot be compared
+  // by intersection; it takes over whatever the primitive draws.
+  if (!callerProperties.includes(RESETS_EVERYTHING)) {
+    if (!callerProperties.some(property => ownedProperties.has(property))) {
+      return false;
+    }
   }
   // Assigning a variable the owned rule READS is a takeover on its own, with no
   // cascade question to ask. A custom property set on the tab applies to the tab
@@ -643,7 +680,7 @@ function takesOver(owned: Utility, caller: Utility): boolean {
  * `--tw-ring-shadow: var(--tw-ring-inset,) ...` — every variable in it is an
  * input the appearance depends on.
  */
-function dependenciesOf(cls: string): string[] {
+function dependenciesOfUncached(cls: string): string[] {
   const css = compiled(cls);
   if (css == null) return [];
   const declarations = declarationsOf(cls);
@@ -659,6 +696,8 @@ function dependenciesOf(cls: string): string[] {
   }
   return [...found];
 }
+
+const dependenciesOf = perClass(dependenciesOfUncached);
 
 /** Which of a component's owned classes a caller's `className` takes over. */
 function displacedBy(exported: string, classes: string): string[] {
@@ -778,8 +817,40 @@ function readBy(css: string): string[] {
   );
 }
 
+/**
+ * Memoise a pure function of a class string.
+ *
+ * Every question below is asked repeatedly for the same handful of classes —
+ * each owned class against each caller class, at every call site in the
+ * repository — and each one re-parses compiled CSS. The design system is
+ * immutable once loaded, so the answers cannot change within a run.
+ */
+function perClass<T>(answer: (cls: string) => T): (cls: string) => T {
+  const cache = new Map<string, T>();
+  return cls => {
+    if (cache.has(cls)) return cache.get(cls) as T;
+    const value = answer(cls);
+    cache.set(cls, value);
+    return value;
+  };
+}
+
+/**
+ * Compiling a candidate is the expensive step, and the same handful of classes
+ * are asked about repeatedly: every owned class against every caller class, at
+ * every call site in the repository, through four separate questions. Cached
+ * because the design system is immutable once loaded, so the answer cannot
+ * change within a run — uncached, the scan starved a neighbouring suite of its
+ * timeout.
+ */
+const compiledCache = new Map<string, string | null>();
+
 function compiled(bare: string): string | null {
-  return designSystem.candidatesToCss([bare])[0] ?? null;
+  const cached = compiledCache.get(bare);
+  if (cached !== undefined) return cached;
+  const css = designSystem.candidatesToCss([bare])[0] ?? null;
+  compiledCache.set(bare, css);
+  return css;
 }
 
 /**
@@ -790,11 +861,13 @@ function compiled(bare: string): string | null {
  * keeps `border-dashed` — which Tailwind emits as the `border-style` shorthand —
  * comparable with the primitive's `border-bottom-style`.
  */
-function propertiesOf(bare: string): string[] {
-  const css = compiled(bare);
+function propertiesOfUncached(cls: string): string[] {
+  const css = compiled(cls);
   if (css == null) return [];
   return [...new Set(setBy(css).flatMap(expandsTo))];
 }
+
+const propertiesOf = perClass(propertiesOfUncached);
 
 /**
  * What an OWNED utility's appearance depends on: what it writes, plus the
@@ -808,11 +881,13 @@ function propertiesOf(bare: string): string[] {
  * `border-dashed`, which writes that variable AND the `border-style` shorthand,
  * is still caught through the properties it sets.
  */
-function reachedBy(bare: string): string[] {
-  const css = compiled(bare);
+function reachedByUncached(cls: string): string[] {
+  const css = compiled(cls);
   if (css == null) return [];
   return [...new Set([...setBy(css), ...readBy(css)].flatMap(expandsTo))];
 }
+
+const reachedBy = perClass(reachedByUncached);
 
 /**
  * The CSS properties each slot's own appearance reaches, kept apart.
@@ -901,9 +976,21 @@ function expandsTo(property: string): string[] {
   return [kebab];
 }
 
+/**
+ * `all` is the CSS-wide shorthand: it resets every property that accepts a
+ * reset, which is every appearance the primitive draws at once.
+ *
+ * It cannot be expanded through the usual mapping because it names no property
+ * in particular — recorded literally, `all` intersected nothing and
+ * `[all:unset]` read as touching none of the tab.
+ */
+const RESETS_EVERYTHING = "all";
+
 function ownsStyleProperty(slot: string, property: string): boolean {
   const owned = ownedCssProperties()[slot];
   if (!owned) return false;
+  const kebab = property.replace(/([A-Z])/g, "-$1").toLowerCase();
+  if (kebab === RESETS_EVERYTHING) return owned.size > 0;
   return expandsTo(property).some(p => owned.has(p));
 }
 
@@ -1022,21 +1109,71 @@ function ownershipIn(sourceFile: ts.SourceFile): {
         namespaces.add(bindings.name.text);
       }
     }
-    if (
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      node.initializer &&
-      ts.isIdentifier(node.initializer) &&
-      names.has(node.initializer.text)
-    ) {
-      names.add(node.name.text);
-      const exported = exportedNameOf.get(node.initializer.text);
-      if (exported) exportedNameOf.set(node.name.text, exported);
+    // An alias carries ownership forward, and it can be written three ways.
+    // Only the first was read, so composing two separately covered forms —
+    // `import * as UI` then `const Trigger = UI.TabsTrigger` — walked through
+    // the contract untouched.
+    if (ts.isVariableDeclaration(node) && node.initializer) {
+      const exported = exportedFrom(
+        node.initializer,
+        names,
+        namespaces,
+        exportedNameOf
+      );
+      if (exported && ts.isIdentifier(node.name)) {
+        names.add(node.name.text);
+        exportedNameOf.set(node.name.text, exported);
+      }
+      // `const { TabsTrigger: Trigger } = UI` names the same component again.
+      if (
+        ts.isObjectBindingPattern(node.name) &&
+        ts.isIdentifier(node.initializer) &&
+        namespaces.has(node.initializer.text)
+      ) {
+        for (const element of node.name.elements) {
+          const source = element.propertyName ?? element.name;
+          if (
+            ts.isIdentifier(source) &&
+            ts.isIdentifier(element.name) &&
+            OWNED_EXPORTS.includes(source.text)
+          ) {
+            names.add(element.name.text);
+            exportedNameOf.set(element.name.text, source.text);
+          }
+        }
+      }
     }
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
   return { ownership: { names, namespaces }, exportedNameOf };
+}
+
+/**
+ * The exported name an initializer resolves to, if it names an owned component.
+ *
+ * Covers a plain alias of an already-known name and a member of a namespace
+ * import. Ownership is a property of what the expression REFERS to, so both
+ * spellings have to be read here rather than only at the JSX tag.
+ */
+function exportedFrom(
+  initializer: ts.Expression,
+  names: Set<string>,
+  namespaces: Set<string>,
+  exportedNameOf: Map<string, string>
+): string | undefined {
+  if (ts.isIdentifier(initializer) && names.has(initializer.text)) {
+    return exportedNameOf.get(initializer.text);
+  }
+  if (
+    ts.isPropertyAccessExpression(initializer) &&
+    ts.isIdentifier(initializer.expression) &&
+    namespaces.has(initializer.expression.text) &&
+    OWNED_EXPORTS.includes(initializer.name.text)
+  ) {
+    return initializer.name.text;
+  }
+  return undefined;
 }
 
 /** The exported name an element's tag renders, or undefined if not owned. */
@@ -1263,21 +1400,26 @@ function isDefinitelyNothing(initializer: ts.Expression): boolean {
 function declaredProperties(
   object: ts.ObjectLiteralExpression,
   resolver: ReturnType<typeof styleResolver>,
-  seen = new Set<ts.Node>()
+  expanded = new Set<ts.Node>()
 ): Map<string, boolean> {
   const entries = new Map<string, boolean>();
-  if (seen.has(object)) return entries;
-  seen.add(object);
+  // Its OWN record of which objects have been merged, kept apart from the one
+  // the resolver uses to walk expressions. Sharing them meant every object the
+  // resolver returned was already marked, so this returned empty for it and a
+  // spread's contents were never read at all — while the probe for clearing a
+  // spread stayed green, because nothing was found either way.
+  if (expanded.has(object)) return entries;
+  expanded.add(object);
 
   for (const property of object.properties) {
     if (ts.isSpreadAssignment(property)) {
       // Every object the spread can be gets merged, because any of them may be
       // the one present at runtime; a later key still overwrites all of them.
-      for (const source of resolver.objectsFrom(property.expression, seen)) {
+      for (const source of resolver.objectsFrom(property.expression)) {
         for (const [name, emits] of declaredProperties(
           source,
           resolver,
-          seen
+          expanded
         )) {
           entries.set(name, emits);
         }
@@ -1679,6 +1821,32 @@ describe("the tab indicator contract", () => {
       "a theme token the primitive draws its ink and underline from",
       '<TabsTrigger className="[--nx-primary:red]" />',
     ],
+    // The control that makes the clear-after-spread case above mean something:
+    // a spread whose owned property is NOT cleared must still be reported, or
+    // that one passes because spread contents are never read at all.
+    [
+      "a spread whose owned property survives",
+      'const inherited = { borderBottomColor: "red" };\n<TabsTrigger style={{ ...inherited }} />',
+    ],
+    // `all` names no property and resets every one of them.
+    [
+      "the CSS-wide shorthand as an arbitrary class",
+      '<TabsTrigger className="[all:unset]" />',
+    ],
+    [
+      "the CSS-wide shorthand as an inline style",
+      '<TabsTrigger style={{ all: "unset" }} />',
+    ],
+    // Two separately covered forms composed: a namespace import, then an alias
+    // of one of its members.
+    [
+      "an alias of a namespace member",
+      'import * as UI from "@nextlyhq/ui";\nconst Trigger = UI.TabsTrigger;\n<Trigger className="border-b-0" />',
+    ],
+    [
+      "a destructured namespace member",
+      'import * as UI from "@nextlyhq/ui";\nconst { TabsTrigger: Trigger } = UI;\n<Trigger className="border-b-0" />',
+    ],
   ])("catches %s", (_label, body) => {
     // The positive controls. Each is a shape an earlier version returned clean
     // on, or a category it never read. Without these, a check that can never
@@ -1844,6 +2012,12 @@ describe("the tab indicator contract", () => {
       '<TabsTrigger className="[&:where(:focus-visible)]:ring-0" />',
     ],
     // An object is built in source order: the later key clears the spread.
+    // Disjoint states: the caller's rule is never in the cascade beside the
+    // owned one, so ranking them says nothing.
+    [
+      "a variant that cannot apply at the same time as the owned rule",
+      '<TabsTrigger className="[&:not(:focus-visible)]:ring-0" />',
+    ],
     [
       "a spread whose owned property the object then clears",
       'const inherited = { borderBottomColor: "red" };\n<TabsTrigger style={{ ...inherited, borderBottomColor: undefined }} />',

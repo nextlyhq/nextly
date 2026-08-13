@@ -267,7 +267,12 @@ describe("alpha-opacity color utilities", () => {
         `package "${p}" uses alpha color utilities but is not in SCANNED_DIRS`
       ).toBe(true);
     }
-  });
+    // A whole-monorepo `grep` in a subprocess, so the budget is I/O rather than
+    // work this test controls. Vitest's 5s default left it about twice its own
+    // measured runtime, which any parallel suite on the same machine can take
+    // away; stated explicitly so a slower neighbour reads as a slower neighbour
+    // rather than as this scan failing.
+  }, 60_000);
 
   it("no faint text/border alpha utility falls below WCAG outside the allowlist", () => {
     const offenders: string[] = [];
