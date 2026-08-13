@@ -32,6 +32,7 @@ import {
   isNodeType,
   isNodeVersion,
   isPlainRecord,
+  treeDepth,
   walkNodes,
   insertNode,
   locateNode,
@@ -832,8 +833,23 @@ function assertForestEntries(nodes: BlockNode[]): void {
   // would throw before this walk could refuse it.
   const pending: unknown[] = [];
   for (const entry of nodes) pending.push(entry);
+  // Every node reached, so a document that holds itself is refused rather than
+  // walked forever. A forest is a tree by intent and not by construction: an
+  // in-process document can be handed to `applyOp` with a node inside its own
+  // slot, and without this the walk pops and re-enqueues that node until memory
+  // runs out — a synchronous hang where the contract promises an `OpError`.
+  // Identity, not id: a cycle is the same OBJECT reached twice, and two
+  // distinct nodes sharing an id are a different fault with its own guard.
+  const seen = new Set<unknown>();
   while (pending.length > 0) {
     const entry = pending.pop();
+    if (seen.has(entry)) {
+      throw new OpError(
+        `a document whose nodes contain themselves is malformed. A forest is ` +
+          `a tree, so no node may sit inside its own slots.`
+      );
+    }
+    seen.add(entry);
     if (!isPlainRecord(entry)) {
       throw new OpError(
         `a document holding ${describe(entry)} among its nodes is malformed. ` +
@@ -867,62 +883,6 @@ function assertForestEntries(nodes: BlockNode[]): void {
   }
 }
 
-function assertDepthWithin(
-  node: BlockNode,
-  depth: number,
-  maxDepth: number,
-  verb: string,
-  before: BlockDocument
-): void {
-  const pending: { node: BlockNode; depth: number }[] = [{ node, depth }];
-  let deepest = 0;
-  while (pending.length > 0) {
-    const entry = pending.pop();
-    if (entry === undefined) break;
-    if (entry.depth > deepest) deepest = entry.depth;
-    if (entry.depth > maxDepth && deepest > depthOf(before.nodes)) {
-      throw new OpError(
-        `${verb}: this would leave the document nested ${String(entry.depth)} ` +
-          `levels deep, past the ${String(maxDepth)} it may hold.`
-      );
-    }
-    const slots = entry.node.slots;
-    if (slots === undefined) continue;
-    for (const children of Object.values(slots)) {
-      if (!Array.isArray(children)) continue;
-      for (const child of children) {
-        if (isPlainRecord(child)) {
-          pending.push({ node: child, depth: entry.depth + 1 });
-        }
-      }
-    }
-  }
-}
-
-/** The deepest level any node in a forest sits at. */
-function depthOf(nodes: BlockNode[]): number {
-  let deepest = 0;
-  const pending: { node: BlockNode; depth: number }[] = nodes
-    .filter(isPlainRecord)
-    .map(node => ({ node, depth: 1 }));
-  while (pending.length > 0) {
-    const entry = pending.pop();
-    if (entry === undefined) break;
-    if (entry.depth > deepest) deepest = entry.depth;
-    const slots = entry.node.slots;
-    if (slots === undefined) continue;
-    for (const children of Object.values(slots)) {
-      if (!Array.isArray(children)) continue;
-      for (const child of children) {
-        if (isPlainRecord(child)) {
-          pending.push({ node: child, depth: entry.depth + 1 });
-        }
-      }
-    }
-  }
-  return deepest;
-}
-
 function assertFitsCaps(
   before: BlockDocument,
   result: BlockDocument,
@@ -941,8 +901,22 @@ function assertFitsCaps(
   // Depth on the RESULT, for the same reason as count and bytes: checking only
   // the incoming subtree misses the depth its PLACEMENT creates. A shallow
   // subtree dropped into a deep slot produces a forest deeper than either part.
-  for (const entry of result.nodes) {
-    assertDepthWithin(entry, 1, limits.maxDepth, verb, before);
+  //
+  // Asked of the ENGINE rather than measured here. A second depth walk in this
+  // package agrees with the engine's on the day it is written and diverges the
+  // moment the engine corrects how it treats a malformed node — leaving the cap
+  // check and the document model with different answers about the same tree.
+  //
+  // Once for each side, not once per node. Comparing every over-deep node
+  // against a freshly measured original made the original's cost proportional
+  // to the number of offending nodes, so lowering `maxDepth` under a broad
+  // document turned a linear edit into a quadratic one.
+  const depth = treeDepth(result.nodes);
+  if (depth > limits.maxDepth && depth > treeDepth(before.nodes)) {
+    throw new OpError(
+      `${verb}: this would leave the document nested ${String(depth)} ` +
+        `levels deep, past the ${String(limits.maxDepth)} it may hold.`
+    );
   }
   const total = countNodes(result.nodes);
   if (total > limits.maxNodes && total > countNodes(before.nodes)) {
@@ -1257,7 +1231,7 @@ export function applyOp(
   // saying so is better than letting a native RangeError escape from whichever
   // helper reaches it first. This is deliberately NOT `limits.maxDepth`: that
   // is a product rule a site may relax, and this is a machine one nothing can.
-  assertWalkable(depthOf(nodes), "this document");
+  assertWalkable(treeDepth(nodes), "this document");
 
   // The op itself, before its discriminant is read. `op.kind` on a `null`
   // leaves this module as a TypeError, which a caller cannot distinguish from
@@ -1295,7 +1269,7 @@ export function applyOp(
       // `limits.maxDepth` can otherwise hand in a subtree deeper than the
       // engine's helpers can walk, and the overflow lands after the document
       // has been checked rather than before.
-      assertWalkable(depthOf([op.node]), "insert");
+      assertWalkable(treeDepth([op.node]), "insert");
       const lockedId = lockedWithin(op.node);
       if (lockedId !== undefined) {
         throw new OpError(

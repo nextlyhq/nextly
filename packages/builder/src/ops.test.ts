@@ -1594,11 +1594,18 @@ describe("the document's own identity fields", () => {
     );
   });
 
-  it("counts a duplicate id on a deep document without overflowing", () => {
-    // The uniqueness scan delegated to the engine's recursive walker, so a
-    // document deep enough to need repairing was exactly the one that made the
-    // guard throw a native RangeError — it broke on the input the repair was
-    // trying to fix.
+  it("refuses a document too deep to walk, by name rather than by crashing", () => {
+    // The machine cap, on the document rather than on an incoming subtree. Past
+    // it the engine's recursive helpers exhaust the call stack, so the refusal
+    // has to come from the guard: a native RangeError names no document and
+    // tells the author nothing about which edit to try instead.
+    //
+    // This is the case the uniqueness scan used to be tested through, which it
+    // could not be. `assertWalkable` rejects a document this deep before any
+    // scan runs, so no input the uniqueness check can ever see is deep enough
+    // to overflow a recursive one, and the assertion passed whichever
+    // implementation was underneath. Uniqueness has its own cases below, on
+    // documents that actually hold a duplicate.
     let leaf = node("deep-0");
     const root = leaf;
     for (let level = 1; level < 15_000; level += 1) {
@@ -1613,7 +1620,22 @@ describe("the document's own identity fields", () => {
     } catch (error) {
       thrown = error;
     }
-    expect(thrown).not.toBeInstanceOf(RangeError);
+    expect(thrown).toBeInstanceOf(OpError);
+    expect((thrown as OpError).message).toMatch(/levels deep and cannot be/);
+  });
+
+  it("refuses a document that holds a node inside its own slots", () => {
+    // A forest is a tree by intent, not by construction. An in-process document
+    // can be handed in with a node placed inside itself, and a walk with no
+    // memory of where it has been pops and re-enqueues that node forever — a
+    // synchronous hang, with no error and no way for the caller to recover,
+    // where the contract promises an OpError.
+    const self = node("ouroboros");
+    self.slots = { main: [self] };
+
+    expect(() => applyOp(doc([self]), { kind: "remove", id: "a" })).toThrow(
+      /nodes contain themselves/
+    );
   });
 });
 
