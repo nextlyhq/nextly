@@ -221,8 +221,19 @@ export interface MigrationSession {
  */
 export function getMigrationLockDdl(dialect: MigrationDialect): string[] {
   const idType = dialect === "mysql" ? "int" : "integer";
+  // `expires_at` is what separates a run that is still working from one that died holding the row.
+  // A holder renews it while it works, so an expired value is an OBSERVATION that the holder stopped
+  // rather than a guess from a threshold. The type follows each dialect's existing convention for a
+  // timestamp column, and must stay in step with the Drizzle declaration in
+  // `schemas/field-group-lock/` — the round-trip guard is what holds them there.
+  const expiresType =
+    dialect === "postgresql"
+      ? "timestamptz"
+      : dialect === "mysql"
+        ? "datetime"
+        : "integer";
   return [
-    `CREATE TABLE IF NOT EXISTS ${MIGRATION_LOCK_TABLE} (id ${idType} PRIMARY KEY, owner text)`,
+    `CREATE TABLE IF NOT EXISTS ${MIGRATION_LOCK_TABLE} (id ${idType} PRIMARY KEY, owner text, expires_at ${expiresType})`,
   ];
 }
 
