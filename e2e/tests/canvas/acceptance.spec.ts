@@ -502,10 +502,8 @@ test.describe("a canvas any Nextly editor could ship", () => {
     // The bound comes from the tree being dragged over, not from a constant.
     // The fault this names is an indicator trailing the pointer by a whole
     // block, so the shortest block is what "a whole block" means here; a fixed
-    // number encodes whatever the fixture's spacing happened to be the day it
-    // was written. Measured, the indicator sits 31px from the pointer while the
-    // blocks are ~92px apart, so the previous constant of 24 rejected an
-    // indicator that was in the correct gap.
+    // number encodes whatever the fixture's spacing happens to be, which is a
+    // property of the fixture rather than of the requirement.
     const blocks = await driver.readBlockBoxes();
     const scale = await driver.frameScale();
     const shortestBlock = Math.min(
@@ -517,13 +515,9 @@ test.describe("a canvas any Nextly editor could ship", () => {
       "the fixture must have blocks to measure the bound against"
     ).toBeGreaterThan(0);
 
-    // No expected-failure marking. This property is MET, and the marking it
-    // used to carry named a reason that is not true: the driver maps the
-    // indicator's frame rect into host coordinates, so it is comparable with the
-    // pointer. What kept the test red was the pairing of an unestablished
-    // precondition with a bound tighter than the fault it describes — with no
-    // zone active the rect was null, and where a rect existed a correct
-    // indicator 31px away was rejected by a 24px constant.
+    // No expected-failure marking: this canvas meets the property. The rect is
+    // comparable with the pointer because the driver maps it out of frame
+    // coordinates into host ones.
     expect(rect, "a drag in progress must show an indicator").not.toBeNull();
     // In the gap, not merely somewhere on screen. What this catches is an
     // indicator trailing the pointer by a whole block.
