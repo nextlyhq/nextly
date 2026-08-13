@@ -32,15 +32,43 @@ let _dispatcher: ServiceDispatcher | null = null;
 let _storedConfig: SanitizedNextlyConfig | null = null;
 
 /**
+ * The plugin list as boot produced it, or null before any boot has run.
+ *
+ * Held separately from `_storedConfig` rather than folded into it, because the
+ * two have independent lifecycles: the route config is re-stored every time the
+ * route module is evaluated, while boot transforms the plugin list once per
+ * process. Writing the transformed list INTO the stored config would leave
+ * whichever write happened to land last as the winner — and both orders occur.
+ * A boot through `getNextly()` or instrumentation runs before the route module
+ * is imported, and route-module HMR re-stores the raw config without booting
+ * again. Either way the raw list would silently replace the booted one.
+ */
+let _bootPlugins: PluginDefinition[] | null = null;
+
+/**
+ * Fold the booted plugin list into the stored config.
+ *
+ * The single place the two inputs meet, called from both writers so the result
+ * cannot depend on the order they arrive in. Only the plugins are taken from
+ * boot: the transformed config carries no `typescript`, `db` or `storage`, so
+ * adopting it wholesale would silently drop three fields this store holds.
+ */
+function foldBootPluginsIntoStore(): void {
+  if (!_storedConfig || !_bootPlugins) return;
+  _storedConfig = { ..._storedConfig, plugins: _bootPlugins };
+}
+
+/**
  * Store the nextly config for use during service initialization.
  * Called by `createDynamicHandlers({ config })` in routeHandler.ts.
  */
 export function setHandlerConfig(config: SanitizedNextlyConfig): void {
   _storedConfig = config;
+  foldBootPluginsIntoStore();
 }
 
 /**
- * Replace the stored config's plugin list, leaving the rest of it alone.
+ * Record the plugin list boot produced, and re-point the store at it.
  *
  * The store is populated when the route module is imported, which is the
  * earliest the config exists and is before any `setup` transformer has run.
@@ -49,13 +77,13 @@ export function setHandlerConfig(config: SanitizedNextlyConfig): void {
  * store WITHOUT initializing services, so without this it describes plugins as
  * their author declared them rather than as they actually booted.
  *
- * Only the plugins, not the whole config: the transformed value carries no
- * `typescript`, `db` or `storage`, so writing it wholesale would silently drop
- * three fields this store legitimately holds.
+ * An empty list is a meaningful value, not an absent one: it is what a
+ * transformer that removes every plugin produces, and the store must then stop
+ * advertising the plugins the author declared.
  */
 export function setHandlerPlugins(plugins: PluginDefinition[]): void {
-  if (!_storedConfig) return;
-  _storedConfig = { ..._storedConfig, plugins };
+  _bootPlugins = plugins;
+  foldBootPluginsIntoStore();
 }
 
 /**

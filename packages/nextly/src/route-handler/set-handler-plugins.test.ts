@@ -2,18 +2,15 @@
  * The handler store is populated when the route module is imported, before any
  * `setup` transformer has run, and the public admin-meta endpoint reads it
  * without initializing services. Boot therefore has to correct it — but only
- * the part boot actually recomputed.
+ * the part boot actually recomputed, and without depending on whether boot or
+ * the route module got there first.
  */
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import type { PluginDefinition } from "../plugins/plugin-context";
 
-import {
-  getHandlerConfig,
-  setHandlerConfig,
-  setHandlerPlugins,
-} from "./auth-handler";
+type HandlerStore = typeof import("./auth-handler");
 
 const stored = {
   typescript: { enabled: true },
@@ -29,15 +26,30 @@ function plugins(...names: string[]): PluginDefinition[] {
   );
 }
 
-describe("setHandlerPlugins", () => {
-  it("replaces the plugin list", () => {
-    setHandlerConfig(stored);
+function names(store: HandlerStore): string[] | undefined {
+  return store.getHandlerConfig()?.plugins?.map(p => p.name);
+}
 
-    setHandlerPlugins(plugins("@acme/transformed"));
+describe("the handler config store", () => {
+  let store: HandlerStore;
 
-    expect(getHandlerConfig()?.plugins?.map(p => p.name)).toEqual([
-      "@acme/transformed",
-    ]);
+  /**
+   * A fresh module per test. Both values this store folds together live in
+   * module scope and neither has a reset seam in production, so a test that
+   * reused the module would inherit the previous one's boot list — and the
+   * ordering assertions below turn on that list being absent to begin with.
+   */
+  beforeEach(async () => {
+    vi.resetModules();
+    store = await import("./auth-handler");
+  });
+
+  it("replaces the plugin list when boot runs after the route module", () => {
+    store.setHandlerConfig(stored);
+
+    store.setHandlerPlugins(plugins("@acme/transformed"));
+
+    expect(names(store)).toEqual(["@acme/transformed"]);
   });
 
   /**
@@ -47,14 +59,66 @@ describe("setHandlerPlugins", () => {
    * the admin-meta endpoint reads.
    */
   it("leaves every other field of the stored config intact", () => {
-    setHandlerConfig(stored);
+    store.setHandlerConfig(stored);
 
-    setHandlerPlugins(plugins("@acme/transformed"));
+    store.setHandlerPlugins(plugins("@acme/transformed"));
 
-    const after = getHandlerConfig();
+    const after = store.getHandlerConfig();
     expect(after?.typescript).toEqual({ enabled: true });
     expect(after?.db).toEqual({ provider: "sqlite" });
     expect(after?.storage).toEqual({ provider: "local" });
     expect(after?.admin?.branding?.logoText).toBe("Acme");
+  });
+
+  /**
+   * The reversed order, which a boot through `getNextly()` or instrumentation
+   * produces: services register before the route module is ever imported, so
+   * there is no stored config to correct at the moment boot reports its list.
+   */
+  it("applies a plugin list recorded before any config was stored", () => {
+    store.setHandlerPlugins(plugins("@acme/transformed"));
+
+    store.setHandlerConfig(stored);
+
+    expect(names(store)).toEqual(["@acme/transformed"]);
+  });
+
+  /**
+   * Route-module HMR re-evaluates the module and stores the raw config again
+   * without re-running boot. The booted list has to survive that.
+   */
+  it("keeps the booted list when the raw config is stored again", () => {
+    store.setHandlerConfig(stored);
+    store.setHandlerPlugins(plugins("@acme/transformed"));
+
+    store.setHandlerConfig(stored);
+
+    expect(names(store)).toEqual(["@acme/transformed"]);
+  });
+
+  /**
+   * An empty list is what a transformer that removes every plugin produces.
+   * Treating it as "boot reported nothing" would leave the author's declared
+   * plugins on display, and admin-meta would advertise routes that never
+   * mounted.
+   */
+  it("clears the declared plugins when boot produced none", () => {
+    store.setHandlerConfig(stored);
+
+    store.setHandlerPlugins([]);
+
+    expect(names(store)).toEqual([]);
+  });
+
+  /**
+   * The store answers for the route config's existence, not boot's: a process
+   * that booted services without ever importing the route module has no
+   * branding, no `db` and no `storage` to report, and a plugin list alone must
+   * not be dressed up as a config.
+   */
+  it("reports no config when only a plugin list has been recorded", () => {
+    store.setHandlerPlugins(plugins("@acme/transformed"));
+
+    expect(store.getHandlerConfig()).toBeNull();
   });
 });

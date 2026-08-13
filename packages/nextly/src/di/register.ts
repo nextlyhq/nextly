@@ -580,7 +580,10 @@ export async function registerServices(
   // store without initializing services, was describing plugins as their author
   // declared them rather than as they boot. A plugin a transformer enables was
   // reported disabled while its routes were mounted.
-  if (transformedConfig.plugins) setHandlerPlugins(transformedConfig.plugins);
+  // Unconditional, and `[]` where boot produced none: a config whose
+  // transformers removed every plugin must clear the store rather than leave
+  // the author's raw list standing as the last thing written to it.
+  setHandlerPlugins(transformedConfig.plugins ?? []);
 
   if (transformedConfig.plugins && transformedConfig.plugins.length > 0) {
     const pluginNames = transformedConfig.plugins.map(p => p.name).join(", ");
