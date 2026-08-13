@@ -56,8 +56,15 @@
  * overridable, so completeness was never available.
  */
 
-import { readFileSync, readdirSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -1022,6 +1029,20 @@ function ownsStyleProperty(slot: string, property: string): boolean {
  * not hypothetical — the store is full of links — so the traversal only follows
  * real directories.
  */
+/**
+ * Whether a file can hold a JSX call site.
+ *
+ * Both extensions, and neither `.ts` nor `.js`: an element cannot appear in
+ * those, so reading them would cost time and find nothing. Named rather than
+ * inlined so the traversal and the Turbo input globs can be checked against one
+ * list instead of two that agree until someone edits one.
+ */
+const CALL_SITE_EXTENSIONS = [".tsx", ".jsx"] as const;
+
+function isCallSite(name: string): boolean {
+  return CALL_SITE_EXTENSIONS.some(extension => name.endsWith(extension));
+}
+
 function sourceFiles(dir: string, found: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const name = entry.name;
@@ -1034,7 +1055,12 @@ function sourceFiles(dir: string, found: string[] = []): string[] {
       // markup on purpose to show a rule fires, and scanning it would report
       // the proof as the problem.
       if (name !== "__tests__") sourceFiles(full, found);
-    } else if (entry.isFile() && name.endsWith(".tsx") && full !== PRIMITIVE) {
+      // `.jsx` as well as `.tsx`. JSX is a supported source form here —
+      // `create-nextly-app` scaffolds JavaScript projects — and an extension
+      // this scan does not name is a call site it never reads. That failure is
+      // silent in the worst way: the file-count control still passes, because
+      // the `.tsx` files it counts are all still there.
+    } else if (entry.isFile() && isCallSite(name) && full !== PRIMITIVE) {
       found.push(full);
     }
   }
@@ -2246,5 +2272,42 @@ function b() { const s = { borderBottomColor: c }; return <div style={s} />; }`;
         "needs a different indicator, change `packages/ui/src/components/tabs.tsx` " +
         "so every surface changes with it."
     ).toEqual([]);
+  });
+});
+
+/**
+ * The traversal reads every file a call site can live in.
+ *
+ * A scan is only as wide as its extension list, and an extension it does not
+ * name is a call site it never reads. That gap is invisible from the outside:
+ * the repository-wide contract still passes, and so does a control that counts
+ * how many files were scanned, because the `.tsx` files it counts are all still
+ * there. Only asking the traversal directly separates the two.
+ */
+describe("which files the call-site scan reads", () => {
+  it("reads .jsx as well as .tsx, and nothing that cannot hold an element", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tabs-scan-"));
+    try {
+      for (const name of ["a.tsx", "b.jsx", "c.ts", "d.js", "e.css"]) {
+        writeFileSync(join(dir, name), "");
+      }
+
+      const found = sourceFiles(dir).map(path => path.slice(dir.length + 1));
+
+      expect(found.sort()).toEqual(["a.tsx", "b.jsx"].sort());
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("finds a violation in a .jsx call site", () => {
+    // The positive control the extension list exists for. Parsed as TSX, which
+    // handles JSX, so the only thing that decides this is whether the file was
+    // read at all.
+    const source =
+      'import { TabsTrigger } from "@nextlyhq/ui";\n' +
+      '<TabsTrigger className="border-b-0" />';
+
+    expect(violationsIn("probe.jsx", source)).not.toEqual([]);
   });
 });

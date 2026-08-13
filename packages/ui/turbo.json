@@ -50,6 +50,13 @@
         "$TURBO_ROOT$/templates/**",
         "$TURBO_ROOT$/packages/**/*.tsx",
         "$TURBO_ROOT$/apps/**/*.tsx",
+        // `.jsx` for the same reason as `.tsx`, and it is the extension the
+        // scan reads rather than the one this repo happens to use today:
+        // `create-nextly-app` scaffolds JavaScript projects, so a call site can
+        // arrive in a `.jsx` file. An input the hash does not cover is a file
+        // that can change behind a cached pass.
+        "$TURBO_ROOT$/packages/**/*.jsx",
+        "$TURBO_ROOT$/apps/**/*.jsx",
         // The RSC-matrix suite reads the root manifest and the package-smoke
         // workflow, comparing the job's Node legs against `engines.node`. Listed
         // here rather than on the root task: there they become inputs to every
@@ -77,6 +84,13 @@
         "$TURBO_ROOT$/templates/**",
         "$TURBO_ROOT$/packages/**/*.tsx",
         "$TURBO_ROOT$/apps/**/*.tsx",
+        // `.jsx` for the same reason as `.tsx`, and it is the extension the
+        // scan reads rather than the one this repo happens to use today:
+        // `create-nextly-app` scaffolds JavaScript projects, so a call site can
+        // arrive in a `.jsx` file. An input the hash does not cover is a file
+        // that can change behind a cached pass.
+        "$TURBO_ROOT$/packages/**/*.jsx",
+        "$TURBO_ROOT$/apps/**/*.jsx",
         // The RSC-matrix suite reads the root manifest and the package-smoke
         // workflow, comparing the job's Node legs against `engines.node`. Listed
         // here rather than on the root task: there they become inputs to every
