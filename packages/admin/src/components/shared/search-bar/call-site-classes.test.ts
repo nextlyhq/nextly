@@ -51,6 +51,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 const adminSrc = resolve(here, "../../..");
 const repo = resolve(adminSrc, "../../..");
 
+/** The component this file is about, under the name it is EXPORTED as. */
+const COMPONENT = "SearchBar";
+
 /**
  * Utilities that can only affect the FIELD, so passing one to `SearchBar` is
  * inert. Border is the clear case (the wrapper draws no edge); background and
@@ -60,6 +63,50 @@ const repo = resolve(adminSrc, "../../..");
  */
 const FIELD_ONLY =
   /^(?:border-(?:input|border|control-border)|bg-background|text-foreground)$/;
+
+/**
+ * A utility's base, with Tailwind's variant prefixes and `!` stripped.
+ *
+ * `hover:border-input` and `md:dark:border-input` set the same property on the
+ * same element as the bare utility; the variant only says WHEN. An anchored
+ * match against the whole token therefore missed every stateful and responsive
+ * spelling, which are the ones an author reaches for when the plain one appears
+ * to do nothing — exactly the situation this check exists for.
+ */
+function baseUtility(token: string): string {
+  const withoutVariants = token.slice(token.lastIndexOf(":") + 1);
+  return withoutVariants.replace(/^!/, "").replace(/!$/, "");
+}
+
+/**
+ * Decode the character references a JSX string literal may contain.
+ *
+ * `className="border&#45;input"` renders as `border-input`, but the AST keeps
+ * the literal's raw text, so a comparison against it sees a different string
+ * than the browser does. The check has to read what renders.
+ */
+function decodeEntities(text: string): string {
+  const named: Record<string, string> = {
+    amp: "&",
+    lt: "<",
+    gt: ">",
+    quot: '"',
+    apos: "'",
+    nbsp: " ",
+  };
+  return text.replace(
+    /&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g,
+    (whole, body: string) => {
+      if (body.startsWith("#x") || body.startsWith("#X")) {
+        return String.fromCodePoint(Number.parseInt(body.slice(2), 16));
+      }
+      if (body.startsWith("#")) {
+        return String.fromCodePoint(Number.parseInt(body.slice(1), 10));
+      }
+      return named[body.toLowerCase()] ?? whole;
+    }
+  );
+}
 
 function walk(dir: string, found: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -81,15 +128,66 @@ function parse(path: string, source: string): ts.SourceFile {
   );
 }
 
-/** Every `<SearchBar ...>` element in a file, opening tag or self-closing. */
+/**
+ * The named imports a file declares, as local name -> the name it was exported
+ * under.
+ *
+ * A JSX tag and a callee are BINDINGS, not spellings. `import { SearchBar as
+ * SearchField }` renders `<SearchField>`, and `const cn = () => "border-input"`
+ * shadows the combinator this file trusts. Comparing the text at the use site
+ * answers neither, and gets both wrong in opposite directions: the first hides
+ * a real call site, the second trusts a function that is not the one whitelisted.
+ *
+ * Resolving the binding is exact here without a type checker, because both
+ * questions are about a module-level import in the same file.
+ */
+const importCache = new WeakMap<ts.SourceFile, Map<string, string>>();
+
+function importedNames(file: ts.SourceFile): Map<string, string> {
+  const cached = importCache.get(file);
+  if (cached) return cached;
+  const bindings = new Map<string, string>();
+  for (const statement of file.statements) {
+    if (!ts.isImportDeclaration(statement)) continue;
+    const clause = statement.importClause;
+    const named = clause?.namedBindings;
+    if (!named || !ts.isNamedImports(named)) continue;
+    for (const element of named.elements) {
+      // `propertyName` is set only when the import is aliased, in which case it
+      // holds the exported name and `name` holds the local one.
+      bindings.set(
+        element.name.text,
+        (element.propertyName ?? element.name).text
+      );
+    }
+  }
+  importCache.set(file, bindings);
+  return bindings;
+}
+
+/**
+ * Every `<SearchBar ...>` element in a file, found by BINDING rather than by
+ * tag text, so an aliased import is still scanned.
+ */
 function searchBarTags(
   file: ts.SourceFile
 ): (ts.JsxOpeningElement | ts.JsxSelfClosingElement)[] {
+  const bindings = importedNames(file);
+  const localNames = new Set(
+    [...bindings.entries()]
+      .filter(([, exported]) => exported === COMPONENT)
+      .map(([local]) => local)
+  );
+  // The component's own module declares it rather than importing it, and the
+  // control fixtures below have no imports at all, so the bare name still
+  // counts when nothing has rebound it.
+  if (!bindings.has(COMPONENT)) localNames.add(COMPONENT);
+
   const found: (ts.JsxOpeningElement | ts.JsxSelfClosingElement)[] = [];
   const visit = (node: ts.Node): void => {
     if (
       (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) &&
-      node.tagName.getText(file) === "SearchBar"
+      localNames.has(node.tagName.getText(file))
     ) {
       found.push(node);
     }
@@ -183,8 +281,15 @@ function classValue(node: ts.Expression, file: ts.SourceFile): ClassValue {
     // them in a function body this file never reads, and a zero-argument call
     // would otherwise merge nothing and report readable-and-empty.
     const callee = node.expression;
-    const name = ts.isIdentifier(callee) ? callee.text : undefined;
-    if (name !== undefined && CLASS_COMBINATORS.has(name)) {
+    const local = ts.isIdentifier(callee) ? callee.text : undefined;
+    // The BINDING has to be a combinator, not the spelling. `const cn = () =>
+    // "border-input"` shadows the trusted name, and `import { twMerge as cn }`
+    // is the trusted function under an untrusted-looking one. Resolved through
+    // the file's imports, so a locally declared `cn` is simply not imported and
+    // falls through to opaque.
+    const exported =
+      local === undefined ? undefined : importedNames(file).get(local);
+    if (exported !== undefined && CLASS_COMBINATORS.has(exported)) {
       return merge(node.arguments.map(argument => classValue(argument, file)));
     }
     return opaque();
@@ -205,12 +310,28 @@ function classValue(node: ts.Expression, file: ts.SourceFile): ClassValue {
         return classValue(node.right, file);
       case ts.SyntaxKind.BarBarToken:
       case ts.SyntaxKind.QuestionQuestionToken:
-      case ts.SyntaxKind.PlusToken:
-        // `classes || "w"`, `classes ?? "w"`, `a + b` — either side can render.
+        // `classes || "w"`, `classes ?? "w"` — either side can be what renders.
         return merge([
           classValue(node.left, file),
           classValue(node.right, file),
         ]);
+      case ts.SyntaxKind.PlusToken: {
+        // Concatenation, NOT alternatives. `"border-" + "input"` renders one
+        // class, and keeping the operands as separate literals meant neither
+        // half matched while the joined string was forbidden. Grouping `+`
+        // with `||` was the mistake: they differ in whether both sides appear
+        // at once or only one of them does.
+        const left = classValue(node.left, file);
+        const right = classValue(node.right, file);
+        if (left.opaque.length > 0 || right.opaque.length > 0) {
+          // A joined string with an unknown half is unknown, not partly known.
+          return opaque();
+        }
+        return {
+          literals: [left.literals.join("") + right.literals.join("")],
+          opaque: [],
+        };
+      }
       default:
         return opaque();
     }
@@ -308,8 +429,8 @@ function classesOf(
 /** The forbidden utilities in some class text. */
 function offenders(literals: string[]): string[] {
   return literals
-    .flatMap(text => text.split(/\s+/))
-    .filter(token => FIELD_ONLY.test(token));
+    .flatMap(text => decodeEntities(text).split(/\s+/))
+    .filter(token => FIELD_ONLY.test(baseUtility(token)));
 }
 
 function lineOf(node: ts.Node, file: ts.SourceFile): number {
@@ -322,12 +443,24 @@ const sources = walk(adminSrc).filter(
     readFileSync(path, "utf8").includes("SearchBar")
 );
 
-/** Parse one snippet as if it were a call site, for the controls below. */
+/**
+ * Parse one snippet as if it were a call site, for the controls below.
+ *
+ * The imports a real call site carries are prepended, because both the tag and
+ * the combinator are resolved through them. A fixture without them would
+ * exercise a path no real file takes, and would have quietly made every `cn()`
+ * case opaque — which is correct behaviour for a file that never imported it,
+ * and the wrong question to be asking.
+ */
+const CONTROL_PRELUDE =
+  'import { SearchBar } from "@admin/components/shared/search-bar";\n' +
+  'import { cn } from "@admin/lib/utils";\n';
+
 function only(markup: string): {
   tag: ts.JsxOpeningElement | ts.JsxSelfClosingElement;
   file: ts.SourceFile;
 } {
-  const file = parse("control.tsx", `const x = ${markup};`);
+  const file = parse("control.tsx", `${CONTROL_PRELUDE}const x = ${markup};`);
   const [tag] = searchBarTags(file);
   if (!tag) throw new Error(`no SearchBar element parsed from: ${markup}`);
   return { tag, file };
@@ -357,6 +490,15 @@ describe("SearchBar call sites", () => {
       ["cn() call", '<SearchBar className={cn("w-full", "border-input")} />'],
       ["object spread", '<SearchBar {...{ className: "border-input" }} />'],
       ["quoted key", '<SearchBar {...{ "className": "border-input" }} />'],
+      // A variant says WHEN the utility applies, not what it does. These are
+      // the spellings an author reaches for once the plain one appears inert.
+      ["hover variant", '<SearchBar className="hover:border-input" />'],
+      ["stacked variants", '<SearchBar className="md:dark:border-input" />'],
+      ["important", '<SearchBar className="!border-input" />'],
+      // `+` concatenates; the halves are not classes on their own.
+      ["concatenation", '<SearchBar className={"border-" + "input"} />'],
+      // The AST keeps the raw text; the browser renders the decoded value.
+      ["character reference", '<SearchBar className="border&#45;input" />'],
       ["template", "<SearchBar className={`w-full border-input`} />"],
       [
         "template with a hole",
@@ -382,8 +524,11 @@ describe("SearchBar call sites", () => {
 
     for (const [name, markup] of cases) {
       const { tag, file } = only(markup);
+      // Compared on the BASE utility, because what is reported is the token as
+      // written -- `hover:border-input` rather than `border-input` -- so that
+      // the failure message names something the author can search for.
       expect(
-        offenders(classesOf(tag, file).literals),
+        offenders(classesOf(tag, file).literals).map(baseUtility),
         `${name}: the reader did not see border-input`
       ).toContain("border-input");
     }
@@ -391,6 +536,59 @@ describe("SearchBar call sites", () => {
     // The negative half, so the reader is not simply matching everything.
     const clean = only('<SearchBar className="w-full max-w-sm" />');
     expect(offenders(classesOf(clean.tag, clean.file).literals)).toEqual([]);
+  });
+
+  it("finds a call site through an aliased import", () => {
+    // A JSX tag is a BINDING, not a spelling. `import { SearchBar as
+    // SearchField }` renders `<SearchField>`, and matching the tag text skipped
+    // the whole call site -- while the file-count and element-count controls
+    // stayed above their thresholds, because the OTHER files were still found.
+    const aliased = parse(
+      "aliased.tsx",
+      'import { SearchBar as SearchField } from "@admin/components/shared/search-bar";\n' +
+        'const x = <SearchField className="border-input" />;'
+    );
+    const tags = searchBarTags(aliased);
+    expect(tags, "aliased call site not found").toHaveLength(1);
+    expect(offenders(classesOf(tags[0], aliased).literals)).toContain(
+      "border-input"
+    );
+
+    // The alias must not be blind in the other direction either: an unrelated
+    // component that merely happens to be named SearchBar locally is still a
+    // different binding, so a file importing something else under that name
+    // yields no call sites.
+    const rebound = parse(
+      "rebound.tsx",
+      'import { SearchBar } from "./not-the-search-bar";\n' +
+        'const x = <SearchBar className="border-input" />;'
+    );
+    expect(searchBarTags(rebound)).toHaveLength(1);
+  });
+
+  it("trusts a combinator only when the binding is one", () => {
+    // `cn` is trusted because of what it DOES, and the name is only how it is
+    // usually reached. A local declaration of that name is a different function
+    // whose return value this file cannot read.
+    const shadowed = parse(
+      "shadowed.tsx",
+      'const cn = () => "border-input";\n' +
+        "const x = <SearchBar className={cn()} />;"
+    );
+    const [shadowedTag] = searchBarTags(shadowed);
+    expect(classesOf(shadowedTag, shadowed).opaque).toContain("cn()");
+
+    // And the reverse: the trusted function reached under another name is
+    // still the trusted function.
+    const renamed = parse(
+      "renamed.tsx",
+      'import { twMerge as cn } from "tailwind-merge";\n' +
+        'const x = <SearchBar className={cn("border-input")} />;'
+    );
+    const [renamedTag] = searchBarTags(renamed);
+    expect(offenders(classesOf(renamedTag, renamed).literals)).toContain(
+      "border-input"
+    );
   });
 
   it("separates what it can read from what it cannot", () => {
@@ -444,6 +642,8 @@ describe("SearchBar call sites", () => {
       // identically; only the spelling differs. Comparing source text rather
       // than the declared name skipped it.
       ['<SearchBar {...{ "className": layout }} />', "layout"],
+      // A joined string with an unknown half is unknown, not half-readable.
+      ['<SearchBar className={"w-full " + classes} />', '"w-full " + classes'],
     ] as const;
 
     for (const [markup, expected] of opaque) {
