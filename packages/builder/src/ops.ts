@@ -1294,6 +1294,29 @@ export function applyOp(
         `survive being written down and read back.`
     );
   }
+  // The envelope's VALUES, not only its keys. Descriptors say a field is held
+  // rather than computed; they say nothing about what is held. An in-process
+  // document carrying `metadata: 1n` satisfies every check above, and then
+  // `documentBytes` leaks `TypeError: Do not know how to serialize a BigInt`
+  // from inside an insert, a move or an update — while a remove, which never
+  // measures bytes, succeeds and hands back a document that cannot be saved.
+  //
+  // The forest is excluded deliberately rather than overlooked. `isJsonValue`
+  // refuses past its own value-depth bound, which is far below the depth a
+  // document may legitimately reach, so walking `nodes` through it would refuse
+  // documents the machine cap allows and name the wrong reason for it. The
+  // forest has its own entry walk, its own depth guard and its own per-op value
+  // checks; this covers the fields none of those look at.
+  for (const [key, value] of Object.entries(document)) {
+    if (key === "nodes") continue;
+    if (!isJsonValue(value)) {
+      throw new OpError(
+        `a document whose "${key}" is ${describe(value)} cannot be edited: ` +
+          `JSON cannot write that value, so the edit would apply and then ` +
+          `fail to save.`
+      );
+    }
+  }
   const nodes = document.nodes;
   // Every ENTRY, not just the array. A stored forest carrying a `null` or a
   // primitive passes the array check and then reaches helpers that read `.id`

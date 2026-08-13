@@ -1693,6 +1693,25 @@ describe("the document's own identity fields", () => {
     expect(() => applyOp(hidden, { kind: "remove", id: "a" })).toThrow(OpError);
   });
 
+  it("refuses a document carrying a value JSON cannot write", () => {
+    // Keys and descriptors say a field is HELD rather than computed; they say
+    // nothing about what is held. Without a value check this document is
+    // accepted, and `documentBytes` then leaks a native TypeError from inside
+    // an insert, a move or an update — while a remove, which never measures
+    // bytes, succeeds and returns a document that cannot be saved at all.
+    const carrying = { ...doc(), metadata: 1n } as unknown as BlockDocument;
+
+    expect(() => applyOp(carrying, { kind: "remove", id: "a" })).toThrow(
+      OpError
+    );
+    // The remove specifically, because it is the one that used to SUCCEED. An
+    // insert or an update fails either way, so a case built on one of those
+    // passes without the check and proves nothing.
+    expect(() => applyOp(carrying, { kind: "remove", id: "a" })).toThrow(
+      /JSON cannot write that value/
+    );
+  });
+
   it("refuses a document whose format version is computed", () => {
     // An accessor runs code to answer, so a guard that reads it is executing
     // the document's own getter while deciding whether to trust the document.
