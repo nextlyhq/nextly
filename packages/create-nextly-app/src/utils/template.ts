@@ -709,6 +709,30 @@ export function generatePnpmWorkspaceYaml(): string {
  * bun ignore the file entirely, so it ships in every scaffold for the same
  * reason `pnpm-workspace.yaml` does.
  */
+export async function writeYarnRcYml(targetDir: string): Promise<void> {
+  const target = path.join(targetDir, ".yarnrc.yml");
+
+  // MERGED, never replaced. The "ignore files and continue" path scaffolds into a directory that
+  // already has contents, and a `.yarnrc.yml` there can carry private-registry credentials,
+  // `npmScopes`, plugins or `packageExtensions` — losing them immediately before the install
+  // either breaks it or silently changes what resolves.
+  if (await fs.pathExists(target)) {
+    const existing = await fs.readFile(target, "utf8");
+    // An explicit choice already on the file is the user's, including `pnp`. Overriding it would
+    // be this scaffold deciding something the project has already decided.
+    if (/^\s*nodeLinker\s*:/m.test(existing)) return;
+    const separator = existing.endsWith("\n") || existing === "" ? "" : "\n";
+    await fs.writeFile(
+      target,
+      existing + separator + generateYarnRcYml(),
+      "utf-8"
+    );
+    return;
+  }
+
+  await fs.writeFile(target, generateYarnRcYml(), "utf-8");
+}
+
 export function generateYarnRcYml(): string {
   return (
     "# Yarn Berry defaults to Plug'n'Play, which has no physical node_modules.\n" +
@@ -930,11 +954,7 @@ export async function copyTemplate(
     generatePnpmWorkspaceYaml(),
     "utf-8"
   );
-  await fs.writeFile(
-    path.join(targetDir, ".yarnrc.yml"),
-    generateYarnRcYml(),
-    "utf-8"
-  );
+  await writeYarnRcYml(targetDir);
 
   // Step 7: Create SQLite data directory if needed
   // SQLite stores its database file at ./data/nextly.db and the parent
@@ -1011,11 +1031,7 @@ async function copyPluginTemplate(opts: {
     generatePnpmWorkspaceYaml(),
     "utf-8"
   );
-  await fs.writeFile(
-    path.join(targetDir, ".yarnrc.yml"),
-    generateYarnRcYml(),
-    "utf-8"
-  );
+  await writeYarnRcYml(targetDir);
 
   // Fill plugin placeholders across the copied tree (src/ + dev/).
   const nextlyRange = await resolvePluginNextlyRange(useYalc);
