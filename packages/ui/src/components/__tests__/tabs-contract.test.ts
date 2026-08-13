@@ -941,6 +941,42 @@ function dependenciesOfUncached(cls: string): string[] {
 
 const dependenciesOf = perClass(dependenciesOfUncached);
 
+/**
+ * The attributes a JSX spread carries, when they can be read here.
+ *
+ * Only an object literal is read, for the same reason a style prop is: knowing
+ * what a name holds means tracing it. `readable` false means the spread may
+ * carry anything, which includes the two props this contract owns.
+ */
+function spreadAttributes(
+  attribute: ts.JsxSpreadAttribute,
+  checker: ts.TypeChecker
+): {
+  attributes: Array<{ name: string; value: ts.Expression }>;
+  readable: boolean;
+} {
+  const { objects, readable } = styleResolver(checker).objectsFrom(
+    attribute.expression
+  );
+  if (!readable) return { attributes: [], readable: false };
+  const attributes: Array<{ name: string; value: ts.Expression }> = [];
+  for (const object of objects) {
+    for (const property of object.properties) {
+      if (!ts.isPropertyAssignment(property)) {
+        // A shorthand or a spread inside the spread is a value this does not
+        // read, and the props it carries are unknown rather than absent.
+        return { attributes: [], readable: false };
+      }
+      const name = property.name;
+      if (!ts.isIdentifier(name) && !ts.isStringLiteral(name)) {
+        return { attributes: [], readable: false };
+      }
+      attributes.push({ name: name.text, value: property.initializer });
+    }
+  }
+  return { attributes, readable: true };
+}
+
 /** Which of a component's owned classes a caller's `className` takes over. */
 function displacedBy(exported: string, classes: string): string[] {
   const owned = OWNED_BY_SLOT[exported] ?? [];
@@ -2357,6 +2393,59 @@ function violationsIn(file: string, source: string): Violation[] {
       );
       if (exported) {
         for (const attribute of node.attributes.properties) {
+          // `<TabsTrigger {...props} />` carries whatever `props` holds, which
+          // includes `style` and `className`. Skipping spreads left the whole
+          // contract bypassable by one idiom, on both halves at once.
+          if (ts.isJsxSpreadAttribute(attribute)) {
+            const spread = spreadAttributes(attribute, checker);
+            if (!spread.readable) {
+              found.push({
+                file,
+                line: at(attribute),
+                why: "spreads props this scan cannot read, which may carry `style` or `className` — spread an object literal, or pass the props this primitive owns explicitly",
+              });
+              continue;
+            }
+            for (const carried of spread.attributes) {
+              const carriedName = carried.name;
+              if (carriedName === "className") {
+                const classes = literalStrings(carried.value).join(" ");
+                const displaced = displacedBy(exported, classes);
+                if (displaced.length > 0) {
+                  found.push({
+                    file,
+                    line: at(attribute),
+                    why: `spreads ${displaced.join(", ")} — the primitive owns that appearance, and every surface should change with it`,
+                  });
+                }
+              }
+              if (carriedName === "style") {
+                const resolver = styleResolver(checker);
+                const { objects, readable } = resolver.objectsFrom(
+                  carried.value
+                );
+                if (!readable) {
+                  found.push({
+                    file,
+                    line: at(attribute),
+                    why: "spreads an inline style this scan cannot read — write it as a literal object, or move it to `className` so the primitive keeps its appearance",
+                  });
+                  continue;
+                }
+                const owned = objects
+                  .map(object => ownedStyleProperty(exported, object, resolver))
+                  .find(Boolean);
+                if (owned) {
+                  found.push({
+                    file,
+                    line: at(attribute),
+                    why: `spreads \`${owned}\` inline, which beats every class the primitive applies`,
+                  });
+                }
+              }
+            }
+            continue;
+          }
           if (!ts.isJsxAttribute(attribute)) continue;
           const name = attribute.name.getText(sourceFile);
           if (name === "style") {
@@ -2913,6 +3002,23 @@ describe("the tab indicator contract", () => {
     [
       "an inline style read from a member access",
       "<TabsTrigger style={theme.tab} />",
+    ],
+    // A JSX spread carries whatever the object holds, including the two props
+    // this contract owns. Skipping spreads left both halves bypassable by one
+    // idiom.
+    [
+      "an owned property spread in as a literal style prop",
+      'const props = { style: { borderBottomColor: "red" } };\n<TabsTrigger {...{ style: { borderBottomColor: "red" } }} />',
+    ],
+    [
+      "a displacing class spread in as a literal className",
+      '<TabsTrigger {...{ className: "border-b-0" }} />',
+    ],
+    // And a spread whose contents cannot be read at all, which may carry
+    // either of them.
+    [
+      "a spread of props the scan cannot read",
+      'const props = { className: "border-b-0" };\n<TabsTrigger {...props} />',
     ],
   ])("catches %s", (_label, body) => {
     // The positive controls. Each is a shape an earlier version returned clean
