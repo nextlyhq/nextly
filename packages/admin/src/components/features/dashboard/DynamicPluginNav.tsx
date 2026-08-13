@@ -56,13 +56,11 @@ function PluginOverviewLink({
 }: {
   isActive: (href?: string) => boolean;
 }) {
-  // `/admin/plugins` is a prefix of `/admin/plugins/browse`, so claiming the
-  // whole subtree would highlight both sibling entries at once on the
-  // directory. Subtracting the sibling rather than demanding an exact match:
-  // a plugin's own pages — `/admin/plugins/<slug>` and its settings — are
-  // descendants too, and under an exact match they left the secondary
-  // navigation with nothing selected at all.
-  const active = isActive(ROUTES.PLUGINS) && !isActive(ROUTES.PLUGIN_BROWSE);
+  // The whole subtree, so a plugin's own pages — `/admin/plugins/<slug>` and
+  // its settings — keep the overview selected. Nothing has to be subtracted
+  // here: the directory lives outside this prefix, so it cannot be caught by
+  // a descendant match and light both entries at once.
+  const active = isActive(ROUTES.PLUGINS);
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active}>

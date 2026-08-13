@@ -31,8 +31,16 @@ interface BrandingState {
   branding: AdminBranding | undefined;
   /** True until the admin-meta query settles, either way. */
   isPending: boolean;
-  /** True when it settled without an answer, so absence proves nothing. */
-  isError: boolean;
+  /**
+   * True when admin-meta has never produced an answer, so absence proves
+   * nothing.
+   *
+   * Not "the last request failed". Once a response is cached, a failed
+   * BACKGROUND refetch leaves that answer intact and still valid, and treating
+   * it as unavailable would replace a correct page with an error for as long
+   * as the server stays unreachable.
+   */
+  isUnavailable: boolean;
 }
 
 const BrandingContext = createContext<BrandingState | undefined>(undefined);
@@ -57,7 +65,7 @@ export function useBrandingStatus(): Omit<BrandingState, "branding"> {
   // here would hang it forever.
   return {
     isPending: state?.isPending ?? false,
-    isError: state?.isError ?? false,
+    isUnavailable: state?.isUnavailable ?? false,
   };
 }
 
@@ -176,7 +184,10 @@ export function BrandingProvider({ children }: BrandingProviderProps) {
   const {
     data: fetchedData,
     isPending,
-    isError,
+    // `isLoadingError`, not `isError`: the latter is also true when a
+    // background refetch fails while a previous response is still cached, and
+    // that cached response is a perfectly good answer.
+    isLoadingError,
   } = useQuery<AdminBranding>({
     queryKey: ["admin-meta"],
     queryFn: () => publicApi.get<AdminBranding>("/admin-meta"),
@@ -193,8 +204,8 @@ export function BrandingProvider({ children }: BrandingProviderProps) {
   // query's own stable `data` reference: without this every consumer of the
   // context re-renders on each render of this provider.
   const value = useMemo(
-    () => ({ branding: fetchedData, isPending, isError }),
-    [fetchedData, isPending, isError]
+    () => ({ branding: fetchedData, isPending, isUnavailable: isLoadingError }),
+    [fetchedData, isPending, isLoadingError]
   );
 
   return (

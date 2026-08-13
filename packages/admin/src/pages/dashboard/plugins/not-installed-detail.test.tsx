@@ -23,7 +23,7 @@ import type { AdminBranding } from "@admin/types/branding";
 const INSTALL_COMMAND = /^pnpm add @nextlyhq\/plugin-seo@\d/;
 
 let mockBranding: AdminBranding = { plugins: [] } as unknown as AdminBranding;
-let mockBrandingStatus = { isPending: false, isError: false };
+let mockBrandingStatus = { isPending: false, isUnavailable: false };
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
@@ -45,7 +45,7 @@ function renderDetail(slug: string) {
 
 afterEach(() => {
   mockBranding = { plugins: [] } as unknown as AdminBranding;
-  mockBrandingStatus = { isPending: false, isError: false };
+  mockBrandingStatus = { isPending: false, isUnavailable: false };
   vi.restoreAllMocks();
 });
 
@@ -76,7 +76,12 @@ describe("plugin detail, not installed", () => {
     expect(
       screen.getByText('import { seoPlugin } from "@nextlyhq/plugin-seo";')
     ).toBeInTheDocument();
-    expect(screen.getByText(/plugins: \[seoPlugin\(/)).toBeInTheDocument();
+    // The element alone, with no `plugins:` property around it. A reader who
+    // already has plugins configured appends this; a property could only be
+    // pasted by replacing theirs.
+    expect(
+      screen.getByText('seoPlugin({ collections: ["your-collection"] })')
+    ).toBeInTheDocument();
   });
 
   /**
@@ -86,7 +91,7 @@ describe("plugin detail, not installed", () => {
    * something they already have.
    */
   it("does not offer to install while the installed list is still loading", async () => {
-    mockBrandingStatus = { isPending: true, isError: false };
+    mockBrandingStatus = { isPending: true, isUnavailable: false };
 
     renderDetail("nextlyhq-plugin-seo");
 
@@ -97,7 +102,7 @@ describe("plugin detail, not installed", () => {
 
   /** Same reasoning, permanent: a failed request is not evidence of absence. */
   it("does not offer to install when the installed list could not be loaded", async () => {
-    mockBrandingStatus = { isPending: false, isError: true };
+    mockBrandingStatus = { isPending: false, isUnavailable: true };
 
     renderDetail("nextlyhq-plugin-seo");
 

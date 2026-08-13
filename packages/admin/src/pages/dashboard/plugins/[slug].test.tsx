@@ -14,7 +14,7 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
   // Settled with an answer: every case here is about a plugin the branding
   // payload already carries.
-  useBrandingStatus: () => ({ isPending: false, isError: false }),
+  useBrandingStatus: () => ({ isPending: false, isUnavailable: false }),
 }));
 
 import PluginDetailPage from "./[slug]";

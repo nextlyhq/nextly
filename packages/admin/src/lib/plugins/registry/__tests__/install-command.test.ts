@@ -85,13 +85,13 @@ describe("config lines", () => {
     expect(importStatement(plugin)).toBe(
       'import { thing } from "@acme/thing";'
     );
-    expect(pluginsArrayEntry(plugin)).toBe("plugins: [thing()]");
+    expect(pluginsArrayEntry(plugin)).toBe("thing()");
   });
 
   it("leaves an uncalled export uncalled", () => {
     expect(
       pluginsArrayEntry(entry({ exportName: "thing", callArgs: null }))
-    ).toBe("plugins: [thing]");
+    ).toBe("thing");
   });
 
   it("places required arguments inside the call", () => {
@@ -99,6 +99,6 @@ describe("config lines", () => {
       pluginsArrayEntry(
         entry({ exportName: "thing", callArgs: '{ collections: ["posts"] }' })
       )
-    ).toBe('plugins: [thing({ collections: ["posts"] })]');
+    ).toBe('thing({ collections: ["posts"] })');
   });
 });

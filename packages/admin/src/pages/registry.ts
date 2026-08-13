@@ -373,12 +373,9 @@ export const routeConfig: Record<string, RouteConfig> = {
     type: "private",
     requiredPermission: "manage-settings",
   },
-  // `/admin/plugins/[slug]` matches `/admin/plugins/browse` too, so which page
-  // answers is decided rather than incidental. Two things decide it, and
-  // either alone is sufficient: `resolveRoute` tries an exact-match pass before
-  // the dynamic matcher, and the dynamic matcher returns the first pattern that
-  // matches in insertion order, which is this one. Kept above PLUGIN_DETAIL so
-  // the ordering half stays true if the exact pass is ever reworked.
+  // Registered outside `/admin/plugins/`, so no ordering rule holds this in
+  // place: the directory and a plugin's detail page cannot match the same
+  // path, whatever the plugin is called.
   [ROUTES.PLUGIN_BROWSE]: {
     component: PluginBrowsePage,
     type: "private",

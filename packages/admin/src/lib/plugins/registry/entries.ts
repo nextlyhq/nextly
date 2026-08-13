@@ -66,9 +66,15 @@ export const REGISTRY_ENTRIES: RegistryPlugin[] = [
     // `collections` is required rather than illustrative: the plugin adds the
     // SEO group only to the collections it is given, so a bare call does not
     // type-check.
+    //
+    // A named placeholder, not a plausible slug like "posts". The blank
+    // template ships `collections: []`, and naming a collection the project
+    // does not have makes the eager schema fold throw
+    // NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN at startup — a copied line that
+    // stops the app is worse than one that obviously has to be edited.
     config: {
       exportName: "seoPlugin",
-      callArgs: '{ collections: ["posts"] }',
+      callArgs: '{ collections: ["your-collection"] }',
     },
     links: {
       homepage: "https://nextlyhq.com",

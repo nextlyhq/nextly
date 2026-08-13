@@ -181,7 +181,7 @@ function InstalledPluginsUnavailable() {
 
 function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
   const branding = useBranding();
-  const { isPending, isError } = useBrandingStatus();
+  const { isPending, isUnavailable } = useBrandingStatus();
   const plugins = branding?.plugins ?? [];
   const plugin = activeSlug
     ? plugins.find(p => pluginSlug(p.name) === activeSlug)
@@ -197,7 +197,7 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
   // "not installed" tells someone who HAS this plugin to go and install it.
   if (!plugin) {
     if (isPending) return <LoadingInstalledPlugins />;
-    if (isError) return <InstalledPluginsUnavailable />;
+    if (isUnavailable) return <InstalledPluginsUnavailable />;
     return <UninstalledOrMissing activeSlug={activeSlug} />;
   }
 

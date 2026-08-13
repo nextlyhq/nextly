@@ -220,10 +220,11 @@ describe("DynamicPluginNav", () => {
 /**
  * Which sidebar entry the overview claims.
  *
- * `/admin/plugins` is a prefix of both the directory and every plugin's own
- * page, and the three cases pull in opposite directions: claiming the whole
- * subtree highlights the overview and Browse together on the directory, while
- * demanding an exact match leaves a plugin's own page with nothing selected.
+ * A plugin's own pages are descendants of `/admin/plugins`, so an exact match
+ * would leave the secondary navigation with nothing selected while reading a
+ * plugin's detail page. The directory is the case pulling the other way, and
+ * it is answered by living under a different prefix rather than by a rule
+ * here — which is what the last case pins.
  */
 describe("DynamicPluginNav overview active state", () => {
   function overviewActive() {
@@ -236,8 +237,12 @@ describe("DynamicPluginNav overview active state", () => {
     ["/admin/plugins", "true"],
     ["/admin/plugins/acme-forms", "true"],
     ["/admin/plugins/acme-forms/settings", "true"],
-    // The sibling page owns itself; Browse is the entry that highlights here.
-    ["/admin/plugins/browse", "false"],
+    // A plugin that happens to be called "browse" is still a plugin, and its
+    // page belongs to this entry like any other.
+    ["/admin/plugins/browse", "true"],
+    // The directory, which Browse owns. It is outside the prefix, so this is
+    // false without the overview having to exclude anything.
+    ["/admin/plugin-directory", "false"],
   ])("at %s the overview is active=%s", (pathname, expected) => {
     mockBranding = { plugins: [] } as unknown as AdminBranding;
 

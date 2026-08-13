@@ -73,7 +73,13 @@ export function importStatement(plugin: RegistryPlugin): string {
 }
 
 /**
- * The entry to add inside `plugins: [...]`.
+ * The single element to append inside an existing `plugins: [...]`.
+ *
+ * The element alone, not the whole `plugins:` property. A reader who already
+ * has plugins configured — the likely one, since the directory is reached from
+ * the installed list — cannot use a property: pasting it inside the array is
+ * not valid TypeScript, and pasting it over the existing property silently
+ * drops every plugin already there.
  *
  * `callArgs` decides whether the binding is called at all: `null` means the
  * package exports a ready-made plugin value, which is how
@@ -83,6 +89,5 @@ export function importStatement(plugin: RegistryPlugin): string {
  */
 export function pluginsArrayEntry(plugin: RegistryPlugin): string {
   const { exportName, callArgs } = plugin.config;
-  const value = callArgs === null ? exportName : `${exportName}(${callArgs})`;
-  return `plugins: [${value}]`;
+  return callArgs === null ? exportName : `${exportName}(${callArgs})`;
 }

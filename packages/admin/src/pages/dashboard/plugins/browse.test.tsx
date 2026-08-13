@@ -1,8 +1,8 @@
 /**
  * The directory joins two sources: a curated catalogue, and what the server
  * reports as installed. These cover that join, and the route that reaches it —
- * `/admin/plugins/browse` is also a legal `/admin/plugins/[slug]`, so which
- * page answers is a property worth pinning rather than assuming.
+ * the directory sits outside `/admin/plugins/` so that no plugin name can
+ * shadow it, and that separation is worth pinning rather than assuming.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -37,15 +37,7 @@ afterEach(() => {
 });
 
 describe("plugin browse route", () => {
-  /**
-   * `/admin/plugins/[slug]` matches this path too. Two independent things keep
-   * the directory reachable — the exact-match pass in `resolveRoute`, and the
-   * browse route being registered before the detail route, since the dynamic
-   * matcher takes the first pattern that matches. Either alone is sufficient,
-   * so this fails only when both are gone, which is the state that would
-   * actually render a plugin detail page for a plugin named "browse".
-   */
-  it("resolves the browse path to the browse page, not the detail page", () => {
+  it("resolves the directory path to the browse page", () => {
     const resolved = resolveRoute(ROUTES.PLUGIN_BROWSE, "");
 
     expect(resolved.Component).toBe(PluginBrowsePage);
@@ -54,12 +46,30 @@ describe("plugin browse route", () => {
 
   it("still resolves a real plugin slug to the detail page", () => {
     // Positive control on the matcher: the dynamic route is reachable, so the
-    // assertion above is about precedence rather than about a detail route
-    // that stopped matching anything.
+    // assertion above is about the directory's own path rather than about a
+    // detail route that stopped matching anything.
     const resolved = resolveRoute("/admin/plugins/nextlyhq-plugin-seo", "");
 
     expect(resolved.Component).not.toBe(PluginBrowsePage);
     expect(resolved.params).toEqual({ slug: "nextlyhq-plugin-seo" });
+  });
+
+  /**
+   * The separating case, and the reason the directory does not live at
+   * `/admin/plugins/browse`.
+   *
+   * `PluginDefinition.name` is an arbitrary string, so a plugin can slugify to
+   * any segment a static sibling might occupy — `browse` included. With the
+   * two sharing a parent, one of them has to win, and the loser is a page the
+   * UI still links to and nothing can reach. Under a different parent the
+   * question does not arise, so this asserts the slug the old layout would
+   * have swallowed still reaches its own page.
+   */
+  it("reaches the detail page for a plugin whose slug is the old directory segment", () => {
+    const resolved = resolveRoute("/admin/plugins/browse", "");
+
+    expect(resolved.Component).not.toBe(PluginBrowsePage);
+    expect(resolved.params).toEqual({ slug: "browse" });
   });
 });
 
