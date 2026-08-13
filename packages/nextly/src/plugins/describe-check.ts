@@ -1,3 +1,5 @@
+import type { Logger } from "../shared/types";
+
 import type { PluginDefinition } from "./plugin-context";
 
 /**
@@ -26,4 +28,26 @@ export function pluginsMissingDescription(
   return plugins
     .filter(plugin => !plugin.admin?.description?.trim())
     .map(plugin => plugin.name);
+}
+
+/**
+ * Report the plugins that ship without a description, if any.
+ *
+ * Takes the logger rather than reaching for one, so the message it produces is
+ * observable in a test. Boot wiring that only exists at a call site inside a
+ * several-hundred-line registration function can be deleted without any test
+ * noticing; the message is the part worth pinning, and this is the smallest
+ * unit that owns it.
+ */
+export function warnUndescribedPlugins(
+  plugins: readonly PluginDefinition[],
+  logger: Logger
+): void {
+  const undescribed = pluginsMissingDescription(plugins);
+  if (undescribed.length === 0) return;
+
+  logger.warn?.(
+    `Plugins with no admin.description, so the admin can only show their ` +
+      `package name: ${undescribed.join(", ")}`
+  );
 }

@@ -99,7 +99,7 @@ import { registerSingleHooks } from "../hooks/register-single-hooks";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
-import { pluginsMissingDescription } from "../plugins/describe-check";
+import { warnUndescribedPlugins } from "../plugins/describe-check";
 import { setInitializedPlugins } from "../plugins/initialized-plugins";
 import {
   collectCustomPermissions,
@@ -581,13 +581,7 @@ export async function registerServices(
     // package specifier. Warned rather than thrown — the omission is the
     // plugin author's and breaks nothing, and an operator cannot fix a
     // third-party package from their own config.
-    const undescribed = pluginsMissingDescription(transformedConfig.plugins);
-    if (undescribed.length > 0) {
-      resolvedLogger.warn?.(
-        `Plugins with no admin.description, so the admin can only show their ` +
-          `package name: ${undescribed.join(", ")}`
-      );
-    }
+    warnUndescribedPlugins(transformedConfig.plugins, resolvedLogger);
   }
 
   // ----------------------------------------

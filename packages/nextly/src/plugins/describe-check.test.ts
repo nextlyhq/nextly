@@ -4,7 +4,12 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { pluginsMissingDescription } from "./describe-check";
+import type { Logger } from "../shared/types";
+
+import {
+  pluginsMissingDescription,
+  warnUndescribedPlugins,
+} from "./describe-check";
 import type { PluginDefinition } from "./plugin-context";
 
 function plugin(name: string, description?: string): PluginDefinition {
@@ -54,5 +59,52 @@ describe("pluginsMissingDescription", () => {
 
   it("says nothing about an empty plugin list", () => {
     expect(pluginsMissingDescription([])).toEqual([]);
+  });
+});
+
+describe("warnUndescribedPlugins", () => {
+  function fakeLogger() {
+    const warnings: string[] = [];
+    return {
+      logger: { warn: (m: string) => warnings.push(m) } as unknown as Logger,
+      warnings,
+    };
+  }
+
+  it("names every plugin missing one, in one message", () => {
+    const { logger, warnings } = fakeLogger();
+
+    warnUndescribedPlugins(
+      [plugin("@acme/a"), plugin("@acme/b", "Has one"), plugin("@acme/c")],
+      logger
+    );
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("@acme/a");
+    expect(warnings[0]).toContain("@acme/c");
+    // The separating assertion: a message that simply listed every plugin
+    // would satisfy the two above.
+    expect(warnings[0]).not.toContain("@acme/b");
+  });
+
+  /**
+   * Silence when there is nothing to say. A warning on every boot of a
+   * correctly-described install is noise that trains an operator to ignore the
+   * one that matters.
+   */
+  it("says nothing when every plugin declares one", () => {
+    const { logger, warnings } = fakeLogger();
+
+    warnUndescribedPlugins([plugin("@acme/a", "Has one")], logger);
+
+    expect(warnings).toEqual([]);
+  });
+
+  it("says nothing when there are no plugins", () => {
+    const { logger, warnings } = fakeLogger();
+
+    warnUndescribedPlugins([], logger);
+
+    expect(warnings).toEqual([]);
   });
 });
