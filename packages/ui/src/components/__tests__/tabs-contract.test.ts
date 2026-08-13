@@ -90,6 +90,20 @@ const REPO = resolve(HERE, "../../../../..");
  */
 const SCAN_ROOT_NAMES = ["packages", "apps", "templates"] as const;
 
+/**
+ * The watch-trigger prefix that subscribes to each scanned root.
+ *
+ * Vitest resolves `forceRerunTriggers` relative to the package, so the roots
+ * the scan walks are reached by relative path here rather than by the
+ * `$TURBO_ROOT$` the Turbo inputs use. Two spellings of one fact, which is why
+ * the contract below checks them against each other rather than trusting both.
+ */
+const CALL_SITE_ROOT_GLOBS = [
+  { root: "packages", prefix: "../*/src/**/*." },
+  { root: "apps", prefix: "../../apps/*/src/**/*." },
+  { root: "templates", prefix: "../../templates/**/*." },
+] as const;
+
 const SCAN_ROOTS = SCAN_ROOT_NAMES.map(r => resolve(REPO, r));
 
 /** The primitive itself declares the contract; it is not a call site. */
@@ -1355,6 +1369,18 @@ function styleResolver(attribute: ts.JsxAttribute): {
       // sibling function is not mistaken for one in this scope.
       ts.forEachChild(scope, statement => {
         if (!ts.isVariableStatement(statement)) return;
+        // `const` only. A `let` or `var` binding's declaration initializer is
+        // not what the element renders — `let c = undefined; c = "red";` paints,
+        // and following the initializer alone concludes the opposite. Reading a
+        // reassignable binding as its first value turns a check into a false
+        // NEGATIVE, which is the direction that lets a real violation ship.
+        //
+        // Undecidable is the honest answer for those, and undecidable here
+        // means "keep reporting": the callers treat an unresolvable binding as
+        // emitting, which is the conservative side.
+        const isConst =
+          (statement.declarationList.flags & ts.NodeFlags.Const) !== 0;
+        if (!isConst) return;
         for (const declaration of statement.declarationList.declarations) {
           if (
             ts.isIdentifier(declaration.name) &&
@@ -1491,6 +1517,19 @@ function propertyNameOf(
  * `seen` stops a self-referential binding from recursing. Anything else — a
  * template with substitutions, a call, a member access — stays undecidable and
  * returns undefined, which leaves the property unnamed rather than guessed.
+ *
+ * KNOWN LIMIT, and it is a hole rather than a decision to be comfortable with:
+ * a reassignable key escapes. `let k = "x"; k = "borderBottomColor";
+ * style={{ [k]: "red" }}` paints the indicator and is not reported, because the
+ * binding is not `const` and its declaration initializer is not what runs.
+ *
+ * The asymmetry with values is deliberate. For a VALUE the property is already
+ * known to be owned, so undecidable defaults to "it emits" and the call site is
+ * reported — the conservative side. For a KEY, undecidable means the property
+ * is not known at all, and defaulting to "owned" would report every computed
+ * key in the repository, including the overwhelming majority that name nothing
+ * this primitive draws. Closing this needs the assignments in scope to be read,
+ * not a change of default.
  */
 function staticKeyOf(
   expression: ts.Expression,
@@ -2132,6 +2171,18 @@ describe("the tab indicator contract", () => {
       "a destructured namespace member",
       'import * as UI from "@nextlyhq/ui";\nconst { TabsTrigger: Trigger } = UI;\n<Trigger className="border-b-0" />',
     ],
+    // A reassignable binding is not its declaration initializer. Reading it as
+    // one concludes the element paints nothing while it paints — a false
+    // NEGATIVE, which is the direction that lets a real violation ship, and the
+    // one an immutable-binding control cannot see.
+    [
+      "a reassigned binding that held nothing at its declaration",
+      'let c: string | undefined = undefined;\nc = "red";\n<TabsTrigger style={{ borderBottomColor: c }} />',
+    ],
+    [
+      "the same reassigned binding behind an assertion",
+      'let c: string | undefined = undefined;\nc = "red";\n<TabsTrigger style={{ borderBottomColor: c as string | undefined }} />',
+    ],
   ])("catches %s", (_label, body) => {
     // The positive controls. Each is a shape an earlier version returned clean
     // on, or a category it never read. Without these, a check that can never
@@ -2514,26 +2565,44 @@ describe("which files the call-site scan reads", () => {
     }
   });
 
-  it("reruns in watch mode for every extension it reads", () => {
+  it("reruns in watch mode for every root and extension it reads", () => {
     // The scan reaches call sites with `readFileSync`, so Vitest has no module
     // dependency on them: without an explicit trigger a watch session keeps
-    // displaying the previous green after a real violation is added to a `.js`
-    // or `.jsx` file. `forceRerunTriggers` is what supplies that dependency,
-    // and it is a second list of extensions — so it is checked against the
-    // first rather than trusted to stay in step.
+    // displaying the previous green after a real violation is added.
+    //
+    // Both halves matter, and the ROOT half is the one that is easy to miss.
+    // The triggers are resolved relative to this package, so a glob under
+    // `**/src` subscribes to `packages/ui` alone — a call site in
+    // `packages/admin`, an app or a template could gain a violation and the
+    // suite reporting on it would never rerun.
     const config = readFileSync(
       resolve(HERE, "../../../vitest.config.ts"),
       "utf8"
     );
-    const trigger = /"\*\*\/src\/\*\*\/\*\.\{([^}]+)\}"/.exec(config)?.[1];
 
-    // Proves the pattern found something before anything is concluded from it:
-    // a renamed option or a reformatted config would otherwise read as a pass.
-    expect(trigger).toBeDefined();
+    const triggers = [...config.matchAll(/"([^"]*)\{([^}]+)\}"/g)].map(
+      match => ({
+        prefix: match[1],
+        extensions: match[2].split(",").map(part => part.trim()),
+      })
+    );
 
-    const covered = (trigger ?? "").split(",").map(part => part.trim());
-    const missing = CALL_SITE_EXTENSIONS.map(e => e.slice(1)).filter(
-      extension => !covered.includes(extension)
+    // Proves the pattern matched something before anything is concluded from
+    // it: a renamed option or a reformatted config would otherwise read as a
+    // pass, which is the failure this whole case exists to prevent.
+    expect(triggers.length).toBeGreaterThan(0);
+
+    const missing = CALL_SITE_ROOT_GLOBS.flatMap(({ root, prefix }) =>
+      CALL_SITE_EXTENSIONS.map(extension => extension.slice(1))
+        .filter(
+          extension =>
+            !triggers.some(
+              trigger =>
+                trigger.prefix === prefix &&
+                trigger.extensions.includes(extension)
+            )
+        )
+        .map(extension => `${root}:${extension}`)
     );
 
     expect(missing).toEqual([]);

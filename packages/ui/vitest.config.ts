@@ -18,6 +18,17 @@ export default defineConfig({
       // `src/components/__tests__/tabs-contract.test.ts`, which asserts this
       // list covers it.
       "**/src/**/*.{ts,tsx,js,jsx}",
+      // And every ROOT that scan walks, not only this package. The glob above
+      // is relative to `packages/ui`, so a call site in `packages/admin`,
+      // `apps/playground` or a template changed nothing in watch mode — the
+      // suite that reports on those files never reran.
+      //
+      // Kept in step with `CALL_SITE_ROOT_GLOBS` in
+      // `src/components/__tests__/tabs-contract.test.ts`, which asserts this
+      // list covers every root-and-extension pair the scan reads.
+      "../*/src/**/*.{ts,tsx,js,jsx}",
+      "../../apps/*/src/**/*.{ts,tsx,js,jsx}",
+      "../../templates/**/*.{ts,tsx,js,jsx}",
       "**/src/**/*.css",
       // The declaration build runs through both tsup configs, and a child
       // process loads them — they are in no module graph Vitest can invalidate,
