@@ -181,47 +181,59 @@ export { pluginAdminSlug } from "./plugin-slug";
  * applies) but contribute NO behavioral admin UI — no menu/pages/settings.
  */
 /**
- * The routes a plugin declares that would actually mount, with the namespace
- * they would answer at.
+ * The routes a plugin would actually serve, with the namespace they answer at.
  *
  * Asks `collectPluginRoutes` rather than restating its rules. That function is
  * the canonical answer to "would these mount": it rejects a path without a
- * leading slash and rejects two declarations sharing a `(method, full path)`.
- * Re-implementing either predicate here would mean the admin can advertise a
- * route boot refuses, which is the whole failure this guards.
+ * leading slash and rejects two routes sharing a `(method, full path)`.
+ * Re-implementing either predicate here would let the admin advertise a route
+ * boot refuses, which is the whole failure this guards.
  *
- * It is asked about ONE plugin, forced enabled, because that is the question:
- * what would happen to this plugin's own declarations. Collisions ACROSS
- * plugins are a property of the whole enabled set and cannot be evaluated for
- * a plugin that is not in it — enabling two plugins that collide with each
- * other still fails at boot, and no per-plugin view can foresee it.
+ * Folded against the plugins that are ALREADY enabled, not against this plugin
+ * alone, because a collision need not be self-inflicted: namespaces are built
+ * from package names, so an enabled `foo` declaring `GET /bar/x` and a
+ * disabled `foo/bar` declaring `GET /x` both resolve to `/plugins/foo/bar/x`.
+ * Enabling the second is what fails, and a fold over one plugin cannot see it.
+ *
+ * The subject is forced enabled, since the question is what WOULD happen. Its
+ * routes are then picked back out by owner: a collision reported against an
+ * already-enabled sibling means the subject's route is the one that could not
+ * be added.
  *
  * `undefined` when nothing would mount, so a caller renders nothing rather
  * than an empty section.
  */
 function mountableRoutes(
-  plugin: PluginDefinition
+  plugin: PluginDefinition,
+  siblings: readonly PluginDefinition[]
 ): PluginAdminMeta["routes"] | undefined {
   const routes = plugin.contributes?.routes;
   if (!routes || routes.length === 0) return undefined;
 
+  // Enabled siblings first, so a collision is attributed to the sibling that
+  // already holds the path and the subject's route is the one rejected.
+  const others = siblings.filter(
+    other => other !== plugin && other.enabled !== false
+  );
+
   let collected;
   try {
-    collected = collectPluginRoutes([{ ...plugin, enabled: true }]);
+    collected = collectPluginRoutes([...others, { ...plugin, enabled: true }]);
   } catch (error) {
     // Only route errors reach here — `collectPluginRoutes` throws
     // `routeInvalidPathError` and `routeCollisionError` and nothing else — and
     // both mean the same thing to this caller: these declarations do not
-    // mount, so there is nothing honest to advertise. Rethrown if it is
-    // anything else, since that would be a defect rather than a verdict.
+    // mount, so there is nothing honest to advertise. Rethrown otherwise,
+    // since that would be a defect rather than a verdict.
     if (!isRouteError(error)) throw error;
     return undefined;
   }
 
   // Method + path only, plus the namespace: handlers and middleware are code
   // and never serialize.
-  return collected.length > 0
-    ? collected.map(c => ({
+  const mine = collected.filter(c => c.pluginName === plugin.name);
+  return mine.length > 0
+    ? mine.map(c => ({
         method: c.method,
         path: c.path,
         fullPath: c.fullPath,
@@ -341,7 +353,7 @@ export function buildPluginAdminMeta(
     // Permissions are NOT part of this: they are folded over every plugin,
     // disabled included, so they are already seeded and are not pending on
     // anything. Only their listing here is withheld while disabled.
-    const declaredRoutes = mountableRoutes(plugin);
+    const declaredRoutes = mountableRoutes(plugin, plugins);
     if (isEnabled) {
       if (declaredRoutes) meta.routes = declaredRoutes;
       const permissions = plugin.contributes?.permissions;

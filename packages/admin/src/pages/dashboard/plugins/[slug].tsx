@@ -32,6 +32,7 @@ import {
   useBranding,
   useBrandingStatus,
 } from "@admin/context/providers/BrandingProvider";
+import { API_PATH_PREFIX } from "@admin/lib/api/fetcher";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { staticRegistrySource } from "@admin/lib/plugins/registry/static-source";
@@ -435,7 +436,7 @@ function Contributions({ plugin }: { plugin: PluginMetadata }) {
       label: "API routes",
       icon: Route,
       items: (plugin.routes ?? []).map(r => ({
-        primary: `${r.method} /api${r.fullPath}`,
+        primary: `${r.method} ${API_PATH_PREFIX}${r.fullPath}`,
       })),
     },
   ].filter(group => group.items.length > 0);
@@ -545,7 +546,7 @@ function WhenEnabled({ plugin }: { plugin: PluginMetadata }) {
               key={`${r.method}-${r.path}`}
               className="break-words font-mono text-sm text-foreground"
             >
-              {`${r.method} /api${r.fullPath}`}
+              {`${r.method} ${API_PATH_PREFIX}${r.fullPath}`}
             </li>
           ))}
         </ul>

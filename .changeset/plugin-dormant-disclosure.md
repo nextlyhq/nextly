@@ -25,7 +25,9 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Disclose what a disabled plugin would add when enabled. A disabled plugin
-mounts no routes and grants no permissions, so those fields stay empty; the
-same declarations now travel as `whenEnabled`, populated only while the plugin
-is disabled, and the admin detail page shows them under their own heading.
+Disclose the routes a disabled plugin would serve once enabled. A disabled
+plugin mounts no routes, so `routes` stays empty and the same declarations
+travel as `whenEnabled` instead — only those that would actually mount, checked
+by the same fold that mounts them. Its permissions are untouched by this: they
+are seeded whatever the plugin's enabled state, so they were never pending on
+anything.

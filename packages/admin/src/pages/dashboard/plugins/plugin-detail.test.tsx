@@ -147,7 +147,7 @@ describe("PluginDetailPage", () => {
     expect(screen.getByText("danger")).toBeInTheDocument();
     // Route summary includes the namespaced final URL.
     expect(
-      screen.getByText("GET /api/plugins/@acme/forms/submissions/export")
+      screen.getByText("GET /admin/api/plugins/@acme/forms/submissions/export")
     ).toBeInTheDocument();
   });
 
@@ -196,7 +196,7 @@ describe("PluginDetailPage dormant disclosure", () => {
     // The RAW package name, which is the namespace the dispatcher registers —
     // not the admin slug, which is only how this UI addresses the plugin.
     expect(
-      screen.getByText("DELETE /api/plugins/@acme/disabled/archive")
+      screen.getByText("DELETE /admin/api/plugins/@acme/disabled/archive")
     ).toBeInTheDocument();
   });
 
@@ -232,7 +232,7 @@ describe("PluginDetailPage dormant disclosure", () => {
     render(<PluginDetailPage params={{ slug: "acme-forms" }} />);
 
     expect(
-      screen.getByText("GET /api/plugins/@acme/forms/submissions/export")
+      screen.getByText("GET /admin/api/plugins/@acme/forms/submissions/export")
     ).toBeInTheDocument();
   });
 });

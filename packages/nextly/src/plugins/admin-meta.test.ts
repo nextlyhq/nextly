@@ -833,3 +833,60 @@ describe("dormant routes", () => {
     expect(meta.whenEnabled).toBeUndefined();
   });
 });
+
+/**
+ * Namespaces are built from package names, so a collision need not be
+ * self-inflicted: an enabled plugin can already own the path a disabled one
+ * would claim. Advertising it as something enabling would serve is a promise
+ * boot refuses.
+ */
+describe("dormant routes against the enabled set", () => {
+  const enabledOwner = {
+    name: "foo",
+    version: "1.0.0",
+    contributes: { routes: [{ method: "GET", path: "/bar/x" }] },
+  } as unknown as PluginDefinition;
+
+  const disabledClaimant = {
+    name: "foo/bar",
+    version: "1.0.0",
+    enabled: false,
+    contributes: { routes: [{ method: "GET", path: "/x" }] },
+  } as unknown as PluginDefinition;
+
+  it("omits a dormant route an enabled plugin already serves", () => {
+    // Both resolve to /plugins/foo/bar/x.
+    const metas = buildPluginAdminMeta(
+      [enabledOwner, disabledClaimant],
+      undefined
+    );
+    const claimant = metas.find(m => m.name === "foo/bar");
+
+    expect(claimant?.whenEnabled).toBeUndefined();
+  });
+
+  /**
+   * The control. Without the enabled owner present the same declaration is
+   * perfectly mountable, so the omission above is about the collision rather
+   * than about a route that was never valid.
+   */
+  it("keeps it when no enabled plugin holds that path", () => {
+    const metas = buildPluginAdminMeta([disabledClaimant], undefined);
+    const claimant = metas.find(m => m.name === "foo/bar");
+
+    expect(claimant?.whenEnabled?.routes).toEqual([
+      { method: "GET", path: "/x", fullPath: "/plugins/foo/bar/x" },
+    ]);
+  });
+
+  it("leaves the enabled owner's own route reported", () => {
+    const metas = buildPluginAdminMeta(
+      [enabledOwner, disabledClaimant],
+      undefined
+    );
+
+    expect(metas.find(m => m.name === "foo")?.routes).toEqual([
+      { method: "GET", path: "/bar/x", fullPath: "/plugins/foo/bar/x" },
+    ]);
+  });
+});

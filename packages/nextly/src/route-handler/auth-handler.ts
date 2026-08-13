@@ -18,6 +18,7 @@ import {
 } from "../di";
 import type { NextlyServiceConfig } from "../di/register";
 import { buildServiceConfig } from "../init/build-service-config";
+import type { PluginDefinition } from "../plugins/plugin-context";
 import { ensureHmrListener } from "../runtime/hmr-listener";
 import { getImageProcessor } from "../storage/image-processor";
 
@@ -36,6 +37,25 @@ let _storedConfig: SanitizedNextlyConfig | null = null;
  */
 export function setHandlerConfig(config: SanitizedNextlyConfig): void {
   _storedConfig = config;
+}
+
+/**
+ * Replace the stored config's plugin list, leaving the rest of it alone.
+ *
+ * The store is populated when the route module is imported, which is the
+ * earliest the config exists and is before any `setup` transformer has run.
+ * Boot then transforms the list — a transformer may add, remove, or flip the
+ * `enabled` flag on a plugin — and the public admin-meta endpoint reads this
+ * store WITHOUT initializing services, so without this it describes plugins as
+ * their author declared them rather than as they actually booted.
+ *
+ * Only the plugins, not the whole config: the transformed value carries no
+ * `typescript`, `db` or `storage`, so writing it wholesale would silently drop
+ * three fields this store legitimately holds.
+ */
+export function setHandlerPlugins(plugins: PluginDefinition[]): void {
+  if (!_storedConfig) return;
+  _storedConfig = { ..._storedConfig, plugins };
 }
 
 /**

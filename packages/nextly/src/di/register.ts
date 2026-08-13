@@ -129,6 +129,7 @@ import {
 } from "../plugins/services/plugin-services-registry";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
 import { validatePluginSlugs } from "../plugins/validate-slugs";
+import { setHandlerPlugins } from "../route-handler/auth-handler";
 import type {
   CollectionSource,
   FieldDefinition,
@@ -571,6 +572,15 @@ export async function registerServices(
 
   const resolvedLogger = logger ?? consoleLogger;
   const resolvedBasePath = basePath ?? process.cwd();
+
+  // Re-point the handler store at the TRANSFORMED plugin list.
+  // `createDynamicHandlers` stores the raw config when the route module is
+  // imported, which is the earliest the config exists but is before any `setup`
+  // transformer has run — so the public admin-meta endpoint, which reads that
+  // store without initializing services, was describing plugins as their author
+  // declared them rather than as they boot. A plugin a transformer enables was
+  // reported disabled while its routes were mounted.
+  if (transformedConfig.plugins) setHandlerPlugins(transformedConfig.plugins);
 
   if (transformedConfig.plugins && transformedConfig.plugins.length > 0) {
     const pluginNames = transformedConfig.plugins.map(p => p.name).join(", ");
