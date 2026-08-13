@@ -356,6 +356,56 @@ function withModes(found: Utility[]): Utility[] {
  */
 const QUOTED_SPAN = /(["'`])([^"'`]*)\1/g;
 
+/**
+ * The source with comment BODIES blanked out, so a class name discussed in
+ * prose is not counted as a class name that renders.
+ *
+ * This matters beyond tidiness. `observed` is what proves an accepted
+ * regression is still reachable, so a backticked utility in a comment keeps an
+ * acceptance alive after the last real use of it is deleted -- the acceptance
+ * then sits in the file reading as live coverage while pre-approving whatever
+ * paints that pair next. Measured: removing the only rendered
+ * `text-destructive-600` while leaving a comment that mentions it kept every
+ * test in this file green.
+ *
+ * Comments are replaced character-for-character with spaces rather than
+ * removed, because every offset in this file is turned back into a line number.
+ * Newlines are preserved for the same reason.
+ *
+ * String literals are tracked so that a `//` inside one -- a URL is the common
+ * case -- does not start a comment and blank the rest of the line.
+ */
+function blankComments(source: string): string {
+  const out = source.split("");
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === '"' || ch === "'" || ch === "`") {
+      i++;
+      while (i < source.length && source[i] !== ch) {
+        i += source[i] === "\\" ? 2 : 1;
+      }
+      i++;
+      continue;
+    }
+    if (ch === "/" && source[i + 1] === "/") {
+      while (i < source.length && source[i] !== "\n") out[i++] = " ";
+      continue;
+    }
+    if (ch === "/" && source[i + 1] === "*") {
+      const end = source.indexOf("*/", i + 2);
+      const stop = end === -1 ? source.length : end + 2;
+      while (i < stop) {
+        if (source[i] !== "\n") out[i] = " ";
+        i++;
+      }
+      continue;
+    }
+    i++;
+  }
+  return out.join("");
+}
+
 /** The utilities in one class string, split on whitespace and matched whole. */
 function parseUtilities(classString: string): Utility[] {
   const found: Utility[] = [];
@@ -399,7 +449,7 @@ function* inkUsages(): Generator<{
   utilities: Utility[];
 }> {
   for (const path of sources) {
-    const source = readFileSync(resolve(repo, path), "utf8");
+    const source = blankComments(readFileSync(resolve(repo, path), "utf8"));
     if (!APPLIES_CLASSES.test(source)) continue;
     for (const span of source.matchAll(QUOTED_SPAN)) {
       const utilities = parseUtilities(span[2] ?? "");
@@ -530,6 +580,43 @@ for (const { path, line, self, utilities } of inkUsages()) {
 }
 
 describe("ink utilities are readable on the surfaces they land on", () => {
+  it("does not read a class name out of a comment", () => {
+    // The reachability assertion below treats `observed` as proof that a
+    // component still paints a pair, so prose counting as paint is not a
+    // cosmetic miscount: it keeps an acceptance alive after the last real use
+    // is deleted. Exercised on a fixture whose right answer is known, because
+    // the difference between the two behaviours is invisible in aggregate --
+    // both produce plenty of utilities.
+    const fixture = [
+      "// see `text-destructive-600` for why this is accepted",
+      "/* also `text-destructive-500` in a block comment */",
+      'const cls = "text-muted-foreground";',
+      'const url = "https://example.com/x"; // trailing comment',
+    ].join("\n");
+
+    const spans = [...blankComments(fixture).matchAll(QUOTED_SPAN)].map(
+      m => m[2]
+    );
+
+    expect(spans).toContain("text-muted-foreground");
+    expect(spans).toContain("https://example.com/x");
+    expect(spans.join(" ")).not.toContain("text-destructive-600");
+    expect(spans.join(" ")).not.toContain("text-destructive-500");
+  });
+
+  it("keeps every offset, so reported lines stay true", () => {
+    // The blanking has to be length-preserving: every hit in this file is
+    // turned into a line number by slicing the source at the match index. A
+    // stripper that removed comments instead would renumber every finding
+    // below its first comment, and the assertions would still pass.
+    const fixture = 'a\n// gone\nconst c = "text-primary";\n';
+    const blanked = blankComments(fixture);
+    expect(blanked).toHaveLength(fixture.length);
+    expect(blanked.split("\n")).toHaveLength(fixture.split("\n").length);
+    const at = blanked.indexOf('"text-primary"');
+    expect(fixture.slice(0, at).split("\n")).toHaveLength(3);
+  });
+
   it("holds accepted pairs to their recorded ratio", () => {
     // Some accepted pairs have no entry in PAIRINGS -- this scan is the only
     // thing that reaches them -- so if the suppression above were unconditional

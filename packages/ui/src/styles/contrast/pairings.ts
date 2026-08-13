@@ -430,6 +430,16 @@ const BOUNDARIES: Pairing[] = [
     mode: "light",
     label: "switch thumb on its unchecked track (light)",
   },
+  // The dark thumb is a different token -- `bg-foreground`, not `bg-background`
+  // -- so the light pairing above says nothing about it, and a mode-blind
+  // reading of "the thumb is covered" was how the dark track went unmeasured.
+  {
+    fg: "--nx-foreground",
+    bg: "--nx-control-border",
+    kind: "ui",
+    mode: "dark",
+    label: "switch thumb on its unchecked track (dark)",
+  },
   // The checkbox and radio boundary, held to 3:1 on every surface with no
   // acceptance. `--nx-input` is knowingly below the minimum; this token exists
   // precisely because those two controls cannot follow it there. A field is
