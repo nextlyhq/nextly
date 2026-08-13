@@ -466,9 +466,13 @@ const COMPARISON_BUDGET = MAX_VALUE_PARTS;
  */
 function equalWithin(a: unknown, b: unknown, budget: number): boolean {
   const pending: [unknown, unknown][] = [[a, b]];
-  let steps = 0;
+  // Charged at ENQUEUE, not on the way out. A budget checked per pop still
+  // allocates one tuple per element before the next check can run, so a dense
+  // array near the parts ceiling builds millions of temporary pairs to answer a
+  // question whose answer is already settled by the lengths. The count is what
+  // the walk is about to do, not what it has already done.
+  let queued = 1;
   while (pending.length > 0) {
-    if (steps++ > budget) return false;
     const pair = pending.pop();
     if (pair === undefined) break;
     const [left, right] = pair;
@@ -476,6 +480,8 @@ function equalWithin(a: unknown, b: unknown, budget: number): boolean {
     if (Array.isArray(left) || Array.isArray(right)) {
       if (!Array.isArray(left) || !Array.isArray(right)) return false;
       if (left.length !== right.length) return false;
+      if (queued + left.length > budget) return false;
+      queued += left.length;
       for (let i = 0; i < left.length; i += 1)
         pending.push([left[i], right[i]]);
       continue;
@@ -484,6 +490,8 @@ function equalWithin(a: unknown, b: unknown, budget: number): boolean {
       const leftKeys = Object.keys(left);
       const rightKeys = Object.keys(right);
       if (leftKeys.length !== rightKeys.length) return false;
+      if (queued + leftKeys.length > budget) return false;
+      queued += leftKeys.length;
       for (const key of leftKeys) {
         if (!Object.hasOwn(right, key)) return false;
         pending.push([left[key], right[key]]);
@@ -628,13 +636,22 @@ function hasOnlyJsonOwnKeys(value: object): boolean {
       if (key === "length") continue;
       if (typeof key !== "string") return false;
       if (!isArrayIndex(key)) return false;
-      // Enumerability is deliberately NOT required of an index: `JSON.stringify`
-      // reads an array by position from `0` to `length`, so a non-enumerable
-      // index still round-trips and refusing it would reject a value that
-      // serializes correctly.
-      if (!holdsAValue(Object.getOwnPropertyDescriptor(value, key))) {
-        return false;
-      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      // Enumerability IS required of an index, against the intuition that
+      // `JSON.stringify` reads an array by position and so round-trips one
+      // without it. That is true of `JSON.stringify` and false of the copier
+      // this module actually uses: measured, `["x","y","z"]` with index `1`
+      // redefined non-enumerable stringifies as `["x","hidden","z"]` and
+      // `structuredClone`s to `["x",null,"z"]`.
+      //
+      // So accepting it admits a value that passes every check and is then
+      // silently altered by `snapshot`: the update succeeds, the stored array
+      // holds a `null` the author never wrote, and the inverse derived
+      // alongside it is refused by the next edit — a successful operation that
+      // cannot be undone. Refusing it is the same rule the envelope and the
+      // object branch already apply, for the same reason.
+      if (descriptor === undefined || !descriptor.enumerable) return false;
+      if (!holdsAValue(descriptor)) return false;
     }
     return true;
   }
@@ -2027,16 +2044,19 @@ export function applyOp(
   // from configuration, an environment variable or a JSON column produces one
   // by parsing a value that was not there.
   assertUsableLimits(limits);
-  // The document itself, before its forest is read. An op arrives beside a
-  // document from storage, so neither is more trustworthy than the other.
-  if (!isPlainRecord(document) || !Array.isArray(document.nodes)) {
+  // A RECORD first, and nothing more. Reading `nodes` in the same condition put
+  // a field access ahead of the descriptor check below, so a document whose
+  // enumerable `nodes` is a throwing accessor ran its getter here and left this
+  // module as a native error rather than the `OpError` it promises — the exact
+  // fault the descriptor check exists to refuse, reached one line before it.
+  if (!isPlainRecord(document)) {
     throw new OpError(
       `a document of ${describe(document)} holds no forest to edit. Every ` +
         `document is a record whose nodes are an array.`
     );
   }
   // The ENVELOPE's own keys, by the same rule its contents are held to, and
-  // before anything reads a field off it.
+  // before anything reads a field off it — `nodes` included.
   //
   // `withNodes` builds the result by spreading, and a spread copies enumerable
   // own properties only — so a `kind` or `formatVersion` defined as
@@ -2052,6 +2072,13 @@ export function applyOp(
       `a document carrying a field JSON cannot write, or one computed rather ` +
         `than held, cannot be edited. Every field a document names must ` +
         `survive being written down and read back.`
+    );
+  }
+  // NOW the forest, once reading a field off the envelope is known to be safe.
+  if (!Array.isArray(document.nodes)) {
+    throw new OpError(
+      `a document whose nodes are ${describe(document.nodes)} holds no forest ` +
+        `to edit. Every document is a record whose nodes are an array.`
     );
   }
   // The envelope's VALUES, not only its keys. Descriptors say a field is held

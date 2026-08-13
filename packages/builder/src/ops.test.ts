@@ -1974,6 +1974,53 @@ describe("an inverse that names a parent held twice", () => {
     ).toThrow(/past the 50 nodes a whole document may hold/);
   });
 
+  it("refuses a computed forest without running its getter", () => {
+    // The descriptor check has to come before the field is READ, and reading
+    // `nodes` to decide whether it is an array is a read. A throwing getter
+    // there leaves this module as whatever the document chose to throw, which
+    // is the one thing `applyOp` promises never to do.
+    //
+    // Separating on the ERROR TYPE, not on the message: with the read ahead of
+    // the check, this escapes as the raw `TypeError` below.
+    const hostile = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+    } as unknown as BlockDocument;
+    Object.defineProperty(hostile, "nodes", {
+      get() {
+        throw new TypeError("the document decided what happens next");
+      },
+      enumerable: true,
+      configurable: true,
+    });
+
+    expect(() => applyOp(hostile, { kind: "remove", id: "a" })).toThrow(
+      OpError
+    );
+  });
+
+  it("refuses an array index the snapshot would silently drop", () => {
+    // `JSON.stringify` reads an array by position, so a non-enumerable index
+    // round-trips through it — which is why this was once accepted. The copier
+    // is `structuredClone`, and it drops the property: measured, the same array
+    // stringifies as ["x","hidden","z"] and clones as ["x",null,"z"].
+    //
+    // Accepted, the update succeeds and stores a `null` the author never wrote,
+    // and the inverse derived beside it is refused by the next edit — an
+    // operation that worked and cannot be undone.
+    const classes = ["x", "y", "z"];
+    Object.defineProperty(classes, "1", {
+      value: "hidden",
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    });
+
+    expect(() =>
+      applyOp(doc(), { kind: "update", id: "a", patch: { classes } })
+    ).toThrow(OpError);
+  });
+
   it("refuses a cap that cannot decide anything", () => {
     // Every cap here is a `>` comparison and every comparison against `NaN` is
     // false, so one non-finite limit does not loosen a cap — it removes it, and
