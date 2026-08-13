@@ -154,6 +154,20 @@ function surfaceFor(name: string): string {
  * opacities (`border-primary/[0.08]`). Rings are included because a focus
  * indicator is a UI boundary held to 3:1.
  */
+/**
+ * Whether a matched path is source that RENDERS.
+ *
+ * Both scans in this file ask this, and they must answer identically. The
+ * measuring scan skips tests because a suite naming `border-input/50` as a
+ * fixture paints nothing — but the fingerprint asking a different question of
+ * the same corpus would fail the run over a package whose only match is in a
+ * test, demanding coverage for a file the measurement then ignores. One
+ * predicate, so the two cannot disagree about what counts as UI.
+ */
+function rendersUi(path: string): boolean {
+  return !/\.test\.|\/__tests__\//.test(path);
+}
+
 function scanCombos(): Map<string, number> {
   const dirs = SCANNED_DIRS.map(d => `${repo}/${d}`);
   // Fail loudly if a scanned dir is missing (a moved or misspelled entry must
@@ -182,7 +196,7 @@ function scanCombos(): Map<string, number> {
     const separator = line.indexOf(":");
     if (separator === -1) continue;
     const path = line.slice(0, separator);
-    if (/\.test\.|\/__tests__\//.test(path)) continue;
+    if (!rendersUi(path)) continue;
     const t = line.slice(separator + 1).trim();
     if (!t) continue;
     const name = nameOf(t);
@@ -264,9 +278,15 @@ describe("alpha-opacity color utilities", () => {
     for (const line of hits.split("\n")) {
       const sep = line.indexOf(":");
       if (sep === -1) continue;
+      const path = line.slice(0, sep);
+      // Same predicate the measuring scan uses. Without it this demands
+      // coverage for a package whose only match is a test fixture -- a file
+      // the measurement deliberately ignores -- so the run fails asking for
+      // something that would change nothing.
+      if (!rendersUi(path)) continue;
       const name = nameOf(line.slice(sep + 1).trim());
       if (!name || !isScannableColor(name)) continue;
-      const pkg = /\/packages\/([^/]+)\/src\//.exec(line.slice(0, sep))?.[1];
+      const pkg = /\/packages\/([^/]+)\/src\//.exec(path)?.[1];
       if (pkg) used.add(pkg);
     }
     const scanned = new Set(

@@ -35,7 +35,7 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
-import { inertClassesIn } from "./inert-classes";
+import { inertClassesFor } from "./inert-classes";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const adminSrc = resolve(here, "../../..");
@@ -65,6 +65,58 @@ function parse(path: string, source: string): ts.SourceFile {
 }
 
 /**
+ * The modules that export THIS `SearchBar`.
+ *
+ * A name is not an identity. Some other module exporting something called
+ * `SearchBar` would otherwise have this component's wrapper rules applied to
+ * it, and would fail on classes that are perfectly valid for whatever it is —
+ * a check firing on correct code, in a file its author never touched.
+ *
+ * A short list rather than an open rule, because following re-exports in
+ * general means resolving the whole module graph. Each entry is verified
+ * against its own source by the test below, so one that stops exporting the
+ * component fails rather than quietly widening what counts.
+ */
+const EXPORTING_MODULES = new Map<string, string>([
+  [
+    "packages/admin/src/components/shared/search-bar",
+    "the component's own module",
+  ],
+  [
+    "packages/admin/src/components/shared",
+    "the shared barrel, which re-exports it",
+  ],
+]);
+
+/**
+ * An import specifier as a repository-relative module path, or null when it
+ * names something outside this package and so cannot be the component.
+ */
+function resolveSpecifier(specifier: string, fromFile: string): string | null {
+  let absolute: string;
+  if (specifier.startsWith("@admin/")) {
+    absolute = resolve(adminSrc, specifier.slice("@admin/".length));
+  } else if (specifier.startsWith(".")) {
+    absolute = resolve(dirname(fromFile), specifier);
+  } else {
+    return null;
+  }
+  // A directory and its `index` are the same module, and both spellings occur.
+  return relative(repo, absolute).replace(/\/index$/, "");
+}
+
+function fromExportingModule(
+  statement: ts.ImportDeclaration,
+  fromFile: string,
+  file: ts.SourceFile
+): boolean {
+  const specifier = statement.moduleSpecifier;
+  if (!ts.isStringLiteral(specifier)) return false;
+  const resolved = resolveSpecifier(specifier.text, fromFile);
+  return resolved !== null && EXPORTING_MODULES.has(resolved);
+}
+
+/**
  * The local names bound to `SearchBar` in a file, including through a namespace.
  *
  * A JSX tag is a BINDING, not a spelling: `import { SearchBar as SearchField }`
@@ -72,39 +124,53 @@ function parse(path: string, source: string): ts.SourceFile {
  * the tag text found neither, and the count assertions stayed green because the
  * other twenty call sites were still there — a threshold cannot see one missing
  * member of a population.
+ *
+ * The binding must also come FROM this component's module. Otherwise a file
+ * importing an unrelated `SearchBar` has these rules applied to it.
  */
-function localTagNames(file: ts.SourceFile): Set<string> {
+function localTagNames(file: ts.SourceFile, fromFile: string): Set<string> {
   const names = new Set<string>();
-  let rebound = false;
+  let importsTheName = false;
   for (const statement of file.statements) {
     if (!ts.isImportDeclaration(statement)) continue;
     const bindings = statement.importClause?.namedBindings;
     if (!bindings) continue;
+    const isOurs = fromExportingModule(statement, fromFile, file);
     if (ts.isNamespaceImport(bindings)) {
-      names.add(`${bindings.name.text}.${COMPONENT}`);
+      if (isOurs) names.add(`${bindings.name.text}.${COMPONENT}`);
       continue;
     }
     for (const element of bindings.elements) {
       // `propertyName` is set only when the import is aliased, and then holds
       // the EXPORTED name while `name` holds the local one.
-      if ((element.propertyName ?? element.name).text === COMPONENT) {
+      if ((element.propertyName ?? element.name).text === COMPONENT && isOurs) {
         names.add(element.name.text);
       }
-      if (element.name.text === COMPONENT) rebound = true;
+      // Tracked whatever the module, so an unrelated import of the same name
+      // suppresses the bare-name fallback below instead of being re-admitted
+      // by it.
+      if (element.name.text === COMPONENT) importsTheName = true;
     }
   }
   // The component's own module declares rather than imports it, and a control
   // fixture may have no imports, so the bare name counts unless something has
-  // bound that name to a different export.
-  if (!rebound) names.add(COMPONENT);
+  // bound that name to some other export.
+  //
+  // What this deliberately does NOT cover: a file that binds `SearchBar`
+  // locally without importing it — a `const`, a function declaration. Such a
+  // name is matched. Excluding it would mean tracking every binding form in
+  // the language, which is the surface this file gave up covering; and a local
+  // component of that name inside admin is a collision worth a warning anyway.
+  if (!importsTheName) names.add(COMPONENT);
   return names;
 }
 
 /** Every `<SearchBar ...>` element in a file, found by binding rather than text. */
 function searchBarTags(
-  file: ts.SourceFile
+  file: ts.SourceFile,
+  fromFile = file.fileName
 ): (ts.JsxOpeningElement | ts.JsxSelfClosingElement)[] {
-  const names = localTagNames(file);
+  const names = localTagNames(file, fromFile);
   const found: (ts.JsxOpeningElement | ts.JsxSelfClosingElement)[] = [];
   const visit = (node: ts.Node): void => {
     if (
@@ -193,6 +259,86 @@ describe("SearchBar call sites", () => {
         'const x = <SearchBar className="w-full" />;'
     );
     expect(searchBarTags(plain), "plain import").toHaveLength(1);
+
+    const barrel = parse(
+      "barrel.tsx",
+      'import { SearchBar } from "@admin/components/shared";\n' +
+        'const x = <SearchBar className="w-full" />;'
+    );
+    expect(searchBarTags(barrel), "barrel import").toHaveLength(1);
+
+    const relativeImport = parse(
+      resolve(adminSrc, "components/shared/other/thing.tsx"),
+      'import { SearchBar } from "../search-bar";\n' +
+        'const x = <SearchBar className="w-full" />;'
+    );
+    expect(searchBarTags(relativeImport), "relative import").toHaveLength(1);
+  });
+
+  it("leaves a different component of the same name alone", () => {
+    // A name is not an identity. Applying this component's wrapper rules to
+    // somebody else's `SearchBar` would fail on classes that are valid for it,
+    // in a file whose author never touched this one -- a check firing on
+    // correct code, which is the failure that gets a check deleted.
+    const unrelated = parse(
+      "unrelated.tsx",
+      'import { SearchBar } from "@vendor/search-kit";\n' +
+        'const x = <SearchBar className="border-input bg-background" />;'
+    );
+    expect(searchBarTags(unrelated), "unrelated module").toHaveLength(0);
+
+    const unrelatedNamespace = parse(
+      "unrelated-namespace.tsx",
+      'import * as Kit from "@vendor/search-kit";\n' +
+        'const x = <Kit.SearchBar className="border-input" />;'
+    );
+    expect(
+      searchBarTags(unrelatedNamespace),
+      "unrelated namespace"
+    ).toHaveLength(0);
+
+    // The foreign import must also suppress the bare-name fallback, or the
+    // fallback re-admits exactly what the module check just excluded. Asserted
+    // through the same path as the case above rather than separately, because
+    // that is the order the two rules run in.
+    const shadowedThenUsed = parse(
+      "shadowed.tsx",
+      'import { SearchBar } from "@vendor/search-kit";\n' +
+        'const a = <SearchBar className="border-input" />;\n' +
+        'const b = <SearchBar className="bg-background" />;'
+    );
+    expect(
+      searchBarTags(shadowedThenUsed),
+      "every use of a foreign binding"
+    ).toHaveLength(0);
+  });
+
+  it("keeps the exporting-module list honest", () => {
+    // An entry that no longer exports the component would go on widening what
+    // these rules apply to, silently. Checked against each module's own source.
+    for (const [module, reason] of EXPORTING_MODULES) {
+      const candidates = [
+        resolve(repo, `${module}.tsx`),
+        resolve(repo, `${module}.ts`),
+        resolve(repo, module, "index.tsx"),
+        resolve(repo, module, "index.ts"),
+      ];
+      const found = candidates.find(path => {
+        try {
+          return statSync(path).isFile();
+        } catch {
+          return false;
+        }
+      });
+      expect(
+        found,
+        `${module} does not resolve to a module file`
+      ).toBeDefined();
+      expect(
+        readFileSync(found ?? "", "utf8").includes(COMPONENT),
+        `${module} no longer mentions ${COMPONENT} (${reason})`
+      ).toBe(true);
+    }
   });
 
   it("reads a literal className, and declines to guess at anything else", () => {
@@ -236,7 +382,9 @@ describe("SearchBar call sites", () => {
       for (const tag of searchBarTags(file)) {
         const className = literalClassName(tag, file);
         if (className === null) continue;
-        const dead = inertClassesIn(className);
+        // Judged on the merged string, exactly as the component judges it, so
+        // the two halves cannot disagree about a class `cn` discarded.
+        const dead = inertClassesFor(className);
         if (dead.length === 0) continue;
         inert.push(
           `${relative(repo, path)}:${lineOf(tag, file)} — ${dead.join(" ")}`

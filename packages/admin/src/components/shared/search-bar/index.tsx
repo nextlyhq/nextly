@@ -6,7 +6,11 @@ import { Loader2, Search, X } from "@admin/components/icons";
 import { Input } from "@admin/components/ui";
 import { cn } from "@admin/lib/utils";
 
-import { inertClassMessage, inertClassesIn } from "./inert-classes";
+import {
+  WRAPPER_BASE,
+  inertClassMessage,
+  inertClassesIn,
+} from "./inert-classes";
 import type { SearchBarProps } from "./types";
 
 /**
@@ -117,6 +121,12 @@ export const SearchBar = React.forwardRef<HTMLInputElement, SearchBarProps>(
     // Internal state for immediate UI updates
     const [internalValue, setInternalValue] = React.useState(value);
 
+    // Merged once and used for both the element and the warning. The prop is
+    // not what renders: `cn` drops the loser of any conflict, so a caller
+    // passing `border-input border-destructive` puts only the second on the
+    // element, and judging the prop would name a class the DOM never had.
+    const wrapperClassName = cn(WRAPPER_BASE, className);
+
     // A class aimed at the field reaches the wrapper and does nothing there,
     // silently. Warned from inside the component because this is the only
     // place the FINAL class string exists: a source check has to predict it,
@@ -131,10 +141,10 @@ export const SearchBar = React.forwardRef<HTMLInputElement, SearchBarProps>(
       // safe: if the value is ever absent, or folded to something unexpected
       // by a bundler, an opt-in stays silent while an opt-out ships a console
       // warning to every consumer of the published package.
-      if (process.env.NODE_ENV !== "development" || !className) return;
-      const inert = inertClassesIn(className);
+      if (process.env.NODE_ENV !== "development") return;
+      const inert = inertClassesIn(wrapperClassName);
       if (inert.length > 0) console.warn(inertClassMessage(inert));
-    }, [className]);
+    }, [wrapperClassName]);
 
     // Sync internal value when parent value changes externally
     React.useEffect(() => {
@@ -169,7 +179,7 @@ export const SearchBar = React.forwardRef<HTMLInputElement, SearchBarProps>(
     };
 
     return (
-      <div className={cn("relative w-full max-w-lg", className)}>
+      <div className={wrapperClassName}>
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         {/* Composes Input rather than restating its classes. The copy this
             replaced had drifted from the original in twelve ways that a reader

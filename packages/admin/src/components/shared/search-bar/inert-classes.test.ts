@@ -8,7 +8,12 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { baseUtility, decodeEntities, inertClassesIn } from "./inert-classes";
+import {
+  baseUtility,
+  decodeEntities,
+  inertClassesFor,
+  inertClassesIn,
+} from "./inert-classes";
 
 describe("inert classes", () => {
   it("names a field-only class", () => {
@@ -71,6 +76,52 @@ describe("inert classes", () => {
     ]);
     // A real width alongside a zero one still paints on the other sides.
     expect(inertClassesIn("border-x-0 border-y border-input")).toEqual([]);
+  });
+
+  it("allows a border colour beside any border spelling", () => {
+    // Logical sides and arbitrary widths paint an edge exactly as `border-2`
+    // does. Enumerating width spellings is what missed these, so the rule asks
+    // whether any OTHER border utility is present rather than matching a list
+    // of the ones that were thought of.
+    expect(inertClassesIn("border-s border-input")).toEqual([]);
+    expect(inertClassesIn("border-e border-border")).toEqual([]);
+    expect(inertClassesIn("border-[3px] border-input")).toEqual([]);
+    expect(inertClassesIn("border-t-[2px] border-border")).toEqual([]);
+    // The logical zero widths paint nothing, same as the physical ones.
+    expect(inertClassesIn("border-s-0 border-input")).toEqual(["border-input"]);
+  });
+
+  it("allows a background once the wrapper has a box to paint", () => {
+    // The input fills the wrapper's content box, so with no padding the
+    // background is covered entirely. Padding makes it a visible frame around
+    // the field, which is a caller asking for something real.
+    expect(inertClassesIn("p-2 bg-background")).toEqual([]);
+    expect(inertClassesIn("px-4 bg-background")).toEqual([]);
+    expect(inertClassesIn("ps-2 bg-background")).toEqual([]);
+    expect(inertClassesIn("p-[10px] bg-background")).toEqual([]);
+    // Padding does not excuse the other two: no text renders in the padding,
+    // and the wrapper still paints no edge.
+    expect(inertClassesIn("p-2 text-foreground")).toEqual(["text-foreground"]);
+    expect(inertClassesIn("p-2 border-input")).toEqual(["border-input"]);
+    // A class that merely starts with `p` is not padding.
+    expect(inertClassesIn("pointer-events-none bg-background")).toEqual([
+      "bg-background",
+    ]);
+  });
+
+  it("judges the class the element actually receives", () => {
+    // `cn` drops the loser of a conflict, so a discarded token never reaches
+    // the DOM and naming it would describe markup that was never rendered.
+    expect(inertClassesFor("border-input border-destructive")).toEqual([]);
+    expect(inertClassesFor("bg-background bg-primary")).toEqual([]);
+    expect(inertClassesFor("text-foreground text-primary")).toEqual([]);
+    // The surviving token is still reported when it is the inert one.
+    expect(inertClassesFor("border-destructive border-input")).toEqual([
+      "border-input",
+    ]);
+    // And the wrapper's own classes do not themselves trigger anything.
+    expect(inertClassesFor(undefined)).toEqual([]);
+    expect(inertClassesFor("w-full")).toEqual([]);
   });
 
   it("sees through an opacity modifier", () => {

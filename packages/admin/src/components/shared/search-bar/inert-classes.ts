@@ -13,29 +13,56 @@
  * component warns at runtime and a test reads the sources, and those are the
  * same question asked of different inputs — so they share this, and cannot
  * drift into disagreeing about what "inert" means.
+ *
+ * Whether a class is inert is a question about the RENDERED box, not about the
+ * token. Each entry below is inert only while the wrapper stays the bare
+ * positioning context it is by default: give it a border and a border colour
+ * paints, give it padding and a background shows around the field. Those
+ * conditions are part of the rule rather than exceptions to it, because a
+ * caller who writes them has asked for something real.
  */
+import { cn } from "@admin/lib/utils";
+
+/** The wrapper's own classes, shared so the check reads what the DOM gets. */
+export const WRAPPER_BASE = "relative w-full max-w-lg";
 
 /** Colour utilities that only reach the field, never the wrapper. */
 const FIELD_ONLY =
   /^(?:border-(?:input|border|control-border)|bg-background|text-foreground)$/;
 
 /**
- * Utilities that give the wrapper a border to colour.
+ * Any border utility at all, colour or width.
  *
- * Without one of these a `border-*` colour is inert, which is the whole point.
- * WITH one, the caller has deliberately drawn an edge on the wrapper and the
- * colour is doing exactly what they asked — so reporting it would reject
- * correct code, and a check that fires on correct code gets worked around.
+ * Written as a PREFIX rather than as a list of width spellings, and that is the
+ * substantive decision in this file. Enumerating widths means keeping up with
+ * `border-2`, `border-x`, the logical `border-s`/`border-e`, arbitrary
+ * `border-[3px]`, and whatever Tailwind adds next — an unbounded surface where
+ * every gap reports a caller's deliberate border as inert. A prefix cannot have
+ * that kind of gap.
+ *
+ * The cost is deliberate and one-directional: a token that is border-ish but
+ * paints nothing suppresses the warning. That errs toward SILENCE, which is the
+ * right direction — a missed dead class costs a line of CSS, while a warning on
+ * correct code teaches the reader to ignore the next one.
  */
-const BORDER_WIDTH = /^border(?:-[0-9]+)?$|^border-[xytrbl](?:-[0-9]+)?$/;
+const BORDER_TOKEN = /^border(?:$|-)/;
 
 /**
- * A width utility that paints nothing. `border-0` and `border-x-0` are widths,
- * so they satisfy the pattern above, and they draw no edge — which puts a
- * colour beside them right back in the inert case the exemption exists to
- * carve out.
+ * A width utility that paints nothing. `border-0` and `border-x-0` are borders
+ * by the prefix above, and they draw no edge — which puts a colour beside them
+ * right back in the inert case the exemption exists to carve out.
  */
-const ZERO_WIDTH = /^border(?:-[xytrbl])?-0$/;
+const ZERO_WIDTH = /^border(?:-[xytrbles])?-0$/;
+
+/**
+ * Padding on the wrapper, which is what makes its background visible.
+ *
+ * The input fills the wrapper's CONTENT box. With no padding the two coincide
+ * and a background on the wrapper is covered entirely; add padding and the
+ * wrapper paints a visible frame around the field, so `bg-background` is doing
+ * exactly what the caller asked.
+ */
+const PADDING_TOKEN = /^p[xytrbles]?-/;
 
 /**
  * A utility's base, with Tailwind's variant prefixes and `!` removed.
@@ -99,17 +126,43 @@ export function decodeEntities(text: string): string {
  */
 export function inertClassesIn(className: string): string[] {
   const tokens = decodeEntities(className).split(/\s+/).filter(Boolean);
-  // A border colour is only inert while nothing gives the wrapper a border.
-  const hasBorderWidth = tokens.some(token => {
-    const base = baseUtility(token);
-    return BORDER_WIDTH.test(base) && !ZERO_WIDTH.test(base);
-  });
-  return tokens.filter(token => {
-    const base = baseUtility(token);
+  const bases = tokens.map(baseUtility);
+
+  // A border colour is only inert while nothing gives the wrapper a border, and
+  // a background only while the wrapper's box is covered by the field.
+  const drawsBorder = bases.some(
+    base =>
+      BORDER_TOKEN.test(base) &&
+      !FIELD_ONLY.test(base) &&
+      !ZERO_WIDTH.test(base)
+  );
+  const hasPadding = bases.some(base => PADDING_TOKEN.test(base));
+
+  return tokens.filter((_, index) => {
+    const base = bases[index] ?? "";
     if (!FIELD_ONLY.test(base)) return false;
-    if (hasBorderWidth && base.startsWith("border-")) return false;
+    if (base.startsWith("border-") && drawsBorder) return false;
+    if (base === "bg-background" && hasPadding) return false;
     return true;
   });
+}
+
+/**
+ * The inert classes in what a caller passed, judged on the string the DOM gets.
+ *
+ * The caller's `className` is not what lands on the element: `cn` merges it
+ * with the wrapper's own classes and drops the losers of any conflict, so
+ * `border-input border-destructive` reaches the DOM as `border-destructive`
+ * alone. Reporting the discarded token would describe markup that was never
+ * rendered.
+ *
+ * So both askers go through here rather than reading the raw prop. The
+ * component has this string already; the test builds the same one from a
+ * literal. Neither classifies anything `cn` did not keep.
+ */
+export function inertClassesFor(className: string | undefined): string[] {
+  if (!className) return [];
+  return inertClassesIn(cn(WRAPPER_BASE, className));
 }
 
 /** The message shown for an inert class, shared so both callers say the same thing. */
