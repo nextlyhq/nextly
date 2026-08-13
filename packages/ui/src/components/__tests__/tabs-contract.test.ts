@@ -1576,16 +1576,30 @@ function ownershipIn(sourceFile: ts.SourceFile): {
     // `.js`/`.jsx` call sites are scanned, so a CommonJS consumer reaches this
     // primitive exactly as an ESM one does.
     if (ts.isVariableDeclaration(node) && node.initializer) {
-      const required = requiredModuleOf(node.initializer);
+      const required = requiredFrom(node.initializer);
       if (
         required !== undefined &&
-        reachesThePrimitive(required, sourceFile.fileName)
+        reachesThePrimitive(required.module, sourceFile.fileName)
       ) {
-        if (ts.isIdentifier(node.name)) {
+        // `const TabsTrigger = require("x").TabsTrigger` selects one export, so
+        // the binding names that component rather than the module.
+        if (required.exported !== undefined) {
+          if (
+            ts.isIdentifier(node.name) &&
+            OWNED_EXPORTS.includes(required.exported)
+          ) {
+            names.add(node.name.text);
+            exportedNameOf.set(node.name.text, required.exported);
+            owning.set(node.name, required.exported);
+          }
+        } else if (ts.isIdentifier(node.name)) {
           namespaces.add(node.name.text);
           owningNamespaces.add(node);
         }
-        if (ts.isObjectBindingPattern(node.name)) {
+        if (
+          required.exported === undefined &&
+          ts.isObjectBindingPattern(node.name)
+        ) {
           for (const element of node.name.elements) {
             const source = element.propertyName ?? element.name;
             if (
@@ -1649,22 +1663,38 @@ function ownershipIn(sourceFile: ts.SourceFile): {
 }
 
 /**
- * The module a `require(...)` call names, when the initializer is one.
+ * What a `require(...)` initializer names: the module, and the export selected
+ * from it when one is.
  *
- * Both spellings reach the same place: `require("x")` and a member access on
- * it, so `const UI = require("x")` and `const { TabsTrigger } = require("x")`
- * are the CommonJS forms of the two imports read above.
+ * Three spellings reach the same place. `const UI = require("x")` and
+ * `const { TabsTrigger } = require("x")` are the CommonJS forms of the two
+ * imports read above, and `const TabsTrigger = require("x").TabsTrigger` is a
+ * third that neither describes — it binds ONE export under a plain name, so
+ * reading it as the namespace form would hold the wrong shape, and reading it
+ * as nothing let a CommonJS call site through untouched.
+ *
+ * A member access is followed for the same reason `exportedFrom` follows one
+ * off a namespace import, and no further: element access is read by neither,
+ * so the two agree on what a member is.
  */
-function requiredModuleOf(initializer: ts.Expression): string | undefined {
-  const call = withoutTypeWrappers(initializer);
+function requiredFrom(
+  initializer: ts.Expression
+): { module: string; exported?: string } | undefined {
+  const value = withoutTypeWrappers(initializer);
+  if (ts.isPropertyAccessExpression(value)) {
+    const required = requiredFrom(value.expression);
+    // Only one member deep: `require("x").a.b` names no export of `x`.
+    if (!required || required.exported !== undefined) return undefined;
+    return { module: required.module, exported: value.name.text };
+  }
   if (
-    ts.isCallExpression(call) &&
-    ts.isIdentifier(call.expression) &&
-    call.expression.text === "require" &&
-    call.arguments.length === 1
+    ts.isCallExpression(value) &&
+    ts.isIdentifier(value.expression) &&
+    value.expression.text === "require" &&
+    value.arguments.length === 1
   ) {
-    const first = call.arguments[0];
-    if (first && ts.isStringLiteral(first)) return first.text;
+    const first = value.arguments[0];
+    if (first && ts.isStringLiteral(first)) return { module: first.text };
   }
   return undefined;
 }
@@ -1896,6 +1926,12 @@ function styleResolver(checker: ts.TypeChecker): {
     return isConst ? declaration.initializer : undefined;
   };
 
+  /** The one lookup `isDefinitelyNothing` reads, usable before the API exists. */
+  const declarations = {
+    declarationOf: (identifier: ts.Identifier): ts.Declaration | undefined =>
+      declarationOf(identifier, checker),
+  };
+
   const objectsFrom = (
     root: ts.Expression | undefined
   ): { objects: ts.ObjectLiteralExpression[]; readable: boolean } => {
@@ -1903,10 +1939,9 @@ function styleResolver(checker: ts.TypeChecker): {
     const seen = new Set<ts.Node>();
     let readable = true;
     const walk = (node: ts.Expression | undefined): void => {
-      if (!node) {
-        readable = false;
-        return;
-      }
+      // `style={}` carries no expression, and React receives no style. There
+      // is nothing here to trace, so it is read rather than reported.
+      if (!node) return;
       if (seen.has(node)) return;
       seen.add(node);
       // Parentheses, `as`, `satisfies` and `!` are erased before the code runs,
@@ -1940,6 +1975,14 @@ function styleResolver(checker: ts.TypeChecker): {
         walk(node.right);
         return;
       }
+      // `undefined`, `null` and the other spellings of nothing are VALUES
+      // React receives as no style, not names that have to be traced. Asked
+      // through the helper the property half uses, so one spelling of "paints
+      // nothing" is not accepted as a property value and then reported as
+      // unreadable when it is the whole prop — which rejected both
+      // `style={undefined}` and the branch of a literal condition that
+      // resolves to it.
+      if (isDefinitelyNothing(node, declarations)) return;
       // A name, a call, a member access, a spread of one: knowing what this
       // holds means tracing it, which is the analysis this deliberately does
       // not do. Reported as unreadable rather than assumed empty — an empty
@@ -1950,16 +1993,12 @@ function styleResolver(checker: ts.TypeChecker): {
     return { objects, readable };
   };
 
-  return {
-    objectsFrom,
-    valueOf,
-    declarationOf: identifier => declarationOf(identifier, checker),
-  };
+  return { objectsFrom, valueOf, ...declarations };
 }
 
-/** The objects an element's `style` prop can resolve to here. */
-function styleObjectsFor(
-  attribute: ts.JsxAttribute,
+/** The objects a `style` expression can resolve to here. */
+function styleObjectsFrom(
+  value: ts.Expression | undefined,
   checker: ts.TypeChecker
 ): {
   objects: ts.ObjectLiteralExpression[];
@@ -1967,14 +2006,22 @@ function styleObjectsFor(
   resolver: ReturnType<typeof styleResolver>;
 } {
   const resolver = styleResolver(checker);
+  return { ...resolver.objectsFrom(value), resolver };
+}
+
+/** The objects an element's `style` attribute can resolve to here. */
+function styleObjectsFor(
+  attribute: ts.JsxAttribute,
+  checker: ts.TypeChecker
+): ReturnType<typeof styleObjectsFrom> {
   const initializer = attribute.initializer;
-  // `style` with no expression at all — `style="x"` or a bare `style` — is not
-  // an object React can read, and is not this contract's business either.
-  if (!initializer || !ts.isJsxExpression(initializer)) {
-    return { objects: [], readable: true, resolver };
+  // `style` written as a plain string — `style="x"` — is not an object React
+  // can read, and is not this contract's business either. A bare `style` has
+  // no initializer and paints nothing, which the resolver reads on its own.
+  if (initializer && !ts.isJsxExpression(initializer)) {
+    return { objects: [], readable: true, resolver: styleResolver(checker) };
   }
-  const { objects, readable } = resolver.objectsFrom(initializer.expression);
-  return { objects, readable, resolver };
+  return styleObjectsFrom(initializer?.expression, checker);
 }
 
 /**
@@ -2148,7 +2195,11 @@ function isDefinitelyPresent(value: ts.Expression): boolean {
  */
 function isDefinitelyNothing(
   initializer: ts.Expression,
-  resolver: ReturnType<typeof styleResolver>
+  // Only the binder lookup is read, and declaring that is what lets the
+  // resolver ask this question while it is still being built.
+  resolver: {
+    declarationOf(identifier: ts.Identifier): ts.Declaration | undefined;
+  }
 ): boolean {
   const value = withoutTypeWrappers(initializer);
   if (ts.isIdentifier(value)) {
@@ -2372,6 +2423,20 @@ interface Violation {
   why: string;
 }
 
+/** The props this contract reads on an owned element. */
+const OWNED_PROPS = ["className", "style"];
+
+/**
+ * Where an owned prop's value comes from, once the attribute list is resolved.
+ *
+ * The two spellings are kept apart rather than normalised to an expression,
+ * because a report says which one it read — `displaces` for an attribute
+ * written on the element, `spreads` for one carried in by an object.
+ */
+type PropSource =
+  | { kind: "attribute"; attribute: ts.JsxAttribute }
+  | { kind: "spread"; at: ts.Node; value: ts.Expression };
+
 function violationsIn(file: string, source: string): Violation[] {
   const { sourceFile, checker } = parse(file, source);
   const { ownership, exportedNameOf, owning, owningNamespaces } =
@@ -2392,6 +2457,21 @@ function violationsIn(file: string, source: string): Violation[] {
         checker
       );
       if (exported) {
+        // JSX props are one object built left to right, so a later attribute
+        // REPLACES an earlier one of the same name: `{...props} className="x"`
+        // renders `x` however `props` was written. Checking each attribute
+        // where it appears asked about values the element never receives, so
+        // the surviving source of each owned prop is resolved first and only
+        // that one is read.
+        const effective = new Map<string, PropSource>();
+        // A spread whose contents cannot be read may carry either owned prop,
+        // so it stops mattering only once BOTH are written again after it.
+        const unread: Array<{ at: ts.Node; awaiting: Set<string> }> = [];
+        const take = (name: string, source: PropSource): void => {
+          effective.set(name, source);
+          for (const spread of unread) spread.awaiting.delete(name);
+        };
+
         for (const attribute of node.attributes.properties) {
           // `<TabsTrigger {...props} />` carries whatever `props` holds, which
           // includes `style` and `className`. Skipping spreads left the whole
@@ -2399,105 +2479,96 @@ function violationsIn(file: string, source: string): Violation[] {
           if (ts.isJsxSpreadAttribute(attribute)) {
             const spread = spreadAttributes(attribute, checker);
             if (!spread.readable) {
-              found.push({
-                file,
-                line: at(attribute),
-                why: "spreads props this scan cannot read, which may carry `style` or `className` — spread an object literal, or pass the props this primitive owns explicitly",
-              });
+              unread.push({ at: attribute, awaiting: new Set(OWNED_PROPS) });
               continue;
             }
             for (const carried of spread.attributes) {
-              const carriedName = carried.name;
-              if (carriedName === "className") {
-                const classes = literalStrings(carried.value).join(" ");
-                const displaced = displacedBy(exported, classes);
-                if (displaced.length > 0) {
-                  found.push({
-                    file,
-                    line: at(attribute),
-                    why: `spreads ${displaced.join(", ")} — the primitive owns that appearance, and every surface should change with it`,
-                  });
-                }
-              }
-              if (carriedName === "style") {
-                const resolver = styleResolver(checker);
-                const { objects, readable } = resolver.objectsFrom(
-                  carried.value
-                );
-                if (!readable) {
-                  found.push({
-                    file,
-                    line: at(attribute),
-                    why: "spreads an inline style this scan cannot read — write it as a literal object, or move it to `className` so the primitive keeps its appearance",
-                  });
-                  continue;
-                }
-                const owned = objects
-                  .map(object => ownedStyleProperty(exported, object, resolver))
-                  .find(Boolean);
-                if (owned) {
-                  found.push({
-                    file,
-                    line: at(attribute),
-                    why: `spreads \`${owned}\` inline, which beats every class the primitive applies`,
-                  });
-                }
-              }
+              if (!OWNED_PROPS.includes(carried.name)) continue;
+              take(carried.name, {
+                kind: "spread",
+                at: attribute,
+                value: carried.value,
+              });
             }
             continue;
           }
           if (!ts.isJsxAttribute(attribute)) continue;
           const name = attribute.name.getText(sourceFile);
-          if (name === "style") {
-            const { objects, readable, resolver } = styleObjectsFor(
-              attribute,
-              checker
-            );
-            // An expression the scan cannot read is reported for BEING
-            // unreadable, rather than passed over. Tracing what a name holds
-            // at this point is the analysis this contract deliberately does
-            // not do, and staying silent about it would mean "no violation"
-            // and "could not tell" looked the same from outside.
-            if (!readable) {
-              found.push({
-                file,
-                line: at(attribute),
-                why: "sets an inline style this scan cannot read — write it as a literal object, or move it to `className` so the primitive keeps its appearance",
-              });
-              continue;
-            }
+          if (OWNED_PROPS.includes(name)) {
+            take(name, { kind: "attribute", attribute });
+          }
+        }
+
+        const lineOf = (source: PropSource): number =>
+          at(source.kind === "attribute" ? source.attribute : source.at);
+
+        for (const spread of unread) {
+          if (spread.awaiting.size === 0) continue;
+          found.push({
+            file,
+            line: at(spread.at),
+            why: "spreads props this scan cannot read, which may carry `style` or `className` — spread an object literal, or pass the props this primitive owns explicitly",
+          });
+        }
+
+        const className = effective.get("className");
+        const classValue =
+          className?.kind === "attribute"
+            ? className.attribute.initializer
+            : className?.value;
+        if (className && classValue) {
+          const displaced = displacedBy(
+            exported,
+            literalStrings(classValue).join(" ")
+          );
+          if (displaced.length > 0) {
+            found.push({
+              file,
+              line: lineOf(className),
+              why: `${className.kind === "spread" ? "spreads" : "displaces"} ${displaced.join(", ")} — the primitive owns that appearance, and every surface should change with it`,
+            });
+          }
+        }
+
+        const style = effective.get("style");
+        if (style) {
+          const line = lineOf(style);
+          const verb = style.kind === "spread" ? "spreads" : "sets";
+          const { objects, readable, resolver } =
+            style.kind === "attribute"
+              ? styleObjectsFor(style.attribute, checker)
+              : styleObjectsFrom(style.value, checker);
+          // An expression the scan cannot read is reported for BEING
+          // unreadable, rather than passed over. Tracing what a name holds at
+          // this point is the analysis this contract deliberately does not do,
+          // and staying silent about it would mean "no violation" and "could
+          // not tell" looked the same from outside.
+          if (!readable) {
+            found.push({
+              file,
+              line,
+              why: `${verb} an inline style this scan cannot read — write it as a literal object, or move it to \`className\` so the primitive keeps its appearance`,
+            });
+          } else {
             const spreadUnreadable = { value: false };
             const property = objects
               .map(object =>
                 ownedStyleProperty(exported, object, resolver, spreadUnreadable)
               )
               .find(Boolean);
-            if (!property && spreadUnreadable.value) {
-              found.push({
-                file,
-                line: at(attribute),
-                why: "spreads an inline style this scan cannot read — write it as a literal object, or move it to `className` so the primitive keeps its appearance",
-              });
-              continue;
-            }
             if (property) {
               found.push({
                 file,
-                line: at(attribute),
-                why: `sets \`${property}\` inline, which beats every class the primitive applies`,
+                line,
+                why: `${verb} \`${property}\` inline, which beats every class the primitive applies`,
+              });
+            } else if (spreadUnreadable.value) {
+              found.push({
+                file,
+                line,
+                why: "spreads an inline style this scan cannot read — write it as a literal object, or move it to `className` so the primitive keeps its appearance",
               });
             }
-            continue;
-          }
-          if (name !== "className" || !attribute.initializer) continue;
-          const classes = literalStrings(attribute.initializer).join(" ");
-          const displaced = displacedBy(exported, classes);
-          if (displaced.length > 0) {
-            found.push({
-              file,
-              line: at(attribute),
-              why: `displaces ${displaced.join(", ")} — the primitive owns that appearance, and every surface should change with it`,
-            });
           }
         }
       }
@@ -3020,6 +3091,24 @@ describe("the tab indicator contract", () => {
       "a spread of props the scan cannot read",
       'const props = { className: "border-b-0" };\n<TabsTrigger {...props} />',
     ],
+    // The CommonJS spelling of a NAMED import: one export selected off the
+    // require call, bound under a plain name rather than a namespace.
+    [
+      "a class on a component required as a member",
+      'const TabsTrigger = require("@nextlyhq/ui").TabsTrigger;\n<TabsTrigger className="border-b-0" />',
+    ],
+    // A later attribute only replaces the prop it NAMES. `className` leaves the
+    // spread's `style` exactly where it was.
+    [
+      "a spread style a later className does not replace",
+      '<TabsTrigger {...{ style: { borderBottomColor: "red" } }} className="w-full" />',
+    ],
+    // An unreadable spread may carry either owned prop, so writing one of them
+    // again afterwards leaves the other still coming from the spread.
+    [
+      "an unreadable spread with only one owned prop written after it",
+      '<TabsTrigger {...rest} className="w-full" />',
+    ],
   ])("catches %s", (_label, body) => {
     // The positive controls. Each is a shape an earlier version returned clean
     // on, or a category it never read. Without these, a check that can never
@@ -3332,6 +3421,21 @@ describe("the tab indicator contract", () => {
     [
       "an attribute value that merely contains a hash",
       '<TabsTrigger className="not-data-[foo=#bar]:opacity-100" />',
+    ],
+    // `undefined` is a VALUE React receives as no style, not a name that has
+    // to be traced, so there is nothing here the scan failed to read.
+    ["a style prop written as undefined", "<TabsTrigger style={undefined} />"],
+    // Props are one object built left to right, so both later attributes
+    // replace what the spread carried and neither spread value is rendered.
+    [
+      "a spread whose owned props are both written again after it",
+      '<TabsTrigger {...{ className: "border-b-0", style: { borderBottomColor: "red" } }} className="w-full" style={{ width: 2 }} />',
+    ],
+    // The same rule reaches an unreadable spread: once both owned props are
+    // written after it, nothing it could have carried survives.
+    [
+      "an unreadable spread with both owned props written after it",
+      '<TabsTrigger {...rest} className="w-full" style={{ width: 2 }} />',
     ],
   ])("does not report %s", (_label, body) => {
     // The complement, and the reason this is a contract rather than a ban. A
