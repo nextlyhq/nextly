@@ -35,20 +35,35 @@ from the merge, absent from `headRefOid`, and therefore absent from both sides
 of every comparison here. Each step then confirms that everything which merged,
 merged.
 
-The independent source is the ref itself:
+The independent source is the ref itself. The guard is part of the check, not a
+note beside it, because the failure it prevents looks exactly like a pass:
 
 ```sh
-BR=$(gh pr view N --json headRefName --jq .headRefName)
-TIP=$(git ls-remote origin "refs/heads/$BR" | cut -f1)   # the branch
-GH=$(gh pr view N --json headRefOid --jq .headRefOid)    # what actually merged
+PR=<number>
+BR=$(gh pr view "$PR" --json headRefName --jq .headRefName)   # ASK, never recall
+TIP=$(git ls-remote origin "refs/heads/$BR" | cut -f1)
+if [ -z "$TIP" ]; then
+  echo "PR#$PR: no such ref on origin — NOT CHECKABLE, which is not clean" >&2
+  exit 2
+fi
+GH=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)     # what actually merged
 git fetch origin "$TIP" --quiet
 git log --oneline "$GH..$TIP"          # any output = commits that never merged
 ```
 
-**Empty output is evidence only when `TIP` is non-empty.** A deleted branch
-yields an empty `TIP`, the range degenerates, and the check reports clean
-without having looked. Deleted branch means NOT CHECKABLE, and must be said
-that way rather than passed.
+**An empty `TIP` degenerates the range and the check reports clean without
+having looked.** Two things produce it, and the second is far likelier than the
+first:
+
+- the branch was deleted after merging — the answer is NOT CHECKABLE;
+- **`$BR` names no ref**, because it was typed from memory or from a task file
+  rather than read from `headRefName`. Measured here: a lane checked a PR that
+  HAD stranded a commit, used a branch name one word off from the real head ref,
+  got an empty tip, and concluded the branch had been auto-deleted. The branch
+  existed the whole time, and the correct query reports the stranded commit.
+
+Derive the name in the same command that uses it, and treat an empty tip as a
+refusal to answer.
 
 Measured against a PR known to have lost two commits and one known intact:
 
@@ -56,17 +71,33 @@ Measured against a PR known to have lost two commits and one known intact:
 | --------------------------------------- | -------------- | --------- |
 | `headRefOid`'s date predates the merge  | "clean"        | "clean"   |
 | step 3's delta comparison               | IDENTICAL      | IDENTICAL |
+| `gh api pulls/N/commits`                | 2 commits only | complete  |
 | `git log <headRefOid>..<ls-remote tip>` | 2 STRANDED     | empty     |
 
-The first two are not weak checks; they cannot see this class of defect at all,
-because each derives both of its sides from the snapshot being audited. That is
-worth stating because the delta comparison is the most rigorous-looking option
-on offer, and its thoroughness is what earns the trust it does not deserve here.
+The first three are not weak checks; they cannot see this class of defect at
+all, because each derives from the snapshot being audited. That is worth stating
+because the delta comparison is the most rigorous-looking option on offer, and
+its thoroughness is what earns the trust it does not deserve here. The commits
+API is the most tempting of the three — it is named as though it lists what the
+branch contained, and it lists what merged.
 
 Three PRs lost tails on a single day in this repository, one of them carrying a
 P1 and one leaving `main` red, and none was found by the procedure below.
 
-1. Confirm what was actually merged, then FETCH the object before probing it:
+### Three different questions, and content answers only one
+
+They are easy to run together and none substitutes for another:
+
+1. **Did my code land?** — content, from the final commit. What the numbered
+   steps below answer.
+2. **Did EVERY commit land?** — the `ls-remote` comparison above. Content from a
+   commit that merged cannot reach a commit that did not.
+3. **Was the job green?** — the merge commit's own check-runs, asserted as
+   `success`. A PR merged here with two `Integration` jobs failing and left
+   `main` red for hours; its author had verified the content correctly and that
+   check had nothing to say about the failure.
+
+4. Confirm what was actually merged, then FETCH the object before probing it:
 
    ```
    gh pr view N --json headRefOid,mergeCommit
@@ -88,7 +119,7 @@ P1 and one leaving `main` red, and none was found by the procedure below.
    falsely; run after `main` advances and a later commit can make omitted
    content look present.
 
-2. Take the check from the **final** commit, in whichever direction it changed
+5. Take the check from the **final** commit, in whichever direction it changed
    things. A marker only proves anything if it is UNIQUE to that commit and the
    search is SCOPED to the path it changed — a string that also occurs elsewhere
    answers the same way whether or not the commit landed. Match it as a FIXED
@@ -125,7 +156,7 @@ P1 and one leaving `main` red, and none was found by the procedure below.
 
    - it changed a file mode, a binary, or a rename → text search cannot see it.
 
-3. When nothing is unique to the commit, or the change is a mode/binary/rename,
+6. When nothing is unique to the commit, or the change is a mode/binary/rename,
    compare the PR's **delta** — not the whole object. Diffing the merged path
    entry against the branch-head entry (`git ls-tree`, blob ids) is wrong as soon
    as `main` changed ANOTHER hunk of the same file after the branch point: a
@@ -146,7 +177,7 @@ P1 and one leaving `main` red, and none was found by the procedure below.
    the merge was computed is outside the comparison and it returns IDENTICAL.
    Run the `ls-remote` check above first; this one is not a substitute for it.
 
-4. If the final commit is a pure revert of an earlier one in the same PR, check the
+7. If the final commit is a pure revert of an earlier one in the same PR, check the
    NET effect, not the last hunk.
 
 The danger window is push-a-fix-then-merge-immediately, which is what everyone
