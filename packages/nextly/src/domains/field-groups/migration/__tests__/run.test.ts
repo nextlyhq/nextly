@@ -1123,17 +1123,12 @@ describe("a preview that meets a writer mid-run", () => {
     let reads = 0;
     world.onMarkerRead = () => {
       reads += 1;
-      if (reads !== 1) return;
-      // The rollback settled; its marker now agrees with the rows it rewrote.
-      world.marker = {
-        version: MIGRATION_MARKER_VERSION,
-        status: "settled",
-        generation: "legacy",
-      };
-      world.tables = [LEGACY_REGISTRY, "comp_hero", MIGRATION_LOCK_TABLE];
-      world.registryRows = [
-        { id: "1", slug: "hero", table_name: "comp_hero", localized: 0 },
-      ];
+      // 🔴 Applied on the SECOND read, and ONLY to the pointers. The hook fires between an
+      // attempt's marker read and its later reads, so clearing at read 1 would revert the world
+      // before attempt 1 ever reached the sweep — and the refusal it then met would be the probe's,
+      // which a different test already covers. Changing nothing else keeps the sweep the only
+      // thing that can refuse here.
+      if (reads !== 2) return;
       world.stalePointers = {};
     };
     const { adapter, trace } = createRunWorld(world);
@@ -1145,9 +1140,9 @@ describe("a preview that meets a writer mid-run", () => {
       dryRun: true,
     });
 
-    if (outcome.ran !== false || outcome.reason !== "dry-run") {
-      expect.fail("expected a dry-run outcome, not a refusal");
-    }
+    // Storage and marker agree once the pointers are repaired, so the preview reports the work as
+    // done rather than previewing a plan.
+    expect(outcome).toMatchObject({ ran: false, reason: "already-migrated" });
     expect(markerReads(trace)).toBe(2);
   });
 
