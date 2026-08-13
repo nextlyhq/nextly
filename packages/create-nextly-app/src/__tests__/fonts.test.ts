@@ -14,7 +14,11 @@ import { fileURLToPath } from "url";
 import fs from "fs-extra";
 import { describe, expect, it } from "vitest";
 
-import { collectFontDependencies } from "../utils/template";
+import {
+  collectFontDependencies,
+  generatePackageJson,
+} from "../utils/template";
+import type { DatabaseConfig } from "../types";
 
 const TEMPLATES_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -88,45 +92,80 @@ describe("no template fetches a font at build time", () => {
 });
 
 describe("the scaffold installs the fonts its templates import", () => {
+  /** The faces each scaffold's FINAL layout references, after the type overlays base. */
+  const EXPECTED: Record<(typeof APP_TEMPLATES)[number], string[]> = {
+    base: ["@fontsource-variable/geist", "@fontsource-variable/geist-mono"],
+    blank: [
+      "@fontsource-variable/inter",
+      "@fontsource-variable/jetbrains-mono",
+    ],
+    blog: ["@fontsource-variable/geist-mono", "@fontsource-variable/inter"],
+  };
+
   it.each(APP_TEMPLATES)(
-    "%s declares every font package its sources reference",
+    "%s emits a manifest carrying exactly the faces it renders",
+    async template => {
+      // Asserted against the GENERATED manifest, not against another scan of the same sources.
+      // Comparing the collector with a second reader agrees with itself however the scaffold is
+      // wired: deleting the dependency loop, or passing the caller no directories, left that
+      // version green while every generated app was missing its fonts and failed to build.
+      const manifest = JSON.parse(
+        await generatePackageJson(
+          "font-fixture",
+          { type: "sqlite" } as DatabaseConfig,
+          true,
+          template,
+          [
+            path.join(TEMPLATES_ROOT, "base"),
+            path.join(TEMPLATES_ROOT, template),
+          ]
+        )
+      ) as { dependencies: Record<string, string> };
+
+      const declared = Object.keys(manifest.dependencies)
+        .filter(name => name.startsWith("@fontsource"))
+        .sort();
+
+      // Exact, not a superset. The overlay REPLACES base's layout, so a union would install the
+      // faces of a layout this scaffold never receives.
+      expect(declared).toEqual([...EXPECTED[template]].sort());
+    }
+  );
+
+  it("declares nothing when the caller passes no template directories", () => {
+    // The collector is handed the dirs the scaffold is COPYING. A downloaded or
+    // --local-template source is a different tree from the bundled one, and a collector that
+    // resolved its own path would install the fonts of templates the project never receives.
+    expect(collectFontDependencies([])).resolves.toEqual([]);
+  });
+
+  it.each(APP_TEMPLATES)(
+    "%s collector output matches what its merged sources import",
     async template => {
       const dirs = [
         path.join(TEMPLATES_ROOT, "base"),
         path.join(TEMPLATES_ROOT, template),
       ];
-
-      // What the templates actually import, read independently of the
-      // collector — a test that called the collector twice would agree with
-      // itself no matter what either one did.
-      const imported = new Set<string>();
+      // The overlay wins per relative path, mirroring the copy.
+      const effective = new Map<string, string>();
       for (const dir of dirs) {
         for (const file of sourceFiles(dir)) {
-          for (const match of fs
-            .readFileSync(file, "utf8")
-            .matchAll(/@fontsource(?:-variable)?\/[a-z0-9-]+/g)) {
-            imported.add(match[0]);
-          }
+          effective.set(path.relative(dir, file), file);
+        }
+      }
+      const imported = new Set<string>();
+      for (const file of effective.values()) {
+        for (const match of fs
+          .readFileSync(file, "utf8")
+          .matchAll(/@fontsource(?:-variable)?\/[a-z0-9-]+/g)) {
+          imported.add(match[0]);
         }
       }
 
-      // Every template loads at least one face, so an empty set here means the
-      // read found nothing rather than that nothing is needed.
       expect(imported.size).toBeGreaterThan(0);
       expect((await collectFontDependencies(dirs)).sort()).toEqual(
         [...imported].sort()
       );
     }
   );
-
-  it("reads the directories it is given rather than resolving its own", async () => {
-    // The collector is handed the dirs the scaffold is COPYING. A downloaded or
-    // --local-template source is a different tree from the bundled one, and a
-    // collector that resolved its own path would install the fonts of templates
-    // the project never receives.
-    expect(await collectFontDependencies([])).toEqual([]);
-    expect(
-      await collectFontDependencies([path.join(TEMPLATES_ROOT, "base")])
-    ).not.toEqual([]);
-  });
 });

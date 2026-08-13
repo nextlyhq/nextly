@@ -48,15 +48,23 @@ const FONT_PACKAGE_PATTERN = /@fontsource(?:-variable)?\/[a-z0-9-]+/g;
 export async function collectFontDependencies(
   templateDirs: readonly string[]
 ): Promise<string[]> {
-  const found = new Set<string>();
-
+  // Merged by RELATIVE path, later directory winning, because that is what the copy does: a
+  // template that overrides `src/app/layout.tsx` REPLACES base's rather than adding to it. Taking
+  // the union instead would install the faces of a layout the project never receives — a blank
+  // scaffold declaring Geist because base's overwritten layout mentioned it.
+  const effective = new Map<string, string>();
   for (const root of templateDirs) {
     if (!root || !(await fs.pathExists(root))) continue;
     for (const file of await walkSourceFiles(root)) {
-      const contents = await fs.readFile(file, "utf8");
-      for (const match of contents.matchAll(FONT_PACKAGE_PATTERN)) {
-        found.add(match[0]);
-      }
+      effective.set(path.relative(root, file), file);
+    }
+  }
+
+  const found = new Set<string>();
+  for (const file of effective.values()) {
+    const contents = await fs.readFile(file, "utf8");
+    for (const match of contents.matchAll(FONT_PACKAGE_PATTERN)) {
+      found.add(match[0]);
     }
   }
 
