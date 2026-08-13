@@ -94,6 +94,51 @@ const TEMPLATE_ROLES = [
  * get a "at least one permission required" error from the core service
  * in that case and the role will be skipped with a warning.
  */
+/** Page size for the user scan below. */
+const USER_SCAN_PAGE_SIZE = 100;
+
+/**
+ * The user with exactly this email, or null.
+ *
+ * Pages through `users.find()` and compares addresses here, because the users
+ * namespace does not filter: it forwards pagination, `search` and the
+ * verification/password flags to its service and drops anything else, so a
+ * `where` clause type-checks and silently returns the first arbitrary user.
+ * Getting that wrong is not a missed lookup — the caller treats the result as
+ * "this account already exists" and rewrites its roles.
+ *
+ * Comparison is case-insensitive because addresses are stored as entered while
+ * mail routing is not case-sensitive on the domain, so a seed re-run that
+ * differs only in case must find the same account rather than create a second.
+ */
+async function findUserByEmail(
+  nextly: Nextly,
+  email: string
+): Promise<Record<string, unknown> | null> {
+  const target = email.toLowerCase();
+  let page = 1;
+
+  for (;;) {
+    const result = await nextly.users.find({
+      limit: USER_SCAN_PAGE_SIZE,
+      page,
+    });
+
+    const match = result.items.find(
+      candidate =>
+        typeof candidate.email === "string" &&
+        candidate.email.toLowerCase() === target
+    );
+    if (match) return match;
+
+    // Driven by the response's own pagination rather than by a full-page
+    // heuristic: a final page that happens to be exactly full would otherwise
+    // stop the scan one page early.
+    if (!result.meta.hasNext) return null;
+    page += 1;
+  }
+}
+
 async function pickPermissionIdsForRoles(
   nextly: Nextly
 ): Promise<Record<string, string[]>> {
@@ -526,14 +571,16 @@ export async function seed({
     // collections path (which only knows about user-defined collections
     // like dc_posts) and throws "schema not found"; users is a core
     // collection with its own query namespace.
-    // `find` + an exact `where`, not `search`: search spans name, email and
-    // custom text fields, so seeding a user whose email appears in someone
-    // else's name would update the wrong account.
-    const found = await nextly.users.find({
-      where: { email: { equals: user.email } },
-      limit: 1,
-    });
-    const existing = found.items[0] ?? null;
+    // Matched on the returned rows rather than through a query filter. The users
+    // namespace forwards only pagination, `search` and the verification/password
+    // flags to its service, so a `where` clause is accepted by the type and then
+    // ignored — a lookup written that way returns the first arbitrary user, and
+    // this loop would go on to overwrite that account's roles.
+    //
+    // `search` is not the alternative: it spans name, email and custom text
+    // fields, so a user whose display name contains someone else's address would
+    // match. Only an exact comparison identifies the account.
+    const existing = await findUserByEmail(nextly, user.email);
     // Build role IDs array if seed-data declares one. Nextly's user
     // mutation service accepts `roles: string[]` in the create/update
     // payload and handles the `user_roles` join rows automatically.

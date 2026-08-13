@@ -20,7 +20,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { mkdirSync, readdirSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 // Next.js 16 app-router builds emit server HTML under .next/server/app, named by
@@ -42,15 +42,21 @@ const globRoot = globSegments
   .slice(0, firstWildcard === -1 ? globSegments.length - 1 : firstWildcard)
   .join("/");
 
-/** Whether any file matching the glob's extension exists beneath `dir`. */
+/**
+ * Whether any `.html` exists beneath `dir`.
+ *
+ * Only a missing directory counts as "nothing to index". Every other failure —
+ * a permissions problem, a path that is not a directory — is rethrown, because
+ * "there are no posts" and "I could not look" are different answers and
+ * collapsing them would report a broken build output as an empty blog.
+ */
 function containsHtml(dir) {
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    // An absent directory means the build produced no pages under it, which is
-    // the same answer as an empty one for the purpose of this check.
-    return false;
+  } catch (err) {
+    if (err.code === "ENOENT") return false;
+    throw err;
   }
   return entries.some(entry =>
     entry.isDirectory()
@@ -59,6 +65,29 @@ function containsHtml(dir) {
   );
 }
 
+// The site root is validated separately from the blog subtree. A missing blog/
+// means no posts; a missing or unreadable SITE root means the build output is
+// not where this script was told to look, which is a failure rather than an
+// empty index.
+function assertSiteDirUsable(dir) {
+  let stats;
+  try {
+    stats = statSync(dir);
+  } catch (err) {
+    const hint =
+      err.code === "ENOENT"
+        ? "it does not exist — run `next build` first, or set PAGEFIND_SITE_DIR"
+        : err.message;
+    console.error(`\n✗ Cannot read the site directory ${dir}: ${hint}`);
+    process.exit(1);
+  }
+  if (!stats.isDirectory()) {
+    console.error(`\n✗ The site path ${dir} is not a directory.`);
+    process.exit(1);
+  }
+}
+
+assertSiteDirUsable(resolve(siteDir));
 mkdirSync(resolve(outputDir), { recursive: true });
 
 // A newly scaffolded project has no posts, so nothing renders under blog/ and
@@ -67,8 +96,12 @@ mkdirSync(resolve(outputDir), { recursive: true });
 // is reported and skipped while a genuine Pagefind failure below still stops the
 // build.
 if (!containsHtml(resolve(siteDir, globRoot))) {
+  // The previous build's index is removed rather than left in place. Keeping it
+  // would serve results for content that no longer exists — unpublishing the
+  // last post would leave the deployed /search still listing it, with excerpts.
+  rmSync(resolve(outputDir), { recursive: true, force: true });
   console.log(
-    `\n• No pages matched ${glob} under ${siteDir} — skipping the search index.`
+    `\n• No pages matched ${glob} under ${siteDir} — removed any previous index.`
   );
   console.log(
     "  Publish a post and build again to generate it; /search reports that the"
