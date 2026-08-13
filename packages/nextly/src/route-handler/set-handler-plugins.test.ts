@@ -199,6 +199,33 @@ describe("the handler config store", () => {
     expect(view?.collections?.[0]).toMatchObject({ dbName: "acme_reports" });
   });
 
+  /**
+   * App-level `config.permissions` too, not just plugin declarations. A `setup`
+   * transformer may remove or replace a top-level declaration that collides
+   * with a plugin's — registration then validates the transformed config and
+   * succeeds, but if the raw declaration is what this store keeps reporting,
+   * `adminMetaPermissions()` sees a collision that no longer exists and
+   * degrades to an empty set, hiding every seeded plugin permission from the
+   * detail page.
+   */
+  it("reports the app permissions boot registered, not the declared ones", () => {
+    store.setHandlerConfig({
+      ...stored,
+      permissions: [{ action: "purge", resource: "cache" }],
+    } as unknown as SanitizedNextlyConfig);
+
+    store.setBootedConfig(
+      booted({
+        plugins: plugins("@acme/transformed"),
+        permissions: [{ action: "archive", resource: "reports" }],
+      })
+    );
+
+    expect(store.getHandlerConfig()?.permissions?.map(p => p.action)).toEqual([
+      "archive",
+    ]);
+  });
+
   it("reports no config when only a plugin list has been recorded", () => {
     store.setBootedConfig(booted({ plugins: plugins("@acme/transformed") }));
 
