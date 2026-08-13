@@ -857,6 +857,15 @@ async function writeScaffoldNpmrc(
   const link = await fs.lstat(npmrcPath).catch(() => null);
   if (link?.isSymbolicLink()) return;
 
+  // A HARD link is the same hazard wearing a disguise `lstat` cannot see through: it reports a
+  // regular file, because that is exactly what a hard link is. The shared config and the path
+  // here are one inode, so appending would edit every project pointing at it.
+  //
+  // `nlink` is what separates them — an ordinary file has one directory entry. Checked after the
+  // symlink test rather than instead of it: the two are different relationships and a file can
+  // only be one of them, so neither check subsumes the other.
+  if (link && link.nlink > 1) return;
+
   const existing = link ? await fs.readFile(npmrcPath, "utf-8") : "";
 
   // Matched at the start of a line so a value mentioning the key, or a commented-out example,

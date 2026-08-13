@@ -21,6 +21,7 @@ import {
   mkdir,
   symlink,
   lstat,
+  link as hardLink,
 } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -62,7 +63,8 @@ afterEach(async () => {
 /** Scaffolds a blank project and returns its `.npmrc`, or null when none was written. */
 async function scaffold(
   packageManager: PackageManager,
-  seedNpmrc?: string
+  seedNpmrc?: string,
+  projectType: "blank" | "plugin" = "blank"
 ): Promise<string | null> {
   const target = join(workspace, "app");
   if (seedNpmrc !== undefined) {
@@ -72,13 +74,13 @@ async function scaffold(
 
   await copyTemplate({
     projectName: "app",
-    projectType: "blank",
+    projectType,
     targetDir: target,
     database: sqlite,
     packageManager,
     templateSource: {
       basePath: join(templates, "base"),
-      templatePath: join(templates, "blank"),
+      templatePath: join(templates, projectType),
     },
     // Set by the installer once it has settled a directory conflict with the user, which is the
     // situation the overlay cases below are standing in for.
@@ -151,6 +153,48 @@ describe("an existing .npmrc that is a symlink", () => {
     expect(await readFile(shared, "utf-8")).toBe(original);
     // And the link is still a link, rather than having been replaced by a regular file.
     expect((await lstat(join(target, ".npmrc"))).isSymbolicLink()).toBe(true);
+  }, 60_000);
+});
+
+describe("a plugin scaffold", () => {
+  // The plugin branch returns EARLY from copyTemplate, so it writes the file through its own
+  // call. Covering only `blank` leaves that call deletable with the whole suite green — and a
+  // plugin scaffold on pnpm 9 would go back to refusing `pnpm add`.
+  it("gets the same opt-out as an app scaffold", async () => {
+    const npmrc = await scaffold("pnpm", undefined, "plugin");
+    expect(npmrc).toMatch(/^ignore-workspace-root-check=true$/m);
+  }, 60_000);
+
+  it("gets none for npm", async () => {
+    expect(await scaffold("npm", undefined, "plugin")).toBeNull();
+  }, 60_000);
+});
+
+describe("an existing .npmrc that is a HARD link", () => {
+  // `lstat` cannot see this one: a hard link IS a regular file. Both paths are one inode, so
+  // appending would edit the shared config every other project reads. `nlink` is the tell.
+  it("is not modified, and the shared file keeps its contents", async () => {
+    const target = join(workspace, "app");
+    const shared = join(workspace, "shared-npmrc");
+    const original = "@acme:registry=https://npm.acme.internal/\n";
+    await writeFile(shared, original, "utf-8");
+    await mkdir(target, { recursive: true });
+    await hardLink(shared, join(target, ".npmrc"));
+
+    await copyTemplate({
+      projectName: "app",
+      projectType: "blank",
+      targetDir: target,
+      database: sqlite,
+      packageManager: "pnpm",
+      templateSource: {
+        basePath: join(templates, "base"),
+        templatePath: join(templates, "blank"),
+      },
+      allowExistingTarget: true,
+    });
+
+    expect(await readFile(shared, "utf-8")).toBe(original);
   }, 60_000);
 });
 
