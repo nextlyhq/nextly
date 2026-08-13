@@ -728,6 +728,45 @@ describe("the host can drive it", () => {
     expect(screen.getByText("Renamed thing")).toBeTruthy();
   });
 
+  it("remounts on a rename that a delimited key could not tell apart", () => {
+    // Joining free-form fields is not injective: with a delimiter, keywords `["open\u0000settings"]`
+    // and `["open", "settings"]` produce the same key, so the rename would not remount and cmdk
+    // would keep the old metadata — the exact defect the key exists to prevent.
+    const separator = String.fromCharCode(0);
+    const commands: BuilderCommand[] = [
+      {
+        id: "a",
+        label: "Thing",
+        keywords: [`open${separator}settings`],
+        run: noop,
+      },
+    ];
+    const { rerender } = mount(<CommandPalette commands={commands} />);
+    pressPaletteKey();
+
+    rerender(
+      <ShortcutProvider>
+        <CommandPalette
+          commands={[
+            {
+              id: "a",
+              label: "Thing",
+              keywords: ["open", "settings"],
+              run: noop,
+            },
+          ]}
+        />
+      </ShortcutProvider>
+    );
+
+    // The new synonyms have to be what cmdk matches on.
+    fireEvent.change(screen.getByRole("combobox"), {
+      target: { value: "open settings" },
+    });
+
+    expect(screen.getByText("Thing")).toBeTruthy();
+  });
+
   it("names the search field, not just the dialog", () => {
     mount(<CommandPalette commands={[]} />);
     pressPaletteKey();

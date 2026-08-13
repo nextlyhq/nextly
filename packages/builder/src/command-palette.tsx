@@ -464,7 +464,17 @@ function PaletteSurface({
                     // refreshes them only when that value changes — and the value is the id,
                     // stable by contract. Without this the row shows its new label while cmdk
                     // keeps filtering on the old one, so searching for what is on screen hides it.
-                    key={`${command.id}\u0000${command.label}\u0000${(command.keywords ?? []).join("\u0000")}`}
+                    //
+                    // A JSON TUPLE rather than the fields joined by a delimiter, for the reason
+                    // the cmdk value has the same shape: joining free-form strings is not
+                    // injective. `keywords: ["open\u0000settings"]` and `["open", "settings"]`
+                    // produce the same delimited string, so that rename would not remount and
+                    // cmdk would keep the old metadata — the defect this key exists to prevent.
+                    key={JSON.stringify([
+                      command.id,
+                      command.label,
+                      command.keywords ?? [],
+                    ])}
                     // The id ALONE, because cmdk keys selection on this value and a concatenation
                     // of free-form fields is not injective: `keywords: ["page"], id: "settings x"`
                     // and `keywords: ["page", "settings"], id: "x"` produce the same string, and
