@@ -19,7 +19,12 @@ import type {
   PluginMenuItem,
 } from "./admin-contributions";
 import type { FieldSurface } from "./contributions";
-import type { CollectedPermission } from "./permissions/collect-permissions";
+import { isPermissionCollision } from "./permission-error";
+import {
+  type CollectedPermission,
+  collectCustomPermissions,
+  type PermissionConfigSource,
+} from "./permissions/collect-permissions";
 import { pluginCollectionSlugs } from "./plugin-admin-meta";
 import type {
   PluginAdminAppearance,
@@ -245,6 +250,37 @@ function mountableRoutes(
         fullPath: c.fullPath,
       }))
     : undefined;
+}
+
+/**
+ * The custom permissions to describe on the PUBLIC admin-meta payload.
+ *
+ * That endpoint is served WITHOUT initializing services, so the config it reads
+ * is whatever the route module stored — before any plugin `setup` transformer
+ * has run. A transformer may legitimately resolve a collision between two
+ * declarations, so the raw list can hold one that boot never sees, and
+ * `collectCustomPermissions` throws on it. Letting that escape would take the
+ * whole endpoint down — branding included — over a configuration that boots.
+ *
+ * Degrades to describing NO custom permissions rather than to describing the
+ * raw declarations: a set that cannot be folded is a set this cannot attribute,
+ * and attributing it wrongly is the thing the fold exists to prevent.
+ *
+ * Deliberately a different failure semantic from `collectPluginInfo`, which
+ * folds the same declarations for the CLI and lets the collision throw — there
+ * an invalid config should be reported, here it should not blank the admin.
+ *
+ * Only the collision is absorbed. Anything else is a defect, and rethrows.
+ */
+export function adminMetaPermissions(
+  config: PermissionConfigSource & { plugins?: PluginDefinition[] }
+): CollectedPermission[] {
+  try {
+    return collectCustomPermissions(config, config.plugins ?? []);
+  } catch (error) {
+    if (isPermissionCollision(error)) return [];
+    throw error;
+  }
 }
 
 export function buildPluginAdminMeta(

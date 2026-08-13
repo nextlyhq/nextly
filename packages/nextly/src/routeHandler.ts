@@ -92,11 +92,10 @@ import { withTimezoneFormatting } from "./lib/date-formatting";
 import { createCorsMiddleware } from "./middleware/cors";
 import { createRateLimiter } from "./middleware/rate-limit";
 import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
-import { buildPluginAdminMeta } from "./plugins/admin-meta";
 import {
-  type CollectedPermission,
-  collectCustomPermissions,
-} from "./plugins/permissions/collect-permissions";
+  adminMetaPermissions,
+  buildPluginAdminMeta,
+} from "./plugins/admin-meta";
 import { runPluginRoute } from "./plugins/routes/dispatch";
 import { getPluginRouteRegistry } from "./plugins/routes/route-registry";
 import { assertClientConfigs } from "./plugins/validate-client-config";
@@ -1233,39 +1232,6 @@ async function handleServiceRequest(
  * be complete colors: the `--nx-*` tokens are consumed directly by the theme,
  * so a bare "H S% L%" triplet would be an invalid value and get dropped.
  */
-/**
- * The custom permissions to describe on the public admin-meta payload.
- *
- * This endpoint is served WITHOUT initializing services, so the config it reads
- * is whatever the route module stored — before any plugin `setup` transformer
- * has run. A transformer may legitimately resolve a collision between two
- * declarations, so the raw list can contain one that boot never sees, and
- * `collectCustomPermissions` throws on it. Letting that escape would take the
- * whole endpoint down (branding, plugins, the lot) over a configuration that
- * boots perfectly well.
- *
- * Degrades to describing no custom permissions rather than to describing the
- * raw declarations: a set that cannot be folded is a set this cannot attribute,
- * and attributing it wrongly is what the fold exists to prevent. Only the
- * collision error is absorbed; anything else is a defect and rethrows.
- */
-function adminMetaPermissions(
-  config: SanitizedNextlyConfig | null
-): CollectedPermission[] {
-  if (!config) return [];
-  try {
-    return collectCustomPermissions(config, config.plugins ?? []);
-  } catch (error) {
-    if (
-      error instanceof NextlyError &&
-      error.code === "NEXTLY_PERMISSION_COLLISION"
-    ) {
-      return [];
-    }
-    throw error;
-  }
-}
-
 async function handleAdminMetaRequest(): Promise<Response> {
   const config = getHandlerConfig();
   const branding = config?.admin?.branding;
@@ -1316,7 +1282,7 @@ async function handleAdminMetaRequest(): Promise<Response> {
   const plugins = buildPluginAdminMeta(
     config?.plugins ?? [],
     pluginOverrides,
-    adminMetaPermissions(config)
+    adminMetaPermissions(config ?? {})
   );
   if (plugins.length > 0) {
     payload.plugins = plugins;

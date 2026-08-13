@@ -6,7 +6,8 @@ import type { PluginDefinition } from "./plugin-context";
 import { NEXTLY_ERROR_STATUS } from "../errors/error-codes";
 import { NextlyError } from "../errors/nextly-error";
 
-import { buildPluginAdminMeta } from "./admin-meta";
+import { adminMetaPermissions, buildPluginAdminMeta } from "./admin-meta";
+import { isPermissionCollision } from "./permission-error";
 
 const base = {
   name: "@acme/p",
@@ -1025,5 +1026,99 @@ describe("dormant routes against the enabled set", () => {
     expect(metas.find(m => m.name === "foo")?.routes).toEqual([
       { method: "GET", path: "/bar/x", fullPath: "/plugins/foo/bar/x" },
     ]);
+  });
+});
+
+/**
+ * The public admin-meta payload is served WITHOUT initializing services, so the
+ * config it folds is the one the route module stored — before any plugin
+ * `setup` transformer has run.
+ */
+describe("adminMetaPermissions", () => {
+  const colliding = asPlugins([
+    {
+      name: "@acme/a",
+      version: "1.0.0",
+      contributes: { permissions: [{ action: "purge", resource: "cache" }] },
+    },
+    {
+      name: "@acme/b",
+      version: "1.0.0",
+      contributes: { permissions: [{ action: "purge", resource: "cache" }] },
+    },
+  ]);
+
+  /**
+   * A transformer may legitimately resolve this collision, so the raw list can
+   * hold one boot never sees. Throwing here would blank the whole endpoint —
+   * branding included — for an app that boots perfectly well.
+   */
+  it("describes no permissions when the raw declarations collide", () => {
+    expect(adminMetaPermissions({ plugins: colliding })).toEqual([]);
+  });
+
+  /**
+   * The positive control. Without it the assertion above is satisfied by a
+   * function that returns `[]` for every input, which would be the endpoint
+   * silently describing nothing rather than degrading only on a collision.
+   */
+  it("returns the collected set when the declarations are valid", () => {
+    const [a] = colliding;
+    expect(adminMetaPermissions({ plugins: [a] }).map(p => p.slug)).toEqual([
+      "purge-cache",
+    ]);
+  });
+
+  /**
+   * A reserved system resource is a different REASON but the same rejection,
+   * and it is judged against the same pre-transform list — a transformer can
+   * drop the offending plugin just as it can resolve a duplicate. Boot still
+   * refuses if the declaration survives, which is where the operator sees it;
+   * blanking the admin as well reports it twice and helps nobody.
+   */
+  it("degrades on a reserved system resource too", () => {
+    expect(
+      adminMetaPermissions({
+        plugins: asPlugins([
+          {
+            name: "@acme/a",
+            version: "1.0.0",
+            contributes: {
+              permissions: [{ action: "read", resource: "users" }],
+            },
+          },
+        ]),
+      })
+    ).toEqual([]);
+  });
+
+  /**
+   * What the degradation must NOT absorb. Asserted on the guard rather than by
+   * provoking a non-collision throw out of the collector, which config alone
+   * cannot do — so this pins the discrimination itself rather than leaving the
+   * rethrow branch as an untested claim.
+   */
+  it("discriminates a collision from any other NextlyError", () => {
+    expect(
+      isPermissionCollision(
+        new NextlyError({
+          code: "NEXTLY_PERMISSION_COLLISION",
+          statusCode: 409,
+          publicMessage: "x",
+          logMessage: "x",
+        })
+      )
+    ).toBe(true);
+    expect(
+      isPermissionCollision(
+        new NextlyError({
+          code: "NEXTLY_ROUTE_COLLISION",
+          statusCode: 409,
+          publicMessage: "x",
+          logMessage: "x",
+        })
+      )
+    ).toBe(false);
+    expect(isPermissionCollision(new Error("boom"))).toBe(false);
   });
 });
