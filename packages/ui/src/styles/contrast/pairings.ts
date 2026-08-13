@@ -417,6 +417,19 @@ const BOUNDARIES: Pairing[] = [
     kind: "ui",
     label: "input border on muted",
   },
+  // The unchecked switch, asserted as it RENDERS rather than as a token in
+  // isolation. Its track against the page is already covered by the control
+  // boundary pairings below -- same role pair, and the uniqueness check rejects
+  // stating it twice. What those do NOT cover is the thumb against the track,
+  // and the thumb's position is the entire on/off signal: a thumb that merges
+  // into its track leaves a control with no readable state.
+  {
+    fg: "--nx-background",
+    bg: "--nx-control-border",
+    kind: "ui",
+    mode: "light",
+    label: "switch thumb on its unchecked track (light)",
+  },
   // The checkbox and radio boundary, held to 3:1 on every surface with no
   // acceptance. `--nx-input` is knowingly below the minimum; this token exists
   // precisely because those two controls cannot follow it there. A field is

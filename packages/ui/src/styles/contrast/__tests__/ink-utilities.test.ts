@@ -193,6 +193,17 @@ function colorOf(role: string, tokens: TokenMap): Rgb | null {
   try {
     return resolveColor(`var(--color-${role})`, { tokens, scale });
   } catch {
+    // Not every token has a `--color-*` alias. `--nx-page-background` is
+    // declared but never mapped into `@theme`, so asking only for the Tailwind
+    // name returned nothing and every pair against that surface was skipped in
+    // silence -- a surface added specifically to be measured that contributed
+    // no measurement at all. Fall back to the `--nx-*` name, which is where the
+    // value actually lives.
+    try {
+      return resolveColor(`var(--nx-${role})`, { tokens, scale });
+    } catch {
+      // Fall through to the null return below.
+    }
     // Not a theme colour: a Tailwind palette name (`text-white`), a non-colour
     // utility sharing the prefix (`text-xs`, `ring-2`), or a typo. Counted and
     // pinned below rather than dropped.
@@ -608,6 +619,38 @@ describe("ink utilities are readable on the surfaces they land on", () => {
       `These pairs now MEET their threshold, so their accepted.ts entries are ` +
         `stale. Delete them: leaving them makes the accepted set read as ` +
         `larger than it is.`
+    ).toEqual([]);
+  });
+
+  it("resolves every surface it claims to measure against", () => {
+    // Adding a surface to PAGE_SURFACES is not the same as measuring against
+    // it. `--nx-page-background` has no `--color-*` alias, so the resolver
+    // returned nothing and every pair against it was skipped in silence -- a
+    // surface added specifically to be measured that contributed no
+    // measurement, while the suite stayed green and read as wider coverage
+    // than it had.
+    //
+    // An unresolvable surface can only ever REMOVE assertions, so nothing
+    // downstream can notice its absence. This is the positive control that
+    // makes the list's own reachability observable.
+    const unresolved: string[] = [];
+    for (const [mode, tokens] of [
+      ["light", light],
+      ["dark", dark],
+    ] as const) {
+      for (const surface of PAGE_SURFACES) {
+        if (!colorOf(surface.replace(/^--nx-/, ""), tokens)) {
+          unresolved.push(`${surface} (${mode})`);
+        }
+      }
+    }
+
+    expect(
+      unresolved,
+      `These surfaces are listed in PAGE_SURFACES but resolve to no colour, so ` +
+        `every pair against them is skipped rather than measured. Give the ` +
+        `token a name the resolver can reach, or remove it from the list so ` +
+        `the coverage it implies is not claimed.`
     ).toEqual([]);
   });
 

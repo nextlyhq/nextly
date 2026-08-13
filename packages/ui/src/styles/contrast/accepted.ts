@@ -231,6 +231,33 @@ export const ACCEPTED_REGRESSIONS: AcceptedRegression[] = [
   {
     fg: "destructive",
     bg: "destructive",
+    bgAlpha: 0.1,
+    bgOver: "page-background",
+    mode: "light",
+    ratio: 3.11,
+    reason:
+      "10% tint over the page container, which `.admin-page-container` paints. Ties with the muted surface for the lowest ratio the palette ships.",
+  },
+  {
+    fg: "destructive",
+    bg: "destructive",
+    bgAlpha: 0.05,
+    bgOver: "page-background",
+    mode: "light",
+    ratio: 3.31,
+    reason: "5% tint over the page container.",
+  },
+  {
+    fg: "destructive-600",
+    bg: "page-background",
+    mode: "light",
+    ratio: 4.23,
+    reason:
+      "The entry meta strip's 600 shade against the page container. Only measurable once the surface resolved; it was skipped entirely before.",
+  },
+  {
+    fg: "destructive",
+    bg: "destructive",
     bgAlpha: 0.05,
     bgOver: "muted",
     mode: "light",
