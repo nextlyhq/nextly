@@ -67,20 +67,86 @@ function regionLocator(page: Page, region: keyof typeof REGION_NAMES): Locator {
 /** How long the shell is given to appear before the page is diagnosed instead. */
 const SHELL_READY_TIMEOUT_MS = 15_000;
 
+/** The chrome root, named once so every reader of it agrees on the selector. */
+const CHROME_SELECTOR = ".nx-builder-chrome";
+
 /**
- * Explain a page that did not come up, rather than letting a later assertion
- * report a symptom of it.
+ * Everything one look at the chrome can tell us.
  *
- * Every geometric check in this file reads a MEASURED box, which is what makes
- * it honest about an unstyled page — and it means a page that never rendered
- * reports "the inspector region has no layout box", which is indistinguishable
- * from a real layout regression in the shell.
- *
- * Called when the shell fails to appear, and again once it has. The two paths
- * are different failures and neither implies the other: a route that never
- * rendered produces no shell at all, while a rendered one can still be missing
- * its styles.
+ * ONE measurement, because two readers of the same element drift: the readiness
+ * check and the stylesheet test both need the box, the painted background and
+ * the layout mode, and a second implementation of "what does the chrome look
+ * like" agrees on the day it is written and not afterwards. Both derive their
+ * verdicts from this rather than each asking the DOM again.
  */
+export interface ShellRenderMeasurement {
+  /** Whether the chrome is in the DOM at all, however it looks. */
+  present: boolean;
+  /** Null when absent, or when it is present with no layout box. */
+  box: { width: number; height: number } | null;
+  /** The RESOLVED background, never the custom property behind it. */
+  background: string | null;
+  /** The resolved `display`, which only this package's stylesheet sets. */
+  display: string | null;
+}
+
+/** Read the chrome once, for every reader that needs to know how it looks. */
+export async function measureShellRender(
+  page: Page
+): Promise<ShellRenderMeasurement> {
+  const chrome = page.locator(CHROME_SELECTOR).first();
+  if ((await chrome.count()) === 0) {
+    return { present: false, box: null, background: null, display: null };
+  }
+  const box = await chrome.boundingBox();
+  const styles = await chrome.evaluate(element => {
+    const computed = getComputedStyle(element);
+    return { background: computed.backgroundColor, display: computed.display };
+  });
+  return {
+    present: true,
+    box: box === null ? null : { width: box.width, height: box.height },
+    background: styles.background,
+    display: styles.display,
+  };
+}
+
+/** A background that resolved to nothing, however the browser spells it. */
+export function isUnpainted(background: string | null): boolean {
+  return (
+    background === null ||
+    background === "transparent" ||
+    background === "rgba(0, 0, 0, 0)"
+  );
+}
+
+/**
+ * Wait for the shell, and explain the page when it does not arrive.
+ *
+ * Exported separately from navigation so a test can drive this branch against a
+ * page it controls. Without that, the diagnostic path runs only during a real
+ * outage — the one moment nobody is placed to discover the diagnostic is itself
+ * wrong.
+ */
+export async function assertShellReady(page: Page): Promise<void> {
+  try {
+    await page
+      .getByRole("navigation", { name: REGION_NAMES.rail })
+      .waitFor({ state: "visible", timeout: SHELL_READY_TIMEOUT_MS });
+  } catch (error) {
+    // Only an ABSENCE is evidence that the page did not render the shell. A
+    // strict-mode violation (two matching rails), a rail hidden by CSS, and a
+    // closed page all reject here too — each a real failure with a real cause
+    // that must not be overwritten by a guess about booting.
+    const measurement = await measureShellRender(page).catch(() => null);
+    if (measurement === null || measurement.present) throw error;
+    await diagnoseUnrenderedPage(page);
+  }
+
+  assertPainted(await measureShellRender(page));
+}
+
+/** Report a page with no shell in it, without naming a cause it cannot see. */
 async function diagnoseUnrenderedPage(page: Page): Promise<never> {
   const bodyText = (
     await page
@@ -88,28 +154,21 @@ async function diagnoseUnrenderedPage(page: Page): Promise<never> {
       .innerText()
       .catch(() => "")
   ).slice(0, 300);
-  const status = page.url();
   throw new Error(
-    `The editor shell never appeared, so the APPLICATION did not come up — ` +
+    `The editor shell is not in the DOM, so the page did not render it — ` +
       `this is not a layout regression in the shell.\n` +
-      `URL: ${status}\n` +
+      `URL: ${page.url()}\n` +
       `Body text (first 300 chars): ${bodyText || "<empty>"}\n` +
-      `Check the web-server log before the code. A blank body points at the ` +
-      `server failing to boot; an error screen usually names its own cause.`
+      `An empty body does NOT by itself mean the server failed to boot: a ` +
+      `route-level exception, a hydration failure, and an intentionally empty ` +
+      `response all look identical from here. Read the web-server log and the ` +
+      `response status before choosing between them.`
   );
 }
 
-/**
- * Whether the chrome has a real box and a resolved colour.
- *
- * Read as a PAINTED colour rather than as a custom property: asking for
- * `--nx-builder-surface` returns the declared token stream — the literal text
- * `var(--nx-muted)` — which is non-empty whether or not anything defines it.
- * Only the resolved value distinguishes a working style chain from a broken one.
- */
-async function assertChromePainted(page: Page): Promise<void> {
-  const chrome = page.locator(".nx-builder-chrome").first();
-  const box = await chrome.boundingBox();
+/** Turn one measurement into the readiness verdict. */
+function assertPainted(measurement: ShellRenderMeasurement): void {
+  const { box, background } = measurement;
   if (box === null || box.width === 0 || box.height === 0) {
     throw new Error(
       `The editor shell is in the DOM but has no layout box, so the page ` +
@@ -118,19 +177,14 @@ async function assertChromePainted(page: Page): Promise<void> {
         `reading this as a shell defect.`
     );
   }
-
-  const background = await chrome.evaluate(
-    element => getComputedStyle(element).backgroundColor
-  );
-  if (background === "rgba(0, 0, 0, 0)" || background === "transparent") {
-    // Deliberately NEUTRAL about which stylesheet is at fault. An unresolvable
+  if (isUnpainted(background)) {
+    // Deliberately NEUTRAL about which sheet is at fault: an unresolvable
     // `var()` chain and a chrome rule that lost its `background-color` compute
-    // to the same transparent value, so naming one of them would state a cause
-    // this check cannot tell apart — and send the reader to the wrong file.
+    // to the same value, so naming one states a cause this cannot separate.
     throw new Error(
       `The editor shell rendered but its chrome resolved to no colour, so the ` +
-        `style chain is broken somewhere between the design system's tokens ` +
-        `and this package's rules. Either a required stylesheet is absent ` +
+        `style chain is broken between the design system's tokens and this ` +
+        `package's rules. Either a required stylesheet is absent ` +
         `("@nextlyhq/ui/styles.css" alongside "@nextlyhq/builder/styles.css") ` +
         `or the chrome's own declaration regressed. The "both stylesheets ` +
         `actually loaded" test separates those two.`
@@ -145,18 +199,7 @@ export function createShellDriver(page: Page): ShellDriver {
       // Waits for the shell rather than for the network: the shell restores
       // preferences in an effect after mount, so a test that measured on
       // `load` would read the defaults and call them the restored values.
-      // The wait is what DIAGNOSES a failed boot, rather than a precondition
-      // for diagnosing one. Waiting first and probing afterwards meant the
-      // central case — a route that never rendered — timed out here and never
-      // reached the probe, so it still surfaced as a bare locator timeout.
-      try {
-        await page
-          .getByRole("navigation", { name: REGION_NAMES.rail })
-          .waitFor({ state: "visible", timeout: SHELL_READY_TIMEOUT_MS });
-      } catch {
-        await diagnoseUnrenderedPage(page);
-      }
-      await assertChromePainted(page);
+      await assertShellReady(page);
     },
 
     railItem(label) {

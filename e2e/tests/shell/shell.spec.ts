@@ -20,7 +20,12 @@ import {
 } from "@nextlyhq/builder/shell-state";
 import { expect, test } from "@playwright/test";
 
-import { createShellDriver } from "./driver";
+import {
+  assertShellReady,
+  createShellDriver,
+  isUnpainted,
+  measureShellRender,
+} from "./driver";
 
 /**
  * The bounds come from the package, not from a second copy of the numbers.
@@ -80,38 +85,27 @@ test.describe("the shell's regions", () => {
   test("both stylesheets actually loaded", async ({ page }) => {
     // The control for every measurement above, and not redundant with them: a
     // shell whose CSS never shipped still renders its markup, still carries its
-    // class names, and lays out as a stack of full-width blocks. Regions would
-    // have boxes; they would simply be the wrong ones.
+    // class names, and lays out as a stack of full-width blocks.
     //
-    // Read as a PAINTED colour rather than as the custom property. Asking for
-    // `--nx-builder-surface` returns the declared token stream — the literal
-    // text `var(--nx-muted)` — which is a non-empty string whether or not
-    // `--nx-muted` is defined anywhere. That assertion passed while the harness
-    // was loading no design-system stylesheet at all, certifying the one thing
-    // it existed to rule out. `background-color` is resolved by the browser, so
-    // it can only be a real colour once the whole chain is present.
+    // Derived from the SAME measurement `goto()` takes, rather than reading the
+    // element again. Two readers of one element drift, and this one would drift
+    // silently because `goto()` runs first — its verdict decides whether this
+    // test evaluates at all.
     const shell = createShellDriver(page);
     await shell.goto();
 
-    const painted = await page.evaluate(() => {
-      const chrome = document.querySelector(".nx-builder-chrome");
-      if (chrome === null) return null;
-      const styles = getComputedStyle(chrome);
-      return {
-        background: styles.backgroundColor,
-        // Proves the editor's own sheet is present too: this class is emitted
-        // only by the builder's stylesheet, so the two halves of the contract
-        // are checked separately rather than inferred from one another.
-        display: styles.display,
-      };
-    });
+    const measurement = await measureShellRender(page);
 
-    expect(painted).not.toBeNull();
-    // An unresolvable `var()` computes to the initial value — transparent —
-    // which is exactly what a missing design system produces.
-    expect(painted?.background).not.toBe("rgba(0, 0, 0, 0)");
-    expect(painted?.background).not.toBe("transparent");
-    expect(painted?.display).toBe("flex");
+    expect(measurement.present).toBe(true);
+    // A painted colour, never the custom property: asking for
+    // `--nx-builder-surface` returns the declared token stream — the literal
+    // text `var(--nx-muted)` — which is non-empty whether or not anything
+    // defines it. That assertion passed while the harness loaded no
+    // design-system stylesheet at all.
+    expect(isUnpainted(measurement.background)).toBe(false);
+    // Emitted only by this package's stylesheet, so the two halves of the
+    // contract are checked separately rather than inferred from one another.
+    expect(measurement.display).toBe("flex");
   });
 });
 
@@ -230,5 +224,58 @@ test.describe("a viewport below the supported width", () => {
       page.getByRole("button", { name: "Exit editor" })
     ).toBeVisible();
     void shell;
+  });
+});
+
+test.describe("the readiness diagnostic itself", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test("names an unrendered page instead of reporting a missing box", async ({
+    page,
+  }) => {
+    // THE POSITIVE CONTROL for the diagnostic added alongside it.
+    //
+    // On a healthy run the shell always appears, so the diagnostic branch never
+    // executes — which would leave an ordering mistake, an unreachable probe or
+    // a diagnostic that throws for the wrong reason invisible until a real
+    // outage, the one moment nobody can afford to debug the instrument. This
+    // drives that branch against a page under the test's control.
+    await page.setContent("<html><body></body></html>");
+
+    await expect(assertShellReady(page)).rejects.toThrow(
+      /shell is not in the DOM/
+    );
+  });
+
+  test("does not claim a boot failure it cannot observe", async ({ page }) => {
+    // The message must describe what was seen and stop there. An empty body is
+    // produced by a route-level exception, a hydration failure and a server that
+    // never booted alike, and Playwright's own `webServer.url` gate has already
+    // proven the server answers — so naming boot as the cause would send the
+    // reader past the actual fault.
+    await page.setContent("<html><body></body></html>");
+
+    const error = await assertShellReady(page).catch(
+      (thrown: unknown) => thrown
+    );
+
+    expect(String(error)).toContain("does NOT by itself mean");
+    expect(String(error)).not.toMatch(/the server failed to boot\b(?!:)/);
+  });
+
+  test("preserves a failure that is not an absence", async ({ page }) => {
+    // A rail that IS present but never visible is a real shell defect with a
+    // real Playwright error. Replacing it with "the application did not come up"
+    // would discard the cause in favour of a guess.
+    await page.setContent(
+      `<html><body><nav aria-label="Editor panels" style="display:none"></nav>
+       <div class="nx-builder-chrome"></div></body></html>`
+    );
+
+    const error = await assertShellReady(page).catch(
+      (thrown: unknown) => thrown
+    );
+
+    expect(String(error)).not.toContain("not in the DOM");
   });
 });
