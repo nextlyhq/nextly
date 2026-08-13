@@ -8,6 +8,7 @@
  * browser suite with it, because its global setup builds first. Both properties
  * below exist to keep that from coming back.
  */
+import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -16,6 +17,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   collectFontDependencies,
+  copyTemplate,
   generatePackageJson,
 } from "../utils/template";
 import type { DatabaseConfig } from "../types";
@@ -129,6 +131,44 @@ describe("the scaffold installs the fonts its templates import", () => {
       // Exact, not a superset. The overlay REPLACES base's layout, so a union would install the
       // faces of a layout this scaffold never receives.
       expect(declared).toEqual([...EXPECTED[template]].sort());
+    }
+  );
+
+  it.each(APP_TEMPLATES)(
+    "%s scaffolds a project whose manifest carries its fonts",
+    async template => {
+      // Through `copyTemplate`, which is where the directories are chosen. The manifest test
+      // above passes them explicitly, so it cannot see the CALL SITE regress — measured: reverting
+      // that argument to `[]` left every other case in this file green.
+      const targetDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), `nextly-fonts-${template}-`)
+      );
+      try {
+        await copyTemplate({
+          projectName: "font-fixture",
+          projectType: template,
+          targetDir,
+          database: { type: "sqlite" } as DatabaseConfig,
+          useYalc: true,
+          allowExistingTarget: true,
+          templateSource: {
+            basePath: path.join(TEMPLATES_ROOT, "base"),
+            templatePath: path.join(TEMPLATES_ROOT, template),
+          },
+        });
+
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(targetDir, "package.json"), "utf8")
+        ) as { dependencies: Record<string, string> };
+
+        expect(
+          Object.keys(manifest.dependencies)
+            .filter(name => name.startsWith("@fontsource"))
+            .sort()
+        ).toEqual([...EXPECTED[template]].sort());
+      } finally {
+        await fs.remove(targetDir);
+      }
     }
   );
 
